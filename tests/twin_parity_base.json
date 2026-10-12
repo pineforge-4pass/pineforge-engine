@@ -7874,115 +7874,115 @@
     "test_frozen_flat_gap_reject": {
       "assertions": [
         {
-          "line": 150,
+          "line": 146,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 151,
+          "line": 147,
           "text": "CHECK_NEAR(eng.position_size(), 0.0, 1e-9)"
         },
         {
-          "line": 152,
+          "line": 148,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 170,
+          "line": 166,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 171,
+          "line": 167,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 172,
+          "line": 168,
           "text": "CHECK_NEAR(eng.position_size(), 0.0, 1e-9)"
         },
         {
-          "line": 193,
+          "line": 187,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 194,
+          "line": 188,
           "text": "CHECK_NEAR(eng.position_size(), 0.0, 1e-9)"
         },
         {
-          "line": 195,
+          "line": 189,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 214,
+          "line": 208,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 215,
+          "line": 209,
           "text": "CHECK_NEAR(eng.position_size(), 0.0, 1e-9)"
         },
         {
-          "line": 216,
+          "line": 210,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 235,
+          "line": 229,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 236,
+          "line": 230,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 237,
+          "line": 231,
           "text": "CHECK_NEAR(eng.position_size(), 0.0, 1e-9)"
         },
         {
-          "line": 256,
+          "line": 249,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 257,
+          "line": 250,
           "text": "CHECK(eng.exit_comment(0) == std::string(\"Margin call\"))"
         },
         {
-          "line": 258,
+          "line": 251,
           "text": "CHECK_NEAR(eng.all_trades()[0].qty, 1.0, 1e-9)"
         },
         {
-          "line": 259,
+          "line": 252,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 260,
+          "line": 253,
           "text": "CHECK_NEAR(eng.position_size(), 8.0, 1e-9)"
         },
         {
-          "line": 279,
+          "line": 272,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 280,
+          "line": 273,
           "text": "CHECK_NEAR(eng.position_size(), 8.0, 1e-9)"
         },
         {
-          "line": 281,
+          "line": 274,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 282,
+          "line": 275,
           "text": "CHECK(eng.exit_comment(0) == std::string(\"Margin call\"))"
         },
         {
-          "line": 299,
+          "line": 292,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 300,
+          "line": 293,
           "text": "CHECK_NEAR(eng.position_size(), 100.0, 1e-9)"
         },
         {
-          "line": 301,
+          "line": 294,
           "text": "CHECK(eng.trade_count() == 0)"
         }
       ],
-      "sourceSha256": "b90aebf1e18bb6b91cc0775cd45b6614cce604e5bec8238273cacc2b03a227ab"
+      "sourceSha256": "c871fe737f363465215fcfa9082a5ab733908d55cbd8cf526da318926b625918"
     },
     "test_frozen_market_instruction": {
       "assertions": [
@@ -12524,159 +12524,159 @@
     "test_level_grid_snap": {
       "assertions": [
         {
-          "line": 184,
+          "line": 161,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 185,
+          "line": 162,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 188,
+          "line": 165,
           "text": "CHECK(t.is_long == is_long)"
         },
         {
-          "line": 189,
+          "line": 166,
           "text": "CHECK(t.entry_time == ts(entry_bar))"
         },
         {
-          "line": 190,
+          "line": 167,
           "text": "CHECK_NEAR(t.entry_price, entry_px, 1e-9)"
         },
         {
-          "line": 191,
+          "line": 168,
           "text": "CHECK(t.exit_time == ts(exit_bar))"
         },
         {
-          "line": 192,
+          "line": 169,
           "text": "CHECK_NEAR(t.exit_price, exit_px, 1e-9)"
         },
         {
-          "line": 193,
+          "line": 170,
           "text": "CHECK_NEAR(t.qty, qty, 1e-9)"
         },
         {
-          "line": 205,
+          "line": 182,
           "text": "CHECK(f.decimals() == 2)"
         },
         {
-          "line": 206,
-          "text": "CHECK(f.grid(9.99 + 0.05) == 10.04)"
+          "line": 183,
+          "text": "CHECK(f.grid(64.03 + 0.04) == 64.07)"
         },
         {
-          "line": 207,
-          "text": "CHECK(f.grid(11.86 - 0.05) == 11.81)"
+          "line": 184,
+          "text": "CHECK(f.grid(80.07 - 0.01) == 80.06)"
         },
         {
-          "line": 208,
-          "text": "CHECK(f.grid(10.04 + 1e-6) == 10.04)"
+          "line": 185,
+          "text": "CHECK(f.grid(64.07 + 1e-6) == 64.07)"
         },
         {
-          "line": 209,
-          "text": "CHECK(f.grid(10.04 + 9e-7) == 10.04)"
+          "line": 186,
+          "text": "CHECK(f.grid(64.07 + 9e-7) == 64.07)"
         },
         {
-          "line": 210,
-          "text": "CHECK(f.grid(10.04 + 1.2e-6) == 10.04 + 1.2e-6)"
+          "line": 187,
+          "text": "CHECK(f.grid(64.07 + 1.2e-6) == 64.07 + 1.2e-6)"
         },
         {
-          "line": 211,
-          "text": "CHECK(f.grid(11.81 - 1e-6) == 11.81)"
+          "line": 188,
+          "text": "CHECK(f.grid(80.06 - 1e-6) == 80.06)"
         },
         {
-          "line": 212,
-          "text": "CHECK(f.grid(11.81 - 3e-6) == 11.81 - 3e-6)"
+          "line": 189,
+          "text": "CHECK(f.grid(80.06 - 3e-6) == 80.06 - 3e-6)"
         },
         {
-          "line": 213,
-          "text": "CHECK(f.grid(12.58 - 1e-6) == 12.58)"
+          "line": 190,
+          "text": "CHECK(f.grid(96.40 - 1e-6) == 96.40)"
         },
         {
-          "line": 214,
-          "text": "CHECK(f.grid(12.58 - 1e-5) == 12.58 - 1e-5)"
+          "line": 191,
+          "text": "CHECK(f.grid(96.40 - 1e-5) == 96.40 - 1e-5)"
         },
         {
-          "line": 215,
+          "line": 192,
           "text": "CHECK(f.grid(14.035) == 14.035)"
         },
         {
-          "line": 216,
-          "text": "CHECK(f.grid(10.04) == 10.04)"
+          "line": 193,
+          "text": "CHECK(f.grid(64.07) == 64.07)"
         },
         {
-          "line": 217,
+          "line": 194,
           "text": "CHECK(f.grid(1404.0 * 0.01) == 14.04)"
         },
         {
-          "line": 218,
+          "line": 195,
           "text": "CHECK(std::isnan(f.grid(kNaN)))"
         },
         {
-          "line": 220,
+          "line": 197,
           "text": "CHECK(es.decimals() == 2)"
         },
         {
-          "line": 221,
+          "line": 198,
           "text": "CHECK(es.grid(5513.75 + 5e-7) == 5513.75)"
         },
         {
-          "line": 222,
+          "line": 199,
           "text": "CHECK(es.grid(5513.75 + 1e-6) == 5513.75 + 1e-6)"
         },
         {
-          "line": 223,
+          "line": 200,
           "text": "CHECK(es.grid(5513.75 + 2.5e-5) == 5513.75 + 2.5e-5)"
         },
         {
-          "line": 224,
+          "line": 201,
           "text": "CHECK(es.grid(5513.76) == 5513.76)"
         },
         {
-          "line": 226,
+          "line": 203,
           "text": "CHECK(eu.decimals() == 5)"
         },
         {
-          "line": 227,
+          "line": 204,
           "text": "CHECK(eu.grid(1.13556 + 1e-13) == 1.13556)"
         },
         {
-          "line": 228,
+          "line": 205,
           "text": "CHECK(eu.grid(1.13556 + 1e-12) == 1.13556)"
         },
         {
-          "line": 229,
+          "line": 206,
           "text": "CHECK(eu.grid(1.13556 + 2e-12) == 1.13556 + 2e-12)"
         },
         {
-          "line": 230,
+          "line": 207,
           "text": "CHECK(eu.grid(1.13556 + 1e-11) == 1.13556 + 1e-11)"
         },
         {
-          "line": 231,
+          "line": 208,
           "text": "CHECK(eu.grid(1.13556 + 1e-9) == 1.13556 + 1e-9)"
         },
         {
-          "line": 233,
+          "line": 210,
           "text": "CHECK(none.decimals() == -1)"
         },
         {
-          "line": 234,
-          "text": "CHECK(none.grid(10.04 + 1e-6) == 10.04 + 1e-6)"
+          "line": 211,
+          "text": "CHECK(none.grid(64.07 + 1e-6) == 64.07 + 1e-6)"
         },
         {
-          "line": 236,
+          "line": 213,
           "text": "CHECK(bin.decimals() == 7)"
         },
         {
-          "line": 237,
+          "line": 214,
           "text": "CHECK(bin.grid(13.7451) == 13.7451)"
         },
         {
-          "line": 238,
+          "line": 215,
           "text": "CHECK(bin.grid(13.7451 + 1e-9) == 13.7451 + 1e-9)"
         }
       ],
-      "sourceSha256": "a682663285ed35b32049380865931d70b62c67b64e9423d92695f8d4760eb46d"
+      "sourceSha256": "cb6bf1e03d6e79df4c8b65c24b6d53781e9633339c022f739d2eef8cbd4384c0"
     },
     "test_limit_exact_touch_level_residue": {
       "assertions": [
@@ -18157,275 +18157,275 @@
     "test_market_entry_affordability": {
       "assertions": [
         {
-          "line": 195,
+          "line": 176,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 196,
+          "line": 177,
           "text": "CHECK_NEAR(eng.position_size(), 0.0, 1e-9)"
         },
         {
-          "line": 197,
+          "line": 178,
           "text": "CHECK(eng.trade_count() == 0)"
+        },
+        {
+          "line": 197,
+          "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
+        },
+        {
+          "line": 198,
+          "text": "CHECK(eng.trade_count() == 0)"
+        },
+        {
+          "line": 214,
+          "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
+        },
+        {
+          "line": 215,
+          "text": "CHECK_NEAR(eng.position_size(), 1.0, 1e-9)"
         },
         {
           "line": 216,
-          "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
-        },
-        {
-          "line": 217,
-          "text": "CHECK(eng.trade_count() == 0)"
-        },
-        {
-          "line": 233,
-          "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
-        },
-        {
-          "line": 234,
-          "text": "CHECK_NEAR(eng.position_size(), 1.0, 1e-9)"
-        },
-        {
-          "line": 235,
           "text": "CHECK(!eng.pyramid_entries_.empty())"
         },
         {
-          "line": 237,
+          "line": 218,
           "text": "CHECK_NEAR(eng.pyramid_entries_.back().price, 19225.0, 1e-9)"
         },
         {
-          "line": 255,
+          "line": 236,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 256,
+          "line": 237,
           "text": "CHECK_NEAR(eng.position_size(), 1.0, 1e-9)"
         },
         {
-          "line": 272,
+          "line": 253,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 273,
+          "line": 254,
           "text": "CHECK_NEAR(eng.position_size(), 1.0, 1e-9)"
         },
         {
-          "line": 289,
+          "line": 270,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 300,
+          "line": 281,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 311,
+          "line": 292,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 335,
+          "line": 316,
           "text": "CHECK(eng.position_side_ == PositionSide::SHORT)"
         },
         {
-          "line": 336,
+          "line": 317,
           "text": "CHECK_NEAR(eng.position_size(), -1.0, 1e-9)"
         },
         {
-          "line": 337,
+          "line": 318,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 339,
+          "line": 320,
           "text": "CHECK(eng.get_trade(0).is_long)"
         },
         {
-          "line": 340,
+          "line": 321,
           "text": "CHECK(eng.get_trade(0).exit_id == \"S\")"
         },
         {
-          "line": 341,
+          "line": 322,
           "text": "CHECK_NEAR(eng.get_trade(0).exit_price, 19899.75, 1e-9)"
         },
         {
-          "line": 361,
+          "line": 342,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 362,
+          "line": 343,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 364,
+          "line": 345,
           "text": "CHECK(eng.get_trade(0).is_long)"
         },
         {
-          "line": 365,
+          "line": 346,
           "text": "CHECK(eng.get_trade(0).exit_id == \"S\")"
         },
         {
-          "line": 366,
+          "line": 347,
           "text": "CHECK_NEAR(eng.get_trade(0).exit_price, 19500.0, 1e-9)"
         },
         {
-          "line": 367,
+          "line": 348,
           "text": "CHECK_NEAR(eng.get_trade(0).qty, 1.0, 1e-9)"
         },
         {
-          "line": 369,
+          "line": 350,
           "text": "CHECK(eng.trades_with_entry_id(\"S\") == 0)"
         },
         {
-          "line": 393,
+          "line": 373,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 394,
+          "line": 374,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 396,
+          "line": 376,
           "text": "CHECK(!eng.get_trade(0).is_long)"
         },
         {
-          "line": 397,
+          "line": 377,
           "text": "CHECK(eng.get_trade(0).exit_id == \"Buy\")"
         },
         {
-          "line": 398,
+          "line": 378,
           "text": "CHECK_NEAR(eng.get_trade(0).exit_price, 105600.0, 1e-9)"
         },
         {
-          "line": 399,
+          "line": 379,
           "text": "CHECK_NEAR(eng.get_trade(0).pnl, -5600.0, 1e-6)"
+        },
+        {
+          "line": 381,
+          "text": "CHECK(eng.trades_with_entry_id(\"Buy\") == 0)"
+        },
+        {
+          "line": 400,
+          "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
           "line": 401,
           "text": "CHECK(eng.trades_with_entry_id(\"Buy\") == 0)"
         },
         {
-          "line": 420,
-          "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
-        },
-        {
-          "line": 421,
-          "text": "CHECK(eng.trades_with_entry_id(\"Buy\") == 0)"
-        },
-        {
-          "line": 422,
+          "line": 402,
           "text": "CHECK(eng.trades_with_exit_id(\"Buy\") == 1)"
         },
         {
-          "line": 423,
+          "line": 403,
           "text": "CHECK(eng.trade_count() <= 3)"
         },
         {
-          "line": 425,
+          "line": 405,
           "text": "CHECK(!eng.get_trade(i).is_long)"
         },
         {
-          "line": 458,
+          "line": 438,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 459,
+          "line": 439,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 461,
+          "line": 441,
           "text": "CHECK(eng.get_trade(0).exit_id == \"S\")"
         },
         {
-          "line": 462,
+          "line": 442,
           "text": "CHECK_NEAR(eng.get_trade(0).qty, 1.0, 1e-9)"
         },
         {
-          "line": 486,
+          "line": 466,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 487,
+          "line": 467,
           "text": "CHECK_NEAR(eng.position_size(), 1.0, 1e-9)"
         },
         {
-          "line": 488,
+          "line": 468,
           "text": "CHECK(eng.pyramid_entries_.size() == 1)"
         },
         {
-          "line": 489,
+          "line": 469,
           "text": "CHECK(eng.trades_with_entry_id(\"L2\") == 0)"
         },
         {
-          "line": 500,
+          "line": 480,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 501,
+          "line": 481,
           "text": "CHECK_NEAR(eng.position_size(), 2.0, 1e-9)"
         },
         {
-          "line": 502,
+          "line": 482,
           "text": "CHECK(eng.pyramid_entries_.size() == 2)"
         },
         {
-          "line": 519,
+          "line": 499,
           "text": "CHECK_NEAR(eng.position_size(), 60.0, 1e-9)"
         },
         {
-          "line": 541,
+          "line": 521,
           "text": "CHECK_NEAR(eng.position_size(), 100.0, 1e-9)"
         },
         {
-          "line": 565,
+          "line": 545,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 566,
+          "line": 546,
           "text": "CHECK_NEAR(eng.position_size(), 662.96, 1e-9)"
         },
         {
-          "line": 567,
+          "line": 547,
           "text": "CHECK(eng.pyramid_entries_.size() == 1)"
         },
         {
-          "line": 569,
+          "line": 549,
           "text": "CHECK_NEAR(eng.pyramid_entries_.back().price, eng.tick(3013.745), 1e-9)"
         },
         {
-          "line": 589,
+          "line": 571,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 590,
+          "line": 572,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 606,
+          "line": 588,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 607,
-          "text": "CHECK_NEAR(eng.position_size(), 999.0, 1e-9)"
+          "line": 589,
+          "text": "CHECK_NEAR(eng.position_size(), 199.0, 1e-9)"
         },
         {
-          "line": 626,
+          "line": 608,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 636,
+          "line": 618,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 637,
+          "line": 619,
           "text": "CHECK_NEAR(eng.position_size(), 50.0, 1e-9)"
         },
         {
-          "line": 655,
+          "line": 637,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 656,
+          "line": 638,
           "text": "CHECK_NEAR(eng.position_size(), 1.0, 1e-9)"
         }
       ],
-      "sourceSha256": "3c5937df2640cb504604f35d447d0a5896375d7233318ffd97739c5758b4c84a"
+      "sourceSha256": "7512df8d886f7ad04bfd697feaedfcdfeae68d334cb9cec908d61517219a91d7"
     },
     "test_market_structure_fills": {
       "assertions": [
@@ -19374,315 +19374,315 @@
     "test_native_security_feed": {
       "assertions": [
         {
-          "line": 106,
+          "line": 107,
           "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 2) == 0)"
         },
         {
-          "line": 109,
+          "line": 110,
           "text": "assert(probe.native_security_feed_enabled())"
         },
         {
-          "line": 113,
+          "line": 114,
           "text": "assert(probe.last_error().empty())"
-        },
-        {
-          "line": 117,
-          "text": "assert((probe.daily_closes == std::vector<double>{111.5, 222.5}))"
         },
         {
           "line": 118,
-          "text": "assert((probe.daily_opens == std::vector<double>{99.0, 199.0}))"
-        },
-        {
-          "line": 119,
-          "text": "assert((probe.daily_volumes == std::vector<double>{5000.0, 6000.0}))"
-        },
-        {
-          "line": 120,
-          "text": "assert(probe.native_security_substitutions() == 2)"
-        },
-        {
-          "line": 121,
-          "text": "assert(probe.native_security_misses() == 0)"
-        },
-        {
-          "line": 123,
-          "text": "assert(probe.daily_at_chart_close.size() == 52)"
-        },
-        {
-          "line": 124,
-          "text": "assert(std::isnan(probe.daily_at_chart_close[24]))"
-        },
-        {
-          "line": 125,
-          "text": "assert(near(probe.daily_at_chart_close[25], 111.5))"
-        },
-        {
-          "line": 126,
-          "text": "assert(near(probe.daily_at_chart_close[26], 111.5))"
-        },
-        {
-          "line": 127,
-          "text": "assert(near(probe.daily_at_chart_close[51], 222.5))"
-        },
-        {
-          "line": 130,
-          "text": "assert(!probe.hourly_closes.empty())"
-        },
-        {
-          "line": 131,
-          "text": "assert(near(probe.hourly_closes[0], 103.0))"
-        },
-        {
-          "line": 133,
-          "text": "assert(probe.chart_closes.size() == 52)"
-        },
-        {
-          "line": 134,
-          "text": "assert(near(probe.chart_closes[25], 125.0))"
-        },
-        {
-          "line": 135,
-          "text": "assert(probe.trade_count() == 1)"
-        },
-        {
-          "line": 136,
-          "text": "assert(near(probe.get_trade(0).entry_price, chart[1].open))"
-        },
-        {
-          "line": 137,
-          "text": "assert(near(probe.get_trade(0).exit_price, chart[2].open))"
-        },
-        {
-          "line": 154,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"1D\", reinterpret_cast<const pf_bar_t*>(daily), 1) == 0)"
-        },
-        {
-          "line": 159,
-          "text": "assert(probe.last_error().empty())"
-        },
-        {
-          "line": 160,
-          "text": "assert((probe.daily_closes == std::vector<double>{111.5, 225.0}))"
-        },
-        {
-          "line": 161,
-          "text": "assert(probe.native_security_substitutions() == 1)"
-        },
-        {
-          "line": 162,
-          "text": "assert(probe.native_security_misses() == 1)"
-        },
-        {
-          "line": 179,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 2) == 0)"
-        },
-        {
-          "line": 183,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", nullptr, 0) == 0)"
-        },
-        {
-          "line": 185,
-          "text": "assert(!probe.native_security_feed_enabled())"
-        },
-        {
-          "line": 188,
-          "text": "assert(probe.last_error().empty())"
-        },
-        {
-          "line": 189,
-          "text": "assert((probe.daily_closes == std::vector<double>{125.0, 225.0}))"
-        },
-        {
-          "line": 190,
-          "text": "assert(probe.native_security_substitutions() == 0)"
-        },
-        {
-          "line": 191,
-          "text": "assert(probe.native_security_misses() == 0)"
-        },
-        {
-          "line": 201,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(unordered), 2) == -1)"
-        },
-        {
-          "line": 204,
-          "text": "assert(!probe.last_error().empty())"
-        },
-        {
-          "line": 205,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"\", reinterpret_cast<const pf_bar_t*>(unordered), 1) == -1)"
-        },
-        {
-          "line": 208,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"bogus\", reinterpret_cast<const pf_bar_t*>(unordered), 1) == -1)"
-        },
-        {
-          "line": 211,
-          "text": "assert(strategy_set_native_security_feed( nullptr, \"D\", reinterpret_cast<const pf_bar_t*>(unordered), 1) == -1)"
-        },
-        {
-          "line": 213,
-          "text": "assert(!probe.native_security_feed_enabled())"
-        },
-        {
-          "line": 217,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 1) == 0)"
-        },
-        {
-          "line": 221,
-          "text": "assert(!probe.stream_begin(warmup.data(), static_cast<int>(warmup.size()), \"15\", \"15\"))"
-        },
-        {
-          "line": 223,
-          "text": "assert(probe.last_error().find(\"native request.security feed\") != std::string::npos)"
-        },
-        {
-          "line": 252,
-          "text": "assert(strategy_set_aux_security_feed( static_cast<pf_strategy_t>(&probe), reinterpret_cast<const pf_bar_t*>(aux.data()), static_cast<int>(aux.size()), \"1\") == 0)"
-        },
-        {
-          "line": 256,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 2) == 0)"
-        },
-        {
-          "line": 261,
-          "text": "assert(probe.last_error().empty())"
-        },
-        {
-          "line": 262,
           "text": "assert((probe.daily_closes == std::vector<double>{111.5, 222.5}))"
         },
         {
-          "line": 263,
+          "line": 119,
+          "text": "assert((probe.daily_opens == std::vector<double>{99.0, 199.0}))"
+        },
+        {
+          "line": 120,
+          "text": "assert((probe.daily_volumes == std::vector<double>{5000.0, 6000.0}))"
+        },
+        {
+          "line": 121,
           "text": "assert(probe.native_security_substitutions() == 2)"
         },
         {
-          "line": 264,
+          "line": 122,
           "text": "assert(probe.native_security_misses() == 0)"
         },
         {
-          "line": 265,
+          "line": 124,
+          "text": "assert(probe.daily_at_chart_close.size() == 52)"
+        },
+        {
+          "line": 125,
+          "text": "assert(std::isnan(probe.daily_at_chart_close[24]))"
+        },
+        {
+          "line": 126,
+          "text": "assert(near(probe.daily_at_chart_close[25], 111.5))"
+        },
+        {
+          "line": 127,
+          "text": "assert(near(probe.daily_at_chart_close[26], 111.5))"
+        },
+        {
+          "line": 128,
+          "text": "assert(near(probe.daily_at_chart_close[51], 222.5))"
+        },
+        {
+          "line": 131,
+          "text": "assert(!probe.hourly_closes.empty())"
+        },
+        {
+          "line": 132,
+          "text": "assert(near(probe.hourly_closes[0], 103.0))"
+        },
+        {
+          "line": 134,
+          "text": "assert(probe.chart_closes.size() == 52)"
+        },
+        {
+          "line": 135,
           "text": "assert(near(probe.chart_closes[25], 125.0))"
         },
         {
-          "line": 297,
-          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 3) == 0)"
+          "line": 136,
+          "text": "assert(probe.trade_count() == 1)"
         },
         {
-          "line": 302,
+          "line": 137,
+          "text": "assert(near(probe.get_trade(0).entry_price, chart[1].open))"
+        },
+        {
+          "line": 138,
+          "text": "assert(near(probe.get_trade(0).exit_price, chart[2].open))"
+        },
+        {
+          "line": 155,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"1D\", reinterpret_cast<const pf_bar_t*>(daily), 1) == 0)"
+        },
+        {
+          "line": 160,
           "text": "assert(probe.last_error().empty())"
         },
         {
-          "line": 305,
-          "text": "assert((probe.daily_closes == std::vector<double>{5077.25, 5177.25}))"
+          "line": 161,
+          "text": "assert((probe.daily_closes == std::vector<double>{111.5, 225.0}))"
         },
         {
-          "line": 306,
-          "text": "assert(probe.native_security_substitutions() == 2)"
+          "line": 162,
+          "text": "assert(probe.native_security_substitutions() == 1)"
         },
         {
-          "line": 307,
-          "text": "assert(probe.native_security_misses() == 0)"
+          "line": 163,
+          "text": "assert(probe.native_security_misses() == 1)"
         },
         {
-          "line": 313,
-          "text": "assert(probe.daily_at_chart_close.size() == 185)"
-        },
-        {
-          "line": 314,
-          "text": "assert(std::isnan(probe.daily_at_chart_close[90]))"
-        },
-        {
-          "line": 315,
-          "text": "assert(near(probe.daily_at_chart_close[91], 5077.25))"
-        },
-        {
-          "line": 316,
-          "text": "assert(near(probe.daily_at_chart_close[92], 5077.25))"
-        },
-        {
-          "line": 317,
-          "text": "assert(near(probe.daily_at_chart_close[183], 5177.25))"
-        },
-        {
-          "line": 318,
-          "text": "assert(near(probe.daily_at_chart_close[184], 5177.25))"
-        },
-        {
-          "line": 443,
+          "line": 180,
           "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 2) == 0)"
         },
         {
-          "line": 448,
+          "line": 184,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", nullptr, 0) == 0)"
+        },
+        {
+          "line": 186,
+          "text": "assert(!probe.native_security_feed_enabled())"
+        },
+        {
+          "line": 189,
           "text": "assert(probe.last_error().empty())"
         },
         {
-          "line": 449,
-          "text": "assert(probe.at_chart_close.size() == 52)"
+          "line": 190,
+          "text": "assert((probe.daily_closes == std::vector<double>{125.0, 225.0}))"
         },
         {
-          "line": 451,
-          "text": "assert(std::isnan(probe.at_chart_close[24].c))"
+          "line": 191,
+          "text": "assert(probe.native_security_substitutions() == 0)"
         },
         {
-          "line": 456,
-          "text": "assert(row_is(probe.at_chart_close[25], kNativeApr22))"
-        },
-        {
-          "line": 457,
-          "text": "assert(row_is(probe.at_chart_close[26], kNativeApr22))"
-        },
-        {
-          "line": 458,
-          "text": "assert(row_is(probe.at_chart_close[50], kNativeApr22))"
-        },
-        {
-          "line": 459,
-          "text": "assert(row_is(probe.at_chart_close[51], kNativeApr23))"
-        },
-        {
-          "line": 460,
-          "text": "assert(probe.at_chart_close[51].h == 10.0054)"
-        },
-        {
-          "line": 461,
-          "text": "assert(probe.at_chart_close[51].c == 9.78)"
-        },
-        {
-          "line": 462,
-          "text": "assert(probe.native_security_substitutions() == 2)"
-        },
-        {
-          "line": 463,
+          "line": 192,
           "text": "assert(probe.native_security_misses() == 0)"
         },
         {
-          "line": 479,
+          "line": 202,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(unordered), 2) == -1)"
+        },
+        {
+          "line": 205,
+          "text": "assert(!probe.last_error().empty())"
+        },
+        {
+          "line": 206,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"\", reinterpret_cast<const pf_bar_t*>(unordered), 1) == -1)"
+        },
+        {
+          "line": 209,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"bogus\", reinterpret_cast<const pf_bar_t*>(unordered), 1) == -1)"
+        },
+        {
+          "line": 212,
+          "text": "assert(strategy_set_native_security_feed( nullptr, \"D\", reinterpret_cast<const pf_bar_t*>(unordered), 1) == -1)"
+        },
+        {
+          "line": 214,
+          "text": "assert(!probe.native_security_feed_enabled())"
+        },
+        {
+          "line": 218,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 1) == 0)"
+        },
+        {
+          "line": 222,
+          "text": "assert(!probe.stream_begin(warmup.data(), static_cast<int>(warmup.size()), \"15\", \"15\"))"
+        },
+        {
+          "line": 224,
+          "text": "assert(probe.last_error().find(\"native request.security feed\") != std::string::npos)"
+        },
+        {
+          "line": 253,
+          "text": "assert(strategy_set_aux_security_feed( static_cast<pf_strategy_t>(&probe), reinterpret_cast<const pf_bar_t*>(aux.data()), static_cast<int>(aux.size()), \"1\") == 0)"
+        },
+        {
+          "line": 257,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 2) == 0)"
+        },
+        {
+          "line": 262,
           "text": "assert(probe.last_error().empty())"
         },
         {
-          "line": 480,
+          "line": 263,
+          "text": "assert((probe.daily_closes == std::vector<double>{111.5, 222.5}))"
+        },
+        {
+          "line": 264,
+          "text": "assert(probe.native_security_substitutions() == 2)"
+        },
+        {
+          "line": 265,
+          "text": "assert(probe.native_security_misses() == 0)"
+        },
+        {
+          "line": 266,
+          "text": "assert(near(probe.chart_closes[25], 125.0))"
+        },
+        {
+          "line": 299,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 3) == 0)"
+        },
+        {
+          "line": 304,
+          "text": "assert(probe.last_error().empty())"
+        },
+        {
+          "line": 307,
+          "text": "assert((probe.daily_closes == std::vector<double>{5077.25, 5177.25}))"
+        },
+        {
+          "line": 308,
+          "text": "assert(probe.native_security_substitutions() == 2)"
+        },
+        {
+          "line": 309,
+          "text": "assert(probe.native_security_misses() == 0)"
+        },
+        {
+          "line": 315,
+          "text": "assert(probe.daily_at_chart_close.size() == 185)"
+        },
+        {
+          "line": 316,
+          "text": "assert(std::isnan(probe.daily_at_chart_close[90]))"
+        },
+        {
+          "line": 317,
+          "text": "assert(near(probe.daily_at_chart_close[91], 5077.25))"
+        },
+        {
+          "line": 318,
+          "text": "assert(near(probe.daily_at_chart_close[92], 5077.25))"
+        },
+        {
+          "line": 319,
+          "text": "assert(near(probe.daily_at_chart_close[183], 5177.25))"
+        },
+        {
+          "line": 320,
+          "text": "assert(near(probe.daily_at_chart_close[184], 5177.25))"
+        },
+        {
+          "line": 400,
+          "text": "assert(strategy_set_native_security_feed( static_cast<pf_strategy_t>(&probe), \"D\", reinterpret_cast<const pf_bar_t*>(daily), 2) == 0)"
+        },
+        {
+          "line": 405,
+          "text": "assert(probe.last_error().empty())"
+        },
+        {
+          "line": 406,
           "text": "assert(probe.at_chart_close.size() == 52)"
         },
         {
-          "line": 482,
-          "text": "assert(d1.o == 9.55 && d1.h == 9.72 && d1.l == 9.53 && d1.c == 9.655)"
+          "line": 408,
+          "text": "assert(std::isnan(probe.at_chart_close[24].c))"
         },
         {
-          "line": 484,
-          "text": "assert(d2.o == 9.83 && d2.h == 10.0 && d2.l == 9.715 && d2.c == 9.765)"
+          "line": 413,
+          "text": "assert(row_is(probe.at_chart_close[25], kTupleDaily1))"
         },
         {
-          "line": 487,
-          "text": "assert(d2.v == vol)"
+          "line": 414,
+          "text": "assert(row_is(probe.at_chart_close[26], kTupleDaily1))"
         },
         {
-          "line": 488,
+          "line": 415,
+          "text": "assert(row_is(probe.at_chart_close[50], kTupleDaily1))"
+        },
+        {
+          "line": 416,
+          "text": "assert(row_is(probe.at_chart_close[51], kTupleDaily2))"
+        },
+        {
+          "line": 418,
+          "text": "assert(probe.at_chart_close[51].h == 676.0625)"
+        },
+        {
+          "line": 419,
+          "text": "assert(probe.at_chart_close[51].c == 674.25)"
+        },
+        {
+          "line": 420,
+          "text": "assert(probe.native_security_substitutions() == 2)"
+        },
+        {
+          "line": 421,
+          "text": "assert(probe.native_security_misses() == 0)"
+        },
+        {
+          "line": 439,
+          "text": "assert(probe.last_error().empty())"
+        },
+        {
+          "line": 440,
+          "text": "assert(probe.at_chart_close.size() == 52)"
+        },
+        {
+          "line": 442,
+          "text": "assert(d1.o == 639.875 && d1.h == 643.875 && d1.l == 639.375 && d1.c == 642.125)"
+        },
+        {
+          "line": 444,
+          "text": "assert(d2.o == 671.875 && d2.h == 675.875 && d2.l == 671.375 && d2.c == 674.125)"
+        },
+        {
+          "line": 446,
+          "text": "assert(d2.v == 1170.0)"
+        },
+        {
+          "line": 447,
           "text": "assert(probe.native_security_substitutions() == 0)"
         }
       ],
-      "sourceSha256": "39899dc3220e3b38ab5a26940fe63532178b7786defff1b5e1f9c44aea945a9d"
+      "sourceSha256": "159c1d717b74653c5cc82a43d2354dab4ac9a097f2c67a362d3afabf00a14145"
     },
     "test_native_wm_buckets": {
       "assertions": [
@@ -21299,175 +21299,175 @@
     "test_percent_equity_affordability": {
       "assertions": [
         {
-          "line": 164,
+          "line": 156,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 165,
+          "line": 157,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 166,
+          "line": 158,
           "text": "CHECK(eng.default_entries_placed == 2)"
         },
         {
-          "line": 167,
+          "line": 159,
           "text": "CHECK(eng.default_entries_pending_after_call == 0)"
         },
         {
-          "line": 168,
+          "line": 160,
           "text": "CHECK(eng.default_entries_with_snapshot == 0)"
         },
         {
-          "line": 187,
+          "line": 178,
           "text": "CHECK(eng.default_entries_pending_after_call == 1)"
         },
         {
-          "line": 188,
+          "line": 179,
           "text": "CHECK(eng.default_entries_with_snapshot == 1)"
         },
         {
-          "line": 189,
+          "line": 180,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 190,
+          "line": 181,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 192,
+          "line": 183,
           "text": "CHECK(eng.get_trade(0).is_long)"
         },
         {
-          "line": 193,
+          "line": 184,
           "text": "CHECK(eng.get_trade(0).entry_id == \"L\")"
         },
         {
-          "line": 194,
-          "text": "CHECK_NEAR(eng.get_trade(0).qty, 1982.0, 1e-9)"
+          "line": 185,
+          "text": "CHECK_NEAR(eng.get_trade(0).qty, 159.0, 1e-9)"
         },
         {
-          "line": 195,
-          "text": "CHECK_NEAR(eng.get_trade(0).entry_price, 10.08, 1e-9)"
+          "line": 186,
+          "text": "CHECK_NEAR(eng.get_trade(0).entry_price, 125.00, 1e-9)"
         },
         {
-          "line": 213,
+          "line": 204,
           "text": "CHECK(eng.default_entries_pending_after_call == 1)"
         },
         {
-          "line": 214,
+          "line": 205,
           "text": "CHECK(eng.default_entries_with_snapshot == 0)"
         },
         {
-          "line": 215,
+          "line": 206,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 216,
-          "text": "CHECK_NEAR(eng.position_size(), 991.0, 1e-9)"
+          "line": 207,
+          "text": "CHECK_NEAR(eng.position_size(), 79.0, 1e-9)"
         },
         {
-          "line": 217,
+          "line": 208,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 231,
+          "line": 222,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 232,
-          "text": "CHECK_NEAR(eng.position_size(), 1500.0, 1e-9)"
+          "line": 223,
+          "text": "CHECK_NEAR(eng.position_size(), 150.0, 1e-9)"
         },
         {
-          "line": 250,
+          "line": 242,
           "text": "CHECK(eng.default_entries_pending_after_call == 1)"
         },
         {
-          "line": 251,
+          "line": 243,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 252,
+          "line": 244,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 263,
+          "line": 255,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 264,
-          "text": "CHECK_NEAR(eng.position_size(), 2000.0, 1e-9)"
+          "line": 256,
+          "text": "CHECK_NEAR(eng.position_size(), 200.0, 1e-9)"
         },
         {
-          "line": 276,
+          "line": 268,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 277,
-          "text": "CHECK_NEAR(eng.position_size(), 2000.0, 1e-9)"
+          "line": 269,
+          "text": "CHECK_NEAR(eng.position_size(), 200.0, 1e-9)"
         },
         {
-          "line": 300,
+          "line": 292,
           "text": "CHECK(eng.default_entries_pending_after_call == 1)"
+        },
+        {
+          "line": 293,
+          "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
+        },
+        {
+          "line": 294,
+          "text": "CHECK(eng.trade_count() == 1)"
+        },
+        {
+          "line": 296,
+          "text": "CHECK(eng.get_trade(0).is_long)"
+        },
+        {
+          "line": 297,
+          "text": "CHECK(eng.get_trade(0).exit_id == \"S\")"
+        },
+        {
+          "line": 298,
+          "text": "CHECK_NEAR(eng.get_trade(0).qty, 50.0, 1e-9)"
+        },
+        {
+          "line": 299,
+          "text": "CHECK_NEAR(eng.get_trade(0).exit_price, 104.00, 1e-9)"
         },
         {
           "line": 301,
+          "text": "CHECK(eng.trades_with_entry_id(\"S\") == 0)"
+        },
+        {
+          "line": 322,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 302,
+          "line": 323,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 304,
+          "line": 325,
           "text": "CHECK(eng.get_trade(0).is_long)"
         },
         {
-          "line": 305,
+          "line": 326,
           "text": "CHECK(eng.get_trade(0).exit_id == \"S\")"
         },
         {
-          "line": 306,
-          "text": "CHECK_NEAR(eng.get_trade(0).qty, 500.0, 1e-9)"
+          "line": 327,
+          "text": "CHECK_NEAR(eng.get_trade(0).qty, 50.0, 1e-9)"
         },
         {
-          "line": 307,
-          "text": "CHECK_NEAR(eng.get_trade(0).exit_price, 10.20, 1e-9)"
-        },
-        {
-          "line": 309,
-          "text": "CHECK(eng.trades_with_entry_id(\"S\") == 0)"
+          "line": 328,
+          "text": "CHECK_NEAR(eng.get_trade(0).exit_price, 102.00, 1e-9)"
         },
         {
           "line": 330,
-          "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
-        },
-        {
-          "line": 331,
-          "text": "CHECK(eng.trade_count() == 1)"
-        },
-        {
-          "line": 333,
-          "text": "CHECK(eng.get_trade(0).is_long)"
-        },
-        {
-          "line": 334,
-          "text": "CHECK(eng.get_trade(0).exit_id == \"S\")"
-        },
-        {
-          "line": 335,
-          "text": "CHECK_NEAR(eng.get_trade(0).qty, 500.0, 1e-9)"
-        },
-        {
-          "line": 336,
-          "text": "CHECK_NEAR(eng.get_trade(0).exit_price, 10.10, 1e-9)"
-        },
-        {
-          "line": 338,
           "text": "CHECK(eng.trades_with_entry_id(\"S\") == 0)"
         }
       ],
-      "sourceSha256": "520b27a7dd3f2d8a0d755c769cab412fa9bd47f5ba6550052a75dcf79a1676cb"
+      "sourceSha256": "36a44ed23bf7515c328628df6dc65868e63d5b1acb904224cbf21f263c4291e4"
     },
     "test_percent_equity_open_entry_fee": {
       "assertions": [
@@ -23218,71 +23218,71 @@
     "test_pooc_retained_trail_path": {
       "assertions": [
         {
-          "line": 94,
+          "line": 84,
           "text": "CHECK(last_error().empty())"
         },
         {
-          "line": 118,
+          "line": 108,
           "text": "CHECK(p.trade_count() > index)"
         },
         {
-          "line": 125,
+          "line": 115,
           "text": "CHECK(trade.is_long == is_long)"
         },
         {
-          "line": 126,
+          "line": 116,
           "text": "CHECK(trade.entry_bar_index == entry_bar)"
         },
         {
-          "line": 127,
+          "line": 117,
           "text": "CHECK(std::abs(trade.entry_price - entry_price) < 1e-9)"
         },
         {
-          "line": 128,
+          "line": 118,
           "text": "CHECK(trade.exit_bar_index == exit_bar)"
         },
         {
-          "line": 129,
+          "line": 119,
           "text": "CHECK(std::abs(trade.exit_price - exit_price) < 1e-9)"
         },
         {
-          "line": 130,
+          "line": 120,
           "text": "CHECK(std::abs(trade.qty - 8) < 1e-9)"
         },
         {
-          "line": 131,
+          "line": 121,
           "text": "CHECK(trade.exit_id == exit_id)"
         },
         {
-          "line": 137,
+          "line": 127,
+          "text": "CHECK(p.trade_count() == 1)"
+        },
+        {
+          "line": 136,
           "text": "CHECK(p.trade_count() == 1)"
         },
         {
           "line": 145,
-          "text": "CHECK(p.trade_count() == 1)"
-        },
-        {
-          "line": 153,
           "text": "CHECK(long_probe.trade_count() == 1)"
         },
         {
-          "line": 158,
+          "line": 151,
           "text": "CHECK(short_probe.trade_count() == 1)"
         },
         {
-          "line": 167,
+          "line": 161,
           "text": "CHECK(p.trade_count() == 1)"
         },
         {
-          "line": 177,
+          "line": 172,
           "text": "CHECK(p.trade_count() == 1)"
         },
         {
-          "line": 190,
+          "line": 186,
           "text": "CHECK(p.trade_count() == 1)"
         },
         {
-          "line": 198,
+          "line": 196,
           "text": "CHECK(p.trade_count() == 1)"
         },
         {
@@ -23290,31 +23290,31 @@
           "text": "CHECK(p.trade_count() == 2)"
         },
         {
-          "line": 219,
+          "line": 221,
           "text": "CHECK(p.stream_begin(&warmup, 1, \"1\", \"1\"))"
         },
         {
-          "line": 220,
+          "line": 222,
           "text": "CHECK(p.stream_push_tick(TradeTick{60001, 1, is_long ? 101.0 : 99.0, 1}))"
         },
         {
-          "line": 221,
+          "line": 223,
           "text": "CHECK(p.trade_count() == 0)"
         },
         {
-          "line": 222,
+          "line": 224,
           "text": "CHECK(p.stream_push_tick(TradeTick{60002, 2, is_long ? 100.94 : 99.06, 1}))"
         },
         {
-          "line": 223,
+          "line": 225,
           "text": "CHECK(p.trade_count() == 1)"
         },
         {
-          "line": 226,
+          "line": 228,
           "text": "CHECK(p.stream_end(false))"
         }
       ],
-      "sourceSha256": "b1b24cf656c47fb94e4aba052e515fd328af54275dfe924fbe4be7c09d7ceb81"
+      "sourceSha256": "2cd02f4a08a112f8671603650c6e33956537004e38202ec672d2a043362b3cac"
     },
     "test_pooc_short_close_tick": {
       "assertions": [
@@ -23380,239 +23380,239 @@
     "test_prearmed_bracket_fill_bar": {
       "assertions": [
         {
-          "line": 144,
+          "line": 136,
           "text": "CHECK(probe.last_error().empty())"
         },
         {
-          "line": 147,
+          "line": 139,
           "text": "CHECK(probe.trade_count() == expected_trades)"
         },
         {
-          "line": 150,
+          "line": 142,
           "text": "CHECK(t.is_long == probe.opens_long())"
         },
         {
-          "line": 151,
+          "line": 143,
           "text": "CHECK(t.entry_bar_index == fill_bar)"
         },
         {
-          "line": 152,
+          "line": 144,
           "text": "CHECK(t.exit_bar_index == fill_bar)"
         },
         {
-          "line": 153,
+          "line": 145,
           "text": "CHECK(near(t.entry_price, 100.0))"
         },
         {
-          "line": 154,
+          "line": 146,
           "text": "CHECK(near(t.exit_price, 100.0))"
         },
         {
-          "line": 155,
+          "line": 147,
           "text": "CHECK(near(t.qty, 1.0))"
         },
         {
-          "line": 156,
+          "line": 148,
           "text": "CHECK(near(t.pnl, 0.0))"
         },
         {
-          "line": 157,
+          "line": 149,
           "text": "CHECK(t.exit_id == \"TP/SL 1\")"
         },
         {
-          "line": 158,
+          "line": 150,
           "text": "CHECK(probe.is_flat())"
         },
         {
-          "line": 159,
+          "line": 151,
           "text": "CHECK(near(probe.live_qty(), 0.0))"
         },
         {
-          "line": 174,
+          "line": 165,
           "text": "CHECK(probe.last_error().empty())"
         },
         {
-          "line": 175,
+          "line": 166,
           "text": "CHECK(probe.trade_count() == 1)"
         },
         {
-          "line": 178,
+          "line": 169,
           "text": "CHECK(t.entry_bar_index == 1)"
         },
         {
-          "line": 179,
+          "line": 170,
           "text": "CHECK(t.exit_bar_index == 3)"
         },
         {
-          "line": 180,
+          "line": 171,
           "text": "CHECK(near(t.entry_price, 92.0))"
         },
         {
-          "line": 181,
+          "line": 172,
           "text": "CHECK(near(t.exit_price, 95.0))"
         },
         {
-          "line": 247,
+          "line": 241,
           "text": "CHECK(probe.last_error().empty())"
         },
         {
-          "line": 252,
+          "line": 246,
           "text": "CHECK(probe.trade_count() >= expected_trades)"
         },
         {
-          "line": 255,
+          "line": 249,
           "text": "CHECK(t.is_long == opens_long)"
         },
         {
-          "line": 256,
+          "line": 250,
           "text": "CHECK(t.entry_bar_index == fill_bar)"
         },
         {
-          "line": 257,
+          "line": 251,
           "text": "CHECK(t.exit_bar_index == fill_bar)"
         },
         {
-          "line": 258,
+          "line": 254,
           "text": "CHECK(near(t.entry_price, open))"
         },
         {
-          "line": 259,
+          "line": 255,
           "text": "CHECK(near(t.exit_price, open))"
         },
         {
-          "line": 260,
+          "line": 256,
           "text": "CHECK(near(t.pnl, 0.0))"
         },
         {
-          "line": 261,
+          "line": 257,
           "text": "CHECK(t.exit_id == (opens_long ? \"Exit Long\" : \"Exit Short\"))"
         },
         {
-          "line": 262,
+          "line": 258,
           "text": "CHECK(probe.is_flat())"
         },
         {
-          "line": 263,
+          "line": 259,
           "text": "CHECK(near(probe.live_qty(), 0.0))"
         },
         {
-          "line": 279,
+          "line": 274,
           "text": "CHECK(probe.last_error().empty())"
         },
         {
-          "line": 280,
+          "line": 275,
           "text": "CHECK(probe.trade_count() == 1)"
         },
         {
-          "line": 283,
+          "line": 278,
           "text": "CHECK(t.entry_bar_index == 1)"
         },
         {
-          "line": 284,
+          "line": 279,
           "text": "CHECK(t.exit_bar_index == 1)"
         },
         {
-          "line": 285,
+          "line": 280,
           "text": "CHECK(near(t.entry_price, 224.0))"
         },
         {
-          "line": 286,
+          "line": 281,
           "text": "CHECK(near(t.exit_price, 221.76, 1e-6))"
         },
         {
-          "line": 356,
+          "line": 350,
           "text": "CHECK(probe.last_error().empty())"
         },
         {
-          "line": 357,
+          "line": 351,
           "text": "CHECK(probe.trade_count() == 1)"
         },
         {
-          "line": 360,
+          "line": 354,
           "text": "CHECK(t.is_long)"
         },
         {
-          "line": 361,
+          "line": 355,
           "text": "CHECK(t.entry_bar_index == 4)"
         },
         {
-          "line": 362,
+          "line": 356,
           "text": "CHECK(t.exit_bar_index == 4)"
         },
         {
-          "line": 363,
+          "line": 357,
           "text": "CHECK(near(t.entry_price, 1.17323, 1e-9))"
         },
         {
-          "line": 364,
+          "line": 358,
           "text": "CHECK(near(t.exit_price, 1.17322, 1e-9))"
         },
         {
-          "line": 365,
+          "line": 359,
           "text": "CHECK(near(t.qty, 1.0))"
         },
         {
-          "line": 366,
+          "line": 360,
           "text": "CHECK(near(t.pnl, -0.00001, 1e-9))"
         },
         {
-          "line": 367,
+          "line": 361,
           "text": "CHECK(t.exit_id == \"long\")"
         },
         {
-          "line": 368,
+          "line": 362,
           "text": "CHECK(probe.is_flat())"
         },
         {
-          "line": 378,
+          "line": 372,
           "text": "CHECK(probe.last_error().empty())"
         },
         {
-          "line": 379,
+          "line": 373,
           "text": "CHECK(probe.trade_count() == 1)"
         },
         {
-          "line": 382,
+          "line": 376,
           "text": "CHECK(t.entry_bar_index == 4)"
         },
         {
-          "line": 383,
+          "line": 377,
           "text": "CHECK(t.exit_bar_index == 4)"
         },
         {
-          "line": 384,
+          "line": 378,
           "text": "CHECK(near(t.entry_price, 1.17320, 1e-9))"
         },
         {
-          "line": 385,
+          "line": 379,
           "text": "CHECK(near(t.exit_price, 1.17319, 1e-9))"
         },
         {
-          "line": 397,
+          "line": 391,
           "text": "CHECK(probe.last_error().empty())"
         },
         {
-          "line": 398,
+          "line": 392,
           "text": "CHECK(probe.trade_count() == 1)"
         },
         {
-          "line": 401,
+          "line": 395,
           "text": "CHECK(t.entry_bar_index == 4)"
         },
         {
-          "line": 402,
+          "line": 396,
           "text": "CHECK(t.exit_bar_index == 5)"
         },
         {
-          "line": 403,
+          "line": 397,
           "text": "CHECK(near(t.entry_price, 1.17323, 1e-9))"
         },
         {
-          "line": 405,
+          "line": 399,
           "text": "CHECK(near(t.exit_price, 1.17307, 1e-9))"
         }
       ],
-      "sourceSha256": "4a9c116f5fdfd33f16aaa5e75e7a03bb4c5ac4fc9f61439bfb29739401c9671b"
+      "sourceSha256": "a04d778f177d63ff7ee97ce51dcd08fb228e96ef663a66f153030e6d0c38da09"
     },
     "test_prearmed_exit_path_cursor": {
       "assertions": [
@@ -24597,519 +24597,519 @@
     "test_range_end_close": {
       "assertions": [
         {
-          "line": 177,
+          "line": 167,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 178,
+          "line": 168,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 179,
+          "line": 169,
           "text": "CHECK_NEAR(eng.position_qty_, 1.0, 1e-12)"
         },
         {
-          "line": 180,
+          "line": 170,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 183,
+          "line": 173,
           "text": "CHECK(t.open_at_end)"
         },
         {
-          "line": 184,
+          "line": 174,
           "text": "CHECK(t.is_long)"
         },
         {
-          "line": 185,
-          "text": "CHECK_NEAR(t.entry_price, 11.82, 1e-9)"
+          "line": 175,
+          "text": "CHECK_NEAR(t.entry_price, 252.00, 1e-9)"
         },
         {
-          "line": 186,
+          "line": 176,
           "text": "CHECK(t.entry_bar_index == 1)"
         },
         {
-          "line": 187,
-          "text": "CHECK_NEAR(t.exit_price, 12.08, 1e-9)"
+          "line": 177,
+          "text": "CHECK_NEAR(t.exit_price, 258.50, 1e-9)"
         },
         {
-          "line": 188,
+          "line": 178,
           "text": "CHECK(t.exit_bar_index == 3)"
         },
         {
-          "line": 189,
+          "line": 179,
           "text": "CHECK(t.exit_time == 4 * kDay)"
         },
         {
-          "line": 190,
-          "text": "CHECK_NEAR(t.pnl, 12.08 - 11.82, 1e-9)"
+          "line": 180,
+          "text": "CHECK_NEAR(t.pnl, 258.50 - 252.00, 1e-9)"
         },
         {
-          "line": 191,
+          "line": 181,
           "text": "CHECK_NEAR(t.qty, 1.0, 1e-12)"
         },
         {
-          "line": 192,
+          "line": 182,
           "text": "CHECK(t.exit_id.empty())"
         },
         {
-          "line": 193,
+          "line": 183,
           "text": "CHECK(t.exit_comment.empty())"
         },
         {
-          "line": 198,
+          "line": 188,
           "text": "CHECK(rep.total_trades == 1)"
         },
         {
-          "line": 199,
+          "line": 189,
           "text": "CHECK(rep.trades_len == 1)"
         },
         {
-          "line": 201,
+          "line": 191,
           "text": "CHECK(rep.trades[0].open_at_end == 1)"
         },
         {
-          "line": 202,
+          "line": 192,
           "text": "CHECK(rep.trades[0].is_long == 1)"
         },
         {
-          "line": 203,
-          "text": "CHECK_NEAR(rep.trades[0].exit_price, 12.08, 1e-9)"
+          "line": 193,
+          "text": "CHECK_NEAR(rep.trades[0].exit_price, 258.50, 1e-9)"
         },
         {
-          "line": 204,
+          "line": 194,
           "text": "CHECK(rep.trades[0].exit_bar_index == 3)"
         },
         {
-          "line": 205,
+          "line": 195,
           "text": "CHECK(rep.trades[0].exit_time == 4 * kDay)"
         },
         {
-          "line": 207,
-          "text": "CHECK_NEAR(rep.net_profit, 12.08 - 11.82, 1e-9)"
+          "line": 197,
+          "text": "CHECK_NEAR(rep.net_profit, 258.50 - 252.00, 1e-9)"
         },
         {
-          "line": 208,
+          "line": 198,
           "text": "CHECK(rep.metrics.all.num_trades == 1)"
         },
         {
-          "line": 209,
+          "line": 199,
           "text": "CHECK(rep.metrics.longs.num_trades == 1)"
         },
         {
-          "line": 211,
+          "line": 201,
           "text": "CHECK_NEAR(rep.metrics.equity.open_pl, 0.0, 1e-12)"
         },
         {
-          "line": 212,
-          "text": "CHECK_NEAR(eng.curve().back().equity, 100000.0 + (12.08 - 11.82), 1e-9)"
+          "line": 202,
+          "text": "CHECK_NEAR(eng.curve().back().equity, 100000.0 + (258.50 - 252.00), 1e-9)"
         },
         {
-          "line": 223,
+          "line": 213,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 224,
+          "line": 214,
           "text": "CHECK(eng.range_end_rows().empty())"
         },
         {
-          "line": 225,
+          "line": 215,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 228,
+          "line": 218,
           "text": "CHECK(!t.open_at_end)"
         },
         {
-          "line": 229,
-          "text": "CHECK_NEAR(t.exit_price, 11.82, 1e-9)"
+          "line": 219,
+          "text": "CHECK_NEAR(t.exit_price, 252.00, 1e-9)"
         },
         {
-          "line": 230,
+          "line": 220,
           "text": "CHECK(t.exit_bar_index == 3)"
         },
         {
-          "line": 234,
+          "line": 224,
           "text": "CHECK(rep.total_trades == 1)"
         },
         {
-          "line": 235,
+          "line": 225,
           "text": "CHECK(rep.trades[0].open_at_end == 0)"
         },
         {
-          "line": 237,
+          "line": 227,
           "text": "CHECK_NEAR(last.open_profit, 0.0, 1e-12)"
         },
         {
-          "line": 238,
+          "line": 228,
           "text": "CHECK_NEAR(last.equity, 100000.0 + rep.net_profit, 1e-9)"
         },
         {
-          "line": 249,
+          "line": 239,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 250,
+          "line": 240,
           "text": "CHECK(eng.position_side_ == PositionSide::SHORT)"
         },
         {
-          "line": 251,
+          "line": 241,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 254,
+          "line": 244,
           "text": "CHECK(t.open_at_end)"
         },
         {
-          "line": 255,
+          "line": 245,
           "text": "CHECK(!t.is_long)"
         },
         {
-          "line": 256,
-          "text": "CHECK_NEAR(t.entry_price, 11.82, 1e-9)"
+          "line": 246,
+          "text": "CHECK_NEAR(t.entry_price, 252.00, 1e-9)"
         },
         {
-          "line": 257,
-          "text": "CHECK_NEAR(t.exit_price, 12.08, 1e-9)"
+          "line": 247,
+          "text": "CHECK_NEAR(t.exit_price, 258.50, 1e-9)"
         },
         {
-          "line": 258,
-          "text": "CHECK_NEAR(t.pnl, -0.26, 1e-9)"
+          "line": 248,
+          "text": "CHECK_NEAR(t.pnl, -6.50, 1e-9)"
         },
         {
-          "line": 259,
-          "text": "CHECK_NEAR(t.pnl_pct, -0.26 / 11.82 * 100.0, 1e-9)"
+          "line": 249,
+          "text": "CHECK_NEAR(t.pnl_pct, -6.50 / 252.00 * 100.0, 1e-9)"
         },
         {
-          "line": 260,
+          "line": 250,
           "text": "CHECK(t.exit_bar_index == 3)"
         },
         {
-          "line": 271,
+          "line": 261,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 275,
+          "line": 266,
           "text": "CHECK_NEAR(t.commission, expect_comm, 1e-12)"
         },
         {
-          "line": 276,
-          "text": "CHECK_NEAR(t.pnl, (12.08 - 11.82) - expect_comm, 1e-12)"
+          "line": 267,
+          "text": "CHECK_NEAR(t.pnl, (258.50 - 252.00) - expect_comm, 1e-12)"
         },
         {
-          "line": 277,
+          "line": 268,
           "text": "CHECK(t.open_at_end)"
         },
         {
-          "line": 284,
+          "line": 275,
           "text": "CHECK_NEAR(last.open_profit, 0.0, 1e-12)"
         },
         {
-          "line": 285,
+          "line": 276,
           "text": "CHECK_NEAR(last.equity, 100000.0 + rep.net_profit, 1e-9)"
         },
         {
-          "line": 286,
-          "text": "CHECK_NEAR(last.equity, 100000.0 + (12.08 - 11.82) - (11.82 * 0.001 + 12.08 * 0.001), 1e-9)"
+          "line": 278,
+          "text": "CHECK_NEAR(last.equity, 100000.0 + (258.50 - 252.00) - (252.00 * 0.001 + 258.50 * 0.001), 1e-9)"
         },
         {
-          "line": 287,
-          "text": "CHECK_NEAR(rep.metrics.all.commission_paid, 11.82 * 0.001 + 12.08 * 0.001, 1e-12)"
+          "line": 279,
+          "text": "CHECK_NEAR(rep.metrics.all.commission_paid, 252.00 * 0.001 + 258.50 * 0.001, 1e-12)"
         },
         {
-          "line": 298,
+          "line": 290,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 301,
-          "text": "CHECK_NEAR(t.exit_price, 12.08, 1e-9)"
+          "line": 293,
+          "text": "CHECK_NEAR(t.exit_price, 258.50, 1e-9)"
         },
         {
-          "line": 303,
-          "text": "CHECK_NEAR(t.entry_price, 11.84, 1e-9)"
+          "line": 295,
+          "text": "CHECK_NEAR(t.entry_price, 252.02, 1e-9)"
         },
         {
-          "line": 304,
-          "text": "CHECK_NEAR(t.pnl, 12.08 - 11.84, 1e-9)"
+          "line": 296,
+          "text": "CHECK_NEAR(t.pnl, 258.50 - 252.02, 1e-9)"
         },
         {
-          "line": 321,
+          "line": 313,
           "text": "CHECK(full.curve().size() == 6)"
         },
         {
-          "line": 322,
+          "line": 314,
           "text": "CHECK(shorter.curve().size() == 5)"
         },
         {
-          "line": 325,
+          "line": 317,
           "text": "CHECK(full.curve()[i].time_ms == shorter.curve()[i].time_ms)"
         },
         {
-          "line": 326,
+          "line": 318,
           "text": "CHECK_NEAR(full.curve()[i].equity, shorter.curve()[i].equity, 1e-12)"
         },
         {
-          "line": 327,
+          "line": 319,
           "text": "CHECK_NEAR(full.curve()[i].open_profit, shorter.curve()[i].open_profit, 1e-12)"
         },
         {
-          "line": 333,
-          "text": "CHECK_NEAR(full.curve()[4].open_profit, 12.10 - 11.82, 1e-9)"
+          "line": 325,
+          "text": "CHECK_NEAR(full.curve()[4].open_profit, 256.00 - 252.00, 1e-9)"
         },
         {
-          "line": 334,
-          "text": "CHECK_NEAR(full.curve()[4].equity, 100000.0 + (12.10 - 11.82), 1e-9)"
+          "line": 326,
+          "text": "CHECK_NEAR(full.curve()[4].equity, 100000.0 + (256.00 - 252.00), 1e-9)"
         },
         {
-          "line": 338,
+          "line": 331,
           "text": "CHECK_NEAR(shorter.curve()[4].open_profit, 0.0, 1e-12)"
         },
         {
-          "line": 339,
-          "text": "CHECK_NEAR(shorter.curve()[4].equity, 100000.0 + (12.10 - 11.82) - comm4, 1e-9)"
+          "line": 332,
+          "text": "CHECK_NEAR(shorter.curve()[4].equity, 100000.0 + (256.00 - 252.00) - comm4, 1e-9)"
         },
         {
-          "line": 344,
+          "line": 337,
           "text": "CHECK_NEAR(last.open_profit, 0.0, 1e-12)"
         },
         {
-          "line": 345,
+          "line": 338,
           "text": "CHECK_NEAR(last.equity, 100000.0 + rep.net_profit + last.open_profit, 1e-9)"
         },
         {
-          "line": 346,
-          "text": "CHECK_NEAR(rep.net_profit, (12.30 - 11.82) - (11.82 * 0.001 + 12.30 * 0.001), 1e-9)"
+          "line": 340,
+          "text": "CHECK_NEAR(rep.net_profit, (262.00 - 252.00) - (252.00 * 0.001 + 262.00 * 0.001), 1e-9)"
         },
         {
-          "line": 348,
+          "line": 342,
           "text": "CHECK_NEAR(rep.metrics.equity.max_equity_drawdown, full.max_dd(), 1e-9)"
         },
         {
-          "line": 349,
+          "line": 343,
           "text": "CHECK_NEAR(rep.metrics.equity.max_equity_runup, full.max_ru(), 1e-9)"
         },
         {
-          "line": 350,
+          "line": 344,
           "text": "CHECK(rep.total_trades == 1)"
         },
         {
-          "line": 351,
+          "line": 345,
           "text": "CHECK(rep.metrics.all.num_trades == 1)"
         },
         {
-          "line": 352,
-          "text": "CHECK_NEAR(rep.metrics.all.commission_paid, 11.82 * 0.001 + 12.30 * 0.001, 1e-12)"
+          "line": 346,
+          "text": "CHECK_NEAR(rep.metrics.all.commission_paid, 252.00 * 0.001 + 262.00 * 0.001, 1e-12)"
         },
         {
-          "line": 355,
+          "line": 349,
           "text": "CHECK_NEAR(rep.metrics.equity.time_in_market_pct, 5.0 / 6.0 * 100.0, 1e-9)"
         },
         {
-          "line": 367,
+          "line": 361,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 368,
+          "line": 362,
           "text": "CHECK(eng.position_side_ == PositionSide::LONG)"
         },
         {
-          "line": 369,
+          "line": 363,
           "text": "CHECK(eng.range_end_rows().size() == 2)"
         },
         {
-          "line": 373,
+          "line": 367,
           "text": "CHECK(a.open_at_end && b.open_at_end)"
         },
         {
-          "line": 374,
-          "text": "CHECK_NEAR(a.entry_price, 11.82, 1e-9)"
+          "line": 368,
+          "text": "CHECK_NEAR(a.entry_price, 252.00, 1e-9)"
         },
         {
-          "line": 375,
-          "text": "CHECK_NEAR(b.entry_price, 11.90, 1e-9)"
+          "line": 369,
+          "text": "CHECK_NEAR(b.entry_price, 254.50, 1e-9)"
         },
         {
-          "line": 376,
-          "text": "CHECK_NEAR(a.exit_price, 12.08, 1e-9)"
+          "line": 370,
+          "text": "CHECK_NEAR(a.exit_price, 258.50, 1e-9)"
         },
         {
-          "line": 377,
-          "text": "CHECK_NEAR(b.exit_price, 12.08, 1e-9)"
+          "line": 371,
+          "text": "CHECK_NEAR(b.exit_price, 258.50, 1e-9)"
         },
         {
-          "line": 378,
+          "line": 372,
           "text": "CHECK(a.exit_bar_index == 4 && b.exit_bar_index == 4)"
         },
         {
-          "line": 379,
-          "text": "CHECK_NEAR(a.pnl + b.pnl, (12.08 - 11.82) + (12.08 - 11.90), 1e-9)"
+          "line": 374,
+          "text": "CHECK_NEAR(a.pnl + b.pnl, (258.50 - 252.00) + (258.50 - 254.50), 1e-9)"
         },
         {
-          "line": 383,
+          "line": 378,
           "text": "CHECK(rep.total_trades == 2)"
         },
         {
-          "line": 384,
-          "text": "CHECK_NEAR(rep.net_profit, (12.08 - 11.82) + (12.08 - 11.90), 1e-9)"
+          "line": 379,
+          "text": "CHECK_NEAR(rep.net_profit, (258.50 - 252.00) + (258.50 - 254.50), 1e-9)"
         },
         {
-          "line": 397,
+          "line": 392,
           "text": "CHECK(eng.trade_count() == 1)"
+        },
+        {
+          "line": 393,
+          "text": "CHECK(eng.range_end_rows().size() == 1)"
+        },
+        {
+          "line": 396,
+          "text": "CHECK(rep.total_trades == 2)"
         },
         {
           "line": 398,
-          "text": "CHECK(eng.range_end_rows().size() == 1)"
-        },
-        {
-          "line": 401,
-          "text": "CHECK(rep.total_trades == 2)"
-        },
-        {
-          "line": 403,
           "text": "CHECK(rep.trades[0].open_at_end == 0)"
         },
         {
-          "line": 404,
+          "line": 399,
           "text": "CHECK(rep.trades[0].exit_bar_index == 3)"
         },
         {
-          "line": 405,
+          "line": 400,
           "text": "CHECK(rep.trades[1].open_at_end == 1)"
         },
         {
-          "line": 406,
+          "line": 401,
           "text": "CHECK(rep.trades[1].entry_bar_index == 5)"
         },
         {
-          "line": 407,
+          "line": 402,
           "text": "CHECK(rep.trades[1].exit_bar_index == 7)"
         },
         {
-          "line": 408,
+          "line": 403,
           "text": "CHECK_NEAR(rep.net_profit, rep.trades[0].pnl + rep.trades[1].pnl, 1e-12)"
         },
         {
-          "line": 421,
+          "line": 416,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 422,
+          "line": 417,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 423,
+          "line": 418,
           "text": "CHECK(eng.report_trade_count() == 2)"
         },
         {
-          "line": 426,
+          "line": 421,
           "text": "CHECK(rep.total_trades == 2)"
         },
         {
-          "line": 431,
+          "line": 426,
           "text": "CHECK(closed_inc != 0)"
         },
         {
-          "line": 432,
+          "line": 427,
           "text": "CHECK(range_end_inc != 0)"
         },
         {
-          "line": 434,
+          "line": 429,
           "text": "CHECK(closed_inc == eng.all_trades()[0].entry_incarnation)"
         },
         {
-          "line": 435,
+          "line": 430,
           "text": "CHECK(range_end_inc == eng.range_end_rows()[0].entry_incarnation)"
         },
         {
-          "line": 438,
+          "line": 433,
           "text": "CHECK(range_end_inc > closed_inc)"
         },
         {
-          "line": 441,
+          "line": 436,
           "text": "CHECK(strategy_closed_trade_entry_incarnation(h, 2) == 0)"
         },
         {
-          "line": 442,
+          "line": 437,
           "text": "CHECK(strategy_closed_trade_entry_incarnation(h, -1) == 0)"
         },
         {
-          "line": 461,
+          "line": 457,
           "text": "CHECK(eng.last_error().empty())"
         },
         {
-          "line": 462,
+          "line": 458,
           "text": "CHECK(eng.curve().size() == 3)"
         },
         {
-          "line": 463,
+          "line": 459,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 466,
+          "line": 462,
           "text": "CHECK(t.open_at_end)"
         },
         {
-          "line": 467,
+          "line": 463,
           "text": "CHECK(t.exit_bar_index == 2)"
         },
         {
-          "line": 468,
+          "line": 464,
           "text": "CHECK(t.exit_time == eng.curve()[2].time_ms)"
         },
         {
-          "line": 469,
+          "line": 465,
           "text": "CHECK(t.exit_time == base + 10 * 60'000)"
         },
         {
-          "line": 470,
-          "text": "CHECK_NEAR(t.exit_price, 12.08, 1e-9)"
+          "line": 466,
+          "text": "CHECK_NEAR(t.exit_price, 258.50, 1e-9)"
         },
         {
-          "line": 482,
+          "line": 478,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 485,
+          "line": 481,
           "text": "CHECK(eng.range_end_rows().empty())"
         },
         {
-          "line": 486,
+          "line": 482,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 505,
+          "line": 501,
           "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
-          "line": 508,
+          "line": 504,
           "text": "CHECK_NEAR(rep.metrics.equity.max_equity_drawdown, eng.max_dd(), 1e-9)"
         },
         {
-          "line": 509,
+          "line": 505,
           "text": "CHECK_NEAR(rep.metrics.equity.max_equity_runup, eng.max_ru(), 1e-9)"
         },
         {
-          "line": 513,
-          "text": "CHECK_NEAR(eng.max_dd(), (12.40 - 11.20) + (11.82 * 0.001 + 11.20 * 0.001), 1e-9)"
+          "line": 510,
+          "text": "CHECK_NEAR(eng.max_dd(), (266.00 - 236.00) + (252.00 * 0.001 + 236.00 * 0.001), 1e-9)"
+        },
+        {
+          "line": 526,
+          "text": "CHECK(eng.range_end_rows().size() == 1)"
         },
         {
           "line": 529,
-          "text": "CHECK(eng.range_end_rows().size() == 1)"
-        },
-        {
-          "line": 532,
           "text": "CHECK_NEAR(rep.metrics.equity.max_equity_drawdown, eng.max_dd(), 1e-9)"
         },
         {
-          "line": 533,
+          "line": 530,
           "text": "CHECK_NEAR(rep.metrics.equity.max_equity_runup, eng.max_ru(), 1e-9)"
         },
         {
-          "line": 536,
-          "text": "CHECK_NEAR(eng.max_ru(), (12.30 - 11.30) - (11.82 * 0.001 + 12.30 * 0.001), 1e-9)"
+          "line": 534,
+          "text": "CHECK_NEAR(eng.max_ru(), (262.00 - 244.00) - (252.00 * 0.001 + 262.00 * 0.001), 1e-9)"
         }
       ],
-      "sourceSha256": "e8b33bba18ecd6cd55e0bfcb2a0354277ebe72cb6ac215a44202939d068cf2f3"
+      "sourceSha256": "26c92f45ca4e9cada3a5eb592dc067387937439f0a3732c5ae0fc6ece9030bce"
     },
     "test_request_security": {
       "assertions": [],
@@ -28073,315 +28073,315 @@
     "test_sizing_basis_mintick": {
       "assertions": [
         {
-          "line": 178,
+          "line": 124,
           "text": "CHECK(eng.basis_buy.size() == 1)"
         },
         {
-          "line": 180,
-          "text": "CHECK_NEAR(eng.basis_buy[0], 9.56, 1e-12)"
+          "line": 126,
+          "text": "CHECK_NEAR(eng.basis_buy[0], 64.03, 1e-12)"
         },
         {
-          "line": 181,
-          "text": "CHECK_NEAR(eng.frozen_qty[0], 10460.0, 1e-9)"
+          "line": 127,
+          "text": "CHECK_NEAR(eng.frozen_qty[0], 9995.0, 1e-9)"
         },
         {
-          "line": 183,
+          "line": 129,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 186,
+          "line": 132,
           "text": "CHECK(t.is_long)"
         },
         {
-          "line": 187,
-          "text": "CHECK_NEAR(t.entry_price, 9.56, 1e-9)"
+          "line": 133,
+          "text": "CHECK_NEAR(t.entry_price, 64.03, 1e-9)"
         },
         {
-          "line": 188,
-          "text": "CHECK_NEAR(t.qty, 10460.0, 1e-9)"
+          "line": 134,
+          "text": "CHECK_NEAR(t.qty, 9995.0, 1e-9)"
         },
         {
-          "line": 189,
-          "text": "CHECK_NEAR(t.exit_price, 9.58, 1e-9)"
+          "line": 135,
+          "text": "CHECK_NEAR(t.exit_price, 64.05, 1e-9)"
         },
         {
-          "line": 191,
+          "line": 137,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 213,
+          "line": 156,
           "text": "CHECK(eng.basis_buy.size() == 1)"
         },
         {
-          "line": 215,
-          "text": "CHECK_NEAR(eng.basis_buy[0], 9.59, 1e-12)"
+          "line": 158,
+          "text": "CHECK_NEAR(eng.basis_buy[0], 64.03, 1e-12)"
         },
         {
-          "line": 216,
-          "text": "CHECK_NEAR(eng.frozen_qty[0], 10427.0, 1e-9)"
+          "line": 159,
+          "text": "CHECK_NEAR(eng.frozen_qty[0], 9995.0, 1e-9)"
         },
         {
-          "line": 218,
+          "line": 161,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 221,
+          "line": 164,
           "text": "CHECK(t.is_long)"
         },
         {
-          "line": 222,
-          "text": "CHECK_NEAR(t.entry_price, 9.59, 1e-9)"
+          "line": 165,
+          "text": "CHECK_NEAR(t.entry_price, 64.03, 1e-9)"
         },
         {
-          "line": 223,
-          "text": "CHECK_NEAR(t.qty, 10427.0, 1e-9)"
+          "line": 166,
+          "text": "CHECK_NEAR(t.qty, 9995.0, 1e-9)"
         },
         {
-          "line": 225,
+          "line": 168,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 256,
+          "line": 190,
           "text": "CHECK(eng.basis_sell.size() == 2)"
         },
         {
-          "line": 258,
-          "text": "CHECK_NEAR(eng.basis_sell[1], 9.59, 1e-12)"
+          "line": 192,
+          "text": "CHECK_NEAR(eng.basis_sell[1], 64.03, 1e-12)"
         },
         {
-          "line": 259,
-          "text": "CHECK_NEAR(eng.frozen_qty[1], 10526.0, 1e-9)"
+          "line": 193,
+          "text": "CHECK_NEAR(eng.frozen_qty[1], 10000.0, 1e-9)"
         },
         {
-          "line": 261,
+          "line": 195,
           "text": "CHECK(eng.trade_count() == 2)"
         },
         {
-          "line": 264,
+          "line": 198,
           "text": "CHECK(t0.is_long)"
         },
         {
-          "line": 265,
-          "text": "CHECK_NEAR(t0.entry_price, 9.50, 1e-9)"
+          "line": 199,
+          "text": "CHECK_NEAR(t0.entry_price, 64.00, 1e-9)"
         },
         {
-          "line": 266,
-          "text": "CHECK_NEAR(t0.qty, 10526.0, 1e-9)"
+          "line": 200,
+          "text": "CHECK_NEAR(t0.qty, 10000.0, 1e-9)"
         },
         {
-          "line": 267,
-          "text": "CHECK_NEAR(t0.exit_price, 9.59, 1e-9)"
+          "line": 201,
+          "text": "CHECK_NEAR(t0.exit_price, 64.03, 1e-9)"
         },
         {
-          "line": 269,
+          "line": 203,
           "text": "CHECK(!t1.is_long)"
         },
         {
-          "line": 270,
-          "text": "CHECK_NEAR(t1.entry_price, 9.59, 1e-9)"
+          "line": 204,
+          "text": "CHECK_NEAR(t1.entry_price, 64.03, 1e-9)"
         },
         {
-          "line": 271,
-          "text": "CHECK_NEAR(t1.qty, 10526.0, 1e-9)"
+          "line": 205,
+          "text": "CHECK_NEAR(t1.qty, 10000.0, 1e-9)"
         },
         {
-          "line": 272,
-          "text": "CHECK_NEAR(t1.exit_price, 9.60, 1e-9)"
+          "line": 206,
+          "text": "CHECK_NEAR(t1.exit_price, 64.10, 1e-9)"
         },
         {
-          "line": 274,
+          "line": 208,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 292,
+          "line": 224,
           "text": "CHECK(eng.basis_buy.size() == 1)"
         },
         {
-          "line": 294,
-          "text": "CHECK_NEAR(eng.basis_buy[0], 9.56, 1e-12)"
+          "line": 226,
+          "text": "CHECK_NEAR(eng.basis_buy[0], 64.03, 1e-12)"
         },
         {
-          "line": 295,
-          "text": "CHECK_NEAR(eng.basis_sell[0], 9.56, 1e-12)"
+          "line": 227,
+          "text": "CHECK_NEAR(eng.basis_sell[0], 64.03, 1e-12)"
         },
         {
-          "line": 296,
-          "text": "CHECK_NEAR(eng.frozen_qty[0], 10460.0, 1e-9)"
+          "line": 228,
+          "text": "CHECK_NEAR(eng.frozen_qty[0], 9995.0, 1e-9)"
         },
         {
-          "line": 298,
+          "line": 230,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 300,
-          "text": "CHECK_NEAR(eng.all_trades()[0].qty, 10460.0, 1e-9)"
+          "line": 232,
+          "text": "CHECK_NEAR(eng.all_trades()[0].qty, 9995.0, 1e-9)"
         },
         {
-          "line": 301,
-          "text": "CHECK_NEAR(eng.all_trades()[0].entry_price, 9.56, 1e-9)"
+          "line": 233,
+          "text": "CHECK_NEAR(eng.all_trades()[0].entry_price, 64.03, 1e-9)"
         },
         {
-          "line": 320,
+          "line": 252,
           "text": "CHECK_NEAR(eng.nearest(5000.125), 5000.25, 1e-9)"
         },
         {
-          "line": 321,
+          "line": 253,
           "text": "CHECK_NEAR(eng.nearest(4999.875), 5000.00, 1e-9)"
         },
         {
-          "line": 322,
+          "line": 254,
           "text": "CHECK(eng.basis_buy.size() == 1)"
         },
         {
-          "line": 324,
+          "line": 256,
           "text": "CHECK_NEAR(eng.basis_buy[0], 5000.25, 1e-9)"
         },
         {
-          "line": 325,
+          "line": 257,
           "text": "CHECK_NEAR(eng.frozen_qty[0], 19.0, 1e-9)"
         },
         {
-          "line": 327,
+          "line": 259,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 329,
+          "line": 261,
           "text": "CHECK_NEAR(eng.all_trades()[0].qty, 19.0, 1e-9)"
         },
         {
-          "line": 330,
+          "line": 262,
           "text": "CHECK_NEAR(eng.all_trades()[0].entry_price, 5000.25, 1e-9)"
         },
         {
-          "line": 349,
+          "line": 281,
           "text": "CHECK(eng.basis_buy.size() == 1)"
         },
         {
-          "line": 351,
-          "text": "CHECK_NEAR(eng.basis_buy[0], 9.58, 1e-12)"
+          "line": 283,
+          "text": "CHECK_NEAR(eng.basis_buy[0], 64.05, 1e-12)"
         },
         {
-          "line": 352,
-          "text": "CHECK_NEAR(eng.basis_sell[0], 9.54, 1e-12)"
+          "line": 284,
+          "text": "CHECK_NEAR(eng.basis_sell[0], 64.01, 1e-12)"
         },
         {
-          "line": 353,
-          "text": "CHECK_NEAR(eng.frozen_qty[0], 10438.0, 1e-9)"
+          "line": 285,
+          "text": "CHECK_NEAR(eng.frozen_qty[0], 9992.0, 1e-9)"
         },
         {
-          "line": 355,
+          "line": 287,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 357,
-          "text": "CHECK_NEAR(eng.all_trades()[0].entry_price, 9.58, 1e-9)"
+          "line": 289,
+          "text": "CHECK_NEAR(eng.all_trades()[0].entry_price, 64.05, 1e-9)"
         },
         {
-          "line": 358,
-          "text": "CHECK_NEAR(eng.all_trades()[0].qty, 10438.0, 1e-9)"
+          "line": 290,
+          "text": "CHECK_NEAR(eng.all_trades()[0].qty, 9992.0, 1e-9)"
         },
         {
-          "line": 408,
+          "line": 340,
           "text": "CHECK(eng.trade_count() == 0)"
         },
         {
-          "line": 409,
+          "line": 341,
           "text": "CHECK(eng.position_side_ == PositionSide::SHORT)"
         },
         {
-          "line": 410,
+          "line": 342,
           "text": "CHECK_NEAR(eng.position_qty_, 10.0, 1e-9)"
         },
         {
-          "line": 426,
+          "line": 358,
           "text": "CHECK(eng.trade_count() >= 1)"
         },
         {
-          "line": 428,
+          "line": 360,
           "text": "CHECK(eng.exit_comment(0) == std::string(\"Margin call\"))"
         },
         {
-          "line": 429,
+          "line": 361,
           "text": "CHECK_NEAR(eng.exit_price(0), 105.01, 1e-9)"
         },
         {
-          "line": 430,
+          "line": 362,
           "text": "CHECK_NEAR(eng.trade_size(0), 4.0 * (20.0 - 2000.0 / 105.01), 1e-6)"
         },
         {
-          "line": 464,
+          "line": 396,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 466,
+          "line": 398,
           "text": "CHECK(eng.exit_comment(0) != std::string(\"Margin call\"))"
         },
         {
-          "line": 467,
+          "line": 399,
           "text": "CHECK_NEAR(eng.exit_price(0), 99.60, 1e-9)"
         },
         {
-          "line": 468,
+          "line": 400,
           "text": "CHECK_NEAR(eng.trade_size(0), 10.0, 1e-9)"
         },
         {
-          "line": 470,
+          "line": 402,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 482,
+          "line": 414,
           "text": "CHECK(eng.trade_count() == 2)"
         },
         {
-          "line": 484,
+          "line": 416,
           "text": "CHECK(eng.exit_comment(0) == std::string(\"Margin call\"))"
         },
         {
-          "line": 485,
+          "line": 417,
           "text": "CHECK_NEAR(eng.exit_price(0), 100.01, 1e-9)"
         },
         {
-          "line": 486,
+          "line": 418,
           "text": "CHECK_NEAR(eng.trade_size(0), 4.0 * q_min, 1e-9)"
         },
         {
-          "line": 487,
+          "line": 419,
           "text": "CHECK(eng.exit_comment(1) != std::string(\"Margin call\"))"
         },
         {
-          "line": 488,
+          "line": 420,
           "text": "CHECK_NEAR(eng.exit_price(1), 99.60, 1e-9)"
         },
         {
-          "line": 489,
+          "line": 421,
           "text": "CHECK_NEAR(eng.trade_size(1), 10.0 - 4.0 * q_min, 1e-9)"
         },
         {
-          "line": 491,
+          "line": 423,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 499,
-          "text": "CHECK_NEAR(eng.nearest(9.565), 9.56, 1e-12)"
+          "line": 431,
+          "text": "CHECK_NEAR(eng.nearest(64.035), 64.03, 1e-12)"
         },
         {
-          "line": 500,
-          "text": "CHECK_NEAR(eng.nearest(9.585), 9.59, 1e-12)"
+          "line": 432,
+          "text": "CHECK_NEAR(eng.nearest(64.025), 64.03, 1e-12)"
         },
         {
-          "line": 501,
-          "text": "CHECK_NEAR(eng.nearest(228.765), 228.76, 1e-12)"
+          "line": 433,
+          "text": "CHECK_NEAR(eng.nearest(512.035), 512.03, 1e-12)"
         },
         {
-          "line": 502,
-          "text": "CHECK_NEAR(eng.nearest(214.385), 214.39, 1e-12)"
+          "line": 434,
+          "text": "CHECK_NEAR(eng.nearest(1024.045), 1024.05, 1e-12)"
         },
         {
-          "line": 503,
-          "text": "CHECK(eng.nearest(9.56) == eng.nearest(eng.nearest(9.56)))"
+          "line": 435,
+          "text": "CHECK(eng.nearest(64.03) == eng.nearest(eng.nearest(64.03)))"
         }
       ],
-      "sourceSha256": "e4f732cf90bc1565398345937e767a9eb059d491e07e95cc7f9f6f134f166ace"
+      "sourceSha256": "e4bc6d7799414729b52b90b2a0dda048e349ae54cfe8123e43ff380ed6162752"
     },
     "test_small_money_margin_residual": {
       "assertions": [
@@ -28515,195 +28515,195 @@
     "test_sparse_atr_prev_close": {
       "assertions": [
         {
-          "line": 123,
+          "line": 120,
           "text": "CHECK(std::isnan(got))"
         },
         {
-          "line": 123,
+          "line": 120,
           "text": "CHECK(std::isnan(legacy))"
         },
         {
-          "line": 124,
+          "line": 121,
           "text": "CHECK(near(got, want))"
         },
         {
-          "line": 125,
+          "line": 122,
           "text": "CHECK(near(legacy, want_legacy))"
         },
         {
-          "line": 129,
+          "line": 126,
           "text": "CHECK(differing == 3)"
         },
         {
-          "line": 143,
+          "line": 140,
           "text": "CHECK(std::isnan(again))"
         },
         {
-          "line": 143,
+          "line": 140,
           "text": "CHECK(near(first, again))"
         },
         {
-          "line": 151,
+          "line": 148,
           "text": "CHECK(near(last, straight))"
         },
         {
-          "line": 160,
+          "line": 157,
           "text": "CHECK(near(tr_true.compute(bars[0].high, bars[0].low, bars[0].close, kNaN), 2.0))"
         },
         {
-          "line": 161,
+          "line": 158,
           "text": "CHECK(std::isnan(tr_false.compute(bars[0].high, bars[0].low, bars[0].close, kNaN)))"
         },
         {
-          "line": 164,
+          "line": 161,
           "text": "CHECK(near(t.compute(bars[1].high, bars[1].low, bars[1].close, bars[0].close), 3.5))"
         },
         {
-          "line": 165,
+          "line": 162,
           "text": "CHECK(near(t.compute(bars[3].high, bars[3].low, bars[3].close, bars[2].close), 6.0))"
         },
         {
-          "line": 166,
+          "line": 163,
           "text": "CHECK(near(t.recompute(bars[3].high, bars[3].low, bars[3].close, bars[2].close), 6.0))"
         },
         {
-          "line": 167,
+          "line": 164,
           "text": "CHECK(near(t.compute(bars[7].high, bars[7].low, bars[7].close, bars[6].close), 5.0))"
         },
         {
-          "line": 199,
+          "line": 196,
           "text": "CHECK(p.prev_seen.size() == bars.size())"
         },
         {
-          "line": 201,
+          "line": 198,
           "text": "CHECK(std::isnan(p.prev_seen[0]))"
         },
         {
-          "line": 202,
+          "line": 199,
           "text": "CHECK(near(p.prev_seen[i], bars[i - 1].close))"
         },
         {
-          "line": 208,
+          "line": 205,
           "text": "CHECK(p.atr_seen.size() == want.size())"
         },
         {
-          "line": 210,
+          "line": 207,
           "text": "CHECK(std::isnan(p.atr_seen[k]))"
         },
         {
-          "line": 211,
+          "line": 208,
           "text": "CHECK(near(p.atr_seen[k], want[k]))"
         },
         {
-          "line": 216,
+          "line": 213,
           "text": "CHECK(near(p.atr_seen[2], 5.5))"
         },
         {
-          "line": 217,
+          "line": 214,
           "text": "CHECK(near(p.atr_seen[3], (5.0 + 2.0 * 5.5) / 3.0))"
         },
         {
-          "line": 218,
+          "line": 215,
           "text": "CHECK(near(p.atr_seen[4], (6.0 + 2.0 * ((5.0 + 2.0 * 5.5) / 3.0)) / 3.0))"
         },
         {
-          "line": 224,
+          "line": 221,
           "text": "CHECK(q.prev_seen.size() == 3 + bars.size())"
         },
         {
-          "line": 226,
+          "line": 223,
           "text": "CHECK(std::isnan(q.prev_seen[3]))"
         },
         {
-          "line": 227,
+          "line": 224,
           "text": "CHECK(near(q.prev_seen[4], bars[0].close))"
         },
         {
-          "line": 301,
+          "line": 294,
           "text": "CHECK(p.last_error().empty())"
         },
         {
-          "line": 304,
+          "line": 297,
           "text": "CHECK(p.trade_count() == 2)"
         },
         {
-          "line": 312,
+          "line": 305,
           "text": "CHECK(recalcs == 5)"
         },
         {
-          "line": 313,
+          "line": 306,
           "text": "CHECK(per_bar[i] == ((i % 2 == 1) ? 2 : 1))"
         },
         {
-          "line": 321,
+          "line": 314,
           "text": "CHECK(std::isnan(s.prev))"
         },
         {
-          "line": 322,
+          "line": 315,
           "text": "CHECK(near(s.prev, bars[s.bar - 1].close))"
         },
         {
-          "line": 323,
+          "line": 316,
           "text": "CHECK(std::isnan(s.atr))"
         },
         {
-          "line": 324,
+          "line": 317,
           "text": "CHECK(near(s.atr, want[s.bar]))"
         },
         {
-          "line": 328,
+          "line": 321,
           "text": "CHECK(near(want[2], 11.0 / 3.0))"
         },
         {
-          "line": 329,
+          "line": 322,
           "text": "CHECK(near(want[3], (8.0 + 2.0 * (11.0 / 3.0)) / 3.0))"
         },
         {
-          "line": 339,
+          "line": 332,
           "text": "CHECK(second_first > 0)"
         },
         {
-          "line": 347,
+          "line": 340,
           "text": "CHECK(second_run_ok)"
         },
         {
-          "line": 423,
+          "line": 416,
           "text": "CHECK(s.bar >= 0 && s.bar < (int)bars.size())"
         },
         {
-          "line": 426,
+          "line": 419,
           "text": "CHECK(std::isnan(s.prev))"
         },
         {
-          "line": 427,
+          "line": 420,
           "text": "CHECK(near(s.prev, bars[s.bar - 1].close))"
         },
         {
-          "line": 430,
+          "line": 423,
           "text": "CHECK(std::isnan(s.atr))"
         },
         {
-          "line": 431,
+          "line": 424,
           "text": "CHECK(near(s.atr, want[s.bar]))"
         },
         {
-          "line": 433,
+          "line": 426,
           "text": "CHECK(closes == (int)bars.size())"
         },
         {
-          "line": 435,
+          "line": 428,
           "text": "CHECK(recalcs >= (int)bars.size() - 1)"
         },
         {
-          "line": 440,
+          "line": 433,
           "text": "CHECK(near(s.atr, (2.0 + 5.0 + 3.0) / 3.0))"
         },
         {
-          "line": 441,
+          "line": 434,
           "text": "CHECK(near(s.atr, (6.0 + 2.0 * ((2.0 + 5.0 + 3.0) / 3.0)) / 3.0))"
         }
       ],
-      "sourceSha256": "b0447eed5c6ddb490201fa611368110a54a62ce3f0e5f0568eecc54e85a6cbaa"
+      "sourceSha256": "d1147743358789a15b10c529add8e8c65f51a0c466370d555c04c1ca29d1f582"
     },
     "test_stop_decline_continue_path": {
       "assertions": [
@@ -30280,119 +30280,119 @@
     "test_stop_tick_rounding": {
       "assertions": [
         {
-          "line": 205,
+          "line": 172,
           "text": "CHECK(eng.position_side_ == PositionSide::FLAT)"
         },
         {
-          "line": 206,
+          "line": 173,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 209,
+          "line": 176,
           "text": "CHECK(t.is_long == is_long)"
         },
         {
-          "line": 210,
+          "line": 177,
           "text": "CHECK(t.entry_time == ts(entry_bar))"
         },
         {
-          "line": 211,
+          "line": 178,
           "text": "CHECK_NEAR(t.entry_price, entry_px, 1e-9)"
         },
         {
-          "line": 212,
+          "line": 179,
           "text": "CHECK(t.exit_time == ts(exit_bar))"
         },
         {
-          "line": 213,
+          "line": 180,
           "text": "CHECK_NEAR(t.exit_price, exit_px, 1e-9)"
         },
         {
-          "line": 214,
+          "line": 181,
           "text": "CHECK_NEAR(t.qty, 100.0, 1e-9)"
         },
         {
-          "line": 226,
-          "text": "CHECK(eng.grid(13.745) == 13.75)"
+          "line": 193,
+          "text": "CHECK(eng.grid(80.245) == 80.25)"
         },
         {
-          "line": 227,
-          "text": "CHECK(eng.grid(14.035) == 14.04)"
+          "line": 194,
+          "text": "CHECK(eng.grid(80.635) == 80.64)"
         },
         {
-          "line": 228,
-          "text": "CHECK(eng.grid(13.3448) == 13.34)"
+          "line": 195,
+          "text": "CHECK(eng.grid(79.8242) == 79.82)"
         },
         {
-          "line": 229,
-          "text": "CHECK(eng.grid(14.0351) == 14.04)"
+          "line": 196,
+          "text": "CHECK(eng.grid(80.6351) == 80.64)"
         },
         {
-          "line": 230,
-          "text": "CHECK(eng.grid(13.2202) == 13.22)"
+          "line": 197,
+          "text": "CHECK(eng.grid(79.9103) == 79.91)"
         },
         {
-          "line": 231,
-          "text": "CHECK(eng.grid(13.775) == 13.78)"
+          "line": 198,
+          "text": "CHECK(eng.grid(80.415) == 80.42)"
         },
         {
-          "line": 232,
-          "text": "CHECK(eng.grid(13.61) == 13.61)"
+          "line": 199,
+          "text": "CHECK(eng.grid(80.10) == 80.10)"
         },
         {
-          "line": 233,
-          "text": "CHECK(eng.grid(14.04) == 14.04)"
+          "line": 200,
+          "text": "CHECK(eng.grid(80.64) == 80.64)"
         },
         {
-          "line": 234,
+          "line": 201,
           "text": "CHECK(std::isnan(eng.grid(kNaN)))"
         },
         {
-          "line": 238,
-          "text": "CHECK(eng.grid(1404.0 * 0.01) == 14.04)"
+          "line": 205,
+          "text": "CHECK(eng.grid(8007.0 * 0.01) == 80.07)"
         },
         {
-          "line": 242,
-          "text": "CHECK(eng.grid(228.765) == 228.76)"
+          "line": 208,
+          "text": "CHECK(eng.grid(80.005) == 80.00)"
         },
         {
-          "line": 243,
-          "text": "CHECK(eng.grid(214.385) == 214.39)"
+          "line": 209,
+          "text": "CHECK(eng.grid(80.015) == 80.02)"
         },
         {
-          "line": 246,
-          "text": "CHECK(eng.grid(13.745) == 13.745)"
+          "line": 212,
+          "text": "CHECK(eng.grid(80.245) == 80.245)"
         },
         {
-          "line": 250,
-          "text": "CHECK(eng.grid(13.7451) == 1759.0 * 0.0078125)"
+          "line": 215,
+          "text": "CHECK(eng.grid(82.4147) == 10549.0 * 0.0078125)"
         },
         {
-          "line": 254,
-          "text": "CHECK(eng.grid(13.7451) == 5.0 * 2.5)"
+          "line": 218,
+          "text": "CHECK(eng.grid(82.4147) == 33.0 * 2.5)"
         },
         {
-          "line": 255,
-          "text": "CHECK(eng.grid(13.75) == 6.0 * 2.5)"
+          "line": 219,
+          "text": "CHECK(eng.grid(83.75) == 34.0 * 2.5)"
         },
         {
-          "line": 446,
-          "text": "CHECK(probe.grid(flip.open) == 13.77)"
+          "line": 418,
+          "text": "CHECK(probe.grid(flip.open) == 82.42)"
         },
         {
-          "line": 447,
-          "text": "CHECK(probe.grid(flip.high) == 13.78)"
+          "line": 419,
+          "text": "CHECK(probe.grid(flip.high) == 82.43)"
         },
         {
-          "line": 448,
-          "text": "CHECK(probe.grid(flip.low) == 13.76)"
+          "line": 420,
+          "text": "CHECK(probe.grid(flip.low) == 82.41)"
         },
         {
-          "line": 449,
-          "text": "CHECK(probe.grid(flip.close) == 13.78)"
+          "line": 421,
+          "text": "CHECK(probe.grid(flip.close) == 82.43)"
         }
       ],
-      "sourceSha256": "a17f43ce3d88465b9bc992b16ae291a30dc25cd7f5dd350fda5c41c66da8fc71"
+      "sourceSha256": "209b1ad4047f4b577dd3350ae65611e09e9e921f4ce0c193a3c3904dbf78a646"
     },
     "test_strategy_commands_extra": {
       "assertions": [
@@ -32715,152 +32715,208 @@
     "test_trail_open_arm_subtick_offset": {
       "assertions": [
         {
-          "line": 108,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 91,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 109,
-          "text": "CHECK(near(f.fill_price, 3110.385))"
+          "line": 92,
+          "text": "CHECK(near(f.exit_price, 3110.385))"
         },
         {
-          "line": 110,
-          "text": "CHECK(f.is_trail == true)"
+          "line": 93,
+          "text": "CHECK(near(f.raw_price, 3110.385))"
         },
         {
-          "line": 111,
-          "text": "CHECK(f.is_limit == false)"
+          "line": 94,
+          "text": "CHECK(f.leg_is_trail == true)"
         },
         {
-          "line": 112,
+          "line": 95,
+          "text": "CHECK(f.level_fill == true)"
+        },
+        {
+          "line": 96,
+          "text": "CHECK(f.leg_is_limit == false)"
+        },
+        {
+          "line": 97,
           "text": "CHECK(f.at_bar_open == false)"
         },
         {
-          "line": 114,
+          "line": 99,
           "text": "CHECK(near(f.path_position, 0.015 / 1.16, 1e-6))"
         },
         {
-          "line": 127,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 112,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 128,
-          "text": "CHECK(near(f.fill_price, 205.55))"
+          "line": 113,
+          "text": "CHECK(near(f.exit_price, 240.01))"
         },
         {
-          "line": 129,
-          "text": "CHECK(f.is_trail == true)"
+          "line": 114,
+          "text": "CHECK(near(f.raw_price, 240.01))"
         },
         {
-          "line": 130,
+          "line": 115,
+          "text": "CHECK(f.leg_is_trail == true)"
+        },
+        {
+          "line": 116,
           "text": "CHECK(f.at_bar_open == false)"
         },
         {
-          "line": 142,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 118,
+          "text": "CHECK(near(f.path_position, 0.01 / 1.00, 1e-6))"
         },
         {
-          "line": 143,
-          "text": "CHECK(near(f.fill_price, 9.54))"
+          "line": 131,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 158,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 132,
+          "text": "CHECK(near(f.exit_price, 128.09))"
         },
         {
-          "line": 159,
-          "text": "CHECK(near(f.fill_price, 102.5))"
+          "line": 133,
+          "text": "CHECK(f.leg_is_trail == true)"
         },
         {
-          "line": 172,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 135,
+          "text": "CHECK(near(f.path_position, 0.01 / 0.08, 1e-6))"
         },
         {
-          "line": 173,
-          "text": "CHECK(near(f.fill_price, 101.5))"
+          "line": 150,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 191,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 151,
+          "text": "CHECK(near(f.exit_price, 102.5))"
         },
         {
-          "line": 192,
-          "text": "CHECK(near(f.fill_price, 1.08329))"
+          "line": 152,
+          "text": "CHECK(f.leg_is_trail == true)"
         },
         {
-          "line": 193,
-          "text": "CHECK(f.is_trail == true)"
+          "line": 153,
+          "text": "CHECK(f.level_fill == true)"
         },
         {
-          "line": 194,
+          "line": 166,
+          "text": "CHECK(f.filled == true)"
+        },
+        {
+          "line": 167,
+          "text": "CHECK(near(f.exit_price, 101.5))"
+        },
+        {
+          "line": 168,
+          "text": "CHECK(f.leg_is_trail == true)"
+        },
+        {
+          "line": 171,
+          "text": "CHECK(near(f.path_position, 2.0 + 0.5 / 1.8, 1e-6))"
+        },
+        {
+          "line": 196,
+          "text": "CHECK(f.filled == true)"
+        },
+        {
+          "line": 197,
+          "text": "CHECK(near(f.exit_price, 1.08329))"
+        },
+        {
+          "line": 198,
+          "text": "CHECK(f.leg_is_limit == true)"
+        },
+        {
+          "line": 199,
+          "text": "CHECK(f.level_fill == true)"
+        },
+        {
+          "line": 200,
+          "text": "CHECK(near(f.raw_price, 1.083295))"
+        },
+        {
+          "line": 201,
           "text": "CHECK(f.at_bar_open == false)"
         },
         {
-          "line": 210,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 202,
+          "text": "CHECK(near(f.path_position, 0.000005 / 0.00016, 1e-6))"
         },
         {
-          "line": 211,
-          "text": "CHECK(near(f.fill_price, 100.03))"
+          "line": 218,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 232,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 219,
+          "text": "CHECK(near(f.exit_price, 100.03))"
         },
         {
-          "line": 233,
-          "text": "CHECK(near(f.fill_price, 1.08320))"
+          "line": 220,
+          "text": "CHECK(f.leg_is_limit == true)"
         },
         {
-          "line": 234,
-          "text": "CHECK(f.at_bar_open == true)"
+          "line": 221,
+          "text": "CHECK(near(f.raw_price, 100.025))"
         },
         {
-          "line": 235,
-          "text": "CHECK(near(f.path_position, 0.0))"
+          "line": 224,
+          "text": "CHECK(near(f.path_position, 1.0 + 0.075 / 0.15, 1e-9))"
+        },
+        {
+          "line": 245,
+          "text": "CHECK(f.filled == true)"
+        },
+        {
+          "line": 246,
+          "text": "CHECK(near(f.exit_price, 1.08320))"
+        },
+        {
+          "line": 247,
+          "text": "CHECK(near(f.raw_price, 1.08320))"
         },
         {
           "line": 248,
-          "text": "CHECK(f.should_fill == true)"
-        },
-        {
-          "line": 249,
-          "text": "CHECK(near(f.fill_price, 1.08320))"
-        },
-        {
-          "line": 250,
           "text": "CHECK(f.at_bar_open == true)"
         },
         {
-          "line": 251,
+          "line": 249,
           "text": "CHECK(near(f.path_position, 0.0))"
         },
         {
-          "line": 268,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 259,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 269,
-          "text": "CHECK(near(f.fill_price, 1.08305))"
+          "line": 260,
+          "text": "CHECK(near(f.exit_price, 1.08320))"
         },
         {
-          "line": 270,
-          "text": "CHECK(f.is_trail == true)"
+          "line": 261,
+          "text": "CHECK(near(f.raw_price, 1.08320))"
         },
         {
-          "line": 271,
-          "text": "CHECK(f.at_bar_open == false)"
+          "line": 262,
+          "text": "CHECK(f.at_bar_open == true)"
         },
         {
-          "line": 273,
-          "text": "CHECK(near(f.path_position, 1.0))"
+          "line": 263,
+          "text": "CHECK(near(f.path_position, 0.0))"
+        },
+        {
+          "line": 285,
+          "text": "CHECK(f.filled == true)"
         },
         {
           "line": 286,
-          "text": "CHECK(f.should_fill == true)"
+          "text": "CHECK(near(f.exit_price, 1.08305))"
         },
         {
           "line": 287,
-          "text": "CHECK(near(f.fill_price, 1.083215))"
+          "text": "CHECK(near(f.raw_price, 1.083205))"
         },
         {
           "line": 288,
@@ -32868,162 +32924,202 @@
         },
         {
           "line": 289,
-          "text": "CHECK(f.open_is_trail_level == true)"
-        },
-        {
-          "line": 290,
           "text": "CHECK(near(f.path_position, 0.0))"
         },
         {
-          "line": 306,
-          "text": "CHECK(f.should_fill == true)"
+          "line": 300,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 307,
-          "text": "CHECK(near(f.fill_price, 1.08315))"
+          "line": 301,
+          "text": "CHECK(near(f.raw_price, 1.083215))"
         },
         {
-          "line": 325,
-          "text": "CHECK(f.should_fill == false)"
+          "line": 302,
+          "text": "CHECK(near(f.exit_price, 1.08322))"
         },
         {
-          "line": 336,
-          "text": "CHECK(f.should_fill == true)"
-        },
-        {
-          "line": 337,
-          "text": "CHECK(near(f.fill_price, 1475.99))"
-        },
-        {
-          "line": 338,
+          "line": 303,
           "text": "CHECK(f.at_bar_open == true)"
         },
         {
-          "line": 339,
-          "text": "CHECK(f.open_is_trail_level == false)"
+          "line": 304,
+          "text": "CHECK(near(f.path_position, 0.0))"
         },
         {
-          "line": 347,
-          "text": "CHECK(omitted.should_fill == true)"
+          "line": 320,
+          "text": "CHECK(f.filled == true)"
         },
         {
-          "line": 348,
-          "text": "CHECK(near(omitted.fill_price, 1475.99))"
+          "line": 321,
+          "text": "CHECK(near(f.exit_price, 1.08315))"
         },
         {
-          "line": 408,
+          "line": 322,
+          "text": "CHECK(f.leg_is_trail == true)"
+        },
+        {
+          "line": 323,
+          "text": "CHECK(f.level_fill == true)"
+        },
+        {
+          "line": 324,
+          "text": "CHECK(near(f.path_position, 1.0 + 0.00001 / 0.00036, 1e-6))"
+        },
+        {
+          "line": 342,
+          "text": "CHECK(f.filled == false)"
+        },
+        {
+          "line": 358,
+          "text": "CHECK(f.filled == true)"
+        },
+        {
+          "line": 359,
+          "text": "CHECK(near(f.exit_price, 1475.99))"
+        },
+        {
+          "line": 360,
+          "text": "CHECK(near(f.raw_price, 1475.99))"
+        },
+        {
+          "line": 361,
+          "text": "CHECK(f.at_bar_open == true)"
+        },
+        {
+          "line": 367,
+          "text": "CHECK(f.leg_is_trail == true)"
+        },
+        {
+          "line": 368,
+          "text": "CHECK(f.level_fill == false)"
+        },
+        {
+          "line": 377,
+          "text": "CHECK(omitted.filled == true)"
+        },
+        {
+          "line": 378,
+          "text": "CHECK(near(omitted.exit_price, 1475.99))"
+        },
+        {
+          "line": 379,
+          "text": "CHECK(omitted.leg_is_market == true)"
+        },
+        {
+          "line": 439,
           "text": "CHECK(eng.last_error().empty())"
         },
         {
-          "line": 409,
+          "line": 440,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 411,
+          "line": 442,
           "text": "CHECK(near(eng.entry_price(0), 3110.31))"
         },
         {
-          "line": 412,
+          "line": 443,
           "text": "CHECK(near(eng.exit_price(0), 3110.385))"
         },
         {
-          "line": 413,
+          "line": 444,
           "text": "CHECK(eng.exit_bar(0) == 1)"
         },
         {
-          "line": 415,
+          "line": 446,
           "text": "CHECK(near(eng.position_size(), 0.0))"
         },
         {
-          "line": 428,
+          "line": 461,
           "text": "CHECK(eng.last_error().empty())"
         },
         {
-          "line": 429,
+          "line": 462,
           "text": "CHECK(eng.trade_count() == 1)"
         },
         {
-          "line": 431,
-          "text": "CHECK(near(eng.entry_price(0), 222.93))"
+          "line": 464,
+          "text": "CHECK(near(eng.entry_price(0), 256.00))"
         },
         {
-          "line": 432,
-          "text": "CHECK(near(eng.exit_price(0), 205.55))"
+          "line": 465,
+          "text": "CHECK(near(eng.exit_price(0), 240.01))"
         },
         {
-          "line": 433,
+          "line": 466,
           "text": "CHECK(eng.exit_bar(0) == 1)"
         },
         {
-          "line": 435,
+          "line": 468,
           "text": "CHECK(near(eng.position_size(), 0.0))"
         },
         {
-          "line": 505,
+          "line": 538,
           "text": "CHECK(zero.trades == 1)"
         },
         {
-          "line": 506,
+          "line": 539,
           "text": "CHECK(near(zero.exit_price, sc.expected))"
         },
         {
-          "line": 507,
+          "line": 540,
           "text": "CHECK(zero.exit_bar == 2)"
         },
         {
-          "line": 508,
+          "line": 541,
           "text": "CHECK(near(zero.position, 0.0))"
         },
         {
-          "line": 512,
+          "line": 545,
           "text": "CHECK(o.trades == zero.trades)"
         },
         {
-          "line": 513,
+          "line": 546,
           "text": "CHECK(near(o.exit_price, zero.exit_price))"
         },
         {
-          "line": 514,
+          "line": 547,
           "text": "CHECK(o.exit_bar == zero.exit_bar)"
         },
         {
-          "line": 515,
+          "line": 548,
           "text": "CHECK(near(o.position, zero.position))"
         },
         {
-          "line": 539,
+          "line": 571,
           "text": "CHECK(o.trades == 1)"
         },
         {
-          "line": 540,
+          "line": 572,
           "text": "CHECK(near(o.exit_price, 100.20))"
         },
         {
-          "line": 541,
+          "line": 573,
           "text": "CHECK(o.exit_bar == 2)"
         },
         {
-          "line": 542,
+          "line": 574,
           "text": "CHECK(near(o.position, 0.0))"
         },
         {
-          "line": 545,
+          "line": 577,
           "text": "CHECK(omitted.trades == 1)"
         },
         {
-          "line": 546,
+          "line": 578,
           "text": "CHECK(near(omitted.exit_price, 100.20))"
         },
         {
-          "line": 547,
+          "line": 579,
           "text": "CHECK(omitted.exit_bar == 2)"
         },
         {
-          "line": 548,
+          "line": 580,
           "text": "CHECK(near(omitted.position, 0.0))"
         }
       ],
-      "sourceSha256": "7d9ee2c9f3062052b0f873da25937490cd9f80753b3d487d35f6022959972031"
+      "sourceSha256": "31a1a1f01f174ca53cde12fbfcc4081c5e1eb69fd7938855063312b6214a8e4b"
     },
     "test_trail_ref_entry_bar_extreme": {
       "assertions": [
