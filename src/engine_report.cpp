@@ -348,9 +348,9 @@ void note_switch_refusal(BacktestEngine& engine, const char* text, const char* r
     note_run_failure(engine, text, RunFailureCode::outputs_rejected, {{"reason", reason}});
 }
 
-// FNV-1a 64 of the bytes, as stream_state_hash folds them.
+// FNV-1a 64 of the bytes, with the standard offset basis and prime.
 uint64_t output_message_hash(const std::string& text) {
-    uint64_t hash = 1469598103934665603ULL;
+    uint64_t hash = 14695981039346656037ULL;
     for (const unsigned char c : text) {
         hash ^= c;
         hash *= 1099511628211ULL;

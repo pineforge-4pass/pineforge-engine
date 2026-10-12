@@ -210,6 +210,10 @@ void hand_values() {
         CHECK(messages[0].message == "first" && messages[0].ordinal_in_bar == 0);
         CHECK(messages[1].message == "second" && messages[1].ordinal_in_bar == 1);
         CHECK(messages[1].message_hash64 == fnv1a64(std::string("second\0bytes", 12)));
+        // The published FNV-1a 64 test vectors, so the helper cannot drift
+        // together with the recorder.
+        CHECK(fnv1a64("") == 0xcbf29ce484222325ULL);
+        CHECK(fnv1a64("a") == 0xaf63dc4c8601ec8cULL);
         CHECK(messages[1].sequence == messages[0].sequence + 1);
     }
     CHECK(r.constants.size() == 2);

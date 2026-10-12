@@ -2309,7 +2309,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
                     ${_pf_abi_receipt_mode}
                     ${_pf_script_cpp_abi_flags}
         )
-        set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+        set_tests_properties(test_script_cpp_abi PROPERTIES SKIP_RETURN_CODE 77)
     else()
         add_test(NAME test_script_cpp_abi COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/native_cpp_abi/host-fc7aad6/manifest.json")
         set_tests_properties(test_script_cpp_abi PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
@@ -2350,7 +2350,7 @@ add_test(
 # gzip-JSON closures): absent, its gate prints the pinned SKIP literal and
 # exits 77, so the row skips here and the private_fixtures label marks it in
 # tests/private_fixture_rows.txt; present, the row runs as before.
-set_tests_properties(test_native_cpp_abi PROPERTIES TIMEOUT 240 SKIP_RETURN_CODE 77 LABELS private_fixtures)
+set_tests_properties(test_native_cpp_abi PROPERTIES SKIP_RETURN_CODE 77 LABELS private_fixtures)
 
 # The actual historical archive is prepared explicitly before CTest so the
 # compatibility check itself stays offline and cannot silently use a stub.
@@ -2398,7 +2398,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
                 --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
                 ${_pf_abi_receipt_mode}
                 ${_pf_script_cpp_abi_flags})
-        set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+        set_tests_properties(test_settlement_cpp_abi PROPERTIES SKIP_RETURN_CODE 77)
     else()
         add_test(NAME test_settlement_cpp_abi COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/settlement_cpp_abi/e60e571/manifest.json")
         set_tests_properties(test_settlement_cpp_abi PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
@@ -2429,7 +2429,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
                 --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
                 ${_pf_abi_receipt_mode}
                 ${_pf_script_cpp_abi_flags})
-        set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+        set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES SKIP_RETURN_CODE 77)
     else()
         add_test(NAME test_aggregate_cpp_versions_runtime COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/native_cpp_abi/host-fc7aad6/manifest.json")
         set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
@@ -3777,7 +3777,7 @@ if(TARGET test_l4g_runtime_budget)
                 --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
                 ${_pf_abi_receipt_mode}
                 ${_pf_runtime_budget_mode})
-        set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+        set_tests_properties(test_l4g_runtime_budget PROPERTIES SKIP_RETURN_CODE 77)
     else()
         add_test(NAME test_l4g_runtime_budget COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/native_cpp_abi/host-ab9714b/manifest.json")
         set_tests_properties(test_l4g_runtime_budget PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
@@ -4546,10 +4546,6 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
     add_test(NAME confirmed_capabilities_same_calc_bracket_e2e COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/same_calc_bracket_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:same_calc_bracket_strategy>)
-    set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 300)
-    if(PINEFORGE_ENABLE_SANITIZERS)
-        set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES TIMEOUT 600)
-    endif()
     else()
         add_test(NAME confirmed_capabilities_same_calc_bracket_e2e COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/same_calc_bracket/generated.cpp")
         set_tests_properties(confirmed_capabilities_same_calc_bracket_e2e PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
@@ -4617,12 +4613,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
             --library $<TARGET_FILE:lv_d8_stop_strategy> --runner $<TARGET_FILE:pineforge-live>
             --require-terminal-receipts)
         add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${_pf_d8_equivalence_command})
-        # 38 s on an idle 32-vCPU host; the row spawns many ctypes scenarios, so
-        # keep an order of magnitude over that for loaded and instrumented runs.
-        set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 300)
-        if(PINEFORGE_ENABLE_SANITIZERS)
-            set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES TIMEOUT 900)
-        endif()
+        # 38 s on an idle 32-vCPU host; the row spawns many ctypes scenarios and
+        # carries no TIMEOUT property, so a loaded or instrumented run is never
+        # cut off (owner rule, 2026-10-12).
         else()
             add_test(NAME test_lv_d8_tick_stop_equivalence COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/fixtures/lv_d8_stop_activation/generated.cpp")
             set_tests_properties(test_lv_d8_tick_stop_equivalence PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
@@ -6914,14 +6907,16 @@ endforeach()
 # configure-time directory under the build dir, the shape the private-fixture
 # controls rows use, instead of letting the rows write into the host's /tmp.
 # test_ci_verify ran 957.74 s (release A), 979.32 s (kernel A) and 781.00 s
-# (release B) in the campaign's lab jobs -- near CTest's 1500 s default, so its
-# row carries a 3600 s bound; test_ci_preflight passed in 2.79 s there, so it
-# stays off PINEFORGE_PR_SLOW_TESTS, while test_ci_verify sits in that
-# timing-derived PR exclusion population and full runs (the lab job set among
-# them, which is where its controls run) still execute it. Both rows are
-# PUBLIC -- no LABELS, no SKIP_RETURN_CODE -- and register in both fixture
-# modes like their neighbours there.
-set_tests_properties(test_ci_verify PROPERTIES TIMEOUT 3600
+# (release B) in the campaign's lab jobs; with no TIMEOUT property and no
+# verifier stage bound it is never cut off for slowness (owner rule,
+# 2026-10-12), and its 3600 s collision with the native-live stage deadline is
+# gone with both. test_ci_preflight passed in 2.79 s there, so it stays off
+# PINEFORGE_PR_SLOW_TESTS, while test_ci_verify sits in that timing-derived PR
+# exclusion population and full runs (the lab job set among them, which is
+# where its controls run) still execute it. Both rows are PUBLIC -- no LABELS,
+# no SKIP_RETURN_CODE -- and register in both fixture modes like their
+# neighbours there.
+set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")

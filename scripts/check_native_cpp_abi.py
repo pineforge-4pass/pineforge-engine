@@ -465,7 +465,7 @@ def expect_compile_rejection(name: str, source: str, include_path: Path, *,
     obj = scratch / (name + ".o")
     argv = [*compiler_flags, "-I", str(include_path), "-I", generated_include,
             "-c", str(path), "-o", str(obj)]
-    compiled = subprocess.run(argv, capture_output=True, text=True, timeout=90)
+    compiled = subprocess.run(argv, capture_output=True, text=True)
     text = diagnostic_text(compiled)
     if compiled.returncode == 0:
         raise RuntimeError(name + " mutated current-result header unexpectedly compiled")
@@ -656,7 +656,7 @@ def main() -> int:
     current_order_submit = "pineforge::native_order::" + order_namespace + "::WorkingRequestCore::submit("
 
     compiler_id = subprocess.run(
-        [args.compiler, "--version"], capture_output=True, text=True, timeout=30)
+        [args.compiler, "--version"], capture_output=True, text=True)
     if compiler_id.returncode:
         raise RuntimeError("compiler --version failed:\n" + diagnostic_text(compiler_id))
     clang = "clang" in (compiler_id.stdout + compiler_id.stderr).lower()
@@ -832,7 +832,7 @@ def main() -> int:
             if extra_source_dir is not None:
                 argv.extend(["-I", str(extra_source_dir)])
             argv.extend(["-c", str(path), "-o", str(obj)])
-            compiled = subprocess.run(argv, capture_output=True, text=True, timeout=90)
+            compiled = subprocess.run(argv, capture_output=True, text=True)
             if compiled.returncode:
                 raise RuntimeError(name + " failed to compile (not a pairing rejection):\n"
                                    + diagnostic_text(compiled))
@@ -848,7 +848,7 @@ def main() -> int:
             compiled = subprocess.run(
                 [*common, "-I", str(include_path), "-I", args.generated_include,
                  "-c", str(source_path), "-o", str(obj)],
-                capture_output=True, text=True, timeout=90)
+                capture_output=True, text=True)
             if compiled.returncode:
                 raise RuntimeError(name + " failed to compile (not a pairing rejection):\n"
                                    + diagnostic_text(compiled))
@@ -867,7 +867,7 @@ def main() -> int:
                 emitted = subprocess.run(
                     [*common, "-I", str(include_path), "-I", args.generated_include,
                      "-S", str(src), "-o", str(assembly)],
-                    capture_output=True, text=True, timeout=90)
+                    capture_output=True, text=True)
                 if emitted.returncode:
                     raise RuntimeError(name + " could not emit layout assembly:\n" + diagnostic_text(emitted))
                 words = 6 if "order" in name else 7 if "calendar" in name else 4
@@ -882,7 +882,7 @@ def main() -> int:
             emitted = subprocess.run(
                 [*common, "-I", str(include_path), "-I", args.generated_include,
                  "-S", "-emit-llvm", str(src), "-o", str(ll)],
-                capture_output=True, text=True, timeout=90)
+                capture_output=True, text=True)
             if emitted.returncode:
                 receipt["layouts"][name]["llvm"] = "unavailable"
                 return
@@ -895,7 +895,7 @@ def main() -> int:
         def link(name, objects, runtime, missing=None):
             out = root / name
             argv = [*common, *[str(x) for x in objects], str(runtime), "-pthread", "-o", str(out)]
-            linked = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+            linked = subprocess.run(argv, capture_output=True, text=True)
             text = diagnostic_text(linked)
             if missing is None:
                 if linked.returncode:
@@ -983,7 +983,7 @@ def main() -> int:
                 compiled = subprocess.run(
                     [*common, "-I", str(frozen_include), "-I", args.generated_include,
                      "-c", str(path), "-o", str(root / (name + ".o"))],
-                    capture_output=True, text=True, timeout=90)
+                    capture_output=True, text=True)
                 diagnostic = diagnostic_text(compiled)
                 if compiled.returncode == 0 or CURRENT_ENGINE_EPOCH not in diagnostic:
                     raise RuntimeError(name + " did not reject the " + frozen_label

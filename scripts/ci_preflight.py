@@ -69,22 +69,10 @@ NATIVE_STRATEGY = '''    strategy:
         include:
           - profile: native
             build_dir: build-live
-            job_minutes: 75
-            verify_minutes: 65
-            test_timeout: 2700
-            ctest_timeout: 2820
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
-            job_minutes: 45
-            verify_minutes: 35
-            test_timeout: 900
-            ctest_timeout: 1200
           - profile: live-tsan
             build_dir: build-live-tsan
-            job_minutes: 45
-            verify_minutes: 35
-            test_timeout: 900
-            ctest_timeout: 1200
 '''
 NATIVE_EXCLUSION = "${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}"
 NATIVE_CACHE_SAVE = ("${{ !cancelled() && !inputs.cold_cache && steps.verify.outcome != 'skipped' "
@@ -97,18 +85,20 @@ VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
 PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # Every job with a runner in the workflows a CI run starts: its runs-on, its
 # timeout-minutes, exactly, and the command that must carry the core count.
-# docs/ci.md gives each limit's measured basis.
+# Every one of them is the platform's own 360-minute job maximum, the only
+# hang catcher left (owner rule, 2026-10-12: no time limit of this repository
+# may fail a run for slowness); docs/ci.md says so.
 JOB_RUNNERS = {
-    'ci.yml': {'changes': ('ubuntu-24.04', 5, None),
-               'preflight': (LINUX_RUNNER, 45, None),
-               'build': (MATRIX_RUNNER, 75, VERIFY),
-               'sanitizers': (LINUX_RUNNER, 120, VERIFY),
-               'kernel-only': (LINUX_RUNNER, 60, VERIFY),
-               'build-gate': ('ubuntu-24.04', 5, None)},
-    'native-live.yml': {'native-live': (LINUX_RUNNER, '${{ matrix.job_minutes }}', VERIFY),
-                         'native-live-gate': ('ubuntu-24.04', 5, None)},
-    'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 120, PARITY),
-                          'corpus-parity-subset': (LINUX_RUNNER, 30, PARITY)},
+    'ci.yml': {'changes': ('ubuntu-24.04', 360, None),
+               'preflight': (LINUX_RUNNER, 360, None),
+               'build': (MATRIX_RUNNER, 360, VERIFY),
+               'sanitizers': (LINUX_RUNNER, 360, VERIFY),
+               'kernel-only': (LINUX_RUNNER, 360, VERIFY),
+               'build-gate': ('ubuntu-24.04', 360, None)},
+    'native-live.yml': {'native-live': (LINUX_RUNNER, 360, VERIFY),
+                         'native-live-gate': ('ubuntu-24.04', 360, None)},
+    'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
+                          'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
 }
 # Every other workflow keeps its jobs on these. release.yml is exempt by name,
 # while its on: block names only events no fork can raise (a push, the
@@ -145,15 +135,11 @@ CLASSIFY_STEP = """      - name: Classify the change
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kernel-only, '
               'corpus-parity-subset]')
-# One stage's bound. The verifier self-tests (test_ci_verify.py) drive the real
-# literal-aware parity, receipt and submodule guards in one serial process. On
-# the maintainers' verification hosts they took 475 s at 0d76a099's tree (458 s
-# in this change's own run, which leaves the suite alone), and those hosts ran
-# them 1.93-1.95 times as fast as the standard hosted runner on the same trees
-# (91d65ad6, 1a0e7ea1): about 925 s there. The stage starts within a minute of
-# the preflight job, so its bound fits inside the job's limit and a stuck
-# verifier-tests is logged here rather than cut off with the job.
-STAGE_TIMEOUT_SECONDS = 2400
+# No stage of this preflight carries a timeout: the verifier self-tests
+# (test_ci_verify.py) drive the real literal-aware parity, receipt and
+# submodule guards in one serial process, and no bound of this file's may
+# fail a run for slowness (owner rule, 2026-10-12). A stage that hangs is
+# caught only by the job's own platform maximum, 360 minutes.
 # A job's header -- any id GitHub accepts -- and the top-level jobs and on keys.
 _JOB_HEADER = re.compile(r'^  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(?:#.*)?$', re.MULTILINE)
 _JOBS_KEY = re.compile(r'^jobs:[ \t]*(?:#.*)?$', re.MULTILINE)
@@ -382,7 +368,8 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
             or _job_values(job, 'needs') or _job_values(job, 'if')
             or _job_values(job, 'name') != ['native-live (${{ matrix.profile }})']):
-        findings.append('native-live must run all three independent profiles with pinned budgets and fail-fast false')
+        findings.append('native-live must run all three independent profiles with fail-fast false, '
+                        'the platform job maximum and no per-run budget')
     if (set(jobs) != {'native-live', 'native-live-gate'}
             or _job_values(gate, 'needs') != ['native-live']
             or _job_values(gate, 'if') != ['always()']
@@ -427,14 +414,14 @@ def native_workflow_findings(native: str, curl_action: str | None = None) -> lis
     expected = ('python3 scripts/ci_verify.py ${{ matrix.profile }} '
                 '--build-dir ${{ matrix.build_dir }} ' + f'--jobs {CORES} '
                 '--generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
-                '--ccache --test-timeout ${{ matrix.test_timeout }} '
-                '--ctest-timeout ${{ matrix.ctest_timeout }} '
+                '--ccache '
                 "${{ matrix.profile == 'native' && '--require-websocket' || '' }} " + NATIVE_EXCLUSION)
     if (len(command) != 1 or command[0].replace('--jobs=', '--jobs ') != expected
             or _step_values(verify, 'if')
-            or _step_values(verify, 'timeout-minutes') != ['${{ matrix.verify_minutes }}']
+            or _step_values(verify, 'timeout-minutes') != ['360']
             or job.count('--exclude-label') != 1 or job.count('scripts/ci_verify.py ') != 1):
-        findings.append('native-live must verify each full profile with bounded CTest and native-only PR exclusion')
+        findings.append('native-live must verify each full profile with no timeout flag and '
+                        'native-only PR exclusion')
     if (_step_values(save, 'if') != [NATIVE_CACHE_SAVE]
             or _step_values(save, 'uses') != ['actions/cache/save@v4']
             or '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}' not in _code(save)
@@ -791,12 +778,8 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         summary['stages'].append(stage)
         record()
         try:
-            result = subprocess.run(argv, cwd=source, capture_output=True,
-                                    timeout=STAGE_TIMEOUT_SECONDS)
+            result = subprocess.run(argv, cwd=source, capture_output=True)
             code, log = result.returncode, result.stdout + result.stderr
-        except subprocess.TimeoutExpired as error:
-            code = 124
-            log = (error.stdout or b'') + (error.stderr or b'') + b'\ncheck timed out\n'
         except OSError as error:
             code, log = 127, str(error).encode()
         (output / stage['log']).write_bytes(log)

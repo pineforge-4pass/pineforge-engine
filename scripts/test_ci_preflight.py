@@ -16,7 +16,7 @@ from unittest import mock
 import ci_preflight
 import ci_verify
 from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER, NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
-                          PROOF_JOBS, STAGE_TIMEOUT_SECONDS, _jobs, check_commands,
+                          PROOF_JOBS, _jobs, check_commands,
                           ci_workflow_findings, native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -228,25 +228,29 @@ class PreflightFailures(unittest.TestCase):
              'promote-baseline.yml job promote must stay on a standard runner'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
              '      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
-            # A time limit changed away from its measured basis.
-            (0, 'preflight', 'timeout-minutes: 45', 'timeout-minutes: 30',
-             'ci.yml job preflight must allow 45 minutes'),
-            (0, 'build', 'timeout-minutes: 75', 'timeout-minutes: 45', 'ci.yml job build must allow 75'),
-            (0, 'sanitizers', 'timeout-minutes: 120', 'timeout-minutes: 60',
-             'ci.yml job sanitizers must allow 120'),
-            (0, 'kernel-only', 'timeout-minutes: 60', 'timeout-minutes: 45',
-             'ci.yml job kernel-only must allow 60'),
-            (0, 'build-gate', '    timeout-minutes: 5\n', '', 'ci.yml job build-gate must allow 5'),
+            # Any time limit other than the platform maximum: every job must
+            # keep GitHub's own 360-minute cap as its only bound, so no bound
+            # of this repository's can fail a run for slowness (owner rule,
+            # 2026-10-12).
+            (0, 'preflight', 'timeout-minutes: 360', 'timeout-minutes: 30',
+             'ci.yml job preflight must allow 360 minutes'),
+            (0, 'build', 'timeout-minutes: 360', 'timeout-minutes: 45',
+             'ci.yml job build must allow 360'),
+            (0, 'sanitizers', 'timeout-minutes: 360', 'timeout-minutes: 60',
+             'ci.yml job sanitizers must allow 360'),
+            (0, 'kernel-only', 'timeout-minutes: 360', 'timeout-minutes: 45',
+             'ci.yml job kernel-only must allow 360'),
+            (0, 'build-gate', '    timeout-minutes: 360\n', '', 'ci.yml job build-gate must allow 360'),
             (0, 'changes', 'runs-on: ubuntu-24.04', 'runs-on: pf-linux-x64-16',
              'ci.yml job changes must run on ubuntu-24.04'),
-            (0, 'changes', '    timeout-minutes: 5\n', '    timeout-minutes: 30\n',
-             'ci.yml job changes must allow 5'),
-            (1, 'native-live', 'timeout-minutes: ${{ matrix.job_minutes }}', 'timeout-minutes: 60',
-             'native-live.yml job native-live must allow ${{ matrix.job_minutes }}'),
-            (4, 'corpus-parity', 'timeout-minutes: 120', 'timeout-minutes: 30',
-             'corpus-parity.yml job corpus-parity must allow 120'),
-            (4, 'corpus-parity-subset', 'timeout-minutes: 30', 'timeout-minutes: 10',
-             'corpus-parity.yml job corpus-parity-subset must allow 30'),
+            (0, 'changes', '    timeout-minutes: 360\n', '    timeout-minutes: 300\n',
+             'ci.yml job changes must allow 360'),
+            (1, 'native-live', 'timeout-minutes: 360', 'timeout-minutes: 60',
+             'native-live.yml job native-live must allow 360 minutes'),
+            (4, 'corpus-parity', 'timeout-minutes: 360', 'timeout-minutes: 30',
+             'corpus-parity.yml job corpus-parity must allow 360'),
+            (4, 'corpus-parity-subset', 'timeout-minutes: 360', 'timeout-minutes: 10',
+             'corpus-parity.yml job corpus-parity-subset must allow 360'),
             # Four jobs asked of a 16-core runner.
             (0, 'build', f'--jobs {CORES}', '--jobs 4', 'ci.yml job build must size'),
             (0, 'sanitizers', f'--jobs {CORES}', '--jobs 4', 'ci.yml job sanitizers must size'),
@@ -351,17 +355,17 @@ class PreflightFailures(unittest.TestCase):
                 (job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
                  refused)]
         mutations += [
-            ('preflight', '    timeout-minutes: 45\n', '    timeout-minutes: 45\n    needs: changes\n',
+            ('preflight', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    needs: changes\n',
              'preflight must start at once'),
-            ('preflight', '    timeout-minutes: 45\n', '    timeout-minutes: 45\n' + skip,
+            ('preflight', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n' + skip,
              'preflight must start at once'),
-            ('changes', '    timeout-minutes: 5\n', '    timeout-minutes: 5\n    needs: preflight\n',
+            ('changes', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    needs: preflight\n',
              'changes must start at once'),
-            ('changes', '    timeout-minutes: 5\n',
-             "    timeout-minutes: 5\n    if: github.event_name != 'pull_request'\n",
+            ('changes', '    timeout-minutes: 360\n',
+             "    timeout-minutes: 360\n    if: github.event_name != 'pull_request'\n",
              'changes must start at once'),
             # A lane that continues on error reports success however it ended.
-            ('sanitizers', '    timeout-minutes: 120\n', '    timeout-minutes: 120\n    continue-on-error: true\n',
+            ('sanitizers', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    continue-on-error: true\n',
              'ci.yml job sanitizers must not continue on error'),
             ('build-gate', '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
              'ci.yml job build-gate must not continue on error'),
@@ -584,14 +588,23 @@ class PreflightFailures(unittest.TestCase):
         self.assertTrue(any('lint.yml job lint must stay on a standard runner' in line for line in
                             ci_workflow_findings(*original, others=dict(others, **{'lint.yml': decoy}))))
 
-    def test_a_stage_times_out_inside_the_preflight_job(self):
-        # Five minutes stay for the runner setup and the other stages, so the
-        # stage's own timeout, with its log, fires before the job's.
-        job_seconds = JOB_RUNNERS['ci.yml']['preflight'][1] * 60
-        self.assertLessEqual(STAGE_TIMEOUT_SECONDS + 300, job_seconds)
-        # And at least twice the stage's standard-runner time at 0d76a099's
-        # tree: 475 s on the verification hosts, up to 1.95 times as fast.
-        self.assertGreaterEqual(STAGE_TIMEOUT_SECONDS, 2 * 475 * 1.95)
+    def test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum(self):
+        # Owner rule, 2026-10-12: no stage of this preflight is run under a
+        # timeout of its own any more (its verifier-tests stage has taken
+        # longer than the old 2400 s bound on slow hosts), and every pinned
+        # job limit is GitHub's own 360-minute maximum -- the only hang
+        # catcher left, and deliberately the same for a five-second job and
+        # the full verifier.
+        self.assertFalse(hasattr(ci_preflight, 'STAGE_TIMEOUT_SECONDS'))
+        source = (ROOT / 'scripts/ci_preflight.py').read_text()
+        stage_call = re.search(r'result = subprocess\.run\(argv, cwd=source[^\n]*\)',
+                               source).group()
+        self.assertNotIn('timeout', stage_call)
+        self.assertNotIn('TimeoutExpired', source)
+        for workflow, jobs in JOB_RUNNERS.items():
+            for job, (_, minutes, _) in jobs.items():
+                with self.subTest(workflow=workflow, job=job):
+                    self.assertEqual(minutes, 360)
 
     def contract_stage(self, mutation):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""
@@ -810,8 +823,8 @@ class IndependentNativeProfiles(unittest.TestCase):
             ('uses: actions/cache/save@v4', 'uses: actions/cache@v4'),
             ('name: ci-diagnostics-native-live-${{ matrix.profile }}',
              'name: ci-diagnostics-native-live'),
-            ('--test-timeout ${{ matrix.test_timeout }}', ''),
-            ('--ctest-timeout ${{ matrix.ctest_timeout }}', ''),
+            ('--ccache ', '--ccache --test-timeout 900 '),
+            ('--ccache ', '--ccache --ctest-timeout 1200 '),
             (NATIVE_EXCLUSION, NATIVE_EXCLUSION + ' --min-tests 1'),
             (NATIVE_EXCLUSION, NATIVE_EXCLUSION + ' || true'),
             ('--require-websocket', '--min-tests 1'),
@@ -826,8 +839,13 @@ class IndependentNativeProfiles(unittest.TestCase):
             block = re.search(r'          - profile: ' + re.escape(profile)
                               + r'\n(?:            .*\n)+', native).group()
             mutations.append((block, ''))
-            for key in ('job_minutes', 'verify_minutes', 'test_timeout', 'ctest_timeout'):
-                mutations.append((block, re.sub(r'(' + key + r': )\d+', r'\g<1>1', block)))
+            # A per-profile budget is not just refused when changed: with the
+            # owner rule of 2026-10-12 (no time limit may fail a run for
+            # slowness) its mere return must fail the contract, whatever its
+            # value.
+            for added in ('            job_minutes: 75\n', '            verify_minutes: 65\n',
+                          '            test_timeout: 2700\n', '            ctest_timeout: 2820\n'):
+                mutations.append((block, block + added))
         for before, after in mutations:
             with self.subTest(mutation=(before, after)):
                 self.assertIn(before, native)
@@ -864,13 +882,17 @@ class IndependentNativeProfiles(unittest.TestCase):
                                      env={**os.environ, 'PROFILES_RESULT': result}, timeout=10)
                 self.assertEqual(ran.returncode == 0, result == 'success', ran.stdout)
 
-    def test_three_profiles_have_independent_budgets_and_no_fail_fast(self):
+    def test_three_profiles_share_the_platform_maximum_and_no_fail_fast(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
         job = _jobs(native)['native-live']
         self.assertIn('fail-fast: false', job)
         for profile in ('native', 'live-sanitizers', 'live-tsan'):
             self.assertIn(f'- profile: {profile}\n', job)
-        self.assertIn('timeout-minutes: ${{ matrix.job_minutes }}', job)
+        # 360 minutes: GitHub's own job maximum, the only hang catcher left.
+        self.assertEqual(job.count('timeout-minutes: 360'), 2)
+        for budget in ('matrix.job_minutes', 'matrix.verify_minutes',
+                       '--test-timeout', '--ctest-timeout'):
+            self.assertNotIn(budget, job)
         self.assertIn('needs: native-live', _jobs(native)['native-live-gate'])
 
     def test_cold_mode_bypasses_both_restores_and_dependencies_save_early(self):

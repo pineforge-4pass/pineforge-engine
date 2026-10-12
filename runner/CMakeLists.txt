@@ -97,7 +97,6 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_service_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_service_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_service_example>)
-        set_tests_properties(native_live_service_e2e PROPERTIES TIMEOUT 300)
         target_sources(native_live_example PRIVATE $<TARGET_OBJECTS:native_live_equivalence_observer>)
         set(_pf_report_strategies $<TARGET_FILE:native_live_example>)
         foreach(probe ta-rsi14-cross-50-01 order-entry-implicit-reversal-exit-01 order-tranche-partial-market-close-01 bracket-atr-trailing-stop-state-01)
@@ -120,19 +119,15 @@ if(PINEFORGE_BUILD_TESTS)
         add_test(NAME native_live_report_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_report_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> ${_pf_report_strategies})
-        set_tests_properties(native_live_report_e2e PROPERTIES TIMEOUT 300)
         add_test(NAME native_live_chart_input_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_chart_input_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
-        set_tests_properties(native_live_chart_input_e2e PROPERTIES TIMEOUT 900)
         add_test(NAME native_live_chart_calendar_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_chart_calendar_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_report_oracle> $<TARGET_FILE:native_live_example>)
-        set_tests_properties(native_live_chart_calendar_e2e PROPERTIES TIMEOUT 600)
         add_test(NAME native_live_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)
-        set_tests_properties(native_live_e2e PROPERTIES TIMEOUT 300)
     endif()
     foreach(contract_kind absent unknown native_no_export native_stub)
         add_library(live_contract_${contract_kind} MODULE
@@ -152,7 +147,6 @@ if(PINEFORGE_BUILD_TESTS)
             $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
             $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
             $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_native_stub>)
-        set_tests_properties(native_live_startup_e2e PROPERTIES TIMEOUT 120)
     endif()
     # Exercise the real MODULE through its C ABI, without linking a second engine.
     add_executable(test_native_example_batch
@@ -164,7 +158,6 @@ if(PINEFORGE_BUILD_TESTS)
     add_dependencies(test_native_example_batch native_market_example)
     add_test(NAME test_native_example_batch
         COMMAND test_native_example_batch $<TARGET_FILE:native_market_example>)
-    set_tests_properties(test_native_example_batch PROPERTIES TIMEOUT 60)
     # Exercise the second native MODULE through the same C ABI boundary.
     add_executable(test_native_example_selected
         ${PROJECT_SOURCE_DIR}/tests/test_native_example_selected.cpp)
@@ -175,7 +168,6 @@ if(PINEFORGE_BUILD_TESTS)
     add_dependencies(test_native_example_selected native_selected_example)
     add_test(NAME test_native_example_selected
         COMMAND test_native_example_selected $<TARGET_FILE:native_selected_example>)
-    set_tests_properties(test_native_example_selected PROPERTIES TIMEOUT 60)
     add_library(pineforge_live_legacy_test_support STATIC store.cpp transport.cpp)
     target_compile_features(pineforge_live_legacy_test_support PUBLIC cxx_std_17)
     target_include_directories(pineforge_live_legacy_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -191,18 +183,16 @@ if(PINEFORGE_BUILD_TESTS)
         endif()
         target_compile_options(${native_test} PRIVATE -UNDEBUG)
         add_test(NAME ${native_test} COMMAND ${native_test})
-        set_tests_properties(${native_test} PROPERTIES TIMEOUT 120)
     endforeach()
     set_tests_properties(test_native_live_websocket PROPERTIES SKIP_RETURN_CODE 77)
     if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME native_live_routing_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_routing_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)
-        set_tests_properties(native_live_routing_e2e PROPERTIES TIMEOUT 300)
         add_test(NAME native_live_websocket_e2e COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/tests/native_live_websocket_e2e.py $<TARGET_FILE:pineforge-live>
             $<TARGET_FILE:native_live_example>)
-        set_tests_properties(native_live_websocket_e2e PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+        set_tests_properties(native_live_websocket_e2e PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 endif()
 
@@ -233,7 +223,6 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
     add_test(NAME checked_settings_e2e COMMAND ${Python3_EXECUTABLE}
         ${PROJECT_SOURCE_DIR}/tests/checked_settings_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:checked_settings_example> $<TARGET_FILE:native_live_example>)
-    set_tests_properties(checked_settings_e2e PROPERTIES TIMEOUT 120)
     foreach(capabilities_kind unknown)
         add_library(capabilities_${capabilities_kind} MODULE
             ${PROJECT_SOURCE_DIR}/tests/fixtures/strategy_capabilities.cpp
@@ -267,7 +256,6 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         ${PROJECT_SOURCE_DIR}/tests/strategy_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
         $<TARGET_FILE:native_live_example> ${capabilities_libraries}
         "unknown=$<TARGET_FILE:capabilities_unknown>")
-    set_tests_properties(strategy_capabilities_e2e PROPERTIES TIMEOUT 300)
     foreach(capabilities_kind close clock_flags)
         add_executable(test_capabilities_equivalence_${capabilities_kind}
             ${PROJECT_SOURCE_DIR}/tests/test_capabilities_equivalence.cpp
@@ -308,10 +296,6 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
                 list(APPEND _pf_confirmed_refusal_requests "${confirmed_library}")
             endif()
         endforeach()
-        set(_pf_confirmed_refusal_timeout 180)
-        if(PINEFORGE_ENABLE_SANITIZERS OR PINEFORGE_LIVE_TSAN)
-            set(_pf_confirmed_refusal_timeout 600)
-        endif()
         foreach(refusal_family requests pooc)
             set(refusal_libraries ${_pf_confirmed_refusal_${refusal_family}})
             list(LENGTH refusal_libraries refusal_library_count)
@@ -324,7 +308,7 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
                     ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_refusals.py $<TARGET_FILE:pineforge-live>
                     ${refusal_shard_libraries})
                 set_tests_properties(${refusal_test} PROPERTIES
-                    TIMEOUT ${_pf_confirmed_refusal_timeout} LABELS confirmed_refusal_shard)
+                    LABELS confirmed_refusal_shard)
                 math(EXPR refusal_offset "${refusal_offset} + 8")
                 math(EXPR refusal_shard "${refusal_shard} + 1")
             endwhile()
@@ -350,12 +334,10 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
                 add_test(NAME confirmed_capabilities_${confirmed_case}_refusal_e2e COMMAND ${Python3_EXECUTABLE}
                     ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_refusals.py $<TARGET_FILE:pineforge-live>
                     "${confirmed_case}=$<TARGET_FILE:confirmed_${confirmed_case}>")
-                set_tests_properties(confirmed_capabilities_${confirmed_case}_refusal_e2e PROPERTIES TIMEOUT 180)
             else()
                 add_test(NAME confirmed_capabilities_${confirmed_case}_e2e COMMAND ${Python3_EXECUTABLE}
                     ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
                     $<TARGET_FILE:native_live_report_oracle> ${confirmed_case} $<TARGET_FILE:confirmed_${confirmed_case}>)
-                set_tests_properties(confirmed_capabilities_${confirmed_case}_e2e PROPERTIES TIMEOUT 900)
             endif()
             add_executable(test_confirmed_equivalence_${confirmed_case}
                 ${PROJECT_SOURCE_DIR}/tests/test_stream_security_equivalence.cpp
@@ -377,7 +359,6 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
             add_test(NAME confirmed_capabilities_${confirmed_control}_tf${_pf_confirmed_clock}_e2e COMMAND ${Python3_EXECUTABLE}
                 ${PROJECT_SOURCE_DIR}/tests/confirmed_capabilities_e2e.py $<TARGET_FILE:pineforge-live>
                 $<TARGET_FILE:native_live_report_oracle> ${confirmed_control} $<TARGET_FILE:confirmed_${confirmed_control}> ${_pf_confirmed_clock})
-            set_tests_properties(confirmed_capabilities_${confirmed_control}_tf${_pf_confirmed_clock}_e2e PROPERTIES TIMEOUT 900)
             add_test(NAME confirmed_capabilities_${confirmed_control}_tf${_pf_confirmed_clock}_equivalence
                 COMMAND test_confirmed_equivalence_${confirmed_control} ${_pf_confirmed_clock} 500)
         endforeach()
@@ -490,7 +471,6 @@ if(PINEFORGE_BUILD_TESTS AND PINEFORGE_BUILD_SOURCE_LAYER)
         --runner $<TARGET_FILE:pineforge-live> --library $<TARGET_FILE:native_live_example>
         --output ${CMAKE_CURRENT_BINARY_DIR}/native_live_genuine_retry_e2e
         ${_pf_genuine_retry_sanitizer_args})
-    set_tests_properties(native_live_genuine_retry_e2e PROPERTIES TIMEOUT 300)
     if(_pf_genuine_retry_sanitizer)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             set(_pf_genuine_retry_runtime_name "lib${_pf_genuine_retry_sanitizer}.so")

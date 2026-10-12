@@ -280,7 +280,7 @@ inline bool same_events(const std::vector<EventRecord>& a, const std::vector<Eve
 
 // FNV-1a 64 of a message's bytes, the recorder's message_hash64.
 inline std::uint64_t fnv1a64(const std::string& text) {
-    std::uint64_t hash = 1469598103934665603ULL;
+    std::uint64_t hash = 14695981039346656037ULL;
     for (unsigned char c : text) {
         hash ^= c;
         hash *= 1099511628211ULL;

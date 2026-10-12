@@ -40,36 +40,24 @@ jobs:
     name: native-live (${{ matrix.profile }})
     # Same trusted-event 16-core policy as CI; forks use the standard runner.
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ matrix.job_minutes }}
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
         include:
           - profile: native
             build_dir: build-live
-            job_minutes: 75
-            verify_minutes: 65
-            test_timeout: 2700
-            ctest_timeout: 2820
           - profile: live-sanitizers
             build_dir: build-live-sanitizers
-            job_minutes: 45
-            verify_minutes: 35
-            test_timeout: 900
-            ctest_timeout: 1200
           - profile: live-tsan
             build_dir: build-live-tsan
-            job_minutes: 45
-            verify_minutes: 35
-            test_timeout: 900
-            ctest_timeout: 1200
-    # Main runs 37398893123/37461653250/37478400505 took 35.4–40.7m
-    # native + 15.1–16.3m ASan before TSan exhausted the shared hour, despite
-    # compiler and curl cache hits. Independent 75/45/45m budgets allow cold
-    # builds and leave ten minutes outside verification for setup/collection.
-    # test_ci_verify took 1695s on GitHub and 2178s on a c5.4xlarge; 2700s
-    # gives that host 24% margin, inside a 2820s stage. Live rows allow up to
-    # 900s; keep those limits and a 1200s stage. No row inventory changes.
+    # 360 minutes is GitHub's job maximum. It is deliberately the ONLY time
+    # limit here (owner rule, 2026-10-12): the old 75/45/45-minute budgets and
+    # the verifier's 2700/2820 and 900/1200-second row and stage deadlines
+    # cut off runs whose own rows were merely slow -- main's 2820s stage
+    # deadline refused this very row set's 3600s TIMEOUT property -- so no
+    # stage, step or row carries a bound of ours any more. Only a hang reaches
+    # the platform maximum. No row inventory changes.
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
     steps:
@@ -121,8 +109,8 @@ jobs:
 
       - name: Verify (${{ matrix.profile }})
         id: verify
-        timeout-minutes: ${{ matrix.verify_minutes }}
-        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache --test-timeout ${{ matrix.test_timeout }} --ctest-timeout ${{ matrix.ctest_timeout }} ${{ matrix.profile == 'native' && '--require-websocket' || '' }} ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}
+        timeout-minutes: 360
+        run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache ${{ matrix.profile == 'native' && '--require-websocket' || '' }} ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -159,7 +147,7 @@ jobs:
     needs: native-live
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 360
     steps:
       - name: Require every native profile to have passed
         env:

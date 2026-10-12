@@ -36,8 +36,7 @@ function(compile_probe compiler source out_status out_text)
         WORKING_DIRECTORY "${PF_WORK_DIR}"
         RESULT_VARIABLE status
         OUTPUT_VARIABLE text
-        ERROR_VARIABLE text
-        TIMEOUT 120)
+        ERROR_VARIABLE text)
     set(${out_status} "${status}" PARENT_SCOPE)
     set(${out_text} "${text}" PARENT_SCOPE)
 endfunction()

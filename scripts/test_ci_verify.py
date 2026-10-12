@@ -195,12 +195,14 @@ class Scripted:
         self.exits = exits
         self.calls: list[list[str]] = []
         # Every invocation's bound, beside the calls fixture (which existing
-        # tests assert verbatim).
-        self.timeouts: list[tuple[list[str], int]] = []
+        # tests assert verbatim). None is the code's own default: no stage
+        # subprocess carries a time limit of ci_verify.py's (owner rule,
+        # 2026-10-12).
+        self.timeouts: list[tuple[list[str], int | None]] = []
         self.cxx = shutil.which('c++') or '/usr/bin/c++'
         self.secret_seen_in_argv = False
 
-    def __call__(self, argv, *, extra_env=None, timeout=600, combine_stderr=True,
+    def __call__(self, argv, *, extra_env=None, timeout=None, combine_stderr=True,
                  stream_output=False) -> Completed:
         argv = list(map(str, argv))
         if argv[0] == 'setarch':
@@ -771,7 +773,7 @@ class RowFloorConfig(unittest.TestCase):
             (Path(temporary) / 'CTestTestfile.cmake').write_text(inventory + '\n')
             result = default_runner(
                 ['ctest', '--test-dir', temporary, '--output-on-failure', '--no-tests=error',
-                 '--parallel', '2'], timeout=120, stream_output=False)
+                 '--parallel', '2'], stream_output=False)
         output = result.stdout.decode('utf-8', 'replace')
         self.assertNotEqual(result.returncode, 0, output)
         rows = ctest_rows(result.stdout)
@@ -1460,7 +1462,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
     def test_source_guards_are_real_and_pass_on_this_tree(self):
         for name, argv in source_guard_commands(ROOT):
             with self.subTest(name=name):
-                result = default_runner(argv, extra_env=guard_environment(), timeout=120,
+                result = default_runner(argv, extra_env=guard_environment(),
                                         combine_stderr=True, stream_output=False)
                 if result.returncode == 77:
                     # A guard whose private fixture input the tree lacks skips
@@ -1736,19 +1738,26 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertIn('ctest-list-all', stage_names(summary))
                 self.assertIn('ctest-list-selected', stage_names(summary))
 
-    def test_full_sanitizers_ctest_runs_an_hour_and_every_other_run_half(self):
-        # Main's full sanitizers set outran 30 minutes twice; the PR set and
-        # every other profile keep the old bound.
-        for profile, extra, bound in (('sanitizers', [], 3600),
-                                      ('sanitizers', ['--exclude-label', 'slow'], 1800),
-                                      ('debug', [], 1800), ('debug', ['--exclude-label', 'slow'], 1800),
-                                      ('release', [], 1800), ('kernel', [], 1800)):
+    def test_no_profile_bounds_a_stage_by_default(self):
+        # Owner rule, 2026-10-12: no time limit of ours may fail a run for
+        # slowness. Every stage invocation of every profile therefore passes
+        # no timeout at all (None through to subprocess.run), and the only
+        # per-test deadline CTest is given is the platform's own maximum.
+        for profile, extra in (('sanitizers', []),
+                               ('sanitizers', ['--exclude-label', 'slow']),
+                               ('debug', []), ('debug', ['--exclude-label', 'slow']),
+                               ('release', []), ('kernel', []),
+                               ('native', []), ('live-sanitizers', []), ('live-tsan', [])):
             with self.subTest(profile=profile, extra=extra):
                 code, summary, scripted, _ = self.run_profile(profile, extra=extra)
                 self.assertEqual(code, 0, summary['failures'])
-                bounds = [timeout for argv, timeout in scripted.timeouts
-                          if argv[0] == 'ctest' and '--output-on-failure' in argv]
-                self.assertEqual(bounds, [bound])
+                self.assertTrue(scripted.timeouts)
+                self.assertEqual({timeout for _, timeout in scripted.timeouts}, {None})
+                self.assertIsNone(summary['testTimeoutSeconds'])
+                self.assertIsNone(summary['ctestTimeoutSeconds'])
+                ctest_argv = next(argv for argv, _ in scripted.timeouts
+                                  if argv[0] == 'ctest' and '--output-on-failure' in argv)
+                self.assertEqual(ctest_argv[ctest_argv.index('--timeout') + 1], '21600')
 
     def test_ctest_discovery_count_rejects_missing_or_ambiguous_summary(self):
         self.assertEqual(ci_verify.ctest_list_count(b'Test #1: a\nTotal Tests: 1\n'), 1)
@@ -2174,7 +2183,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 os.environ['CI_VERIFY_TEST_SECRET'] = previous
 
     def test_ctest_junit_detection_matches_real_ctest(self):
-        help_text = default_runner(['ctest', '--help'], extra_env=None, timeout=30,
+        help_text = default_runner(['ctest', '--help'], extra_env=None,
                                    combine_stderr=True, stream_output=False)
         self.assertEqual(help_text.returncode, 0)
         self.assertEqual(ctest_supports_junit(default_runner),
@@ -3441,7 +3450,7 @@ class FloorDocsPointAtTheTable(unittest.TestCase):
     def test_the_help_text_names_the_table_and_no_stale_number(self):
         result = subprocess.run(
             [sys.executable, '-B', str(ROOT / 'scripts' / 'ci_verify.py'), '--help'],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('PRIVATE_FIXTURE_PROFILE_FLOORS', result.stdout)
         self.assertNotIn('defaults to 325', result.stdout)
@@ -3727,7 +3736,7 @@ class DiagnosticsCollection(unittest.TestCase):
         result = subprocess.run(
             [sys.executable, str(ROOT / 'scripts/collect_ci_diagnostics.py'),
              '--build-dir', str(build), '--profile', profile, '--output', str(output)],
-            capture_output=True, text=True, env=env, timeout=30)
+            capture_output=True, text=True, env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_live_sanitizers_retain_runner_last_test_log_separately(self):
@@ -3870,7 +3879,20 @@ class DiagnosticsCollection(unittest.TestCase):
 
 
 class CTestDeadlines(unittest.TestCase):
-    def test_explicit_test_properties_are_preserved_but_must_leave_collection_time(self):
+    def test_no_stage_deadline_never_refuses_a_row_however_slow(self):
+        # Without an explicit --ctest-timeout there is no stage deadline for a
+        # row to outlive, so a slow row is never refused a run (owner rule,
+        # 2026-10-12). This holds with and without an explicit --test-timeout.
+        inventory = {'tests': [
+            {'name': 'slow-default'},
+            {'name': 'explicit', 'properties': [{'name': 'TIMEOUT', 'value': 999999}]}]}
+        for flags in ([], ['--test-timeout', '900'], ['--exclude-label', 'slow']):
+            with self.subTest(flags=flags):
+                cfg = ci_verify.build_config(['native', *flags])
+                self.assertIsNone(ci_verify.ctest_timeout(cfg))
+                self.assertEqual(ci_verify.ctest_deadline_errors(inventory, cfg), [])
+
+    def test_explicit_stage_deadline_still_bounds_every_selected_row(self):
         cfg = ci_verify.build_config(['native', '--test-timeout', '2100',
                                       '--ctest-timeout', '2400'])
         inventory = {'tests': [
@@ -3880,6 +3902,10 @@ class CTestDeadlines(unittest.TestCase):
         for seconds in (0, -1, 2400, 9999, float('nan'), float('inf')):
             inventory['tests'][1]['properties'][0]['value'] = seconds
             self.assertIn('explicit', ci_verify.ctest_deadline_errors(inventory, cfg)[0])
+        # A row without its own TIMEOUT rides the explicit default, which is
+        # itself checked against the explicit deadline.
+        inventory['tests'][0]['properties'] = [{'name': 'TIMEOUT', 'value': 2400}]
+        self.assertIn('slow-default', ci_verify.ctest_deadline_errors(inventory, cfg)[0])
 
     def test_commands_keep_every_profile_inventory_and_only_explicit_label_exclusion(self):
         for profile in ('native', 'live-sanitizers', 'live-tsan'):
@@ -3894,28 +3920,41 @@ class CTestDeadlines(unittest.TestCase):
         cfg = ci_verify.build_config(['native', '--exclude-label', 'slow'])
         argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=False)
         self.assertEqual(argv[argv.index('-LE') + 1], 'slow')
-        self.assertNotIn('--timeout', argv)
+        # No flag of ours: the per-test deadline is the platform job maximum
+        # itself, so no row can be cut off before the platform's own limit.
+        self.assertEqual(argv[argv.index('--timeout') + 1], '21600')
 
-    def test_defaults_remain_compatible_and_explicit_deadlines_are_recorded(self):
-        for profile, stage_seconds in (('native', 1800), ('live-sanitizers', 3600),
-                                        ('live-tsan', 1800)):
+    def test_defaults_bound_nothing_and_explicit_deadlines_are_recorded(self):
+        for profile in ('release', 'debug', 'kernel', 'native', 'sanitizers',
+                        'live-sanitizers', 'live-tsan'):
             with self.subTest(profile=profile):
                 cfg = ci_verify.build_config([profile])
                 self.assertIsNone(cfg.test_timeout)
-                self.assertEqual(ci_verify.ctest_timeout(cfg), stage_seconds)
+                self.assertIsNone(ci_verify.ctest_timeout(cfg))
+                summary = ci_verify.Driver(cfg).summary
+                self.assertIsNone(summary['testTimeoutSeconds'])
+                self.assertIsNone(summary['ctestTimeoutSeconds'])
                 cfg = ci_verify.build_config(
                     [profile, '--test-timeout', '900', '--ctest-timeout', '1200'])
                 summary = ci_verify.Driver(cfg).summary
                 self.assertEqual(summary['testTimeoutSeconds'], 900)
                 self.assertEqual(summary['ctestTimeoutSeconds'], 1200)
+        # An exclusion label no longer changes any bound: nothing is bounded.
+        cfg = ci_verify.build_config(['sanitizers', '--exclude-label', 'slow'])
+        self.assertIsNone(ci_verify.ctest_timeout(cfg))
 
     def test_invalid_deadlines_are_refused(self):
         for flags in (['--test-timeout', '0'], ['--test-timeout', '-1'],
                       ['--ctest-timeout', '0'], ['--ctest-timeout', '-1'],
-                      ['--test-timeout', '1800'],
-                      ['--test-timeout', '900', '--ctest-timeout', '900']):
+                      ['--test-timeout', '900', '--ctest-timeout', '900'],
+                      ['--test-timeout', '2401', '--ctest-timeout', '2400']):
             with self.subTest(flags=flags), self.assertRaises(ConfigError):
                 ci_verify.build_config(['native', *flags])
+        # A row bound alone has no stage deadline to outlive: accepted, and
+        # the flag stays parseable as the documented opt-in.
+        cfg = ci_verify.build_config(['native', '--test-timeout', '1800'])
+        self.assertEqual(cfg.test_timeout, 1800)
+        self.assertIsNone(ci_verify.ctest_timeout(cfg))
 
     def test_real_ctest_names_the_hang_and_runs_the_remaining_row(self):
         # Real CTest, with no engine build or mocked timer: a hanging child
@@ -3967,7 +4006,7 @@ class CTestDeadlines(unittest.TestCase):
             (Path(temporary) / 'CTestTestfile.cmake').write_text(inventory + '\n')
             discovered = default_runner(
                 ['ctest', '--test-dir', temporary, '--show-only=json-v1'],
-                timeout=120, stream_output=False)
+                stream_output=False)
             self.assertEqual(discovered.returncode, 0, discovered.stdout)
             registered = json.loads(discovered.stdout)['tests']
             self.assertEqual({test['name'] for test in registered},
@@ -3980,7 +4019,7 @@ class CTestDeadlines(unittest.TestCase):
                     self.assertEqual(set(properties['LABELS']), {'slow', 'live'})
             result = default_runner(
                 ['ctest', '--test-dir', temporary, '--output-on-failure', '--no-tests=error',
-                 '--parallel', '2'], timeout=120, stream_output=False)
+                 '--parallel', '2'], stream_output=False)
         output = result.stdout.decode('utf-8', 'replace')
         self.assertEqual(result.returncode, 8, output)
         self.assertRegex(output,
