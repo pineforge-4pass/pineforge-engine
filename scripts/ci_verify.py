@@ -2237,7 +2237,33 @@ class Driver:
         if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             try:
                 rows = ctest_rows(ran.stdout + ran.stderr)
-                if rows is None or rows.skipped or rows.not_run or rows.disabled:
+                if rows is None or rows.not_run or rows.disabled:
+                    raise RuntimeError(f'{self.cfg.profile.name} cannot accept skipped, disabled or unreadable rows')
+                if rows.skipped and not private_fixtures_overlay():
+                    # The required native-live job's shape (X2): without the
+                    # overlay runner/ registers its pinned private-fixture
+                    # placeholders and they SKIP, which is not a lost row --
+                    # the same rule the PR-exclusion branch states. Every
+                    # skipped row must be a pinned private-fixture row; an
+                    # unpinned skip, a not-run row and a disabled row are all
+                    # refused, and the pin file fails closed when unreadable or
+                    # truncated (pinned_private_fixture_rows).
+                    pinned = self.pinned_private_fixture_rows('live-test-skips')
+                    if pinned is not None:
+                        unpinned = [name for name in rows.skipped if name not in pinned]
+                        if unpinned:
+                            raise RuntimeError(
+                                f'{self.cfg.profile.name} cannot accept skipped rows that '
+                                f'are not pinned private-fixture placeholders (the overlay '
+                                f'is absent): ' + ', '.join(unpinned))
+                        self.pass_stage(
+                            'live-test-skips',
+                            f'{len(rows.skipped)} pinned private-fixture rows skipping in '
+                            f'the fixtures-absent world; no unpinned skip, no not-run and '
+                            f'no disabled row')
+                elif rows.skipped:
+                    # Overlay present: every runner row must RUN; a skipped row
+                    # is a lost row, pinned or not.
                     raise RuntimeError(f'{self.cfg.profile.name} cannot accept skipped, disabled or unreadable rows')
             except Exception as error:
                 self.fail_stage('live-test-skips', str(error))

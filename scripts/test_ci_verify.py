@@ -3225,6 +3225,127 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         self.assertEqual(driver.stages[0]['name'], 'ctest-exclusion')
 
 
+class LiveProfilesWithFixturesAbsent(unittest.TestCase):
+    """X2: the required native-live job on a tree without the private fixtures.
+
+    live-sanitizers and live-tsan run ONLY the runner/ rows and refuse every
+    skip; without the overlay runner/ registers its pinned private-fixture
+    placeholders and they SKIP, so the old rule failed the required
+    native-live job of every public PR (.github/workflows/ci.yml's build
+    gate). The branch now accepts exactly the pinned skips -- every skipped
+    row must be a pinned private-fixture row -- while an unpinned skip, a
+    not-run row and a disabled row still fail, and with the overlay present
+    the old rule stands: nothing may skip.
+    """
+
+    def run_profile(self, profile='live-sanitizers', extra=None, **exits):
+        # The real source guards run in this harness, and this tree has no
+        # private fixtures: check_native_cpp_versions genuinely exits 77 in
+        # BOTH worlds, accepted while the overlay is absent and refused under
+        # it (R2-F3). These controls are about the runner-skip rule, so that
+        # one guard is scripted as the world leaves it, as the sibling
+        # control classes do.
+        exits.setdefault('source-guard-native-versions', 0)
+        return DriverOrderingAndAggregation.run_profile(
+            self, profile, extra=extra, **exits)
+
+    def pinned_probe(self, count: int) -> list:
+        pinned = sorted(ci_verify.private_fixture_rows(ROOT))
+        self.assertGreaterEqual(len(pinned), count)
+        return pinned[:count]
+
+    def test_green_the_absent_runner_placeholders_skip_and_the_profile_passes(self):
+        # Control (a): the public native-live shape. The runner/ tree
+        # registers its 65 pinned placeholders beside the 12 rows it runs;
+        # they skip, ran stays at the floor, and the profile passes with the
+        # acceptance printed.
+        pinned = self.pinned_probe(65)
+        code, summary, _, build_dir = self.run_profile(
+            'live-sanitizers', ctest_registered=77, ctest_rows=77,
+            ctest_skipped=pinned)
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['ctestRows'], LIVE_SANITIZERS_MIN_TESTS)
+        self.assertNotIn('live-test-skips', failure_stages(summary))
+        self.assertIn('live-test-skips', stage_names(summary))
+        log = (build_dir / 'ci-logs' / 'live-test-skips.log').read_text()
+        self.assertIn('65 pinned private-fixture rows skipping', log)
+
+    def test_red_an_unpinned_runner_skip_fails(self):
+        # Control (b): one skipped row outside the pin is a failure, even
+        # though the arithmetic alone would tolerate it.
+        pinned = self.pinned_probe(65)
+        code, summary, _, _ = self.run_profile(
+            'live-sanitizers', ctest_registered=78, ctest_rows=78,
+            ctest_skipped=pinned + ['test_unpinned_runner_row'])
+        self.assertEqual(code, 1)
+        self.assertIn('live-test-skips', failure_stages(summary))
+        error = next(item['error'] for item in summary['failures']
+                     if item['stage'] == 'live-test-skips')
+        self.assertIn('test_unpinned_runner_row', error)
+        self.assertIn('not pinned private-fixture placeholders', error)
+
+    def test_red_a_not_run_row_fails_with_the_pinned_skips(self):
+        # Control (c): a row CTest could not start is refused beside the
+        # pinned skips -- the acceptance covers skips, nothing else.
+        pinned = self.pinned_probe(65)
+        code, summary, _, _ = self.run_profile(
+            'live-sanitizers', ctest_registered=78, ctest_rows=78,
+            ctest_skipped=pinned, ctest_not_run=['test_live_not_run_row'])
+        self.assertEqual(code, 1)
+        self.assertIn('live-test-skips', failure_stages(summary))
+        error = next(item['error'] for item in summary['failures']
+                     if item['stage'] == 'live-test-skips')
+        self.assertIn('cannot accept skipped, disabled or unreadable rows', error)
+
+    def test_red_a_disabled_row_fails_with_the_pinned_skips(self):
+        # Control (c) again, for the disabled list: CTest leaves it out of its
+        # own count, so only this rule can refuse it.
+        pinned = self.pinned_probe(65)
+        code, summary, _, _ = self.run_profile(
+            'live-sanitizers', ctest_registered=77, ctest_rows=77,
+            ctest_skipped=pinned, ctest_disabled=['test_live_disabled_row'])
+        self.assertEqual(code, 1)
+        self.assertIn('live-test-skips', failure_stages(summary))
+
+    def test_red_overlay_present_a_pinned_skip_still_fails(self):
+        # Control (d): with the overlay present the old rule stands -- every
+        # runner row must run -- so a pinned row that skips fails on the
+        # private-fixtures rule and on this one.
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': '1'}):
+            code, summary, _, _ = self.run_profile(
+                'live-sanitizers', ctest_registered=13, ctest_rows=13,
+                ctest_skipped=self.pinned_probe(1))
+        self.assertEqual(code, 1)
+        self.assertIn('live-test-skips', failure_stages(summary))
+        self.assertIn('ctest-private-fixtures', failure_stages(summary))
+        error = next(item['error'] for item in summary['failures']
+                     if item['stage'] == 'live-test-skips')
+        self.assertIn('cannot accept skipped', error)
+
+    def test_green_live_tsan_carries_the_same_rule(self):
+        # The rule keys on the profile SET: live-tsan accepts the pinned
+        # placeholders the same way.
+        pinned = self.pinned_probe(65)
+        code, summary, _, _ = self.run_profile(
+            'live-tsan', ctest_registered=77, ctest_rows=77,
+            ctest_skipped=pinned)
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertIn('live-test-skips', stage_names(summary))
+
+    def test_the_native_profile_is_not_under_this_rule(self):
+        # Control (e): the native profile runs runner rows too but is not a
+        # live-only profile; its shape is unchanged -- the runner-skip rule
+        # adds no stage there (and with the overlay absent its own rules are
+        # the floor's, which this profile declares none of).
+        pinned = self.pinned_probe(1)
+        code, summary, _, _ = self.run_profile(
+            'native', ctest_registered=963, ctest_rows=963,
+            ctest_skipped=pinned)
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertNotIn('live-test-skips', stage_names(summary))
+        self.assertNotIn('ctest-floor', stage_names(summary))
+
+
 class FloorDocsPointAtTheTable(unittest.TestCase):
     """N3: the floors have ONE source, and the prose says where it is.
 
