@@ -7,6 +7,8 @@ so a check that silently stopped reading its inputs fails here.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 from pathlib import Path
 import sys
 import unittest
@@ -20,6 +22,11 @@ HEADER = (ROOT / rulings.HEADER).read_text()
 ADAPTER = (ROOT / rulings.ADAPTER).read_text()
 ADR = (ROOT / rulings.ADR).read_text()
 SOURCE_LAYER = rulings.read_source_layer(ROOT)
+# The removals' form for the price-grid unit and the path it resolves to; both
+# must come from the checker and the pin files, never restated here blindly --
+# the controls below assert the resolution first.
+PRIVATE_TEST_CITATION = "the private test `test_native_price_grid`"
+PRIVATE_TEST_NAME = "test_native_price_grid"
 
 
 def read_file(relative: str) -> str | None:
@@ -30,6 +37,14 @@ def read_file(relative: str) -> str | None:
 def findings(header: str = HEADER, adapter: str = ADAPTER, adr: str = ADR,
              source_layer: str = SOURCE_LAYER, reader=read_file) -> list[str]:
     return rulings.check(header, adapter, adr, source_layer, reader)
+
+
+def run_main() -> tuple[int, str]:
+    """The real main() over the real tree, output captured."""
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = rulings.main([])
+    return code, buffer.getvalue()
 
 
 def drop_row(adr: str, first_cell_prefix: str) -> str:
@@ -166,6 +181,98 @@ class NativeFeatureRulings(unittest.TestCase):
         with self.assertRaises(rulings.ShapeError):
             findings(adr=ADR.replace("| `open_bar_view` | **adapter-policy** |",
                                      "| `open_bar_view` | retained |", 1))
+
+
+class PrivateTestCitations(unittest.TestCase):
+    """The removals' fifth-cell form: "the private test `test_native_price_grid`".
+
+    The doc-lint rule (no dead paths) and this check's rule (a native-only
+    ruling needs a pinning unit) meet here: the ADR may cite the unit by its
+    private test name, and the check accepts it only while the pin files carry
+    it -- a pinned private row or a removed tests/ source -- reads it field for
+    field whenever the tree holds it, and counts it as NOT an executed
+    consumer while it is absent (the summary says so).
+    """
+
+    def test_the_real_citation_resolves_through_the_pin_files(self):
+        # The controls below are only about the real citation if these hold.
+        self.assertIn(PRIVATE_TEST_CITATION, ADR)
+        self.assertTrue(rulings.private_test_is_pinned(ROOT, PRIVATE_TEST_NAME))
+        self.assertTrue(
+            (ROOT / 'tests' / 'private_fixture_rows.txt').read_text().splitlines()
+            .count(PRIVATE_TEST_NAME) >= 1)
+        source = rulings.private_test_source(ROOT, PRIVATE_TEST_NAME)
+        self.assertEqual(source, 'tests/test_native_price_grid.cpp')
+        self.assertFalse((ROOT / source).exists())
+        ruled = {field: ruling for ruling in rulings.parse_rulings(ADR)
+                 for field in ruling.fields}
+        self.assertEqual(ruled['price_grid'].private_tests, (PRIVATE_TEST_NAME,))
+
+    def test_green_the_pinned_private_unit_passes_with_the_private_consumer_note(self):
+        # Control (a): the tree as it is -- the ruling passes, and the summary
+        # does not claim an executed consumer for it: the note names the count
+        # and the path it could not check.
+        self.assertEqual(findings(), [])
+        code, output = run_main()
+        self.assertEqual(code, 0, output)
+        self.assertIn('9 of 10 rulings backed by an executed native consumer', output)
+        self.assertIn('private consumers: 1: tests/test_native_price_grid.cpp', output)
+
+    def test_red_a_name_that_is_neither_public_nor_pinned_fails(self):
+        # Control (b): renaming the citation to a name the tree does not hold
+        # and the pin files do not carry is a finding -- and the ruling still
+        # lacks its tests/ unit, so the native-only rule fires too.
+        mutated = ADR.replace(PRIVATE_TEST_CITATION,
+                              'the private test `test_neither_public_nor_pinned`', 1)
+        self.assertNotEqual(mutated, ADR)
+        found = findings(adr=mutated)
+        self.assertEqual(found, [
+            "price_grid, grid_rounding: the ruling names the private test "
+            "test_neither_public_nor_pinned, which is neither in the tree nor a "
+            "pinned private test (tests/private_fixture_rows.txt, "
+            "tests/private_fixture_paths.txt)",
+            "price_grid, grid_rounding: a native-only ruling needs a tests/ unit "
+            "that pins it"])
+
+    def test_a_pinned_citation_that_the_tree_holds_is_read_field_for_field(self):
+        # The overlay world (the tree holds the unit): the file is read like
+        # any consumer path, so a unit that stops spelling the field is named.
+        def reader(relative: str) -> str | None:
+            if relative == 'tests/test_native_price_grid.cpp':
+                return 'int main() { return 0; }\n'
+            return read_file(relative)
+
+        self.assertEqual(findings(reader=reader), [
+            "price_grid: consumer tests/test_native_price_grid.cpp never spells it",
+            "grid_rounding: consumer tests/test_native_price_grid.cpp never spells it"])
+
+    def test_a_pinned_flag_alone_does_not_excuse_a_unit_the_tree_has(self):
+        # The reverse reading: a citation whose unit the tree holds is read
+        # even when the pin files also carry it -- the present world is never
+        # excused by the pin. Full text -> the ruling passes; the same tree
+        # with the file gone -> the private-consumer note decides.
+        def reader(relative: str) -> str | None:
+            if relative == 'tests/test_native_price_grid.cpp':
+                return 'price_grid grid_rounding\n'
+            return read_file(relative)
+
+        self.assertEqual(findings(reader=reader), [])
+
+    def test_a_pinned_private_test_does_not_satisfy_adapter_policy_rulings(self):
+        # The citation only matters where a tests/ unit is required (or for the
+        # spell check). A ruling whose consumers are all examples keeps its own
+        # requirement; the citation must not buy an absent pin either.
+        row = next(line for line in ADR.splitlines() if line.startswith("| `open_bar_view` |"))
+        cells = row.split("|")
+        mutated_row = "|".join(
+            cells[:5] + [" `examples/native/native_calc_on_fills_strategy.cpp`, "
+                         "the private test `test_also_not_pinned` "] + cells[6:])
+        found = findings(adr=ADR.replace(row, mutated_row, 1))
+        self.assertEqual(found, [
+            "open_bar_view: the ruling names the private test "
+            "test_also_not_pinned, which is neither in the tree nor a pinned "
+            "private test (tests/private_fixture_rows.txt, "
+            "tests/private_fixture_paths.txt)"])
 
 
 if __name__ == "__main__":

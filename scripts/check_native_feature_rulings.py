@@ -22,6 +22,14 @@ dead weight nobody decided about. This check makes the difference mechanical:
                         begin-time hook instead of the spec field; the row's
                         third cell names that hook first, and the source layer
                         must call it
+  * a tests/ unit the row names may be a private test -- the removals' form
+    "the private test `test_native_price_grid`" -- ONLY when the pin files
+    carry it (a pinned private row, or a removed tests/ source), and then the
+    unit must still be found and read, field for field, whenever the tree
+    holds it; with it absent the summary prints what could not be checked
+    ("private consumers: N") and the ruling does not count as backed by an
+    executed consumer. A test that is neither in the tree nor pinned is a
+    finding, exactly as a missing consumer path is.
   * a row for a field project() does assign is a stale ruling, and a row for a
     name that is not a field is a typo: both fail. So does a member of a ruled
     name assigned ANYWHERE in the source layer through any object (a helper
@@ -51,6 +59,12 @@ END_MARKER = "<!-- native-feature-rulings:end -->"
 RULING_KINDS = ("native-only", "adapter-policy", "adapter-hook")
 EXAMPLES_PREFIX = "examples/native/"
 TESTS_PREFIX = "tests/"
+# The removals' own form for a tests/ unit that is not in the public tree:
+#   the private test `test_native_price_grid`
+# The name is a pinned private row or a removed test source, and the pin files
+# are the only place that can say so.
+PRIVATE_TEST = re.compile(r"private tests?\s+`([A-Za-z_][A-Za-z0-9_]*)`")
+PIN_FILES = "tests/private_fixture_rows.txt, tests/private_fixture_paths.txt"
 
 
 class ShapeError(RuntimeError):
@@ -63,6 +77,9 @@ class Ruling:
     kind: str
     hook: str | None
     consumers: tuple[str, ...]
+    # Tests the fifth cell names as private ("the private test `x`"); each must
+    # be a pinned private row or a removed test source, absent or present.
+    private_tests: tuple[str, ...] = ()
 
 
 def strip_comments(text: str) -> str:
@@ -164,7 +181,8 @@ def parse_rulings(adr_text: str) -> list[Ruling]:
                 raise ShapeError("adapter-hook row names no hook in its third cell: " + ", ".join(fields))
             hook = named[0].split("::")[-1]
         consumers = tuple(re.findall(r"`([A-Za-z0-9_./-]+\.(?:cpp|c|hpp|h))`", cells[4]))
-        rulings.append(Ruling(fields, kinds[0], hook, consumers))
+        private_tests = tuple(dict.fromkeys(PRIVATE_TEST.findall(cells[4])))
+        rulings.append(Ruling(fields, kinds[0], hook, consumers, private_tests))
     return rulings
 
 
@@ -198,16 +216,65 @@ def default_private_consumer(path: str) -> bool:
     return private_consumer(ROOT, path)
 
 
+def removed_test_sources(root: Path) -> frozenset[str]:
+    """The tests/ sources the removals take (F lines of the path pin)."""
+    path = root / "tests" / "private_fixture_paths.txt"
+    if not path.is_file():
+        return frozenset()
+    return frozenset(line.strip()[2:].strip()
+                     for line in path.read_text().splitlines()
+                     if line.strip().startswith("F "))
+
+
+def private_test_source(root: Path, name: str) -> str:
+    """The tests/ path a ruling's private-test citation resolves to.
+
+    The removed test source the path pin names for that unit, else the
+    conventional tests/<name>.cpp. With the overlay in the tree the unit is
+    read through this path exactly as a consumer path is; without it the
+    checks compare the pinned citation and say what could not be checked.
+    """
+    for candidate in sorted(removed_test_sources(root)):
+        if candidate.startswith(TESTS_PREFIX) and Path(candidate).stem == name:
+            return candidate
+    return TESTS_PREFIX + name + ".cpp"
+
+
+def private_test_is_pinned(root: Path, name: str) -> bool:
+    """True when the pin files carry the unit: a pinned private row, or a
+    removed tests/ test source. A tree without those files (the mutation
+    self-test's synthetic inputs) pins nothing, so the check fails closed
+    there."""
+    if name in private_fixture_rows(root):
+        return True
+    return any(candidate.startswith(TESTS_PREFIX) and Path(candidate).stem == name
+               for candidate in removed_test_sources(root))
+
+
+def default_pinned_private_test(name: str) -> bool:
+    return private_test_is_pinned(ROOT, name)
+
+
+def default_private_test_source(name: str) -> str:
+    return private_test_source(ROOT, name)
+
+
 def check(header_text: str, adapter_text: str, adr_text: str, source_layer_text: str,
           read_file: Callable[[str], str | None],
-          is_private: Callable[[str], bool] = default_private_consumer) -> list[str]:
+          is_private: Callable[[str], bool] = default_private_consumer,
+          is_pinned_private_test: Callable[[str], bool] = default_pinned_private_test,
+          private_test_source_of: Callable[[str], str] = default_private_test_source) -> list[str]:
     """Findings for one tree; shape errors propagate.
 
     A ruled consumer the tree does not carry is named in the skip report, not
     a finding, when it is one of the private-fixture rows; the same path is
     checked exactly as before whenever it is present, and it still satisfies a
     native-only ruling's tests/ requirement (the row that reads it is the
-    pinned private-fixture row).
+    pinned private-fixture row). A private-test citation ("the private test
+    `x`") is checked the same way through its resolved tests/ path: present,
+    it must spell every field the ruling names; absent, it must be pinned
+    (a pinned private row or a removed test source) or it is a finding, and
+    only a pinned one satisfies the native-only tests/ requirement.
     """
     fields = spec_fields(header_text)
     declared = adapter_declared(adapter_text, fields)
@@ -240,7 +307,7 @@ def check(header_text: str, adapter_text: str, adr_text: str, source_layer_text:
                             f"({ADR}, between the native-feature-rulings markers)")
     for ruling in rulings:
         name = ", ".join(ruling.fields)
-        if not ruling.consumers:
+        if not ruling.consumers and not ruling.private_tests:
             findings.append(f"{name}: the ruling names no native consumer")
         for path in ruling.consumers:
             text = read_file(path)
@@ -252,10 +319,28 @@ def check(header_text: str, adapter_text: str, adr_text: str, source_layer_text:
             for field in ruling.fields:
                 if not re.search(r"\b" + re.escape(field) + r"\b", text):
                     findings.append(f"{field}: consumer {path} never spells it")
+        for test_name in ruling.private_tests:
+            path = private_test_source_of(test_name)
+            text = read_file(path)
+            if text is None:
+                if is_pinned_private_test(test_name):
+                    continue  # named in the private-consumer note, not a finding
+                findings.append(
+                    f"{name}: the ruling names the private test {test_name}, which "
+                    f"is neither in the tree nor a pinned private test ({PIN_FILES})")
+                continue
+            for field in ruling.fields:
+                if not re.search(r"\b" + re.escape(field) + r"\b", text):
+                    findings.append(f"{field}: consumer {path} never spells it")
         if ruling.kind == "native-only":
             if not any(path.startswith(EXAMPLES_PREFIX) for path in ruling.consumers):
                 findings.append(f"{name}: a native-only ruling needs an {EXAMPLES_PREFIX} host that exercises it")
-            if not any(path.startswith(TESTS_PREFIX) for path in ruling.consumers):
+            pinned_unit = any(
+                is_pinned_private_test(test_name)
+                or read_file(private_test_source_of(test_name)) is not None
+                for test_name in ruling.private_tests)
+            if not (any(path.startswith(TESTS_PREFIX) for path in ruling.consumers)
+                    or pinned_unit):
                 findings.append(f"{name}: a native-only ruling needs a {TESTS_PREFIX} unit that pins it")
         if ruling.kind == "adapter-hook":
             if not re.search(r"\b" + re.escape(ruling.hook or "") + r"\s*\(", strip_comments(source_layer_text)):
@@ -295,12 +380,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         source_layer_text = read_source_layer(root)
         findings = check(header_text, adapter_text, adr_text, source_layer_text, read_file,
-                         is_private=lambda path: private_consumer(root, path))
+                         is_private=lambda path: private_consumer(root, path),
+                         is_pinned_private_test=lambda name: private_test_is_pinned(root, name),
+                         private_test_source_of=lambda name: private_test_source(root, name))
         fields = spec_fields(header_text)
         declared = adapter_declared(adapter_text, fields)
         rulings = parse_rulings(adr_text)
-        skipped = sorted({path for ruling in rulings for path in ruling.consumers
-                          if read_file(path) is None and private_consumer(root, path)})
+        skipped_paths = {path for ruling in rulings for path in ruling.consumers
+                         if read_file(path) is None and private_consumer(root, path)}
+        skipped_tests = {private_test_source(root, test_name) for ruling in rulings
+                         for test_name in ruling.private_tests
+                         if read_file(private_test_source(root, test_name)) is None
+                         and private_test_is_pinned(root, test_name)}
+        skipped = sorted(skipped_paths | skipped_tests)
     except ShapeError as error:
         print(f"check_native_feature_rulings: {error}", file=sys.stderr)
         return 1
@@ -313,16 +405,19 @@ def main(argv: list[str] | None = None) -> int:
     if findings:
         return 1
     counts = {kind: sum(len(r.fields) for r in rulings if r.kind == kind) for kind in RULING_KINDS}
-    skipped_paths = set(skipped)
-    without_consumer = sum(1 for ruling in rulings
-                           if any(path in skipped_paths for path in ruling.consumers))
+    without_consumer = sum(
+        1 for ruling in rulings
+        if any(path in skipped_paths for path in ruling.consumers)
+        or any(private_test_source(root, test_name) in skipped_tests
+               for test_name in ruling.private_tests))
     print(f"check_native_feature_rulings: {len(fields)} NativeRunSpec fields, {len(declared)} declared by "
           f"the adapter's project(), {len(fields) - len(declared)} ruled ("
           + ", ".join(f"{counts[kind]} {kind}" for kind in RULING_KINDS)
           + f"), {len(rulings) - without_consumer} of {len(rulings)} rulings backed by an "
           "executed native consumer"
           + (f"; {without_consumer} name consumers the tree does not carry (private "
-             "fixtures not present: " + ", ".join(skipped) + ")" if skipped else ""))
+             f"fixtures not present; private consumers: {len(skipped)}: "
+             + ", ".join(skipped) + ")" if skipped else ""))
     return 0
 
 
