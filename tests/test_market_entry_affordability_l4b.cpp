@@ -4,7 +4,8 @@
  * and default FIXED / CASH sizing (default percent_of_equity keeps its own
  * pinned KI-54 / gap-reject / gross-admission family).
  *
- * Rule (pinned 2026-09-03 with `lab tv`, TV is ground truth):
+ * Rule pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository):
  *
  *   admit iff lot_floored(resulting_position_qty)
  *               * max(tick(close(S)), tick(fill)) * pv * fx * margin/100
@@ -18,29 +19,9 @@
  * max(equity, signal_notional) admission floor. A rejected reversal drops the
  * ENTRY leg only — its closing leg still executes.
  *
- * Evidence (tapes under scratchpad/r5/pins, `lab tv` exports):
- *   pin-afford-{flat,reverse} CME_MINI:NQ1! 15, fixed qty 1, margin 100:
- *     10,212 flat-entry + reversal decisions, 0 mismatches; the short reversal
- *     at 2025-05-06 14:15Z filled with realized 396,625 < cost 397,995 because
- *     MTM 398,455 >= cost.
- *   pin-afford-gapup:     capital 380,000, signal close 18,820.50 (376,410 ok)
- *                         -> fill 19,225 (384,500 > 380k) -> NOT filled.
- *   pin-afford-gapdown:   capital 345,000, signal close 17,483.25 (349,665 >
- *                         345k) -> fill 17,100 (342,000 ok) -> NOT filled.
- *   pin-afford-gapup-ctl: capital 1e6 fills at 19,225.
- *   pin-admit-allin-xau   OANDA:XAUUSD 15, qty = strategy.equity / close,
- *                         commission 0.05%, 1279/1279: 2025-04-08 13:30Z
- *                         E 1,998,000.02, close 3013.72, open 3013.745, lot
- *                         step 0.01 -> 662.968 -> 662.96 lots ADMITTED.
- *   pin-admit-allin-f     NYSE:F 15, 352/352: half-cent close 10.225 -> fill
- *                         10.23: floor(E/10.225) * 10.23 > E -> DECLINED.
- *   production: rampatel BTC 2025-05-12 07:15Z — TV closed the short remainder
- *     by "Buy" @105,600 and opened no long (equity 103,572 < 105,600);
- *     masayanfx NQ1 2025-07-30 20:15Z — pyramiding add 2 * 23,667.75 * 20 =
- *     946,710 > MTM 945,225 -> TV dropped the add.
- *
- * Every price below is on-tick for its instrument (NQ 0.25, XAUUSD/F 0.01)
- * unless the case is ABOUT a sub-tick print, so fills land on the bar prices.
+ * Whole-lot cent-tick scenarios below use invented prices and timestamps.
+ * Other instrument controls preserve the same admission arithmetic.
+ * Prices are on-tick unless the case is about a sub-tick print.
  */
 
 #include <cmath>
@@ -101,7 +82,7 @@ struct Instrument {
 };
 static const Instrument kNQ  = {20.0, 0.25, 1.0};
 static const Instrument kXAU = {1.0,  0.01, 0.01};
-static const Instrument kF   = {1.0,  0.01, 1.0};
+static const Instrument kWholeLot = {1.0, 0.01, 1.0};
 static const Instrument kBTC = {1.0,  1.0,  0.001};
 
 // Scripted probe. Script chars (indexed by bar_index_):
@@ -109,7 +90,7 @@ static const Instrument kBTC = {1.0,  1.0,  0.001};
 //   'A' default-sized LONG  add "L2" (pyramiding)
 //   'l' explicit LONG  "L" qty = entry_qty_       's' explicit SHORT "S"
 //   'a' explicit LONG  add "L2" qty = entry_qty_
-//   'B' explicit LONG  "Buy" qty = entry_qty_ (the rampatel reversal id)
+//   'B' explicit LONG  "Buy" qty = entry_qty_ (the reversal close id)
 //   'E' explicit LONG  "L" qty = strategy.equity / close (the all-in idiom)
 //   'C' strategy.close("L")                        '.' nothing
 class Probe : public pineforge::source::PineStrategyHost {
@@ -180,7 +161,7 @@ public:
 // ---------------------------------------------------------------------------
 // NQ gap probes (default fixed qty 1, margin 100, commission 0).
 
-// pin-afford-gapup: placement admits (376,410 <= 380,000); the fill gaps to
+// Placement admits (376,410 <= 380,000); the fill gaps to
 // 19,225 (384,500 > 380,000) -> the entry is NOT filled. Pre-fix: FIXED default
 // sizing had no fill-time check at all and the engine opened it.
 void test_nq_gap_up_declined_at_fill() {
@@ -200,7 +181,7 @@ void test_nq_gap_up_declined_at_fill() {
     CHECK(eng.trade_count() == 0);
 }
 
-// pin-afford-gapdown: placement REJECTS (349,665 > 345,000) even though the
+// Placement REJECTS (349,665 > 345,000) even though the
 // gapped-down fill at 17,100 (342,000) would have been affordable -> NOT
 // filled. TV uses the rounded signal close as a decline trigger, never as an
 // admission floor. Pre-fix: no placement check for default sizing -> LONG.
@@ -220,7 +201,7 @@ void test_nq_gap_down_declined_at_placement() {
     CHECK(eng.trade_count() == 0);
 }
 
-// pin-afford-gapup-ctl: capital 1e6, same gap -> fills 1 @ 19,225.
+// Capital 1e6, same gap -> fills 1 @ 19,225.
 void test_nq_gap_up_control_fills() {
     std::printf("-- NQ gap-up control (capital 1e6) fills --\n");
     Probe eng(1000000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
@@ -318,7 +299,7 @@ void test_nq_margin_scaling_and_zero_inert() {
 // ---------------------------------------------------------------------------
 // Reversals.
 
-// pin-afford-reverse 2025-05-06 14:15Z shape: long 1 @ 19,808.25; the short
+// Long 1 @ 19,808.25; the short
 // signal closes at 19,899.75 (cost 397,995). Realized equity 396,625 < cost,
 // but MTM = 396,625 + 91.50 * 20 = 398,455 >= cost -> TV filled the reversal.
 // Only the NEW side's qty is costed (the closing leg is not part of the
@@ -372,10 +353,9 @@ void test_reversal_declined_at_fill_closes_only() {
     CHECK(eng.trades_with_entry_id("S") == 0);
 }
 
-// rampatel BTC 2025-05-12 07:15Z shape: a live short, equity below the price
-// of one contract, an opposite "Buy" entry. TV closed the short by "Buy"
-// @105,600 and opened no long. Pre-fix the engine opened the long, then
-// margin-called 4x the shortfall and cascaded (23,605 trades vs TV 1,486).
+// A live short, equity below the price of one contract, and an opposite
+// "Buy" entry: the broker closes the short and opens no long. Pre-fix the
+// engine opened the long, then margin-called 4x the shortfall and cascaded.
 // (a) margin calls disabled: the pure broker rule.
 // (b) margin calls enabled: no long is ever opened, no cascade.
 void test_rampatel_reversal_close_leg_executes_no_entry() {
@@ -469,7 +449,7 @@ void test_declined_reversal_with_coqueued_close() {
 // ---------------------------------------------------------------------------
 // Pyramiding adds: the RESULTING position (held + add) is costed.
 
-// masayanfx NQ1 2025-07-30 20:15Z: held 1, add 1 at 23,667.75 -> 2 * 23,667.75
+// Held 1, add 1 at 23,667.75 -> 2 * 23,667.75
 // * 20 = 946,710 > MTM 945,225 -> the add is dropped, the position stays 1.
 // Control at 950,000 admits it. Pre-fix: FIXED default adds were ungated.
 void test_pyramiding_add_costed_as_resulting_position() {
@@ -511,7 +491,7 @@ void test_pyramiding_add_costed_as_resulting_position() {
 void test_explicit_add_costed_as_resulting_position() {
     std::printf("-- explicit add costed held + add --\n");
     {
-        Probe eng(10000.0, kF, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
+        Probe eng(10000.0, kWholeLot, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
         eng.entry_qty_ = 60.0;
         eng.script = "l.a..";
         std::vector<Bar> bars = {
@@ -533,7 +513,7 @@ void test_explicit_add_costed_as_resulting_position() {
                 Probe::on_source_bar(bar);
             }
         };
-        P2 eng(10000.0, kF, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
+        P2 eng(10000.0, kWholeLot, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
         eng.entry_qty_ = 60.0;
         eng.script = "l....";
         std::vector<Bar> bars = {
@@ -548,7 +528,7 @@ void test_explicit_add_costed_as_resulting_position() {
 // ---------------------------------------------------------------------------
 // Explicit qty = strategy.equity / close (the all-in idiom).
 
-// pin-admit-allin-xau 2025-04-08 13:30Z: E 1,998,000.02, close 3013.72, next
+// Fractional-lot control: E 1,998,000.02, close 3013.72, next
 // open 3013.745 (a sub-tick print that books at tick(3013.745)), lot step
 // 0.01, commission 0.05%. qty = 662.968 -> floored 662.96; 662.96 * 3013.75 =
 // 1,997,995.7 <= E -> ADMITTED. Pre-fix the engine costed the RAW 662.968 at
@@ -574,22 +554,24 @@ void test_xauusd_floored_qty_admitted() {
     }
 }
 
-// pin-admit-allin-f: half-cent close 10.225 (E = 10,225 -> qty 1000), next
-// open 10.23: 1000 * 10.23 = 10,230 > E -> DECLINED. Pre-fix the fill gate's
-// max(E, qty * tick(close)) floor admitted it.
+// Invented half-cent close: qty = 25,025 / 125.125 = 200 whole lots.
+// The cent grid rounds UP to 125.13: 200 * 125.13 = 25,026 > 25,025,
+// so placement rejects it despite the raw-close notional being an exact tie.
+// The next open is also 125.13: a max(E, qty * tick(close)) floor must not
+// rescue the entry at fill. The no-gap on-tick case below is its control.
 void test_f_half_cent_declined() {
-    std::printf("-- F half-cent close: declined --\n");
-    Probe eng(10225.0, kF, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
+    std::printf("-- synthetic whole-lot half-cent close: declined --\n");
+    Probe eng(25025.0, kWholeLot, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
     eng.script = "E....";
     std::vector<Bar> bars = {
-        flat_bar(1000, 10.225),
-        mk_bar(2000, 10.23, 10.25, 10.20, 10.24),
-        flat_bar(3000, 10.24),
-        flat_bar(4000, 10.24),
-        flat_bar(5000, 10.24),
+        flat_bar(1000, 125.125),
+        mk_bar(2000, 125.13, 125.50, 125.00, 125.25),
+        flat_bar(3000, 125.25),
+        flat_bar(4000, 125.25),
+        flat_bar(5000, 125.25),
     };
     eng.run(bars.data(), (int)bars.size());
-    CHECK(eng.position_side_ == PositionSide::FLAT);   // pre-fix: LONG 1000
+    CHECK(eng.position_side_ == PositionSide::FLAT);   // pre-fix: LONG 200
     CHECK(eng.trade_count() == 0);
 }
 
@@ -597,29 +579,29 @@ void test_f_half_cent_declined() {
 // quantity (positive control for the two cases above).
 void test_all_in_idiom_no_gap_admits() {
     std::printf("-- all-in idiom, no gap: admits --\n");
-    Probe eng(10225.0, kF, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
+    Probe eng(25025.0, kWholeLot, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
     eng.script = "E...";
     std::vector<Bar> bars = {
-        flat_bar(1000, 10.23),      // qty = 999.51 -> 999 shares = 10,219.77
-        flat_bar(2000, 10.23),
-        flat_bar(3000, 10.23),
-        flat_bar(4000, 10.23),
+        flat_bar(1000, 125.13),      // floor(25,025 / 125.13) = 199; cost 24,900.87 <= 25,025
+        flat_bar(2000, 125.13),
+        flat_bar(3000, 125.13),
+        flat_bar(4000, 125.13),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);
-    CHECK_NEAR(eng.position_size(), 999.0, 1e-9);
+    CHECK_NEAR(eng.position_size(), 199.0, 1e-9); // 199 * 125.13 = 24,900.87
 }
 
 // ---------------------------------------------------------------------------
-// CASH default sizing takes the same rule (no TV tape of its own; the broker
-// does not know how the quantity was derived): cash 20,000 on 10,000 capital
+// CASH default sizing takes the same rule (the broker does not know how the
+// quantity was derived): cash 20,000 on 10,000 capital
 // at margin 100 is 200 lots @100 = 20,000 > 10,000 -> declined; cash 5,000 ->
 // 50 lots admitted. (Re-pins test_margin_admission_gate's former CASH
 // exemption, which was a scope carve-out, not a TV observation.)
 void test_cash_default_sizing_gated() {
     std::printf("-- CASH default sizing gated --\n");
     {
-        Probe eng(10000.0, kF, QtyType::CASH, 20000.0, 0.0, 100.0, 0, false);
+        Probe eng(10000.0, kWholeLot, QtyType::CASH, 20000.0, 0.0, 100.0, 0, false);
         eng.script = "L...";
         std::vector<Bar> bars = {
             flat_bar(1000, 100.0), flat_bar(2000, 100.0),
@@ -629,7 +611,7 @@ void test_cash_default_sizing_gated() {
         CHECK(eng.position_side_ == PositionSide::FLAT);
     }
     {
-        Probe eng(10000.0, kF, QtyType::CASH, 5000.0, 0.0, 100.0, 0, false);
+        Probe eng(10000.0, kWholeLot, QtyType::CASH, 5000.0, 0.0, 100.0, 0, false);
         eng.script = "L...";
         std::vector<Bar> bars = {
             flat_bar(1000, 100.0), flat_bar(2000, 100.0),
