@@ -268,7 +268,7 @@ docker run --rm \
 
 ### Recorded outputs (the harness's `--outputs`)
 
-This section describes unreleased support targeted for **1.5.0**. Released
+This section describes support released in **1.5.0**. Released
 1.4.0 images do not provide recorded outputs.
 
 A library compiled to record outputs keeps, besides its trades, values per bar,

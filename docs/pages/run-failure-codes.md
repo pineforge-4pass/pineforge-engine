@@ -93,7 +93,7 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The `outputs_limit` and `outputs_rejected` rows below are unreleased, targeted for 1.5.0, and not part of 1.4.0; so are the 24 selected-window and report-contract rows described [after the tables](#run_failure_codes_selected_window). The other 38 codes retain their released 1.4.0 status. The `strategy_library_incompatible` row counts the two unreleased 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`, in addition to its six released 1.4.0 reasons.
+The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and not part of 1.4.0; so are the 24 selected-window and report-contract rows described [after the tables](#run_failure_codes_selected_window). The other 38 codes retain their released 1.4.0 status. The `strategy_library_incompatible` row counts the two released 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`, in addition to its six released 1.4.0 reasons.
 
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 
@@ -224,7 +224,7 @@ three: `report_post_execution_failed` (the phases after the strategy has
 finished), `engine_command_value_invalid` (an invalid command value the engine
 derived itself) and `window_pruner_unsupported` (the optimizer's trial pruner).
 Their classes, argument kinds and English are the contract's; all are
-`retryable: false` and `since: 1.5.0`, and none is released. The registry
+`retryable: false` and `since: 1.5.0`, and all are released. The registry
 declares them and validates their arguments, which is all this page states
 about them: whether a build raises one is the build's own, and a row in the
 catalog is not proof that the source paths it names enforce anything.
