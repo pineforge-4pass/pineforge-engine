@@ -204,6 +204,23 @@ EXEMPT = {
         'holds the oracles, because the overlay world is not what they '
         'assert. Control 12 of scripts/test_private_fixture_reads.py re-runs '
         'the trace'),
+    'test_two_world_registration': (
+        'the path it names is the overlay MARKER (OVERLAY_MARKER), not a read: '
+        'the script probes it with Path.exists() -- an os.stat, which the '
+        'open-audit hook does not observe -- to decide whether the overlay '
+        'half runs, and every file it opens is gated on that same world '
+        'existence test (load_pinned_rows, reaches_source_layer, parent_list, '
+        'file(STRINGS)), so no file under the real tests/fixtures/ or '
+        'tests/oracle/ is ever opened, present or absent. Without the '
+        'fixtures the row exits 0 and prints its own not-run line ("overlay '
+        'half not run: private fixtures not present: <marker>"); it carries '
+        'no skip code. The trace control re-runs every row this table '
+        'exempts, with one caveat stated rather than hidden: its invocation '
+        'runs a script through runpy without the script’s own directory on '
+        'sys.path, so THIS script stops at its `import ci_verify` and the '
+        'trace observes no opens either way -- the evidence that holds here '
+        'is the reading above plus the row’s exit 0 on the fixture-less '
+        'tree, and the checker’s sweep re-reads the constant every run'),
 }
 GATED_BY_MODULE = re.compile(r'(?:return|Exit|exit)\s*\(?\s*77\b')
 
