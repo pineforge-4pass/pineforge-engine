@@ -6906,3 +6906,22 @@ foreach(_pf_python_row IN ITEMS
         set_tests_properties(${_pf_python_row} PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 endforeach()
+
+# The two gate suites (registered unconditionally at tests/CMakeLists.txt:2217
+# and :2219) drive the real ci_verify Driver over the floor, exclusion, overlay
+# and live-profile paths, and build their tamper trees through
+# tempfile.TemporaryDirectory, which honours TMPDIR: pin TMPDIR to a
+# configure-time directory under the build dir, the shape the private-fixture
+# controls rows use, instead of letting the rows write into the host's /tmp.
+# test_ci_verify ran 957.74 s (release A), 979.32 s (kernel A) and 781.00 s
+# (release B) in the campaign's lab jobs -- near CTest's 1500 s default, so its
+# row carries a 3600 s bound; test_ci_preflight passed in 2.79 s there, so it
+# stays off PINEFORGE_PR_SLOW_TESTS, while test_ci_verify sits in that
+# timing-derived PR exclusion population and full runs (the lab job set among
+# them, which is where its controls run) still execute it. Both rows are
+# PUBLIC -- no LABELS, no SKIP_RETURN_CODE -- and register in both fixture
+# modes like their neighbours there.
+set_tests_properties(test_ci_verify PROPERTIES TIMEOUT 3600
+    ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+set_tests_properties(test_ci_preflight PROPERTIES
+    ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
