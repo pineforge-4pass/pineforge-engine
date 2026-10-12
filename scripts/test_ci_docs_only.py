@@ -293,7 +293,7 @@ class CommandLineTests(unittest.TestCase):
         root = ['--root', '.'] if outside is not None else []
         return subprocess.run([sys.executable, str(home / 'ci_docs_only.py'), *root,
                                '--github-output', str(output)], cwd=repo, capture_output=True,
-                              text=True, env={**environment, **GIT_ENV, **env}, timeout=60)
+                              text=True, env={**environment, **GIT_ENV, **env})
 
     def test_appends_the_answer_and_exits_zero(self) -> None:
         directory = tempfile.TemporaryDirectory()

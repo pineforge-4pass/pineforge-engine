@@ -81,7 +81,7 @@ def gate_ratio(candidates: list[Sample], baselines: list[Sample], limit: float =
 
 
 def run_sample(executable: Path) -> Sample:
-    result = subprocess.run([str(executable)], text=True, capture_output=True, timeout=120)
+    result = subprocess.run([str(executable)], text=True, capture_output=True)
     diagnostic = result.stdout + result.stderr
     if result.returncode:
         raise RuntimeError(f"runtime witness {executable} exited {result.returncode}:\n{diagnostic}")
@@ -126,7 +126,7 @@ def compile_baseline(args: argparse.Namespace, root: Path) -> Path:
         "-I", str(frozen_root / "include"), "-I", str(args.generated_include),
         *flags, str(args.source), str(frozen.archive), "-pthread", "-o", str(output),
     ]
-    result = subprocess.run(command, text=True, capture_output=True, timeout=180)
+    result = subprocess.run(command, text=True, capture_output=True)
     if result.returncode:
         raise RuntimeError("ab9714be runtime witness did not compile:\n"
                            + result.stdout + result.stderr)

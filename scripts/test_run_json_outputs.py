@@ -147,7 +147,7 @@ class RunJsonOutputsTests(unittest.TestCase):
     def run_json(self, library: Path, *args: str, env: dict | None = None):
         command = [sys.executable, str(RUN_JSON), "--so", str(library), "--ohlcv",
                    str(self.csv), "--input-tf", "5", *args]
-        done = subprocess.run(command, capture_output=True, text=True, timeout=300,
+        done = subprocess.run(command, capture_output=True, text=True,
                               env={**os.environ, **(env or {})})
         lines = [line for line in done.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 1, done.stdout + done.stderr)

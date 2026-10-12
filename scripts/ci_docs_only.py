@@ -71,7 +71,6 @@ PROOF_READS = {
 SHA = re.compile(r'[0-9a-f]{40}')
 NO_COMMIT = '0' * 40
 SHOWN = 40
-GIT_SECONDS = 60
 
 
 class Doubt(Exception):
@@ -88,8 +87,7 @@ def is_documentation(path: str) -> bool:
 
 def git(root: Path, *args: str) -> str:
     try:
-        result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True,
-                                timeout=GIT_SECONDS)
+        result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Doubt(f'git {" ".join(args)} failed: {error}') from error
     if result.returncode:

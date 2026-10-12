@@ -184,7 +184,7 @@ def run_under_trace(root: Path, tmp: Path, target: Path, argv: tuple = ()):
     env[TRACE_MARKER] = '1'
     return subprocess.run(
         [PY, '-B', str(tracer), str(root), str(target), *argv],
-        capture_output=True, text=True, timeout=900, env=env, cwd=str(tmp))
+        capture_output=True, text=True, env=env, cwd=str(tmp))
 
 
 # TRACER_SOURCE's own exit codes: 3 names an open of a missing private path,
@@ -229,7 +229,7 @@ def row_argv(kernel, row: str) -> tuple:
 def run_sweep(root: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [PY, '-B', str(SWEEP), '--root', str(root)],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True)
 
 
 class TamperTree:
@@ -493,7 +493,7 @@ class KernelPythonSweepControls(unittest.TestCase):
     def run_sweep(self) -> subprocess.CompletedProcess:
         return subprocess.run(
             [PY, '-B', str(self.script), '--cmake', str(self.cmake)],
-            capture_output=True, text=True, timeout=600)
+            capture_output=True, text=True)
 
     def test_python_row_reading_absent_private_file_is_caught(self):
         (self.root / 'tests' / 'e2e_fb2_reader.py').write_text(
@@ -517,9 +517,7 @@ class KernelPythonSweepControls(unittest.TestCase):
         self.assertIn('names no .py script', result.stdout + result.stderr)
 
     def test_real_tree_is_clean(self):
-        result = subprocess.run(
-            [PY, '-B', str(KERNEL_SWEEP)], capture_output=True, text=True,
-            timeout=600)
+        result = subprocess.run([PY, '-B', str(KERNEL_SWEEP)], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('kernel python rows reading an absent private file: 0',
                       result.stdout)

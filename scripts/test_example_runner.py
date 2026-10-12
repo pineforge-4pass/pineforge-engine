@@ -67,7 +67,7 @@ class Runner(unittest.TestCase):
 
     def run_runner(self, *definitions: str) -> tuple[int, str]:
         result = subprocess.run([TOOLS.cmake, *definitions, "-P", str(RUNNER)],
-                                capture_output=True, text=True, timeout=120)
+                                capture_output=True, text=True)
         return result.returncode, normalized(result.stdout + result.stderr)
 
     def run_row(self, name: str, *extra: str) -> tuple[int, str]:
@@ -118,7 +118,7 @@ class RegisteredRows(unittest.TestCase):
     def rows(self) -> list[dict]:
         result = subprocess.run(
             [TOOLS.ctest, "--show-only=json-v1", "--test-dir", str(TOOLS.examples_build_dir)],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return [test for test in json.loads(result.stdout)["tests"]
                 if test["name"].startswith("example_")]

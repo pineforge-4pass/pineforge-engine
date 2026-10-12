@@ -39,7 +39,7 @@ OBSERVABLE_REWRITES = {
 
 def git(*args: str) -> str:
     result = subprocess.run(["git", "-C", str(ROOT), *args], text=True,
-                            capture_output=True, timeout=60)
+                            capture_output=True)
     if result.returncode:
         raise SystemExit(result.stderr.strip())
     return result.stdout

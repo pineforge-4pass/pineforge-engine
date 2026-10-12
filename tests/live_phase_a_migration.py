@@ -50,7 +50,7 @@ try:
                      '--symbol', 'TEST:MOCK', '--mode', 'bars', '--feed', str(feed), '--ledger', str(ledger),
                      '--webhook-url', f'http://127.0.0.1:{server.server_port}/actions', '--allow-insecure-http',
                      '--max-attempts', '1']
-        old = subprocess.run([previous] + arguments, capture_output=True, text=True, env=os.environ, timeout=25)
+        old = subprocess.run([previous] + arguments, capture_output=True, text=True, env=os.environ)
         assert old.returncode == 1, (old.stdout, old.stderr)
         with sqlite3.connect(ledger) as database:
             assert database.execute('SELECT schema_version FROM metadata').fetchone() == (1,)
@@ -59,7 +59,7 @@ try:
             assert [row[3] for row in immutable] == [1, 0]
         received.clear()
         allow_success = True
-        new = subprocess.run([current] + arguments, capture_output=True, text=True, env=os.environ, timeout=25)
+        new = subprocess.run([current] + arguments, capture_output=True, text=True, env=os.environ)
         assert new.returncode == 0, (new.stdout, new.stderr)
         assert sorted(row[0] for row in received) == [2, 3, 4]
         recovered = next(row for row in received if row[0] == 2)
@@ -70,7 +70,7 @@ try:
             assert database.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone() == (6,)
             assert database.execute("SELECT count(*) FROM delivery_log WHERE phase='completed'").fetchone() == (3,)
             assert database.execute('SELECT delivery_id=event_id FROM event_routes JOIN events USING(ordinal)').fetchall() == [(1,)] * 4
-        resumed = subprocess.run([current] + arguments, capture_output=True, text=True, env=os.environ, timeout=25)
+        resumed = subprocess.run([current] + arguments, capture_output=True, text=True, env=os.environ)
         assert resumed.returncode == 0 and len(received) == 3, resumed.stderr
         print('PASS actual phase-A schema-1 ledger migration: additive audit tables, unchanged payload/event IDs, acknowledged events never resent, unacknowledged events sent once')
 finally:

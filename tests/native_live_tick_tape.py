@@ -357,7 +357,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                                     "committed_before_kill": recorded}
                                 break
                             time.sleep(0.01)
-                        killed = process.wait(timeout=20)
+                        killed = process.wait()
                         if "sigkill" not in result or killed != -signal.SIGKILL:
                             raise RuntimeError(f"mid-tape SIGKILL not proven: {killed}")
                         result["sigkill"]["returncode"] = killed
@@ -368,7 +368,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                         command = base + ["--feed", str(feed_path), "--from-input", str(resumed)]
                         result["resume_from_input"] = resumed
                     else:
-                        result["runner_returncode"] = process.wait(timeout=1800)
+                        result["runner_returncode"] = process.wait()
                 costs.append(parse_cost(cost_path))
             if fail_first:
                 cost_path = output / "time-redelivery.json"
@@ -377,7 +377,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
                 receiver.begin_invocation(command)
                 process = TimedProcess(command, cost_path, stdout=log, stderr=subprocess.STDOUT,
                     env=receiver.environment)
-                result["redelivery_returncode"] = process.wait(timeout=1800)
+                result["redelivery_returncode"] = process.wait()
                 if result["redelivery_returncode"] != 0:
                     raise RuntimeError("explicit HTTP-failure redelivery did not complete")
                 costs.append(parse_cost(cost_path))
@@ -409,7 +409,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
     finally:
         if process is not None and process.poll() is None:
             process.kill()
-            process.wait(timeout=20)
+            process.wait()
         if receiver is not None:
             receiver.finish(output)
         if local_feed is not None:

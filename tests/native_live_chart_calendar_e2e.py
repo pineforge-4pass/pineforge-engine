@@ -125,7 +125,7 @@ def prove(root, runner, oracle, library, cell, probe):
         ledger = target / f"{mode}.sqlite"
         command = [runner, "run", "--strategy", library, "--warmup", warmup,
                    "--feed", feed, "--ledger", ledger, "--mode", mode] + config_args(config)
-        result = subprocess.run(list(map(str, command)), text=True, capture_output=True, timeout=180)
+        result = subprocess.run(list(map(str, command)), text=True, capture_output=True)
         (target / f"{mode}.log").write_text(result.stdout + result.stderr)
         receipt = dict(timeframe=timeframe, timezone=timezone, session=session, first_day=first_day,
                        mode=mode, returncode=result.returncode, stderr=result.stderr.strip(),

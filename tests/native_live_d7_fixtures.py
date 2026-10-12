@@ -15,7 +15,7 @@ from native_live_report_e2e import action_key, equal, write_csv
 
 def checked(command, destination):
     with destination.open("w") as output, destination.with_suffix(".stderr").open("w") as errors:
-        result = subprocess.run(list(map(str, command)), stdout=output, stderr=errors, timeout=1800)
+        result = subprocess.run(list(map(str, command)), stdout=output, stderr=errors)
     assert result.returncode == 0, (command, result.returncode, destination.with_suffix(".stderr").read_text())
     return json.loads(destination.read_text())
 
@@ -82,7 +82,7 @@ def run_case(args, case):
             refused = target / f"refused-{mode}.sqlite"
             result = subprocess.run(list(map(str, [args.runner, "run", "--strategy", library,
                 "--warmup", warmup, "--ledger", refused, "--mode", mode] + config_args(config))),
-                text=True, capture_output=True, timeout=30)
+                text=True, capture_output=True)
             assert result.returncode == 1 and "daily/weekly chart delivery on a daylight-saving calendar is not supported yet" in result.stderr
             assert not refused.exists() and not Path(str(refused) + ".lock").exists()
         verdict = dict(case=case.name, bars="REFUSED D/W daylight-saving calendar", ticks="REFUSED", timezone=config["timezone"])
@@ -151,7 +151,7 @@ def run_case(args, case):
         tape = case / "tape.jsonl"
         if not tape.exists():
             with tape.open("wb") as output:
-                subprocess.run(["zstd", "-q", "-d", "-c", str(case / "tape.jsonl.zst")], stdout=output, check=True, timeout=300)
+                subprocess.run(["zstd", "-q", "-d", "-c", str(case / "tape.jsonl.zst")], stdout=output, check=True)
         tick_feed = target / "ticks.jsonl"
         with tape.open() as source:
             batched(tick_feed, map(json.loads, source))

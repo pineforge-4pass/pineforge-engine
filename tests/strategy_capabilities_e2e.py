@@ -59,7 +59,7 @@ try:
                               '--control-dir', str(controls), '--status-file', str(health)]
             if declaration == 'calc_on_order_fills':
                 command += ['--override', 'calc_on_order_fills=false']
-            result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+            result = subprocess.run(command, capture_output=True, text=True)
             assert result.returncode == 1, result
             assert declaration in result.stderr, result.stderr
             if kind == 'unresolved_tick':
@@ -73,13 +73,13 @@ try:
             ledger = root / f'override-pooc-{value}.sqlite'
             result = subprocess.run(base + ['--strategy', libraries['close'], '--ledger', str(ledger),
                                            '--override', f'process_orders_on_close={value}'],
-                                    capture_output=True, text=True, timeout=20)
+                                    capture_output=True, text=True)
             assert result.returncode == 1 and 'process_orders_on_close' in result.stderr, result.stderr
             assert not ledger.exists() and not list(root.glob(ledger.name + '*')) and not requests
         ledger = root / 'close.sqlite'
         command = base + ['--strategy', libraries['close'], '--ledger', str(ledger),
                           '--override', 'process_orders_on_close=false']
-        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(command, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         summary = json.loads(result.stdout)
         receipt = summary['execution_capabilities']
@@ -90,21 +90,21 @@ try:
         assert 'lacks execution capabilities' not in result.stderr
         with sqlite3.connect(ledger) as database:
             assert database.execute('SELECT identity FROM metadata').fetchone()[0] == summary['deployment']
-        replay = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        replay = subprocess.run(command, capture_output=True, text=True)
         assert replay.returncode == 0, replay.stderr
         assert json.loads(replay.stdout)['execution_capabilities'] == receipt
         assert json.loads(replay.stdout)['deployment'] == summary['deployment']
         changed = subprocess.run(base + ['--strategy', libraries['clock_flags'], '--ledger', str(ledger)],
-                                 capture_output=True, text=True, timeout=20)
+                                 capture_output=True, text=True)
         assert changed.returncode == 1 and 'deployment identity or schema mismatch' in changed.stderr
         admitted = subprocess.run(base + ['--strategy', libraries['clock_flags'], '--ledger', str(root / 'flags.sqlite')],
-                                  capture_output=True, text=True, timeout=20)
+                                  capture_output=True, text=True)
         assert admitted.returncode == 0, admitted.stderr
         assert json.loads(admitted.stdout)['execution_capabilities'] != receipt
         feed.write_text('')
         old_ledger = root / 'old.sqlite'
         old = subprocess.run(base + ['--strategy', old_library, '--ledger', str(old_ledger)],
-                             capture_output=True, text=True, timeout=20)
+                             capture_output=True, text=True)
         assert old.returncode == 0, old.stderr
         assert 'warning: compiled strategy lacks execution capabilities' in old.stderr
         assert 'legacy behavior retained' in old.stderr

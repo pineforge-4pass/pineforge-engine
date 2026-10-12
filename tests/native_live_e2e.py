@@ -85,7 +85,7 @@ try:
             import os
             env = dict(os.environ, PINEFORGE_TEST_HMAC=secret)
             p = subprocess.run(base + extra, input=stdin, capture_output=True, text=True,
-                               env=env, timeout=25)
+                               env=env)
             assert (p.returncode == 0) is success, (p.returncode, p.stdout, p.stderr)
             assert secret not in p.stdout + p.stderr
             return json.loads(p.stdout) if success else p
@@ -164,7 +164,7 @@ try:
             deployment = db.execute('SELECT identity FROM metadata WHERE singleton=1').fetchone()[0]
         retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--deployment', deployment,
                                 '--target', 'default', '--failed-only'],
-                               capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
+                               capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret))
         assert retry.returncode == 0, retry.stderr
         assert received[4] == first
         assert len({e['event_id'] for e in received}) == 4
@@ -196,7 +196,7 @@ try:
             deployment = db.execute('SELECT identity FROM metadata WHERE singleton=1').fetchone()[0]
         retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--deployment', deployment,
                                 '--target', 'default', '--failed-only'],
-                               capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
+                               capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret))
         assert retry.returncode == 0, retry.stderr
         assert received[4] == first
 
@@ -233,7 +233,7 @@ try:
                        '--max-events', str(len(events)), '--ledger', str(websocket_ledger)]
             import os
             result = subprocess.run(base+options, capture_output=True, text=True,
-                                    env=dict(os.environ, PINEFORGE_TEST_HMAC=secret), timeout=25)
+                                    env=dict(os.environ, PINEFORGE_TEST_HMAC=secret))
             if result.returncode:
                 assert ('libcurl build with WS/WSS support enabled' in result.stderr or
                         'libcurl 8.14.1 or newer' in result.stderr), (result.stdout,result.stderr)

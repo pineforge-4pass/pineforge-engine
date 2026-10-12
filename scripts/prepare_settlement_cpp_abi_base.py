@@ -179,8 +179,8 @@ def current_eigen_source(cache: dict[str, str], current: Path) -> Path | None:
     return None
 
 
-def run(argv, *, cwd=None, timeout=60, log: Path | None = None) -> bytes:
-    result = subprocess.run(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+def run(argv, *, cwd=None, log: Path | None = None) -> bytes:
+    result = subprocess.run(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if log:
         log.write_bytes(result.stdout + result.stderr)
     if result.returncode:
@@ -295,9 +295,9 @@ def main() -> int:
                      'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON', 'FETCHCONTENT_FULLY_DISCONNECTED': 'ON'})
     configure = ['cmake', '-S', str(source), '-B', str(build), '-G', cache['CMAKE_GENERATOR'],
                  *[f'-D{key}={value}' for key, value in settings.items()]]
-    run(configure, timeout=120, log=output / 'configure.log')
+    run(configure, log=output / 'configure.log')
     build_argv = ['cmake', '--build', str(build), '--target', 'pineforge', '--parallel', str(args.jobs)]
-    run(build_argv, timeout=1800, log=output / 'build.log')
+    run(build_argv, log=output / 'build.log')
     library = build / 'lib/libpineforge.a'
     if not library.read_bytes().startswith(b'!<arch>\n'):
         raise RuntimeError('base library is not a full static archive')

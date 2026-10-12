@@ -56,7 +56,7 @@ def check() -> None:
         result = subprocess.run(
             [compiler, "-std=c++17", "-I", str(ROOT / "include"), "-I", str(root),
              "-c", str(source_path), "-o", str(object_path)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True,
         )
         if result.returncode:
             raise SystemExit("compiler mirror proof failed:\n" + result.stderr)

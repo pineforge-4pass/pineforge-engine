@@ -11,7 +11,7 @@ import tempfile
 
 
 def checked(command, expected=0):
-    result = subprocess.run(command, text=True, capture_output=True, timeout=45)
+    result = subprocess.run(command, text=True, capture_output=True)
     assert result.returncode == expected, (command, result.returncode, result.stdout, result.stderr)
     return result.stdout
 

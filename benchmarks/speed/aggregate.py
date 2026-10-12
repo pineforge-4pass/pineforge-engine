@@ -70,7 +70,7 @@ def _sysctl_or(key: str, fallback: str) -> str:
     if sys.platform != "darwin":
         return fallback
     try:
-        r = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True)
         val = r.stdout.strip()
         return val if val else fallback
     except Exception:

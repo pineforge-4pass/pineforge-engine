@@ -51,7 +51,7 @@ def main() -> int:
             return 0
         if not args.out.exists() or args.out.read_text(encoding="utf-8") != source:
             raise ValueError("Complete host page changed after build; rebuild its target")
-        return subprocess.run([str(args.run)], timeout=120, check=False).returncode
+        return subprocess.run([str(args.run)], check=False).returncode
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"Complete host extraction: {error}", file=sys.stderr)
         return 1

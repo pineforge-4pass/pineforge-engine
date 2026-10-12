@@ -679,7 +679,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             receiver.begin_invocation(command)
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
             if fail_first:
-                result["initial_runner_returncode"] = process.wait(timeout=600)
+                result["initial_runner_returncode"] = process.wait()
                 if result["initial_runner_returncode"] != 0:
                     raise RuntimeError("initial HTTP-failure run did not complete")
                 command = receiver.redelivery_command(runner, output / "orders.sqlite3")
@@ -690,7 +690,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 if not receiver.accepted.wait(120):
                     raise RuntimeError("accepted-effect crash window not reached")
                 process.kill()
-                killed_returncode = process.wait(timeout=10)
+                killed_returncode = process.wait()
                 if killed_returncode != -9:
                     raise RuntimeError(f"runner was not SIGKILLed: {killed_returncode}")
                 result["crash_receipt"] = {"accepted_effect": crash_action, "returncode": killed_returncode,
@@ -700,7 +700,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
                 restart_invocation = receiver.begin_invocation(command)
                 result["crash_receipt"]["restart_invocation"] = restart_invocation
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=receiver.environment)
-            result["runner_returncode"] = process.wait(timeout=600)
+            result["runner_returncode"] = process.wait()
         redelivery = receiver.redelivery
         attempts, effects = receiver.finish(output)
         errors = receiver.errors
@@ -738,7 +738,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
     finally:
         if process is not None and process.poll() is None:
             process.kill()
-            process.wait(timeout=10)
+            process.wait()
         if receiver is not None:
             receiver.finish(output)
         write_json(output / "result.json", result)

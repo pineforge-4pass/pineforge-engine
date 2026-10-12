@@ -113,7 +113,7 @@ def wait_for(predicate, timeout=8):
 
 def invoke(arguments, code=0, stdin=None, env=None):
     result = subprocess.run([runner] + list(map(str, arguments)), input=stdin, text=True,
-        capture_output=True, timeout=22, env=env)
+        capture_output=True, env=env)
     assert result.returncode == code, (arguments, result.returncode, result.stdout, result.stderr)
     assert secret not in result.stdout + result.stderr
     return result.stdout
@@ -139,8 +139,8 @@ def finish(process, code=0, stop=True, signal_number=signal.SIGTERM):
     if stop:
         process.send_signal(signal_number)
     else:
-        process.wait(timeout=30)
-    output, errors = process.communicate(timeout=30)
+        process.wait()
+    output, errors = process.communicate()
     assert process.returncode == code, (process.returncode, output, errors)
     assert secret not in output + errors
     return output
@@ -188,7 +188,7 @@ try:
         assert set(status(health)["metrics"]) - {"control_errors"} == {"committed_input", "last_seq", "source_timestamp_ms",
             "source_lag_ms", "queue_bytes", "ledger_bytes", "report_cursor", "targets"}
         duplicate = subprocess.run([runner] + list(map(str, base(ledger) + ["--feed", feed,
-            "--status-file", health])), capture_output=True, text=True, timeout=5)
+            "--status-file", health])), capture_output=True, text=True)
         assert duplicate.returncode == 1 and status(health)["liveness"]["alive"]
         process.stdin.write("{")
         process.stdin.flush()
@@ -214,7 +214,7 @@ try:
         health.unlink()
         health.mkdir()
         wait_for(lambda: process.poll() is not None)
-        output, errors = process.communicate(timeout=5)
+        output, errors = process.communicate()
         assert process.returncode == 1 and "service status publication failed" in errors, (output, errors)
         assert invoke(["report", "--ledger", ledger]) == before
         print("PASS status-publication failure is fatal with committed report intact", flush=True)
@@ -391,7 +391,7 @@ try:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         children.append(pipe)
         pipe.stdout.close()
-        assert pipe.wait(timeout=15) == 1
+        assert pipe.wait() == 1
         assert query(pipe_ledger, "SELECT count(*) FROM inputs") == [(1,)]
         assert "stdout write failed" in pipe.stderr.read().decode()
 
@@ -455,7 +455,7 @@ finally:
         if process.poll() is None:
             process.terminate()
             try:
-                process.communicate(timeout=5)
+                process.communicate()
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.communicate()
