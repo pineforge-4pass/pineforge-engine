@@ -6,7 +6,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 text = (ROOT / "scripts/regen_corpus_cpp.sh").read_text()
-commit = "a4259656d025f36411a7ad1e4ab6c6dd020b780a"
+commit = "52101f9b7b540fece4493ddc7495451b6d85fc07"
 if text.count(f'CODEGEN_COMMIT="{commit}"') != 1:
     raise SystemExit("regen_corpus_cpp: paired codegen commit is not pinned exactly once")
 if "pineforge-release:latest" in text:
@@ -19,4 +19,4 @@ for required in (
         "--network=none", "-e PYTHONPATH=/codegen"):
     if required not in text:
         raise SystemExit("regen_corpus_cpp: missing pin enforcement: " + required)
-print("regen_corpus_cpp: codegen a425965 and immutable runtime image pinned")
+print("regen_corpus_cpp: codegen 52101f9 and immutable runtime image pinned")
