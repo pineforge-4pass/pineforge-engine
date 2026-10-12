@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,14 @@ REMOVED_EXAMPLE = 'tests/fixtures/whole_lot_tie'
 # every Python child that inherits the environment; a child run with -I and a
 # scrubbed environment (not this suite's) is out of any in-process hook's
 # reach, and the exemption reason says so.
+#
+# The trace runs the target the way its own ctest row does: the row's argv,
+# and the script's directory first on sys.path exactly as `python <script>`
+# would put it (runpy.run_path does not, and the two-world row stopped at
+# `import ci_verify` under the old tracer, so its exemption was traced
+# vacuously).  A script that raises instead of exiting is a FAILURE of the
+# trace, never a clean log: its exit code is 4, distinct from the 3 of an
+# open that named a missing private path.
 TRACE_MARKER = 'PF_PRIVATE_TRACE_CHILD'
 
 TRACER_SOURCE = '''\
@@ -60,6 +69,13 @@ reports the log its processes wrote (PF_PRIVATE_TRACE_LOG), exiting 3 when an
 open named a missing path under PF_PRIVATE_TRACE_ROOT/tests/fixtures/ or
 .../tests/oracle/ -- a read of a KEPT file there is not what the exemption is
 about.
+
+The target runs the way `python <script> [args...]` would: its own directory
+first on sys.path (runpy.run_path does not do that for a script FILE) and its
+argv the caller gave.  The trace prints the script's own exit code, and a
+script that RAISES instead is a failure of the trace -- exit 4, distinct from
+the 3 of an open -- because a script that dies before its work opens nothing
+and its clean log proves nothing.
 """
 import os
 import runpy
@@ -106,13 +122,31 @@ sys.addaudithook(_hook)
 if __name__ == '__main__':
     target = sys.argv[2]
     os.environ['PF_PRIVATE_TRACE_CHILD'] = '1'
-    sys.argv = [target]
+    sys.argv = [target] + sys.argv[3:]
+    # `python <script>` puts the script's own directory first on sys.path;
+    # runpy.run_path does NOT (it touches sys.path only for a directory or
+    # zip target, never for a script file).  Without this the target's own
+    # imports fail, the script dies before doing its work, and the trace is
+    # vacuously clean -- which is how the two-world row's exemption passed.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(target)))
+    exited = 0
+    raised = None
     try:
         runpy.run_path(target, run_name='__main__')
-    except SystemExit:
-        pass
-    except Exception as error:
-        print('trace: the traced script raised %r' % (error,))
+    except SystemExit as exit_error:
+        # The scripts end by exit codes; the code is reported, not judged
+        # here -- the control compares it to the code the script is known
+        # to produce in this tree.
+        code = exit_error.code
+        if code is None:
+            exited = 0
+        elif isinstance(code, int):
+            exited = code
+        else:
+            print('trace: the traced script exited with the message %r' % (code,))
+            exited = 1
+    except BaseException as error:
+        raised = error
     try:
         with open(os.environ['PF_PRIVATE_TRACE_LOG']) as handle:
             opened = sorted({line.strip() for line in handle if line.strip()})
@@ -121,12 +155,23 @@ if __name__ == '__main__':
     for path in opened:
         print('trace: opened %s' % (path,))
     print('trace: opens under the real private trees: %d' % len(opened))
+    if raised is not None:
+        # The script died before finishing: no clean log can clear it, so
+        # the trace fails with a code distinct from the 3 of an open.
+        print('trace: the traced script raised %r' % (raised,))
+        print('trace: the traced script did not run to the end')
+        sys.exit(4)
+    print('trace: the traced script exited %d' % exited)
     sys.exit(3 if opened else 0)
 '''
 
 
-def run_under_trace(root: Path, tmp: Path, target: Path):
-    """Run one script under the audit-hook trace, children included."""
+def run_under_trace(root: Path, tmp: Path, target: Path, argv: tuple = ()):
+    """Run one script under the audit-hook trace, children included, from a
+    neutral cwd (the scratch dir): `argv` is the extra argv the script's own
+    ctest row passes, so the trace reproduces the row's invocation, and a
+    script that needs the repo as its cwd is caught here rather than passing
+    on the runner's."""
     tracer = tmp / 'sitecustomize.py'
     tracer.write_text(TRACER_SOURCE)
     log = tmp / 'opens.log'
@@ -138,8 +183,47 @@ def run_under_trace(root: Path, tmp: Path, target: Path):
     env['PF_PRIVATE_TRACE_LOG'] = str(log)
     env[TRACE_MARKER] = '1'
     return subprocess.run(
-        [PY, '-B', str(tracer), str(root), str(target)],
-        capture_output=True, text=True, timeout=900, env=env)
+        [PY, '-B', str(tracer), str(root), str(target), *argv],
+        capture_output=True, text=True, timeout=900, env=env, cwd=str(tmp))
+
+
+# TRACER_SOURCE's own exit codes: 3 names an open of a missing private path,
+# 4 a traced script that raised -- a script that died before its work opened
+# nothing, so a trace there is a failure of the trace, never a clean result.
+TRACE_PRIVATE_OPEN_EXIT = 3
+TRACE_RAISED_EXIT = 4
+
+
+def row_argv(kernel, row: str) -> tuple:
+    """The extra argv tests/CMakeLists.txt passes the row's script.
+
+    The trace reproduces the row's own invocation, never a bare run: the
+    two-world row registers `check_two_world_registration.py --both`, and the
+    ROW is what an exemption is about.  Read from the same file the checker
+    parses (its own statement split), so a registration that grows an
+    argument is followed here without a second list to keep in step."""
+    text = (REPO / 'tests' / 'CMakeLists.txt').read_text()
+    for _line, statement in kernel.statements(text):
+        head = kernel.CMAKE_HEAD.match(statement)
+        if not head or head.group(1) != 'add_test':
+            continue
+        name = kernel.ADD_TEST.search(statement)
+        if not name or name.group(1) != row:
+            continue
+        match = re.search(r'[\w${}/.-]+\.py\b', statement)
+        if match is None:
+            raise AssertionError(f'{row}: the registration names no .py script')
+        argv = []
+        for token in statement[match.end():].split():
+            token = token.rstrip(')').strip('"')  # the closing paren rides it
+            if not token:
+                continue
+            if '${' in token:
+                raise AssertionError(
+                    f'{row}: unexpanded registration argument {token!r}')
+            argv.append(token)
+        return tuple(argv)
+    raise AssertionError(f'{row}: no add_test() registration names it')
 
 
 def run_sweep(root: Path) -> subprocess.CompletedProcess:
@@ -459,9 +543,13 @@ class ExemptRowTraceControls(unittest.TestCase):
 
     The rows and their scripts come from the real checker (its EXEMPT table
     and its own row parse), so an exemption added there is traced here without
-    a second list to keep in step. The trace records opens of paths the real
-    private trees do NOT have: an exemption says the script never reads an
-    absent private file, and a kept file's read is nobody's finding.
+    a second list to keep in step. The trace runs each script the way its own
+    ctest row does -- the row's argv, the script's directory first on
+    sys.path, a scratch cwd -- and records opens of paths the real private
+    trees do NOT have: an exemption says the script never reads an absent
+    private file, and a kept file's read is nobody's finding. A trace whose
+    script raised (the tracer's exit 4) is a failure of the trace, never a
+    clean result.
     """
 
     def setUp(self):
@@ -472,6 +560,7 @@ class ExemptRowTraceControls(unittest.TestCase):
             self.skipTest('a traced child run must not trace itself')
 
     def _exempt_scripts(self) -> dict:
+        """row -> (its script, the argv its ctest registration passes)."""
         spec = importlib.util.spec_from_file_location(
             'check_kernel_python_private_reads', KERNEL_SWEEP)
         kernel = importlib.util.module_from_spec(spec)
@@ -483,16 +572,32 @@ class ExemptRowTraceControls(unittest.TestCase):
         for row in kernel.EXEMPT:
             self.assertIn(row, rows,
                           f'{row} is exempt but registers no Python row')
-            scripts[row] = rows[row]
+            scripts[row] = (rows[row], row_argv(kernel, row))
         return scripts
 
-    # control 12: every exempt row's script, traced, opens no file under the
-    # real tests/fixtures/ or tests/oracle/ -- the evidence its exemption
-    # cites, re-run in-tree instead of trusted
+    def assertTraceCompleted(self, result, where: str) -> None:
+        """A trace whose script raised (the tracer's exit 4) is a failure of
+        the trace, not an observation: the script did not run to the end, so
+        it had done none of its work when the log was written."""
+        self.assertNotEqual(
+            TRACE_RAISED_EXIT, result.returncode,
+            f'{where}: the traced script did not run to the end (trace exit '
+            f'{TRACE_RAISED_EXIT}): ' + result.stdout + result.stderr)
+
+    # control 12: every exempt row's script, traced the way its row runs it,
+    # opens no file under the real tests/fixtures/ or tests/oracle/ and runs
+    # to its own end -- the evidence its exemption cites, re-run in-tree
+    # instead of trusted. Each script's exit code in the fixture-less tree is
+    # 0, read from the scripts and registrations themselves, so 0 is the code
+    # this control compares to (a script that died earlier records its own
+    # code and fails here).
     def test_exempt_rows_open_no_real_private_file(self):
-        for row, script in sorted(self._exempt_scripts().items()):
+        for row, (script, argv) in sorted(self._exempt_scripts().items()):
             with self.subTest(row=row):
-                result = run_under_trace(REPO, self.tmp, script)
+                result = run_under_trace(REPO, self.tmp, script, argv)
+                self.assertTraceCompleted(result, row)
+                self.assertIn('trace: the traced script exited 0',
+                              result.stdout, result.stdout + result.stderr)
                 self.assertEqual(0, result.returncode,
                                  result.stdout + result.stderr)
                 self.assertIn('trace: opens under the real private trees: 0',
@@ -510,11 +615,17 @@ class ExemptRowTraceControls(unittest.TestCase):
         return script
 
     # control 13: the trace can fail -- a copy of an exempt script that reads
-    # a real private path is named and the trace exits 3
+    # a real private path is named and the trace exits 3. The copy's own exit
+    # code is not compared here: it is the suite run from a scratch path, so
+    # its REPO is the scratch parent and a non-zero code is that copy's
+    # business -- the tracer records it in the output, and the failure this
+    # control watches is the exit-4 raise.
     def test_a_tampered_copy_that_reads_a_fixture_is_failed(self):
         script = self._tampered_copy('tampered_in_process.py', TAMPER_READ)
         result = run_under_trace(REPO, self.tmp, script)
-        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertTraceCompleted(result, 'the in-process tampered copy')
+        self.assertEqual(TRACE_PRIVATE_OPEN_EXIT, result.returncode,
+                         result.stdout + result.stderr)
         self.assertIn(f'trace: opened {REPO}/{REMOVED_EXAMPLE}/bars.csv',
                       result.stdout)
 
@@ -523,7 +634,9 @@ class ExemptRowTraceControls(unittest.TestCase):
     def test_a_child_process_read_is_still_failed(self):
         script = self._tampered_copy('tampered_child.py', TAMPER_CHILD_READ)
         result = run_under_trace(REPO, self.tmp, script)
-        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertTraceCompleted(result, 'the child-read tampered copy')
+        self.assertEqual(TRACE_PRIVATE_OPEN_EXIT, result.returncode,
+                         result.stdout + result.stderr)
         self.assertIn(f'trace: opened {REPO}/{REMOVED_EXAMPLE}/bars.csv',
                       result.stdout)
 
