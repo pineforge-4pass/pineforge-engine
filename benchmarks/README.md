@@ -43,7 +43,7 @@ Every engine was timed in the same window on this host, at engine `35db01c8`, wi
 | vectorbt | in-process, the 13 ports that load | 13 | 209.3 ms | — |
 | PineTS | subprocess wall time of the canonical 10-indicator script | 1 | 1416.2 ms | — |
 
-- PineForge's median speedup is **36× over PyneCore**, per strategy across the 200 strategies both engines time (p5 15×, p95 131×), and 4.2× over vectorbt across its 13 ports.
+- PineForge's median speedup is **36× over PyneCore**, per strategy across the 200 strategies both engines time (100 corpus probes and 100 held-out private strategies; p5 15×, p95 131×), and 4.2× over vectorbt across its 13 ports.
 - The throughput package ([`throughput/`](throughput/)) measures the magnifier-off hot loop at a median of **0.78 M bars/s** per strategy. That figure is over all 201 slots, and is the median of five quiet runs.
 - The PineForge sweep ran at a 1-minute load of 4.68 (slots 001–100) and 1.32 (slots 101–201). Against engine `063e4460`, timed alternately with `35db01c8` in one window on 201 slots, `35db01c8` takes 0.35× the time per strategy at the median, each engine running its own `generated.cpp`.
 - On the same host and in the same window, PyneCore 6.10.3 takes 1.01× the time of 6.10.2 per strategy at the median, over 26 public slots timed alternately.

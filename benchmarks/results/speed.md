@@ -288,7 +288,7 @@ realistic cost for engines whose entry point IS the process.
 | PineForge (in-process, magnifier ON) | 505.1 k | **806.8 k** | 1.13 M |
 | PyneCore (subprocess wall time) | 13.1 k | **20.5 k** | 32.2 k |
 
-- **Median speedup PineForge vs PyneCore** (across 200 commonly-timed strategies): **36×** (p5 15×, p95 131×)
+- **Median speedup PineForge vs PyneCore** (across 200 commonly-timed strategies, 100 corpus probes and 100 held-out private strategies): **36×** (p5 15×, p95 131×)
 - **Median speedup PineForge vs vectorbt** (across 13 commonly-timed strategies): **4.2×**
 - **PineTS canonical indicator:** 1416.2 ms median
 

@@ -208,6 +208,8 @@ def main() -> None:
 
     pc_speedups = [pc[s]["median_ms"] / pf[s]["median_ms"] for s in all_strategies
                    if s in pf and s in pc and pf[s]["median_ms"] > 0]
+    pc_timed = [s for s in all_strategies if s in pf and s in pc and pf[s]["median_ms"] > 0]
+    pc_held_out = sum(1 for s in pc_timed if s.endswith("-closed"))
     vbt_speedups = [vbt[s]["median_ms"] / pf[s]["median_ms"] for s in all_strategies
                     if s in pf and s in vbt and pf[s]["median_ms"] > 0]
     pf_bps = [bps(v) for v in pf.values()]
@@ -344,7 +346,8 @@ def main() -> None:
     lines.append("")
     if pc_speedups:
         lines.append(f"- **Median speedup PineForge vs PyneCore** (across {len(pc_speedups)} commonly-timed "
-                     f"strategies): **{_median(pc_speedups):.0f}×** (p5 {quantile(pc_speedups, .05):.0f}×, "
+                     f"strategies, {len(pc_timed) - pc_held_out} corpus probes and {pc_held_out} held-out "
+                     f"private strategies): **{_median(pc_speedups):.0f}×** (p5 {quantile(pc_speedups, .05):.0f}×, "
                      f"p95 {quantile(pc_speedups, .95):.0f}×)")
     if vbt_speedups:
         lines.append(f"- **Median speedup PineForge vs vectorbt** (across {len(vbt_speedups)} commonly-timed "
