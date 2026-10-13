@@ -4,6 +4,8 @@
 #include <pineforge/native_module.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include "../src/compat/pine/callback_lifecycle_rules.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -42,7 +44,8 @@ public:
     double capital = 0x1p1023;
     bool short_side = false;
     int calls = 0;
-    void setup(Shape chosen, double ticks, double initial, bool is_short = false) {
+    void setup(Shape chosen, double ticks, double initial, bool is_short = false,
+               bool calc_on_fills = false) {
         shape = chosen;
         operand = ticks;
         capital = initial;
@@ -55,6 +58,7 @@ public:
         config.commission_value = 0.0;
         config.margin_long = config.margin_short = 0.0;
         config.pyramiding = 1;
+        config.calc_on_order_fills = calc_on_fills;
         configure_pine_strategy(config);
         syminfo_mintick_ = 1.0;
         fixture_retain_all_events();
@@ -101,9 +105,10 @@ public:
             } else if (shape == Shape::Preclose) {
                 set_pine_risk_max_intraday_loss(operand, true);
                 strategy_close("E", "", na, na, true);
-                // Keep this producer's witness isolated: if its guard is
-                // removed, a later marked-price check cannot make it pass.
-                set_pine_risk_max_intraday_loss(0.0, false);
+                // Settlement queues the applied notification until this
+                // callback returns. Keep the limit active through that drain;
+                // this is the final input bar, so no later marked-price check
+                // can rescue a removed preclose producer.
             }
         }
         if (index == 4 && (shape == Shape::Placeholder || shape == Shape::NoExit
@@ -123,16 +128,18 @@ struct Run {
     std::string code;
     std::string args;
     int status = -1;
-    Run(Shape shape, double operand, double capital, double price, bool short_side = false) {
+    Run(Shape shape, double operand, double capital, double price, bool short_side = false,
+        bool calc_on_fills = false) {
         handle = strategy_create(nullptr);
         CHECK(handle != nullptr);
         if (!handle) return;
         host = dynamic_cast<SourceProbe*>(static_cast<BacktestEngine*>(handle));
         CHECK(host != nullptr);
         if (!host) return;
-        host->setup(shape, operand, capital, short_side);
+        host->setup(shape, operand, capital, short_side, calc_on_fills);
         std::vector<pf_bar_t> bars;
-        for (int i = 0; i < 40; ++i) {
+        const int bar_count = shape == Shape::Preclose ? 3 : 40;
+        for (int i = 0; i < bar_count; ++i) {
             const double p = (shape == Shape::Intraday || shape == Shape::Preclose) && i >= 2
                 ? price - 1.0 : price;
             bars.push_back({p, p, p, p, 1.0, 1700000040000LL
@@ -175,10 +182,11 @@ void row15_finite_relative_sum_overflow() {
     }
 }
 
-void row16_placeholder_withdrawal_keep() {
-    row = "row16_placeholder_withdrawal_keep";
-    Run placeholder(Shape::Placeholder, 200.0, 10000.0, 100.0, true);
-    Run control(Shape::NoExit, 0.0, 10000.0, 100.0, true);
+void row16_placeholder_withdrawal_keep(bool raw_projection = false) {
+    row = raw_projection ? "row16_invalid_installed_level_placeholder_keep"
+                         : "row16_placeholder_withdrawal_keep";
+    Run placeholder(Shape::Placeholder, 200.0, 10000.0, 100.0, true, raw_projection);
+    Run control(Shape::NoExit, 0.0, 10000.0, 100.0, true, raw_projection);
     CHECK(placeholder.code.empty() && placeholder.args.empty() && placeholder.status == 0);
     CHECK(control.code.empty() && control.status == 0);
     CHECK(placeholder.report.trades_len == 1 && control.report.trades_len == 1);
@@ -207,7 +215,13 @@ void row16_placeholder_withdrawal_keep() {
                 if (!arm->definition || arm->definition->request.label != "X") continue;
                 const auto* limit = std::get_if<native_order::Limit>(
                     &arm->definition->request.trigger);
-                CHECK(limit && same_bits(limit->price, 1.0));
+                // The ordinary negative profit level is clamped to zero by
+                // source_trigger_threshold. The raw on-grid COOF fixture
+                // instead retains -100, so resolve_anchored_level returns the
+                // documented tick=1 placeholder and marks it unadoptable.
+                CHECK(limit && same_bits(limit->price, raw_projection ? 1.0 : 0.0));
+                CHECK(std::holds_alternative<native_order::Absolute>(
+                    arm->definition->request.anchor));
                 child = arm->definition->handle;
                 armed_ordinal = arm->ordinal;
                 ++armed;
@@ -223,6 +237,23 @@ void row16_placeholder_withdrawal_keep() {
     CHECK(armed == 1 && withdrawn == 1);
 }
 
+void row16_invalid_installed_level_placeholder_keep() {
+    // Existing internal fixture: without RestingLimitTickReach an on-grid
+    // COOF limit keeps its raw level. Scope it to these two single-threaded
+    // runs so the actual negative-installed-level KEEP branch is exercised.
+    struct RawLimitScope {
+        using Rule = source::detail::PineCallbackLifecycleRule;
+        bool previous = source::detail::pine_callback_lifecycle_rule(Rule::RestingLimitTickReach);
+        RawLimitScope() {
+            source::detail::set_pine_callback_lifecycle_rule(Rule::RestingLimitTickReach, false);
+        }
+        ~RawLimitScope() {
+            source::detail::set_pine_callback_lifecycle_rule(Rule::RestingLimitTickReach, previous);
+        }
+    } scope;
+    row16_placeholder_withdrawal_keep(true);
+}
+
 void row18_threshold_overflow() {
     for (const Shape shape : {Shape::Drawdown, Shape::Intraday, Shape::Preclose}) {
         row = shape == Shape::Drawdown ? "row18_drawdown_threshold"
@@ -231,6 +262,23 @@ void row18_threshold_overflow() {
         Run run(shape, 0x1p1023, 10000.0, 100.0);
         expect_g(run, "risk.threshold", "risk");
         if (shape != Shape::Preclose) CHECK(run.report.total_trades == 0);
+        else {
+            CHECK(run.host && run.host->calls == 3);
+            int closed = 0;
+            if (run.host) {
+                for (const auto& event : run.host->native_events(0)) {
+                    if (!event.command) continue;
+                    const auto* applied = std::get_if<native_order::ExecutionAppliedEvent>(
+                        &*event.command);
+                    if (!applied || applied->closed_trade_count == 0) continue;
+                    CHECK(applied->closed_trade_count == 1);
+                    CHECK(same_bits(applied->closed_units, 1.0));
+                    CHECK(same_bits(applied->resolved_price, 99.0));
+                    ++closed;
+                }
+            }
+            CHECK(closed == 1);
+        }
     }
 }
 
@@ -286,6 +334,7 @@ void finite_relative_bits() {
 int main() {
     row15_finite_relative_sum_overflow();
     row16_placeholder_withdrawal_keep();
+    row16_invalid_installed_level_placeholder_keep();
     row18_threshold_overflow();
     row18_infinite_configured_limit_is_not_g();
     row20_filled_counter_keep();

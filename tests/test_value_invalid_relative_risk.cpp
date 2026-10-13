@@ -284,12 +284,20 @@ void finite_controls() {
         Run absent(Shape::MarkOnly, Risk::Absent, 0.0, false, 100.0, marks);
         compare_money(risk, absent);
         CHECK(risk.script.applied == 1);
-        CHECK(risk.report.equity_curve_len > 0);
-        if (risk.report.equity_curve_len > 0) {
-            const double expected = end_price == 75.0 ? 0.0 : -4.0;
-            CHECK(same_bits(risk.report.equity_curve[risk.report.equity_curve_len - 1].equity,
-                            expected));
-        }
+        CHECK(risk.script.calls == 40 && absent.script.calls == 40);
+        // These runs use the default HostRecorded report policy: no host
+        // records a curve. Pin the actual account through the public query,
+        // including zero/negative finite equity, rather than a report series.
+        CHECK(risk.report.equity_curve_len == 0 && absent.report.equity_curve_len == 0);
+        double risk_equity = std::numeric_limits<double>::quiet_NaN();
+        double absent_equity = std::numeric_limits<double>::quiet_NaN();
+        CHECK(strategy_native_marked_equity_v1(risk.script.host, end_price, &risk_equity)
+              == PF_NATIVE_OK);
+        CHECK(strategy_native_marked_equity_v1(absent.script.host, end_price, &absent_equity)
+              == PF_NATIVE_OK);
+        const double expected = end_price == 75.0 ? 0.0 : -4.0;
+        CHECK(same_bits(risk_equity, expected));
+        CHECK(same_bits(absent_equity, expected));
     }
 }
 } // namespace
