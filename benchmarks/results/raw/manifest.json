@@ -3,7 +3,7 @@
   "evidence": {
     "sha256": "c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019",
     "bytes": 20109399,
-    "what": "the 101 closed slots (101-201): strategy.pine, generated.cpp (codegen 121b3e6a), inputs.json (with the pre-2026-09-24 strategy() default pins), metrics.json, PROVENANCE.json, tv_trades.csv, strategy_pyne.py, pineforge_trades.csv and pynecore_trades.csv of this refresh, and _selection/ with the full selection manifest; TradingView-scraped third-party scripts, not redistributed",
+    "what": "the 101 closed slots (101-201): strategy.pine, generated.cpp (codegen 121b3e6a), inputs.json (with the pre-2026-09-24 strategy() default pins), metrics.json, PROVENANCE.json, tv_trades.csv, strategy_pyne.py, pineforge_trades.csv and pynecore_trades.csv of this refresh, and _selection/ with the full selection manifest; held-out private strategies, not redistributed",
     "lane": "BENCH-REFRESH",
     "fetch": "lab evidence get <sha256> --out <file> (maintainers, campaign environment); tar -xzf <file> -C benchmarks",
     "previous": {
@@ -446,11 +446,6 @@
       "sha256": "886dc8ac17caaa893ec871dfcc0df6fe2645e150cae0b41f9d34f00875e91044",
       "what": "1/5/15-min load every 10 s during batch pinets: UTC, load1, load5, load15",
       "origin": "the timing host's benchmarks/_workdir/timing/pinets-load.tsv"
-    },
-    "2026-09-29-35db01c8/loads/pynecore-load.tsv": {
-      "sha256": "a2af505e704c5553e358281c33befd9d55610253f335ce10cd3722add8ea8174",
-      "what": "1/5/15-min load every 10 s during batch pynecore: UTC, load1, load5, load15",
-      "origin": "the timing host's benchmarks/_workdir/timing/pynecore-load.tsv"
     },
     "2026-09-29-35db01c8/throughput/r1-load.tsv": {
       "sha256": "b7f531f23272c9f2ad4729158d2b19d71c07655069632f08a898254dc5d59d66",

@@ -4,7 +4,8 @@
  * and default FIXED / CASH sizing (default percent_of_equity keeps its own
  * pinned KI-54 / gap-reject / gross-admission family).
  *
- * Rule (pinned 2026-09-03 with `lab tv`, TV is ground truth):
+ * Rule pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository):
  *
  *   admit iff lot_floored(resulting_position_qty)
  *               * max(tick(close(S)), tick(fill)) * pv * fx * margin/100
@@ -18,29 +19,9 @@
  * max(equity, signal_notional) admission floor. A rejected reversal drops the
  * ENTRY leg only — its closing leg still executes.
  *
- * Evidence (tapes under scratchpad/r5/pins, `lab tv` exports):
- *   pin-afford-{flat,reverse} CME_MINI:NQ1! 15, fixed qty 1, margin 100:
- *     10,212 flat-entry + reversal decisions, 0 mismatches; the short reversal
- *     at 2025-05-06 14:15Z filled with realized 396,625 < cost 397,995 because
- *     MTM 398,455 >= cost.
- *   pin-afford-gapup:     capital 380,000, signal close 18,820.50 (376,410 ok)
- *                         -> fill 19,225 (384,500 > 380k) -> NOT filled.
- *   pin-afford-gapdown:   capital 345,000, signal close 17,483.25 (349,665 >
- *                         345k) -> fill 17,100 (342,000 ok) -> NOT filled.
- *   pin-afford-gapup-ctl: capital 1e6 fills at 19,225.
- *   pin-admit-allin-xau   OANDA:XAUUSD 15, qty = strategy.equity / close,
- *                         commission 0.05%, 1279/1279: 2025-04-08 13:30Z
- *                         E 1,998,000.02, close 3013.72, open 3013.745, lot
- *                         step 0.01 -> 662.968 -> 662.96 lots ADMITTED.
- *   pin-admit-allin-f     NYSE:F 15, 352/352: half-cent close 10.225 -> fill
- *                         10.23: floor(E/10.225) * 10.23 > E -> DECLINED.
- *   production: rampatel BTC 2025-05-12 07:15Z — TV closed the short remainder
- *     by "Buy" @105,600 and opened no long (equity 103,572 < 105,600);
- *     masayanfx NQ1 2025-07-30 20:15Z — pyramiding add 2 * 23,667.75 * 20 =
- *     946,710 > MTM 945,225 -> TV dropped the add.
- *
- * Every price below is on-tick for its instrument (NQ 0.25, XAUUSD/F 0.01)
- * unless the case is ABOUT a sub-tick print, so fills land on the bar prices.
+ * Every non-crypto scenario uses invented prices and timestamps; the
+ * instrument constants supply only tick, lot and point-value specifications.
+ * Prices are on-tick unless the case is about a sub-tick print.
  */
 
 #include <cmath>
@@ -100,7 +81,7 @@ struct Instrument {
 };
 static const Instrument kNQ  = {20.0, 0.25, 1.0};
 static const Instrument kXAU = {1.0,  0.01, 0.01};
-static const Instrument kF   = {1.0,  0.01, 1.0};
+static const Instrument kWholeLot = {1.0, 0.01, 1.0};
 static const Instrument kBTC = {1.0,  1.0,  0.001};
 
 // Scripted probe. Script chars (indexed by bar_index_):
@@ -108,7 +89,7 @@ static const Instrument kBTC = {1.0,  1.0,  0.001};
 //   'A' default-sized LONG  add "L2" (pyramiding)
 //   'l' explicit LONG  "L" qty = entry_qty_       's' explicit SHORT "S"
 //   'a' explicit LONG  add "L2" qty = entry_qty_
-//   'B' explicit LONG  "Buy" qty = entry_qty_ (the rampatel reversal id)
+//   'B' explicit LONG  "Buy" qty = entry_qty_ (the reversal close id)
 //   'E' explicit LONG  "L" qty = strategy.equity / close (the all-in idiom)
 //   'C' strategy.close("L")                        '.' nothing
 class Probe : public pineforge::source::PineStrategyHost {
@@ -175,21 +156,20 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// NQ gap probes (default fixed qty 1, margin 100, commission 0).
+// Gap probes (default fixed qty 1, margin 100, commission 0).
 
-// pin-afford-gapup: placement admits (376,410 <= 380,000); the fill gaps to
-// 19,225 (384,500 > 380,000) -> the entry is NOT filled. Pre-fix: FIXED default
-// sizing had no fill-time check at all and the engine opened it.
+// Synthetic gap: placement 1*200*20=4000 <= 4200, fill 1*230*20=4600
+// > 4200. Missing the fill-time admission check would open a long.
 void test_nq_gap_up_declined_at_fill() {
-    std::printf("-- NQ gap-up: admitted at placement, declined at fill --\n");
-    Probe eng(380000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    std::printf("-- gap-up: admitted at placement, declined at fill --\n");
+    Probe eng(4200.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L....";
     std::vector<Bar> bars = {
-        flat_bar(1000, 18820.50),                       // L placed: 376,410 ok
-        mk_bar(2000, 19225.0, 19240.0, 19200.0, 19230.0), // fill 384,500 > 380k
-        flat_bar(3000, 19230.0),
-        flat_bar(4000, 19230.0),
-        flat_bar(5000, 19230.0),
+        flat_bar(1000, 200.0),                       // 1*200*20=4000 <= 4200
+        mk_bar(2000, 230.0, 235.0, 225.0, 232.0), // 1*230*20=4600 > 4200
+        flat_bar(3000, 232.0),
+        flat_bar(4000, 232.0),
+        flat_bar(5000, 232.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::FLAT);   // pre-fix: LONG
@@ -197,44 +177,43 @@ void test_nq_gap_up_declined_at_fill() {
     CHECK(eng.trade_count() == 0);
 }
 
-// pin-afford-gapdown: placement REJECTS (349,665 > 345,000) even though the
-// gapped-down fill at 17,100 (342,000) would have been affordable -> NOT
-// filled. TV uses the rounded signal close as a decline trigger, never as an
-// admission floor. Pre-fix: no placement check for default sizing -> LONG.
+// Synthetic downward gap: placement 1*240*20=4800 > 4500 rejects,
+// although the later 1*210*20=4200 would fit. Placement cannot be rescued
+// by a favorable fill.
 void test_nq_gap_down_declined_at_placement() {
-    std::printf("-- NQ gap-down: declined at placement --\n");
-    Probe eng(345000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    std::printf("-- gap-down: declined at placement --\n");
+    Probe eng(4500.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L....";
     std::vector<Bar> bars = {
-        flat_bar(1000, 17483.25),                       // 349,665 > 345,000
-        mk_bar(2000, 17100.0, 17120.0, 17080.0, 17110.0), // 342,000 would fit
-        flat_bar(3000, 17110.0),
-        flat_bar(4000, 17110.0),
-        flat_bar(5000, 17110.0),
+        flat_bar(1000, 240.0),                       // 1*240*20=4800 > 4500
+        mk_bar(2000, 210.0, 215.0, 205.0, 212.0), // 1*210*20=4200 would fit
+        flat_bar(3000, 212.0),
+        flat_bar(4000, 212.0),
+        flat_bar(5000, 212.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::FLAT);   // pre-fix: LONG
     CHECK(eng.trade_count() == 0);
 }
 
-// pin-afford-gapup-ctl: capital 1e6, same gap -> fills 1 @ 19,225.
+// Capital 1e6 exceeds both requirements: control fills one contract at 230.
 void test_nq_gap_up_control_fills() {
-    std::printf("-- NQ gap-up control (capital 1e6) fills --\n");
+    std::printf("-- gap-up control (capital 1e6) fills --\n");
     Probe eng(1000000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L....";
     std::vector<Bar> bars = {
-        flat_bar(1000, 18820.50),
-        mk_bar(2000, 19225.0, 19240.0, 19200.0, 19230.0),
-        flat_bar(3000, 19230.0),
-        flat_bar(4000, 19230.0),
-        flat_bar(5000, 19230.0),
+        flat_bar(1000, 200.0),
+        mk_bar(2000, 230.0, 235.0, 225.0, 232.0),
+        flat_bar(3000, 232.0),
+        flat_bar(4000, 232.0),
+        flat_bar(5000, 232.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);
     CHECK_NEAR(eng.position_size(), 1.0, 1e-9);
     CHECK(!eng.pyramid_entries_.empty());
     if (!eng.pyramid_entries_.empty()) {
-        CHECK_NEAR(eng.pyramid_entries_.back().price, 19225.0, 1e-9);
+        CHECK_NEAR(eng.pyramid_entries_.back().price, 230.0, 1e-9);
     }
 }
 
@@ -242,14 +221,14 @@ void test_nq_gap_up_control_fills() {
 // the admitted placement notional -> fills (the fill check can only add an
 // adverse-gap decline, never re-decline a placement admit).
 void test_nq_favorable_gap_fills() {
-    std::printf("-- NQ favorable gap fills --\n");
-    Probe eng(380000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    std::printf("-- favorable gap fills --\n");
+    Probe eng(4200.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L...";
     std::vector<Bar> bars = {
-        flat_bar(1000, 18820.50),                       // 376,410 <= 380,000
-        mk_bar(2000, 18800.0, 18810.0, 18790.0, 18805.0), // 376,000 fits
-        flat_bar(3000, 18805.0),
-        flat_bar(4000, 18805.0),
+        flat_bar(1000, 200.0),                       // 4000 <= 4200
+        mk_bar(2000, 180.0, 185.0, 175.0, 182.0), // 1*180*20=3600 fits
+        flat_bar(3000, 182.0),
+        flat_bar(4000, 182.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);
@@ -259,14 +238,14 @@ void test_nq_favorable_gap_fills() {
 // Exact tie at placement AND fill (notional == equity): admitted (the guard is
 // a float guard only, and the comparison is strict).
 void test_nq_exact_tie_admits() {
-    std::printf("-- NQ exact tie admits --\n");
-    Probe eng(376410.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    std::printf("-- exact tie admits --\n");
+    Probe eng(4000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L...";
     std::vector<Bar> bars = {
-        flat_bar(1000, 18820.50),                       // 376,410 == equity
-        flat_bar(2000, 18820.50),
-        flat_bar(3000, 18820.50),
-        flat_bar(4000, 18820.50),
+        flat_bar(1000, 200.0),                       // 1*200*20=4000 == equity
+        flat_bar(2000, 200.0),
+        flat_bar(3000, 200.0),
+        flat_bar(4000, 200.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);
@@ -276,25 +255,25 @@ void test_nq_exact_tie_admits() {
 // margin_pct scales the requirement: margin 50 halves it; margin 0 disables
 // the check (TV performs no margin simulation at 0).
 void test_nq_margin_scaling_and_zero_inert() {
-    std::printf("-- NQ margin 50 scales / margin 0 inert --\n");
+    std::printf("-- margin 50 scales / margin 0 inert --\n");
     {
-        Probe eng(190000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 50.0, 0, false);
+        Probe eng(2100.0, kNQ, QtyType::FIXED, 1.0, 0.0, 50.0, 0, false);
         eng.script = "L...";
         std::vector<Bar> bars = {
-            flat_bar(1000, 18820.50),   // 376,410 * 0.5 = 188,205 <= 190,000
-            flat_bar(2000, 18820.50), flat_bar(3000, 18820.50),
-            flat_bar(4000, 18820.50),
+            flat_bar(1000, 200.0),   // 1*200*20*0.5=2000 <= 2100
+            flat_bar(2000, 200.0), flat_bar(3000, 200.0),
+            flat_bar(4000, 200.0),
         };
         eng.run(bars.data(), (int)bars.size());
         CHECK(eng.position_side_ == PositionSide::LONG);
     }
     {
-        Probe eng(180000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 50.0, 0, false);
+        Probe eng(1900.0, kNQ, QtyType::FIXED, 1.0, 0.0, 50.0, 0, false);
         eng.script = "L...";
         std::vector<Bar> bars = {
-            flat_bar(1000, 18820.50),   // 188,205 > 180,000 -> declined
-            flat_bar(2000, 18820.50), flat_bar(3000, 18820.50),
-            flat_bar(4000, 18820.50),
+            flat_bar(1000, 200.0),   // 2000 > 1900 -> declined
+            flat_bar(2000, 200.0), flat_bar(3000, 200.0),
+            flat_bar(4000, 200.0),
         };
         eng.run(bars.data(), (int)bars.size());
         CHECK(eng.position_side_ == PositionSide::FLAT);
@@ -303,9 +282,9 @@ void test_nq_margin_scaling_and_zero_inert() {
         Probe eng(1000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 0.0, 0, false);
         eng.script = "L...";
         std::vector<Bar> bars = {
-            flat_bar(1000, 18820.50),   // margin 0: no check at all
-            mk_bar(2000, 19225.0, 19240.0, 19200.0, 19230.0),
-            flat_bar(3000, 19230.0), flat_bar(4000, 19230.0),
+            flat_bar(1000, 200.0),   // margin 0: no check at all
+            mk_bar(2000, 230.0, 235.0, 225.0, 232.0),
+            flat_bar(3000, 232.0), flat_bar(4000, 232.0),
         };
         eng.run(bars.data(), (int)bars.size());
         CHECK(eng.position_side_ == PositionSide::LONG);
@@ -315,21 +294,19 @@ void test_nq_margin_scaling_and_zero_inert() {
 // ---------------------------------------------------------------------------
 // Reversals.
 
-// pin-afford-reverse 2025-05-06 14:15Z shape: long 1 @ 19,808.25; the short
-// signal closes at 19,899.75 (cost 397,995). Realized equity 396,625 < cost,
-// but MTM = 396,625 + 91.50 * 20 = 398,455 >= cost -> TV filled the reversal.
-// Only the NEW side's qty is costed (the closing leg is not part of the
-// notional). Pre-fix (realized-only basis) would have declined it.
+// Long 1 at 300; signal 320 costs 1*320*20=6400 > realized equity 6100.
+// MTM is 6100+(320-300)*20=6500 >= 6400, so the new short is admitted.
+// Costing the closing leg as well would require 12800 and reject it.
 void test_reversal_uses_mtm_equity_and_new_side_only() {
     std::printf("-- reversal: MTM equity, new side only --\n");
-    Probe eng(396625.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    Probe eng(6100.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L.S..";
     std::vector<Bar> bars = {
-        flat_bar(1000, 19808.25),   // L placed (396,165 <= 396,625)
-        flat_bar(2000, 19808.25),   // L fills
-        flat_bar(3000, 19899.75),   // S placed: MTM 398,455 >= 397,995
-        flat_bar(4000, 19899.75),   // S fills: long closed, short opened
-        flat_bar(5000, 19899.75),
+        flat_bar(1000, 300.0),   // 1*300*20=6000 <= 6100
+        flat_bar(2000, 300.0),   // L fills
+        flat_bar(3000, 320.0),   // MTM 6500 >= required 6400
+        flat_bar(4000, 320.0),   // S fills: long closed, short opened
+        flat_bar(5000, 320.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::SHORT);
@@ -338,24 +315,24 @@ void test_reversal_uses_mtm_equity_and_new_side_only() {
     if (eng.trade_count() == 1) {
         CHECK(eng.get_trade(0).is_long);
         CHECK(eng.get_trade(0).exit_id == "S");
-        CHECK_NEAR(eng.get_trade(0).exit_price, 19899.75, 1e-9);
+        CHECK_NEAR(eng.get_trade(0).exit_price, 320.0, 1e-9);
     }
 }
 
-// The reversal is admitted at placement (MTM 389,000 >= 384,000) but the fill
-// gaps to 19,500 (390,000 > 389,000): the ENTRY leg is dropped, the CLOSING
-// leg still executes at the fill under the entry's id.
+// Placement MTM = 8300+(420-400)*20=8700 >= 1*420*20=8400.
+// The fill gaps to 460: 1*460*20=9200 > the frozen 8700 snapshot.
+// Only the entry leg is dropped; the closing leg still exits at 460.
 void test_reversal_declined_at_fill_closes_only() {
     std::printf("-- reversal declined at fill: close leg only --\n");
-    Probe eng(385000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    Probe eng(8300.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L.S...";
     std::vector<Bar> bars = {
-        flat_bar(1000, 19000.0),    // L placed (380,000 <= 385,000)
-        flat_bar(2000, 19000.0),    // L fills
-        flat_bar(3000, 19200.0),    // S placed: 384,000 <= MTM 389,000
-        mk_bar(4000, 19500.0, 19520.0, 19480.0, 19500.0), // 390,000 > 389,000
-        flat_bar(5000, 19500.0),
-        flat_bar(6000, 19500.0),
+        flat_bar(1000, 400.0),    // 1*400*20=8000 <= 8300
+        flat_bar(2000, 400.0),    // L fills
+        flat_bar(3000, 420.0),    // required 8400 <= MTM 8700
+        mk_bar(4000, 460.0, 465.0, 455.0, 460.0), // 9200 > frozen MTM 8700
+        flat_bar(5000, 460.0),
+        flat_bar(6000, 460.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::FLAT);   // pre-fix: SHORT
@@ -363,16 +340,15 @@ void test_reversal_declined_at_fill_closes_only() {
     if (eng.trade_count() == 1) {
         CHECK(eng.get_trade(0).is_long);
         CHECK(eng.get_trade(0).exit_id == "S");
-        CHECK_NEAR(eng.get_trade(0).exit_price, 19500.0, 1e-9);
+        CHECK_NEAR(eng.get_trade(0).exit_price, 460.0, 1e-9);
         CHECK_NEAR(eng.get_trade(0).qty, 1.0, 1e-9);
     }
     CHECK(eng.trades_with_entry_id("S") == 0);
 }
 
-// rampatel BTC 2025-05-12 07:15Z shape: a live short, equity below the price
-// of one contract, an opposite "Buy" entry. TV closed the short by "Buy"
-// @105,600 and opened no long. Pre-fix the engine opened the long, then
-// margin-called 4x the shortfall and cascaded (23,605 trades vs TV 1,486).
+// A live short, equity below the price of one contract, and an opposite
+// "Buy" entry: the broker closes the short and opens no long. Pre-fix the
+// engine opened the long, then margin-called 4x the shortfall and cascaded.
 // (a) margin calls disabled: the pure broker rule.
 // (b) margin calls enabled: no long is ever opened, no cascade.
 void test_rampatel_reversal_close_leg_executes_no_entry() {
@@ -444,15 +420,15 @@ void test_declined_reversal_with_coqueued_close() {
             Probe::on_source_bar(bar);
         }
     };
-    P2 eng(385000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    P2 eng(8300.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L.....";
     std::vector<Bar> bars = {
-        flat_bar(1000, 19000.0),
-        flat_bar(2000, 19000.0),
-        flat_bar(3000, 19200.0),
-        mk_bar(4000, 19500.0, 19520.0, 19480.0, 19500.0),
-        flat_bar(5000, 19500.0),
-        flat_bar(6000, 19500.0),
+        flat_bar(1000, 400.0),
+        flat_bar(2000, 400.0),
+        flat_bar(3000, 420.0),
+        mk_bar(4000, 460.0, 465.0, 455.0, 460.0),
+        flat_bar(5000, 460.0),
+        flat_bar(6000, 460.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::FLAT);
@@ -466,21 +442,21 @@ void test_declined_reversal_with_coqueued_close() {
 // ---------------------------------------------------------------------------
 // Pyramiding adds: the RESULTING position (held + add) is costed.
 
-// masayanfx NQ1 2025-07-30 20:15Z: held 1, add 1 at 23,667.75 -> 2 * 23,667.75
-// * 20 = 946,710 > MTM 945,225 -> the add is dropped, the position stays 1.
-// Control at 950,000 admits it. Pre-fix: FIXED default adds were ungated.
+// Held 1 at 500, add 1 at 520 requires 2*520*20=20800.
+// MTM = 20200+(520-500)*20=20600, so the add is dropped.
+// Control capital 21000 gives MTM 21400 >= 20800 and admits the add.
 void test_pyramiding_add_costed_as_resulting_position() {
     std::printf("-- pyramiding add costed held + add --\n");
     {
-        // initial 943,870 + open profit 67.75 * 20 = MTM 945,225 at the add.
-        Probe eng(943870.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
+        // initial 20200 + (520-500)*20 = MTM 20600 at the add.
+        Probe eng(20200.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
         eng.script = "L.A..";
         std::vector<Bar> bars = {
-            flat_bar(1000, 23600.0),    // L placed (472,000 fits)
-            flat_bar(2000, 23600.0),    // L fills
-            flat_bar(3000, 23667.75),   // L2 placed: 946,710 > 945,225
-            flat_bar(4000, 23667.75),
-            flat_bar(5000, 23667.75),
+            flat_bar(1000, 500.0),    // 1*500*20=10000 fits
+            flat_bar(2000, 500.0),    // L fills
+            flat_bar(3000, 520.0),   // 20800 > 20600
+            flat_bar(4000, 520.0),
+            flat_bar(5000, 520.0),
         };
         eng.run(bars.data(), (int)bars.size());
         CHECK(eng.position_side_ == PositionSide::LONG);
@@ -489,12 +465,12 @@ void test_pyramiding_add_costed_as_resulting_position() {
         CHECK(eng.trades_with_entry_id("L2") == 0);
     }
     {
-        Probe eng(950000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
+        Probe eng(21000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
         eng.script = "L.A..";
         std::vector<Bar> bars = {
-            flat_bar(1000, 23600.0), flat_bar(2000, 23600.0),
-            flat_bar(3000, 23667.75), flat_bar(4000, 23667.75),
-            flat_bar(5000, 23667.75),
+            flat_bar(1000, 500.0), flat_bar(2000, 500.0),
+            flat_bar(3000, 520.0), flat_bar(4000, 520.0),
+            flat_bar(5000, 520.0),
         };
         eng.run(bars.data(), (int)bars.size());
         CHECK(eng.position_side_ == PositionSide::LONG);
@@ -508,7 +484,7 @@ void test_pyramiding_add_costed_as_resulting_position() {
 void test_explicit_add_costed_as_resulting_position() {
     std::printf("-- explicit add costed held + add --\n");
     {
-        Probe eng(10000.0, kF, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
+        Probe eng(10000.0, kWholeLot, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
         eng.entry_qty_ = 60.0;
         eng.script = "l.a..";
         std::vector<Bar> bars = {
@@ -530,7 +506,7 @@ void test_explicit_add_costed_as_resulting_position() {
                 Probe::on_source_bar(bar);
             }
         };
-        P2 eng(10000.0, kF, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
+        P2 eng(10000.0, kWholeLot, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);
         eng.entry_qty_ = 60.0;
         eng.script = "l....";
         std::vector<Bar> bars = {
@@ -545,48 +521,50 @@ void test_explicit_add_costed_as_resulting_position() {
 // ---------------------------------------------------------------------------
 // Explicit qty = strategy.equity / close (the all-in idiom).
 
-// pin-admit-allin-xau 2025-04-08 13:30Z: E 1,998,000.02, close 3013.72, next
-// open 3013.745 (a sub-tick print that books at tick(3013.745)), lot step
-// 0.01, commission 0.05%. qty = 662.968 -> floored 662.96; 662.96 * 3013.75 =
-// 1,997,995.7 <= E -> ADMITTED. Pre-fix the engine costed the RAW 662.968 at
-// the fill (1,998,016 > E) and declined.
+// Invented fractional-lot control: E=100.249, close=25, raw qty=4.00996.
+// Floor to 0.01 lots gives 4.00; the half-cent open 25.005 books at 25.01.
+// Floored cost 4*25.01=100.04 <= E; raw cost 4.00996*25.01=100.2890996
+// > E. This distinguishes lot-flooring BEFORE admission; fee 0.05% is
+// excluded from notional and margin calls are disabled.
 void test_xauusd_floored_qty_admitted() {
-    std::printf("-- XAUUSD 662.96 admitted (lot-floored qty) --\n");
-    Probe eng(1998000.02, kXAU, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
+    std::printf("-- synthetic fractional-lot quantity 4 admitted --\n");
+    Probe eng(100.249, kXAU, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
     eng.script = "E....";
     std::vector<Bar> bars = {
-        flat_bar(1000, 3013.72),
-        mk_bar(2000, 3013.745, 3015.0, 3012.0, 3014.0),
-        flat_bar(3000, 3014.0),
-        flat_bar(4000, 3014.0),
-        flat_bar(5000, 3014.0),
+        flat_bar(1000, 25.0),
+        mk_bar(2000, 25.005, 26.0, 24.0, 25.5),
+        flat_bar(3000, 25.5),
+        flat_bar(4000, 25.5),
+        flat_bar(5000, 25.5),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);   // pre-fix: FLAT
-    CHECK_NEAR(eng.position_size(), 662.96, 1e-9);
+    CHECK_NEAR(eng.position_size(), 4.0, 1e-9);
     CHECK(eng.pyramid_entries_.size() == 1);
     if (!eng.pyramid_entries_.empty()) {
         CHECK_NEAR(eng.pyramid_entries_.back().price,
-                   eng.tick(3013.745), 1e-9);
+                   25.01, 1e-9); // nearest-cent half tie: 25.005 -> 25.01
     }
 }
 
-// pin-admit-allin-f: half-cent close 10.225 (E = 10,225 -> qty 1000), next
-// open 10.23: 1000 * 10.23 = 10,230 > E -> DECLINED. Pre-fix the fill gate's
-// max(E, qty * tick(close)) floor admitted it.
-void test_f_half_cent_declined() {
-    std::printf("-- F half-cent close: declined --\n");
-    Probe eng(10225.0, kF, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
+// Invented half-cent close: qty = 25,025 / 125.125 = 200 whole lots.
+// The cent grid rounds UP to 125.13: 200 * 125.13 = 25,026 > 25,025,
+// so placement rejects it despite the raw-close notional being an exact tie.
+// The next open is also 125.13: a max(E, qty * tick(close)) floor must not
+// rescue the entry at fill. The no-gap on-tick case below is its control.
+void test_case_half_cent_declined() {
+    std::printf("-- synthetic whole-lot half-cent close: declined --\n");
+    Probe eng(25025.0, kWholeLot, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
     eng.script = "E....";
     std::vector<Bar> bars = {
-        flat_bar(1000, 10.225),
-        mk_bar(2000, 10.23, 10.25, 10.20, 10.24),
-        flat_bar(3000, 10.24),
-        flat_bar(4000, 10.24),
-        flat_bar(5000, 10.24),
+        flat_bar(1000, 125.125),
+        mk_bar(2000, 125.13, 125.50, 125.00, 125.25),
+        flat_bar(3000, 125.25),
+        flat_bar(4000, 125.25),
+        flat_bar(5000, 125.25),
     };
     eng.run(bars.data(), (int)bars.size());
-    CHECK(eng.position_side_ == PositionSide::FLAT);   // pre-fix: LONG 1000
+    CHECK(eng.position_side_ == PositionSide::FLAT);   // pre-fix: LONG 200
     CHECK(eng.trade_count() == 0);
 }
 
@@ -594,29 +572,29 @@ void test_f_half_cent_declined() {
 // quantity (positive control for the two cases above).
 void test_all_in_idiom_no_gap_admits() {
     std::printf("-- all-in idiom, no gap: admits --\n");
-    Probe eng(10225.0, kF, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
+    Probe eng(25025.0, kWholeLot, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
     eng.script = "E...";
     std::vector<Bar> bars = {
-        flat_bar(1000, 10.23),      // qty = 999.51 -> 999 shares = 10,219.77
-        flat_bar(2000, 10.23),
-        flat_bar(3000, 10.23),
-        flat_bar(4000, 10.23),
+        flat_bar(1000, 125.13),      // floor(25,025 / 125.13) = 199; cost 24,900.87 <= 25,025
+        flat_bar(2000, 125.13),
+        flat_bar(3000, 125.13),
+        flat_bar(4000, 125.13),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);
-    CHECK_NEAR(eng.position_size(), 999.0, 1e-9);
+    CHECK_NEAR(eng.position_size(), 199.0, 1e-9); // 199 * 125.13 = 24,900.87
 }
 
 // ---------------------------------------------------------------------------
-// CASH default sizing takes the same rule (no TV tape of its own; the broker
-// does not know how the quantity was derived): cash 20,000 on 10,000 capital
+// CASH default sizing takes the same rule (the broker does not know how the
+// quantity was derived): cash 20,000 on 10,000 capital
 // at margin 100 is 200 lots @100 = 20,000 > 10,000 -> declined; cash 5,000 ->
 // 50 lots admitted. (Re-pins test_margin_admission_gate's former CASH
 // exemption, which was a scope carve-out, not a TV observation.)
 void test_cash_default_sizing_gated() {
     std::printf("-- CASH default sizing gated --\n");
     {
-        Probe eng(10000.0, kF, QtyType::CASH, 20000.0, 0.0, 100.0, 0, false);
+        Probe eng(10000.0, kWholeLot, QtyType::CASH, 20000.0, 0.0, 100.0, 0, false);
         eng.script = "L...";
         std::vector<Bar> bars = {
             flat_bar(1000, 100.0), flat_bar(2000, 100.0),
@@ -626,7 +604,7 @@ void test_cash_default_sizing_gated() {
         CHECK(eng.position_side_ == PositionSide::FLAT);
     }
     {
-        Probe eng(10000.0, kF, QtyType::CASH, 5000.0, 0.0, 100.0, 0, false);
+        Probe eng(10000.0, kWholeLot, QtyType::CASH, 5000.0, 0.0, 100.0, 0, false);
         eng.script = "L...";
         std::vector<Bar> bars = {
             flat_bar(1000, 100.0), flat_bar(2000, 100.0),
@@ -643,13 +621,13 @@ void test_cash_default_sizing_gated() {
 // the fill half can never decline what placement admitted.
 void test_pooc_no_double_decline() {
     std::printf("-- POOC: fill half is a no-op --\n");
-    Probe eng(376410.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
+    Probe eng(4000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.process_orders_on_close_ = true;
     eng.script = "L..";
     std::vector<Bar> bars = {
-        flat_bar(1000, 18820.50),   // placed AND filled at the close, tie
-        mk_bar(2000, 19225.0, 19240.0, 19200.0, 19230.0),
-        flat_bar(3000, 19230.0),
+        flat_bar(1000, 200.0),   // placed AND filled at the close, tie
+        mk_bar(2000, 230.0, 235.0, 225.0, 232.0),
+        flat_bar(3000, 232.0),
     };
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::LONG);
@@ -673,7 +651,7 @@ int main() {
     test_pyramiding_add_costed_as_resulting_position();
     test_explicit_add_costed_as_resulting_position();
     test_xauusd_floored_qty_admitted();
-    test_f_half_cent_declined();
+    test_case_half_cent_declined();
     test_all_in_idiom_no_gap_admits();
     test_cash_default_sizing_gated();
     test_pooc_no_double_decline();

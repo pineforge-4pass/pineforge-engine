@@ -16,20 +16,12 @@
  * still open after the final bar is reported as a CLOSED trade whose exit
  * leg is the last bar at that bar's close.
  *
- * Evidence (the ws-report-v1 tape the campaign grades against): orb-lite on
- * NYSE:F 1D reports "Entry short 2026-03-16 @ 11.82, Exit 2026-04-30 @ 12.08",
- * exit Signal EMPTY, closedTrades:1 — 12.08 is the last close of the range.
- * On the f-1d spark set 8/10 engine runs held the same position to the last
- * bar (bars-in-market = TV Duration + 1) and 7/10 had a mark-to-market open_pl
- * equal to TV's row to the cent, so the row is exactly the open position
- * marked at the last close. The engine exported closed trades only (trades_
- * grows in emit_close_trade alone; no end-of-feed flatten in either run
- * loop) and was one trade short on every such probe. Operator decision
- * 2026-09-02: the engine emulates the row (engine_orders.cpp,
- * record_range_end_close_trades) — in the REPORT: the row is built with the
- * ordinary close arithmetic and merged behind the script's closed trades by
- * fill_trades_section, while the live position, trades_ and the realized
- * sums stay as the bar loop left them (a stream continues that position).
+ * Pinned against TradingView behaviour (recorded tapes are kept outside this
+ * repository). These fixtures use invented prices and timestamps.
+ * The range-end row is built with ordinary close arithmetic in the REPORT
+ * and merged behind the script's closed trades. The live position, trades_
+ * and realized sums stay as the bar loop left them, so a stream continues
+ * that position.
  *
  * Pins:
  *   A. Open LONG at end: the report carries one extra closed trade, flagged
@@ -38,22 +30,22 @@
  *      position is still LONG and trade_count() is still 0.
  *   B. Flat at end (closed by the script): the report is unchanged and no
  *      row carries the flag.
- *   C. Open SHORT at end: mirror of A with the short sign; matches the
- *      orb-lite row shape (entry 11.82, last close 12.08 -> -0.26 on qty 1).
+ *   C. Open SHORT at end: mirror of A with the short sign; entry 252.00,
+ *      last close 258.50 gives -6.50 on qty 1.
  *   D. Commission is applied like any close (0.1% on both legs): the row's
  *      commission equals entry_price*qty*0.001 + exit_price*qty*0.001 and
  *      pnl is net of it — the same arithmetic test_metrics pins for
  *      script-driven exits.
  *   E. The mark is the mintick-rounded close with NO slippage: a sub-tick
- *      last close 12.083 books 12.08 even with slippage 2 ticks set (a
- *      script close on the same bar would have booked 12.06).
- *   F. Equity curve: every point before the last is byte-identical to a
- *      run that stops one bar earlier; the last point is re-marked to the
+ *      last close 258.503 books 258.50 even with slippage 2 ticks set (a
+ *      script close on the same bar would have booked 258.48).
+ *   F. Equity curve: points before the shorter run's final bar are identical
+ *      to a run that stops one bar earlier; the last point is re-marked to the
  *      flat account so equity == capital + net_profit + open_profit(0)
  *      holds, and the report's net_profit / total_trades include the row.
  *   J. Drawdown / run-up: the compute_equity_stats curve walk reproduces the
  *      engine's scalar extremes with commission and a position open at the
- *      end whose last bar is the trough (and, mirrored, the peak) — the
+ *      end whose last bar is the trough (or ends a recovery from it) — the
  *      scalars are re-folded from the re-marked curve. A first cut re-marked
  *      the point and left the scalars at the gross fold, and the two
  *      disagreed by the row's commissions exactly there.
@@ -67,10 +59,8 @@
  *      strategy_closed_trade_entry_incarnation reads it at the row's REPORT
  *      index (behind the script's closed trades). Pre-fix the accessor
  *      bounded the index by trade_count() == trades_.size() and returned 0
- *      for every range-end row; run_strategy.py then wrote an empty
- *      "Engine entry incarnation" for the row, the grader failed closed on
- *      the identity gate and the verifier ladder rejected the TV-identical
- *      trim candidate for ena-grid (XAUUSD 1D).
+ *      for every range-end row. The report index must reach the row and
+ *      preserve its physical broker-entry identity.
  */
 
 #include <cmath>
@@ -164,12 +154,12 @@ public:
 };
 
 std::vector<Bar> daily_bars(int n, double last_close) {
-    // Flat-ish tape: entries fill at 11.82 (bar 1 open); the last close is
-    // the parameter so each pin can shape the mark.
+    // Invented plateau: signal 250.00, entry 252.00 on bar 1, daily labels
+    // at (i + 1) * kDay. Each caller designs its final mark or interior path.
     std::vector<Bar> bars;
     for (int i = 0; i < n; ++i) {
-        double px = (i == 0) ? 11.80 : 11.82;
-        bars.push_back(mk_bar((int64_t)(i + 1) * kDay, px, px + 0.30, px - 0.30, px));
+        double px = (i == 0) ? 250.00 : 252.00;
+        bars.push_back(mk_bar((int64_t)(i + 1) * kDay, px, px + 10.00, px - 10.00, px));
     }
     bars.back().close = last_close;
     bars.back().high = std::max(bars.back().high, last_close);
@@ -184,7 +174,7 @@ static void test_open_long_at_end() {
     std::printf("-- A: open long at end closes at the last bar's close --\n");
     Probe eng;
     eng.script = "L...";
-    auto bars = daily_bars(4, 12.08);
+    auto bars = daily_bars(4, 258.50);
     eng.run(bars.data(), (int)bars.size());
     // Live state: exactly what the bar loop left — the lot is still open.
     CHECK(eng.trade_count() == 0);
@@ -195,17 +185,17 @@ static void test_open_long_at_end() {
         const Trade& t = eng.range_end_rows()[0];
         CHECK(t.open_at_end);
         CHECK(t.is_long);
-        CHECK_NEAR(t.entry_price, 11.82, 1e-9);
+        CHECK_NEAR(t.entry_price, 252.00, 1e-9);
         CHECK(t.entry_bar_index == 1);
-        CHECK_NEAR(t.exit_price, 12.08, 1e-9);
+        CHECK_NEAR(t.exit_price, 258.50, 1e-9);
         CHECK(t.exit_bar_index == 3);
-        CHECK(t.exit_time == 4 * kDay);
-        CHECK_NEAR(t.pnl, 12.08 - 11.82, 1e-9);
+        CHECK(t.exit_time == 4 * kDay); // synthetic daily label, bar index 3
+        CHECK_NEAR(t.pnl, 258.50 - 252.00, 1e-9); // (exit - entry) * 1 = 6.50
         CHECK_NEAR(t.qty, 1.0, 1e-12);
         CHECK(t.exit_id.empty());
         CHECK(t.exit_comment.empty());
     }
-    // Report: the row is a closed trade (TV closedTrades:1).
+    // Report: the synthetic open lot contributes one closed row.
     ReportC rep{};
     eng.fill_report(&rep);
     CHECK(rep.total_trades == 1);                       // pre-fix: 0
@@ -213,16 +203,16 @@ static void test_open_long_at_end() {
     if (rep.trades_len == 1) {
         CHECK(rep.trades[0].open_at_end == 1);
         CHECK(rep.trades[0].is_long == 1);
-        CHECK_NEAR(rep.trades[0].exit_price, 12.08, 1e-9);
+        CHECK_NEAR(rep.trades[0].exit_price, 258.50, 1e-9);
         CHECK(rep.trades[0].exit_bar_index == 3);
         CHECK(rep.trades[0].exit_time == 4 * kDay);
     }
-    CHECK_NEAR(rep.net_profit, 12.08 - 11.82, 1e-9);
+    CHECK_NEAR(rep.net_profit, 258.50 - 252.00, 1e-9); // one row, gross 6.50
     CHECK(rep.metrics.all.num_trades == 1);
     CHECK(rep.metrics.longs.num_trades == 1);
     // The last point is the flat account: the row is closed, nothing is open.
     CHECK_NEAR(rep.metrics.equity.open_pl, 0.0, 1e-12);
-    CHECK_NEAR(eng.curve().back().equity, 100000.0 + (12.08 - 11.82), 1e-9);
+    CHECK_NEAR(eng.curve().back().equity, 100000.0 + (258.50 - 252.00), 1e-9); // 100,006.50
     BacktestEngine::free_report(&rep);
 }
 
@@ -231,7 +221,7 @@ static void test_flat_at_end_unchanged() {
     std::printf("-- B: flat at end is unaffected --\n");
     Probe eng;
     eng.script = "L.C.";
-    auto bars = daily_bars(4, 12.08);
+    auto bars = daily_bars(4, 258.50);
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.trade_count() == 1);
     CHECK(eng.range_end_rows().empty());
@@ -239,7 +229,7 @@ static void test_flat_at_end_unchanged() {
     if (eng.trade_count() == 1) {
         const Trade& t = eng.all_trades()[0];
         CHECK(!t.open_at_end);
-        CHECK_NEAR(t.exit_price, 11.82, 1e-9);       // bar 3 open, the script's close
+        CHECK_NEAR(t.exit_price, 252.00, 1e-9);       // bar 3 open, the script's close
         CHECK(t.exit_bar_index == 3);
     }
     ReportC rep{};
@@ -252,12 +242,12 @@ static void test_flat_at_end_unchanged() {
     BacktestEngine::free_report(&rep);
 }
 
-// C. Open short at end: the orb-lite row shape.
+// C. Open short at end: the synthetic long case with the short sign.
 static void test_open_short_at_end() {
-    std::printf("-- C: open short at end (orb-lite: 11.82 -> 12.08 = -0.26) --\n");
+    std::printf("-- C: open short at end (252.00 -> 258.50 = -6.50) --\n");
     Probe eng;
     eng.script = "S...";
-    auto bars = daily_bars(4, 12.08);
+    auto bars = daily_bars(4, 258.50);
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.trade_count() == 0);
     CHECK(eng.position_side_ == PositionSide::SHORT);
@@ -266,10 +256,10 @@ static void test_open_short_at_end() {
         const Trade& t = eng.range_end_rows()[0];
         CHECK(t.open_at_end);
         CHECK(!t.is_long);
-        CHECK_NEAR(t.entry_price, 11.82, 1e-9);
-        CHECK_NEAR(t.exit_price, 12.08, 1e-9);
-        CHECK_NEAR(t.pnl, -0.26, 1e-9);
-        CHECK_NEAR(t.pnl_pct, -0.26 / 11.82 * 100.0, 1e-9);
+        CHECK_NEAR(t.entry_price, 252.00, 1e-9);
+        CHECK_NEAR(t.exit_price, 258.50, 1e-9);
+        CHECK_NEAR(t.pnl, -6.50, 1e-9); // short: (252.00 - 258.50) * 1
+        CHECK_NEAR(t.pnl_pct, -6.50 / 252.00 * 100.0, 1e-9); // short PnL / entry notional
         CHECK(t.exit_bar_index == 3);
     }
 }
@@ -279,14 +269,15 @@ static void test_commission_applied_like_a_close() {
     std::printf("-- D: 0.1%% commission charged on entry and the range-end exit --\n");
     Probe eng(/*commission_pct=*/0.1);
     eng.script = "L...";
-    auto bars = daily_bars(4, 12.08);
+    auto bars = daily_bars(4, 258.50);
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.range_end_rows().size() == 1);
     if (eng.range_end_rows().size() == 1) {
         const Trade& t = eng.range_end_rows()[0];
-        const double expect_comm = 11.82 * 1.0 * 0.001 + 12.08 * 1.0 * 0.001;
+        // 0.1% of each leg: 0.252 + 0.2585 = 0.5105; net PnL = 5.9895.
+        const double expect_comm = 252.00 * 1.0 * 0.001 + 258.50 * 1.0 * 0.001;
         CHECK_NEAR(t.commission, expect_comm, 1e-12);
-        CHECK_NEAR(t.pnl, (12.08 - 11.82) - expect_comm, 1e-12);
+        CHECK_NEAR(t.pnl, (258.50 - 252.00) - expect_comm, 1e-12);
         CHECK(t.open_at_end);
     }
     // The last equity point is the flat account: net of both legs'
@@ -296,25 +287,26 @@ static void test_commission_applied_like_a_close() {
     const pf_equity_point_t& last = eng.curve().back();
     CHECK_NEAR(last.open_profit, 0.0, 1e-12);
     CHECK_NEAR(last.equity, 100000.0 + rep.net_profit, 1e-9);
-    CHECK_NEAR(last.equity, 100000.0 + (12.08 - 11.82) - (11.82 * 0.001 + 12.08 * 0.001), 1e-9);
-    CHECK_NEAR(rep.metrics.all.commission_paid, 11.82 * 0.001 + 12.08 * 0.001, 1e-12);
+    // Capital + 6.50 gross - 0.5105 commission = 100,005.9895.
+    CHECK_NEAR(last.equity, 100000.0 + (258.50 - 252.00) - (252.00 * 0.001 + 258.50 * 0.001), 1e-9);
+    CHECK_NEAR(rep.metrics.all.commission_paid, 252.00 * 0.001 + 258.50 * 0.001, 1e-12);
     BacktestEngine::free_report(&rep);
 }
 
 // E. Sub-tick last close rounds to the nearest tick; slippage is not applied.
 static void test_mark_is_rounded_close_without_slippage() {
-    std::printf("-- E: 12.083 last close books 12.08, slippage ignored --\n");
+    std::printf("-- E: 258.503 last close books 258.50, slippage ignored --\n");
     Probe eng(/*commission_pct=*/0.0, /*slippage_ticks=*/2);
     eng.script = "L...";
-    auto bars = daily_bars(4, 12.083);
+    auto bars = daily_bars(4, 258.503);
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.range_end_rows().size() == 1);
     if (eng.range_end_rows().size() == 1) {
         const Trade& t = eng.range_end_rows()[0];
-        CHECK_NEAR(t.exit_price, 12.08, 1e-9);        // not 12.06 (2 ticks adverse)
-        // The entry, a market order, DID take slippage: 11.82 + 2 ticks.
-        CHECK_NEAR(t.entry_price, 11.84, 1e-9);
-        CHECK_NEAR(t.pnl, 12.08 - 11.84, 1e-9);
+        CHECK_NEAR(t.exit_price, 258.50, 1e-9);        // not 258.48 (2 ticks adverse)
+        // The entry, a market order, DID take slippage: 252.00 + 2 ticks.
+        CHECK_NEAR(t.entry_price, 252.02, 1e-9);
+        CHECK_NEAR(t.pnl, 258.50 - 252.02, 1e-9); // 6.48: 2 entry ticks, none on mark
     }
 }
 
@@ -322,9 +314,9 @@ static void test_mark_is_rounded_close_without_slippage() {
 //    flat account.
 static void test_equity_curve_earlier_points_unchanged() {
     std::printf("-- F: earlier equity points unchanged, last point re-marked flat --\n");
-    auto bars = daily_bars(6, 12.30);
-    bars[3].close = 11.60; bars[3].low = 11.50;      // an interior drawdown bar
-    bars[4].close = 12.10; bars[4].high = 12.40;
+    auto bars = daily_bars(6, 262.00);
+    bars[3].close = 248.00; bars[3].low = 246.00;      // an interior drawdown bar
+    bars[4].close = 256.00; bars[4].high = 266.00;
     Probe full(/*commission_pct=*/0.1);
     full.script = "L.....";
     full.run(bars.data(), (int)bars.size());
@@ -343,26 +335,28 @@ static void test_equity_curve_earlier_points_unchanged() {
     // run's copy still carries the mark-to-market (the position was open at
     // that bar's close), i.e. the pre-fix reading, since nothing was
     // flattened there.
-    CHECK_NEAR(full.curve()[4].open_profit, 12.10 - 11.82, 1e-9);
-    CHECK_NEAR(full.curve()[4].equity, 100000.0 + (12.10 - 11.82), 1e-9);
+    CHECK_NEAR(full.curve()[4].open_profit, 256.00 - 252.00, 1e-9); // gross mark = 4.00
+    CHECK_NEAR(full.curve()[4].equity, 100000.0 + (256.00 - 252.00), 1e-9);
     // The shorter run flattened on ITS last bar (bar 4): its last point is
     // flat at the net of commission.
-    const double comm4 = 11.82 * 0.001 + 12.10 * 0.001;
+    // Commission 0.252 + 0.256 = 0.508; shorter net PnL = 4 - 0.508 = 3.492.
+    const double comm4 = 252.00 * 0.001 + 256.00 * 0.001;
     CHECK_NEAR(shorter.curve()[4].open_profit, 0.0, 1e-12);
-    CHECK_NEAR(shorter.curve()[4].equity, 100000.0 + (12.10 - 11.82) - comm4, 1e-9);
+    CHECK_NEAR(shorter.curve()[4].equity, 100000.0 + (256.00 - 252.00) - comm4, 1e-9);
     // Report identities on the full run.
     ReportC rep{};
     full.fill_report(&rep);
     const pf_equity_point_t& last = full.curve().back();
     CHECK_NEAR(last.open_profit, 0.0, 1e-12);
     CHECK_NEAR(last.equity, 100000.0 + rep.net_profit + last.open_profit, 1e-9);
-    CHECK_NEAR(rep.net_profit, (12.30 - 11.82) - (11.82 * 0.001 + 12.30 * 0.001), 1e-9);
+    // Full net PnL = 10 - (0.252 + 0.262) = 9.486.
+    CHECK_NEAR(rep.net_profit, (262.00 - 252.00) - (252.00 * 0.001 + 262.00 * 0.001), 1e-9);
     // The curve walk reproduces the re-folded scalars on both runs.
     CHECK_NEAR(rep.metrics.equity.max_equity_drawdown, full.max_dd(), 1e-9);
     CHECK_NEAR(rep.metrics.equity.max_equity_runup, full.max_ru(), 1e-9);
     CHECK(rep.total_trades == 1);
     CHECK(rep.metrics.all.num_trades == 1);
-    CHECK_NEAR(rep.metrics.all.commission_paid, 11.82 * 0.001 + 12.30 * 0.001, 1e-12);
+    CHECK_NEAR(rep.metrics.all.commission_paid, 252.00 * 0.001 + 262.00 * 0.001, 1e-12);
     // time in market counts the last bar as in-market (position open at its
     // close, as before): 5 of 6 bars.
     CHECK_NEAR(rep.metrics.equity.time_in_market_pct, 5.0 / 6.0 * 100.0, 1e-9);
@@ -374,8 +368,8 @@ static void test_pyramiding_two_rows() {
     std::printf("-- G: two open slices -> two flagged rows --\n");
     Probe eng(/*commission_pct=*/0.0, /*slippage_ticks=*/0, /*pyramiding=*/2);
     eng.script = "L.L..";
-    auto bars = daily_bars(5, 12.08);
-    bars[3].open = 11.90;                             // second slice fills here
+    auto bars = daily_bars(5, 258.50);
+    bars[3].open = 254.50;                             // second slice fills here
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.trade_count() == 0);
     CHECK(eng.position_side_ == PositionSide::LONG);
@@ -384,17 +378,18 @@ static void test_pyramiding_two_rows() {
         const Trade& a = eng.range_end_rows()[0];
         const Trade& b = eng.range_end_rows()[1];
         CHECK(a.open_at_end && b.open_at_end);
-        CHECK_NEAR(a.entry_price, 11.82, 1e-9);
-        CHECK_NEAR(b.entry_price, 11.90, 1e-9);
-        CHECK_NEAR(a.exit_price, 12.08, 1e-9);
-        CHECK_NEAR(b.exit_price, 12.08, 1e-9);
+        CHECK_NEAR(a.entry_price, 252.00, 1e-9);
+        CHECK_NEAR(b.entry_price, 254.50, 1e-9);
+        CHECK_NEAR(a.exit_price, 258.50, 1e-9);
+        CHECK_NEAR(b.exit_price, 258.50, 1e-9);
         CHECK(a.exit_bar_index == 4 && b.exit_bar_index == 4);
-        CHECK_NEAR(a.pnl + b.pnl, (12.08 - 11.82) + (12.08 - 11.90), 1e-9);
+        // Two unit lots: 6.50 + 4.00 = 10.50, one marked row per slice.
+        CHECK_NEAR(a.pnl + b.pnl, (258.50 - 252.00) + (258.50 - 254.50), 1e-9);
     }
     ReportC rep{};
     eng.fill_report(&rep);
     CHECK(rep.total_trades == 2);
-    CHECK_NEAR(rep.net_profit, (12.08 - 11.82) + (12.08 - 11.90), 1e-9);
+    CHECK_NEAR(rep.net_profit, (258.50 - 252.00) + (258.50 - 254.50), 1e-9);
     BacktestEngine::free_report(&rep);
 }
 
@@ -405,7 +400,7 @@ static void test_closed_then_open_rows_ordered() {
     std::printf("-- G2: closed trade then range-end row, in that order --\n");
     Probe eng;
     eng.script = "L.C.L...";
-    auto bars = daily_bars(8, 12.08);
+    auto bars = daily_bars(8, 258.50);
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.trade_count() == 1);
     CHECK(eng.range_end_rows().size() == 1);
@@ -429,7 +424,7 @@ static void test_range_end_row_incarnation_through_c_abi() {
     std::printf("-- I: range-end row exposes its entry incarnation via the C ABI --\n");
     Probe eng;
     eng.script = "L.C.L...";
-    auto bars = daily_bars(8, 12.08);
+    auto bars = daily_bars(8, 258.50);
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.trade_count() == 1);
     CHECK(eng.range_end_rows().size() == 1);
@@ -462,12 +457,13 @@ static void test_aggregated_path_exit_on_script_label() {
     Probe eng;
     eng.script = "L..";                               // script bar 0 places, bar 1 fills
     std::vector<Bar> bars;
-    const int64_t t0 = 1'700'000'000'000LL;           // 5m-aligned? make it so
+    const int64_t t0 = 1'200'000'000LL;               // invented epoch offset
+    // Align by construction: 15 one-minute inputs form exactly three 5m bars.
     const int64_t base = (t0 / 300'000) * 300'000;
     for (int i = 0; i < 15; ++i) {                    // three 5m script bars
-        double px = (i < 5) ? 11.80 : 11.82;
-        if (i == 14) px = 12.08;
-        bars.push_back(mk_bar(base + (int64_t)i * 60'000, px, px + 0.05, px - 0.05, px));
+        double px = (i < 5) ? 250.00 : 252.00;
+        if (i == 14) px = 258.50;
+        bars.push_back(mk_bar(base + (int64_t)i * 60'000, px, px + 1.00, px - 1.00, px));
     }
     eng.run(bars.data(), (int)bars.size(), "1", "5", /*bar_magnifier=*/false, 4,
             MagnifierDistribution::ENDPOINTS);
@@ -480,7 +476,7 @@ static void test_aggregated_path_exit_on_script_label() {
         CHECK(t.exit_bar_index == 2);
         CHECK(t.exit_time == eng.curve()[2].time_ms);
         CHECK(t.exit_time == base + 10 * 60'000);
-        CHECK_NEAR(t.exit_price, 12.08, 1e-9);
+        CHECK_NEAR(t.exit_price, 258.50, 1e-9);
     }
 }
 
@@ -490,7 +486,7 @@ static void test_rerun_clears_rows() {
     std::printf("-- I: re-run clears the range-end rows --\n");
     Probe eng;
     eng.script = "L...";
-    auto bars = daily_bars(4, 12.08);
+    auto bars = daily_bars(4, 258.50);
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.range_end_rows().size() == 1);
     eng.script = "L.C.";
@@ -503,15 +499,15 @@ static void test_rerun_clears_rows() {
 //    open position at the end, the last bar being the extreme.
 static void test_walk_reproduces_scalar_extremes_at_the_end() {
     std::printf("-- J: dd/runup walk == scalar extremes with commission, open at end --\n");
-    // Long from bar 1 at 11.82; the tape rallies to a peak on bar 3 and
+    // Long from bar 1 at 252.00; the series rallies to a peak on bar 2 and
     // then falls to its lowest close on the LAST bar: the trough is the
     // range-end bar, where the first cut's re-mark moved the point.
     {
-        auto bars = daily_bars(6, 11.20);
-        bars[2].close = 12.40; bars[2].high = 12.50;
-        bars[3].close = 12.10; bars[3].high = 12.45;
-        bars[4].close = 11.60; bars[4].low = 11.50;
-        bars[5].low = 11.10;
+        auto bars = daily_bars(6, 236.00);
+        bars[2].close = 266.00; bars[2].high = 268.00;
+        bars[3].close = 256.00; bars[3].high = 267.00;
+        bars[4].close = 248.00; bars[4].low = 246.00;
+        bars[5].low = 234.00;
         Probe eng(/*commission_pct=*/0.1);
         eng.script = "L.....";
         eng.run(bars.data(), (int)bars.size());
@@ -520,10 +516,11 @@ static void test_walk_reproduces_scalar_extremes_at_the_end() {
         eng.fill_report(&rep);
         CHECK_NEAR(rep.metrics.equity.max_equity_drawdown, eng.max_dd(), 1e-9);
         CHECK_NEAR(rep.metrics.equity.max_equity_runup, eng.max_ru(), 1e-9);
-        // The drawdown runs from the peak mark (12.40, gross) to the
-        // re-marked last point (11.20 net of both legs' commission): the
-        // first cut's scalars still read the gross 12.40 - 11.20 here.
-        CHECK_NEAR(eng.max_dd(), (12.40 - 11.20) + (11.82 * 0.001 + 11.20 * 0.001), 1e-9);
+        // The drawdown runs from the peak mark (266.00, gross) to the
+        // re-marked last point (236.00 net of both legs' commission): the
+        // first cut's scalars still read the gross 266.00 - 236.00 here.
+        // Peak-to-final loss 30 + commissions (0.252 + 0.236) = 30.488.
+        CHECK_NEAR(eng.max_dd(), (266.00 - 236.00) + (252.00 * 0.001 + 236.00 * 0.001), 1e-9);
         BacktestEngine::free_report(&rep);
     }
     // Mirrored: peak on bar 2, trough on bar 3, and the run-up from that
@@ -531,11 +528,11 @@ static void test_walk_reproduces_scalar_extremes_at_the_end() {
     // reset): the scalar reads the re-marked last point, net of the row's
     // commissions, where the first cut still read the gross mark.
     {
-        auto bars = daily_bars(6, 12.30);
-        bars[2].close = 12.40; bars[2].high = 12.50;
-        bars[3].close = 11.30; bars[3].low = 11.20;
-        bars[4].close = 12.10;
-        bars[5].high = 12.45;
+        auto bars = daily_bars(6, 262.00);
+        bars[2].close = 266.00; bars[2].high = 268.00;
+        bars[3].close = 244.00; bars[3].low = 236.00;
+        bars[4].close = 256.00;
+        bars[5].high = 267.00;
         Probe eng(/*commission_pct=*/0.1);
         eng.script = "L.....";
         eng.run(bars.data(), (int)bars.size());
@@ -544,9 +541,10 @@ static void test_walk_reproduces_scalar_extremes_at_the_end() {
         eng.fill_report(&rep);
         CHECK_NEAR(rep.metrics.equity.max_equity_drawdown, eng.max_dd(), 1e-9);
         CHECK_NEAR(rep.metrics.equity.max_equity_runup, eng.max_ru(), 1e-9);
-        // Run-up from the trough mark (11.30, gross) to the re-marked last
-        // point (12.90 net of commission).
-        CHECK_NEAR(eng.max_ru(), (12.30 - 11.30) - (11.82 * 0.001 + 12.30 * 0.001), 1e-9);
+        // Run-up from the trough mark (244.00, gross) to the re-marked last
+        // point (262.00 net of commission).
+        // Trough-to-final gain 18 - commissions (0.252 + 0.262) = 17.486.
+        CHECK_NEAR(eng.max_ru(), (262.00 - 244.00) - (252.00 * 0.001 + 262.00 * 0.001), 1e-9);
         BacktestEngine::free_report(&rep);
     }
 }

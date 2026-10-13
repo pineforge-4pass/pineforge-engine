@@ -47,8 +47,8 @@ Timing is valid only on a quiet host: 1-minute load average below 6.0 and no `cm
   timed iteration calls `strategy_create`, applies the slot's `inputs.json`
   `strategy_overrides` pins, and runs `run_backtest_full` over the 53,929-bar
   feed. `N=20` iterations; GBench's `real_time` is the per-iteration mean (no p95).
-- **PyneCore:** subprocess wall time of `uv run python runners/run_pynecore.py
-  <strategy> --no-write`, including Python interpreter startup, PyneCore framework
+- **PyneCore:** timed with a harness kept outside this repository, as subprocess
+  wall time including Python interpreter startup, PyneCore framework
   import and the full backtest; median and p95 over `N=20` invocations, 8 strategies timed concurrently.
 - **Bars/s:** feed bars ÷ median seconds per strategy. For PyneCore that is the
   subprocess wall time above, so startup and import are inside the figure;
@@ -288,7 +288,7 @@ realistic cost for engines whose entry point IS the process.
 | PineForge (in-process, magnifier ON) | 505.1 k | **806.8 k** | 1.13 M |
 | PyneCore (subprocess wall time) | 13.1 k | **20.5 k** | 32.2 k |
 
-- **Median speedup PineForge vs PyneCore** (across 200 commonly-timed strategies): **36×** (p5 15×, p95 131×)
+- **Median speedup PineForge vs PyneCore** (across 200 commonly-timed strategies, 100 corpus probes and 100 held-out private strategies): **36×** (p5 15×, p95 131×)
 - **Median speedup PineForge vs vectorbt** (across 13 commonly-timed strategies): **4.2×**
 - **PineTS canonical indicator:** 1416.2 ms median
 

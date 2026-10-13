@@ -15,7 +15,7 @@ public assets and, when present, the maintainer-local closed root):
 
     tv_trades.csv          TradingView ground truth
     pineforge_trades.csv   scripts/run_strategy.py output (run_all.sh)
-    pynecore_trades.csv    runners/run_pynecore.py output (run_all.sh)
+    pynecore_trades.csv    private runners/run_pynecore.py output (run_all.sh, optional)
     vectorbt_trades.csv    speed/time_vectorbt.py --write-trades (optional)
 
 An engine without output is reported ``n/a`` with its reason: the PyneSys

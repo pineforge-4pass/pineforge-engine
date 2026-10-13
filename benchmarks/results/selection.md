@@ -41,7 +41,7 @@ Corpus: 313 directories → 310 eligible (excluded: needs the 1m corpus feed (be
 | sizing bases | 3 | 1 |
 | ta | 77 | 25 |
 
-Closed: 413 BINANCE:ETHUSDT.P 15 scraped probes → 379 eligible (excluded: campaign runs it on the 1m feed (finer-TF / lower_tf security) 16, surface anomaly 18).
+Closed: 413 BINANCE:ETHUSDT.P 15 held-out private probes → 379 eligible (excluded: campaign runs it on the 1m feed (finer-TF / lower_tf security) 16, surface anomaly 18).
 
 | Surface | Eligible | Slots |
 |---|---:|---:|
@@ -151,107 +151,107 @@ Closed: 413 BINANCE:ETHUSDT.P 15 scraped probes → 379 eligible (excluded: camp
 | 098-udt-method-var-instance-streak-01 | corpus | `corpus/validation/udt-method-var-instance-streak-01` | 1007 (2014) | UDT | 5 | Apache-2.0 (pineforge-corpus LICENSE) |
 | 099-udt-tessellate-tuple-method-01 | corpus | `corpus/validation/udt-tessellate-tuple-method-01` | 426 (852) | UDT | 3 | Apache-2.0 (pineforge-corpus LICENSE) |
 | 100-vwap-bands-mean-reversion-2sigma-01 | corpus | `corpus/validation/vwap-bands-mean-reversion-2sigma-01` | 241 (482) | ta | 0 | Apache-2.0 (pineforge-corpus LICENSE) |
-| 101-closed | closed | `closed root (maintainers only)` | 288 (576) | hard | 33 | TradingView scraped, not redistributed |
-| 102-closed | closed | `closed root (maintainers only)` | 354 (708) | hard | 39 | TradingView scraped, not redistributed |
-| 103-closed | closed | `closed root (maintainers only)` | 332 (664) | hard | 37 | TradingView scraped, not redistributed |
-| 104-closed | closed | `closed root (maintainers only)` | 43 (86) | hard | 9 | TradingView scraped, not redistributed |
-| 105-closed | closed | `closed root (maintainers only)` | 392 (784) | hard | 43 | TradingView scraped, not redistributed |
-| 106-closed | closed | `closed root (maintainers only)` | 29 (58) | hard | 7 | TradingView scraped, not redistributed |
-| 107-closed | closed | `closed root (maintainers only)` | 371 (742) | hard | 41 | TradingView scraped, not redistributed |
-| 108-closed | closed | `closed root (maintainers only)` | 2559 (5118) | hard | 86 | TradingView scraped, not redistributed |
-| 109-closed | closed | `closed root (maintainers only)` | 172 (344) | hard | 22 | TradingView scraped, not redistributed |
-| 110-closed | closed | `closed root (maintainers only)` | 2949 (5898) | hard | 88 | TradingView scraped, not redistributed |
-| 111-closed | closed | `closed root (maintainers only)` | 2373 (4746) | hard | 84 | TradingView scraped, not redistributed |
-| 112-closed | closed | `closed root (maintainers only)` | 462 (924) | hard | 46 | TradingView scraped, not redistributed |
-| 113-closed | closed | `closed root (maintainers only)` | 7 (14) | hard | 3 | TradingView scraped, not redistributed |
-| 114-closed | closed | `closed root (maintainers only)` | 2183 (4366) | hard | 83 | TradingView scraped, not redistributed |
-| 115-closed | closed | `closed root (maintainers only)` | 196 (392) | hard | 24 | TradingView scraped, not redistributed |
-| 116-closed | closed | `closed root (maintainers only)` | 866 (1732) | hard | 63 | TradingView scraped, not redistributed |
-| 117-closed | closed | `closed root (maintainers only)` | 298 (596) | hard | 35 | TradingView scraped, not redistributed |
-| 118-closed | closed | `closed root (maintainers only)` | 253 (506) | hard | 31 | TradingView scraped, not redistributed |
-| 119-closed | closed | `closed root (maintainers only)` | 466 (932) | hard | 47 | TradingView scraped, not redistributed |
-| 120-closed | closed | `closed root (maintainers only)` | 416 (832) | hard | 44 | TradingView scraped, not redistributed |
-| 121-closed | closed | `closed root (maintainers only)` | 1119 (2238) | hard | 71 | TradingView scraped, not redistributed |
-| 122-closed | closed | `closed root (maintainers only)` | 1976 (3952) | hard | 81 | TradingView scraped, not redistributed |
-| 123-closed | closed | `closed root (maintainers only)` | 14289 (28578) | hard | 99 | TradingView scraped, not redistributed |
-| 124-closed | closed | `closed root (maintainers only)` | 200 (400) | hard | 25 | TradingView scraped, not redistributed |
-| 125-closed | closed | `closed root (maintainers only)` | 1396 (2792) | hard | 74 | TradingView scraped, not redistributed |
-| 126-closed | closed | `closed root (maintainers only)` | 978 (1956) | hard | 67 | TradingView scraped, not redistributed |
-| 127-closed | closed | `closed root (maintainers only)` | 1743 (3486) | hard | 78 | TradingView scraped, not redistributed |
-| 128-closed | closed | `closed root (maintainers only)` | 1574 (3148) | hard | 77 | TradingView scraped, not redistributed |
-| 129-closed | closed | `closed root (maintainers only)` | 1562 (3124) | hard | 76 | TradingView scraped, not redistributed |
-| 130-closed | closed | `closed root (maintainers only)` | 5148 (10296) | hard | 94 | TradingView scraped, not redistributed |
-| 131-closed | closed | `closed root (maintainers only)` | 210 (420) | hard | 27 | TradingView scraped, not redistributed |
-| 132-closed | closed | `closed root (maintainers only)` | 86 (172) | hard | 14 | TradingView scraped, not redistributed |
-| 133-closed | closed | `closed root (maintainers only)` | 313 (626) | hard | 36 | TradingView scraped, not redistributed |
-| 134-closed | closed | `closed root (maintainers only)` | 3369 (6738) | hard | 91 | TradingView scraped, not redistributed |
-| 135-closed | closed | `closed root (maintainers only)` | 1790 (3580) | hard | 79 | TradingView scraped, not redistributed |
-| 136-closed | closed | `closed root (maintainers only)` | 928 (1856) | hard | 65 | TradingView scraped, not redistributed |
-| 137-closed | closed | `closed root (maintainers only)` | 224 (448) | hard | 29 | TradingView scraped, not redistributed |
-| 138-closed | closed | `closed root (maintainers only)` | 151 (302) | hard | 20 | TradingView scraped, not redistributed |
-| 139-closed | closed | `closed root (maintainers only)` | 643 (1286) | hard | 55 | TradingView scraped, not redistributed |
-| 140-closed | closed | `closed root (maintainers only)` | 96 (192) | hard | 15 | TradingView scraped, not redistributed |
-| 141-closed | closed | `closed root (maintainers only)` | 774 (1548) | hard | 60 | TradingView scraped, not redistributed |
-| 142-closed | closed | `closed root (maintainers only)` | 3194 (6388) | hard | 90 | TradingView scraped, not redistributed |
-| 143-closed | closed | `closed root (maintainers only)` | 4 (8) | hard | 1 | TradingView scraped, not redistributed |
-| 144-closed | closed | `closed root (maintainers only)` | 513 (1026) | hard | 49 | TradingView scraped, not redistributed |
-| 145-closed | closed | `closed root (maintainers only)` | 906 (1812) | hard | 64 | TradingView scraped, not redistributed |
-| 146-closed | closed | `closed root (maintainers only)` | 48 (96) | hard | 10 | TradingView scraped, not redistributed |
-| 147-closed | closed | `closed root (maintainers only)` | 746 (1492) | hard | 58 | TradingView scraped, not redistributed |
-| 148-closed | closed | `closed root (maintainers only)` | 430 (860) | hard | 45 | TradingView scraped, not redistributed |
-| 149-closed | closed | `closed root (maintainers only)` | 593 (1186) | hard | 52 | TradingView scraped, not redistributed |
-| 150-closed | closed | `closed root (maintainers only)` | 8491 (16982) | hard | 98 | TradingView scraped, not redistributed |
-| 151-closed | closed | `closed root (maintainers only)` | 16 (32) | hard | 5 | TradingView scraped, not redistributed |
-| 152-closed | closed | `closed root (maintainers only)` | 1040 (2080) | hard | 69 | TradingView scraped, not redistributed |
-| 153-closed | closed | `closed root (maintainers only)` | 232 (464) | hard | 30 | TradingView scraped, not redistributed |
-| 154-closed | closed | `closed root (maintainers only)` | 346 (692) | hard | 38 | TradingView scraped, not redistributed |
-| 155-closed | closed | `closed root (maintainers only)` | 362 (724) | hard | 40 | TradingView scraped, not redistributed |
-| 156-closed | closed | `closed root (maintainers only)` | 132 (264) | hard | 18 | TradingView scraped, not redistributed |
-| 157-closed | closed | `closed root (maintainers only)` | 5999 (11998) | hard | 95 | TradingView scraped, not redistributed |
-| 158-closed | closed | `closed root (maintainers only)` | 6826 (13652) | hard | 96 | TradingView scraped, not redistributed |
-| 159-closed | closed | `closed root (maintainers only)` | 642 (1284) | hard | 54 | TradingView scraped, not redistributed |
-| 160-closed | closed | `closed root (maintainers only)` | 819 (1638) | hard | 62 | TradingView scraped, not redistributed |
-| 161-closed | closed | `closed root (maintainers only)` | 4 (8) | hard | 2 | TradingView scraped, not redistributed |
-| 162-closed | closed | `closed root (maintainers only)` | 73 (146) | hard | 13 | TradingView scraped, not redistributed |
-| 163-closed | closed | `closed root (maintainers only)` | 13 (26) | hard | 4 | TradingView scraped, not redistributed |
-| 164-closed | closed | `closed root (maintainers only)` | 183 (366) | hard | 23 | TradingView scraped, not redistributed |
-| 165-closed | closed | `closed root (maintainers only)` | 7021 (14042) | hard | 97 | TradingView scraped, not redistributed |
-| 166-closed | closed | `closed root (maintainers only)` | 602 (1204) | hard | 53 | TradingView scraped, not redistributed |
-| 167-closed | closed | `closed root (maintainers only)` | 795 (1590) | hard | 61 | TradingView scraped, not redistributed |
-| 168-closed | closed | `closed root (maintainers only)` | 1002 (2004) | hard | 68 | TradingView scraped, not redistributed |
-| 169-closed | closed | `closed root (maintainers only)` | 766 (1532) | hard | 59 | TradingView scraped, not redistributed |
-| 170-closed | closed | `closed root (maintainers only)` | 1 (2) | hard | 0 | TradingView scraped, not redistributed |
-| 171-closed | closed | `closed root (maintainers only)` | 1106 (2212) | hard | 70 | TradingView scraped, not redistributed |
-| 172-closed | closed | `closed root (maintainers only)` | 1521 (3042) | hard | 75 | TradingView scraped, not redistributed |
-| 173-closed | closed | `closed root (maintainers only)` | 1849 (3698) | hard | 80 | TradingView scraped, not redistributed |
-| 174-closed | closed | `closed root (maintainers only)` | 4330 (8660) | hard | 93 | TradingView scraped, not redistributed |
-| 175-closed | closed | `closed root (maintainers only)` | 386 (772) | hard | 42 | TradingView scraped, not redistributed |
-| 176-closed | closed | `closed root (maintainers only)` | 484 (968) | hard | 48 | TradingView scraped, not redistributed |
-| 177-closed | closed | `closed root (maintainers only)` | 2846 (5692) | hard | 87 | TradingView scraped, not redistributed |
-| 178-closed | closed | `closed root (maintainers only)` | 519 (1038) | hard | 50 | TradingView scraped, not redistributed |
-| 179-closed | closed | `closed root (maintainers only)` | 220 (440) | hard | 28 | TradingView scraped, not redistributed |
-| 180-closed | closed | `closed root (maintainers only)` | 291 (582) | hard | 34 | TradingView scraped, not redistributed |
-| 181-closed | closed | `closed root (maintainers only)` | 2411 (4822) | hard | 85 | TradingView scraped, not redistributed |
-| 182-closed | closed | `closed root (maintainers only)` | 3031 (6062) | hard | 89 | TradingView scraped, not redistributed |
-| 183-closed | closed | `closed root (maintainers only)` | 1302 (2604) | hard | 72 | TradingView scraped, not redistributed |
-| 184-closed | closed | `closed root (maintainers only)` | 958 (1916) | hard | 66 | TradingView scraped, not redistributed |
-| 185-closed | closed | `closed root (maintainers only)` | 2153 (4306) | hard | 82 | TradingView scraped, not redistributed |
-| 186-closed | closed | `closed root (maintainers only)` | 36 (72) | hard | 8 | TradingView scraped, not redistributed |
-| 187-closed | closed | `closed root (maintainers only)` | 202 (404) | hard | 26 | TradingView scraped, not redistributed |
-| 188-closed | closed | `closed root (maintainers only)` | 1372 (2744) | hard | 73 | TradingView scraped, not redistributed |
-| 189-closed | closed | `closed root (maintainers only)` | 144 (288) | hard | 19 | TradingView scraped, not redistributed |
-| 190-closed | closed | `closed root (maintainers only)` | 53 (106) | hard | 11 | TradingView scraped, not redistributed |
-| 191-closed | closed | `closed root (maintainers only)` | 269 (538) | hard | 32 | TradingView scraped, not redistributed |
-| 192-closed | closed | `closed root (maintainers only)` | 157 (314) | hard | 21 | TradingView scraped, not redistributed |
-| 193-closed | closed | `closed root (maintainers only)` | 3394 (6788) | hard | 92 | TradingView scraped, not redistributed |
-| 194-closed | closed | `closed root (maintainers only)` | 657 (1314) | hard | 56 | TradingView scraped, not redistributed |
-| 195-closed | closed | `closed root (maintainers only)` | 712 (1424) | hard | 57 | TradingView scraped, not redistributed |
-| 196-closed | closed | `closed root (maintainers only)` | 111 (222) | hard | 17 | TradingView scraped, not redistributed |
-| 197-closed | closed | `closed root (maintainers only)` | 110 (220) | hard | 16 | TradingView scraped, not redistributed |
-| 198-closed | closed | `closed root (maintainers only)` | 72 (144) | hard | 12 | TradingView scraped, not redistributed |
-| 199-closed | closed | `closed root (maintainers only)` | 26 (52) | hard | 6 | TradingView scraped, not redistributed |
-| 200-closed | closed | `closed root (maintainers only)` | 533 (1066) | hard | 51 | TradingView scraped, not redistributed |
-| 201-closed | closed | `closed root (maintainers only)` | 154 (308) | hard | 21 | TradingView scraped, not redistributed |
+| 101-closed | closed | `closed root (maintainers only)` | 288 (576) | hard | 33 | Held-out private strategy, not redistributed |
+| 102-closed | closed | `closed root (maintainers only)` | 354 (708) | hard | 39 | Held-out private strategy, not redistributed |
+| 103-closed | closed | `closed root (maintainers only)` | 332 (664) | hard | 37 | Held-out private strategy, not redistributed |
+| 104-closed | closed | `closed root (maintainers only)` | 43 (86) | hard | 9 | Held-out private strategy, not redistributed |
+| 105-closed | closed | `closed root (maintainers only)` | 392 (784) | hard | 43 | Held-out private strategy, not redistributed |
+| 106-closed | closed | `closed root (maintainers only)` | 29 (58) | hard | 7 | Held-out private strategy, not redistributed |
+| 107-closed | closed | `closed root (maintainers only)` | 371 (742) | hard | 41 | Held-out private strategy, not redistributed |
+| 108-closed | closed | `closed root (maintainers only)` | 2559 (5118) | hard | 86 | Held-out private strategy, not redistributed |
+| 109-closed | closed | `closed root (maintainers only)` | 172 (344) | hard | 22 | Held-out private strategy, not redistributed |
+| 110-closed | closed | `closed root (maintainers only)` | 2949 (5898) | hard | 88 | Held-out private strategy, not redistributed |
+| 111-closed | closed | `closed root (maintainers only)` | 2373 (4746) | hard | 84 | Held-out private strategy, not redistributed |
+| 112-closed | closed | `closed root (maintainers only)` | 462 (924) | hard | 46 | Held-out private strategy, not redistributed |
+| 113-closed | closed | `closed root (maintainers only)` | 7 (14) | hard | 3 | Held-out private strategy, not redistributed |
+| 114-closed | closed | `closed root (maintainers only)` | 2183 (4366) | hard | 83 | Held-out private strategy, not redistributed |
+| 115-closed | closed | `closed root (maintainers only)` | 196 (392) | hard | 24 | Held-out private strategy, not redistributed |
+| 116-closed | closed | `closed root (maintainers only)` | 866 (1732) | hard | 63 | Held-out private strategy, not redistributed |
+| 117-closed | closed | `closed root (maintainers only)` | 298 (596) | hard | 35 | Held-out private strategy, not redistributed |
+| 118-closed | closed | `closed root (maintainers only)` | 253 (506) | hard | 31 | Held-out private strategy, not redistributed |
+| 119-closed | closed | `closed root (maintainers only)` | 466 (932) | hard | 47 | Held-out private strategy, not redistributed |
+| 120-closed | closed | `closed root (maintainers only)` | 416 (832) | hard | 44 | Held-out private strategy, not redistributed |
+| 121-closed | closed | `closed root (maintainers only)` | 1119 (2238) | hard | 71 | Held-out private strategy, not redistributed |
+| 122-closed | closed | `closed root (maintainers only)` | 1976 (3952) | hard | 81 | Held-out private strategy, not redistributed |
+| 123-closed | closed | `closed root (maintainers only)` | 14289 (28578) | hard | 99 | Held-out private strategy, not redistributed |
+| 124-closed | closed | `closed root (maintainers only)` | 200 (400) | hard | 25 | Held-out private strategy, not redistributed |
+| 125-closed | closed | `closed root (maintainers only)` | 1396 (2792) | hard | 74 | Held-out private strategy, not redistributed |
+| 126-closed | closed | `closed root (maintainers only)` | 978 (1956) | hard | 67 | Held-out private strategy, not redistributed |
+| 127-closed | closed | `closed root (maintainers only)` | 1743 (3486) | hard | 78 | Held-out private strategy, not redistributed |
+| 128-closed | closed | `closed root (maintainers only)` | 1574 (3148) | hard | 77 | Held-out private strategy, not redistributed |
+| 129-closed | closed | `closed root (maintainers only)` | 1562 (3124) | hard | 76 | Held-out private strategy, not redistributed |
+| 130-closed | closed | `closed root (maintainers only)` | 5148 (10296) | hard | 94 | Held-out private strategy, not redistributed |
+| 131-closed | closed | `closed root (maintainers only)` | 210 (420) | hard | 27 | Held-out private strategy, not redistributed |
+| 132-closed | closed | `closed root (maintainers only)` | 86 (172) | hard | 14 | Held-out private strategy, not redistributed |
+| 133-closed | closed | `closed root (maintainers only)` | 313 (626) | hard | 36 | Held-out private strategy, not redistributed |
+| 134-closed | closed | `closed root (maintainers only)` | 3369 (6738) | hard | 91 | Held-out private strategy, not redistributed |
+| 135-closed | closed | `closed root (maintainers only)` | 1790 (3580) | hard | 79 | Held-out private strategy, not redistributed |
+| 136-closed | closed | `closed root (maintainers only)` | 928 (1856) | hard | 65 | Held-out private strategy, not redistributed |
+| 137-closed | closed | `closed root (maintainers only)` | 224 (448) | hard | 29 | Held-out private strategy, not redistributed |
+| 138-closed | closed | `closed root (maintainers only)` | 151 (302) | hard | 20 | Held-out private strategy, not redistributed |
+| 139-closed | closed | `closed root (maintainers only)` | 643 (1286) | hard | 55 | Held-out private strategy, not redistributed |
+| 140-closed | closed | `closed root (maintainers only)` | 96 (192) | hard | 15 | Held-out private strategy, not redistributed |
+| 141-closed | closed | `closed root (maintainers only)` | 774 (1548) | hard | 60 | Held-out private strategy, not redistributed |
+| 142-closed | closed | `closed root (maintainers only)` | 3194 (6388) | hard | 90 | Held-out private strategy, not redistributed |
+| 143-closed | closed | `closed root (maintainers only)` | 4 (8) | hard | 1 | Held-out private strategy, not redistributed |
+| 144-closed | closed | `closed root (maintainers only)` | 513 (1026) | hard | 49 | Held-out private strategy, not redistributed |
+| 145-closed | closed | `closed root (maintainers only)` | 906 (1812) | hard | 64 | Held-out private strategy, not redistributed |
+| 146-closed | closed | `closed root (maintainers only)` | 48 (96) | hard | 10 | Held-out private strategy, not redistributed |
+| 147-closed | closed | `closed root (maintainers only)` | 746 (1492) | hard | 58 | Held-out private strategy, not redistributed |
+| 148-closed | closed | `closed root (maintainers only)` | 430 (860) | hard | 45 | Held-out private strategy, not redistributed |
+| 149-closed | closed | `closed root (maintainers only)` | 593 (1186) | hard | 52 | Held-out private strategy, not redistributed |
+| 150-closed | closed | `closed root (maintainers only)` | 8491 (16982) | hard | 98 | Held-out private strategy, not redistributed |
+| 151-closed | closed | `closed root (maintainers only)` | 16 (32) | hard | 5 | Held-out private strategy, not redistributed |
+| 152-closed | closed | `closed root (maintainers only)` | 1040 (2080) | hard | 69 | Held-out private strategy, not redistributed |
+| 153-closed | closed | `closed root (maintainers only)` | 232 (464) | hard | 30 | Held-out private strategy, not redistributed |
+| 154-closed | closed | `closed root (maintainers only)` | 346 (692) | hard | 38 | Held-out private strategy, not redistributed |
+| 155-closed | closed | `closed root (maintainers only)` | 362 (724) | hard | 40 | Held-out private strategy, not redistributed |
+| 156-closed | closed | `closed root (maintainers only)` | 132 (264) | hard | 18 | Held-out private strategy, not redistributed |
+| 157-closed | closed | `closed root (maintainers only)` | 5999 (11998) | hard | 95 | Held-out private strategy, not redistributed |
+| 158-closed | closed | `closed root (maintainers only)` | 6826 (13652) | hard | 96 | Held-out private strategy, not redistributed |
+| 159-closed | closed | `closed root (maintainers only)` | 642 (1284) | hard | 54 | Held-out private strategy, not redistributed |
+| 160-closed | closed | `closed root (maintainers only)` | 819 (1638) | hard | 62 | Held-out private strategy, not redistributed |
+| 161-closed | closed | `closed root (maintainers only)` | 4 (8) | hard | 2 | Held-out private strategy, not redistributed |
+| 162-closed | closed | `closed root (maintainers only)` | 73 (146) | hard | 13 | Held-out private strategy, not redistributed |
+| 163-closed | closed | `closed root (maintainers only)` | 13 (26) | hard | 4 | Held-out private strategy, not redistributed |
+| 164-closed | closed | `closed root (maintainers only)` | 183 (366) | hard | 23 | Held-out private strategy, not redistributed |
+| 165-closed | closed | `closed root (maintainers only)` | 7021 (14042) | hard | 97 | Held-out private strategy, not redistributed |
+| 166-closed | closed | `closed root (maintainers only)` | 602 (1204) | hard | 53 | Held-out private strategy, not redistributed |
+| 167-closed | closed | `closed root (maintainers only)` | 795 (1590) | hard | 61 | Held-out private strategy, not redistributed |
+| 168-closed | closed | `closed root (maintainers only)` | 1002 (2004) | hard | 68 | Held-out private strategy, not redistributed |
+| 169-closed | closed | `closed root (maintainers only)` | 766 (1532) | hard | 59 | Held-out private strategy, not redistributed |
+| 170-closed | closed | `closed root (maintainers only)` | 1 (2) | hard | 0 | Held-out private strategy, not redistributed |
+| 171-closed | closed | `closed root (maintainers only)` | 1106 (2212) | hard | 70 | Held-out private strategy, not redistributed |
+| 172-closed | closed | `closed root (maintainers only)` | 1521 (3042) | hard | 75 | Held-out private strategy, not redistributed |
+| 173-closed | closed | `closed root (maintainers only)` | 1849 (3698) | hard | 80 | Held-out private strategy, not redistributed |
+| 174-closed | closed | `closed root (maintainers only)` | 4330 (8660) | hard | 93 | Held-out private strategy, not redistributed |
+| 175-closed | closed | `closed root (maintainers only)` | 386 (772) | hard | 42 | Held-out private strategy, not redistributed |
+| 176-closed | closed | `closed root (maintainers only)` | 484 (968) | hard | 48 | Held-out private strategy, not redistributed |
+| 177-closed | closed | `closed root (maintainers only)` | 2846 (5692) | hard | 87 | Held-out private strategy, not redistributed |
+| 178-closed | closed | `closed root (maintainers only)` | 519 (1038) | hard | 50 | Held-out private strategy, not redistributed |
+| 179-closed | closed | `closed root (maintainers only)` | 220 (440) | hard | 28 | Held-out private strategy, not redistributed |
+| 180-closed | closed | `closed root (maintainers only)` | 291 (582) | hard | 34 | Held-out private strategy, not redistributed |
+| 181-closed | closed | `closed root (maintainers only)` | 2411 (4822) | hard | 85 | Held-out private strategy, not redistributed |
+| 182-closed | closed | `closed root (maintainers only)` | 3031 (6062) | hard | 89 | Held-out private strategy, not redistributed |
+| 183-closed | closed | `closed root (maintainers only)` | 1302 (2604) | hard | 72 | Held-out private strategy, not redistributed |
+| 184-closed | closed | `closed root (maintainers only)` | 958 (1916) | hard | 66 | Held-out private strategy, not redistributed |
+| 185-closed | closed | `closed root (maintainers only)` | 2153 (4306) | hard | 82 | Held-out private strategy, not redistributed |
+| 186-closed | closed | `closed root (maintainers only)` | 36 (72) | hard | 8 | Held-out private strategy, not redistributed |
+| 187-closed | closed | `closed root (maintainers only)` | 202 (404) | hard | 26 | Held-out private strategy, not redistributed |
+| 188-closed | closed | `closed root (maintainers only)` | 1372 (2744) | hard | 73 | Held-out private strategy, not redistributed |
+| 189-closed | closed | `closed root (maintainers only)` | 144 (288) | hard | 19 | Held-out private strategy, not redistributed |
+| 190-closed | closed | `closed root (maintainers only)` | 53 (106) | hard | 11 | Held-out private strategy, not redistributed |
+| 191-closed | closed | `closed root (maintainers only)` | 269 (538) | hard | 32 | Held-out private strategy, not redistributed |
+| 192-closed | closed | `closed root (maintainers only)` | 157 (314) | hard | 21 | Held-out private strategy, not redistributed |
+| 193-closed | closed | `closed root (maintainers only)` | 3394 (6788) | hard | 92 | Held-out private strategy, not redistributed |
+| 194-closed | closed | `closed root (maintainers only)` | 657 (1314) | hard | 56 | Held-out private strategy, not redistributed |
+| 195-closed | closed | `closed root (maintainers only)` | 712 (1424) | hard | 57 | Held-out private strategy, not redistributed |
+| 196-closed | closed | `closed root (maintainers only)` | 111 (222) | hard | 17 | Held-out private strategy, not redistributed |
+| 197-closed | closed | `closed root (maintainers only)` | 110 (220) | hard | 16 | Held-out private strategy, not redistributed |
+| 198-closed | closed | `closed root (maintainers only)` | 72 (144) | hard | 12 | Held-out private strategy, not redistributed |
+| 199-closed | closed | `closed root (maintainers only)` | 26 (52) | hard | 6 | Held-out private strategy, not redistributed |
+| 200-closed | closed | `closed root (maintainers only)` | 533 (1066) | hard | 51 | Held-out private strategy, not redistributed |
+| 201-closed | closed | `closed root (maintainers only)` | 154 (308) | hard | 21 | Held-out private strategy, not redistributed |
 
 ## Replacements
 

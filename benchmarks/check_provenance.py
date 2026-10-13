@@ -345,7 +345,7 @@ def corpus_half(tree, m):
 
 
 @claim(r"\*\*(?P<n>\d+) closed strategies\*\* \(slots `(?P<lo>\d+)`–`(?P<hi>\d+)`\) are "
-       r"TradingView-scraped community scripts on `BINANCE:ETHUSDT\.P` (?P<tf>\d+m), .*?"
+       r"held-out private strategies on `BINANCE:ETHUSDT\.P` (?P<tf>\d+m), .*?"
        r"\(sha256 `(?P<evidence>[0-9a-f]{64})`\)")
 def closed_half(tree, m):
     slots = [int(s["slot"][:3]) for s in tree.json(SELECTION)["slots"]
@@ -457,7 +457,8 @@ def pinets_row(tree, m):
 
 
 @claim(r"PineForge's median speedup is \*\*(?P<x>\d+)× over PyneCore\*\*, per strategy across the "
-       r"(?P<n>\d+) strategies both engines time \(p5 (?P<p5>\d+)×, p95 (?P<p95>\d+)×\), and "
+       r"(?P<n>\d+) strategies both engines time \((?P<probes>\d+) corpus probes and (?P<held>\d+) "
+       r"held-out private strategies; p5 (?P<p5>\d+)×, p95 (?P<p95>\d+)×\), and "
        r"(?P<vbt>[\d.]+)× over vectorbt across its (?P<vbt_n>\d+) ports\.")
 def speedup(tree, m):
     pf = pineforge_ms(tree)
@@ -465,7 +466,14 @@ def speedup(tree, m):
     vbt = tree.json(f"{NOW}/vbt_speed.json")
     over_pc = [pc[s]["median_ms"] / pf[s] for s in pf if s in pc]
     over_vbt = [vbt[s]["median_ms"] / pf[s] for s in pf if s in vbt]
+    timed = [s for s in pf if s in pc]
+    closed = {s["slot"] for s in tree.json(SELECTION)["slots"] if s["source"] == "closed"}
+    held = sum(1 for s in timed if s in closed)
+    probes = sum(1 for s in timed if s not in closed)
+    if probes + held != len(over_pc):
+        raise Mismatch("the timed corpus probes and held-out strategies do not sum to n")
     return {"x": Num(quantile(over_pc, .5)), "n": len(over_pc),
+            "probes": probes, "held": held,
             "p5": Num(quantile(over_pc, .05)), "p95": Num(quantile(over_pc, .95)),
             "vbt": Num(quantile(over_vbt, .5)), "vbt_n": len(over_vbt)}
 

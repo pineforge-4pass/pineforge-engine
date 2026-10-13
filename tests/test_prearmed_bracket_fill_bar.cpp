@@ -1,33 +1,25 @@
 /*
  * Prearmed strategy.exit brackets resolve on their parent's FILL bar.
  *
- * Three tape-pinned shapes, all order-lifecycle semantics:
+ * Three order-lifecycle shapes pinned against TradingView behaviour
+ * (recorded tapes are kept outside this repository):
  *
- *  (1a) DUAL-MARKETABLE bracket. bprakaash-new-era-strategy-1-0
- *       (OANDA:EURUSD 15m, 2025-07-03 / 07-24 / 08-07 / 09-09 13:30Z):
- *       strategy.entry("Short", qty=1) + strategy.exit("TP/SL 1", "Short",
- *       qty=1, stop=sl, limit=target) armed on the signal bar with sl BELOW
- *       the close (so target lands above it). At the fill open both legs are
- *       marketable (stop 1.17528 < open 1.17646 < limit 1.17879; on 08-07
- *       stop == limit == open). TV fills the entry at the open and one leg
- *       at the same open: exit px == entry px, duration 0, PnL 0. Before
- *       this pin the engine held dual-marketable brackets off the open
- *       scratch ("no tape exemplar") and gap-filled them the next bar.
+ *  (1a) DUAL-MARKETABLE bracket. An explicit-qty entry and exit are armed
+ *       on the signal bar with both legs marketable at the fill open,
+ *       including the stop == limit == open tie. Entry and one exit leg
+ *       fill at that open: duration 0, PnL 0. Deferring the bracket to
+ *       the next bar would change the exit bar even at an unchanged price.
  *
- *  (1b) TRAIL-carrying leg. stevenygabbyperez-fast-scalper-with-stops
- *       (NASDAQ:AAPL 15m, 2025-04-03 / 2026-04-27 13:30Z):
- *       strategy.exit(stop=close*0.99, trail_points=...) armed with a MARKET
- *       entry; the RTH open gaps below the stop. TV: entry + 'Exit Long' at
- *       the open (205.54 / 266.09), PnL 0. The trail leg is dormant until
- *       activation and does not change the breached stop's fill.
+ *  (1b) TRAIL-carrying leg. A stop derived from the signal close is armed
+ *       with a MARKET entry and a trailing activation offset. The next
+ *       open gaps through the stop. Entry and exit fill at that same open,
+ *       PnL 0. The trail remains dormant and must not defer the breached
+ *       stop, including a reversal and percent-of-equity sizing.
  *
- *  (2)  RELATIVE-TICKS bracket of a parent that fills INTRABAR.
- *       quantbyboji-nq-hma-midday-strategy (OANDA:EURUSD 15m, 2025-08-22
- *       18:15Z): resting limit 1.17323 fills mid-path (open 1.17356), the
- *       loss leg binds to the fill price and resolves on the remaining path
- *       of the same bar (exit 1.17322). 140/141 sibling exits whose parent
- *       filled at the open already matched; only the mid-path fill deferred
- *       the child to the next bar's open.
+ *  (2)  RELATIVE-TICKS bracket of a parent that fills INTRABAR. A resting
+ *       limit fills mid-path, so the loss leg binds to the actual fill
+ *       price and resolves on the remaining path of the same bar. A
+ *       reissued child must still become eligible on that parent-fill bar.
  */
 
 #include <cmath>
@@ -67,8 +59,8 @@ static Bar bar(int64_t ts, double o, double h, double l, double c) {
 // ── (1a) dual-marketable bracket ───────────────────────────────────────
 
 enum class DualCell {
-    ShortBothInside,    // stop below the open, limit above it (07-03 shape)
-    ShortBothEqualOpen, // stop == limit == open (08-07 shape)
+    ShortBothInside,    // stop below the open, limit above it
+    ShortBothEqualOpen, // stop == limit == open
     LongBothInside,     // mirror
     ShortStopOnlyGap,   // control: single-leg gap keeps its existing path
 };
@@ -116,7 +108,7 @@ public:
                 limit_px = 80.0;   // not marketable at the open
                 break;
         }
-        // bprakaash shape: explicit qty on both the entry and the exit.
+        // Explicit qty on both the entry and the exit.
         strategy_entry(opens_long() ? "Long" : "Short", opens_long(),
                        kNaN, kNaN, 1.0, "signal");
         strategy_exit("TP/SL 1", opens_long() ? "Long" : "Short",
@@ -159,8 +151,7 @@ static void check_dual_marketable_scratches_at_open(DualCell cell,
     CHECK(near(probe.live_qty(), 0.0));
 }
 
-// Control: a correctly-sided explicit-qty bracket keeps its ordinary path
-// (the 265 bprakaash trades that already matched).
+// Control: a correctly-sided explicit-qty bracket keeps its ordinary path.
 static void check_explicit_qty_bracket_no_gap_control() {
     DualMarketableBracket probe(DualCell::ShortStopOnlyGap, false);
     std::vector<Bar> bars = {
@@ -210,8 +201,8 @@ public:
             return;
         }
         if (bar_index_ != arm_bar) return;
-        // stevenygabbyperez shape: stop from the signal close plus a
-        // trail_points activation, default (percent) sizing.
+        // Stop from the signal close plus a trail_points activation,
+        // with default sizing (fixed or percent).
         strategy_entry(opens_long_ ? "Long" : "Short", opens_long_,
                        kNaN, kNaN, kNaN, "signal");
         strategy_exit(opens_long_ ? "Exit Long" : "Exit Short",
@@ -236,10 +227,13 @@ static void check_trail_stop_gap(bool opens_long, bool reversal,
         bar(3'000, 224.0, 224.5, 223.5, 224.0),
         bar(4'000, 224.0, 224.5, 223.5, 224.0),
     };
-    // -8% gap through the 0.99*close stop (long) / +8% through the
-    // 1.01*close stop (short).
+    // Signal close 224 gives stops 224*0.99 = 221.76 (long) and
+    // 224*1.01 = 226.24 (short). Invented opens 208 < 221.76 and
+    // 242 > 226.24 breach them. Trail distance = 224*0.02 = 4.48;
+    // Favorable moves of 2 (long high 210) and 3 (short low 239) are
+    // both below 4.48, leaving the trail dormant.
     const int fill_bar = reversal ? 2 : 1;
-    const double open = opens_long ? 205.54 : 242.0;
+    const double open = opens_long ? 208.0 : 242.0;
     bars[fill_bar] = bar(bars[fill_bar].timestamp, open,
                          open + 2.0, open - 3.0, open - 2.6);
     probe.run(bars.data(), static_cast<int>(bars.size()));
@@ -255,6 +249,8 @@ static void check_trail_stop_gap(bool opens_long, bool reversal,
     CHECK(t.is_long == opens_long);
     CHECK(t.entry_bar_index == fill_bar);
     CHECK(t.exit_bar_index == fill_bar);
+    // Both gap fills use the supplied open (208 long / 242 short), so
+    // signed (exit - entry)*qty = 0, including the percent-sized reversal.
     CHECK(near(t.entry_price, open));
     CHECK(near(t.exit_price, open));
     CHECK(near(t.pnl, 0.0));
@@ -264,13 +260,12 @@ static void check_trail_stop_gap(bool opens_long, bool reversal,
 }
 
 // Control: no gap through the stop — the stop leg walks the entry-bar path
-// and fills at its level (the 11 stevenygabbyperez same-bar stops that
-// already matched), the trail never activates.
+// and fills at its level; the trail never activates.
 static void check_trail_stop_intrabar_control() {
     TrailBracket probe(true, false, false);
     std::vector<Bar> bars = {
         bar(1'000, 224.0, 224.5, 223.5, 224.0),
-        // stop = 221.76; open above it, low below it.
+        // stop = 224*0.99 = 221.76; open above it, low below it.
         bar(2'000, 224.0, 224.5, 220.0, 221.0),
         bar(3'000, 221.0, 222.0, 220.0, 221.0),
     };
@@ -311,7 +306,7 @@ public:
             strategy_entry("long", true, /*limit=*/1.17323, kNaN, 1.0,
                            "resting limit");
         }
-        // quantbyboji shape: the ticks bracket is (re-)issued at global
+        // The ticks bracket is (re-)issued at global
         // scope on EVERY bar while the limit parent rests, so its
         // created_bar trails the parent's by the time the parent fills.
         if (bar_index_ == 0 || reissue_every_bar_) {
@@ -327,11 +322,10 @@ private:
     bool reissue_every_bar_;
 };
 
-// The tape bracket: ta.atr(...)*mult/0.25 gave 0.00984 ticks for BOTH legs
-// (a sub-tick offset). TV books the loss leg at 1.17322 — the level
-// 1.17323 - 0.0000000984 lands on the tick below the fill — and the profit
-// leg above the fill is never reached on the remaining path.
-static constexpr double kTapeTicks = 0.00984241;
+// Both relative legs have a sub-tick offset. The loss level is
+// 1.17323 - 0.00984241*0.00001, which snaps down to the next tick, 1.17322.
+// The profit leg above the fill is never reached on the remaining path.
+static constexpr double kFixtureTicks = 0.00984241;
 
 static std::vector<Bar> intrabar_parent_bars(double fill_bar_open,
                                              double fill_bar_low) {
@@ -340,7 +334,7 @@ static std::vector<Bar> intrabar_parent_bars(double fill_bar_open,
         bar(2'000, 1.17356, 1.17380, 1.17340, 1.17370),   // parent rests
         bar(3'000, 1.17370, 1.17390, 1.17345, 1.17360),   // parent rests
         bar(4'000, 1.17360, 1.17372, 1.17348, 1.17356),   // parent rests
-        // The tape bar (2025-08-22 18:15Z): open above the 1.17323 limit,
+        // Fill bar: open above the 1.17323 limit,
         // the path reaches the low so the limit fills mid-path and the
         // loss leg is crossed on the remaining path of the SAME bar.
         bar(5'000, fill_bar_open, 1.17364, fill_bar_low, 1.17305),
@@ -349,7 +343,7 @@ static std::vector<Bar> intrabar_parent_bars(double fill_bar_open,
 }
 
 static void check_intrabar_limit_parent_ticks(bool reissue_every_bar) {
-    IntrabarLimitParentTicks probe(kTapeTicks, kTapeTicks, reissue_every_bar);
+    IntrabarLimitParentTicks probe(kFixtureTicks, kFixtureTicks, reissue_every_bar);
     std::vector<Bar> bars = intrabar_parent_bars(1.17356, 1.17288);
     probe.run(bars.data(), static_cast<int>(bars.size()));
 
@@ -368,10 +362,10 @@ static void check_intrabar_limit_parent_ticks(bool reissue_every_bar) {
     CHECK(probe.is_flat());
 }
 
-// Control: parent fills AT the open (open <= limit) — the already-matching
-// 140-trade population — the bracket walks the whole bar.
+// Control: parent fills AT the open (open <= limit), so the bracket walks
+// the whole bar.
 static void check_open_fill_limit_parent_ticks_control() {
-    IntrabarLimitParentTicks probe(kTapeTicks, kTapeTicks, true);
+    IntrabarLimitParentTicks probe(kFixtureTicks, kFixtureTicks, true);
     std::vector<Bar> bars = intrabar_parent_bars(1.17320, 1.17288);
     probe.run(bars.data(), static_cast<int>(bars.size()));
 
@@ -389,7 +383,7 @@ static void check_open_fill_limit_parent_ticks_control() {
 // at the bar's low and the bar closes there) — the bracket rests into the
 // next bar and gap-fills at its open.
 static void check_intrabar_limit_parent_ticks_unreached_control() {
-    IntrabarLimitParentTicks probe(kTapeTicks, kTapeTicks, true);
+    IntrabarLimitParentTicks probe(kFixtureTicks, kFixtureTicks, true);
     std::vector<Bar> bars = intrabar_parent_bars(1.17356, 1.17323);
     bars[4].close = 1.17323;
     probe.run(bars.data(), static_cast<int>(bars.size()));
@@ -408,7 +402,7 @@ static void check_intrabar_limit_parent_ticks_unreached_control() {
 int main() {
     std::printf("prearmed bracket legs resolve on the parent's fill bar\n");
 
-    // (1a) dual-marketable bracket (bprakaash)
+    // (1a) dual-marketable bracket
     check_dual_marketable_scratches_at_open(DualCell::ShortBothInside, false);
     check_dual_marketable_scratches_at_open(DualCell::ShortBothEqualOpen, false);
     check_dual_marketable_scratches_at_open(DualCell::LongBothInside, false);
@@ -416,14 +410,14 @@ int main() {
     check_dual_marketable_scratches_at_open(DualCell::LongBothInside, true);
     check_explicit_qty_bracket_no_gap_control();
 
-    // (1b) trail-carrying leg (stevenygabbyperez)
+    // (1b) trail-carrying leg
     check_trail_stop_gap(true, false, false);
     check_trail_stop_gap(false, false, false);
     check_trail_stop_gap(true, true, false);
     check_trail_stop_gap(true, true, true);
     check_trail_stop_intrabar_control();
 
-    // (2) relative-ticks bracket of an intrabar limit parent (quantbyboji)
+    // (2) relative-ticks bracket of an intrabar limit parent
     check_intrabar_limit_parent_ticks(/*reissue_every_bar=*/true);
     check_intrabar_limit_parent_ticks(/*reissue_every_bar=*/false);
     check_open_fill_limit_parent_ticks_control();

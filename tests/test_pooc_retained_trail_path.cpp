@@ -3,20 +3,10 @@
  * pre-bar best. Activating at the second extreme does not make the earlier
  * open or adverse extreme a later retrace.
  *
- * TradingView ws-report-v1 pins (2026-09-06), NASDAQ:AAPL 15m, all covered:
- * r13-nils-long-retained   03-31 14:00Z 218.87 -> 16:00Z 219.56
- * r13-nils-short-retained  03-31 15:45Z 220.34 -> 16:15Z 220.18
- * r13-nils-{long,short}-retrace -> 15:45Z 220.46 / 16:00Z 219.78
- * r13-nils-long-active-gap -> 15:15Z 219.30
- * r13-nils-long-nonpooc    14:00Z 217.13 -> 16:00Z 219.56
- * r13-nils-long-restart   14:00Z 218.87 -> 17:00Z 220.01
- * r13-nils-long-new-at-close / long-newcycle: new long at 15:45Z
- *                        220.38 -> 16:00Z 220.37
- *
- * Sources, raw report provenance and all byte hashes are in
- * $PINEFORGE_PARITY_STATE/r13-nils/{pins,tv,pin-panel.json}.
- * These small synthetic fixtures retain the decisive OHLC waypoints while
- * omitting uneventful historical bars. They do not replay the strategy.
+ * Pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository). Invented bars separate activation, a later retrace,
+ * close restarts, and a fresh position cycle. Low/high proximity deliberately
+ * puts activation at the second extreme for both long and short walks.
  */
 
 #include <cmath>
@@ -88,7 +78,7 @@ struct Probe final : pineforge::source::PineStrategyHost {
 
     void run_fixture(std::vector<Bar> bars) {
         for (size_t i = 0; i < bars.size(); ++i) {
-            bars[i].timestamp = 1743429600000LL + i * 900000;
+            bars[i].timestamp = 1000000LL + i * 900000;
         }
         run(bars.data(), static_cast<int>(bars.size()));
         CHECK(last_error().empty());
@@ -97,18 +87,18 @@ struct Probe final : pineforge::source::PineStrategyHost {
 
 std::vector<Bar> long_path() {
     return {
-        mk(217.11, 218.85, 217.01, 218.85),  // close entry 218.87
-        mk(219.27, 220.07, 219.27, 219.35),  // prior best below activation
-        mk(219.56, 220.58, 219.53, 220.36),  // low first, then activation
-        mk(220.355, 220.49, 219.56, 220.0),  // actual retrace
+        mk(298.50, 300.00, 298.30, 300.00),  // close entry = 300 + 0.02
+        mk(300.80, 301.20, 300.70, 300.90),  // best below activation 301.52
+        mk(301.00, 301.90, 300.85, 301.70),  // low first, then activation
+        mk(301.65, 301.80, 300.80, 301.10),  // later retrace through 300.90
     };
 }
 
 std::vector<Bar> short_path() {
     return {
-        mk(219.56, 220.58, 219.53, 220.36),  // close entry 220.34
-        mk(220.355, 220.49, 219.56, 220.0),  // high first, then activation
-        mk(220.01, 220.93, 219.87, 220.92),  // actual retrace
+        long_path()[2],  // close entry = 301.70 - 0.02 = 301.68
+        long_path()[3],  // high first, then activation below 301.18
+        mk(301.10, 302.05, 300.95, 301.95),  // later retrace through 301.40
     };
 }
 
@@ -135,7 +125,8 @@ void test_long_does_not_replay_earlier_open() {
     Probe p;
     p.run_fixture(long_path());
     CHECK(p.trade_count() == 1);
-    expect_trade(p, 0, true, 0, 218.87, 3, 219.56);
+    // Entry = 300 + 0.02; stop = 301.90 - 1.00, exit = stop - 0.02.
+    expect_trade(p, 0, true, 0, 300.02, 3, 300.88);
 }
 
 void test_short_does_not_replay_earlier_open() {
@@ -143,7 +134,8 @@ void test_short_does_not_replay_earlier_open() {
     p.is_long = false; p.points = 50; p.offset = 60;
     p.run_fixture(short_path());
     CHECK(p.trade_count() == 1);
-    expect_trade(p, 0, false, 0, 220.34, 2, 220.18);
+    // Entry = 301.70 - 0.02; stop = 300.80 + 0.60, exit = stop + 0.02.
+    expect_trade(p, 0, false, 0, 301.68, 2, 301.42);
 }
 
 void test_retrace_after_activation_still_fills_same_bar() {
@@ -151,44 +143,50 @@ void test_retrace_after_activation_still_fills_same_bar() {
     long_probe.offset = 10;
     long_probe.run_fixture(long_path());
     CHECK(long_probe.trade_count() == 1);
-    expect_trade(long_probe, 0, true, 0, 218.87, 2, 220.46);
+    // Same-bar close retrace: 301.90 - 0.10 - 0.02 = 301.78.
+    expect_trade(long_probe, 0, true, 0, 300.02, 2, 301.78);
     Probe short_probe;
     short_probe.is_long = false; short_probe.points = 50; short_probe.offset = 20;
     short_probe.run_fixture(short_path());
     CHECK(short_probe.trade_count() == 1);
-    expect_trade(short_probe, 0, false, 0, 220.34, 1, 219.78);
+    // Same-bar close retrace: 300.80 + 0.20 + 0.02 = 301.02.
+    expect_trade(short_probe, 0, false, 0, 301.68, 1, 301.02);
 }
 
 void test_previously_active_trail_keeps_open_gap() {
     Probe p;
     p.points = 100; p.offset = 73;
     p.run_fixture({long_path()[0], long_path()[1],
-                   mk(219.32, 219.84, 218.97, 219.13)});
+                   mk(300.40, 300.80, 300.00, 300.20)});
     CHECK(p.trade_count() == 1);
-    expect_trade(p, 0, true, 0, 218.87, 2, 219.30);
+    // Active stop = 301.20 - 0.73 = 300.47; gap fill = 300.40 - 0.02.
+    expect_trade(p, 0, true, 0, 300.02, 2, 300.38);
 }
 
 void test_non_pooc_keeps_one_walk() {
     Probe p(false);
     p.points = 300;
     auto bars = long_path();
-    bars.insert(bars.begin(), mk(217.97, 218.19, 216.84, 217.11));
+    bars.insert(bars.begin(), mk(299.00, 299.40, 298.10, 298.50));
     p.run_fixture(bars);
     CHECK(p.trade_count() == 1);
-    expect_trade(p, 0, true, 1, 217.13, 4, 219.56);
+    // Next-open entry = 298.50 + 0.02; activation = 298.52 + 3 = 301.52.
+    expect_trade(p, 0, true, 1, 298.52, 4, 300.88);
 }
 
 void test_reissued_activation_keeps_close_restart() {
     Probe p;
     p.action = Action::Restart;
-    auto bars = long_path();
-    bars.push_back(mk(220.01, 220.93, 219.87, 220.92));
-    bars.push_back(mk(220.91, 221.03, 220.47, 220.505));
-    bars.push_back(mk(220.53, 220.77, 220.09, 220.10));
-    bars.push_back(mk(220.08, 220.74, 219.93, 220.46));
+    auto bars = long_path(); bars[3].low = 300.85;
+    bars.push_back(mk(301.10, 302.05, 300.95, 301.95));
+    bars.push_back(mk(301.90, 302.20, 301.50, 301.60));
+    bars.push_back(mk(301.65, 302.00, 301.30, 301.40));
+    bars.push_back(mk(301.35, 301.90, 300.90, 301.50));
     p.run_fixture(bars);
     CHECK(p.trade_count() == 1);
-    expect_trade(p, 0, true, 0, 218.87, 7, 220.01);
+    // Restart at close 301.70 gives stop 300.70 (bar 3 low 300.85 clears it, and clears the 300.80 an in-bar high 301.80 would give).
+    // Later best = 302.20, stop = 301.20, exit = 301.20 - 0.02.
+    expect_trade(p, 0, true, 0, 300.02, 7, 301.18);
 }
 
 void test_new_close_entry_does_not_inherit_pre_entry_extreme() {
@@ -196,7 +194,9 @@ void test_new_close_entry_does_not_inherit_pre_entry_extreme() {
     p.points = 1; p.offset = 10;
     p.run_fixture({long_path()[2], long_path()[3]});
     CHECK(p.trade_count() == 1);
-    expect_trade(p, 0, true, 0, 220.38, 1, 220.37);
+    // Fresh best = 301.80; exit = 301.80 - 0.10 - 0.02 = 301.68.
+    // Inheriting the pre-entry high 301.90 would instead gap at the open.
+    expect_trade(p, 0, true, 0, 301.72, 1, 301.68);
 }
 
 void test_same_bar_close_reentry_starts_new_position_cycle() {
@@ -204,8 +204,10 @@ void test_same_bar_close_reentry_starts_new_position_cycle() {
     p.action = Action::NewCycle;
     p.run_fixture(long_path());
     CHECK(p.trade_count() == 2);
-    expect_trade(p, 0, true, 0, 218.87, 2, 220.34, "__close__");
-    expect_trade(p, 1, true, 2, 220.38, 3, 220.37, "X2");
+    // Old cycle closes at 301.70 - 0.02; new entry fills at 301.70 + 0.02.
+    expect_trade(p, 0, true, 0, 300.02, 2, 301.68, "__close__");
+    // New cycle's own best 301.80 gives exit = 301.80 - 0.10 - 0.02.
+    expect_trade(p, 1, true, 2, 301.72, 3, 301.68, "X2");
 }
 
 // Realtime processing sees a sequence of observed price points, not two

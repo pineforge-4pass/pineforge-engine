@@ -1,30 +1,15 @@
 /*
- * test_limit_exact_touch_level_residue.cpp — issue #177 (dfl3xrs, 2026-09-04):
- * a strategy.exit(limit=) target that the bar's extreme reaches EXACTLY is
- * filled by TradingView on that bar; the engine filled it bars later at the
- * same price whenever the level carried a floating-point residue.
+ * test_limit_exact_touch_level_residue.cpp — exact-touch level regression.
+ * A resting stop/limit level within 0.01 / pricescale^2 of k / pricescale
+ * is stored on that grid before comparison with the tick-quantized bar.
+ * Pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository). Every bar and timestamp below is invented.
  *
- * TradingView rule (round 8 family T, pinned 2026-09-05 by 40 lab tv sensor
- * tapes on NYSE:F / CME_MINI:ES1! / OANDA:EURUSD 15m, scratchpad famT/pins):
- * a resting stop/limit LEVEL within 0.01 / pricescale^2 of a price-grid
- * value (k / pricescale) is stored AS that grid value and tested against
- * the tick-quantized bar (round 6 stop-tick-rounding). A level computed as
- * `avg_price + r` (2683.8 + (2683.8 - 2682.7) = 2684.9000000000005) is
- * therefore 2684.9 to TradingView and fills on the bar whose high is
- * 2684.9. The engine compared the RAW level with the quantized bar, so the
- * +4.5e-13 residue skipped the touch bar. The reporter's reading — a strict
- * `>` where TV uses `>=` — is not the mechanism: an exact literal level
- * fills on the touch bar on main (the compare is already inclusive); only
- * a residue-laden level misses.
- *
- * The bar is the reporter's first case verbatim (MGC 1-minute, mintick 0.1,
- * 2025-01-14 12:22 UTC: O 2683.9 H 2684.9 L 2683.7 C 2684.8, limit 2684.90,
- * TV filled 12:22 @2684.90; PineForge exited later). The short case mirrors
- * the fourth (buy limit 2038.20 on a bar whose low is 2038.2).
- *
- * The fix in flight is the order-level price-grid snap on round8/famT
- * (level_on_price_grid at strategy.entry/exit/order storage); this test is
- * the reporter's shape as a regression check for it.
+ * At tick 0.1, 100.4 + (100.4 - 98.6) is 102.20000000000002:
+ * comparing the raw level skips a high of 102.2 and fills only at bar 5.
+ * The literal and negative-residue controls also fill at bar 2, so this
+ * distinguishes storage snapping from merely changing an inclusive compare.
+ * The short mirrors the failure with a residue below its exact-touch low.
  *
  * NDEBUG-PROOF: every assertion uses the returning CHECK macro.
  */
@@ -60,7 +45,7 @@ static bool near(double a, double b, double tol = 1e-9) {
 
 namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr int64_t kT0 = 1736857200000LL;  // 2025-01-14 12:20 UTC
+constexpr int64_t kT0 = 1'000'000LL;  // invented epoch start
 constexpr int64_t k1m = 60'000LL;
 
 static Bar mk(int i, double o, double h, double l, double c) {
@@ -70,7 +55,7 @@ static Bar mk(int i, double o, double h, double l, double c) {
     return b;
 }
 
-// mintick 0.1 (COMEX micro gold), fixed 1 contract, no slippage/commission.
+// Synthetic instrument: mintick 0.1, fixed 1 contract, no slippage/commission.
 class LimitTouchProbe : public pineforge::source::PineStrategyHost {
 public:
     bool is_long_;
@@ -106,37 +91,41 @@ static void run_case(const char* name, bool is_long, double limit, double stop,
 
 static void test_long_sell_limit_exact_touch() {
     std::printf("test_long_sell_limit_exact_touch\n");
-    // Entry at bar 1 open 2683.8; bar 2 is the reporter's 12:22 bar (high == 2684.9).
+    // Bar 1 enters at 100.4; only bar 2 touches 102.2 until bar 5 exceeds it.
     const std::vector<Bar> bars = {
-        mk(0, 2683.5, 2683.9, 2683.2, 2683.8),
-        mk(1, 2683.8, 2684.0, 2683.6, 2683.9),
-        mk(2, 2683.9, 2684.9, 2683.7, 2684.8),   // exact touch: TV fills here @2684.90
-        mk(3, 2684.8, 2684.8, 2684.2, 2684.5),
-        mk(4, 2684.5, 2684.7, 2684.0, 2684.3),
-        mk(5, 2684.3, 2686.0, 2684.1, 2685.5),   // where the engine used to fill
-        mk(6, 2685.5, 2685.6, 2685.0, 2685.2),
+        mk(0, 100.0, 100.6, 99.5, 100.2),
+        mk(1, 100.4, 100.8, 100.2, 100.6),
+        mk(2, 100.6, 102.2, 100.1, 101.6),
+        mk(3, 101.6, 101.9, 100.8, 101.0),
+        mk(4, 101.0, 101.5, 100.5, 101.2),
+        mk(5, 101.2, 104.0, 100.9, 103.0),
+        mk(6, 103.0, 103.8, 102.5, 103.5),
     };
-    const double ep = 2683.8, lvl = 2682.7;      // r = ep - lvl = 1.0999999999999091
-    run_case("literal 2684.9", true, 2684.9, 2670.0, bars, 2, 2684.9);
-    run_case("ep + (ep - lvl) = 2684.9000000000005", true, ep + (ep - lvl), 2670.0, bars, 2, 2684.9);
-    run_case("2683.6 + (2683.6 - 2682.3) = 2684.8999999999996", true, 2683.6 + (2683.6 - 2682.3), 2670.0, bars, 2, 2684.9);
+    const double ep = 100.4, lvl = 98.6;
+    // Decimal target: 100.4 + (100.4 - 98.6) = 102.2; both residues snap
+    // to that target, so all three exits must be bar 2 at 102.2.
+    run_case("literal 102.2", true, 102.2, 90.0, bars, 2, 102.2);
+    run_case("ep + (ep - lvl) = 102.20000000000002", true, ep + (ep - lvl), 90.0, bars, 2, 102.2);
+    run_case("100.1 + (100.1 - 98.0) = 102.19999999999999", true, 100.1 + (100.1 - 98.0), 90.0, bars, 2, 102.2);
 }
 
 static void test_short_buy_limit_exact_touch() {
     std::printf("test_short_buy_limit_exact_touch\n");
-    // Entry at bar 1 open 2038.3; bar 2 low == 2038.2 (the reporter's 4th case shape).
+    // Bar 2 alone touches 81.2; the later bar 5 trades strictly below it.
     const std::vector<Bar> bars = {
-        mk(0, 2038.6, 2038.9, 2038.2, 2038.3),
-        mk(1, 2038.3, 2038.5, 2038.3, 2038.4),
-        mk(2, 2038.4, 2038.6, 2038.2, 2038.3),   // exact touch: TV fills here @2038.20
-        mk(3, 2038.3, 2038.7, 2038.3, 2038.6),
-        mk(4, 2038.6, 2038.9, 2038.4, 2038.8),
-        mk(5, 2038.8, 2039.0, 2037.0, 2037.5),   // where the engine used to fill
-        mk(6, 2037.5, 2037.9, 2037.2, 2037.6),
+        mk(0, 82.0, 82.4, 81.4, 81.8),
+        mk(1, 81.3, 81.8, 81.3, 81.6),
+        mk(2, 81.6, 82.1, 81.2, 81.7),
+        mk(3, 81.7, 82.5, 81.5, 82.0),
+        mk(4, 82.0, 82.8, 81.6, 82.4),
+        mk(5, 82.4, 82.6, 80.0, 80.5),
+        mk(6, 80.5, 81.0, 80.2, 80.8),
     };
-    const double ep = 2038.3, lvl = 2038.4;      // buy limit = ep - (lvl - ep) = 2038.1999999999998
-    run_case("literal 2038.2", false, 2038.2, 2050.0, bars, 2, 2038.2);
-    run_case("ep - (lvl - ep) = 2038.1999999999998", false, ep - (lvl - ep), 2050.0, bars, 2, 2038.2);
+    const double ep = 81.3, lvl = 81.4;
+    // 81.3 - (81.4 - 81.3) = 81.19999999999999 in binary64, but the
+    // decimal grid target is 81.2: both exits must fill at bar 2 at 81.2.
+    run_case("literal 81.2", false, 81.2, 90.0, bars, 2, 81.2);
+    run_case("ep - (lvl - ep) = 81.19999999999999", false, ep - (lvl - ep), 90.0, bars, 2, 81.2);
 }
 
 int main() {

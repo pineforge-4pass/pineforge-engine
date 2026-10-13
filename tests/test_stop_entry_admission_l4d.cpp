@@ -12,50 +12,21 @@
 #define coof_cursor_is_bar_close_ l4d_coof_cursor_is_bar_close()
 
 /*
- * test_stop_entry_admission.cpp — round 7: TradingView's admission of a
- * strategy.entry(stop=) under margin simulation, pinned by 22 `lab tv`
- * tapes (2026-09-05, ledger note log-20260905t053924z-15615295, rule and
- * call-by-call table scratchpad/r7/pins/flatten-PINS.md, tapes
- * scratchpad/r7/pins/flatten-<slug>/tv_trades.csv, sources <slug>.pine).
+ * test_stop_entry_admission.cpp — stop-entry admission under margin simulation.
+ * Pinned against TradingView behaviour (recorded tapes are kept outside this
+ * repository). The cent-tick, half-tick and fractional-lot paths below are
+ * independently hand-designed synthetic data with timestamps 1000 + k * period.
  *
- * The pinned rule (margin_long/short > 0, default process_orders_on_close):
- *
- *   1. PLACEMENT on the bar B of the call: accepted iff
- *        lot_floored(qty) * tick_half_up(close(B)) * pv * fx * margin%/100
- *          <= strategy.equity(B) as the script reads it
- *      (post-exit realized equity on a flattening bar; on a reversal only
- *      the new side counts; a position closed on B counts nothing). Not the
- *      raw sub-tick close, not high/low, not the level.
- *   2. A rejected placement is DROPPED, never re-evaluated; a rejected
- *      same-id re-issue also CANCELS the resting order of an earlier
- *      accepted issue; qty is recomputed only by the script's next call.
- *   3. An accepted order rests until touched; later closes are not
- *      re-checked.
- *   4. FILL: the same floored qty * tick(fill price) <= equity at the fill,
- *      where the fill price is the LEVEL on an intrabar touch (not the bar
- *      open — the engine's KI-62 premise was wrong) or the rounded open on
- *      a gap-through; a rejected fill drops the order (no partial / trim).
- *   5. Market re-entries on the flattening bar keep the round-5 market rule.
- *
- * Scope: the explicit-qty / default FIXED / CASH / default percent > 100
- * sizing partition (every tape passes an explicit qty). A DEFAULT
- * percent_of_equity <= 100 stop takes the SAME placement half with its own
- * quantity — sized at the tick-snapped LEVEL, family K, ledger note
- * log-20260905t084529z-c7b22df1, tests/test_default_pct_stop_sizing.cpp —
- * and the same fill half on that quantity; KI-62's bar-OPEN basis is
- * retired. The ahtisham regression at the end of this file
- * (cand-round7-engine-a-20260905: costing the all-in default at the level
- * with a FILL-time quantity admitted 394 short touches TV never fills) is
- * now explained by the placement half: the all-in sell stop below the
- * close is never placed.
- *
- * Feed bars are the registry's NYSE:F 15 (mintick 0.01, whole shares) and
- * OANDA:XAUUSD 15 (mintick 0.005, lot 0.01) bars, UTC, `lab bars`. Tape
- * times are UTC+8 in the CSVs; they are quoted here in UTC.
- *
- * Engine (c2032d1) pre-fix: no placement check on stops at all, and the
- * fill-time gate costed the bar OPEN. Every "TV result" column below is
- * what the tape shows; the "pre-fix" notes say what the engine did.
+ * Placement costs lot-floored qty at tick-half-up(close), including point value,
+ * FX and margin percentage, against script-visible equity. A flattening bar
+ * uses post-exit equity; a reversal costs only the new side, and a position
+ * already closed on the bar counts nothing.
+ * Rejected placements are dropped; rejected same-id re-issues cancel resting
+ * orders. Accepted resting orders are not re-checked at subsequent closes.
+ * Fill admission uses the same quantity at the level for an intrabar touch or
+ * at the rounded open for a gap; an unaffordable fill is dropped without trim.
+ * Default percent sizing uses the snapped level and the same placement gate.
+ * The crypto regression at the end retains its existing, out-of-scope data.
  */
 
 #include <cmath>
@@ -110,100 +81,95 @@ namespace {
 
 constexpr int64_t kMin15 = 15LL * 60LL * 1000LL;
 
-// NYSE:F 15, 2025-08-12 19:45Z .. 2025-08-14 15:15Z (feed 80f404ae85ef).
-// Index map: b0 = 08-12 19:45Z; b1..b26 = 08-13 13:30Z..19:45Z;
-// b27.. = 08-14 13:30Z, 13:45Z, 14:00Z, 14:15Z, 14:30Z, 14:45Z, 15:00Z, 15:15Z.
+// Stable indices preserve the source call order and every existing bar check.
 enum FBar {
-    F0812_1945 = 0,
-    F0813_1330 = 1, F0813_1345 = 2, F0813_1400 = 3, F0813_1415 = 4,
-    F0813_1430 = 5, F0813_1445 = 6, F0813_1500 = 7, F0813_1945 = 26,
-    F0814_1330 = 27, F0814_1345 = 28, F0814_1400 = 29, F0814_1415 = 30,
-    F0814_1430 = 31, F0814_1445 = 32, F0814_1500 = 33, F0814_1515 = 34,
+    BSeed = 0,
+    BSeedFill = 1, BFlatten = 2, BGap = 3, BAffordable = 4,
+    BTouch = 5, BHold = 6, BHoldNext = 7, BClose = 26,
+    BExit = 27, BGapTouch = 28, BTail0 = 29, BTail1 = 30,
+    BTail2 = 31, BRawCall = 32, BRawFill = 33, BTailEnd = 34,
 };
 
-std::vector<Bar> f_bars() {
-    const int64_t t0812 = 1755027900000LL;   // 2025-08-12 19:45Z
-    const int64_t t0813 = 1755091800000LL;   // 2025-08-13 13:30Z
-    const int64_t t0814 = 1755178200000LL;   // 2025-08-14 13:30Z
+std::vector<Bar> admission_bars() {
     std::vector<Bar> b;
-    b.push_back(mk(t0812, 11.23, 11.25, 11.2, 11.24));
-    const double d13[][4] = {
-        {11.29, 11.29, 11.19, 11.25},      {11.255, 11.325, 11.25, 11.325},
-        {11.325, 11.365, 11.32, 11.33},    {11.335, 11.335, 11.26, 11.285},
-        {11.285, 11.34, 11.28, 11.335},    {11.33, 11.335, 11.3, 11.325},
-        {11.33, 11.36, 11.325, 11.355},    {11.355, 11.415, 11.355, 11.39},
-        {11.39, 11.4, 11.375, 11.385},     {11.385, 11.385, 11.345, 11.37},
-        {11.375, 11.42, 11.37, 11.415},    {11.415, 11.45, 11.415, 11.425},
-        {11.425, 11.45, 11.425, 11.44},    {11.445, 11.45, 11.435, 11.445},
-        {11.44, 11.45, 11.41, 11.41},      {11.415, 11.445, 11.415, 11.425},
-        {11.425, 11.43, 11.4, 11.415},     {11.415, 11.435, 11.415, 11.425},
-        {11.425, 11.45, 11.415, 11.415},   {11.415, 11.44, 11.415, 11.435},
-        {11.44, 11.445, 11.42, 11.43},     {11.43, 11.45, 11.43, 11.435},
-        {11.435, 11.455, 11.435, 11.455},  {11.455, 11.47, 11.455, 11.465},
-        {11.465, 11.485, 11.46, 11.475},   {11.475, 11.48, 11.425, 11.425},
+    // All indices use one invented epoch; the last block needs no calendar.
+    auto push = [&](double o, double h, double l, double c) {
+        b.push_back(mk(1000LL + static_cast<int64_t>(b.size()) * kMin15,
+                       o, h, l, c));
     };
-    for (int i = 0; i < 26; ++i) {
-        b.push_back(mk(t0813 + i * kMin15, d13[i][0], d13[i][1], d13[i][2],
-                       d13[i][3]));
+    push(20.00, 20.01, 19.99, 20.00);       // seed / placement
+    push(20.02, 20.03, 19.80, 20.02);       // seed fill; short touches 19.81
+    push(20.015, 20.215, 20.01, 20.215);    // stop-out, half-up close 20.22
+    push(20.215, 20.25, 20.04, 20.22);      // rounded gap open; exact short touch
+    push(20.225, 20.23, 20.015, 20.026);    // market fill 20.23; close 20.03
+    push(20.026, 20.08, 20.02, 20.06);      // long touches 20.04
+    // Every intervening close costs more than 2001.50 for the gap probe's
+    // 100 shares. Thus no intermediate re-issue can revive a rejected gap.
+    for (int i = 6; i <= BClose; ++i) {
+        const double c = 20.08 + (i % 3) * 0.01;
+        push(20.08, 20.12, 20.06, c);
     }
-    const double d14[][4] = {
-        {11.3, 11.32, 11.215, 11.225},     {11.225, 11.27, 11.22, 11.265},
-        {11.265, 11.3, 11.25, 11.275},     {11.27, 11.275, 11.25, 11.265},
-        {11.265, 11.3, 11.265, 11.29},     {11.29, 11.315, 11.29, 11.305},
-        {11.3, 11.315, 11.295, 11.295},    {11.3, 11.315, 11.29, 11.305},
-    };
-    for (int i = 0; i < 8; ++i) {
-        b.push_back(mk(t0814 + i * kMin15, d14[i][0], d14[i][1], d14[i][2],
-                       d14[i][3]));
+    push(20.01, 20.02, 19.98, 19.985);      // exit; gap re-issue affordable
+    push(19.985, 20.03, 19.98, 20.015);     // open 19.99, intrabar touch 20.00
+    for (int i = BTail0; i <= BTail2; ++i) {
+        const double c = 20.02 + (i % 2) * 0.01;
+        push(20.02, 20.05, 20.00, c);
     }
+    push(20.02, 20.04, 20.00, 20.015);      // floored-quantity call
+    push(20.01, 20.04, 20.00, 20.02);       // fill at 20.01
+    push(20.02, 20.04, 20.00, 20.02);
     return b;
 }
 
-// NYSE:F 15, 2025-09-19 13:30Z .. 15:30Z.
-enum F0919Bar {
-    S1330 = 0, S1345 = 1, S1400 = 2, S1415 = 3, S1430 = 4, S1445 = 5,
-    S1500 = 6, S1515 = 7, S1530 = 8,
+enum HalfBar {
+    HSignal = 0, HRejected1 = 1, HRejected2 = 2, HRejected3 = 3, HRejected4 = 4, HAccepted = 5,
+    HFill = 6, HTail = 7, HEnd = 8,
 };
 
-std::vector<Bar> f0919_bars() {
-    const int64_t t = 1758288600000LL;       // 2025-09-19 13:30Z
+std::vector<Bar> half_tick_bars() {
+    // A short at 30.00 cannot be admitted at closes rounding to 30.01 or
+    // above. Bar 5 first closes at 30.00, and bar 6 opens exactly at its stop.
     const double d[][4] = {
-        {11.785, 11.8, 11.62, 11.625},     {11.62, 11.69, 11.61, 11.675},
-        {11.675, 11.725, 11.67, 11.715},   {11.715, 11.715, 11.67, 11.68},
-        {11.68, 11.69, 11.64, 11.645},     {11.64, 11.64, 11.6, 11.62},
-        {11.62, 11.63, 11.61, 11.62},      {11.615, 11.625, 11.59, 11.605},
-        {11.605, 11.615, 11.59, 11.61},
+        {30.02, 30.03, 29.99, 30.005},
+        {30.00, 30.06, 29.99, 30.05},
+        {30.05, 30.09, 30.04, 30.08},
+        {30.08, 30.09, 30.01, 30.02},
+        {30.02, 30.04, 30.00, 30.015},
+        {30.02, 30.03, 29.99, 30.00},
+        {30.00, 30.01, 29.99, 30.00},
+        {30.00, 30.02, 29.98, 29.99},
+        {29.99, 30.01, 29.98, 30.00},
     };
     std::vector<Bar> b;
     for (int i = 0; i < 9; ++i) {
-        b.push_back(mk(t + i * kMin15, d[i][0], d[i][1], d[i][2], d[i][3]));
+        b.push_back(mk(1000LL + i * kMin15, d[i][0], d[i][1], d[i][2], d[i][3]));
     }
     return b;
 }
 
-// OANDA:XAUUSD 15, 2025-08-18 14:30Z .. 16:45Z (feed 248086b8b82d).
 enum XBar {
-    X1430 = 0, X1445 = 1, X1500 = 2, X1515 = 3, X1530 = 4, X1545 = 5,
-    X1600 = 6, X1615 = 7, X1630 = 8, X1645 = 9,
+    GSeed = 0, GEntry = 1, GFlatten = 2, GAccepted1 = 3, GAccepted2 = 4,
+    GRejected = 5, GTouch = 6, GRetryTouch = 7, GTail = 8, GEnd = 9,
 };
 
-std::vector<Bar> xau_bars() {
-    const int64_t t = 1755527400000LL;       // 2025-08-18 14:30Z
+std::vector<Bar> fractional_lot_bars() {
+    // Bar 2 stops the seed at 200.00. Bars 3..5 stay strictly above that
+    // stop; bar 6 touches from an expensive open, and bar 7 repeats the touch.
     const double d[][4] = {
-        {3335.915, 3338.76, 3334.895, 3335.745},
-        {3335.725, 3336.13, 3333.005, 3334.375},
-        {3334.41, 3335.28, 3332.335, 3334.73},
-        {3334.765, 3335.965, 3333.375, 3334.765},
-        {3334.77, 3335.71, 3333.175, 3335.145},
-        {3335.125, 3336.9, 3334.0, 3335.72},
-        {3335.73, 3335.905, 3332.01, 3333.41},
-        {3333.415, 3333.445, 3331.995, 3332.47},
-        {3332.48, 3334.705, 3331.775, 3332.705},
-        {3332.675, 3334.545, 3332.45, 3334.33},
+        {201.00, 201.50, 200.75, 201.10},
+        {201.25, 201.50, 200.25, 200.50},
+        {200.50, 200.75, 199.995, 200.05},
+        {200.05, 200.10, 200.025, 200.06},
+        {200.06, 200.10, 200.025, 200.07},
+        {200.07, 200.20, 200.025, 200.15},
+        {200.175, 200.20, 199.95, 200.02},
+        {200.025, 200.05, 199.95, 199.975},
+        {199.975, 200.05, 199.90, 199.95},
+        {199.95, 200.05, 199.90, 200.00},
     };
     std::vector<Bar> b;
     for (int i = 0; i < 10; ++i) {
-        b.push_back(mk(t + i * kMin15, d[i][0], d[i][1], d[i][2], d[i][3]));
+        b.push_back(mk(1000LL + i * kMin15, d[i][0], d[i][1], d[i][2], d[i][3]));
     }
     return b;
 }
@@ -278,13 +244,12 @@ public:
     using BacktestEngine::position_entry_price_;
 };
 
-// Phase A of the flatten tapes: short 800 placed 08-12 19:45Z, fills 08-13
-// 13:30Z @11.29, stop exit 11.32 fills 13:45Z (the flattening bar).
-// E_post = C - 24.
+// Seed short: 80 at bar 1 open 20.02; bar 2 touches stop 20.04.
+// Realized equity = capital + 80 * (20.02 - 20.04) = capital - 1.60.
 void phase_a_short(Probe& p, int bar) {
-    if (bar == F0812_1945) {
-        p.strategy_entry("S", false, kNaN, kNaN, 800.0);
-        p.strategy_exit("XS", "S", kNaN, 11.32);
+    if (bar == BSeed) {
+        p.strategy_entry("S", false, kNaN, kNaN, 80.0);
+        p.strategy_exit("XS", "S", kNaN, 20.04);
     }
 }
 
@@ -293,546 +258,520 @@ void check_phase_a(const Probe& p) {
     if (p.trade_count() >= 1) {
         const Trade& t = p.get_trade(0);
         CHECK(!t.is_long);
-        CHECK(t.entry_bar_index == F0813_1330);
-        CHECK_NEAR(t.entry_price, 11.29, 1e-9);
-        CHECK(t.exit_bar_index == F0813_1345);
-        CHECK_NEAR(t.exit_price, 11.32, 1e-9);
-        CHECK_NEAR(t.qty, 800.0, 1e-9);
-        CHECK_NEAR(t.pnl, -24.0, 1e-9);
+        CHECK(t.entry_bar_index == BSeedFill);
+        CHECK_NEAR(t.entry_price, 20.02, 1e-9);
+        CHECK(t.exit_bar_index == BFlatten);
+        CHECK_NEAR(t.exit_price, 20.04, 1e-9);
+        CHECK_NEAR(t.qty, 80.0, 1e-9);
+        CHECK_NEAR(t.pnl, -1.6, 1e-9); // 80 * (20.02 - 20.04)
     }
 }
 
-// Re-issued long stop at L while flat, from bar `from` to F0813_1930, qty from
-// the script's own strategy.equity; eod close at F0813_1945.
+// Re-issue while flat; script equity sizes each call. The close on bar 26
+// executes at bar 27 open 20.01. Rejected calls must leave no resting order.
 void reissue_long_stop(Probe& p, int bar, double L, double frac, bool floor_qty,
-                       int from = F0813_1345) {
-    if (bar >= from && bar <= F0813_1945 - 1 && p.flat()) {
+                       int from = BFlatten) {
+    if (bar >= from && bar <= BClose - 1 && p.flat()) {
         const double raw = frac * p.equity() / L;
         p.entry_stop("L", true, L, floor_qty ? std::floor(raw) : raw,
                      "p" + std::to_string(bar));
     }
-    if (bar == F0813_1945 && p.position_size() > 0) {
+    if (bar == BClose && p.position_size() > 0) {
         p.strategy_close("L", "eod");
     }
 }
 
-// --- pin: flatten-stop-floor (C 10026 -> E 10002, qty floor(E/L) = 883) ---
-// TV: fill 08-13 14:30Z @11.32, 883, Signal p0813-1415. 13:45Z rejected
-// (883 * 11.33 = 10,004.39 > 10,002; the raw close 11.325 -> 9,999.98 would
-// pass), 14:00Z close 11.33 rejected, 14:15Z close 11.285 -> 11.29 accepted.
-// Pre-fix the engine admitted 883 at the 14:00Z open 11.325 (10,002.98
-// costed at the open) and filled 14:00Z @11.33.
+// Post-exit E = 2185.10 - 1.60 = 2183.50; floor(E / 20.04) = 108.
+// Raw close cost 108 * 20.215 = 2183.22 is affordable, but rounded close cost
+// 108 * 20.22 = 2183.76 rejects on bars 2/3. Bar 4 costs 2163.24 and accepts;
+// bar 5 touches 20.04. The raw-quantity variant also lot-floors to 108.
 void test_flatten_stop_floor() {
-    std::printf("-- flatten-stop-floor: 883 x 11.33 > 10,002 rejects, fills 14:30Z @11.32 --\n");
+    std::printf("-- synthetic flatten stop floor --\n");
     for (bool floor_qty : {true, false}) {
-        Probe p(10026.0, 100.0, 0.01, 1.0);
+        Probe p(2185.1, 100.0, 0.01, 1.0);
         p.script = [&](Probe& e, int bar) {
             phase_a_short(e, bar);
-            reissue_long_stop(e, bar, 11.32, 1.0, floor_qty);
+            reissue_long_stop(e, bar, 20.04, 1.0, floor_qty);
         };
-        std::vector<Bar> bars = f_bars();
+        std::vector<Bar> bars = admission_bars();
         p.run(bars.data(), (int)bars.size());
         check_phase_a(p);
-        CHECK(!p.placed_on(F0813_1345));   // 10,004.39 > 10,002
-        CHECK(!p.placed_on(F0813_1400));   // 883 * 11.33 again
-        CHECK(p.placed_on(F0813_1415));    // 883 * 11.29 = 9,969.07
+        CHECK(!p.placed_on(BFlatten));
+        CHECK(!p.placed_on(BGap));
+        CHECK(p.placed_on(BAffordable));
         CHECK(p.trade_count() == 2);
         if (p.trade_count() == 2) {
             const Trade& t = p.get_trade(1);
             CHECK(t.is_long);
-            CHECK(t.entry_bar_index == F0813_1430);
-            CHECK_NEAR(t.entry_price, 11.32, 1e-9);
-            CHECK_NEAR(t.qty, 883.0, 1e-9);        // flatten-stop-raw: 883.57 floored
-            CHECK(t.entry_comment == "p" + std::to_string((int)F0813_1415));
-            CHECK(t.exit_bar_index == F0814_1330);
-            CHECK_NEAR(t.exit_price, 11.30, 1e-9);
-            CHECK_NEAR(t.pnl, -17.66, 1e-6);
+            CHECK(t.entry_bar_index == BTouch);
+            CHECK_NEAR(t.entry_price, 20.04, 1e-9);
+            CHECK_NEAR(t.qty, 108.0, 1e-9); // floor(2183.50 / 20.04)
+            CHECK(t.entry_comment == "p" + std::to_string((int)BAffordable));
+            CHECK(t.exit_bar_index == BExit);
+            CHECK_NEAR(t.exit_price, 20.01, 1e-9);
+            CHECK_NEAR(t.pnl, -3.24, 1e-6); // 108 * (20.01 - 20.04)
         }
     }
 }
 
-// --- pin: fresh-stop-floor (C 10002, no phase A) --- identical to
-// flatten-stop-floor: the flattening is irrelevant.
+// Starting flat at E = 2183.50 must give the same placement and fill bars
+// as the post-exit scenario; flattening itself is not an admission exemption.
 void test_fresh_stop_floor() {
-    std::printf("-- fresh-stop-floor: identical without the flattening --\n");
-    Probe p(10002.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh stop floor --\n");
+    Probe p(2183.5, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        reissue_long_stop(e, bar, 11.32, 1.0, true);
+        reissue_long_stop(e, bar, 20.04, 1.0, true);
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(!p.placed_on(F0813_1345));
-    CHECK(!p.placed_on(F0813_1400));
-    CHECK(p.placed_on(F0813_1415));
+    CHECK(!p.placed_on(BFlatten));
+    CHECK(!p.placed_on(BGap));
+    CHECK(p.placed_on(BAffordable));
     CHECK(p.trade_count() == 1);
     if (p.trade_count() == 1) {
         const Trade& t = p.get_trade(0);
-        CHECK(t.entry_bar_index == F0813_1430);
-        CHECK_NEAR(t.entry_price, 11.32, 1e-9);
-        CHECK_NEAR(t.qty, 883.0, 1e-9);
+        CHECK(t.entry_bar_index == BTouch);
+        CHECK_NEAR(t.entry_price, 20.04, 1e-9);
+        CHECK_NEAR(t.qty, 108.0, 1e-9); // floor(2183.50 / 20.04)
     }
 }
 
-// --- pin: flatten-stop-once --- the 13:45Z placement is rejected and
-// DROPPED: never re-evaluated although every later bar would fill it.
+// The sole bar-2 call costs 108 * 20.22 = 2183.76 > 2183.50.
+// Later bars cross its stop, but the rejected placement must never revive.
 void test_flatten_stop_once_dropped() {
-    std::printf("-- flatten-stop-once: a rejected placement is dropped, no long trade --\n");
-    Probe p(10026.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten stop once dropped --\n");
+    Probe p(2185.1, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
         phase_a_short(e, bar);
-        if (bar == F0813_1345) {
-            e.entry_stop("L", true, 11.32, std::floor(e.equity() / 11.32));
+        if (bar == BFlatten) {
+            e.entry_stop("L", true, 20.04, std::floor(e.equity() / 20.04));
         }
-        if (bar == F0813_1945 && e.position_size() > 0) e.strategy_close("L", "eod");
+        if (bar == BClose && e.position_size() > 0) e.strategy_close("L", "eod");
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
     check_phase_a(p);
-    CHECK(!p.placed_on(F0813_1345));
+    CHECK(!p.placed_on(BFlatten));
     CHECK(p.pending_count() == 0);
     CHECK(p.flat());
     CHECK(p.trade_count() == 1);
 }
 
-// --- pin: flatten-stop-90 (qty floor(0.9 E / L) = 795) --- the flattening
-// bar accepts when affordable (795 * 11.33 = 9,007.35 <= 10,002); the 14:00Z
-// open 11.325 gaps through 11.32 and the fill prints the tick-rounded open
-// 11.33, Signal p0813-1345.
+// floor(0.9 * 2183.50 / 20.04) = 98; placement costs 98 * 20.22 =
+// 1981.56 <= 2183.50. Bar 3 gaps through and fills at rounded open 20.22.
 void test_flatten_stop_90_accepted_on_flattening_bar() {
-    std::printf("-- flatten-stop-90: flattening bar accepts, gap-open fill @11.33 --\n");
-    Probe p(10026.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten stop 90 accepted on flattening bar --\n");
+    Probe p(2185.1, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
         phase_a_short(e, bar);
-        reissue_long_stop(e, bar, 11.32, 0.9, true);
+        reissue_long_stop(e, bar, 20.04, 0.9, true);
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
     check_phase_a(p);
-    CHECK(p.placed_on(F0813_1345));
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         const Trade& t = p.get_trade(1);
         CHECK(t.is_long);
-        CHECK(t.entry_bar_index == F0813_1400);
-        CHECK_NEAR(t.entry_price, 11.33, 1e-9);
-        CHECK_NEAR(t.qty, 795.0, 1e-9);
-        CHECK(t.entry_comment == "p" + std::to_string((int)F0813_1345));
-        CHECK_NEAR(t.exit_price, 11.30, 1e-9);
-        CHECK_NEAR(t.pnl, -23.85, 1e-6);
+        CHECK(t.entry_bar_index == BGap);
+        CHECK_NEAR(t.entry_price, 20.22, 1e-9);
+        CHECK_NEAR(t.qty, 98.0, 1e-9); // floor(0.9 * 2183.50 / 20.04)
+        CHECK(t.entry_comment == "p" + std::to_string((int)BFlatten));
+        CHECK_NEAR(t.exit_price, 20.01, 1e-9);
+        CHECK_NEAR(t.pnl, -20.58, 1e-6); // 98 * (20.01 - 20.22)
     }
 }
 
-// --- pin: flatten-samedir-90 --- a SHORT re-entry on the bar that stopped
-// the short out: the just-closed same-direction position does NOT count at
-// placement (795 * 11.33 = 9,007.35 <= 10,002). Fill 14:00Z @11.32 (the
-// 11.325 -> 11.33 open is above the short stop, the 11.32 low touches it).
+// The seed short is already closed: only 98 * 20.22 = 1981.56 counts.
+// Bar 3 opens above the short stop and its low exactly touches 20.04.
 void test_flatten_samedir_90_closed_position_not_counted() {
-    std::printf("-- flatten-samedir-90: the position closed on B counts nothing --\n");
-    Probe p(10026.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten samedir 90 closed position not counted --\n");
+    Probe p(2185.1, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
         phase_a_short(e, bar);
-        if (bar >= F0813_1345 && bar <= F0813_1945 - 1 && e.flat()) {
-            e.entry_stop("S2", false, 11.32,
-                         std::floor(0.9 * e.equity() / 11.32),
+        if (bar >= BFlatten && bar <= BClose - 1 && e.flat()) {
+            e.entry_stop("S2", false, 20.04,
+                         std::floor(0.9 * e.equity() / 20.04),
                          "p" + std::to_string(bar));
         }
-        if (bar == F0813_1945 && e.position_size() != 0) e.strategy_close_all();
+        if (bar == BClose && e.position_size() != 0) e.strategy_close_all();
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
     check_phase_a(p);
-    CHECK(p.placed_on(F0813_1345));
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         const Trade& t = p.get_trade(1);
         CHECK(!t.is_long);
         CHECK(t.entry_id == "S2");
-        CHECK(t.entry_bar_index == F0813_1400);
-        CHECK_NEAR(t.entry_price, 11.32, 1e-9);
-        CHECK_NEAR(t.qty, 795.0, 1e-9);
-        CHECK_NEAR(t.exit_price, 11.30, 1e-9);
-        CHECK_NEAR(t.pnl, 15.9, 1e-6);
+        CHECK(t.entry_bar_index == BGap);
+        CHECK_NEAR(t.entry_price, 20.04, 1e-9);
+        CHECK_NEAR(t.qty, 98.0, 1e-9); // floor(0.9 * 2183.50 / 20.04)
+        CHECK_NEAR(t.exit_price, 20.01, 1e-9);
+        CHECK_NEAR(t.pnl, 2.94, 1e-6); // 98 * (20.04 - 20.01)
     }
 }
 
-// --- pin: flatten-stop-m50 --- margin 50 halves the cost: 883 * 11.33 *
-// 0.5 = 5,002.20 <= 10,002 accepts on the flattening bar, fill 14:00Z @11.33.
+// Half margin costs 108 * 20.22 * 0.5 = 1091.88 <= 2183.50,
+// so bar 2 accepts and bar 3 fills at rounded gap open 20.22.
 void test_flatten_stop_m50_halves_cost() {
-    std::printf("-- flatten-stop-m50: margin 50 halves the cost --\n");
-    Probe p(10026.0, 50.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten stop m50 halves cost --\n");
+    Probe p(2185.1, 50.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
         phase_a_short(e, bar);
-        reissue_long_stop(e, bar, 11.32, 1.0, true);
+        reissue_long_stop(e, bar, 20.04, 1.0, true);
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
     check_phase_a(p);
-    CHECK(p.placed_on(F0813_1345));
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         const Trade& t = p.get_trade(1);
-        CHECK(t.entry_bar_index == F0813_1400);
-        CHECK_NEAR(t.entry_price, 11.33, 1e-9);
-        CHECK_NEAR(t.qty, 883.0, 1e-9);
-        CHECK_NEAR(t.pnl, -26.49, 1e-6);
+        CHECK(t.entry_bar_index == BGap);
+        CHECK_NEAR(t.entry_price, 20.22, 1e-9);
+        CHECK_NEAR(t.qty, 108.0, 1e-9); // floor(2183.50 / 20.04)
+        CHECK_NEAR(t.pnl, -22.68, 1e-6); // 108 * (20.01 - 20.22)
     }
 }
 
-// --- pin: flatten-stop-floor-c10029 (C 10029 -> E_post 10005) ---
-// 883 * 11.33 = 10,004.39 <= 10,005 accepts on the flattening bar itself:
-// the basis is the POST-exit realized equity (pre-exit mark-to-market equity
-// 10,001 would reject) and exactly the tick 11.33 (threshold in
-// (11.3273, 11.3307]). Fill 14:00Z @11.33 (10,004.39 <= 10,005 at the fill).
+// Higher capital gives E_post = 2185.60 - 1.60 = 2184.00. The same
+// 108 * 20.22 = 2183.76 now passes; pre-exit MTM = 2184.00 -
+// 80 * (20.215 - 20.04) = 2170.00 would wrongly reject.
 void test_flatten_stop_floor_c10029_post_exit_equity() {
-    std::printf("-- flatten-stop-floor-c10029: post-exit equity, basis exactly 11.33 --\n");
-    Probe p(10029.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten stop floor post exit equity --\n");
+    Probe p(2185.6, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
         phase_a_short(e, bar);
-        reissue_long_stop(e, bar, 11.32, 1.0, true);
+        reissue_long_stop(e, bar, 20.04, 1.0, true);
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
     check_phase_a(p);
-    CHECK(p.placed_on(F0813_1345));
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         const Trade& t = p.get_trade(1);
-        CHECK(t.entry_bar_index == F0813_1400);
-        CHECK_NEAR(t.entry_price, 11.33, 1e-9);
-        CHECK_NEAR(t.qty, 883.0, 1e-9);
+        CHECK(t.entry_bar_index == BGap);
+        CHECK_NEAR(t.entry_price, 20.22, 1e-9);
+        CHECK_NEAR(t.qty, 108.0, 1e-9); // floor(2184.00 / 20.04)
     }
 }
 
-// --- pin: flatten-closenext-90 --- strategy.close("S") + the long stop on
-// the same bar with the short still open: a reversal, costed on the NEW side
-// only (794 * 11.33 = 8,996.02 <= MTM 9,998); both execute at the next open
-// (exit short @11.33 "xnext", long 794 @11.33).
+// While the short is open, script MTM = 2185.10 + 80 * (20.02 - 20.215)
+// = 2169.50. floor(0.9 * 2169.50 / 20.04) = 97, rather than the post-exit
+// 98. Only the new 97-share side costs margin; both legs fill on bar 3.
 void test_flatten_closenext_90_reversal_new_side_only() {
-    std::printf("-- flatten-closenext-90: reversal costs the new side only --\n");
-    Probe p(10026.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten closenext 90 reversal new side only --\n");
+    Probe p(2185.1, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar == F0812_1945) e.strategy_entry("S", false, kNaN, kNaN, 800.0);
-        if (bar == F0813_1345) e.strategy_close("S", "xnext");
-        if (bar >= F0813_1345 && bar <= F0813_1945 - 1 && e.position_size() <= 0) {
-            e.entry_stop("L", true, 11.32, std::floor(0.9 * e.equity() / 11.32),
+        if (bar == BSeed) e.strategy_entry("S", false, kNaN, kNaN, 80.0);
+        if (bar == BFlatten) e.strategy_close("S", "xnext");
+        if (bar >= BFlatten && bar <= BClose - 1 && e.position_size() <= 0) {
+            e.entry_stop("L", true, 20.04, std::floor(0.9 * e.equity() / 20.04),
                          "p" + std::to_string(bar));
         }
-        if (bar == F0813_1945 && e.position_size() > 0) e.strategy_close("L", "eod");
+        if (bar == BClose && e.position_size() > 0) e.strategy_close("L", "eod");
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0813_1345));
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         const Trade& s = p.get_trade(0);
         CHECK(!s.is_long);
-        CHECK_NEAR(s.entry_price, 11.29, 1e-9);
-        CHECK(s.exit_bar_index == F0813_1400);
-        CHECK_NEAR(s.exit_price, 11.33, 1e-9);
-        CHECK_NEAR(s.pnl, -32.0, 1e-9);
+        CHECK_NEAR(s.entry_price, 20.02, 1e-9);
+        CHECK(s.exit_bar_index == BGap);
+        CHECK_NEAR(s.exit_price, 20.22, 1e-9);
+        CHECK_NEAR(s.pnl, -16.0, 1e-9); // 80 * (20.02 - 20.22)
         const Trade& t = p.get_trade(1);
         CHECK(t.is_long);
-        CHECK(t.entry_bar_index == F0813_1400);
-        CHECK_NEAR(t.entry_price, 11.33, 1e-9);
-        CHECK_NEAR(t.qty, 794.0, 1e-9);
-        CHECK_NEAR(t.pnl, -23.82, 1e-6);
+        CHECK(t.entry_bar_index == BGap);
+        CHECK_NEAR(t.entry_price, 20.22, 1e-9);
+        CHECK_NEAR(t.qty, 97.0, 1e-9); // floor(0.9 * 2169.50 / 20.04)
+        CHECK_NEAR(t.pnl, -20.37, 1e-6); // 97 * (20.01 - 20.22)
     }
 }
 
-// --- pin: flatten-closeimm-90 --- strategy.close("S", immediately=true)
-// flattens on the bar itself (exit 13:45Z @11.33 "ximm"); the stop entry
-// placed after it is costed from the post-close equity 9,994: floor(0.9 *
-// 9,994 / 11.32) = 794, 794 * 11.33 = 8,996.02 <= 9,994 -> fill 14:00Z @11.33.
+// Immediate close uses rounded close 20.22: E = 2185.10 - 16 = 2169.10.
+// floor(0.9 * 2169.10 / 20.04) = 97. The next gap still fills at 20.22.
 void test_flatten_closeimm_90() {
-    std::printf("-- flatten-closeimm-90: same-bar immediate flatten, entry accepted --\n");
-    Probe p(10026.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten closeimm 90 --\n");
+    Probe p(2185.1, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar == F0812_1945) e.strategy_entry("S", false, kNaN, kNaN, 800.0);
-        if (bar == F0813_1345) e.strategy_close("S", "ximm", kNaN, kNaN, true);
-        if (bar >= F0813_1345 && bar <= F0813_1945 - 1 && e.position_size() <= 0) {
-            e.entry_stop("L", true, 11.32, std::floor(0.9 * e.equity() / 11.32),
+        if (bar == BSeed) e.strategy_entry("S", false, kNaN, kNaN, 80.0);
+        if (bar == BFlatten) e.strategy_close("S", "ximm", kNaN, kNaN, true);
+        if (bar >= BFlatten && bar <= BClose - 1 && e.position_size() <= 0) {
+            e.entry_stop("L", true, 20.04, std::floor(0.9 * e.equity() / 20.04),
                          "p" + std::to_string(bar));
         }
-        if (bar == F0813_1945 && e.position_size() > 0) e.strategy_close("L", "eod");
+        if (bar == BClose && e.position_size() > 0) e.strategy_close("L", "eod");
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0813_1345));
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         const Trade& s = p.get_trade(0);
-        CHECK(s.exit_bar_index == F0813_1345);
-        CHECK_NEAR(s.exit_price, 11.33, 1e-9);
-        CHECK_NEAR(s.pnl, -32.0, 1e-9);
+        CHECK(s.exit_bar_index == BFlatten);
+        CHECK_NEAR(s.exit_price, 20.22, 1e-9);
+        CHECK_NEAR(s.pnl, -16.0, 1e-9); // 80 * (20.02 - 20.22)
         const Trade& t = p.get_trade(1);
         CHECK(t.is_long);
-        CHECK(t.entry_bar_index == F0813_1400);
-        CHECK_NEAR(t.entry_price, 11.33, 1e-9);
-        CHECK_NEAR(t.qty, 794.0, 1e-9);
+        CHECK(t.entry_bar_index == BGap);
+        CHECK_NEAR(t.entry_price, 20.22, 1e-9);
+        CHECK_NEAR(t.qty, 97.0, 1e-9); // floor(0.9 * 2169.10 / 20.04)
     }
 }
 
-// --- pin: flatten-market-floor --- the round-5 MARKET rule on the flattening
-// bar is unchanged: floor(10,002 / 11.325) = 883 * 11.33 rejected 13:45Z,
-// floor(10,002 / 11.33) = 882 * 11.33 = 9,993.06 accepted 14:00Z, fill 14:15Z
-// at the 11.335 -> 11.34 open (882 * 11.34 = 10,001.88 <= 10,002).
+// Market qty uses raw close: floor(2183.50 / 20.215) = 108, rejected
+// at rounded-close cost 2183.76. Next call floor(2183.50 / 20.22) = 107
+// costs 2163.54, passes, and fills at bar 4 rounded open 20.23 (cost 2164.61).
 void test_flatten_market_floor_round5_rule_unchanged() {
-    std::printf("-- flatten-market-floor: round-5 market rule unchanged --\n");
-    Probe p(10026.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic flatten market floor round5 rule unchanged --\n");
+    Probe p(2185.1, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
         phase_a_short(e, bar);
-        if (bar >= F0813_1345 && bar <= F0813_1945 - 1 && e.flat()) {
+        if (bar >= BFlatten && bar <= BClose - 1 && e.flat()) {
             e.strategy_entry("L", true, kNaN, kNaN,
                              std::floor(e.equity() / e.close_now()),
                              "p" + std::to_string(bar));
             e.placements.emplace_back(bar, e.pending("L"));
         }
-        if (bar == F0813_1945 && e.position_size() > 0) e.strategy_close("L", "eod");
+        if (bar == BClose && e.position_size() > 0) e.strategy_close("L", "eod");
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
     check_phase_a(p);
-    CHECK(!p.placed_on(F0813_1345));
-    CHECK(p.placed_on(F0813_1400));
+    CHECK(!p.placed_on(BFlatten));
+    CHECK(p.placed_on(BGap));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
         const Trade& t = p.get_trade(1);
-        CHECK(t.entry_bar_index == F0813_1415);
-        CHECK_NEAR(t.entry_price, 11.34, 1e-9);
-        CHECK_NEAR(t.qty, 882.0, 1e-9);
-        CHECK_NEAR(t.pnl, -35.28, 1e-6);
+        CHECK(t.entry_bar_index == BAffordable);
+        CHECK_NEAR(t.entry_price, 20.23, 1e-9);
+        CHECK_NEAR(t.qty, 107.0, 1e-9); // floor(2183.50 / 20.22)
+        CHECK_NEAR(t.pnl, -23.54, 1e-6); // 107 * (20.01 - 20.23)
     }
 }
 
-// --- pin: fresh-floorraw-0814 (C 10000, raw qty 884.956, L 11.30 from 08-14
-// 14:45Z) --- the check uses the FLOORED qty: 884 * tick(11.305 -> 11.31) =
-// 9,998.04 <= 10,000 accepts (raw 884.956 * 11.31 = 10,008.9 would reject);
-// fill 15:00Z at the 11.30 open (through the level), 884 shares.
+// Raw qty 2002.40 / 20.01 = 100.069965... is floored to 100 shares.
+// Rounded close 20.02 costs 2002.00 <= 2002.40; raw qty would cost
+// 2003.400699... > capital. Bar 33 fills at its exact level/open 20.01.
 void test_fresh_floorraw_0814_floored_qty() {
-    std::printf("-- fresh-floorraw-0814: the floored qty is what is costed --\n");
-    Probe p(10000.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh floorraw floored qty --\n");
+    Probe p(2002.4, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar >= F0814_1445 && bar <= F0814_1515 && e.flat()) {
-            e.entry_stop("L", true, 11.30, e.equity() / 11.30,
+        if (bar >= BRawCall && bar <= BTailEnd && e.flat()) {
+            e.entry_stop("L", true, 20.01, e.equity() / 20.01,
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0814_1445));
+    CHECK(p.placed_on(BRawCall));
     CHECK(p.position_side_ == PositionSide::LONG);
-    CHECK_NEAR(p.position_qty_, 884.0, 1e-9);
-    CHECK_NEAR(p.position_entry_price_, 11.30, 1e-9);
+    CHECK_NEAR(p.position_qty_, 100.0, 1e-9); // floor(2002.40 / 20.01)
+    CHECK_NEAR(p.position_entry_price_, 20.01, 1e-9);
     CHECK(p.trade_count() == 0);
 }
 
-// --- pin: fresh-gap-once (C 10000, long stop 11.24 x 889 placed 08-12 19:45Z
-// at close 11.24 = L, accepted: 9,992.36 <= 10,000) --- 08-13 opens 11.29
-// THROUGH the level: the fill check 889 * 11.29 = 10,036.81 > 10,000 REJECTS
-// the fill and the order is dropped — no partial fill, no slice, no trade.
+// floor(2001.50 / 20.00) = 100; seed close cost 2000.00 passes.
+// Next open 20.02 costs 2002.00 > 2001.50: drop the whole order, no trim.
 void test_fresh_gap_once_fill_rejected_and_dropped() {
-    std::printf("-- fresh-gap-once: gap-through costed at the rounded open, rejected and dropped --\n");
-    Probe p(10000.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh gap once fill rejected and dropped --\n");
+    Probe p(2001.5, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar == F0812_1945) {
-            e.entry_stop("L", true, 11.24, std::floor(e.equity() / 11.24),
+        if (bar == BSeed) {
+            e.entry_stop("L", true, 20.00, std::floor(e.equity() / 20.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0812_1945));
+    CHECK(p.placed_on(BSeed));
     CHECK(p.flat());
     CHECK(p.pending_count() == 0);
     CHECK(p.trade_count() == 0);
 }
 
-// --- pin: fresh-gap-replace --- re-issued while flat: every 08-13 close x
-// 889 > 10,000 (13:30Z 11.25 -> 10,001.25 already rejects); the first close
-// at or below 11.248 is 08-14 13:30Z (11.225 -> 11.23) -> accepted -> the
-// 13:45Z bar (open 11.225 -> 11.23 < L, high 11.27) touches -> fill @11.24.
+// After the rejected gap, every bar 1..26 closes at 20.02 or above,
+// costing at least 2002.00 > 2001.50. Bar 27 close rounds to 19.99 (1999.00)
+// and accepts; bar 28 opens below 20.00 and touches it intrabar.
 void test_fresh_gap_replace() {
-    std::printf("-- fresh-gap-replace: first affordable close 08-14 13:30Z, fill 13:45Z @11.24 --\n");
-    Probe p(10000.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh gap replace --\n");
+    Probe p(2001.5, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar >= F0812_1945 && bar <= F0814_1515 && e.flat()) {
-            e.entry_stop("L", true, 11.24, std::floor(e.equity() / 11.24),
+        if (bar >= BSeed && bar <= BTailEnd && e.flat()) {
+            e.entry_stop("L", true, 20.00, std::floor(e.equity() / 20.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0812_1945));
-    for (int b = F0813_1330; b <= F0813_1945; ++b) CHECK(!p.placed_on(b));
-    CHECK(p.placed_on(F0814_1330));
+    CHECK(p.placed_on(BSeed));
+    for (int b = BSeedFill; b <= BClose; ++b) CHECK(!p.placed_on(b));
+    CHECK(p.placed_on(BExit));
     CHECK(p.position_side_ == PositionSide::LONG);
-    CHECK_NEAR(p.position_qty_, 889.0, 1e-9);
-    CHECK_NEAR(p.position_entry_price_, 11.24, 1e-9);
+    CHECK_NEAR(p.position_qty_, 100.0, 1e-9); // floor(2001.50 / 20.00)
+    CHECK_NEAR(p.position_entry_price_, 20.00, 1e-9);
     CHECK(p.trade_count() == 0);
-    // The one placement that filled was the 08-14 13:30Z re-issue.
+
     int last_call = -1;
     for (const auto& pl : p.placements) last_call = pl.first;
-    CHECK(last_call == F0814_1330);
+    CHECK(last_call == BExit);
 }
 
-// --- pin: fresh-touch-once (C 10004.2, short stop 11.23 x 890 placed 08-12
-// 19:45Z: 890 * 11.24 = 10,003.6 <= 10,004.2 accepted) --- 08-13 13:30Z
-// opens 11.29 > L and touches (low 11.19): the fill is costed at the LEVEL,
-// 890 * 11.23 = 9,994.7 <= E -> FILLS @11.23; the open would cost 10,048.1 >
-// E (KI-62's "costs the bar open" is refuted). Pre-fix: declined, no trade.
+// floor(2000.50 / 19.81) = 100. Placement at close 20.00 costs 2000.00;
+// level-touch cost is 1981.00, while bar 1 open costs 2002.00 > capital.
 void test_fresh_touch_once_fill_costed_at_level() {
-    std::printf("-- fresh-touch-once: a touch is costed at the level, 890 x 11.23 fills --\n");
-    Probe p(10004.2, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh touch once fill costed at level --\n");
+    Probe p(2000.5, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar == F0812_1945) {
-            e.entry_stop("S", false, 11.23, std::floor(e.equity() / 11.23),
+        if (bar == BSeed) {
+            e.entry_stop("S", false, 19.81, std::floor(e.equity() / 19.81),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0812_1945));
+    CHECK(p.placed_on(BSeed));
     CHECK(p.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(p.position_qty_, 890.0, 1e-9);
-    CHECK_NEAR(p.position_entry_price_, 11.23, 1e-9);
+    CHECK_NEAR(p.position_qty_, 100.0, 1e-9); // floor(2000.50 / 19.81)
+    CHECK_NEAR(p.position_entry_price_, 19.81, 1e-9);
     CHECK(p.trade_count() == 0);
 }
 
-// The same tape with the margin call on: TV admits the under-margined 890
-// and the ordinary margin call slices it from the fill bar on (8 @11.25 on
-// 13:30Z, 24 @11.33 on 13:45Z, then 1 / 4 / 4) — the entry itself is
-// untouched (890 @11.23) and every slice comes out of those 890. The slice
-// SIZES are the KI-31 cascade's business, not this pin's; the entry-bar
-// chronology (the fill bar's mark is the post-fill path — its close 11.25,
-// not the 11.29 high the short never saw) is the round-7 family-L rule,
-// asserted row-for-row in tests/test_entry_bar_margin_path.cpp.
+// The same 100-share touch is admitted before ordinary margin slicing.
+// At bar 1 close 20.02, equity = 2000.50 + 100 * (19.81 - 20.02) = 1979.50
+// < required 2002.00. The 22.50 deficit exceeds one whole share at 20.02,
+// so a fill-bar slice must occur, with total quantity
+// conserved across closed slices and the remaining position.
 void test_fresh_touch_once_margin_call_slices() {
-    std::printf("-- fresh-touch-once + margin call: admitted fill, sliced from 890 --\n");
-    Probe p(10004.2, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh touch once margin call slices --\n");
+    Probe p(2000.5, 100.0, 0.01, 1.0);
     p.enable_margin_call();
     p.script = [&](Probe& e, int bar) {
-        if (bar == F0812_1945) {
-            e.entry_stop("S", false, 11.23, std::floor(e.equity() / 11.23),
+        if (bar == BSeed) {
+            e.entry_stop("S", false, 19.81, std::floor(e.equity() / 19.81),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
     CHECK(p.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(p.position_entry_price_, 11.23, 1e-9);
+    CHECK_NEAR(p.position_entry_price_, 19.81, 1e-9);
     double sliced = 0.0;
     for (int i = 0; i < p.trade_count(); ++i) {
         sliced += p.get_trade(i).qty;
-        CHECK(p.get_trade(i).entry_bar_index == F0813_1330);
-        CHECK_NEAR(p.get_trade(i).entry_price, 11.23, 1e-9);
+        CHECK(p.get_trade(i).entry_bar_index == BSeedFill);
+        CHECK_NEAR(p.get_trade(i).entry_price, 19.81, 1e-9);
     }
-    CHECK_NEAR(sliced + p.position_qty_, 890.0, 1e-9);
+    CHECK_NEAR(sliced + p.position_qty_, 100.0, 1e-9);
     CHECK(p.trade_count() >= 1);
     if (p.trade_count() >= 1) {
-        CHECK(p.get_trade(0).exit_bar_index == F0813_1330);   // sliced on the fill bar
+        CHECK(p.get_trade(0).exit_bar_index == BSeedFill);
     }
 }
 
-// --- pin: fresh-0919-once (C 10000, short stop 11.62 x 860 placed 09-19
-// 13:30Z) --- close 11.625 rounds half-UP to 11.63: 860 * 11.63 = 10,001.8 >
-// 10,000 -> rejected and dropped, although the 13:45Z open 11.62 = L would
-// have been affordable (9,993.2): the check is at placement, not fill-only.
+// floor(3000.75 / 30.00) = 100. Close 30.005 rounds half-up to 30.01:
+// Raw close cost 3000.50 <= 3000.75, but rounded cost 3001.00 rejects.
+// The next open 30.00 is affordable; checking only at fill would also be wrong.
 void test_fresh_0919_once_half_up_rejected() {
-    std::printf("-- fresh-0919-once: 11.625 rounds half-up, rejected at placement --\n");
-    Probe p(10000.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh once half up rejected --\n");
+    Probe p(3000.75, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar == S1330) {
-            e.entry_stop("S", false, 11.62, std::floor(e.equity() / 11.62),
+        if (bar == HSignal) {
+            e.entry_stop("S", false, 30.00, std::floor(e.equity() / 30.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = f0919_bars();
+    std::vector<Bar> bars = half_tick_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(!p.placed_on(S1330));
+    CHECK(!p.placed_on(HSignal));
     CHECK(p.flat());
     CHECK(p.trade_count() == 0);
 }
 
-// --- pin: fresh-0919-replace --- 13:45Z..14:30Z closes (11.68 / 11.72 /
-// 11.68 / 11.65) rejected, the 14:45Z close 11.62 accepted (9,993.2), fill
-// 15:00Z at the 11.62 open, 860 shares.
+// Bars 0..4 round to at least 30.01 and reject 100 shares. Bar 5
+// closes at 30.00 (cost 3000.00 <= 3000.75); bar 6 opens exactly at 30.00.
 void test_fresh_0919_replace() {
-    std::printf("-- fresh-0919-replace: accept 14:45Z, fill 15:00Z @11.62 --\n");
-    Probe p(10000.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic fresh replace --\n");
+    Probe p(3000.75, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar >= S1330 && bar <= S1530 && e.flat()) {
-            e.entry_stop("S", false, 11.62, std::floor(e.equity() / 11.62),
+        if (bar >= HSignal && bar <= HEnd && e.flat()) {
+            e.entry_stop("S", false, 30.00, std::floor(e.equity() / 30.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = f0919_bars();
+    std::vector<Bar> bars = half_tick_bars();
     p.run(bars.data(), (int)bars.size());
-    for (int b = S1330; b <= S1430; ++b) CHECK(!p.placed_on(b));
-    CHECK(p.placed_on(S1445));
+    for (int b = HSignal; b <= HRejected4; ++b) CHECK(!p.placed_on(b));
+    CHECK(p.placed_on(HAccepted));
     CHECK(p.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(p.position_qty_, 860.0, 1e-9);
-    CHECK_NEAR(p.position_entry_price_, 11.62, 1e-9);
+    CHECK_NEAR(p.position_qty_, 100.0, 1e-9); // floor(3000.75 / 30.00)
+    CHECK_NEAR(p.position_entry_price_, 30.00, 1e-9);
     CHECK(p.trade_count() == 0);
 }
 
-// --- the probe itself (waranyutrkm F@15) decoded with the rule ---
-// 08-13: equity 10,262.39, qty 906: 13:45Z 906 * 11.33 = 10,264.98 > E
-// reject (pre-fix: admitted at the 14:00Z open, 906 * 11.325 = 10,260.45),
-// 14:00Z reject, 14:15Z 906 * 11.29 = 10,228.74 accept -> 14:30Z @11.32 = TV.
-// 09-19: equity 10,298.91, qty 886: 13:30Z 886 * 11.63 = 10,304.18 reject ...
-// 14:45Z 886 * 11.62 = 10,295.32 accept -> 15:00Z @11.62 = TV (pre-fix the
-// engine admitted at the 13:45Z open 11.62 = L).
+// Explicit quantities isolate admission from script sizing. First control:
+// 112 * raw 20.215 = 2264.08 <= 2264.20 < 112 * rounded 20.22 = 2264.64;
+// 112 * 20.03 = 2243.36 passes bar 4. Second control: 110 * 30.01 =
+// 3301.10 > 3300.75 (raw 110 * 30.005 = 3300.55 would pass), but
+// 110 * 30.00 = 3300.00 passes bar 5.
 void test_probe_decode_f_0813_and_0919() {
-    std::printf("-- probe decode: F 08-13 -> 14:30Z @11.32, 09-19 -> 15:00Z @11.62 --\n");
+    std::printf("-- synthetic explicit-quantity admission controls --\n");
     {
-        Probe p(10262.39, 100.0, 0.01, 1.0);
+        Probe p(2264.2, 100.0, 0.01, 1.0);
         p.script = [&](Probe& e, int bar) {
-            if (bar >= F0813_1345 && bar <= F0813_1945 - 1 && e.flat()) {
-                e.entry_stop("L", true, 11.32, 906.0, "p" + std::to_string(bar));
+            if (bar >= BFlatten && bar <= BClose - 1 && e.flat()) {
+                e.entry_stop("L", true, 20.04, 112.0, "p" + std::to_string(bar));
             }
         };
-        std::vector<Bar> bars = f_bars();
+        std::vector<Bar> bars = admission_bars();
         p.run(bars.data(), (int)bars.size());
-        CHECK(!p.placed_on(F0813_1345));
-        CHECK(!p.placed_on(F0813_1400));
-        CHECK(p.placed_on(F0813_1415));
+        CHECK(!p.placed_on(BFlatten));
+        CHECK(!p.placed_on(BGap));
+        CHECK(p.placed_on(BAffordable));
         CHECK(p.position_side_ == PositionSide::LONG);
-        CHECK_NEAR(p.position_qty_, 906.0, 1e-9);
-        CHECK_NEAR(p.position_entry_price_, 11.32, 1e-9);
+        CHECK_NEAR(p.position_qty_, 112.0, 1e-9);
+        CHECK_NEAR(p.position_entry_price_, 20.04, 1e-9);
         CHECK(p.trade_count() == 0);
-        // The engine opened it on the 14:30Z bar.
+
         CHECK(!p.pyramid_entries().empty());
         if (!p.pyramid_entries().empty()) {
-            CHECK(p.pyramid_entries().back().entry_bar_index == F0813_1430);
+            CHECK(p.pyramid_entries().back().entry_bar_index == BTouch);
         }
     }
     {
-        Probe p(10298.91, 100.0, 0.01, 1.0);
+        Probe p(3300.75, 100.0, 0.01, 1.0);
         p.script = [&](Probe& e, int bar) {
-            if (bar >= S1330 && bar <= S1530 && e.flat()) {
-                e.entry_stop("S", false, 11.62, 886.0, "p" + std::to_string(bar));
+            if (bar >= HSignal && bar <= HEnd && e.flat()) {
+                e.entry_stop("S", false, 30.00, 110.0, "p" + std::to_string(bar));
             }
         };
-        std::vector<Bar> bars = f0919_bars();
+        std::vector<Bar> bars = half_tick_bars();
         p.run(bars.data(), (int)bars.size());
-        for (int b = S1330; b <= S1430; ++b) CHECK(!p.placed_on(b));
-        CHECK(p.placed_on(S1445));
+        for (int b = HSignal; b <= HRejected4; ++b) CHECK(!p.placed_on(b));
+        CHECK(p.placed_on(HAccepted));
         CHECK(p.position_side_ == PositionSide::SHORT);
-        CHECK_NEAR(p.position_qty_, 886.0, 1e-9);
-        CHECK_NEAR(p.position_entry_price_, 11.62, 1e-9);
+        CHECK_NEAR(p.position_qty_, 110.0, 1e-9);
+        CHECK_NEAR(p.position_entry_price_, 30.00, 1e-9);
         CHECK(!p.pyramid_entries().empty());
         if (!p.pyramid_entries().empty()) {
-            CHECK(p.pyramid_entries().back().entry_bar_index == S1500);
+            CHECK(p.pyramid_entries().back().entry_bar_index == HFill);
         }
     }
 }
 
-// XAU phase A: long 3 at 14:30Z, fills 14:45Z @3335.725, stop exit 3332.34
-// fills 15:00Z; E_post = C - 10.155.
+// Fractional-lot seed: long 2 at 201.25 on bar 1, stopped at 200.00
+// on bar 2. Realized equity = capital + 2 * (200.00 - 201.25) = capital - 2.50.
 void xau_phase_a(Probe& p, int bar) {
-    if (bar == X1430) {
-        p.strategy_entry("Lg", true, kNaN, kNaN, 3.0);
-        p.strategy_exit("XL", "Lg", kNaN, 3332.34);
+    if (bar == GSeed) {
+        p.strategy_entry("Lg", true, kNaN, kNaN, 2.0);
+        p.strategy_exit("XL", "Lg", kNaN, 200.00);
     }
 }
 
@@ -841,11 +780,11 @@ void check_xau_phase_a(const Probe& p) {
     if (p.trade_count() >= 1) {
         const Trade& t = p.get_trade(0);
         CHECK(t.is_long);
-        CHECK(t.entry_bar_index == X1445);
-        CHECK_NEAR(t.entry_price, 3335.725, 1e-9);
-        CHECK(t.exit_bar_index == X1500);
-        CHECK_NEAR(t.exit_price, 3332.34, 1e-9);
-        CHECK_NEAR(t.pnl, -10.155, 1e-9);
+        CHECK(t.entry_bar_index == GEntry);
+        CHECK_NEAR(t.entry_price, 201.25, 1e-9);
+        CHECK(t.exit_bar_index == GFlatten);
+        CHECK_NEAR(t.exit_price, 200.00, 1e-9);
+        CHECK_NEAR(t.pnl, -2.5, 1e-9); // 2 * (200.00 - 201.25)
     }
 }
 
@@ -853,170 +792,164 @@ double xau_qty(const Probe& p, double L) {
     return std::floor(100.0 * p.equity() / L) / 100.0;
 }
 
-// --- pin: xau-flatten-once (C 11000 -> E 10989.845, qty 3.29) --- the
-// flattening bar accepts a close 2.39 ABOVE the short level (3.29 * 3334.73
-// = 10,971.26 <= E: equity, not the level, is the bound); the accepted
-// order rests 3 bars and fills on the 16:00Z touch at the level 3332.34.
+// Control E = 2198.40 - 2.50 = 2195.90; floor(100 * E / 200) / 100
+// = 10.97. Initial cost 10.97 * 200.05 = 2194.5485 passes. Bars 3..5 have
+// lows above 200.00, so the order must rest until bar 6's level touch.
 void test_xau_flatten_once_rests_until_touched() {
-    std::printf("-- xau-flatten-once: accepted above the level, rests 3 bars, fills at the level --\n");
-    Probe p(11000.0, 100.0, 0.005, 0.01);
+    std::printf("-- synthetic flatten once rests until touched --\n");
+    Probe p(2198.4, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);
-        if (bar == X1500) {
-            e.entry_stop("S", false, 3332.34, xau_qty(e, 3332.34),
+        if (bar == GFlatten) {
+            e.entry_stop("S", false, 200.00, xau_qty(e, 200.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = xau_bars();
+    std::vector<Bar> bars = fractional_lot_bars();
     p.run(bars.data(), (int)bars.size());
     check_xau_phase_a(p);
-    CHECK(p.placed_on(X1500));
+    CHECK(p.placed_on(GFlatten));
     CHECK(p.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(p.position_qty_, 3.29, 1e-9);
-    CHECK_NEAR(p.position_entry_price_, 3332.34, 1e-9);
+    CHECK_NEAR(p.position_qty_, 10.97, 1e-9); // floor(100 * 2195.90 / 200.00) / 100
+    CHECK_NEAR(p.position_entry_price_, 200.00, 1e-9);
     CHECK(!p.pyramid_entries().empty());
     if (!p.pyramid_entries().empty()) {
-        CHECK(p.pyramid_entries().back().entry_bar_index == X1600);
+        CHECK(p.pyramid_entries().back().entry_bar_index == GTouch);
     }
     CHECK(p.trade_count() == 1);
 }
 
-// --- pin: xau-flatten-once-c10983 (C 10983.155 -> E 10973) --- the resting
-// order is NOT re-checked at later closes (the 15:45Z close 3335.72 would
-// cost 10,974.52 > E) and the 16:00Z touch is costed at the LEVEL (10,963.40
-// <= E) although the open 3335.73 costs 10,974.55 > E. Pre-fix: declined.
+// E = 2197.50 - 2.50 = 2195.00; floor(100 * E / 200) / 100 = 10.97.
+// Bar 5 close costs 10.97 * 200.15 = 2195.6455 > E; resting admission must
+// survive. Bar 6 open costs 10.97 * 200.175 = 2195.91975 > E, whereas
+// the touched level costs 10.97 * 200.00 = 2194.00 <= E.
 void test_xau_flatten_once_c10983_no_recheck_fill_at_level() {
-    std::printf("-- xau-flatten-once-c10983: no re-check while resting, touch costed at the level --\n");
-    Probe p(10983.155, 100.0, 0.005, 0.01);
+    std::printf("-- synthetic flatten once no recheck fill at level --\n");
+    Probe p(2197.5, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);
-        if (bar == X1500) {
-            e.entry_stop("S", false, 3332.34, xau_qty(e, 3332.34),
+        if (bar == GFlatten) {
+            e.entry_stop("S", false, 200.00, xau_qty(e, 200.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = xau_bars();
+    std::vector<Bar> bars = fractional_lot_bars();
     p.run(bars.data(), (int)bars.size());
     check_xau_phase_a(p);
-    CHECK(p.placed_on(X1500));
+    CHECK(p.placed_on(GFlatten));
     CHECK(p.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(p.position_qty_, 3.29, 1e-9);
-    CHECK_NEAR(p.position_entry_price_, 3332.34, 1e-9);
+    CHECK_NEAR(p.position_qty_, 10.97, 1e-9); // floor(100 * 2195.00 / 200.00) / 100
+    CHECK_NEAR(p.position_entry_price_, 200.00, 1e-9);
     CHECK(!p.pyramid_entries().empty());
     if (!p.pyramid_entries().empty()) {
-        CHECK(p.pyramid_entries().back().entry_bar_index == X1600);
+        CHECK(p.pyramid_entries().back().entry_bar_index == GTouch);
     }
 }
 
-// --- pin: xau-flatten-replace-c10983 --- re-issued every bar while flat:
-// 15:00Z / 15:15Z / 15:30Z accepted (10,971.26 / 10,971.38 / 10,972.63 <=
-// 10,973), the 15:45Z re-issue REJECTED (3.29 * 3335.72 = 10,974.52) and
-// that CANCELS the resting order — the 16:00Z touch fills nothing; the
-// 16:00Z re-issue (close 3333.41 -> 10,966.92) is accepted and fills on the
-// 16:15Z touch, Signal p0818-1600. Pre-fix: filled 16:00Z.
+// At E = 2195.00, bars 2/3/4 cost 2194.5485 / 2194.6582 / 2194.7679
+// and pass. Bar 5 costs 2195.6455 and cancels the prior order, so bar 6
+// cannot fill. Its close costs 10.97 * 200.02 = 2194.2194 and accepts a
+// fresh order; bar 7 touches 200.00, carrying the bar-6 comment.
 void test_xau_flatten_replace_c10983_rejected_reissue_cancels() {
-    std::printf("-- xau-flatten-replace-c10983: a rejected re-issue cancels the resting order --\n");
-    Probe p(10983.155, 100.0, 0.005, 0.01);
+    std::printf("-- synthetic flatten replace rejected reissue cancels --\n");
+    Probe p(2197.5, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);
-        if (bar >= X1500 && bar <= X1645 && e.flat()) {
-            e.entry_stop("S", false, 3332.34, xau_qty(e, 3332.34),
+        if (bar >= GFlatten && bar <= GEnd && e.flat()) {
+            e.entry_stop("S", false, 200.00, xau_qty(e, 200.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = xau_bars();
+    std::vector<Bar> bars = fractional_lot_bars();
     p.run(bars.data(), (int)bars.size());
     check_xau_phase_a(p);
-    CHECK(p.placed_on(X1500));
-    CHECK(p.placed_on(X1515));
-    CHECK(p.placed_on(X1530));
-    CHECK(!p.placed_on(X1545));       // rejected AND the resting order is gone
-    CHECK(p.called_on(X1600));        // still flat at 16:00Z: nothing filled
-    CHECK(p.placed_on(X1600));
-    CHECK(!p.called_on(X1615));       // filled on the 16:15Z bar
+    CHECK(p.placed_on(GFlatten));
+    CHECK(p.placed_on(GAccepted1));
+    CHECK(p.placed_on(GAccepted2));
+    CHECK(!p.placed_on(GRejected));
+    CHECK(p.called_on(GTouch));
+    CHECK(p.placed_on(GTouch));
+    CHECK(!p.called_on(GRetryTouch));
     CHECK(p.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(p.position_qty_, 3.29, 1e-9);
-    CHECK_NEAR(p.position_entry_price_, 3332.34, 1e-9);
+    CHECK_NEAR(p.position_qty_, 10.97, 1e-9); // floor(100 * 2195.00 / 200.00) / 100
+    CHECK_NEAR(p.position_entry_price_, 200.00, 1e-9);
     CHECK(!p.pyramid_entries().empty());
     if (!p.pyramid_entries().empty()) {
-        CHECK(p.pyramid_entries().back().entry_bar_index == X1615);
+        CHECK(p.pyramid_entries().back().entry_bar_index == GRetryTouch);
         CHECK(p.pyramid_entries().back().entry_comment
-              == "p" + std::to_string((int)X1600));
+              == "p" + std::to_string((int)GTouch));
     }
 }
 
-// --- pin: xau-flatten-replace (C 11000) --- every re-issue is affordable;
-// the 15:45Z one is the live order at the 16:00Z touch (Signal p0818-1545).
+// Control E = 2195.90 keeps the same 10.97 lots. Even bar 5 cost
+// 2195.6455 is affordable, so its replacement fills on bar 6's touch.
 void test_xau_flatten_replace_control() {
-    std::printf("-- xau-flatten-replace: affordable re-issues, fills 16:00Z --\n");
-    Probe p(11000.0, 100.0, 0.005, 0.01);
+    std::printf("-- synthetic flatten replace control --\n");
+    Probe p(2198.4, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);
-        if (bar >= X1500 && bar <= X1645 && e.flat()) {
-            e.entry_stop("S", false, 3332.34, xau_qty(e, 3332.34),
+        if (bar >= GFlatten && bar <= GEnd && e.flat()) {
+            e.entry_stop("S", false, 200.00, xau_qty(e, 200.00),
                          "p" + std::to_string(bar));
         }
     };
-    std::vector<Bar> bars = xau_bars();
+    std::vector<Bar> bars = fractional_lot_bars();
     p.run(bars.data(), (int)bars.size());
     check_xau_phase_a(p);
-    CHECK(p.placed_on(X1545));
-    CHECK(!p.called_on(X1600));
+    CHECK(p.placed_on(GRejected));
+    CHECK(!p.called_on(GTouch));
     CHECK(p.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(p.position_qty_, 3.29, 1e-9);
+    CHECK_NEAR(p.position_qty_, 10.97, 1e-9); // floor(100 * 2195.90 / 200.00) / 100
     CHECK(!p.pyramid_entries().empty());
     if (!p.pyramid_entries().empty()) {
-        CHECK(p.pyramid_entries().back().entry_bar_index == X1600);
+        CHECK(p.pyramid_entries().back().entry_bar_index == GTouch);
         CHECK(p.pyramid_entries().back().entry_comment
-              == "p" + std::to_string((int)X1545));
+              == "p" + std::to_string((int)GRejected));
     }
 }
 
-// --- engine scope (no tape): a STOP reversal whose entry leg is rejected at
-// placement keeps its CLOSING leg, like the pinned market rule (rampatel BTC
-// 2025-05-12 07:15Z). Short 800 held, MTM 9,998 at the 13:45Z close; a long
-// stop x 900 costs 900 * 11.33 = 10,197 > 9,998 -> the entry leg is dropped,
-// the order rests close-only, the 14:00Z gap-through closes the short at
-// 11.33 and opens nothing.
+// The new long leg costs 120 * 20.22 = 2426.40 > script MTM 2169.50.
+// Rejection drops that leg but keeps the closing leg: bar 3 gaps through
+// and closes the 80-share short at 20.22 without opening a long.
 void test_rejected_stop_reversal_keeps_close_leg() {
-    std::printf("-- rejected stop reversal: closing leg only --\n");
-    Probe p(10026.0, 100.0, 0.01, 1.0);
+    std::printf("-- synthetic rejected stop reversal keeps close leg --\n");
+    Probe p(2185.1, 100.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
-        if (bar == F0812_1945) e.strategy_entry("S", false, kNaN, kNaN, 800.0);
-        if (bar == F0813_1345) e.entry_stop("L", true, 11.32, 900.0, "rev");
+        if (bar == BSeed) e.strategy_entry("S", false, kNaN, kNaN, 80.0);
+        if (bar == BFlatten) e.entry_stop("L", true, 20.04, 120.0, "rev");
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0813_1345));     // survives as the closing leg
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.flat());
     CHECK(p.trade_count() == 1);
     if (p.trade_count() == 1) {
         const Trade& s = p.get_trade(0);
         CHECK(!s.is_long);
-        CHECK(s.exit_bar_index == F0813_1400);
-        CHECK_NEAR(s.exit_price, 11.33, 1e-9);
+        CHECK(s.exit_bar_index == BGap);
+        CHECK_NEAR(s.exit_price, 20.22, 1e-9);
         CHECK(s.exit_id == "L");
     }
     CHECK(p.pending_count() == 0);
 }
 
-// Control: margin 0 disables both halves — the 13:45Z placement is accepted
-// and the 14:00Z gap-through fills 883 @11.33 whatever the equity.
+// Zero margin disables both admission halves. The bar-2 call rests
+// and the bar-3 gap fills all floor(2183.50 / 20.04) = 108 shares at 20.22.
 void test_margin_zero_control() {
-    std::printf("-- control: margin 0 has no admission --\n");
-    Probe p(10026.0, 0.0, 0.01, 1.0);
+    std::printf("-- synthetic margin zero control --\n");
+    Probe p(2185.1, 0.0, 0.01, 1.0);
     p.script = [&](Probe& e, int bar) {
         phase_a_short(e, bar);
-        reissue_long_stop(e, bar, 11.32, 1.0, true);
+        reissue_long_stop(e, bar, 20.04, 1.0, true);
     };
-    std::vector<Bar> bars = f_bars();
+    std::vector<Bar> bars = admission_bars();
     p.run(bars.data(), (int)bars.size());
-    CHECK(p.placed_on(F0813_1345));
+    CHECK(p.placed_on(BFlatten));
     CHECK(p.trade_count() == 2);
     if (p.trade_count() == 2) {
-        CHECK(p.get_trade(1).entry_bar_index == F0813_1400);
-        CHECK_NEAR(p.get_trade(1).entry_price, 11.33, 1e-9);
-        CHECK_NEAR(p.get_trade(1).qty, 883.0, 1e-9);
+        CHECK(p.get_trade(1).entry_bar_index == BGap);
+        CHECK_NEAR(p.get_trade(1).entry_price, 20.22, 1e-9);
+        CHECK_NEAR(p.get_trade(1).qty, 108.0, 1e-9); // floor(2183.50 / 20.04)
     }
 }
 
@@ -1214,7 +1147,7 @@ void test_ahtisham_explicit_qty_control() {
 }  // namespace
 
 int main() {
-    std::printf("--- stop_entry_admission (round 7, log-20260905t053924z-15615295) ---\n");
+    std::printf("--- stop_entry_admission (synthetic admission paths) ---\n");
     test_flatten_stop_floor();
     test_fresh_stop_floor();
     test_flatten_stop_once_dropped();

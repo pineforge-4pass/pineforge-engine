@@ -1,41 +1,17 @@
 /*
- * test_ta_extremes_ring.cpp — TradingView's bar-addressed ring for the window
- * extremes (ta.highest / ta.lowest / ta.highestbars / ta.lowestbars) and the
- * per-context bar index the engine installs for it (ta::bar_context()).
+ * test_ta_extremes_ring.cpp — TradingView's bar-addressed ring for window
+ * extremes and the per-context bar index installed by the engine.
  *
- * The rule (pinned 2026-09-03 with `lab tv` on NYSE:F 1D, range 2025-04-01..
- * 2026-05-01, tapes scratchpad/r5/pins/out-pin-ring-highest{,-c9}): a window
- * call site owns K = length + 1 slots addressed by bar_index % K; a call on
- * bar b writes slot[b % K] = src and returns the extremum over the WRITTEN
- * slots (b - k) % K, k in [0, length). Stale values from earlier executions
- * survive in slots not rewritten, never-written slots read as 0 (pinned
- * 2026-09-04 on BTCUSDT 1D at cadence 13), and the
- * result is na iff bar_index < length - 1 — NOT until `length` executions.
+ * A call site owns K = length + 1 slots addressed by bar_index % K. Calls
+ * write the current slot; stale values survive, unwritten slots read as 0.
+ * Warmup uses bar_index - origin, not the number of executions. A cached
+ * extremum retains its implied bar until expiry; a new extremum wins before
+ * the expiry rescan. Written na poisons the cache and the older window.
  *
- *   pin-ring-highest.pine:  if bar_index % 7 == 3
- *                               v = ta.highest(high, 5)
- *                               strategy.entry("L", strategy.long, qty=math.round(v*100))
- *   pin-ring-highest-c9.pine: the same with `% 9`.
- *
- * TV's entry sizes are round(v*100) (na -> default qty 1), so the tapes pin v
- * at every execution bar: cadence 7 (bars 3,10,17,...) -> na, 9.73, 10.10,
- * 10.62, 10.78 x5, 11.85 ...; cadence 9 (bars 3,12,21,...) -> na, 9.73, 10.32,
- * 10.70, 10.70, 10.65, 10.87, 11.85 ... (call 6 = 10.65: a per-call buffer
- * would still hold 10.70 — only the bar-addressed ring drops it).
- *
- * Every-bar callers must stay byte-identical to the positional deque in every
- * context; the deque is reproduced here as the reference, with the na rule
- * re-pinned (2026-09-04, NYSE:F 1D, every-bar ta.lowest / ta.highest over a
- * source na on every 4th bar): an na source answers na on its own bar
- * (11/11) AND poisons the window -- the answer on the bars after it is the
- * extremum over the members newer than the na (20/20 entries: lowest ==
- * highest on the bar after each gap), where the old deque skipped the na and
- * answered the window's other members. The same written-na poison governs
- * conditional callers' rescans and their cache (log-20260904t112527z-ea13dfcd;
- * the tape replays at the end of this file).
- *
- * NDEBUG-PROOF: self-rolled CHECK with a failure counter; main() returns
- * nonzero on any failure.
+ * Pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository). Synthetic cadence fixtures preserve slot aliasing,
+ * overwrites and offsets; every-bar callers are compared with a deque.
+ * NDEBUG-PROOF: CHECK increments a failure counter and main returns nonzero.
  */
 
 #include <cmath>
@@ -71,27 +47,45 @@ static bool same(double a, double b) {
     return a == b;
 }
 
-// NYSE:F 1D highs, bars 0..89 of the pinned chart range (bar 0 = 2025-04-01),
-// from the campaign feed (`lab bars NYSE:F 1D`). Bar 3 = 9.73, bar 10 = 9.63.
-static const double kHighs[90] = {
-    10.17, 10.27, 10.2, 9.73, 9.64, 9.52, 9.54, 9.28, 9.35, 9.81, 9.63, 9.62,
-    9.69, 9.63, 9.72, 10.0054, 10.09, 10.1, 10.18, 10.19, 10.13, 10.32, 10.39,
-    10.24, 10.62, 10.505, 10.464, 10.49, 10.73, 10.63, 10.7, 10.78, 10.81,
-    10.785, 10.84, 10.69, 10.5, 10.41, 10.4897, 10.335, 10.28, 10.46, 10.28,
-    10.225, 10.365, 10.25, 10.35, 10.45, 10.65, 10.77, 10.59, 10.51, 10.67,
-    10.63, 10.53, 10.6, 10.75, 10.87, 10.765, 10.65, 10.92, 10.86, 11.38,
-    11.78, 11.96, 11.79, 11.85, 11.9, 11.97, 11.86, 11.895, 11.93, 11.45,
-    11.3465, 11.24, 11.45, 11.29, 11.46, 11.429, 11.49, 11.49, 11.29, 11.125,
-    11.15, 10.92, 11.02, 11.1, 11.26, 11.385, 11.37};
+// Invented highs: only cadence call sites need designed geometry; other
+// bars follow a short periodic formula. Values are not a transformed tape.
+static double synthetic_high(int b) {
+    switch (b) {
+        case 3: return 120.0;
+        case 10: return 110.0;
+        case 17: return 135.0;
+        case 24: return 150.0;
+        case 31: return 170.0;
+        case 38: return 140.0;
+        case 45: return 160.0;
+        case 52: return 130.0;
+        case 59: return 155.0;
+        case 66: return 210.0;
+        case 73: return 190.0;
+        case 80: return 180.0;
+        case 87: return 195.0;
+        case 12: return 115.0;
+        case 21: return 145.0;
+        case 30: return 165.0;
+        case 39: return 125.0;
+        case 48: return 150.0;
+        case 57: return 175.0;
+        case 75: return 200.0;
+        case 84: return 185.0;
+        default: return 100.0 + (b % 8) * 2.0;
+    }
+}
 static const int kNumHighs = 90;
 
-// TV "Size (qty)" column of the pinned tapes at each execution bar
-// (round(v*100); 1 = na -> default qty). The first 13 / 10 entries fall
-// inside the 90-bar window above.
-static const int kTvSizesCadence7[13] = {1, 973, 1010, 1062, 1078, 1078, 1078,
-                                         1078, 1078, 1185, 1185, 1185, 1185};
-static const int kTvSizesCadence9[10] = {1, 973, 1032, 1070, 1070, 1065, 1087,
-                                         1185, 1185, 1145};
+// Expected sizes encode round(extremum * 100), with 1 for warmup na.
+// Cadence 7: 120 survives bar 10, new peaks 135/150/170 follow; peak 170
+// remains in slot 1 at offsets 1..4, then bar 66's 210 replaces it.
+// Cadence 9: slots 3 and 0 alternate; at bar 48, 165 in slot 0 is
+// overwritten by 150 while slot 3 holds 125, hence max(150,125) = 150.
+static const int kTvSizesCadence7[13] = {1, 12000, 13500, 15000, 17000, 17000,
+                                       17000, 17000, 17000, 21000, 21000, 21000, 21000};
+static const int kTvSizesCadence9[10] = {1, 12000, 14500, 16500, 16500, 15000,
+                                       17500, 21000, 21000, 20000};
 
 static int tv_size(double v) {
     return is_na(v) ? 1 : static_cast<int>(std::llround(v * 100.0));
@@ -99,11 +93,9 @@ static int tv_size(double v) {
 
 // --- The previous implementation, kept as the every-bar reference ---
 
-// The positional window's extremum under the written-na poison (pinned
-// 2026-09-04, NYSE:F 1D pin-lowest-na-everybar): an na member resets the
-// running extremum, so the result is the extremum over the members newer than
-// the newest na (na when there is none). The pre-poison deque took the
-// extremum over ALL non-na members.
+// In an oldest-first positional scan, na resets the running extremum.
+// Only members newer than the newest na remain live; none means na.
+// The pre-poison deque incorrectly considered all non-na members.
 static double ref_extremum(const std::deque<double>& buffer, bool want_max) {
     double best = na<double>();
     for (double v : buffer) {
@@ -121,7 +113,7 @@ struct RefHighest {
         buffer.push_back(src);
         while ((int)buffer.size() > length) buffer.pop_front();
         if ((int)buffer.size() < length) return na<double>();
-        if (is_na(src)) return na<double>();   // pinned 2026-09-04 (NYSE:F 1D): an na source answers na
+        if (is_na(src)) return na<double>();   // an na source answers na
         return ref_extremum(buffer, true);
     }
     double recompute(double src) {
@@ -141,7 +133,7 @@ struct RefLowest {
         buffer.push_back(src);
         while ((int)buffer.size() > length) buffer.pop_front();
         if ((int)buffer.size() < length) return na<double>();
-        if (is_na(src)) return na<double>();   // pinned 2026-09-04 (NYSE:F 1D): an na source answers na
+        if (is_na(src)) return na<double>();   // an na source answers na
         return ref_extremum(buffer, false);
     }
     double recompute(double src) {
@@ -224,7 +216,7 @@ static std::vector<double> make_series(int n, unsigned seed, int na_every) {
     return out;
 }
 
-// --- Cadence pins: the two TV tapes, replayed bar by bar as the chart does ---
+// --- Designed cadence pins, with chart bar addressing ---
 
 static void test_cadence7_pin() {
     std::printf("test_cadence7_pin\n");
@@ -233,12 +225,12 @@ static void test_cadence7_pin() {
     for (int b = 0; b < kNumHighs; ++b) {
         ta::BarContextScope scope(b, 0);
         if (b % 7 != 3) continue;
-        double v = hi.compute(kHighs[b]);
+        double v = hi.compute(synthetic_high(b));
         CHECK(call < 13);
         if (call < 13) CHECK(tv_size(v) == kTvSizesCadence7[call]);
         if (call == 0) CHECK(is_na(v));                 // bar 3 < length - 1 = 4
-        if (call == 1) CHECK(near(v, 9.73));            // max{bar 3, bar 10}: 2 executions, not na
-        if (call == 5) CHECK(near(v, 10.78));           // bar 31's 10.78 survives in slot 1
+        if (call == 1) CHECK(near(v, 120.0));            // max{bar 3, bar 10}: 2 executions, not na
+        if (call == 5) CHECK(near(v, 170.0));           // bar 31's 170 survives in slot 1
         ++call;
     }
     CHECK(call == 13);
@@ -252,22 +244,19 @@ static void test_cadence9_pin() {
     for (int b = 0; b < kNumHighs; ++b) {
         ta::BarContextScope scope(b, 0);
         if (b % 9 != 3) continue;
-        double v = hi.compute(kHighs[b]);
+        double v = hi.compute(synthetic_high(b));
         CHECK(call < 10);
         if (call < 10) CHECK(tv_size(v) == kTvSizesCadence9[call]);
-        // Call 6 (bar 48, high 10.65): slots read are bars 48,47,46,45,44 ->
-        // 48%6=0 (this call), 47%6=5, 46%6=4, 45%6=3, 44%6=2; 10.70 (bar 30,
-        // slot 0) was just overwritten and 10.335 (bar 39, slot 3) is beaten,
-        // so 10.65 — a per-call buffer would still answer 10.70.
-        if (call == 5) CHECK(near(v, 10.65));
+        // Bar 48 overwrites slot 0's 165 with 150; slot 3 holds 125.
+        // The ring returns max(150,125)=150; a per-call window keeps 165.
+        if (call == 5) CHECK(near(v, 150.0));
         ++call;
     }
     CHECK(call == 10);
 }
 
-// The same tapes with the cadence guard evaluated through the ring but the
-// remaining bars also *seen* by the context (no call) — i.e. the guard is the
-// only thing that differs from an every-bar caller, exactly as in Pine.
+// Evaluate the guard in chart context, including bars that make no call.
+// Negating the designed highs preserves the lowest/highest mirror.
 static void test_cadence_pin_lowest_mirror() {
     std::printf("test_cadence_pin_lowest_mirror\n");
     for (int cadence : {7, 9}) {
@@ -276,8 +265,8 @@ static void test_cadence_pin_lowest_mirror() {
         for (int b = 0; b < kNumHighs; ++b) {
             ta::BarContextScope scope(b, 0);
             if (b % cadence != 3) continue;
-            double h = hi.compute(kHighs[b]);
-            double l = lo.compute(-kHighs[b]);
+            double h = hi.compute(synthetic_high(b));
+            double l = lo.compute(-synthetic_high(b));
             CHECK(same(l, is_na(h) ? h : -h));   // lowest(-x) == -highest(x)
         }
     }
@@ -339,10 +328,9 @@ static void test_na_until_bar_length_minus_1() {
 
 static void test_bars_variants_ring() {
     std::printf("test_bars_variants_ring\n");
-    // Cadence 7, length 5, K = 6, over the pinned highs. Derived from the rule
-    // (no TV tape for highestbars): offsets are slot distances, so bar 3's
-    // stale 9.73 sits 1 slot behind bar 10 and beats it; bar 31's 10.78 walks
-    // back 1,2,3,4 slots across bars 38..59 and bar 66's 11.85 resets to 0.
+    // Cadence 7, K=6: bar 3's 120 beats bar 10's 110 one slot behind.
+    // Bar 31's peak 170 stays at offsets 1,2,3,4 on calls at 38..59;
+    // bar 66's new peak 210 resets the offset to 0. Negation mirrors it.
     static const double kExpect[10] = {0, -1, 0, 0, 0, -1, -2, -3, -4, 0};
     ta::HighestBars hb(5);
     ta::LowestBars lb(5);
@@ -350,8 +338,8 @@ static void test_bars_variants_ring() {
     for (int b = 0; b < 70; ++b) {
         ta::BarContextScope scope(b, 0);
         if (b % 7 != 3) continue;
-        double v = hb.compute(kHighs[b]);
-        double w = lb.compute(-kHighs[b]);
+        double v = hb.compute(synthetic_high(b));
+        double w = lb.compute(-synthetic_high(b));
         if (call == 0) {
             CHECK(is_na(v));
             CHECK(is_na(w));
@@ -522,23 +510,20 @@ static void test_htf_context_sanity() {
 }
 
 
-// --- Cached extremum with an implied bar (pinned 2026-09-04: 8 NYSE:F 1D
-// alias tapes 696/696, BINANCE:ETHUSDT.P 15 geometry pin 82/82, jayentriken
-// BBWP ETH replay 593/593) ------------------------------------------------
-
-// t382 geometry (`m = bar_index % 49; exec = m < 4 or 37 <= m < 47 or m == 48`,
-// ta.lowest(low, 10)): bar 3's stale 9.20 aliases one slot behind bar 48, yet
-// TV answers the cached 9.88 (from bar 42) on bars 48..51 and only rescans to
-// 9.20 on bar 52, once the cache has aged `length` bars.
+// --- Cached extremum survives aliasing until its implied bar expires ---
+//
+// Bar 3 leaves 90 in slot 3. Bar 42's live minimum is 110. At bars 48..51,
+// slot 3 aliases into the window but the cache is younger than length 10.
+// At bar 52 it expires, so the rescan finally reads the stale 90.
 static void test_cached_extremum_keeps_over_aliased_slot_until_expiry() {
     std::printf("test_cached_extremum_keeps_over_aliased_slot_until_expiry\n");
     ta::Lowest lo(10);
     auto low_at = [](int b) {
-        if (b == 3) return 9.20;
-        if (b < 4) return 9.50;
-        if (b == 42) return 9.88;
-        if (b >= 37 && b <= 46) return 10.00;
-        return 10.50;                       // bars 48..52
+        if (b == 3) return 90.0;
+        if (b < 4) return 95.0;
+        if (b == 42) return 110.0;
+        if (b >= 37 && b <= 46) return 120.0;
+        return 130.0;                       // bars 48..52
     };
     auto executes = [](int b) {
         const int m = b % 49;
@@ -549,9 +534,9 @@ static void test_cached_extremum_keeps_over_aliased_slot_until_expiry() {
         if (!executes(b)) continue;
         const double v = lo.compute(low_at(b));
         if (b < 9) CHECK(is_na(v));                       // bar_index < length - 1
-        if (b == 46) CHECK(near(v, 9.88));                // fresh window minimum, bar 42
-        if (b >= 48 && b <= 51) CHECK(near(v, 9.88));     // cache (9.88, 42) younger than 10 bars: slot 3 unread
-        if (b == 52) CHECK(near(v, 9.20));                // aged out: rescan reads the aliased slot
+        if (b == 46) CHECK(near(v, 110.0));                // fresh window minimum, bar 42
+        if (b >= 48 && b <= 51) CHECK(near(v, 110.0));     // cache (110.0, 42) younger than 10 bars: slot 3 unread
+        if (b == 52) CHECK(near(v, 90.0));                // aged out: rescan reads the aliased slot
     }
 }
 
@@ -621,34 +606,24 @@ static void test_never_written_slots_read_as_zero() {
 
 
 
-// --- A written na POISONS the ring (pinned 2026-09-04, ledger
-// log-20260904t112527z-ea13dfcd; tapes scratchpad/r6/pins/ringkind/{out-1,
-// out-nafirst,out-mlsite} on OANDA:XAUUSD 1D and r6/pins/out-pin-lowest-na-
-// everybar on NYSE:F 1D). In the oldest-first rescan a slot written with na
-// resets the running extremum and the next (newer) slot restarts it, so the
-// answer is the extremum over the slots NEWER than the newest na slot in the
-// window (never-written 0 slots among them included), na when the newest slot
-// is itself na; the na write also poisons the cache to (na, b), so the next
-// valid call restarts from its own src without reading the slots. ----------
-
-// Every-bar, mid-stream gaps: NYSE:F 1D lows, bars 0..41 of the pinned range
-// (bar 0 = 2025-04-01; `lab bars NYSE:F 1D`), `x = bar_index % 4 == 0 ? na :
-// low`, v = ta.lowest(x, 5), h = ta.highest(x, 5), entries on odd bars with
-// qty = na ? 7 : 1 + round(v * 100). TV: v == h on every bar after an na bar
-// (5, 9, 13, ...: the bar's own low, a single live member) -- the old "skip
-// the gap" reading kept the pre-gap extremum (bar 9: 8.44 from bar 6; TV
-// 9.20), and the old "leave the cache alone" na rule would have kept it too
-// (the cache was only 3 bars old). 20/20 entries.
-static const double kFordLows[42] = {
-    9.81, 9.82, 9.53, 9.2, 9.0, 8.55, 8.4406, 8.88, 9.04, 9.2, 9.38, 9.29,
-    9.405, 9.35, 9.53, 9.71, 9.815, 9.97, 9.9701, 9.925, 9.86, 10.02, 10.215,
-    10.095, 10.055, 10.12, 10.26, 10.35, 10.48, 10.42, 10.48, 10.55, 10.64,
-    10.63, 10.66, 10.45, 10.34, 10.29, 10.21, 10.15, 10.11, 10.12};
-// TV "Size (qty)" of the V / H entries signalled on bars 1, 3, ..., 39.
-static const int kFordTapeV[20] = {7, 7, 856, 845, 921, 921, 936, 936, 998, 994,
-                                   1003, 1003, 1013, 1013, 1043, 1043, 1064, 1046, 1030, 1016};
-static const int kFordTapeH[20] = {7, 7, 856, 889, 921, 939, 936, 972, 998, 998,
-                                   1003, 1023, 1013, 1036, 1043, 1056, 1064, 1067, 1030, 1030};
+// --- A written na poisons older members and restarts the next valid call ---
+//
+// Synthetic four-bar blocks: gap, base+6, base, base+9, base=200+10*(b/4).
+// After a gap, only base+6 is live; two calls later the extrema are base and
+// base+9. Warmup bars 1/3 are na. A pre-gap low must not survive the gap.
+static double synthetic_low(int b) {
+    static const double kWithinBlock[4] = {0.0, 6.0, 0.0, 9.0};
+    return 200.0 + (b / 4) * 10.0 + kWithinBlock[b % 4];
+}
+// Odd-bar signals: qty = 1 + 100 * extremum, na -> 7.
+// In block g >= 1, V is 200+10g+6 then 200+10g; H is 200+10g+6 then
+// 200+10g+9. Thus every listed integer follows directly from the block rule.
+static const int kSyntheticV[20] = {
+    7, 7, 21601, 21001, 22601, 22001, 23601, 23001, 24601, 24001,
+    25601, 25001, 26601, 26001, 27601, 27001, 28601, 28001, 29601, 29001};
+static const int kSyntheticH[20] = {
+    7, 7, 21601, 21901, 22601, 22901, 23601, 23901, 24601, 24901,
+    25601, 25901, 26601, 26901, 27601, 27901, 28601, 28901, 29601, 29901};
 
 static bool matches_qty(double v, int qty) {
     if (qty == 7) return is_na(v);
@@ -663,7 +638,7 @@ static void test_everybar_na_gap_poisons_the_window() {
         ta::Highest hi(5);
         int entry = 0;
         for (int b = 0; b < 42; ++b) {
-            const double x = (b % 4 == 0) ? na<double>() : kFordLows[b];
+            const double x = (b % 4 == 0) ? na<double>() : synthetic_low(b);
             double v, h;
             if (mode == 0) {
                 v = lo.compute(x);
@@ -677,78 +652,84 @@ static void test_everybar_na_gap_poisons_the_window() {
             if (b % 2 == 1 && b <= 39) {   // bar 41's signal has no next bar to fill on
                 CHECK(entry < 20);
                 if (entry < 20) {
-                    CHECK(matches_qty(v, kFordTapeV[entry]));
-                    CHECK(matches_qty(h, kFordTapeH[entry]));
+                    CHECK(matches_qty(v, kSyntheticV[entry]));
+                    CHECK(matches_qty(h, kSyntheticH[entry]));
                 }
                 ++entry;
             }
             if (b >= 4 && b % 4 == 1) CHECK(same(v, h));   // the bar after a gap: a single live member
-            if (b == 9) { CHECK(near(v, 9.2)); CHECK(near(h, 9.2)); }   // not 8.4406 (bar 6, older than bar 8's na)
-            if (b == 11) { CHECK(near(v, 9.2)); CHECK(near(h, 9.38)); } // bars 9..11 live
+            if (b == 9) { CHECK(near(v, 226.0)); CHECK(near(h, 226.0)); } // 200+20+6; pre-gap bar 6's 210 is dead
+            if (b == 11) { CHECK(near(v, 220.0)); CHECK(near(h, 229.0)); } // min/max of {226,220,229}
         }
         CHECK(entry == 20);
     }
     CHECK(!ta::bar_context().installed);
 }
 
-// Conditional, cadence 13 / length 10 (K = 11) on OANDA:XAUUSD 1D
-// (2025-03-01..2025-11-01, bar 0 = 2025-03-03; tape r6/pins/ringkind/out-1):
-// the zero-fill control ta.lowest(low, 10) -- na, 0 x 9 while a never-written
-// slot sits in the window, then the stale minima 2880.3 / 3017.7 / 3210.1 --
-// and the sign-mixed COMPUTED source o = sma(close, 5) - close, where the
-// never-written 0 never wins because every live member is negative: the
-// source kind does not change the rule (13/13 on low, close - 2000,
-// sma(close, 5), low[1], hl2 and o; only C and o are replayed here).
-static const int kXauCallBars[13] = {5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135, 148, 161};
-static const double kXauLowAtCalls[13] = {
-    2880.310, 3017.655, 3210.065, 3237.790, 3279.235, 3302.015, 3255.850,
-    3319.695, 3345.005, 3325.280, 3626.030, 3734.440, 4140.735};
-static const double kXauTvLowestLow[13] = {NAN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2880.3, 3017.7, 3210.1};
-static const double kXauOscAtCalls[13] = {
-    19.9530, -30.1400, -42.4510, -50.4460, -28.0200, 14.0790, 51.2330,
-    -8.3920, -47.9130, -4.4120, -35.5470, -8.6510, -117.0400};
-// TV: sign via qty 3/5/9 (neg/pos/zero) and |v| via 11 + round(|v| * 100).
-static const double kXauTvLowestOsc[13] = {
-    NAN, -30.14, -42.45, -50.45, -50.45, -50.45, -50.45, -50.45, -47.91,
-    -50.45, -50.45, -50.45, -117.04};
+// Synthetic cadence 13, length 10: call i is at 5+13*i, so K=11
+// visits residues 5,7,9,0,2,4,6,8,10,1,3,5,7. Positive sources follow
+// 200+20*i: unwritten zeros win through i=9; at i=10..12 the oldest
+// available positive members are calls 0,1,2, giving 200,220,240.
+// The sign-mixed source below is designed to keep negative minima ahead
+// of unwritten zeros and to expose the stale slot containing -20.
+static int synthetic_call_bar(int i) { return 5 + 13 * i; }
+static double synthetic_positive_call(int i) { return 200.0 + 20.0 * i; }
+static const double kSyntheticLowestLow[13] = {
+    NAN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 220, 240};
+static const double kSyntheticOsc[13] = {
+    6, -8, -12, -20, -4, 10, 14, -6, -16, -2, -10, -18, -24};
+// At i=8 the -20 slot is excluded: min=-16. At i=9 it aliases back into
+// the window: min=-20 until the fresh -24 at i=12 wins before the rescan.
+static const double kSyntheticLowestOsc[13] = {
+    NAN, -8, -12, -20, -20, -20, -20, -20, -16, -20, -20, -20, -24};
 
 static void test_cadence13_zero_fill_control_and_computed_source() {
     std::printf("test_cadence13_zero_fill_control_and_computed_source\n");
     ta::Lowest lo(10);
     ta::Lowest lo_osc(10);
     for (int i = 0; i < 13; ++i) {
-        ta::BarContextScope scope(kXauCallBars[i], 0);
-        const double v = lo.compute(kXauLowAtCalls[i]);
-        const double w = lo_osc.compute(kXauOscAtCalls[i]);
+        ta::BarContextScope scope(synthetic_call_bar(i), 0);
+        const double v = lo.compute(synthetic_positive_call(i));
+        const double w = lo_osc.compute(kSyntheticOsc[i]);
         if (i == 0) { CHECK(is_na(v)); CHECK(is_na(w)); continue; }
-        CHECK(!is_na(v) && near(v, kXauTvLowestLow[i], 0.051));
-        CHECK(!is_na(w) && near(w, kXauTvLowestOsc[i], 0.006));
+        CHECK(!is_na(v) && near(v, kSyntheticLowestLow[i], 0.051));
+        CHECK(!is_na(w) && near(w, kSyntheticLowestOsc[i], 0.006));
         if (i >= 1 && i <= 9) CHECK(near(v, 0.0));   // a never-written slot in the window reads 0
         if (i >= 1) CHECK(w < 0.0);                  // the 0 never beats a negative member
     }
 }
 
-// Leading-na sites at the same cadence (tape out-nafirst): the first 1 / 2 /
-// 5 calls of ta.lowest(sma(close, N), 10) write na. Every zero run ends at
-// bar 83 when the na slot re-enters at k = 1 (src is the only live member),
-// and the stale first valid write returns from bar 109 on, once it is newer
-// than the na slot -- poison 13/13 on all 7 sites (zero-fill 8-10/13, skip
-// 7-10/13). F and G are the sign-mixed sma(close, N) - close twins.
-static const double kNaFirstSrc[5][13] = {
-    {NAN, 2997.9843, 3111.9871, 3316.0614, 3285.6300, 3329.3643, 3357.6014, 3327.4057, 3350.1189, 3355.1350, 3478.2407, 3689.8500, 3964.3786},        // A: sma 14
-    {NAN, NAN, 3086.7670, 3254.7987, 3287.3295, 3303.4298, 3355.1255, 3333.7838, 3343.2762, 3343.9192, 3435.9715, 3649.7668, 3891.3310},              // B: sma 20
-    {NAN, NAN, NAN, NAN, NAN, 3235.7817, 3301.0254, 3322.9830, 3332.4742, 3348.5481, 3376.0111, 3455.1191, 3593.3572},                                // E: sma 59
-    {NAN, NAN, -143.0280, -79.3963, -7.6805, -19.1802, 80.9505, -13.8162, -30.3588, 5.2092, -190.3435, -110.0882, -316.4390},                         // F: sma 20 - close
-    {NAN, NAN, NAN, NAN, -86.4224, -38.3341, 46.4009, -20.1672, -26.5463, 5.3768, -238.9141, -275.7978, -544.8904},                                   // G: sma 46 - close
-};
+// Synthetic leading-na sources at the same cadence. Positive sites use
+// 400+100*s+20*i after 1,2,5 leading na writes, respectively. Signed sites
+// use the hand-designed values below after 2 and 4 leading na writes.
+// The na at residue 5 is read one slot behind call i=6, clearing older
+// members. Calls i=6,7 therefore answer their own source; subsequent
+// rescans can resurrect only slots NEWER than the last encountered na.
+static double synthetic_na_first_source(int s, int i) {
+    static const int kLeadingNa[5] = {1, 2, 5, 2, 4};
+    static const double kSigned[2][13] = {
+        {NAN, NAN, -24, -14, -2, -6, 12, -4, -8, 4, -32, -20, -48},
+        {NAN, NAN, NAN, NAN, -16, -6, 8, -4, -10, 2, -36, -40, -72},
+    };
+    if (i < kLeadingNa[s]) return na<double>();
+    // Site A call 7 reads a source NOT above call 6's cached 520, so it answers its own
+    // source by the cache shortcut (a rising source would trigger a rescan and return 420).
+    if (s == 0 && i == 7) return 510.0;
+    return s < 3 ? 400.0 + 100.0 * s + 20.0 * i : kSigned[s - 3][i];
+}
+// Positive sites: zeros win until poison removes them; the stale first
+// valid write wins at i=8..11 (site A/B), or i=11..12 (site E).
+// Site A's first write is overwritten at i=12, so its second (440) wins.
+// Signed sites take minima of the live post-poison members: in F the
+// aliased -24 returns at i=9, then -32 wins; in G i=9 restarts on +2.
 static const double kNaFirstTv[5][13] = {
-    {NAN, 2998.00, 0.00, 0.00, 0.00, 0.00, 3357.60, 3327.40, 2998.00, 2998.00, 2998.00, 2998.00, 3112.00},
-    {NAN, NAN, 3086.80, 0.00, 0.00, 0.00, 3355.10, 3333.80, 3086.80, 3086.80, 3086.80, 3086.80, 3086.80},
-    {NAN, NAN, NAN, NAN, NAN, 3235.80, 3301.00, 3323.00, 3332.50, 3348.50, 3376.00, 3235.80, 3235.80},
-    {NAN, NAN, -143.03, -143.03, -143.03, -143.03, 80.95, -13.82, -30.36, -143.03, -190.34, -190.34, -316.44},
-    {NAN, NAN, NAN, NAN, -86.42, -86.42, 46.40, -20.17, -26.55, 5.38, -238.91, -275.80, -544.89},
+    {NAN, 420, 0, 0, 0, 0, 520, 510, 420, 420, 420, 420, 440},
+    {NAN, NAN, 540, 0, 0, 0, 620, 640, 540, 540, 540, 540, 540},
+    {NAN, NAN, NAN, NAN, NAN, 700, 720, 740, 760, 780, 800, 700, 700},
+    {NAN, NAN, -24, -24, -24, -24, 12, -4, -8, -24, -32, -32, -48},
+    {NAN, NAN, NAN, NAN, -16, -16, 8, -4, -10, 2, -36, -40, -72},
 };
-static const double kNaFirstTol[5] = {0.051, 0.051, 0.051, 0.0051, 0.0051};   // qty resolution 0.1 / 0.01
+static const double kNaFirstTol[5] = {0.051, 0.051, 0.051, 0.0051, 0.0051};   // retained 0.1 / 0.01 resolution
 
 static void test_leading_na_site_poison_pin() {
     std::printf("test_leading_na_site_poison_pin\n");
@@ -756,9 +737,9 @@ static void test_leading_na_site_poison_pin() {
         ta::Lowest lo(10);
         ta::LowestBars lb(10);
         for (int i = 0; i < 13; ++i) {
-            ta::BarContextScope scope(kXauCallBars[i], 0);
-            const double v = lo.compute(kNaFirstSrc[s][i]);
-            const double k = lb.compute(kNaFirstSrc[s][i]);
+            ta::BarContextScope scope(synthetic_call_bar(i), 0);
+            const double v = lo.compute(synthetic_na_first_source(s, i));
+            const double k = lb.compute(synthetic_na_first_source(s, i));
             if (is_na(kNaFirstTv[s][i])) {
                 CHECK(is_na(v));
                 CHECK(is_na(k));
@@ -767,41 +748,37 @@ static void test_leading_na_site_poison_pin() {
                 CHECK(!is_na(k));
             }
             if (s == 0) {
-                // Site A, ta.lowest(sma(close, 14), 10): the bars-since of the
-                // extremum among the non-poisoned slots (derived, no tape).
+                // Site A, first valid source at call 1: the bars-since of the
+                // extremum among the non-poisoned slots.
                 if (i == 1) CHECK(near(k, 0.0));     // bar 18: restart on src (slot 6 behind it never read)
                 if (i == 2) CHECK(near(k, -3.0));    // bar 31: never-written slot 6 = bar 28, the oldest 0 past bar 27's na
                 if (i == 6) CHECK(near(k, 0.0));     // bar 83: the na slot at k = 1, src alone
-                if (i == 8) CHECK(near(k, -3.0));    // bar 109: 2998 lives in slot 7 = bar 106
-                if (i == 12) CHECK(near(k, -9.0));   // bar 161: 3112 in slot 9 = bar 152
+                if (i == 8) CHECK(near(k, -3.0));    // bar 109: 420 lives in slot 7 = bar 106
+                if (i == 12) CHECK(near(k, -9.0));   // bar 161: 440 in slot 9 = bar 152
             }
         }
     }
     // Site A, first three calls, spelled out: bar 5 writes na (cache (na, 5)),
-    // bar 18 restarts on 2998 (a rescan would have read the never-written
-    // slot 6 = bar 17 as 0 -- TV says 2998), bar 31 rescans: slots 0..4
+    // bar 18 restarts on 420 (a rescan would have read the never-written
+    // slot 6 = bar 17 as 0 -- the poisoned cache restarts on 420), bar 31 rescans: slots 0..4
     // (bars 22..26) never written -> 0, bar 27 = slot 5 -> na, poison; bar
-    // 28 = slot 6 never written -> 0 restarts; 2998 (bar 29) and 3112 (bar
+    // 28 = slot 6 never written -> 0 restarts; 420 (bar 29) and 440 (bar
     // 31) do not beat it -> 0.
     {
         ta::Lowest lo(10);
         { ta::BarContextScope scope(5, 0);  CHECK(is_na(lo.compute(na<double>()))); }
-        { ta::BarContextScope scope(18, 0); CHECK(near(lo.compute(2997.9843), 2997.9843)); }
-        { ta::BarContextScope scope(31, 0); CHECK(near(lo.compute(3111.9871), 0.0)); }
+        { ta::BarContextScope scope(18, 0); CHECK(near(lo.compute(420.0), 420.0)); }
+        { ta::BarContextScope scope(31, 0); CHECK(near(lo.compute(440.0), 0.0)); }
     }
 }
 
-// Replica of the market-logic VFDO-S site (tape out-mlsite, OANDA:XAUUSD 1D
-// 2025-04-01..2026-05-01): osc = resid / stdev(resid, 50) is na for its
-// first ~100 bars; pivot-gated ta.lowest(osc, 11) on pivot-low bars and
-// ta.highest(osc, 11) on pivot-high bars; qty = 100000 + round(v * 1000).
-// 32 calls: 16 na reads (the poisoned cache), one stale aliased read (bar
-// 240 on the highest ring, src 0.7236: the aged cache rescans bars 230..240;
-// bar 227's 1.3252 sits in slot 227 % 12 = 11, which the window addresses as
-// bar 239, k = 1, past the poison of the na written at bar 70 in slot 10) and
-// one true 0 read (bar 273, highest ring: past the na slots the live members
-// are two never-written 0s and src -0.6354, so 0). Poison 32/32; zero-fill
-// 24/32; skip 25/32.
+// Designed two-ring sparse call schedule, length 11 (K=12).
+// Sixteen initial na writes poison the older slots. All later values are
+// invented integers, with distinct positive, stale and zero-winning cases.
+// The call at bar 240 excludes the na at residue 10 but reads residue 11
+// (written at 227) as bar 239: stale +7 beats the fresh +2. At bar 273
+// the two unwritten zeros beat the fresh -4, after all poison is excluded.
+// The call addresses deliberately preserve those modulo-12 alignments.
 struct MlCall { int bar; bool low_ring; double osc; double tv; };
 static const MlCall kMlCalls[32] = {
     {18, false, NAN, NAN},      {25, true, NAN, NAN},       {28, false, NAN, NAN},
@@ -810,12 +787,12 @@ static const MlCall kMlCalls[32] = {
     {67, true, NAN, NAN},       {70, false, NAN, NAN},      {74, true, NAN, NAN},
     {80, true, NAN, NAN},       {84, false, NAN, NAN},      {89, true, NAN, NAN},
     {96, false, NAN, NAN},
-    {104, true, 1.4057, 1.406},  {147, false, 1.5218, 1.522}, {153, true, 1.1918, 1.192},
-    {165, false, 0.9717, 0.972}, {168, true, 1.0785, 1.078},  {177, false, 0.8948, 0.895},
-    {195, false, 4.2483, 4.248}, {198, true, 3.8822, 3.882},  {218, false, 1.1347, 1.135},
-    {220, true, 1.8796, 1.880},  {227, false, 1.3252, 1.325}, {231, true, 1.4513, 1.451},
-    {240, false, 0.7236, 1.325}, {241, true, 0.8939, 0.894},  {255, true, -1.0579, -1.058},
-    {273, false, -0.6354, 0.000},
+    {104, true, 6, 6},    {147, false, 8, 8},    {153, true, 4, 4},
+    {165, false, 5, 5},   {168, true, 3, 3},     {177, false, 2, 2},
+    {195, false, 20, 20}, {198, true, 16, 16},   {218, false, 6, 6},
+    {220, true, 10, 10},  {227, false, 7, 7},    {231, true, 5, 5},
+    {240, false, 2, 7},   {241, true, 1, 1},     {255, true, -8, -8},
+    {273, false, -4, 0},
 };
 
 static void test_market_logic_replica_pin() {
@@ -829,7 +806,7 @@ static void test_market_logic_replica_pin() {
         const bool hit = is_na(c.tv) ? is_na(v) : (!is_na(v) && near(v, c.tv, 0.0007));
         CHECK(hit);
         ok += hit;
-        if (c.bar == 240) CHECK(!is_na(v) && near(v, 1.3252, 1e-6));   // the aliased bar-227 slot, not src 0.7236
+        if (c.bar == 240) CHECK(!is_na(v) && near(v, 7.0, 1e-6));   // residue 11 aliases bar 227's +7 as bar 239
         if (c.bar == 273) CHECK(!is_na(v) && near(v, 0.0));            // a never-written slot beats every negative member
     }
     CHECK(ok == 32);
@@ -881,13 +858,9 @@ static void test_bars_variants_under_poison() {
     }
 }
 
-// An na source poisons the cache (re-pinned 2026-09-04: the OANDA:XAUUSD 15
-// geometry `ta.lowest(bar_index % 13 == 6 ? na : z, 10)` with the inserted na
-// calls from bar 100 answers na on them, 34/34 -- and every valid call after
-// one answers its own src, which the previous "leave the cache alone" reading
-// only reproduced for a falling series). With a RISING series the old rule
-// rescanned (aged cache) and read the never-written / stale slots; the
-// poisoned cache restarts on src instead.
+// An na source poisons the cache. Every valid call after it must restart
+// on its own source, even for a rising series: retaining the old cache would
+// rescan unwritten/stale slots on expiry. Cadence and sources are invented.
 static void test_na_source_poisons_the_cache() {
     std::printf("test_na_source_poisons_the_cache\n");
     for (int falling = 0; falling < 2; ++falling) {

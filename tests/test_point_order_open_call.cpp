@@ -1,31 +1,15 @@
 /*
  * test_point_order_open_call.cpp -- the point order's margin call at a gapped
- * open, on the bars of tests/fixtures/admission_rules.
+ * open, using independently designed fifteen-minute bars.
  *
- * At a bar's open TradingView executes the queued orders first, then the
- * exits the open reaches, and checks the margin on what is left. Two shapes
- * keep the earlier order, and a control of each fills the exit first:
+ * Pinned against TradingView behaviour (recorded tapes are kept outside this
+ * repository). Queued calls execute before stops when the call still covers
+ * the new open's shortfall. With sufficient capital, the gapped stop takes
+ * the entire position instead. A partial stop gets priority only if its
+ * remainder is margined: a 50 % stop does, a 2 % stop does not.
  *
- * - A process_orders_on_close short that the fee and the slippage leave short
- *   of margin at its entry close carries a call sized at that close. While
- *   that call still covers the open's own shortfall the open does not re-size
- *   it, and it is a queued order: it executes at the next open before the stop
- *   the open gaps through. This is TradingView's tape of
- *   axealgo-tp-sl-toolkit-axealgo on OANDA:XAUUSD 15 (2025-06-01 22:00: Margin
- *   call 1, then the stop's 1.62); here an explicit short of 3, at a capital
- *   one dollar over its cost at the signal close, does the same on the XAUUSD
- *   fixture bars.
- *   - Control, with $500 more capital (10509.845 against 10010.845): no call
- *     is sized at the close, and the gapped stop takes the whole short.
- * - A partial stop the open gaps through fills first only when what it leaves
- *   is margined.
- *   - The 50 % stop leaves a margined half and fills first with no call, as
- *     stop_priority stop-09 and stop-10 do on TradingView's tapes.
- *   - The 2 % stop leaves a short remainder. Then the call at the open comes
- *     first, as before. No TradingView tape decides that case yet.
- *
- * Every row below is asserted as the engine books it: side, quantity, entry
- * and exit price and time, and whether a margin call or the stop closed it.
+ * Every row checks side, quantity, entry and exit prices and times, and the
+ * exit id. Both partial-stop scenarios also compare batch and forward runs.
  */
 
 #include <pineforge/bar.hpp>
@@ -57,31 +41,30 @@ static int tests_failed = 0;
         }                                                                      \
     } while (0)
 
-#ifndef PINEFORGE_ADMISSION_RULES_FIXTURE_DIR
-#error "PINEFORGE_ADMISSION_RULES_FIXTURE_DIR must name tests/fixtures/admission_rules"
-#endif
-
 namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
+constexpr std::int64_t kEpoch = 946684800000LL;
+constexpr std::int64_t kPeriod = 900000LL;
+
+std::int64_t at(int index) { return kEpoch + index * kPeriod; }
+
 std::vector<Bar> load_bars(const std::string& name) {
-    std::ifstream in(std::string(PINEFORGE_ADMISSION_RULES_FIXTURE_DIR) + "/bars/" + name);
-    std::string line;
-    std::getline(in, line);
-    std::vector<Bar> bars;
-    while (std::getline(in, line)) {
-        std::vector<std::string> cells;
-        std::string cell;
-        std::istringstream row(line);
-        while (std::getline(row, cell, ',')) cells.push_back(cell);
-        if (cells.size() != 6) continue;
-        bars.push_back({std::strtod(cells[1].c_str(), nullptr), std::strtod(cells[2].c_str(), nullptr),
-                        std::strtod(cells[3].c_str(), nullptr), std::strtod(cells[4].c_str(), nullptr),
-                        std::strtod(cells[5].c_str(), nullptr),
-                        static_cast<std::int64_t>(std::strtoll(cells[0].c_str(), nullptr, 10))});
+    // Flat OHLC makes every adverse checkpoint explicit; no hidden extreme
+    // changes the call size. The gap opens beyond the resting stop.
+    if (name == "close-call") {
+        return {{200.0, 200.0, 200.0, 200.0, 1.0, at(0)},
+                {201.0, 201.0, 201.0, 201.0, 1.0, at(1)},
+                {201.0, 201.0, 201.0, 201.0, 1.0, at(2)},
+                {201.0, 201.0, 201.0, 201.0, 1.0, at(3)}};
     }
-    return bars;
+    return {{100.0, 100.0, 100.0, 100.0, 1.0, at(0)},
+            {100.0, 100.0, 100.0, 100.0, 1.0, at(1)},
+            {100.1, 100.1, 100.1, 100.1, 1.0, at(2)},
+            {103.0, 103.0, 103.0, 103.0, 1.0, at(3)},
+            {103.0, 103.0, 103.0, 103.0, 1.0, at(4)},
+            {104.0, 104.0, 104.0, 104.0, 1.0, at(5)}};
 }
 
 // One short opened on one bar with its protective stop, closed by close_all
@@ -122,10 +105,6 @@ public:
         configure_pine_strategy(config);
         set_syminfo_mintick(s.tick);
         set_syminfo_metadata("qty_step", s.step);
-        if (std::string(s.bars).rfind("f-", 0) == 0) {
-            set_syminfo_timezone("America/New_York");
-            set_syminfo_session("0930-1600");
-        }
     }
 
     void on_source_bar(const Bar& bar) override {
@@ -196,45 +175,48 @@ void expect(const Scenario& s, const std::vector<Row>& rows, bool forward) {
 
 int main() {
     std::printf("=== the point order's margin call at a gapped open ===\n");
-    // XAUUSD fixture bars: an explicit short of 3 at the 2025-07-04 16:45 UTC
-    // close under process_orders_on_close (fee 0.05 %, slippage 2), its stop at
-    // 3340, gapped by the 3341.57 open of 2025-07-06 22:00.
-    const char* xau = "xau-2025-07-03-2025-07-08.csv";
-    const std::int64_t xau_open = 1751647500000;
-    const std::int64_t xau_gap = 1751839200000;
-    const std::int64_t xau_end = 1751931000000;
-    const Scenario call_sized_at_close{"close-sized call, then the gapped stop", xau, 0.001, 0.01,
-        10010.845, false, 3.0, 0.05, 2, true, xau_open, 3340.0, 100.0, xau_end};
-    expect(call_sized_at_close, {{1.0, xau_open, xau_gap, 3336613, 3341572, "__margin_call__"},
-                                 {2.0, xau_open, xau_gap, 3336613, 3341572, "SE"}},
-           false);
-    const Scenario room_at_close{"control: no call sized at the close, the stop takes all", xau,
-        0.001, 0.01, 10509.845, false, 3.0, 0.05, 2, true, xau_open, 3340.0, 100.0, xau_end};
-    expect(room_at_close, {{3.0, xau_open, xau_gap, 3336613, 3341572, "SE"}}, false);
+    // Short entry = 200 - 2*0.01 = 199.98; entry fee =
+    // 3*199.98*0.0005 = 0.29997. At the signal close, equity =
+    // 600.1 - 0.29997 - 3*0.02 = 599.74003 against margin 600:
+    // q_restore = 0.25997/200 < 0.01, hence the one-unit queued call.
+    // At the gap, equity = 600.1 - 0.29997 - 3*1.02 = 596.74003 and
+    // q_restore = (603 - 596.74003)/201 = 0.03114...,
+    // floor-to-0.01 then 4x = 0.12 <= the queued one unit: no re-sizing.
+    // Both gap exits buy at 201 + 2*0.01 = 201.02.
+    const Scenario call_sized_at_close{"close-sized call, then the gapped stop",
+        "close-call", 0.01, 0.01, 600.1, false, 3.0, 0.05, 2, true,
+        at(0), 200.5, 100.0, at(2)};
+    expect(call_sized_at_close, {{1.0, at(0), at(1), 19998, 20102, "__margin_call__"},
+                                 {2.0, at(0), at(1), 19998, 20102, "SE"}}, false);
+    // Extra capital removes the close's deficit, so all three hit the stop.
+    const Scenario room_at_close{"control: no call sized at the close, the stop takes all",
+        "close-call", 0.01, 0.01, 650.1, false, 3.0, 0.05, 2, true,
+        at(0), 200.5, 100.0, at(2)};
+    expect(room_at_close, {{3.0, at(0), at(1), 19998, 20102, "SE"}}, false);
 
-    // NYSE:F fixture bars: 100 % of equity short at the 2025-10-20 18:45 UTC
-    // signal, filled at the next open; a partial stop at 12.115 gapped by the
-    // 12.26 open of 2025-10-21 13:30.
-    const char* f = "f-2025-10-20-2025-10-22.csv";
-    const std::int64_t f_signal = 1760985900000;
-    const std::int64_t f_fill = 1760986800000;
-    const std::int64_t f_call = 1760989500000;
-    const std::int64_t f_gap = 1761053400000;
-    const std::int64_t f_end_signal = 1761073200000;
-    const std::int64_t f_end = 1761074100000;
+    // Equity 100000 / signal 100 = 1000 whole units. At 100.1:
+    // q_restore = 1000 - 99900/100.1 = 1.998... -> floor 1 * 4 = 4.
+    // At gap 103 the 996 survivors have equity
+    // 100000 - 4*0.1 - 996*3 = 97011.6; q_restore =
+    // 996 - 97011.6/103 = 54.1398... -> floor 54 * 4 = 216.
+    // A 2 % stop reserves floor(1000*0.02)=20, leaving 976 if first:
+    // 976*103 > 97011.6, so the call precedes it; 996-216-20=760 remain.
+    // A 50 % stop reserves 500, leaving 496*103=51088 < 97011.6:
+    // it fills first with no gap call, and 996-500=496 remain.
+    // The sub-tick stop is crossed by the gap; prices/0.01 give tick rows.
     const Scenario partial_short_remainder{"2 % stop: the remainder is short, the call comes first",
-        f, 0.01, 1.0, 106282.0, true, 0.0, 0.0, 0, false, f_signal, 12.115, 2.0, f_end_signal};
-    expect(partial_short_remainder, {{112.0, f_fill, f_call, 1200, 1202, "__margin_call__"},
-                                     {1040.0, f_fill, f_gap, 1200, 1226, "__margin_call__"},
-                                     {177.0, f_fill, f_gap, 1200, 1226, "SE"},
-                                     {7527.0, f_fill, f_end, 1200, 1257, "__close__"}},
-           true);
+        "partial-call", 0.01, 1.0, 100000.0, true, 0.0, 0.0, 0, false,
+        at(0), 100.505, 2.0, at(4)};
+    expect(partial_short_remainder, {{4.0, at(1), at(2), 10000, 10010, "__margin_call__"},
+                                     {216.0, at(1), at(3), 10000, 10300, "__margin_call__"},
+                                     {20.0, at(1), at(3), 10000, 10300, "SE"},
+                                     {760.0, at(1), at(5), 10000, 10400, "__close__"}}, true);
     const Scenario partial_margined_remainder{"50 % stop: the remainder is margined, the stop fills first",
-        f, 0.01, 1.0, 106282.0, true, 0.0, 0.0, 0, false, f_signal, 12.115, 50.0, f_end_signal};
-    expect(partial_margined_remainder, {{112.0, f_fill, f_call, 1200, 1202, "__margin_call__"},
-                                        {4428.0, f_fill, f_gap, 1200, 1226, "SE"},
-                                        {4316.0, f_fill, f_end, 1200, 1257, "__close__"}},
-           true);
+        "partial-call", 0.01, 1.0, 100000.0, true, 0.0, 0.0, 0, false,
+        at(0), 100.505, 50.0, at(4)};
+    expect(partial_margined_remainder, {{4.0, at(1), at(2), 10000, 10010, "__margin_call__"},
+                                        {500.0, at(1), at(3), 10000, 10300, "SE"},
+                                        {496.0, at(1), at(5), 10000, 10400, "__close__"}}, true);
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed ? 1 : 0;

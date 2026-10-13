@@ -71,7 +71,7 @@ bool near(double a, double b) {
     return std::abs(a - b) < 1e-9;
 }
 
-// One NYSE-style session (0930-1600 America/New_York) of 15m bars: 26 bars
+// One synthetic session (0930-1600 America/New_York) of 15m bars: 26 bars
 // from 09:30 to 15:45, closes 100*(day+1) + k so the last 15m close of day d
 // is 100*(d+1) + 25.
 std::vector<Bar> ny_session(int day, int64_t open_ms) {
@@ -84,14 +84,15 @@ std::vector<Bar> ny_session(int day, int64_t open_ms) {
     return bars;
 }
 
-constexpr int64_t kNyDay1 = 1704205800000;  // 2024-01-02 09:30 America/New_York
+// Invented winter weekday: eleven epoch days plus 14:30 UTC (09:30 local).
+constexpr int64_t kNyDay1 = 11 * kDay + (14 * 60 + 30) * kMinute;
 constexpr int64_t kNyDay2 = kNyDay1 + kDay;
 
 void test_completed_daily_bucket_carries_the_native_bar() {
     std::vector<Bar> chart = ny_session(0, kNyDay1);
     const std::vector<Bar> day2 = ny_session(1, kNyDay2);
     chart.insert(chart.end(), day2.begin(), day2.end());
-    // TradingView's own daily bars: the official close differs from the last
+    // Invented native daily bars: the official close differs from the last
     // 15m close (125 / 225), and so do open/volume.
     const Bar daily[] = {
         {99.0, 130.0, 90.0, 111.5, 5000.0, kNyDay1},
@@ -270,7 +271,8 @@ void test_split_aux_feed_path_substitutes_the_same_native_bar() {
 // stamped at the 17:00 open and closes at 16:00 the next calendar day, with
 // TradingView's close the 15:00 settlement rather than the 15:45 bar's close.
 void test_overnight_cme_session_labels_by_session_day() {
-    constexpr int64_t open1 = 1704236400000;  // 2024-01-02 17:00 America/Chicago
+    // 14:30 UTC + 8h30 = 23:00 UTC, the winter 17:00 Chicago open.
+    constexpr int64_t open1 = kNyDay1 + (8 * 60 + 30) * kMinute;
     constexpr int64_t open2 = open1 + kDay;
     constexpr int64_t open3 = open2 + kDay;
     std::vector<Bar> chart;
@@ -323,83 +325,38 @@ void test_overnight_cme_session_labels_by_session_day() {
 // ── the tuple form: [o, h, l, c, v] = request.security(tickerid, tf, [open,
 // high, low, close, volume]) reads the same native row ────────────────────
 //
-// Round 7 family K (mukhlisilahi universal-backtest-pro NYSE:F@15, campaign
-// note log-20260905t084530z-66c3f27e): the probe's chart EMAs run on the
-// CLOSE element of a five-field tuple request whose timeframe is an
-// input.timeframe("D") variable. The codegen lowers the tuple body to one
-// evaluator that assigns every element from the completed bucket
-// (`_req_sec_0_3 = bar.close`), so the substitution the scalar path gets in
-// feed_security_input applies to it unchanged — pinned here on the registry
-// NYSE:F 15m bars of 2025-04-22 / 04-23 (feed 80f404ae85ef) against the
-// exchange's own 1D rows (feed e3dd3a88e85b): 04-22 closes 9.65 where the
-// last 15m print is 9.655; 04-23 is 9.835 / 10.0054 / 9.71 / 9.78 /
-// 158,691,527 where the aggregate reads 9.83 / 10.00 / 9.715 / 9.765.
-// (The probe's own runs never had the feed: the harness routes the native
-// daily candidate only for a LITERAL "D"/"1D" timeframe argument —
-// pineforge-lab verify_routing.py executable_uses_daily_security — so an
-// input-bound timeframe kept the aggregate. That is the harness's fix.)
+// Synthetic tuple fixture pinned against TradingView behaviour (recorded
+// tapes are kept outside this repository). An input-bound "D"/"1D" request
+// assigns every tuple member from the completed daily bucket. Native rows
+// must replace that entire bucket without rounding fractional prices; with
+// no native feed, all five members must remain the intraday aggregate.
 namespace {
 
-constexpr int64_t kApr22_1330Z = 1745328600000LL;  // 2025-04-22 13:30Z
-constexpr int64_t kApr23_1330Z = 1745415000000LL;  // 2025-04-23 13:30Z
-
-Bar f15(double o, double h, double l, double c, double v) {
-    return Bar{o, h, l, c, v, 0};
-}
-
-// NYSE:F 15m, the two full sessions (26 bars each), registry prints.
-std::vector<Bar> f15_apr22_apr23() {
-    std::vector<Bar> d1 = {
-        f15(9.55, 9.635, 9.53, 9.605, 427205), f15(9.605, 9.63, 9.59, 9.59, 219496),
-        f15(9.59, 9.595, 9.55, 9.56, 218153), f15(9.56, 9.595, 9.54, 9.57, 306707),
-        f15(9.56, 9.62, 9.56, 9.615, 155463), f15(9.61, 9.615, 9.58, 9.605, 174014),
-        f15(9.61, 9.67, 9.61, 9.665, 283781), f15(9.67, 9.67, 9.625, 9.63, 119196),
-        f15(9.635, 9.66, 9.61, 9.615, 109087), f15(9.615, 9.66, 9.61, 9.66, 186877),
-        f15(9.655, 9.7, 9.655, 9.675, 333614), f15(9.67, 9.71, 9.65, 9.695, 239144),
-        f15(9.69, 9.72, 9.69, 9.705, 168025), f15(9.705, 9.705, 9.68, 9.7, 220522),
-        f15(9.69, 9.695, 9.63, 9.63, 287554), f15(9.635, 9.64, 9.535, 9.545, 414666),
-        f15(9.55, 9.6, 9.53, 9.6, 175623), f15(9.605, 9.605, 9.565, 9.565, 75129),
-        f15(9.56, 9.62, 9.56, 9.615, 112723), f15(9.61, 9.64, 9.61, 9.63, 158776),
-        f15(9.625, 9.64, 9.62, 9.62, 86466), f15(9.62, 9.65, 9.62, 9.65, 122109),
-        f15(9.64, 9.65, 9.63, 9.63, 64055), f15(9.64, 9.64, 9.605, 9.615, 166832),
-        f15(9.61, 9.665, 9.61, 9.66, 220974), f15(9.65, 9.67, 9.62, 9.655, 672067),
-    };
-    std::vector<Bar> d2 = {
-        f15(9.83, 9.93, 9.81, 9.9, 914063), f15(9.895, 10, 9.86, 9.895, 1019468),
-        f15(9.9, 9.955, 9.85, 9.895, 704662), f15(9.9, 9.92, 9.85, 9.9, 185224),
-        f15(9.9, 9.92, 9.86, 9.89, 235711), f15(9.89, 9.895, 9.86, 9.88, 153999),
-        f15(9.875, 9.9, 9.825, 9.9, 417687), f15(9.895, 9.895, 9.81, 9.83, 485316),
-        f15(9.835, 9.87, 9.77, 9.835, 363176), f15(9.84, 9.845, 9.75, 9.785, 412994),
-        f15(9.785, 9.8, 9.755, 9.77, 218683), f15(9.775, 9.775, 9.715, 9.765, 164273),
-        f15(9.77, 9.835, 9.765, 9.83, 307265), f15(9.82, 9.835, 9.8, 9.835, 257656),
-        f15(9.83, 9.87, 9.77, 9.865, 357318), f15(9.865, 9.885, 9.855, 9.86, 193816),
-        f15(9.86, 9.865, 9.81, 9.84, 155121), f15(9.845, 9.89, 9.835, 9.88, 280372),
-        f15(9.875, 9.9, 9.85, 9.88, 248374), f15(9.88, 9.895, 9.83, 9.835, 146731),
-        f15(9.84, 9.87, 9.83, 9.83, 91255), f15(9.835, 9.84, 9.81, 9.81, 53131),
-        f15(9.815, 9.835, 9.8, 9.81, 116294), f15(9.81, 9.81, 9.75, 9.755, 165863),
-        f15(9.76, 9.785, 9.755, 9.77, 222441), f15(9.77, 9.795, 9.755, 9.765, 536554),
-    };
+// Two full invented daytime sessions, aligned to the same winter 09:30
+// session open as the scalar tests. Keeping all 26 quarter-hour slots makes
+// completion occur at indices 25 and 51, with the first row held in between.
+std::vector<Bar> synthetic_tuple_sessions() {
     std::vector<Bar> chart;
-    for (std::size_t i = 0; i < d1.size(); ++i) {
-        d1[i].timestamp = kApr22_1330Z + static_cast<int64_t>(i) * kQuarter;
-        chart.push_back(d1[i]);
-    }
-    for (std::size_t i = 0; i < d2.size(); ++i) {
-        d2[i].timestamp = kApr23_1330Z + static_cast<int64_t>(i) * kQuarter;
-        chart.push_back(d2[i]);
+    for (int day = 0; day < 2; ++day) {
+        for (int k = 0; k < 26; ++k) {
+            const double c = 640.0 + 32.0 * day + 0.5 * (k % 7) + 0.125;
+            chart.push_back({c - 0.25, c + 0.75, c - 0.75, c,
+                             20.0 + 2.0 * k,
+                             kNyDay1 + day * kDay + k * kQuarter});
+        }
     }
     return chart;
 }
 
-// TradingView's own NYSE:F daily rows for the two sessions.
-const Bar kNativeApr22{9.55, 9.72, 9.53, 9.65, 121387081.0, kApr22_1330Z};
-const Bar kNativeApr23{9.835, 10.0054, 9.71, 9.78, 158691527.0, kApr23_1330Z};
+// Invented native rows. Day 1 shares aggregate O/H/L but replaces close and
+// volume; day 2 differs in every member. Its high has sub-cent precision.
+const Bar kTupleDaily1{639.875, 643.875, 639.375, 642.12, 4096.0, kNyDay1};
+const Bar kTupleDaily2{672.125, 676.0625, 670.875, 674.25, 8192.0, kNyDay2};
 
 // The generated strategy's shape for `[o, h, l, c, v] = request.security(
 // syminfo.tickerid, tf_input, [open, high, low, close, volume])`: one
 // evaluator assigning the five members from the bucket it is handed, the
-// timeframe string an input value ("D" is input.timeframe's default; "1D"
-// is what an exported inputs.json spells).
+// timeframe string an input value ("D" is the default; "1D" is its alias).
 class TupleProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit TupleProbe(std::string tf) : tf_(std::move(tf)) {}
@@ -433,8 +390,8 @@ bool row_is(const TupleProbe::Row& r, const Bar& b) {
 
 void test_tuple_request_reads_the_native_daily_row() {
     for (const char* tf : {"D", "1D"}) {
-        std::vector<Bar> chart = f15_apr22_apr23();
-        const Bar daily[] = {kNativeApr22, kNativeApr23};
+        std::vector<Bar> chart = synthetic_tuple_sessions();
+        const Bar daily[] = {kTupleDaily1, kTupleDaily2};
         TupleProbe probe(tf);
         strategy_set_syminfo_timezone(
             static_cast<pf_strategy_t>(&probe), "America/New_York");
@@ -447,28 +404,31 @@ void test_tuple_request_reads_the_native_daily_row() {
                   false, 4, MagnifierDistribution::ENDPOINTS);
         assert(probe.last_error().empty());
         assert(probe.at_chart_close.size() == 52);
-        // na until the first daily completion (the 04-22 19:45Z bar).
+        // na until the first daily completion (session bar 25).
         assert(std::isnan(probe.at_chart_close[24].c));
-        // Every element of the tuple is the native row, verbatim: the
-        // sub-penny close 9.65 (aggregate 9.655), and on 04-23 the
-        // 10.0054 high / 9.835 open / 9.71 low / 9.78 close / the exchange
-        // volume (aggregate 9.83 / 10.0 / 9.715 / 9.765).
-        assert(row_is(probe.at_chart_close[25], kNativeApr22));
-        assert(row_is(probe.at_chart_close[26], kNativeApr22));   // held
-        assert(row_is(probe.at_chart_close[50], kNativeApr22));
-        assert(row_is(probe.at_chart_close[51], kNativeApr23));
-        assert(probe.at_chart_close[51].h == 10.0054);
-        assert(probe.at_chart_close[51].c == 9.78);
+        // Every tuple member must equal the supplied native row, verbatim.
+        // Day 1 close 642.12 differs from aggregate 642.125 by half a cent;
+        // day 2 high 676.0625 must retain its sub-cent fraction. The native
+        // day 2 O/H/L/C/V all differ from its intraday aggregate.
+        assert(row_is(probe.at_chart_close[25], kTupleDaily1));
+        assert(row_is(probe.at_chart_close[26], kTupleDaily1));   // held
+        assert(row_is(probe.at_chart_close[50], kTupleDaily1));
+        assert(row_is(probe.at_chart_close[51], kTupleDaily2));
+        // Direct native constants also catch tuple-field swaps or rounding.
+        assert(probe.at_chart_close[51].h == 676.0625);
+        assert(probe.at_chart_close[51].c == 674.25);
         assert(probe.native_security_substitutions() == 2);
         assert(probe.native_security_misses() == 0);
     }
 }
 
 void test_tuple_request_without_the_feed_is_the_aggregate() {
-    // The same run with no native feed — the shape the mukhlisilahi F@15
-    // case actually ran under — reads the 15m aggregate: 04-22 close 9.655,
-    // 04-23 9.83 / 10.0 / 9.715 / 9.765 and the summed volume.
-    std::vector<Bar> chart = f15_apr22_apr23();
+    // With no native feed, read the formula-generated intraday OHLCV.
+    // For day d: first open = 640 + 32*d + 0.125 - 0.25;
+    // high = 640 + 32*d + 6*0.5 + 0.125 + 0.75;
+    // low = 640 + 32*d + 0.125 - 0.75;
+    // final close = 640 + 32*d + (25 % 7)*0.5 + 0.125.
+    std::vector<Bar> chart = synthetic_tuple_sessions();
     TupleProbe probe("D");
     strategy_set_syminfo_timezone(
         static_cast<pf_strategy_t>(&probe), "America/New_York");
@@ -479,12 +439,11 @@ void test_tuple_request_without_the_feed_is_the_aggregate() {
     assert(probe.last_error().empty());
     assert(probe.at_chart_close.size() == 52);
     const TupleProbe::Row& d1 = probe.at_chart_close[25];
-    assert(d1.o == 9.55 && d1.h == 9.72 && d1.l == 9.53 && d1.c == 9.655);
+    assert(d1.o == 639.875 && d1.h == 643.875 && d1.l == 639.375 && d1.c == 642.125);
     const TupleProbe::Row& d2 = probe.at_chart_close[51];
-    assert(d2.o == 9.83 && d2.h == 10.0 && d2.l == 9.715 && d2.c == 9.765);
-    double vol = 0.0;
-    for (std::size_t i = 26; i < 52; ++i) vol += chart[i].volume;
-    assert(d2.v == vol);
+    assert(d2.o == 671.875 && d2.h == 675.875 && d2.l == 671.375 && d2.c == 674.125);
+    // Sum(k=0..25, 20 + 2*k) = 26*20 + 2*(25*26/2) = 1170.
+    assert(d2.v == 1170.0);
     assert(probe.native_security_substitutions() == 0);
 }
 

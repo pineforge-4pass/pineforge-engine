@@ -3,9 +3,9 @@
 Open-source checkouts use ``benchmarks/assets/``, a **public** git submodule
 (pineforge-benchmarks-assets, Apache-2.0) whose tree is ``data/`` (pinned OHLCV)
 and ``strategies/`` (the 100 public slots: ``.pine`` sources, ``tv_trades.csv``,
-engine trade lists, cloud-compiled Pyne, ``_indicators/``). Only the 101 closed
-slots are private: third-party TradingView scripts that maintainers
-extract from the evidence store into ``benchmarks/assets-closed/`` (gitignored).
+engine trade lists, cloud-compiled Pyne, ``_indicators/``). The 101 closed slots
+are held-out private strategies, available to maintainers in
+``benchmarks/assets-closed/`` (gitignored).
 
 If ``benchmarks/assets/strategies`` is missing, we fall back to inline
 ``benchmarks/data`` and ``benchmarks/strategies`` for maintainer monorepos or
@@ -24,7 +24,7 @@ else:
     ASSETS = BENCH
 STRATEGIES = ASSETS / "strategies"
 DATA = ASSETS / "data"
-# Maintainer-local closed slots (third-party TradingView, never public); absent in
+# Maintainer-local closed slots (held-out private strategies, never public); absent in
 # public checkouts, where STRATEGY_ROOTS is the public root alone.
 CLOSED_STRATEGIES = BENCH / "assets-closed" / "strategies"
 STRATEGY_ROOTS = [STRATEGIES] + ([CLOSED_STRATEGIES] if CLOSED_STRATEGIES.is_dir() else [])

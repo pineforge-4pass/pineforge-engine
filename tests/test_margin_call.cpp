@@ -1,6 +1,10 @@
 /*
  * test_margin_call.cpp — verify TradingView forced-liquidation (margin call).
  *
+ * Pinned against TradingView behaviour (recorded tapes of restricted markets
+ * are kept outside this repository). Non-crypto fixtures use invented prices
+ * and epoch-based timestamps; explicitly identified crypto controls remain.
+ *
  * Covers the principal behaviours of process_margin_call /
  * margin_liquidation_price:
  *
@@ -17,7 +21,7 @@
  *   C. A one-lot-or-larger opening affordability shortfall is trimmed on the
  *      entry bar using entry affordability and exit-side fill semantics.
  *
- *   D. A LEVERAGED long (margin_long = 20 => 5x) IS liquidated when price falls
+ *   D. A LEVERAGED long (margin_long = 50 => 2x) IS liquidated when price falls
  *      far enough; the forced exit fills at the bar's adverse extreme (LOW).
  *
  *   E. The margin-call emulator can be switched off (set_margin_call_enabled
@@ -272,7 +276,7 @@ static void test_short_margin_call_qty_step() {
 class ShortZeroCoverProbe : public MCEngine {
 public:
     explicit ShortZeroCoverProbe(double qty_step) {
-        initial_capital_ = 100.384250;
+        initial_capital_ = 100.003;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;
         commission_value_ = 0.0;
@@ -291,11 +295,11 @@ public:
 static void test_short_margin_call_zero_cover_closes_full_residual() {
     std::printf("test_short_margin_call_zero_cover_closes_full_residual\n");
     std::vector<Bar> bars = {
-        // Signal close freezes floor(100.38425 / 3788 / 0.0001) = 0.0265.
-        mk_bar(1000, 3788.00, 3788.00, 3788.00, 3788.00, 1.0),
-        // At HIGH: equity=100.37153, required=100.39472, so
-        // q_min=0.000006121... < qty_step and the truncated cover is zero.
-        mk_bar(2000, 3788.00, 3788.48, 3766.62, 3775.78, 1.0),
+        // Invented entry 250: floor(100.003/250/0.0001)*0.0001 = 0.4.
+        mk_bar(1000, 250.0, 250.0, 250.0, 250.0, 1.0),
+        // At high 250.01: E=100.003-0.4*0.01=99.999; margin=100.004.
+        // q_min=0.005/250.01=0.0000199992 < 0.0001: cover floors to zero.
+        mk_bar(2000, 250.0, 250.01, 248.0, 249.0, 1.0),
     };
 
     ShortZeroCoverProbe eng(/*qty_step=*/0.0001);
@@ -304,21 +308,19 @@ static void test_short_margin_call_zero_cover_closes_full_residual() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.entry_price(0), 3788.00));
-    CHECK(near(eng.exit_price(0), 3788.48));
-    CHECK(near(eng.trade_size(0), 0.0265));
+    CHECK(near(eng.entry_price(0), 250.0));
+    CHECK(near(eng.exit_price(0), 250.01));
+    CHECK(near(eng.trade_size(0), 0.4));
     CHECK(near(eng.position_size(), 0.0));
 }
 
-// Without the opt-in metadata the generic one-contract fallback applies. The
-// position here is 0.0265 contracts, far below one, so the min(1.0, qty) cap
-// closes the whole residual anyway — TV's own tapes contain 1,007 such capped
-// floor-zero events and match this 1,007/1,007.
+// Without the opt-in metadata, min(1.0, qty) still caps the one-contract
+// fallback to the entire invented 0.4-contract residual.
 static void test_short_margin_call_zero_cover_closes_sub_one_residual() {
     std::printf("test_short_margin_call_zero_cover_closes_sub_one_residual\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 3788.00, 3788.00, 3788.00, 3788.00, 1.0),
-        mk_bar(2000, 3788.00, 3788.48, 3766.62, 3775.78, 1.0),
+        mk_bar(1000, 250.0, 250.0, 250.0, 250.0, 1.0),
+        mk_bar(2000, 250.0, 250.01, 248.0, 249.0, 1.0),
     };
 
     ShortZeroCoverProbe eng(/*qty_step=*/0.0001);
@@ -326,7 +328,7 @@ static void test_short_margin_call_zero_cover_closes_sub_one_residual() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.trade_size(0), 0.0265));
+    CHECK(near(eng.trade_size(0), 0.4));
     CHECK(near(eng.position_size(), 0.0));
 }
 
@@ -336,10 +338,8 @@ static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble()
     // An all-in short of 10 @ entry from 10*entry of equity leaves
     //   q_min = 20 * (adverse - entry) / adverse
     // at the adverse high. The short cascade marks that deficit at the
-    // mintick-ROUNDED high (process_margin_call, the sizing-basis fix: the
-    // broker ledger is on-tick, 32 vs 0 reproduced slices on the NYSE:F
-    // tape), so the shape is built on ON-TICK prices where the rounding is
-    // an identity and the pin measures the lot rule alone: one penny of
+    // mintick-ROUNDED high. This synthetic shape uses ON-TICK prices where
+    // rounding is an identity, so the pin measures the lot rule alone: one penny of
     // adverse move at 2000.00 is mathematically exactly one 0.0001 lot,
     // but the engine's equivalent arithmetic represents the quotient just
     // below 1 (0.99999999998). A bare floor would erase the lot and
@@ -566,17 +566,19 @@ static void test_eps_deficit_chronology_slice_is_one_contract() {
 static void test_short_margin_call_zero_cover_without_qty_step_stays_continuous() {
     std::printf("test_short_margin_call_zero_cover_without_qty_step_stays_continuous\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 3788.00, 3788.00, 3788.00, 3788.00, 1.0),
-        mk_bar(2000, 3788.00, 3788.48, 3766.62, 3775.78, 1.0),
+        mk_bar(1000, 250.0, 250.0, 250.0, 250.0, 1.0),
+        mk_bar(2000, 250.0, 250.01, 248.0, 249.0, 1.0),
     };
 
     ShortZeroCoverProbe eng(/*qty_step=*/0.0);
     eng.run(bars.data(), (int)bars.size());
 
-    const double opened_qty = 100.384250 / 3788.00;
-    const double equity_at_high = 100.384250
-        - (3788.48 - 3788.00) * opened_qty;
-    const double q_min = opened_qty - equity_at_high / 3788.48;
+    // Continuous control: q=100.003/250=0.400012. At high 250.01,
+    // q_min=0.0000319996800128, so 4x=0.0001279987200512 (no lot floor).
+    const double opened_qty = 100.003 / 250.0;
+    const double equity_at_high = 100.003
+        - (250.01 - 250.0) * opened_qty;
+    const double q_min = opened_qty - equity_at_high / 250.01;
     const double expected_liquidation = 4.0 * q_min;
 
     CHECK(eng.trade_count() == 1);
@@ -590,9 +592,9 @@ static void test_short_margin_call_nonzero_cover_keeps_four_x_nibble() {
     std::printf("test_short_margin_call_nonzero_cover_keeps_four_x_nibble\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
-        // q_min=0.15085... = 1.50 qty steps. Floor-before-4x must
+        // q_min=20*0.8/100.8=0.158730... = 1.58 qty steps. Floor-before-4x must
         // therefore close 0.4, not the full 10-contract position.
-        mk_bar(2000, 100.0, 100.76, 99.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 100.80, 99.0, 100.0, 1.0),
     };
 
     ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/0.1);
@@ -601,7 +603,7 @@ static void test_short_margin_call_nonzero_cover_keeps_four_x_nibble() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.exit_price(0), 100.76));
+    CHECK(near(eng.exit_price(0), 100.80));
     CHECK(near(eng.trade_size(0), 0.4));
     CHECK(near(eng.position_size(), -9.6));
 }
@@ -716,15 +718,10 @@ static void test_long_100pct_margin_no_call() {
 }
 
 // A default 100%-of-equity MARKET order placed and filled from true flat.
-// A gap-up whose frozen-qty cost at the fill exceeds the sizing equity is
-// REJECTED at fill and silently dropped (design-cntvxiao-gap-reject) — with
-// or without a commission: the round-7 market-entry-admission pin (campaign
-// notes log-20260905t071818z-e57e7235 / log-20260905t071819z-ece9b623, lab
-// tv tapes scratchpad/r7/pins/macd1d-mktadmit-*, 0.1% commission, 206
-// placements, 0 violations) shows TradingView tests floored_qty x tick(fill)
-// <= equity with the fee EXCLUDED. A COMMISSIONED fill whose cost fits but
-// whose cost + fee does not (the fee-only shortfall) keeps the KI-61
-// fill-then-entry-bar affordability-trim path.
+// Floored quantity times tick(fill) must fit sizing equity, excluding fees.
+// A gap that breaches it is rejected even with zero commission.
+// An affordable fill whose fee alone creates a shortfall instead takes the
+// fill-then-entry-bar affordability trim. These bars and budgets are invented.
 class FrozenAllInFlatLongProbe : public MCEngine {
 public:
     explicit FrozenAllInFlatLongProbe(double commission_percent) {
@@ -766,9 +763,8 @@ static void test_zero_cost_frozen_all_in_true_flat_gap_is_rejected() {
 // Commission 10% + the same above-equity gap-up: signal sizing reserves the
 // fee, floor(1000/1.1/100) = 9, and the 120 fill costs 9 x 120 = 1080 > 1000
 // — the fee is not part of the test, so TV REJECTS the entry outright: no
-// fill, no entry-bar margin call, FLAT. (Until the round-7 pin the engine
-// filled 9 @ 120 and trimmed 4 on the entry bar — TV's z8830 bb-macd probes
-// on NYSE:F@1D 2025-09-19 and OANDA:XAUUSD@1D 2025-07-14 show no such row.)
+// fill, no entry-bar margin call, FLAT. Missing fill-time admission would
+// fill nine and incorrectly trim four on the entry bar.
 static void test_commissioned_frozen_all_in_true_flat_gap_is_rejected() {
     std::printf("test_commissioned_frozen_all_in_true_flat_gap_is_rejected\n");
     std::vector<Bar> bars = {
@@ -787,8 +783,8 @@ static void test_commissioned_frozen_all_in_true_flat_gap_is_rejected() {
 // through and the KI-61 entry-bar affordability trim fires: restoring needs
 // 9 - (1000 - 99)/110 = 0.809 lots, which floors to zero and takes the
 // opening event's one-contract fallback — one lot closes on the entry bar
-// at the fill, 8 are held. (The tapes' shape: NYSE:F 2025-07-29 896 @ 11.29
-// vs equity 10125.50, OANDA:XAUUSD 2025-10-22 2.93 @ 4110.085 vs 12043.12.)
+// at the fill, 8 are held. Pinned against TradingView behaviour (recorded
+// tapes are kept outside this repository); the fixture is synthetic.
 static void test_commissioned_frozen_all_in_true_flat_fee_only_shortfall_is_eligible() {
     std::printf("test_commissioned_frozen_all_in_true_flat_fee_only_shortfall_is_eligible\n");
     std::vector<Bar> bars = {
@@ -925,96 +921,105 @@ public:
 static void test_fee_created_floor_zero_closes_one_contract() {
     std::printf("test_fee_created_floor_zero_closes_one_contract\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 1801.33, 1801.33, 1801.33, 1801.33, 1.0),
-        mk_bar(2000, 1801.34, 1801.34, 1801.34, 1801.34, 1.0),
-    };
-    CommissionedDefaultPoeDustProbe eng(
-        /*initial_capital=*/10000.0, /*qty_step=*/0.0001);
-    eng.run(bars.data(), (int)bars.size());
-
-    // Frozen qty is 5.5459. Margin alone retains positive headroom, but the
-    // 0.1% opening fee creates raw q_min=0.00002307... < one step.
-    CHECK(eng.trade_count() == 1);
-    CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.entry_price(0), 1801.34));
-    CHECK(near(eng.exit_price(0), 1801.34));
-    CHECK(near(eng.trade_size(0), 1.0));
-    CHECK(near(eng.position_size(), 4.5459));
-}
-
-static void test_fee_created_floor_zero_caps_sub_one_position() {
-    std::printf("test_fee_created_floor_zero_caps_sub_one_position\n");
-    std::vector<Bar> bars = {
-        mk_bar(1000, 1500.0, 1500.0, 1500.0, 1500.0, 1.0),
-        mk_bar(2000, 1500.01, 1500.01, 1500.01, 1500.01, 1.0),
+        mk_bar(1000, 125.0, 125.0, 125.0, 125.0, 1.0),
+        mk_bar(2000, 125.001, 125.001, 125.001, 125.001, 1.0),
     };
     CommissionedDefaultPoeDustProbe eng(
         /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
     eng.run(bars.data(), (int)bars.size());
 
+    // q=floor(1000/1.001/125/0.0001)*0.0001=7.992.
+    // Fee-inclusive cost 7.992*125.001*1.001=1000.006999992:
+    // q_min=0.006999992/125.001=0.0000559995, so close 1 and hold 6.992.
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.trade_size(0), 0.666));
+    CHECK(near(eng.entry_price(0), 125.001));
+    CHECK(near(eng.exit_price(0), 125.001));
+    CHECK(near(eng.trade_size(0), 1.0));
+    CHECK(near(eng.position_size(), 6.992));
+}
+
+static void test_fee_created_floor_zero_caps_sub_one_position() {
+    std::printf("test_fee_created_floor_zero_caps_sub_one_position\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 125.0, 125.0, 125.0, 125.0, 1.0),
+        mk_bar(2000, 125.01, 125.01, 125.01, 125.01, 1.0),
+    };
+    CommissionedDefaultPoeDustProbe eng(
+        /*initial_capital=*/100.0, /*qty_step=*/0.0001);
+    eng.run(bars.data(), (int)bars.size());
+
+    // q=floor(100/1.001/125/0.0001)*0.0001=0.7992.
+    // q_min=(0.7992*125.01*1.001-100)/125.01=0.0000631949.
+    // The one-contract fallback caps to the whole 0.7992 position.
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 0.7992));
     CHECK(near(eng.position_size(), 0.0));
 }
 
 static void test_fee_created_sub_half_cent_deficit_respects_fx_ledger() {
     std::printf("test_fee_created_sub_half_cent_deficit_respects_fx_ledger\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 1500.0, 1500.0, 1500.0, 1500.0, 1.0),
-        mk_bar(2000, 1500.005, 1500.005, 1500.005, 1500.005, 1.0),
+        mk_bar(1000, 125.0, 125.0, 125.0, 125.0, 1.0),
+        mk_bar(2000, 125.002, 125.002, 125.002, 125.002, 1.0),
     };
-    // q=0.666 leaves enough lot-floor headroom that the adverse fill creates
-    // only a $0.00233 post-fee deficit. A same-currency broker compares the
-    // raw amounts and applies the one-contract fallback (capped to the full
-    // sub-one position).
+    // q=floor(100/1.001/125/0.0001)*0.0001=0.7992. Cost with fee:
+    // 0.7992*125.002*1.001=100.0014999984, a 0.0014999984 deficit.
+    // Same-currency raw money sees q_min=0.0000119998: cap to 0.7992.
+    // Converted cent money rounds the cost to 100.00, so no trim.
     CommissionedDefaultPoeDustProbe same_currency(
-        /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
+        /*initial_capital=*/100.0, /*qty_step=*/0.0001);
     same_currency.run(bars.data(), (int)bars.size());
     CHECK(same_currency.trade_count() == 1);
-    CHECK(near(same_currency.trade_size(0), 0.666));
+    CHECK(near(same_currency.trade_size(0), 0.7992));
     CHECK(near(same_currency.position_size(), 0.0));
 
     // A configured quote->account provider selects TV's converted cent ledger.
     // Both bars use rate 1 so conversion lifecycle, not rate magnitude, is the
     // sole factor. The sub-half-cent remainder stays affordable.
     CommissionedDefaultPoeDustProbe converted_currency(
-        /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
+        /*initial_capital=*/100.0, /*qty_step=*/0.0001);
     const int64_t timestamps[] = {0};
     const double rates[] = {1.0};
     CHECK(converted_currency.set_account_currency_fx_series(
         timestamps, rates, 1));
     converted_currency.run(bars.data(), (int)bars.size());
     CHECK(converted_currency.trade_count() == 0);
-    CHECK(near(converted_currency.position_size(), 0.666));
+    CHECK(near(converted_currency.position_size(), 0.7992));
 }
 
 static void test_fee_created_nonzero_floor_keeps_four_x_quantity() {
     std::printf("test_fee_created_nonzero_floor_keeps_four_x_quantity\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 1872.19, 1872.19, 1872.19, 1872.19, 1.0),
-        mk_bar(2000, 1872.27, 1872.27, 1872.27, 1872.27, 1.0),
+        mk_bar(1000, 125.0, 125.0, 125.0, 125.0, 1.0),
+        mk_bar(2000, 125.003, 125.003, 125.003, 125.003, 1.0),
     };
     CommissionedDefaultPoeDustProbe eng(
-        /*initial_capital=*/9949.545946, /*qty_step=*/0.0001);
+        /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
     eng.run(bars.data(), (int)bars.size());
 
-    // raw q_min=0.00014707... floors to 0.0001 before the established 4x.
+    // q=7.992; q_min=(7.992*125.003*1.001-1000)/125.003
+    // =0.000183995392 = 1.84 qty steps -> floor 0.0001 -> 4x 0.0004; held 7.9916.
+    // (4x before the floor would give floor(7.36 steps) = 0.0007: the order is pinned.)
     CHECK(eng.trade_count() == 1);
     CHECK(near(eng.trade_size(0), 0.0004));
-    CHECK(near(eng.position_size(), 5.3086));
+    CHECK(near(eng.position_size(), 7.9916));
 }
 
 static void test_fee_created_floor_zero_rejects_off_grid_one_contract() {
     std::printf("test_fee_created_floor_zero_rejects_off_grid_one_contract\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
-        mk_bar(2000, 1800.01, 1800.01, 1800.01, 1800.01, 1.0),
+        mk_bar(1000, 80.0, 80.0, 80.0, 80.0, 1.0),
+        mk_bar(2000, 80.004, 80.004, 80.004, 80.004, 1.0),
     };
     CommissionedDefaultPoeDustProbe eng(
-        /*initial_capital=*/9009.02, /*qty_step=*/2.5);
+        /*initial_capital=*/400.42, /*qty_step=*/2.5);
     eng.run(bars.data(), (int)bars.size());
 
+    // floor_step(400.42/1.001/80, 2.5)=5. Cost with fee is
+    // 5*80.004*1.001=400.42002: positive sub-step restore, but one whole
+    // contract is off this 2.5-lot grid, so hold 5 without a fallback.
     CHECK(eng.trade_count() == 0);
     CHECK(near(eng.position_size(), 5.0));
 }
@@ -1024,18 +1029,21 @@ static void test_fee_created_floor_zero_rejects_off_grid_one_contract() {
 static void test_cash_per_order_floor_zero_closes_one_contract() {
     std::printf("test_cash_per_order_floor_zero_closes_one_contract\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
-        mk_bar(2000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
+        mk_bar(1000, 500.0, 500.0, 500.0, 500.0, 1.0),
+        mk_bar(2000, 500.0, 500.0, 500.0, 500.0, 1.0),
     };
     CommissionedDefaultPoeDustProbe eng(
-        /*initial_capital=*/10000.0, /*qty_step=*/0.0001,
-        CommissionType::CASH_PER_ORDER, /*commission_value=*/0.2);
+        /*initial_capital=*/1000.0, /*qty_step=*/0.0001,
+        CommissionType::CASH_PER_ORDER, /*commission_value=*/0.02);
     eng.run(bars.data(), (int)bars.size());
 
+    // q=floor(1000/500/0.0001)*0.0001=2, cost=1000.
+    // Fixed fee 0.02 gives q_min=(1000+0.02-1000)/500
+    // =0.00004: one-contract fallback leaves 2-1=1.
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
     CHECK(near(eng.trade_size(0), 1.0));
-    CHECK(near(eng.position_size(), 4.5555));
+    CHECK(near(eng.position_size(), 1.0));
 }
 
 // Repurposed from the KI-61 "sublot overage held" fixture (design-explicit-qty-
@@ -1044,15 +1052,8 @@ static void test_cash_per_order_floor_zero_closes_one_contract() {
 // ADVERSELY to 110: notional 10*110 = 1100 overshoots equity 1000. TV DECLINES
 // it outright with ZERO slack — the frozen path's one-lot lot-floor slack does
 // NOT apply to explicit qty — so the pre-fix "held 10 via lot-floor dust"
-// outcome is dead: no fill, no rows, no margin call. Evidence:
-// data/probes/pf-probe-allin-floor-comm0 (4,740 from-flat attempts; decline iff
-// fill notional > equity, commission-independent, zero slack). The KI-61
-// lot-floored opening-affordability trim these fixtures once exercised is still
-// pinned by the frozen/default-sized path (test_commissioned_frozen_all_in_
-// true_flat_fee_only_shortfall_is_eligible for the commissioned fee-only
-// admit+trim; the frozen
-// exemption tests for the sub-lot held case) plus test_explicit_qty_fill_
-// admission's GREEN-D.
+// outcome is dead: no fill, no rows, no margin call. The frozen/default-sized
+// fee-only control above still exercises the opening-affordability trim.
 static void test_explicit_all_in_zero_comm_adverse_gap_declined() {
     std::printf("test_explicit_all_in_zero_comm_adverse_gap_declined\n");
     std::vector<Bar> bars = {
@@ -1071,12 +1072,9 @@ static void test_explicit_all_in_zero_comm_adverse_gap_declined() {
 // Repurposed from the KI-61 "lot trim uses entry affordability" fixture. An
 // EXPLICIT-qty all-in true-flat MARKET entry (qty=10 == equity/close), commission
 // 4%, fill gaps ADVERSELY to 120: the NOTIONAL 10*120 = 1200 alone overshoots
-// equity 1000 (the fee is irrelevant to the predicate). Commission-scoping is
-// DEAD (data/probes/pf-probe-allin-floor-comm0 is comm=0 and still declines), so
-// TV DECLINES this too — the pre-fix "fill 10@120 then 4x entry-bar trim to hold
-// 2" outcome is dead. No fill, no Margin-call rows. The commissioned admit+trim
-// KI-61 semantics remain pinned by the FROZEN path
-// (test_commissioned_frozen_all_in_true_flat_fee_only_shortfall_is_eligible).
+// equity 1000 (the fee is irrelevant to the predicate). Commission does not
+// alter admission, so no fill or margin-call row is produced. The frozen
+// fee-only control above retains the commissioned admit-and-trim scenario.
 static void test_explicit_all_in_commissioned_adverse_gap_declined() {
     std::printf("test_explicit_all_in_commissioned_adverse_gap_declined\n");
     std::vector<Bar> bars = {
@@ -1207,11 +1205,8 @@ static void test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip() {
     // used to report fill@123 then trim to size 4) does NOT fire — the
     // "declined fills must not fire the dust-trim" reconciliation.
     //
-    // TV declines over-allocated stops too: cross-confirmed by
-    // pf-probe-ki65-dual-entry-precedence, whose UQ=1,000,000 (>=1000x
-    // over-notional) stop cells decline under the identical rule, lifting its
-    // canonical TV match 93.8% -> 100.0%. The LIMIT sibling below is UNAFFECTED
-    // (the gate is stop-entry-only) and still fills + trims.
+    // This stop-only admission gate does not apply to the limit sibling,
+    // which still fills and trims. Behaviour is pinned against TradingView.
     //
     // CAVEAT (register): the OVER-ALLOCATED FIXED-QTY class is UNPINNED by the
     // ki62 probe itself (which used all-in / marginal / fixed-small sizing). It
@@ -1326,7 +1321,7 @@ public:
         // (The fixture used to force a fill between the two placements; under
         // design-market-entry-affordability an ADD placed while already
         // holding the BASE is costed as held + add and declined at placement
-        // — masayanfx — whereas the same-source-bar pair placed from flat is
+        // whereas the same-source-bar pair placed from flat is
         // admitted with "held" frozen at placement, then trimmed here.)
         strategy_entry("BASE", is_long_, kNaN, kNaN, /*qty=*/2.0);
         strategy_entry("ADD", is_long_, kNaN, kNaN, /*qty=*/2.0);
@@ -1353,7 +1348,7 @@ static double expected_same_bar_pair_opening_liquidation(
 
 static void check_same_bar_explicit_pair_opening_trim(
         bool is_long, double account_fx, double initial_capital) {
-    constexpr double raw_fill = 1741.23;
+    constexpr double raw_fill = 1600.0;
     constexpr double one_entry_qty = 2.0;
     constexpr double total_qty = 4.0;
     constexpr double entry_fee = 20.0;
@@ -1370,6 +1365,11 @@ static void check_same_bar_explicit_pair_opening_trim(
     };
     eng.run(bars.data(), (int)bars.size());
 
+    // At FX=40: q_min=4-(200000-80)/(1600*40)=0.87625,
+    // floor 0.8762 then 4x=3.5048; FIFO closes 2 + 1.5048, holds 0.4952.
+    // At FX=1: q_min=4-(5000.08-80)/1600=0.92495,
+    // floor 0.9249 then 4x=3.6996; FIFO closes 2 + 1.6996, holds 0.3004.
+    // Both budgets sit halfway between lot boundaries, for either direction.
     const double expected_qty = expected_same_bar_pair_opening_liquidation(
         initial_capital, raw_fill, account_fx);
     double liquidated_qty = 0.0;
@@ -1386,8 +1386,8 @@ static void check_same_bar_explicit_pair_opening_trim(
 
 static void test_same_bar_explicit_pair_foreign_fx_direction_symmetry() {
     std::printf("test_same_bar_explicit_pair_foreign_fx_direction_symmetry\n");
-    constexpr double account_fx = 88.0;
-    constexpr double initial_capital = 500000.0;
+    constexpr double account_fx = 40.0;
+    constexpr double initial_capital = 200000.0;
     check_same_bar_explicit_pair_opening_trim(
         /*is_long=*/true, account_fx, initial_capital);
     check_same_bar_explicit_pair_opening_trim(
@@ -1397,21 +1397,16 @@ static void test_same_bar_explicit_pair_foreign_fx_direction_symmetry() {
 static void test_same_bar_explicit_pair_fx1_direction_symmetry() {
     std::printf("test_same_bar_explicit_pair_fx1_direction_symmetry\n");
     constexpr double account_fx = 1.0;
-    constexpr double initial_capital = 6000.0;
+    constexpr double initial_capital = 5000.08;
     check_same_bar_explicit_pair_opening_trim(
         /*is_long=*/true, account_fx, initial_capital);
     check_same_bar_explicit_pair_opening_trim(
         /*is_long=*/false, account_fx, initial_capital);
 }
 
-// The add would fill above the base short. RE-PIN (2026-09-03, design-market-
-// entry-affordability): an add placed while already HOLDING the base is
-// costed as the resulting position at the signal close — held 2 + add 2 =
-// 4 * 110 = 440 > MTM 420 - (110-100)*2 = 400 — and DECLINED at placement
-// (masayanfx NQ1 2025-07-30 20:15Z: TV drops an over-notional pyramiding
-// add). The base short stands (2 * 110 = 220 <= 400) and no margin call
-// fires. (This fixture used to assert admit-then-4x-trim marked at the latest
-// raw fill; that shape was never TV-pinned.)
+// Synthetic add above the base short: held 2 + add 2 at signal 110 needs
+// 4*110=440, but MTM=420-(110-100)*2=400. Placement declines the add.
+// The base short still fits (2*110=220 <= 400), with no margin call.
 class UnequalFillShortAddProbe : public MCEngine {
 public:
     UnequalFillShortAddProbe() {
@@ -1450,17 +1445,14 @@ static void test_short_add_opening_margin_marks_latest_raw_fill() {
     CHECK(near(eng.position_size(), -2.0));
 }
 
-// Literal non-POOC geometry from the Thula margin fork. The effective fixed FX
-// is deliberately inside the observed interval but remains an ordinary runtime
-// input; the expected broker rows are pinned directly, not computed by a copy
-// of the implementation formula.
+// Invented next-open pair: each two-contract order fits individually,
+// but the accepted pair receives a cumulative opening-margin checkpoint.
+// Literal expected rows below come from the designed budget and FIFO split.
 class NextOpenExplicitShortPairProbe : public MCEngine {
 public:
     NextOpenExplicitShortPairProbe() {
-        // Prior realized loss leaves 497641.70 before these fills; four
-        // account-native 20-per-contract opening fees make the broker's
-        // opening-equity basis exactly 497561.70.
-        initial_capital_ = 497641.70;
+        // Capital 25999.60 less four account-native fees of 20 gives 25919.60.
+        initial_capital_ = 25999.60;
         default_qty_type_ = QtyType::FIXED;
         commission_type_ = CommissionType::CASH_PER_CONTRACT;
         commission_value_ = 20.0;
@@ -1470,7 +1462,7 @@ public:
         pyramiding_ = 2;
         qty_step_ = 0.0001;
         syminfo_mintick_ = 0.01;
-        account_currency_fx_ = 85.3567;
+        account_currency_fx_ = 50.0;
     }
 
     void on_source_bar(const Bar& /*bar*/) override {
@@ -1483,23 +1475,27 @@ public:
 static void test_thula_next_open_short_pair_exact_margin_rows() {
     std::printf("test_thula_next_open_short_pair_exact_margin_rows\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 1700.0, 1700.0, 1700.0, 1700.0, 1.0),
-        mk_bar(2000, 1741.23, 1741.23, 1741.23, 1741.23, 1.0),
+        mk_bar(1000, 150.0, 150.0, 150.0, 150.0, 1.0),
+        mk_bar(2000, 160.0, 160.0, 160.0, 160.0, 1.0),
     };
     NextOpenExplicitShortPairProbe eng;
     eng.run(bars.data(), (int)bars.size());
 
+    // Each fill costs 2*160*50=16000 < 25999.60. Combined opening budget:
+    // q_min=4-25919.60/(160*50)=0.76005: halfway between lot boundaries.
+    // Floor 0.7600 then 4x=3.04, safely away from representation jitter.
+    // FIFO closes BASE's 2 and ADD's 1.04; remaining short=4-3.04=0.96.
     CHECK(eng.trade_count() == 2);
     CHECK(margin_call_rows(eng) == 2);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
     CHECK(eng.exit_comment(1) == std::string("Margin call"));
-    CHECK(near(eng.entry_price(0), 1741.23));
-    CHECK(near(eng.entry_price(1), 1741.23));
-    CHECK(near(eng.exit_price(0), 1741.23));
-    CHECK(near(eng.exit_price(1), 1741.23));
+    CHECK(near(eng.entry_price(0), 160.0));
+    CHECK(near(eng.entry_price(1), 160.0));
+    CHECK(near(eng.exit_price(0), 160.0));
+    CHECK(near(eng.exit_price(1), 160.0));
     CHECK(near(eng.trade_size(0), 2.0));
-    CHECK(near(eng.trade_size(1), 0.6088));
-    CHECK(near(eng.position_size(), -1.3912));
+    CHECK(near(eng.trade_size(1), 1.04));
+    CHECK(near(eng.position_size(), -0.96));
 }
 
 class ShortOpeningEventScopeProbe : public MCEngine {
@@ -1596,14 +1592,13 @@ static void test_short_opening_event_scope_is_explicit_market_margin100_only() {
     }
 }
 
-// Literal first reversal from a source-bound TV tape. The script closes Long
-// and then emits an omitted-qty Short in the same evaluation. Paid entry fees
-// reduce broker equity, and the close-then-short fill receives both the
-// fill-price affordability checkpoint and one bounded adverse-high retry.
+// Invented close-then-short sequence. Paid entry fees reduce broker
+// equity; the omitted-qty short receives a fill-price affordability check
+// and one bounded retry at the adverse high.
 class CommissionedDefaultShortCheckpointProbe : public MCEngine {
 public:
     CommissionedDefaultShortCheckpointProbe() {
-        initial_capital_ = 10000.0;
+        initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;
         commission_type_ = CommissionType::PERCENT;
@@ -1628,7 +1623,7 @@ public:
                 && opening_obligations_.actionable()
                 && opening_obligations_.requires_adverse_pass()
                 && opening_owner_matches_position()
-                && near(opening_obligations_.raw_fill_base(), 1798.09);
+                && near(opening_obligations_.raw_fill_base(), 99.0);
         }
     }
 
@@ -1646,9 +1641,9 @@ struct DefaultShortCheckpointResult {
 
 static DefaultShortCheckpointResult run_commissioned_default_short_checkpoint() {
     std::vector<Bar> bars = {
-        mk_bar(1000, 1801.48, 1801.48, 1801.48, 1801.48, 1.0),
-        mk_bar(2000, 1801.48, 1801.48, 1798.09, 1798.09, 1.0),
-        mk_bar(3000, 1798.09, 1806.33, 1798.09, 1804.62, 1.0),
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 100.0, 99.0, 99.0, 1.0),
+        mk_bar(3000, 99.0, 100.0, 99.0, 99.5, 1.0),
     };
     CommissionedDefaultShortCheckpointProbe eng;
     eng.run(bars.data(), static_cast<int>(bars.size()));
@@ -1675,11 +1670,22 @@ static void test_commissioned_close_then_short_exact_checkpoints() {
     CHECK(result.captured);
     CHECK(result.margin_rows == 2);
     CHECK(result.margin_qty.size() == 2);
-    CHECK(near(result.margin_qty[0], 0.0108, 1e-9));
-    CHECK(near(result.margin_exit[0], 1798.09, 1e-9));
-    CHECK(near(result.margin_qty[1], 0.1696, 1e-9));
-    CHECK(near(result.margin_exit[1], 1806.33, 1e-9));
-    CHECK(near(result.position, -5.3650, 1e-9));
+    // Long q=floor(1000/1.0005/100, 0.0001)=9.995; fee=0.49975.
+    // Signal MTM=1000-0.49975+(99-100)*9.995=989.50525;
+    // short q=floor(989.50525/1.0005/99, 0.0001)=9.99.
+    // After long closes: E=1000-9.995-9.995*(100+99)*0.0005
+    // =989.0104975. Short opening fee=9.99*99*0.0005=0.494505.
+    // Restore=9.99-(989.0104975-0.494505)/99=0.004989974747;
+    // floor 0.0049 then 4x=0.0196 at fill 99, leaving 9.9704.
+    CHECK(near(result.margin_qty[0], 0.0196, 1e-9));
+    CHECK(near(result.margin_exit[0], 99.0, 1e-9));
+    // Retry E=989.0104975-0.0196*99*0.0005
+    //          -9.9704*99*0.0005+(99-100)*9.9704=978.5455925.
+    // Restore=9.9704-978.5455925/100=0.184944075;
+    // floor 0.1849 then 4x=0.7396, leaving 9.9704-0.7396=9.2308.
+    CHECK(near(result.margin_qty[1], 0.7396, 1e-9));
+    CHECK(near(result.margin_exit[1], 100.0, 1e-9));
+    CHECK(near(result.position, -9.2308, 1e-9));
 }
 
 // Mirror a separate close-then-entry order pair on the LONG side. A
@@ -1689,7 +1695,7 @@ class CommissionedCloseThenLongProbe : public MCEngine {
 public:
     explicit CommissionedCloseThenLongProbe(bool explicit_qty)
         : explicit_qty_(explicit_qty) {
-        initial_capital_ = 10000.0;
+        initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;
         commission_type_ = CommissionType::PERCENT;
@@ -1729,22 +1735,29 @@ private:
 static void test_commissioned_close_then_long_floor_zero_scope() {
     std::printf("test_commissioned_close_then_long_floor_zero_scope\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 2968.50, 2968.50, 2968.50, 2968.50, 1.0),
-        mk_bar(2000, 2968.50, 2968.50, 2968.50, 2968.50, 1.0),
-        mk_bar(3000, 2967.80, 2967.80, 2967.80, 2967.80, 1.0),
+        mk_bar(1000, 250.0, 250.0, 250.0, 250.0, 1.0),
+        mk_bar(2000, 250.0, 250.0, 250.0, 250.0, 1.0),
+        mk_bar(3000, 249.94, 249.94, 249.94, 249.94, 1.0),
     };
     CommissionedCloseThenLongProbe omitted(/*explicit_qty=*/false);
     omitted.run(bars.data(), static_cast<int>(bars.size()));
     CommissionedCloseThenLongProbe explicit_control(/*explicit_qty=*/true);
     explicit_control.run(bars.data(), static_cast<int>(bars.size()));
 
+    // Short q=floor(1000/1.0005/250, 0.0001)=3.998.
+    // Signal equity=1000-3.998*250*0.0005=999.50025;
+    // long q=floor(999.50025/1.0005/250, 0.0001)=3.996.
+    // Short close equity=1000+(250-249.94)*3.998
+    // -3.998*(250+249.94)*0.0005=999.24049994.
+    // Restore=(3.996*249.94*1.0005-999.24049994)/249.94
+    // =0.00007649908 < 0.0001: one whole contract at 249.94 in both arms.
     CHECK(omitted.captured);
     CHECK(explicit_control.captured);
     CHECK(omitted.trade_count() == 2);  // short close + long margin trim
     CHECK(margin_call_rows(omitted) == 1);
     CHECK(omitted.exit_comment(1) == std::string("Margin call"));
-    CHECK(near(omitted.entry_price(1), 2967.80));
-    CHECK(near(omitted.exit_price(1), 2967.80));
+    CHECK(near(omitted.entry_price(1), 249.94));
+    CHECK(near(omitted.exit_price(1), 249.94));
     CHECK(near(omitted.trade_size(1), 1.0, 1e-9));
     // Same discontinuity and lot under the independently sized explicit call.
     CHECK(explicit_control.trade_count() == 2);
@@ -1754,7 +1767,7 @@ static void test_commissioned_close_then_long_floor_zero_scope() {
 
 // After the close-then-short fill-price trim, its bounded ordinary adverse
 // retry can require a positive restore quantity smaller than one configured
-// lot. TV's source-bound tape closes one whole contract at that exact
+// lot. The broker closes one whole contract at that exact
 // discontinuity. The former tagged/untagged arms below are retained as
 // identical-input repeat controls after removal of the unused lifecycle bit.
 class DefaultShortLaterFloorZeroProbe : public MCEngine {
@@ -1770,9 +1783,11 @@ public:
             "margin_zero_cover_full_liquidation",
             full_residual ? 1.0 : 0.0);
 
-        constexpr double qty = 3.6930;
-        constexpr double entry = 1799.94;
-        constexpr double adverse = 1801.26;
+        // Invented seed: solve the budget for restore 0.00005 at high 162;
+        // floor_step gives zero, so one-contract fallback leaves 4.25-1=3.25.
+        constexpr double qty = 4.25;
+        constexpr double entry = 160.0;
+        constexpr double adverse = 162.0;
         constexpr double raw_q_min = 0.00005;
         position_side_ = PositionSide::SHORT;
         position_cycle_seq_ = next_position_cycle_seq_++;
@@ -1796,7 +1811,7 @@ public:
 
     void trigger() {
         current_bar_ = mk_bar(
-            2000, 1800.00, 1801.26, 1799.50, 1800.50, 1.0);
+            2000, 161.0, 162.0, 159.0, 160.5, 1.0);
         bar_index_ = 1;
         process_margin_call(current_bar_);
     }
@@ -1820,13 +1835,13 @@ static void test_default_short_lifecycle_floor_zero_one_contract() {
     // The fallback is not conditioned on an entry-lifecycle label.
     CHECK(top_level.trade_count() == 1);
     CHECK(near(top_level.trade_size(0), 1.0, 1e-9));
-    CHECK(near(top_level.position_size(), -2.6930, 1e-9));
+    CHECK(near(top_level.position_size(), -3.25, 1e-9));
 
     CHECK(one_contract.trade_count() == 1);
     CHECK(one_contract.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(one_contract.exit_price(0), 1801.26));
+    CHECK(near(one_contract.exit_price(0), 162.0));
     CHECK(near(one_contract.trade_size(0), 1.0, 1e-9));
-    CHECK(near(one_contract.position_size(), -2.6930, 1e-9));
+    CHECK(near(one_contract.position_size(), -3.25, 1e-9));
     CHECK(one_contract.has_live_short_position());
     CHECK(!one_contract.opening_pending());
 
@@ -1836,9 +1851,9 @@ static void test_default_short_lifecycle_floor_zero_one_contract() {
     // whole contract and HOLDS the remainder (TV never prints a full
     // liquidation at these eps-scale deficits — finding 279, serhan ADX).
     CHECK(full_residual.trade_count() == 1);
-    CHECK(near(full_residual.exit_price(0), 1801.26));
+    CHECK(near(full_residual.exit_price(0), 162.0));
     CHECK(near(full_residual.trade_size(0), 1.0, 1e-9));
-    CHECK(near(full_residual.position_size(), -2.6930, 1e-9));
+    CHECK(near(full_residual.position_size(), -3.25, 1e-9));
     CHECK(full_residual.has_live_short_position());
     CHECK(!full_residual.opening_pending());
 }
@@ -2038,7 +2053,7 @@ static void test_default_flat_short_opening_decision_tracks_commission() {
 // After a prior LONG has already been fully liquidated, the next default SHORT
 // is a true-flat open rather than a close-then-open reversal. Its adverse
 // restore amount is positive but below one lot; TV caps the one-contract
-// fallback to the entire 0.3383-contract residual.
+// fallback to the entire 0.625-contract residual.
 class DefaultFlatShortFloorZeroProbe : public MCEngine {
 public:
     DefaultFlatShortFloorZeroProbe() {
@@ -2051,8 +2066,8 @@ public:
         qty_step_ = 0.0001;
         syminfo_mintick_ = 0.01;
 
-        constexpr double qty = 0.3383;
-        constexpr double entry = 3734.88;
+        constexpr double qty = 0.625;
+        constexpr double entry = 80.0;
         position_side_ = PositionSide::SHORT;
         position_cycle_seq_ = next_position_cycle_seq_++;
         position_entry_price_ = entry;
@@ -2061,7 +2076,10 @@ public:
         position_entry_count_ = 1;
         position_open_bar_ = 0;
         trail_best_price_ = entry;
-        net_profit_sum_ = -8735.542085;
+        // E(high)=(0.625-0.00005)*80.02=50.008499.
+        // net=50.008499-10000+(80.02-80)*0.625+0.625*80*0.0005
+        // =-9949.954001, including the surviving opening fee.
+        net_profit_sum_ = -9949.954001;
         pyramid_entries_.push_back(
             {entry, position_entry_time_, qty, "Short", 0});
         pyramid_entries_.back().entry_incarnation = 1;
@@ -2073,7 +2091,7 @@ public:
 
     void trigger() {
         current_bar_ = mk_bar(
-            2000, 3734.88, 3735.52, 3734.00, 3735.00, 1.0);
+            2000, 80.0, 80.02, 79.0, 80.01, 1.0);
         bar_index_ = 1;
         process_margin_call(current_bar_);
     }
@@ -2086,18 +2104,19 @@ static void test_default_flat_short_floor_zero_caps_to_residual() {
     DefaultFlatShortFloorZeroProbe repeated;
     repeated.trigger();
 
-    // 0.3383 contracts is below one, so the min(1.0, qty) cap closes the whole
+    // Designed restore 0.00005 floors below the 0.0001 step.
+    // 0.625 contracts is below one, so the min(1.0, qty) cap closes the whole
     // residual in both former lifecycle-tag arms, now repeat controls.
     CHECK(baseline.trade_count() == 1);
-    CHECK(near(baseline.exit_price(0), 3735.52));
-    CHECK(near(baseline.trade_size(0), 0.3383, 1e-9));
+    CHECK(near(baseline.exit_price(0), 80.02));
+    CHECK(near(baseline.trade_size(0), 0.625, 1e-9));
     CHECK(near(baseline.position_size(), 0.0, 1e-9));
 
     CHECK(repeated.trade_count() == 1);
     CHECK(repeated.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(repeated.entry_price(0), 3734.88));
-    CHECK(near(repeated.exit_price(0), 3735.52));
-    CHECK(near(repeated.trade_size(0), 0.3383, 1e-9));
+    CHECK(near(repeated.entry_price(0), 80.0));
+    CHECK(near(repeated.exit_price(0), 80.02));
+    CHECK(near(repeated.trade_size(0), 0.625, 1e-9));
     CHECK(near(repeated.position_size(), 0.0, 1e-9));
 }
 
@@ -2733,8 +2752,8 @@ static void test_reversal_captures_fresh_opening_state() {
 // check yet become microscopically underfunded after the carried short is
 // realized at the next-open fill. TV restores this positive sub-step deficit
 // by closing exactly one whole contract, not by treating it as dust. The
-// numbers pin a source-faithful omitted-quantity reversal event and also
-// exercise the frozen-quantity no-refloor path: 5.2798 must survive placement
+// invented numbers pin an omitted-quantity reversal event and also
+// exercise the frozen-quantity no-refloor path: 6.0008 must survive placement
 // and flip.
 class DefaultLongReversalFloorZeroProbe : public MCEngine {
 public:
@@ -2755,19 +2774,24 @@ public:
     void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
 
-        // Seed the already-partially-liquidated short immediately before the
-        // TV-pinned reversal signal. Its open mark at 1841.70 freezes the new
-        // long at 5.2798; filling at 1841.71 realizes the remaining short loss
-        // and leaves a positive restore amount below the 0.0001 lot step.
+        // Synthetic short 4.5 at 1990, net 2046.70: MTM at signal 2000
+        // =10000+2046.70+(1990-2000)*4.5=12001.70.
+        // floor_step(12001.70/2000, 0.0001)=6.0008. In binary64,
+        // (60008*0.0001)/0.0001=60007.99999999999: reflooring at fill
+        // would lose one lot, erase the deficit, and miss the margin row.
+        // Fill 2000.01 costs 12001.660008 <= placement snapshot 12001.70.
+        // Closing the short leaves 12001.70-0.01*4.5=12001.655:
+        // restore=(12001.660008-12001.655)/2000.01=0.00000250398748,
+        // below one step. One-contract fallback leaves 6.0008-1=5.0008.
         position_side_ = PositionSide::SHORT;
         position_cycle_seq_ = next_position_cycle_seq_++;
-        position_entry_price_ = 1821.96;
+        position_entry_price_ = 1990.0;
         position_entry_time_ = current_bar_.timestamp - 1000;
-        position_qty_ = 5.2524;
+        position_qty_ = 4.5;
         position_entry_count_ = 1;
         position_open_bar_ = -1;
         trail_best_price_ = position_entry_price_;
-        net_profit_sum_ = -172.449012;
+        net_profit_sum_ = 2046.70;
         pyramid_entries_.clear();
         id_unclosed_qty_.clear();
         pyramid_entries_.push_back(
@@ -2778,7 +2802,7 @@ public:
         id_unclosed_qty_["SEED"] = position_qty_;
 
         if (explicit_reversal_) {
-            strategy_entry("L", true, kNaN, kNaN, 5.2798000001);
+            strategy_entry("L", true, kNaN, kNaN, 6.0008000001);
         } else {
             strategy_entry("L", true);
         }
@@ -2790,8 +2814,8 @@ private:
 
 static std::vector<Bar> default_long_reversal_floor_zero_bars() {
     return {
-        mk_bar(1000, 1841.70, 1841.70, 1841.70, 1841.70, 1.0),
-        mk_bar(2000, 1841.71, 1841.71, 1841.71, 1841.71, 1.0),
+        mk_bar(1000, 2000.0, 2000.0, 2000.0, 2000.0, 1.0),
+        mk_bar(2000, 2000.01, 2000.01, 2000.01, 2000.01, 1.0),
     };
 }
 
@@ -2804,10 +2828,10 @@ static void test_default_long_reversal_floor_zero_closes_one_contract() {
     CHECK(eng.trade_count() == 2);  // seed close + same-fill long MC trim
     CHECK(margin_call_rows(eng) == 1);
     CHECK(eng.exit_comment(1) == std::string("Margin call"));
-    CHECK(near(eng.entry_price(1), 1841.71));
-    CHECK(near(eng.exit_price(1), 1841.71));
+    CHECK(near(eng.entry_price(1), 2000.01));
+    CHECK(near(eng.exit_price(1), 2000.01));
     CHECK(near(eng.trade_size(1), 1.0));
-    CHECK(near(eng.position_size(), 4.2798));
+    CHECK(near(eng.position_size(), 5.0008));
 }
 
 // The explicit-quantity twin reaches the identical broker discontinuity, and
@@ -2822,7 +2846,7 @@ static void test_explicit_long_reversal_floor_zero_closes_one_contract() {
     CHECK(eng.trade_count() == 2);  // seed close + same-fill long MC trim
     CHECK(margin_call_rows(eng) == 1);
     CHECK(near(eng.trade_size(1), 1.0));
-    CHECK(near(eng.position_size(), 4.2798));
+    CHECK(near(eng.position_size(), 5.0008));
 }
 
 // ── Generic floor-zero forced-liquidation lot (unconditional one contract) ──
@@ -2835,16 +2859,10 @@ static void test_explicit_long_reversal_floor_zero_closes_one_contract() {
 //     if qty_liq == 0: qty_liq = 1.0                 // ONE WHOLE CONTRACT
 //     qty_liq = min(qty_liq, position_qty)
 //
-// and the floor-zero fallback is UNCONDITIONAL: it is not scoped to a side, a
-// commission model, or an entry lifecycle. Forensic fit against every
-// `Signal == "Margin call"` fragment in the campaign's TV exports (58,737
-// USDT-account fragments over 89 slugs) matches 58,711 = 99.956% exactly, and
-// on the 974 events where the fallback value is unconstrained TV closed exactly
-// 1.0000 contracts 971 times. 950 of those lie OUTSIDE any short/commission
-// lifecycle scope and 464 are LONG *and* commission-free. No alternative
-// fallback value (one qty_step, 4 qty_step, the whole residual, 1% of the
-// position) matched a single one of them.
-//
+// The floor-zero fallback is independent of direction, commission model,
+// and entry lifecycle. Pinned against TradingView behaviour (recorded tapes
+// are kept outside this repository). A one-step or full-residual fallback
+// would fail the invented cases below.
 // The fixtures below pin the two configurations the previous lifecycle gate
 // could not reach by construction, plus the structural guards that survive and
 // the full-position cap.
@@ -2872,7 +2890,7 @@ public:
     }
 };
 
-// RED-1 class (805 TV events): a LONG at margin_long=100 has no adverse-price
+// RED-1 class: a LONG at margin_long=100 has no adverse-price
 // liquidation, so its only broker action is the opening affordability event.
 // Commission is zero, so no fee-created provenance exists — the previous gate
 // could not emit anything here at all.
@@ -2929,7 +2947,7 @@ public:
         qty_step_ = qty_step;
         syminfo_mintick_ = 0.01;
 
-        constexpr double entry = 1799.94;
+        constexpr double entry = 160.0;
         position_side_ = PositionSide::SHORT;
         position_cycle_seq_ = next_position_cycle_seq_++;
         position_entry_price_ = entry;
@@ -2954,15 +2972,15 @@ public:
 
     void trigger() {
         current_bar_ = mk_bar(
-            2000, 1800.00, kAdverse, 1799.50, 1800.50, 1.0);
+            2000, 161.0, kAdverse, 159.0, 160.5, 1.0);
         bar_index_ = 1;
         process_margin_call(current_bar_);
     }
 
-    static constexpr double kAdverse = 1801.26;
+    static constexpr double kAdverse = 162.0;
 };
 
-// RED-1 — the 805-event class. LONG at margin_long=100, commission 0, positive
+// RED-1 — opening-affordability case. LONG at margin_long=100, commission 0, positive
 // restore quantity below one lot step. TV closes ONE WHOLE CONTRACT; the
 // lifecycle-gated engine emitted nothing at all (the gate required a
 // commissioned default-long / reversal provenance this shape cannot have).
@@ -2979,7 +2997,7 @@ static void test_commission_free_long_floor_zero_closes_one_contract() {
     CHECK(near(eng.position_size(), 9.0, 1e-9));
 }
 
-// RED-2 — the 166-event class. Commission-free SHORT on the ordinary
+// RED-2 — ordinary finite-price case. Commission-free SHORT on the ordinary
 // finite-price cascade, no lifecycle provenance of any kind. TV closes ONE
 // WHOLE CONTRACT; the engine closed one 0.0001 qty_step.
 static void test_commission_free_short_floor_zero_closes_one_contract() {
@@ -2997,8 +3015,8 @@ static void test_commission_free_short_floor_zero_closes_one_contract() {
     // 10 @ 100 short against a SYNTHETIC sub-tick high of
     // 2000 / (20 - 0.5 * step) = 100.00025..., marked raw; on the on-tick
     // ledger that print is 100.00, exactly at liquidation, and fires
-    // nothing (test_sizing_basis_mintick.cpp E1). The 166-event class this
-    // pins is a lot-rule fact and is unchanged by the mark.
+    // nothing (test_sizing_basis_mintick.cpp E1). This constructed case
+    // pins the lot rule independently of the mark.
     //
     // round 8/9 family R (engine.hpp rules 2 and 5): this lot is worth 0.4
     // units of account (0.0001 x 4000), so the broker admits the all-in

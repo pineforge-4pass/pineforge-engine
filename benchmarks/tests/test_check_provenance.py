@@ -12,6 +12,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "benchmarks"))
@@ -96,6 +97,31 @@ class CheckProvenance(unittest.TestCase):
         tree = Tampered(change="benchmarks/throughput/benchmark_results.json")
         self.assert_error(self.errors(tree=tree),
                           "throughput/benchmark_results.json is not the median run's raw file")
+
+    def test_speedup_split_uses_manifest_sources_including_replacement(self) -> None:
+        class SelectionTree:
+            def json(self, path: str) -> dict:
+                if path == cp.SELECTION:
+                    return {"slots": [
+                        {"slot": "001-named-closed", "source": "corpus"},
+                        {"slot": "101-private-name", "source": "closed"},
+                        {"slot": "201-replacement", "source": "closed", "replaces": "192-closed"},
+                        {"slot": "192-closed", "source": "closed"},
+                    ]}
+                if path == f"{cp.NOW}/pc_speed.json":
+                    return {s: {"median_ms": 10} for s in
+                            ("001-named-closed", "101-private-name", "201-replacement")}
+                if path == f"{cp.NOW}/vbt_speed.json":
+                    return {"001-named-closed": {"median_ms": 2}}
+                raise AssertionError(f"unexpected source: {path}")
+
+        timings = {s: 1 for s in ("001-named-closed", "101-private-name", "201-replacement", "192-closed")}
+        with patch.object(cp, "pineforge_ms", return_value=timings):
+            claim = cp.speedup(SelectionTree(), None)
+        self.assertEqual(claim["n"], 3)
+        self.assertEqual(claim["probes"], 1)
+        self.assertEqual(claim["held"], 2)
+        self.assertEqual(claim["probes"] + claim["held"], claim["n"])
 
 
 if __name__ == "__main__":

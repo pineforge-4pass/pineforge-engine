@@ -3,26 +3,20 @@
  * quantity is ZERO is declined cleanly (no fill, no trade row, no open trade)
  * instead of opening a phantom zero-quantity position.
  *
- * Ground truth: 3commas-3commas-bch-heikin-ashi-rsi-fade-short-strategy on
- * NASDAQ:AAPL 15m (qty_step 1 share, process_orders_on_close=true,
- * qty = 280 / close). TV tape: 2025-12-02 15:45 UTC close 286.96 ->
- * 280/286.96 = 0.9757 -> 0 shares -> NO row; the next TV entry is
- * 2025-12-09 18:15 UTC @ 278.35 qty 1 (280/278.38 = 1.0058 -> 1), and the
- * strategy keeps trading (26 TV entries through 2026-04-28). Pre-fix the
- * engine handed the floored 0 to open_fresh_position: strategy.position_size
- * read 0 (script believed it was flat, never placed its exit) while
- * strategy.opentrades read 1 and pyramiding=1 was saturated -> every later
- * entry dropped (2 engine trades vs 26).
+ * Pinned against TradingView behaviour (recorded tapes are kept outside
+ * this repository). Invented cash sizing crosses the one-lot boundary:
+ * 240 / 320.25 = 0.7494145... is declined; 240 / 200 = 1.2 later fills 1.
+ * A declined entry must not leave a zero-quantity lot or consume a slot.
  *
- * RED-1   explicit qty 0.9757 @ step 1, POOC     -> declined; NEXT >=1-share
+ * RED-1   explicit qty 0.7494145... @ step 1, POOC -> declined; NEXT >=1-share
  *         signal fills qty 1 (position SHORT 1, opentrades 1).
- * RED-2   CASH default sizing (qty=na, 280 cash) @ step 1 -> same.
- * RED-3   explicit qty 0.9757 @ step 1, next-bar-open fill (POOC=false).
+ * RED-2   CASH default sizing (qty=na, 240 cash) @ step 1 -> same.
+ * RED-3   explicit qty 0.7494145... @ step 1, next-bar-open fill (POOC=false).
  * RED-4   pyramiding DCA MARKET add usdt/close -> 0 @ step 1 -> declined, NO
  *         pyramiding slot consumed: the next >=1-share add still fills.
  * RED-5   same with a LIMIT add placed while in position (tv_carry_qty > 0 is
  *         snapshotted for it but is NOT a deferred-flip carry) -> declined.
- * GREEN-A same explicit qty @ step 0.0001 -> fills 0.9757 (unchanged path).
+ * GREEN-A same explicit qty @ step 0.0001 -> floors to 0.7494.
  * GREEN-B explicit qty 2.47 @ step 1 -> fills 2 (existing floor unchanged).
  * GREEN-C step 0 (corpus default), explicit qty 1 -> fills 1 (unchanged).
  */
@@ -78,7 +72,7 @@ static Bar mk_bar(int64_t ts, double o, double h, double l, double c) {
 namespace {
 
 // Script chars (indexed by bar_index_):
-//   'S' explicit SHORT market entry, qty = cash_ / close   (the 3commas shape)
+//   'S' explicit SHORT market entry, qty = cash_ / close   (the DCA-bot shape)
 //   'D' default-sized SHORT market entry (qty = na)
 //   'F' explicit SHORT market entry, qty = fixed_qty_
 //   'A' explicit SHORT market ADD,  qty = add_cash_ / close   (DCA safety order)
@@ -103,7 +97,7 @@ public:
         process_orders_on_close_ = pooc;
     }
     std::string script;
-    double cash_ = 280.0;
+    double cash_ = 240.0;
     double fixed_qty_ = 1.0;
     double add_cash_ = 280.0;
     double limit_ = kNaN;
@@ -132,25 +126,25 @@ public:
     }
 };
 
-// The AAPL divergence bar (close 286.96, 280/close = 0.9757) followed by the
-// bar TV actually entered on (close 278.38, 280/close = 1.0058).
-static std::vector<Bar> aapl_bars() {
+// Invented closes bracket the cash budget: 320.25 > 240 > 200.
+// Each signal has a following bar so both close and next-open fills are tested.
+static std::vector<Bar> synthetic_bars() {
     return {
-        mk_bar(1000, 285.00, 287.00, 284.50, 286.96),   // 'S' -> 0.9757 -> 0
-        mk_bar(2000, 286.00, 286.50, 285.00, 286.04),   // '.' still flat in TV
-        mk_bar(3000, 278.00, 279.00, 277.50, 278.38),   // 'S' -> 1.0058 -> 1
-        mk_bar(4000, 278.00, 278.50, 277.00, 278.00),
+        mk_bar(1000, 318.0, 322.0, 316.0, 320.25), // floor(240/320.25) = 0 lots
+        mk_bar(2000, 319.0, 321.0, 317.0, 318.0),  // no signal, still flat
+        mk_bar(3000, 202.0, 204.0, 198.0, 200.0),  // floor(240/200) = 1
+        mk_bar(4000, 201.0, 203.0, 199.0, 202.0),
     };
 }
 
-// RED-1. POOC explicit-qty short: 0.9757 -> 0 -> declined; next signal fills 1.
+// RED-1. POOC explicit-qty short: 0.7494145... -> 0; next signal fills 1.
 // Pre-fix: bar 0 opens a phantom SHORT with qty 0 (opentrades 1, size 0) and
 // bar 2's entry is dropped by the pyramiding cap.
 void test_red1_pooc_explicit_zero_lot_declined_then_next_fills() {
     std::printf("-- RED-1: POOC explicit zero-lot declined, next signal fills --\n");
     Probe eng(/*qty_step=*/1.0, /*pooc=*/true, QtyType::FIXED, 1.0);
     eng.script = "S.S.";
-    std::vector<Bar> bars = aapl_bars();
+    std::vector<Bar> bars = synthetic_bars();
     // Run all four bars and inspect end state + ledger: pre-fix the phantom
     // shows up as opentrades 1 with size 0 and a dropped second entry.
     eng.run(bars.data(), (int)bars.size());
@@ -158,19 +152,19 @@ void test_red1_pooc_explicit_zero_lot_declined_then_next_fills() {
     CHECK_NEAR(eng.position_size(), -1.0, 1e-9);          // pre-fix: -0.0
     CHECK(eng.opentrades() == 1);
     CHECK_NEAR(eng.pyramid_entries_.back().qty, 1.0, 1e-9);  // pre-fix: 0
-    // Fill at bar 2's close minus 3 ticks of slippage (short).
-    CHECK_NEAR(eng.pyramid_entries_.back().price, 278.35, 1e-9);
+    // Short close fill = 200.00 - 3 * 0.01 = 199.97.
+    CHECK_NEAR(eng.pyramid_entries_.back().price, 199.97, 1e-9);
     CHECK(eng.trade_count() == 0);                          // still open
 }
 
-// RED-2. CASH default sizing (qty = na, default 280 cash): frozen quantity
-// floors to 0 at 286.96 -> declined (KI-72 covers only percent_of_equity);
+// RED-2. CASH default sizing (qty = na, default 240 cash): frozen quantity
+// floors to 0 at 320.25 -> declined (KI-72 covers only percent_of_equity);
 // next signal fills 1.
 void test_red2_cash_default_zero_lot_declined() {
     std::printf("-- RED-2: CASH default zero-lot declined --\n");
-    Probe eng(/*qty_step=*/1.0, /*pooc=*/true, QtyType::CASH, 280.0);
+    Probe eng(/*qty_step=*/1.0, /*pooc=*/true, QtyType::CASH, 240.0);
     eng.script = "D.D.";
-    std::vector<Bar> bars = aapl_bars();
+    std::vector<Bar> bars = synthetic_bars();
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::SHORT);
     CHECK_NEAR(eng.position_size(), -1.0, 1e-9);
@@ -185,27 +179,27 @@ void test_red3_next_bar_open_zero_lot_declined() {
     std::printf("-- RED-3: next-bar-open explicit zero-lot declined --\n");
     Probe eng(/*qty_step=*/1.0, /*pooc=*/false, QtyType::FIXED, 1.0);
     eng.script = "S.S.";
-    std::vector<Bar> bars = aapl_bars();
+    std::vector<Bar> bars = synthetic_bars();
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::SHORT);
     CHECK_NEAR(eng.position_size(), -1.0, 1e-9);
     CHECK(eng.opentrades() == 1);
     CHECK_NEAR(eng.pyramid_entries_.back().qty, 1.0, 1e-9);
-    CHECK_NEAR(eng.pyramid_entries_.back().price, 278.00 - 0.03, 1e-9);
+    CHECK_NEAR(eng.pyramid_entries_.back().price, 201.0 - 0.03, 1e-9); // 201 - 3 ticks = 200.97
 }
 
-// GREEN-A. Same explicit qty at step 0.0001 (ETH lane): fills 0.9757 on bar 0
-// exactly as before; bar 2's entry is then capped by pyramiding=1.
+// GREEN-A. Fine-lot control: floor((240/320.25)/0.0001)*0.0001 = 0.7494.
+// The fractional remainder is discarded; bar 2 is capped by pyramiding=1.
 void test_greenA_fine_step_unchanged() {
-    std::printf("-- GREEN-A: step 0.0001 fills 0.9757 (unchanged) --\n");
+    std::printf("-- GREEN-A: step 0.0001 floors to 0.7494 --\n");
     Probe eng(/*qty_step=*/0.0001, /*pooc=*/true, QtyType::FIXED, 1.0);
     eng.script = "S.S.";
-    std::vector<Bar> bars = aapl_bars();
+    std::vector<Bar> bars = synthetic_bars();
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::SHORT);
-    CHECK_NEAR(eng.position_size(), -0.9757, 1e-9);
+    CHECK_NEAR(eng.position_size(), -0.7494, 1e-9); // 7494 lots of size 0.0001, short
     CHECK(eng.opentrades() == 1);
-    CHECK_NEAR(eng.pyramid_entries_.back().price, 286.93, 1e-9);
+    CHECK_NEAR(eng.pyramid_entries_.back().price, 320.22, 1e-9); // 320.25 - 3 ticks
 }
 
 // GREEN-B. Explicit 2.47 at step 1 floors to 2 (existing behavior).
@@ -214,7 +208,7 @@ void test_greenB_floor_above_one_unchanged() {
     Probe eng(/*qty_step=*/1.0, /*pooc=*/true, QtyType::FIXED, 1.0);
     eng.fixed_qty_ = 2.47;
     eng.script = "F...";
-    std::vector<Bar> bars = aapl_bars();
+    std::vector<Bar> bars = synthetic_bars();
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::SHORT);
     CHECK_NEAR(eng.position_size(), -2.0, 1e-9);
@@ -226,17 +220,17 @@ void test_greenC_step_zero_unchanged() {
     Probe eng(/*qty_step=*/0.0, /*pooc=*/true, QtyType::FIXED, 1.0);
     eng.fixed_qty_ = 1.0;
     eng.script = "F...";
-    std::vector<Bar> bars = aapl_bars();
+    std::vector<Bar> bars = synthetic_bars();
     eng.run(bars.data(), (int)bars.size());
     CHECK(eng.position_side_ == PositionSide::SHORT);
     CHECK_NEAR(eng.position_size(), -1.0, 1e-9);
 }
 
-// RED-4. 3commas DCA shape (pyramiding=2, POOC, same id "E"): base 2 shares,
-// then a safety-order MARKET add sized 280/close at close 290 -> 0.9655 -> 0.
-// TV does not place it: no lot, no trade row, NO pyramiding slot spent, so the
-// next add (qty 1) still fills -> position -3, two positive lots.
-// Pre-fix: the zero add opens a qty-0 lot (count 2 == cap) and the 1-share add
+// RED-4. DCA-bot shape (pyramiding=2, POOC, same id "E"): base 2 shares,
+// then a safety-order MARKET add sized 280/290 = 0.9655 -> 0.
+// No lot, no trade row, NO pyramiding slot spent: the next fixed add of
+// 2 shares fills, giving -(2 + 2) = -4 with two positive lots.
+// Pre-fix: the zero add opens a qty-0 lot (count 2 == cap) and the 2-share add
 // is dropped by the cap -> position -2 with a qty-0 phantom lot.
 void test_red4_market_add_zero_lot_declined_no_slot() {
     std::printf("-- RED-4: DCA MARKET zero-lot add declined, slot preserved --\n");
