@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": "",
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "EN-132 D3 margin_long/margin_short: finite <= 0 keeps defined model suppression",
+  "native_boundary_control": null
+}

@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": "",
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "EN-132 D3-a omission is finite; codegen Pine v6 defaults",
+  "native_boundary_control": null
+}
