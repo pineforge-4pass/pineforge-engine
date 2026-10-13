@@ -3769,6 +3769,18 @@ if(PINEFORGE_VALUE_INVALID_FIXTURES)
     endif()
 endif()
 
+# EN-132 M: source-only ownership proof, controls, and an independent D4 route.
+add_test(NAME test_selected_window_ownership_manifest
+    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
+add_test(NAME test_selected_window_ownership_manifest_controls
+    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py)
+add_test(NAME test_selected_window_ownership_d4
+    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
+        ManifestCheckerTests.test_d4_independent_reconstruction_matches_manifest)
+set_tests_properties(test_selected_window_ownership_manifest
+    test_selected_window_ownership_manifest_controls test_selected_window_ownership_d4
+    PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)
+
 # The C bridge test also links the shared window-plan helper, whose bridge
 # (src/selected_window_plan_c.cpp) is not in the kernel archive. The loop above
 # supplies pineforge and the -ffp-contract=off and -UNDEBUG flags.

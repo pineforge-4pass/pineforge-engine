@@ -899,6 +899,7 @@ SOURCE_GUARD_SCRIPTS = (
     # the newest release tag, so every checkout that runs them fetches history.
     ('source-guard-run-failure-codes', ['scripts/check_run_failure_codes.py']),
     ('source-guard-run-failure-diff', ['scripts/gen_run_failure_catalog_diff.py', '--check']),
+    ('source-guard-selected-window-ownership', ['scripts/check_selected_window_ownership.py']),
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native', 'kernel'))
 # The kernel-only archive must name no TradingView vocabulary outside ADR-0001's
