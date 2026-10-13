@@ -1,0 +1,6 @@
+//@version=6
+strategy("EN132 margin_zero_fraction", initial_capital=1000, margin_long=0, margin_short=0, commission_type=strategy.commission.percent, commission_value=0, slippage=0)
+if bar_index == 1
+    strategy.entry("L", strategy.long, qty=1)
+if bar_index == 8
+    strategy.close("L")

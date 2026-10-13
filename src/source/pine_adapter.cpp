@@ -10,6 +10,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include "../engine_value_invalid.hpp"
 #include "../native_execution_consumer.hpp"
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
@@ -3044,27 +3045,74 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
 // entries and strategy.order, point values 1 and 50) and all 366 trades of
 // corpus order-percent-equity-cash-commission-01.
 double PineExecutionAdapter::default_sizing_cash(
-        const PineSizingSnapshot& sizing) const noexcept {
+        const PineSizingSnapshot& sizing) const {
     if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
+        if (!std::isfinite(config_.default_qty_value)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
         return config_.default_qty_value;
     }
     if (config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)) return kNaN;
     if (default_sizing_reserves_cash_fee()) {
-        if (!finite_positive(sizing.strategy_equity)) return kNaN;
+        if (!finite_positive(sizing.strategy_equity)) {
+            if (!std::isfinite(sizing.strategy_equity)) {
+                engine_command_value_invalid_or_count("sizing.basis", EngineValueStage::sizing,
+                                                     EngineValueReason::nonfinite);
+            }
+            return kNaN;
+        }
         const double equity = staged_.quantity_grid ? source_money_round(sizing.strategy_equity)
                                                     : sizing.strategy_equity;
         const double money = config_.default_qty_value / 100.0 * equity;
-        if (config_.commission_type == static_cast<int>(CommissionType::CASH_PER_ORDER))
-            return money - config_.commission_value;
+        if (!std::isfinite(money)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
+        if (config_.commission_type == static_cast<int>(CommissionType::CASH_PER_ORDER)) {
+            const double cash = money - config_.commission_value;
+            if (!std::isfinite(cash)) {
+                engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                     EngineValueReason::nonfinite);
+            }
+            return cash;
+        }
         // The core converts cash / unit_cost; this cash leaves
         // units * (unit_cost + fee) == money.
         const double unit_cost = sizing.price * staged_.syminfo.pointvalue * sizing.fx;
-        if (!finite_positive(unit_cost)) return kNaN;
-        return money * unit_cost / (unit_cost + config_.commission_value);
+        if (!finite_positive(unit_cost)) {
+            if (!std::isfinite(unit_cost)) {
+                engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                     EngineValueReason::nonfinite);
+            }
+            return kNaN;
+        }
+        const double divisor = unit_cost + config_.commission_value;
+        if (!std::isfinite(divisor)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
+        const double cash = money * unit_cost / divisor;
+        if (!std::isfinite(cash)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
+        return cash;
     }
-    if (!finite_positive(sizing.equity)) return kNaN;
+    if (!finite_positive(sizing.equity)) {
+        if (!std::isfinite(sizing.equity)) {
+            engine_command_value_invalid_or_count("sizing.basis", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
+        return kNaN;
+    }
     const double money = config_.default_qty_value / 100.0 * sizing.equity;
-    return staged_.quantity_grid ? source_money_round(money) : money;
+    const double cash = staged_.quantity_grid ? source_money_round(money) : money;
+    if (!std::isfinite(money) || !std::isfinite(cash)) {
+        engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                             EngineValueReason::nonfinite);
+    }
+    return cash;
 }
 
 // A percentage declaration reserves a percentage commission out of its own
@@ -3111,7 +3159,7 @@ double PineExecutionAdapter::default_sizing_lot_floor(double units) const noexce
 // the CashValue basis, the core's fee reserve, the raw quotient for the source
 // lot floor, frozen at acceptance against the signal rule.  No money, no shape.
 std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_shape(
-        const PineSizingSnapshot& sizing) const noexcept {
+        const PineSizingSnapshot& sizing) const {
     const double cash = default_sizing_cash(sizing);
     if (!finite_positive(cash)) return std::nullopt;
     native_order::Sized sized;
@@ -3128,7 +3176,13 @@ std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_shape(
 // money band is a source policy"), so the source asks the core for its own
 // conversion and floors it -- the arithmetic exists once (R5 N11).
 double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizing) const {
-    if (!finite_positive(sizing.price) || !finite_positive(sizing.fx)) return 0.0;
+    if (!finite_positive(sizing.price) || !finite_positive(sizing.fx)) {
+        if (!std::isfinite(sizing.price) || !std::isfinite(sizing.fx)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
+        return 0.0;
+    }
     const auto sized = default_sizing_shape(sizing);
     if (!sized) return 0.0;
     const auto quotient = require_host().native_sized_units(
@@ -3178,7 +3232,7 @@ std::optional<double> PineExecutionAdapter::typed_entry_units(
 }
 
 std::optional<native_order::Sized> PineExecutionAdapter::default_sizing_intent(
-        const PineSizingSnapshot& sizing, bool is_long) const noexcept {
+        const PineSizingSnapshot& sizing, bool is_long) const {
     // The core converts at the run's own point value; whether it also converts
     // at the source's FX rate is decided where it accepts the command
     // (core_sizing_price_matches), so a staged FX series keeps this shape.
@@ -7270,6 +7324,11 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                 : mark;
             const double required = units * admission_mark
                 * staged_.syminfo.pointvalue * fx * margin / 100.0;
+            if (finite_positive(margin) && margin <= 100.0
+                && (!std::isfinite(required) || !std::isfinite(equity))) {
+                engine_command_value_invalid_or_count("margin.required", EngineValueStage::margin,
+                                                     EngineValueReason::nonfinite);
+            }
             // Margin rule 2: an explicit quantity opening from flat at full
             // margin, market, or a stop under process_orders_on_close, is
             // judged at its signal close c' =
@@ -8420,6 +8479,11 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         }
         const double required = (charged_held + std::abs(own_units)) * signal * staged_.syminfo.pointvalue
             * snapshot.sizing.fx * margin / 100.0;
+        if (margin > 0.0
+            && (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity))) {
+            engine_command_value_invalid_or_count("margin.required", EngineValueStage::margin,
+                                                 EngineValueReason::nonfinite);
+        }
         const double epsilon = std::max(1e-9, std::abs(snapshot.sizing.equity) * 1e-12);
         snapshot.projection_affordability_equity = snapshot.sizing.equity;
         snapshot.projection_affordability_signal_price = signal;

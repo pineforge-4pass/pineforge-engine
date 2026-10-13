@@ -2318,7 +2318,7 @@ private:
     // policy: the money the percentage is taken of (with its equity mark and
     // its ten-significant-digit rounding), whether a percentage fee is
     // reserved out of it, and the lot floor applied to the core's quotient.
-    double default_sizing_cash(const PineSizingSnapshot&) const noexcept;
+    double default_sizing_cash(const PineSizingSnapshot&) const;
     bool default_sizing_reserves_percent_fee() const noexcept;
     // A percent-of-equity default quantity under a cash commission (per
     // order or per contract) takes its percentage of strategy.equity and
@@ -2340,9 +2340,9 @@ private:
     // and the sided intent a re-lowerable opening carries.  std::nullopt keeps
     // the host-resolved shape for every path the core cannot name.
     std::optional<native_order::Sized> default_sizing_shape(
-        const PineSizingSnapshot&) const noexcept;
+        const PineSizingSnapshot&) const;
     std::optional<native_order::Sized> default_sizing_intent(
-        const PineSizingSnapshot&, bool is_long) const noexcept;
+        const PineSizingSnapshot&, bool is_long) const;
     // True when the price the core will freeze for a Sized opening accepted
     // NOW is bit-for-bit the price this snapshot already froze.  A command
     // deferred to a later execution point, or one whose sizing price the

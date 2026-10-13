@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": "",
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "D6 row 8 non-positive model suppression / row 7 disabled requirement KEEP",
+  "native_boundary_control": "tests/test_value_invalid_sizing_margin.cpp"
+}

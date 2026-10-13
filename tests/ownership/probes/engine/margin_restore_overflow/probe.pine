@@ -1,0 +1,4 @@
+//@version=6
+strategy("EN132 margin_restore_overflow", initial_capital=1000, margin_long=1e-300, margin_short=1e-300, commission_type=strategy.commission.percent, commission_value=0, slippage=0)
+if bar_index == 1
+    strategy.entry("S", strategy.short, qty=1e10)

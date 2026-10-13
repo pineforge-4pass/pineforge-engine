@@ -576,6 +576,13 @@ protected:
     // projected at the native begin boundary.
     PineStrategyConfig& fixture_configuration() noexcept { return config_; }
     const PineStrategyConfig& fixture_configuration() const noexcept { return config_; }
+#ifdef PINEFORGE_VALUE_INVALID_SIZING_MARGIN_FIXTURES
+    // Stateless test injection at the derived sizing tuple, inside a real
+    // source callback. Absent from normal builds; no layout or kernel seam.
+    double fixture_default_sizing_units(const PineSizingSnapshot& sizing) const {
+        return adapter_.default_sizing_units(sizing);
+    }
+#endif
     bool fixture_intraday_cap_latched();
     compat::pine::CapClock fixture_cap_clock() const;
     compat::pine::Calculation fixture_cap_calculation() const;

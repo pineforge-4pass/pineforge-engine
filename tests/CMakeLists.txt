@@ -1594,6 +1594,9 @@ list(APPEND TEST_SOURCES test_native_bar_open_hook)
 # settlement previews each run builds (differential). Source-free, so it also
 # runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_precommit_hook)
+# EN-132: source-free native ownership witnesses and the source companion.
+list(APPEND TEST_SOURCES test_value_invalid_sizing_margin)
+list(APPEND TEST_SOURCES test_value_invalid_sizing_margin_source)
 # R5 lane D2-C: the library's per-thread runtime state (the TA bar context,
 # the EMA seeding default, the chart day partition) written on the pump's
 # runtime block against thread-local storage at every write -- bare hosts

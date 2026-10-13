@@ -1,0 +1,13 @@
+{
+  "outcome": "failed",
+  "code": "engine_command_value_invalid",
+  "args": {
+    "field": "sizing.basis",
+    "stage": "sizing",
+    "reason": "nonfinite"
+  },
+  "min_trades": 0,
+  "label": "G",
+  "pinned_by": "D6 row 3",
+  "native_boundary_control": "tests/test_value_invalid_sizing_margin.cpp"
+}
