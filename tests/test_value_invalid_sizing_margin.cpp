@@ -1,5 +1,6 @@
-// EN-132 D6 rows 4/5/6/9/10. Written before the producers; expectations
-// are pinned in .lane-out/MAP.md. This TU is source-free / kernel-profile safe.
+// EN-132 D6 rows 4/5/6/9/10. Fault expectations were pinned before producers;
+// row 5 is KEEP per ENGINE-TOP/L6 13:10, pinned to the execution-terms neighbour.
+// This TU is source-free / kernel-profile safe.
 // Real C callback hosts run through strategy_native_run_v1. The few tuples
 // command admission cannot construct are injected inside their callbacks;
 // they still execute the real sizing / preview / execution implementation.
@@ -308,31 +309,6 @@ void row4_sizing_input_and_output() {
     }
 }
 
-void row5_host_sized_nonfinite() {
-    for (const double units : {inf, -inf, nan}) {
-        for (const bool preview : {false, true}) {
-            row = preview ? "row5_host_sized_preview" : "row5_host_sized_execution";
-            State state;
-            state.close_units = units;
-            state.script = [preview](State& s, int index) {
-                if (index) return;
-                if (preview) {
-                    const auto target = host_open(s);
-                    if (!target) return;
-                    (void)s.native().inspect_current_execution({*target});
-                    // If the producer is missing, prevent queued execution
-                    // from supplying the fault this preview failed to raise.
-                    (void)s.native().cancel(*target);
-                } else {
-                    execute(s, host_close(s));
-                }
-            };
-            failed(run(state), "sizing.quantity", "sizing", "nonfinite");
-            CHECK(state.close_calls == 1);
-        }
-    }
-}
-
 void row6_deduction_overflow() {
     for (const bool preview : {false, true}) {
         row = preview ? "row6_pending_preview" : "row6_pending_execution";
@@ -493,6 +469,56 @@ void keep_host_sized_finite_refusal() {
         }
     }
 }
+void keep_host_sized_nan_rejection() {
+    // A-T5 (:710-712, :732, :743-755) pins this NaN payload on an independent
+    // HostSized open to a completed run with InvalidTerms. No output was used.
+    const std::uint64_t bits = 0x7ff8000000000002ULL;
+    double units = 0.0;
+    std::memcpy(&units, &bits, sizeof(units));
+    for (const bool preview : {false, true}) {
+        row = preview ? "row5_keep_nan_host_units_preview" : "row5_keep_nan_host_units_execution";
+        State state;
+        state.close_units = units;
+        std::uint64_t incarnation = 0;
+        state.script = [preview, &incarnation](State& s, int index) {
+            if (index) return;
+            const auto target = host_open(s);
+            if (!target) return;
+            incarnation = target->incarnation;
+            if (preview) {
+                // Use A-T14's supported preview and no-mutation observation.
+                const auto hash = s.native().native_continuation_hash();
+                const auto history = s.native().native_events(0).size();
+                const auto view = s.native().inspect_current_execution({*target});
+                CHECK(!view.refusal);
+                CHECK(view.terms_rejection == no::MatchRejectReason::InvalidTerms);
+                CHECK(!view.settlement_readiness);
+                CHECK(s.native().native_continuation_hash() == hash);
+                CHECK(s.native().native_events(0).size() == history);
+                (void)s.native().cancel(*target);
+            }
+            // The execution arm leaves the request to the queued matcher,
+            // just as A-T5 does; it never invokes preview.
+        };
+        const auto result = run(state);
+        completed(result);
+        CHECK(state.bars == 4);
+        CHECK(state.close_calls == 1);
+        CHECK(incarnation != 0);
+        CHECK(result.trades.empty());
+        CHECK(result.signed_units == 0.0);
+        int rejections = 0;
+        for (const auto& event : result.events) {
+            if (event.incarnation != incarnation) continue;
+            CHECK(event.kind != PF_NATIVE_EVENT_TERMS_RESOLVED);
+            if (event.kind == PF_NATIVE_EVENT_MATCH_REJECTED) {
+                ++rejections;
+                CHECK(event.reason == PF_NATIVE_MATCH_REJECT_INVALID_TERMS);
+            }
+        }
+        CHECK(rejections == (preview ? 0 : 1));
+    }
+}
 void keep_margin_finite_paths() {
     row = "row9_keep_finite_shortfall";
     State shortfall;
@@ -558,13 +584,13 @@ void finite_boundary_is_bit_identical() {
 
 int main() {
     row4_sizing_input_and_output();
-    row5_host_sized_nonfinite();
     row6_deduction_overflow();
     row9_opening_requirement_overflow();
     row10_maintenance_nonfinite();
     row10_restore_overflow();
     keep_zero_sizing();
     keep_host_sized_finite_refusal();
+    keep_host_sized_nan_rejection();
     keep_margin_finite_paths();
     finite_boundary_is_bit_identical();
     std::printf("EN132 sizing/margin native: %d checks, %d failures\n", checks, failures);

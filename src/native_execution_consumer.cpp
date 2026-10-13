@@ -5763,10 +5763,6 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
-            if (!std::isfinite(*terms.units)) {
-                engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
-                                                     EngineValueReason::nonfinite);
-            }
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
         const bool own_quantity = closing_size && terms.units
@@ -7336,10 +7332,6 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         return out;
     }
     if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
-        if (!std::isfinite(*terms.units)) {
-            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
-                                                 EngineValueReason::nonfinite);
-        }
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
