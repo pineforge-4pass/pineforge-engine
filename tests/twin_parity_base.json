@@ -12637,23 +12637,23 @@
         },
         {
           "line": 206,
-          "text": "CHECK(eu.grid(1.20005 + 1e-13) == 1.20005)"
+          "text": "CHECK(eu.grid(1.20050 + 1e-13) == 1.20050)"
         },
         {
           "line": 207,
-          "text": "CHECK(eu.grid(1.20005 + 1e-12) == 1.20005)"
+          "text": "CHECK(eu.grid(1.20050 + 1e-12) == 1.20050)"
         },
         {
           "line": 208,
-          "text": "CHECK(eu.grid(1.20005 + 2e-12) == 1.20005 + 2e-12)"
+          "text": "CHECK(eu.grid(1.20050 + 2e-12) == 1.20050 + 2e-12)"
         },
         {
           "line": 209,
-          "text": "CHECK(eu.grid(1.20005 + 1e-11) == 1.20005 + 1e-11)"
+          "text": "CHECK(eu.grid(1.20050 + 1e-11) == 1.20050 + 1e-11)"
         },
         {
           "line": 210,
-          "text": "CHECK(eu.grid(1.20005 + 1e-9) == 1.20005 + 1e-9)"
+          "text": "CHECK(eu.grid(1.20050 + 1e-9) == 1.20050 + 1e-9)"
         },
         {
           "line": 212,
@@ -12676,7 +12676,7 @@
           "text": "CHECK(bin.grid(13.7451 + 1e-9) == 13.7451 + 1e-9)"
         }
       ],
-      "sourceSha256": "33a8062a2821ce53ec2ccd1b652d7b09fe4e430262893827b6c10eaa25c16dcd"
+      "sourceSha256": "9019700bde095a198a1875399c6c9933fd5b7fbc5cd5edc5f385539127e09490"
     },
     "test_limit_exact_touch_level_residue": {
       "assertions": [

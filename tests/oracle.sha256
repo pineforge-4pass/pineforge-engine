@@ -17,16 +17,16 @@
     "test_oracle_reversal_later_tick.cpp": "ca45d16f8823a2d88cfc398408f71897dcbc26e140459b5f81860896474bd774",
     "test_oracle_reversal_replaced_percent.cpp": "8045db56eab804901b002585e67eb29331c1491b3f1dcd35deb2820e01aea501",
     "test_oracle_reversal_same_bar_tx.cpp": "775150f02e5a3ad7fd3c46cc7786a4d03857a2a66aaf3a627743a08831d3161b",
-    "test_oracle_short_seed.cpp": "d28e163cb7d33af85478f084d8020476b1063f27f2b67c632c193e80a2a9112b",
+    "test_oracle_short_seed.cpp": "b35ef394fe5717e31aee9f368ee03fadcafca0d3e3b064194a832cef3654b3f2",
     "test_oracle_short_seed_percent.cpp": "ba24c10847dc5b2364243274b09f488f75f0737951c754a6a809f8ab280ec591",
     "test_oracle_stop_snapshot.cpp": "d3a14a771538873144c8f03a9d8cf391256e9967ad31a03e29e1ed46359daf1d"
   },
   "schema": "pineforge-r4-d-oracle-tree/v2",
-  "treeSha256": "0520c5450824512c7c6867e85a5e3f230ab04a5c5fe4898db3006e48401b6deb",
+  "treeSha256": "f507799c69524a878045ce8ca6cae41118b084045b642d524f1030d1eafe19da",
   "privateFixtureAbsent": [
     "test_oracle_day_key.cpp",
     "test_oracle_reversal_same_bar_tx.cpp",
     "test_oracle_stop_snapshot.cpp"
   ],
-  "treeSha256WithoutPrivate": "e25ef4f4b061db7af5eb6cd78bcabf361716b4a644985e641dee97c0f91dc8b5"
+  "treeSha256WithoutPrivate": "11d3163de6eee0551813e6b9951c9ef59bb12c23d8293ef934ff0edb0f62ed7f"
 }

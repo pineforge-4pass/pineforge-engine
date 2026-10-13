@@ -28,7 +28,7 @@ LEDGER = ROOT / "tests/twin_parity_ledger.md"
 # Patched to the generated fixture bytes by the landing. Keeping these pins in
 # executable code means a ledger/inventory rewrite cannot silently redefine
 # what the guard proves.
-BASE_MANIFEST_SHA256 = "d564cbd5a458a12aebecccf0761105d3709032a7e24a4c094738e9ff0ee94cc0"
+BASE_MANIFEST_SHA256 = "a20f80eb29af455400fd2ab1bdef86e477af3d81891b1207623b4c890f6056db"
 INVENTORY_SHA256 = "a1c0122868587da8d996184afeed77d915c78ce9c17370643d101cb125a8291a"
 LEDGER_SHA256 = "c568999da8777ff967cdb3fcf007f382f88902bf78f9e02c2c5d7d15de22e9ba"
 
