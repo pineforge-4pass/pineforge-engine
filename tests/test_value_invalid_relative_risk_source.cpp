@@ -196,24 +196,31 @@ void row16_placeholder_withdrawal_keep() {
         CHECK(a.is_long == b.is_long && a.open_at_end == b.open_at_end);
         CHECK(a.entry_bar_index == b.entry_bar_index && a.exit_bar_index == b.exit_bar_index);
     }
-    bool armed = false;
-    bool withdrawn = false;
-    std::uint64_t child = 0;
+    int armed = 0;
+    int withdrawn = 0;
+    native_order::RequestHandle child{};
+    std::uint64_t armed_ordinal = 0;
     if (placeholder.host) {
         for (const auto& event : placeholder.host->native_events(0)) {
             if (!event.command) continue;
             if (const auto* arm = std::get_if<native_order::ArmedEvent>(&*event.command)) {
-                if (arm->request().label != "X") continue;
-                const auto* limit = std::get_if<native_order::Limit>(&arm->request().trigger);
+                if (!arm->definition || arm->definition->request.label != "X") continue;
+                const auto* limit = std::get_if<native_order::Limit>(
+                    &arm->definition->request.trigger);
                 CHECK(limit && same_bits(limit->price, 1.0));
-                child = arm->handle().incarnation;
-                armed = true;
+                child = arm->definition->handle;
+                armed_ordinal = arm->ordinal;
+                ++armed;
             }
-            if (const auto* cancel = std::get_if<native_order::CancelledEvent>(&*event.command))
-                if (armed && cancel->handle().incarnation == child) withdrawn = true;
+            if (const auto* cancel = std::get_if<native_order::CancelledEvent>(&*event.command)) {
+                if (armed && cancel->definition && cancel->handle() == child) {
+                    CHECK(cancel->ordinal > armed_ordinal);
+                    ++withdrawn;
+                }
+            }
         }
     }
-    CHECK(armed && withdrawn);
+    CHECK(armed == 1 && withdrawn == 1);
 }
 
 void row18_threshold_overflow() {
