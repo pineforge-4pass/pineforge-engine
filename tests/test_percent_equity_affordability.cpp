@@ -143,7 +143,7 @@ private:
 // Cost = 159 * 125.50 = 19,954.50 > 10,000: each entry is declined AT
 // PLACEMENT (no PendingOrder, no fill, no trade row), with margin calls both
 // disabled and enabled. Pre-fix: KI-54 skips pct > 100 and no other gate ran.
-void test_f_200pct_margin100_declined() {
+void test_case_200pct_margin100_declined() {
     std::printf("-- synthetic 200%% at margin 100: 0 entries --\n");
     for (bool mc : {false, true}) {
         Probe eng(10000.0, 200.0, 100.0, mc);
@@ -164,7 +164,7 @@ void test_f_200pct_margin100_declined() {
 // 200% at margin 50 costs 159 * 125.50 * 0.5 = 9,977.25 <= 10,000.
 // The invented 125.00 open is a favorable gap: max(125.50, 125.00) = 125.50,
 // so the same placement snapshot admits the fill, with 159 lots at 125.00.
-void test_f_200pct_margin50_fills() {
+void test_case_200pct_margin50_fills() {
     std::printf("-- synthetic 200%% at margin 50: fills 159 @125.00 --\n");
     Probe eng(10000.0, 200.0, 50.0, false);
     eng.script = "L.C.";
@@ -190,7 +190,7 @@ void test_f_200pct_margin50_fills() {
 // Exactly 100% is byte-identical: no affordability snapshot is attached (the
 // order stays on the KI-54 / gap-reject family) and the all-in entry fills as
 // before: floor(10,000 / 125.50) = 79 lots at the favorable 125.00 open.
-void test_f_100pct_control_unchanged() {
+void test_case_100pct_control_unchanged() {
     std::printf("-- synthetic 100%% control: no snapshot, fills 79 --\n");
     Probe eng(10000.0, 100.0, 100.0, false);
     eng.script = "L...";
@@ -211,7 +211,7 @@ void test_f_100pct_control_unchanged() {
 // 150% at margin 50 is 75% of equity: pct > 100 is not a blanket decline,
 // the rule is the notional. floor(15,000 / 100) = 150 lots * 100 * 0.5 =
 // 7,500 <= 10,000 -> fills.
-void test_f_150pct_margin50_fills() {
+void test_case_150pct_margin50_fills() {
     std::printf("-- synthetic 150%% at margin 50: 75%% of equity fills --\n");
     Probe eng(10000.0, 150.0, 50.0, false);
     eng.script = "L..";
@@ -228,7 +228,7 @@ void test_f_150pct_margin50_fills() {
 // A 100.25 open costs 10,025 > 10,000, so no fill or trade row;
 // a favorable 99.50 open keeps max(close, fill) = 100 and admits 200 lots.
 // POOC fills at the 100 close tie before the adverse next-open gap.
-void test_f_200pct_margin50_gap_up_declined_at_fill() {
+void test_case_200pct_margin50_gap_up_declined_at_fill() {
     std::printf("-- synthetic 200%% at margin 50: gap-up fill declined, gap-down fills --\n");
     {
         Probe eng(10000.0, 200.0, 50.0, false);
@@ -275,7 +275,7 @@ void test_f_200pct_margin50_gap_up_declined_at_fill() {
 // The default short sizes floor(2 * 10,200 / 104) = 196 lots; cost 20,384
 // exceeds MTM, so the ENTRY leg is declined at placement. The close-only
 // order survives and closes all 50 lots at the next 104 open under id "S".
-void test_f_200pct_reversal_close_leg_only() {
+void test_case_200pct_reversal_close_leg_only() {
     std::printf("-- synthetic 200%% reversal: close leg executes, no new entry --\n");
     Probe eng(10000.0, 200.0, 100.0, false);
     eng.entry_qty_ = 50.0;
@@ -305,7 +305,7 @@ void test_f_200pct_reversal_close_leg_only() {
 // The 200% short sizes floor(20,000 / 100) = 200 lots; margin-50 cost is
 // 200 * 100 * 0.5 = 10,000 (tie admitted at placement). A 102 open costs
 // 200 * 102 * 0.5 = 10,200 > snapshot 10,000, so only the 50-lot close fills.
-void test_f_200pct_reversal_declined_at_fill_closes_only() {
+void test_case_200pct_reversal_declined_at_fill_closes_only() {
     std::printf("-- synthetic 200%% reversal declined at fill: close leg only --\n");
     Probe eng(10000.0, 200.0, 50.0, false);
     eng.entry_qty_ = 50.0;
@@ -334,13 +334,13 @@ void test_f_200pct_reversal_declined_at_fill_closes_only() {
 
 int main() {
     std::printf("--- percent_equity_affordability ---\n");
-    test_f_200pct_margin100_declined();
-    test_f_200pct_margin50_fills();
-    test_f_100pct_control_unchanged();
-    test_f_150pct_margin50_fills();
-    test_f_200pct_margin50_gap_up_declined_at_fill();
-    test_f_200pct_reversal_close_leg_only();
-    test_f_200pct_reversal_declined_at_fill_closes_only();
+    test_case_200pct_margin100_declined();
+    test_case_200pct_margin50_fills();
+    test_case_100pct_control_unchanged();
+    test_case_150pct_margin50_fills();
+    test_case_200pct_margin50_gap_up_declined_at_fill();
+    test_case_200pct_reversal_close_leg_only();
+    test_case_200pct_reversal_declined_at_fill_closes_only();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

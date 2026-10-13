@@ -559,7 +559,7 @@ void test_xauusd_floored_qty_admitted() {
 // so placement rejects it despite the raw-close notional being an exact tie.
 // The next open is also 125.13: a max(E, qty * tick(close)) floor must not
 // rescue the entry at fill. The no-gap on-tick case below is its control.
-void test_f_half_cent_declined() {
+void test_case_half_cent_declined() {
     std::printf("-- synthetic whole-lot half-cent close: declined --\n");
     Probe eng(25025.0, kWholeLot, QtyType::FIXED, 1.0, 0.05, 100.0, 0, false);
     eng.script = "E....";
@@ -658,7 +658,7 @@ int main() {
     test_pyramiding_add_costed_as_resulting_position();
     test_explicit_add_costed_as_resulting_position();
     test_xauusd_floored_qty_admitted();
-    test_f_half_cent_declined();
+    test_case_half_cent_declined();
     test_all_in_idiom_no_gap_admits();
     test_cash_default_sizing_gated();
     test_pooc_no_double_decline();

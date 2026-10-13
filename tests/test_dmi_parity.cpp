@@ -122,8 +122,8 @@ static void test_dmi_up_within_band_of_zero_is_not_up() {
 }
 
 // Absolute-band boundary controls at invented bases, including the DMI tie.
-static void test_float_compare_band_replays_the_sensor_tapes() {
-    std::printf("test_float_compare_band_replays_the_sensor_tapes\n");
+static void test_float_compare_band_replays_invented_bars() {
+    std::printf("test_float_compare_band_replays_invented_bars\n");
     auto code = [](double a, double b) {
         return 100 * (float_band_gt(a, b) ? 1 : 0)
              + 10 * (float_band_eq(a, b) ? 1 : 0)
@@ -171,7 +171,7 @@ int main() {
     test_dmi_exact_decimal_tie_books_neither_dm();
     test_dmi_clear_difference_is_unchanged();
     test_dmi_up_within_band_of_zero_is_not_up();
-    test_float_compare_band_replays_the_sensor_tapes();
+    test_float_compare_band_replays_invented_bars();
     std::printf("dmi_parity: %d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
 }

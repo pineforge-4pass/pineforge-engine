@@ -12597,7 +12597,7 @@
         },
         {
           "line": 192,
-          "text": "CHECK(f.grid(14.035) == 14.035)"
+          "text": "CHECK(f.grid(20.085) == 20.085)"
         },
         {
           "line": 193,
@@ -12605,7 +12605,7 @@
         },
         {
           "line": 194,
-          "text": "CHECK(f.grid(1404.0 * 0.01) == 14.04)"
+          "text": "CHECK(f.grid(2008.0 * 0.01) == 20.08)"
         },
         {
           "line": 195,
@@ -12676,7 +12676,7 @@
           "text": "CHECK(bin.grid(13.7451 + 1e-9) == 13.7451 + 1e-9)"
         }
       ],
-      "sourceSha256": "cb6bf1e03d6e79df4c8b65c24b6d53781e9633339c022f739d2eef8cbd4384c0"
+      "sourceSha256": "d2059054bbab16f98c953d006b581aa37240782f4c47d877048a4b930b0abc32"
     },
     "test_limit_exact_touch_level_residue": {
       "assertions": [
@@ -18425,7 +18425,7 @@
           "text": "CHECK_NEAR(eng.position_size(), 1.0, 1e-9)"
         }
       ],
-      "sourceSha256": "7512df8d886f7ad04bfd697feaedfcdfeae68d334cb9cec908d61517219a91d7"
+      "sourceSha256": "96883140f2aa869df80e055c26cc3305219e5560262cd0d51a768beb04b7e5f2"
     },
     "test_market_structure_fills": {
       "assertions": [
@@ -21467,7 +21467,7 @@
           "text": "CHECK(eng.trades_with_entry_id(\"S\") == 0)"
         }
       ],
-      "sourceSha256": "36a44ed23bf7515c328628df6dc65868e63d5b1acb904224cbf21f263c4291e4"
+      "sourceSha256": "9e20d757897d83f604dc27d985867996866f15bcea8a623b4313f3f79e2dc3b5"
     },
     "test_percent_equity_open_entry_fee": {
       "assertions": [
@@ -23612,7 +23612,7 @@
           "text": "CHECK(near(t.exit_price, 1.17307, 1e-9))"
         }
       ],
-      "sourceSha256": "a04d778f177d63ff7ee97ce51dcd08fb228e96ef663a66f153030e6d0c38da09"
+      "sourceSha256": "766361e230a966eab8b639b371166b5060d0a128dfdc32dd80043409d8258cd2"
     },
     "test_prearmed_exit_path_cursor": {
       "assertions": [
@@ -28381,7 +28381,7 @@
           "text": "CHECK(eng.nearest(64.03) == eng.nearest(eng.nearest(64.03)))"
         }
       ],
-      "sourceSha256": "e4bc6d7799414729b52b90b2a0dda048e349ae54cfe8123e43ff380ed6162752"
+      "sourceSha256": "967b7c47bcfb67e06863685d6f396c9472ee997b09eb14d2496c9e1204a371cb"
     },
     "test_small_money_margin_residual": {
       "assertions": [
@@ -33119,7 +33119,7 @@
           "text": "CHECK(near(omitted.position, 0.0))"
         }
       ],
-      "sourceSha256": "31a1a1f01f174ca53cde12fbfcc4081c5e1eb69fd7938855063312b6214a8e4b"
+      "sourceSha256": "95cfedf052261dc77f2766785ece7634a2ac5f015eecacf8d2d7186bbe1e6ff9"
     },
     "test_trail_ref_entry_bar_extreme": {
       "assertions": [

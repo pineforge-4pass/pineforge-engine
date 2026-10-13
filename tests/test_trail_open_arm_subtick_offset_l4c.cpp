@@ -5,7 +5,7 @@
 /*
  * test_trail_open_arm_subtick_offset.cpp — two trailing-exit rules pinned
  * against TradingView behaviour (recorded tapes are kept outside this
- * repository). Legacy test function names stay fixed; cent-tick fixtures
+ * repository). Two test function names that carried a ticker are renamed; cent-tick fixtures
  * use invented prices and timestamps.
  *
  * (B) A resting trail observes the OPEN first. An open past activation arms
@@ -122,8 +122,8 @@ void test_open_arms_trail_stock_short() {
     CHECK(near(f.path_position, 0.01 / 1.00, 1e-6));
 }
 
-void test_open_arms_trail_ford_daily_long() {
-    std::printf("test_open_arms_trail_ford_daily_long\n");
+void test_open_arms_trail_daily_long() {
+    std::printf("test_open_arms_trail_daily_long\n");
     // Invented long entry 128.00: ceil(1.5) = 2 ticks activates at 128.02.
     // Open 128.10 arms with a one-tick offset. |O-L| = 0.08 < |H-O| = 0.50,
     // so the low-first path crosses 128.10 - 0.01 = 128.09 before its high.
@@ -591,7 +591,7 @@ int main() {
 
     test_open_arms_trail_xauusd_long();
     test_open_arms_trail_stock_short();
-    test_open_arms_trail_ford_daily_long();
+    test_open_arms_trail_daily_long();
     test_open_is_a_new_best_for_an_armed_trail();
     test_open_below_activation_does_not_arm();
 

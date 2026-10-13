@@ -425,7 +425,7 @@ void test_short_chronological_slice_marks_at_rounded_high() {
 }
 
 // F. Invented decimal midpoints at two scales plus a fixed-point check.
-void test_helper_census_values() {
+void test_helper_values() {
     std::printf("-- F: round_to_mintick on invented midpoints --\n");
     Probe eng(640000.0, 0.01, 0);
     CHECK_NEAR(eng.nearest(64.035), 64.03, 1e-12);        // 6403.499999999999 -> 64.03
@@ -448,7 +448,7 @@ int main() {
     test_short_cascade_ignores_sub_tick_excursion();
     test_short_cascade_slices_at_rounded_high();
     test_short_chronological_slice_marks_at_rounded_high();
-    test_helper_census_values();
+    test_helper_values();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

@@ -325,7 +325,7 @@ private:
 // Both relative legs have a sub-tick offset. The loss level is
 // 1.17323 - 0.00984241*0.00001, which snaps down to the next tick, 1.17322.
 // The profit leg above the fill is never reached on the remaining path.
-static constexpr double kTapeTicks = 0.00984241;
+static constexpr double kFixtureTicks = 0.00984241;
 
 static std::vector<Bar> intrabar_parent_bars(double fill_bar_open,
                                              double fill_bar_low) {
@@ -343,7 +343,7 @@ static std::vector<Bar> intrabar_parent_bars(double fill_bar_open,
 }
 
 static void check_intrabar_limit_parent_ticks(bool reissue_every_bar) {
-    IntrabarLimitParentTicks probe(kTapeTicks, kTapeTicks, reissue_every_bar);
+    IntrabarLimitParentTicks probe(kFixtureTicks, kFixtureTicks, reissue_every_bar);
     std::vector<Bar> bars = intrabar_parent_bars(1.17356, 1.17288);
     probe.run(bars.data(), static_cast<int>(bars.size()));
 
@@ -365,7 +365,7 @@ static void check_intrabar_limit_parent_ticks(bool reissue_every_bar) {
 // Control: parent fills AT the open (open <= limit), so the bracket walks
 // the whole bar.
 static void check_open_fill_limit_parent_ticks_control() {
-    IntrabarLimitParentTicks probe(kTapeTicks, kTapeTicks, true);
+    IntrabarLimitParentTicks probe(kFixtureTicks, kFixtureTicks, true);
     std::vector<Bar> bars = intrabar_parent_bars(1.17320, 1.17288);
     probe.run(bars.data(), static_cast<int>(bars.size()));
 
@@ -383,7 +383,7 @@ static void check_open_fill_limit_parent_ticks_control() {
 // at the bar's low and the bar closes there) — the bracket rests into the
 // next bar and gap-fills at its open.
 static void check_intrabar_limit_parent_ticks_unreached_control() {
-    IntrabarLimitParentTicks probe(kTapeTicks, kTapeTicks, true);
+    IntrabarLimitParentTicks probe(kFixtureTicks, kFixtureTicks, true);
     std::vector<Bar> bars = intrabar_parent_bars(1.17356, 1.17323);
     bars[4].close = 1.17323;
     probe.run(bars.data(), static_cast<int>(bars.size()));

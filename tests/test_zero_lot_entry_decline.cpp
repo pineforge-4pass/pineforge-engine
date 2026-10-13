@@ -72,7 +72,7 @@ static Bar mk_bar(int64_t ts, double o, double h, double l, double c) {
 namespace {
 
 // Script chars (indexed by bar_index_):
-//   'S' explicit SHORT market entry, qty = cash_ / close   (the 3commas shape)
+//   'S' explicit SHORT market entry, qty = cash_ / close   (the DCA-bot shape)
 //   'D' default-sized SHORT market entry (qty = na)
 //   'F' explicit SHORT market entry, qty = fixed_qty_
 //   'A' explicit SHORT market ADD,  qty = add_cash_ / close   (DCA safety order)
@@ -226,7 +226,7 @@ void test_greenC_step_zero_unchanged() {
     CHECK_NEAR(eng.position_size(), -1.0, 1e-9);
 }
 
-// RED-4. 3commas DCA shape (pyramiding=2, POOC, same id "E"): base 2 shares,
+// RED-4. DCA-bot shape (pyramiding=2, POOC, same id "E"): base 2 shares,
 // then a safety-order MARKET add sized 280/290 = 0.9655 -> 0.
 // No lot, no trade row, NO pyramiding slot spent: the next fixed add of
 // 2 shares fills, giving -(2 + 2) = -4 with two positive lots.

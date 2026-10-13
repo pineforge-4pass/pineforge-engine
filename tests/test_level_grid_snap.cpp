@@ -182,28 +182,28 @@ void test_level_on_price_grid() {
     CHECK(f.decimals() == 2);
     CHECK(f.grid(64.03 + 0.04) == 64.07);            // the natural residue
     CHECK(f.grid(80.07 - 0.01) == 80.06);
-    CHECK(f.grid(64.07 + 1e-6) == 64.07);           // famT-lim-1e-6 IN
+    CHECK(f.grid(64.07 + 1e-6) == 64.07);           // lvl-lim-1e-6 IN
     CHECK(f.grid(64.07 + 9e-7) == 64.07);
-    CHECK(f.grid(64.07 + 1.2e-6) == 64.07 + 1.2e-6); // famT-lim-1.2e-6 OUT
-    CHECK(f.grid(80.06 - 1e-6) == 80.06);           // famT-stp-1e-6 IN
-    CHECK(f.grid(80.06 - 3e-6) == 80.06 - 3e-6);    // famT-stp-3e-6 OUT
-    CHECK(f.grid(96.40 - 1e-6) == 96.40);           // famT-blim-1e-6 IN
-    CHECK(f.grid(96.40 - 1e-5) == 96.40 - 1e-5);    // famT-blim-1e-5 OUT
-    CHECK(f.grid(14.035) == 14.035);                // a genuine sub-tick level is untouched
+    CHECK(f.grid(64.07 + 1.2e-6) == 64.07 + 1.2e-6); // lvl-lim-1.2e-6 OUT
+    CHECK(f.grid(80.06 - 1e-6) == 80.06);           // lvl-stp-1e-6 IN
+    CHECK(f.grid(80.06 - 3e-6) == 80.06 - 3e-6);    // lvl-stp-3e-6 OUT
+    CHECK(f.grid(96.40 - 1e-6) == 96.40);           // lvl-blim-1e-6 IN
+    CHECK(f.grid(96.40 - 1e-5) == 96.40 - 1e-5);    // lvl-blim-1e-5 OUT
+    CHECK(f.grid(20.085) == 20.085);                // a genuine sub-tick level is untouched
     CHECK(f.grid(64.07) == 64.07);                  // on-grid is a fixed point
-    CHECK(f.grid(1404.0 * 0.01) == 14.04);          // k*mintick residue -> the literal double
+    CHECK(f.grid(2008.0 * 0.01) == 20.08);          // k*mintick residue -> the literal double
     CHECK(std::isnan(f.grid(kNaN)));
     Probe es(0.25);
     CHECK(es.decimals() == 2);                      // pricescale 100, not 1/0.25
-    CHECK(es.grid(5513.75 + 5e-7) == 5513.75);      // famT-es-lim-5e-7 IN
-    CHECK(es.grid(5513.75 + 1e-6) == 5513.75 + 1e-6);   // famT-es-lim-1e-6 OUT
+    CHECK(es.grid(5513.75 + 5e-7) == 5513.75);      // lvl-es-lim-5e-7 IN
+    CHECK(es.grid(5513.75 + 1e-6) == 5513.75 + 1e-6);   // lvl-es-lim-1e-6 OUT
     CHECK(es.grid(5513.75 + 2.5e-5) == 5513.75 + 2.5e-5); // 1e-4 ticks is NOT the band
     CHECK(es.grid(5513.76) == 5513.76);             // on the price grid, off the tick grid: kept
     Probe eu(0.00001);
     CHECK(eu.decimals() == 5);
-    CHECK(eu.grid(1.13556 + 1e-13) == 1.13556);     // famT-eu-lim-1e-13 IN
-    CHECK(eu.grid(1.13556 + 1e-12) == 1.13556);     // famT-eu-lim-1e-12 IN (FP boundary)
-    CHECK(eu.grid(1.13556 + 2e-12) == 1.13556 + 2e-12); // famT-eu-lim-2e-12 OUT
+    CHECK(eu.grid(1.13556 + 1e-13) == 1.13556);     // lvl-eu-lim-1e-13 IN
+    CHECK(eu.grid(1.13556 + 1e-12) == 1.13556);     // lvl-eu-lim-1e-12 IN (FP boundary)
+    CHECK(eu.grid(1.13556 + 2e-12) == 1.13556 + 2e-12); // lvl-eu-lim-2e-12 OUT
     CHECK(eu.grid(1.13556 + 1e-11) == 1.13556 + 1e-11); // OUT
     CHECK(eu.grid(1.13556 + 1e-9) == 1.13556 + 1e-9);   // OUT
     Probe none(0.0);
@@ -216,7 +216,7 @@ void test_level_on_price_grid() {
 }
 
 // --- synthetic sell limit at an exact O = H touch ---------------------------
-void test_f_sell_limit_band() {
+void test_case_sell_limit_band() {
     std::printf("-- synthetic sell limit: inside band bar 2 @64.07, outside band bar 3 @64.08 --\n");
     // Entry 64.035 prints 64.03; band = 0.01 / 100^2 = 1e-6.
     for (double d : {0.0, 1e-12, 1e-9, 5e-7, 9e-7, 1e-6}) {
@@ -247,7 +247,7 @@ void test_f_sell_limit_band() {
 }
 
 // --- synthetic sell stop at exact and quantized low touches -----------------
-void test_f_sell_stop_band() {
+void test_case_sell_stop_band() {
     std::printf("-- synthetic sell stop: inside band bar 3 @80.06, outside band bar 5 @80.05 --\n");
     // Lows on bars 3/4 print 80.06; bar 5 crosses floor_tick(stop) = 80.05.
     for (double stop : {80.06, 80.07 - 0.01, 80.06 - 1e-9, 80.06 - 1e-6}) {
@@ -270,7 +270,7 @@ void test_f_sell_stop_band() {
 }
 
 // --- synthetic buy limit for a short position -------------------------------
-void test_f_buy_limit_band() {
+void test_case_buy_limit_band() {
     std::printf("-- synthetic buy limit: inside band bar 3 @96.40, outside band bar 4 @96.39 --\n");
     // Inside band: 96.40 touch on bar 3. Outside: floor_tick(limit) = 96.39.
     for (double d : {0.0, 1e-6}) {
@@ -292,7 +292,7 @@ void test_f_buy_limit_band() {
 }
 
 // --- limit residue versus a tick-quantized high -----------------------------
-void test_masayanfx_56_limit_on_quantized_high() {
+void test_limit_on_quantized_high() {
     std::printf("-- synthetic limit residue fills at the quantized high on bar 2 --\n");
     // Entry 64.035 prints 64.03; high 64.065 prints 64.07 on bar 2.
     Probe eng(0.01);
@@ -355,10 +355,10 @@ void test_eurusd_band() {
 int main() {
     std::printf("--- level_grid_snap (round 8 family T) ---\n");
     test_level_on_price_grid();
-    test_f_sell_limit_band();
-    test_f_sell_stop_band();
-    test_f_buy_limit_band();
-    test_masayanfx_56_limit_on_quantized_high();
+    test_case_sell_limit_band();
+    test_case_sell_stop_band();
+    test_case_buy_limit_band();
+    test_limit_on_quantized_high();
     test_es_band_is_price_not_ticks();
     test_eurusd_band();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
