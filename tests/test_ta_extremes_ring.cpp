@@ -712,6 +712,9 @@ static double synthetic_na_first_source(int s, int i) {
         {NAN, NAN, NAN, NAN, -16, -6, 8, -4, -10, 2, -36, -40, -72},
     };
     if (i < kLeadingNa[s]) return na<double>();
+    // Site A call 7 reads a source NOT above call 6's cached 520, so it answers its own
+    // source by the cache shortcut (a rising source would trigger a rescan and return 420).
+    if (s == 0 && i == 7) return 510.0;
     return s < 3 ? 400.0 + 100.0 * s + 20.0 * i : kSigned[s - 3][i];
 }
 // Positive sites: zeros win until poison removes them; the stale first
@@ -720,7 +723,7 @@ static double synthetic_na_first_source(int s, int i) {
 // Signed sites take minima of the live post-poison members: in F the
 // aliased -24 returns at i=9, then -32 wins; in G i=9 restarts on +2.
 static const double kNaFirstTv[5][13] = {
-    {NAN, 420, 0, 0, 0, 0, 520, 540, 420, 420, 420, 420, 440},
+    {NAN, 420, 0, 0, 0, 0, 520, 510, 420, 420, 420, 420, 440},
     {NAN, NAN, 540, 0, 0, 0, 620, 640, 540, 540, 540, 540, 540},
     {NAN, NAN, NAN, NAN, NAN, 700, 720, 740, 760, 780, 800, 700, 700},
     {NAN, NAN, -24, -24, -24, -24, 12, -4, -8, -24, -32, -32, -48},

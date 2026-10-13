@@ -993,14 +993,15 @@ static void test_fee_created_nonzero_floor_keeps_four_x_quantity() {
     std::printf("test_fee_created_nonzero_floor_keeps_four_x_quantity\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 125.0, 125.0, 125.0, 125.0, 1.0),
-        mk_bar(2000, 125.002, 125.002, 125.002, 125.002, 1.0),
+        mk_bar(2000, 125.003, 125.003, 125.003, 125.003, 1.0),
     };
     CommissionedDefaultPoeDustProbe eng(
         /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
     eng.run(bars.data(), (int)bars.size());
 
-    // q=7.992; q_min=(7.992*125.002*1.001-1000)/125.002
-    // =0.000119997952 -> floor 0.0001 -> 4x 0.0004; held 7.9916.
+    // q=7.992; q_min=(7.992*125.003*1.001-1000)/125.003
+    // =0.000183995392 = 1.84 qty steps -> floor 0.0001 -> 4x 0.0004; held 7.9916.
+    // (4x before the floor would give floor(7.36 steps) = 0.0007: the order is pinned.)
     CHECK(eng.trade_count() == 1);
     CHECK(near(eng.trade_size(0), 0.0004));
     CHECK(near(eng.position_size(), 7.9916));

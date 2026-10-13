@@ -159,12 +159,12 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// NQ gap probes (default fixed qty 1, margin 100, commission 0).
+// Gap probes (default fixed qty 1, margin 100, commission 0).
 
 // Synthetic gap: placement 1*200*20=4000 <= 4200, fill 1*230*20=4600
 // > 4200. Missing the fill-time admission check would open a long.
 void test_nq_gap_up_declined_at_fill() {
-    std::printf("-- NQ gap-up: admitted at placement, declined at fill --\n");
+    std::printf("-- gap-up: admitted at placement, declined at fill --\n");
     Probe eng(4200.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L....";
     std::vector<Bar> bars = {
@@ -184,7 +184,7 @@ void test_nq_gap_up_declined_at_fill() {
 // although the later 1*210*20=4200 would fit. Placement cannot be rescued
 // by a favorable fill.
 void test_nq_gap_down_declined_at_placement() {
-    std::printf("-- NQ gap-down: declined at placement --\n");
+    std::printf("-- gap-down: declined at placement --\n");
     Probe eng(4500.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L....";
     std::vector<Bar> bars = {
@@ -201,7 +201,7 @@ void test_nq_gap_down_declined_at_placement() {
 
 // Capital 1e6 exceeds both requirements: control fills one contract at 230.
 void test_nq_gap_up_control_fills() {
-    std::printf("-- NQ gap-up control (capital 1e6) fills --\n");
+    std::printf("-- gap-up control (capital 1e6) fills --\n");
     Probe eng(1000000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L....";
     std::vector<Bar> bars = {
@@ -224,7 +224,7 @@ void test_nq_gap_up_control_fills() {
 // the admitted placement notional -> fills (the fill check can only add an
 // adverse-gap decline, never re-decline a placement admit).
 void test_nq_favorable_gap_fills() {
-    std::printf("-- NQ favorable gap fills --\n");
+    std::printf("-- favorable gap fills --\n");
     Probe eng(4200.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L...";
     std::vector<Bar> bars = {
@@ -241,7 +241,7 @@ void test_nq_favorable_gap_fills() {
 // Exact tie at placement AND fill (notional == equity): admitted (the guard is
 // a float guard only, and the comparison is strict).
 void test_nq_exact_tie_admits() {
-    std::printf("-- NQ exact tie admits --\n");
+    std::printf("-- exact tie admits --\n");
     Probe eng(4000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
     eng.script = "L...";
     std::vector<Bar> bars = {
@@ -258,7 +258,7 @@ void test_nq_exact_tie_admits() {
 // margin_pct scales the requirement: margin 50 halves it; margin 0 disables
 // the check (TV performs no margin simulation at 0).
 void test_nq_margin_scaling_and_zero_inert() {
-    std::printf("-- NQ margin 50 scales / margin 0 inert --\n");
+    std::printf("-- margin 50 scales / margin 0 inert --\n");
     {
         Probe eng(2100.0, kNQ, QtyType::FIXED, 1.0, 0.0, 50.0, 0, false);
         eng.script = "L...";
