@@ -18,6 +18,8 @@
 #include "../compat/pine/callback_lifecycle_rules.hpp"
 #include "pine_reissue_binding.hpp"
 #include "pine_run_failure.hpp"
+#include "pine_checked_arith.hpp"
+#include "pine_value_admission.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -292,8 +294,22 @@ bool source_same_point(double booked, double raw, double tick) noexcept {
             && nearest_tick(raw, tick) == booked);
 }
 
-double directional_tick(double value, double tick, bool upward) noexcept {
+// Only raw door callers supply a literal field. Derived prices retain the
+// original arithmetic; no source ownership is inferred from their bits.
+double source_arith_value(const std::optional<double>& value, const char* field) {
+    if (!value)
+        throw_strategy_value_invalid(field, StrategyValueReason::numeric_overflow);
+    return *value;
+}
+
+double directional_tick(double value, double tick, bool upward,
+                        const char* field = nullptr) {
     if (!std::isfinite(value) || !finite_positive(tick)) return value;
+    if (field) {
+        const double scaled = source_arith_value(checked_div(value, tick), field);
+        return source_arith_value(checked_mul(
+            upward ? std::ceil(scaled - 1e-9) : std::floor(scaled + 1e-9), tick), field);
+    }
     const double scaled = value / tick;
     return (upward ? std::ceil(scaled - 1e-9) : std::floor(scaled + 1e-9)) * tick;
 }
@@ -326,14 +342,17 @@ int price_grid_decimals(double tick) noexcept {
     return -1;
 }
 
-double source_level_on_price_grid(double level, double tick) noexcept {
+double source_level_on_price_grid(double level, double tick,
+                                 const char* field = nullptr) {
     if (!std::isfinite(level)) return level;
     const int digits = price_grid_decimals(tick);
     if (digits < 0) return level;
     double price_scale = 1.0;
     for (int i = 0; i < digits; ++i) price_scale *= 10.0;
     const double point_size = 1.0 / price_scale;
-    const double points = level / point_size;
+    const double points = field
+        ? source_arith_value(checked_div(level, point_size), field)
+        : level / point_size;
     const double grid = std::floor(points + 0.5);
     if (std::abs(points - grid) <= 0.01 / price_scale)
         return grid / price_scale;
@@ -341,19 +360,21 @@ double source_level_on_price_grid(double level, double tick) noexcept {
 }
 
 double source_trigger_threshold(double level, double tick,
-                                bool is_buy, bool is_limit) noexcept {
+                                bool is_buy, bool is_limit,
+                                const char* field = nullptr) {
     if (!std::isfinite(level) || !finite_positive(tick)) return level;
     // ab9714be pine_strategy_commands.cpp:533-537: 0.0 is a valid stop level.
     // The native matcher's finite_non_negative trigger validator refuses negative
     // levels, so a non-positive trigger cannot be shifted half a tick lower.
     if (level <= 0.0) return 0.0;
     const bool upward = is_limit ? !is_buy : is_buy;
-    double scaled = level / tick;
+    double scaled = field ? source_arith_value(checked_div(level, tick), field) : level / tick;
     const double inverse = 1.0 / tick;
     const double integral_inverse = std::floor(inverse + 0.5);
     if (integral_inverse > 0.0
         && std::abs(inverse - integral_inverse) <= 1e-6 * integral_inverse) {
-        scaled = level * integral_inverse;
+        scaled = field ? source_arith_value(checked_mul(level, integral_inverse), field)
+                       : level * integral_inverse;
         const double nearest_index = std::floor(scaled + 0.5);
         if (source_bar_fill_tick(level, tick) == level)
             scaled = nearest_index;
@@ -361,14 +382,19 @@ double source_trigger_threshold(double level, double tick,
     const double target_index = upward
         ? std::ceil(scaled - 1e-12)
         : std::floor(scaled + 1e-12);
-    const double grid = target_index * tick;
-    double threshold = grid + (upward ? -0.5 : 0.5) * tick;
+    const double grid = field ? source_arith_value(checked_mul(target_index, tick), field)
+                             : target_index * tick;
+    double threshold = field
+        ? source_arith_value(checked_add(grid, (upward ? -0.5 : 0.5) * tick), field)
+        : grid + (upward ? -0.5 : 0.5) * tick;
     // Materialize the exact binary64 boundary using the same half-up broker
     // projection as the legacy trigger bar. Decimal half ticks can land one
     // or two ULPs to either side depending on the literal and multiplication
     // order (11.805 and 13.775 are the two pinned opposite cases).
     const auto reaches_target = [&](double price) {
-        const double rounded_index = std::floor(price / tick + 0.5);
+        const double rounded_index = field
+            ? std::floor(source_arith_value(checked_div(price, tick), field) + 0.5)
+            : std::floor(price / tick + 0.5);
         return upward ? rounded_index >= target_index
                       : rounded_index <= target_index;
     };
@@ -387,6 +413,10 @@ double source_trigger_threshold(double level, double tick,
         if (!reaches_target(candidate)) break;
         threshold = candidate;
     }
+    // An infinite outside candidate can be rejected by the walk. Only an
+    // installed boundary derived from this finite raw level is an overflow.
+    if (field && !std::isfinite(threshold))
+        throw_strategy_value_invalid(field, StrategyValueReason::numeric_overflow);
     return threshold;
 }
 
@@ -719,7 +749,14 @@ namespace {
 // trail_points as whole ticks (compat::pine::trail_points_to_ticks): with
 // the mintick-scaled tolerance TradingView applies, or the constant one when
 // the trail switch is off.
-double source_trail_points_ticks(double trail_points, double mintick) noexcept {
+double source_trail_points_ticks(double trail_points, double mintick,
+                                 const char* field = nullptr) {
+    if (field && finite_positive(mintick)
+        && detail::pine_callback_lifecycle_rule(detail::PineCallbackLifecycleRule::TrailPointsMintickTolerance)) {
+        const double tolerance = source_arith_value(checked_mul(
+            compat::pine::kTrailPointsCeilMintickScale, mintick), field);
+        return std::ceil(source_arith_value(checked_add(trail_points, -tolerance), field));
+    }
     return detail::pine_callback_lifecycle_rule(detail::PineCallbackLifecycleRule::TrailPointsMintickTolerance)
         ? compat::pine::trail_points_to_ticks(trail_points, mintick)
         : compat::pine::trail_points_to_ticks(trail_points);
@@ -7126,8 +7163,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             }
         }
     }
-    limit_price = source_level_on_price_grid(limit_price, staged_.syminfo.mintick);
-    stop_price = source_level_on_price_grid(stop_price, staged_.syminfo.mintick);
+    limit_price = source_level_on_price_grid(
+        limit_price, staged_.syminfo.mintick, value_field::entry_limit_price);
+    stop_price = source_level_on_price_grid(
+        stop_price, staged_.syminfo.mintick, value_field::entry_stop_price);
     const bool pure_stop_entry = std::isnan(limit_price)
         && finite_positive(stop_price);
     if (intraday_loss_orders_blocked()
@@ -7654,7 +7693,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         && config_.default_qty_value <= 100.0;
     double default_stop_sizing_price = kNaN;
     if (default_stop_freeze && finite_positive(staged_.syminfo.mintick)) {
-        stop_price = directional_tick(stop_price, staged_.syminfo.mintick, is_long);
+        stop_price = directional_tick(
+            stop_price, staged_.syminfo.mintick, is_long, value_field::entry_stop_price);
         const double signal = source_point
             ? nearest_tick(source_point->price, staged_.syminfo.mintick) : kNaN;
         if (config_.process_orders_on_close && source_level_on_price_grid(stop_price, staged_.syminfo.mintick) == source_level_on_price_grid(signal, staged_.syminfo.mintick)) {
@@ -7729,11 +7769,11 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // tick-quantized bar, so an off-grid level triggers on the half-up
         // rounded print (NYSE:F ORB 10.845 / 11.425 / 11.89 limits).
         native_limit = source_trigger_threshold(
-            limit_price, staged_.syminfo.mintick, is_long, true);
+            limit_price, staged_.syminfo.mintick, is_long, true, value_field::entry_limit_price);
     } else if (finite_positive(stop_price) && !finite_positive(limit_price)
                && !config_.calc_on_order_fills) {
         native_stop = source_trigger_threshold(
-            stop_price, staged_.syminfo.mintick, is_long, false);
+            stop_price, staged_.syminfo.mintick, is_long, false, value_field::entry_stop_price);
     }
     const auto* pine_host = pine_view_of(&require_host());
     const bool nonpositive_priced = priced && pine_host
@@ -11111,7 +11151,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (!finite_positive(stop_price) && finite_positive(loss_ticks))
             stop_price = entry_price - (long_side ? 1.0 : -1.0) * loss_ticks * tick;
         if (std::isfinite(source_trail_points)) {
-            const double trail_ticks = source_trail_points_ticks(source_trail_points, tick);
+            const double trail_ticks = source_trail_points_ticks(
+                source_trail_points, tick, value_field::exit_trail_points);
             trail_price = directional_tick(entry_price
                 + (long_side ? 1.0 : -1.0) * trail_ticks * tick,
                 tick, long_side);
@@ -14454,8 +14495,10 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     double risk_coof_forced_price = kNaN;
     double coof_market_fill = kNaN;
     bool delay_after_default_pair = false;
-    limit_price = source_level_on_price_grid(limit_price, staged_.syminfo.mintick);
-    stop_price = source_level_on_price_grid(stop_price, staged_.syminfo.mintick);
+    limit_price = source_level_on_price_grid(
+        limit_price, staged_.syminfo.mintick, value_field::order_limit_price);
+    stop_price = source_level_on_price_grid(
+        stop_price, staged_.syminfo.mintick, value_field::order_stop_price);
     const bool default_sized = std::isnan(qty);
     const double normalized_qty = default_sized ? qty
         : floor_quantity_grid(std::abs(qty), staged_.quantity_grid);
@@ -14473,11 +14516,11 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     double native_stop = stop_price;
     if (finite_positive(limit_price) && !finite_positive(stop_price)) {
         native_limit = source_trigger_threshold(
-            limit_price, staged_.syminfo.mintick, is_long, true);
+            limit_price, staged_.syminfo.mintick, is_long, true, value_field::order_limit_price);
     } else if (finite_positive(stop_price) && !finite_positive(limit_price)
                && !config_.calc_on_order_fills) {
         native_stop = source_trigger_threshold(
-            stop_price, staged_.syminfo.mintick, is_long, false);
+            stop_price, staged_.syminfo.mintick, is_long, false, value_field::order_stop_price);
     }
     request.trigger = trigger_for(native_limit, native_stop);
     if (coof_recalc_active_ && coof_first_open_) {

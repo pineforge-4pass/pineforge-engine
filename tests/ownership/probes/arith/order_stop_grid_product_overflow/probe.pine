@@ -1,0 +1,7 @@
+//@version=6
+strategy("EN-132 order_stop_grid_product_overflow", initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0, commission_value=0, slippage=0)
+if bar_index == 0
+    strategy.order("raw", strategy.long, qty=1, stop=1.5e308)
+if bar_index == 3
+    strategy.cancel_all()
+    strategy.close_all()

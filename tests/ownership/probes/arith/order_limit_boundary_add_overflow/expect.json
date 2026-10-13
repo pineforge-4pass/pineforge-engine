@@ -1,0 +1,12 @@
+{
+  "outcome": "failed",
+  "code": "strategy_value_invalid",
+  "args": {
+    "field": "order.limit_price",
+    "reason": "numeric_overflow"
+  },
+  "min_trades": 0,
+  "label": "S",
+  "pinned_by": "revision 3 section 4 raw-argument arithmetic; Appendix B order.limit_price; Appendix D",
+  "native_boundary_control": "tests/test_value_admission_arith.cpp"
+}
