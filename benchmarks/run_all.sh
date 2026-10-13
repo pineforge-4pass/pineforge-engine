@@ -16,7 +16,7 @@
 #
 # Honours these env vars:
 #   SKIP_BUILD          — skip the runtime + bench-strategy build step
-#   SKIP_PYNE           — skip PyneCore strategy + indicator runs and timing
+#   SKIP_PYNE           — skip only PyneCore strategy runs and the canonical indicator run
 #   PYNECORE_HARNESS_DIR — private harness directory containing runners/run_pynecore.py
 #                         and speed/time_pynecore.py (unset = skip PyneCore)
 #   SKIP_PINETS         — skip PineTS indicator run
@@ -69,9 +69,12 @@ log()  { printf '\033[1;34m[bench]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bench]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[bench]\033[0m %s\n' "$*" >&2; exit 1; }
 
-pynecore_available() {
-    [[ "${SKIP_PYNE:-0}" != "1" && -n "${PYNECORE_HARNESS_DIR:-}" \
+pynecore_harness_has() {
+    [[ -n "${PYNECORE_HARNESS_DIR:-}" \
         && -f "${PYNECORE_HARNESS_DIR:-}/$1" ]]
+}
+pynecore_available() {
+    [[ "${SKIP_PYNE:-0}" != "1" ]] && pynecore_harness_has "$1"
 }
 skip_pynecore() {
     warn "PyneCore harness not present (set PYNECORE_HARNESS_DIR to the private harness); skipping the PyneCore leg"
@@ -134,7 +137,7 @@ if [[ ! -f "${LIVE_CSV}" ]] || ! cmp -s "${SNAPSHOT_CSV}" "${LIVE_CSV}"; then
     cp "${SNAPSHOT_CSV}" "${LIVE_CSV}"
 fi
 # Re-convert to PyneCore .ohlcv if missing or stale.
-if { pynecore_available runners/run_pynecore.py || pynecore_available speed/time_pynecore.py; } \
+if { pynecore_harness_has runners/run_pynecore.py || pynecore_harness_has speed/time_pynecore.py; } \
    && { [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
         || [[ "${LIVE_CSV}" -nt "${LIVE_CSV%.csv}.ohlcv" ]]; }; then
     pyne -w "${WORKDIR}" data convert-from \
@@ -191,7 +194,9 @@ run_pineforge_one() {
 run_pynecore_one() {
     local s="$1"
     if ! pynecore_available runners/run_pynecore.py; then
-        skip_pynecore
+        if ! pynecore_harness_has runners/run_pynecore.py; then
+            skip_pynecore
+        fi
         return 0
     fi
     rm -f "$s/pynecore_trades.csv"
@@ -202,7 +207,7 @@ run_pynecore_one() {
     fi
 }
 export -f run_pineforge_one run_pynecore_one
-export -f pynecore_available skip_pynecore warn
+export -f pynecore_harness_has pynecore_available skip_pynecore warn
 # The private harness finds this checkout through PINEFORGE_REPO_ROOT (it no longer sits inside it).
 export PINEFORGE_REPO_ROOT="${ROOT_DIR}"
 export ROOT_DIR BENCH_DIR SNAPSHOT_CSV PYNECORE_HARNESS_DIR
@@ -230,7 +235,10 @@ if pynecore_available runners/run_pynecore.py; then
         warn "PyneCore runtime failed on $(wc -l <<<"${failed}" | tr -d ' ') strategies: $(tr '\n' ' ' <<<"${failed}")"
     fi
 else
-    skip_pynecore
+    # A skipped leg leaves the committed PyneCore trade lists as they are (they are published results).
+    if ! pynecore_harness_has runners/run_pynecore.py; then
+        skip_pynecore
+    fi
 fi
 if [[ "${SKIP_INDICATORS:-0}" != "1" ]]; then
     if pynecore_available runners/run_pynecore.py; then
@@ -239,7 +247,7 @@ if [[ "${SKIP_INDICATORS:-0}" != "1" ]]; then
             "${STRATEGIES_DIR}/_indicators/canonical_pyne.py" \
             "${WORKDIR}/data/ETHUSDT_15.ohlcv" \
             --plot "${STRATEGIES_DIR}/_indicators/canonical_pyne.csv" >/dev/null
-    else
+    elif ! pynecore_harness_has runners/run_pynecore.py; then
         skip_pynecore
     fi
 fi
@@ -339,13 +347,17 @@ if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
         PF_FMT=gbench
     fi
     PC_ARGS=()
-    if pynecore_available speed/time_pynecore.py; then
+    if pynecore_harness_has speed/time_pynecore.py; then
         quiet_gate pynecore
         (cd "${BENCH_DIR}" && uv run python "${PYNECORE_HARNESS_DIR}/speed/time_pynecore.py") \
             > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
         PC_ARGS=(--pynecore "${WORKDIR}/pc_speed.json")
     else
+        rm -f "${WORKDIR}/pc_speed.json" "${WORKDIR}/pc_speed.err"
         skip_pynecore
+        # Without PyneCore the table is a different table: never overwrite the committed results/speed.md with it.
+        PC_ARGS=(--out "${WORKDIR}/speed.md")
+        log "no PyneCore timings: writing the speed table to ${WORKDIR}/speed.md, not results/speed.md"
     fi
     quiet_gate pinets
     (cd "${BENCH_DIR}" && node speed/time_pinets.mjs) > "${WORKDIR}/pt_speed.json" 2>"${WORKDIR}/pt_speed.err"

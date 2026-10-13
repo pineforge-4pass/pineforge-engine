@@ -263,8 +263,8 @@ def main() -> None:
     ]
     if with_pc:
         lines += [
-            "- **PyneCore:** subprocess wall time of `uv run python runners/run_pynecore.py",
-            "  <strategy> --no-write`, including Python interpreter startup, PyneCore framework",
+            "- **PyneCore:** timed with a harness kept outside this repository, as subprocess",
+            "  wall time including Python interpreter startup, PyneCore framework",
             f"  import and the full backtest; median and p95 over `N=20` invocations, "
             f"{args.pynecore_workers} strategies timed concurrently.",
             "- **Bars/s:** feed bars ÷ median seconds per strategy. For PyneCore that is the",

@@ -6,7 +6,7 @@ This directory compares **PineForge** with two open-source PineScript runtimes a
 - [**PineTS**](https://github.com/LuxAlgo/PineTS): a TypeScript transpiler and runtime that runs raw `.pine` source in Node.js or browsers. AGPL-3.0. It has shipped a `strategy.*` namespace since 0.9.17, but this harness runs only its indicator layer, through the canonical indicator script.
 - [**vectorbt**](https://github.com/polakowo/vectorbt): a vectorized Pandas/NumPy/Numba backtester. It runs the hand-written `strategy_vbt.py` ports that some slots ship.
 
-The PyneCore harness is kept outside this repository; set PYNECORE_HARNESS_DIR to reproduce the PyneCore leg.
+The PyneCore harness is not part of this repository and is not distributed with it. `run_all.sh` runs the PyneCore leg only when `PYNECORE_HARNESS_DIR` names a directory holding `runners/run_pynecore.py` and `speed/time_pynecore.py`; otherwise it skips the leg with a message and the speed table is written without PyneCore. The PyneCore figures published here were measured on 2026-09-29 at engine `35db01c8` and are not re-measured by this repository.
 
 ## Headline
 
@@ -116,7 +116,7 @@ QUIET_LOAD_MAX=6 SKIP_BUILD=1 SKIP_PINEFORGE=1 SKIP_PINETS=1 SKIP_REPORTS=1 bash
 #   or in chunks, re-checking the gate before each; the closed PyneCore slots run 1-72 s per backtest:
 ./build/bin/pineforge_bench --benchmark_filter='/throughput/with_magnifier' --benchmark_format=json > benchmarks/_workdir/pf_speed.json
 #   (or per slot range, e.g. --benchmark_filter='^(0[0-9][0-9]|100)-[^/]*/throughput/with_magnifier', then merge the "benchmarks" arrays)
-(cd benchmarks && uv run python "${PYNECORE_HARNESS_DIR}/speed/time_pynecore.py" --n 20 --workers 8 \
+(cd benchmarks && PINEFORGE_REPO_ROOT="$(cd .. && pwd)" uv run python "${PYNECORE_HARNESS_DIR}/speed/time_pynecore.py" --n 20 --workers 8 \
     --first 178,162,164,163,165,132,114,171,181,168,189,105 --out _workdir/pc_speed.json)
 #   (--first starts the longest slots first, so the pool stays 8 wide; one batch took an hour on the AWS host)
 (cd benchmarks && N=20 node speed/time_pinets.mjs > _workdir/pt_speed.json)
@@ -134,7 +134,7 @@ PyneSys is not needed to reproduce: the committed `strategy_pyne.py` files are t
 
 **`run_all.sh` knobs:**
 
-- `SKIP_BUILD`, `SKIP_PINEFORGE`, `SKIP_PYNE`, `SKIP_PINETS`, `SKIP_VECTORBT`, `SKIP_INDICATORS`, `SKIP_SPEED` and `SKIP_REPORTS` each skip one step.
+- `SKIP_BUILD`, `SKIP_PINEFORGE`, `SKIP_PINETS`, `SKIP_VECTORBT`, `SKIP_INDICATORS`, `SKIP_SPEED` and `SKIP_REPORTS` skip their named steps. `SKIP_PYNE=1` skips only PyneCore strategy runs and the canonical indicator run; `.ohlcv` conversion and PyneCore timing still run when the harness is present.
 - `JOBS` runs parallel parity jobs. It never affects timing.
 - `SLOTS` narrows the loops to slot ranges, for example `1-50,120`.
 - `QUIET_LOAD_MAX` holds each timing batch until the host is quiet. Each batch's load is recorded in `_workdir/speed_loads.tsv` and in `speed.md`.

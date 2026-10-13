@@ -467,9 +467,13 @@ def speedup(tree, m):
     over_pc = [pc[s]["median_ms"] / pf[s] for s in pf if s in pc]
     over_vbt = [vbt[s]["median_ms"] / pf[s] for s in pf if s in vbt]
     timed = [s for s in pf if s in pc]
+    closed = {s["slot"] for s in tree.json(SELECTION)["slots"] if s["source"] == "closed"}
+    held = sum(1 for s in timed if s in closed)
+    probes = sum(1 for s in timed if s not in closed)
+    if probes + held != len(over_pc):
+        raise Mismatch("the timed corpus probes and held-out strategies do not sum to n")
     return {"x": Num(quantile(over_pc, .5)), "n": len(over_pc),
-            "probes": sum(1 for s in timed if not s.endswith("-closed")),
-            "held": sum(1 for s in timed if s.endswith("-closed")),
+            "probes": probes, "held": held,
             "p5": Num(quantile(over_pc, .05)), "p95": Num(quantile(over_pc, .95)),
             "vbt": Num(quantile(over_vbt, .5)), "vbt_n": len(over_vbt)}
 
