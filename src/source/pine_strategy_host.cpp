@@ -1946,7 +1946,9 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         context.account_fx = fx;
         const auto mark = build_close_trade_with_costs(lot, row.qty, price, row.is_long != 0,
             allocated_entry_commission(lot, row.qty), calc_commission_at(price, row.qty, fx), context);
-        // settlement safety guard (an invariant), not Pine parity.
+        // settlement safety guard (an invariant), not Pine parity. The price
+        // test is implied by the predicate (the mark carries it as exit_price);
+        // no mutant can kill it alone.
         if (!internal::closed_row_all_finite(mark) || !std::isfinite(price))
             throw std::logic_error("non-finite terminal-quote report row");
         row.exit_time = report_quote_time_ms_;
