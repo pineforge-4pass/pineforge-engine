@@ -1,0 +1,6 @@
+//@version=6
+strategy("EN132 relative", initial_capital=8.98846567431158e307, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0, commission_type=strategy.commission.cash_per_order, commission_value=0)
+if bar_index == 0
+    strategy.entry("E", strategy.short, qty=1)
+if bar_index == 2
+    strategy.exit("X", "E", loss=8.98846567431158e307)

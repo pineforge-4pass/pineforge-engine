@@ -1,0 +1,13 @@
+{
+  "outcome": "failed",
+  "code": "engine_command_value_invalid",
+  "args": {
+    "field": "risk.threshold",
+    "stage": "risk",
+    "reason": "numeric_overflow"
+  },
+  "min_trades": 0,
+  "label": "G",
+  "pinned_by": "EN-132 FINAL D6 row 18; revision 3 section 4 engine-derived risk",
+  "native_boundary_control": "tests/test_value_invalid_relative_risk_source.cpp"
+}

@@ -1659,6 +1659,14 @@ public:
     // Read-only fixture facade for command-boundary rows that have not yet
     // become live native requests.  It never participates in matching.
     std::vector<FixturePendingSnapshot> fixture_pending_snapshots() const;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    // Ownership boundary control: bypass source admission for a stored limit.
+    // Inline, no new state; absent from ordinary builds.
+    void fixture_value_invalid_drawdown_limit(double value, bool percent) noexcept {
+        risk_.max_drawdown = value;
+        risk_.max_drawdown_percent = percent;
+    }
+#endif
     // Fixture-only read of the source cohort's currently live quantity. It
     // projects the adapter's truthful opening facts; it does not recreate the
     // deleted executable id ledger.
@@ -2193,7 +2201,7 @@ private:
     void defer_declined_reversal_exits_at_adverse(const Bar&,
                                                   const NativeDecisionContext&,
                                                   bool margin_scheduled);
-    bool intraday_loss_breached(double mark_price) const noexcept;
+    bool intraday_loss_breached(double mark_price) const;
     bool submit_intraday_loss_close(double mark_price, const NativeDecisionContext&,
                                     bool execute_current);
     void schedule_intraday_loss_path(const Bar&, const NativeDecisionContext&);
