@@ -8833,6 +8833,8 @@ double NativeExecutionConsumer::append_open_position_report_rows(
             lot, lot.qty, mark_price, was_long,
             engine.allocated_entry_commission(lot, lot.qty),
             engine.calc_commission_at(mark_price, lot.qty, account_fx), context);
+        if (!internal::closed_row_all_finite(row))
+            throw std::logic_error("non-finite open-position report row");
         row.open_at_end = true;
         marked += row.pnl;
         engine.range_end_trades_.push_back(std::move(row));

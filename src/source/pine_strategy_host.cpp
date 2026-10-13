@@ -1946,6 +1946,11 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         context.account_fx = fx;
         const auto mark = build_close_trade_with_costs(lot, row.qty, price, row.is_long != 0,
             allocated_entry_commission(lot, row.qty), calc_commission_at(price, row.qty, fx), context);
+        // settlement safety guard (an invariant), not Pine parity. The price
+        // test is implied by the predicate (the mark carries it as exit_price);
+        // no mutant can kill it alone.
+        if (!internal::closed_row_all_finite(mark) || !std::isfinite(price))
+            throw std::logic_error("non-finite terminal-quote report row");
         row.exit_time = report_quote_time_ms_;
         row.exit_price = price;
         row.pnl = mark.pnl;
@@ -2126,6 +2131,12 @@ void source::PineStrategyHost::order_global_exit_children(
             rows.push_back(std::move(row));
             sources.push_back(first + slice.lot);
         }
+    }
+    // settlement safety guard (an invariant), not Pine parity. Validate all
+    // replacements before changing the committed rows or their tallies.
+    for (const auto& row : rows) {
+        if (!internal::closed_row_all_finite(row))
+            throw std::logic_error("non-finite amended trade row");
     }
     // strategy.wintrades / losstrades / eventrades and the gross sums count
     // rows: count the children's instead of the kernel's. net_profit_sum_ (the

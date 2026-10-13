@@ -189,6 +189,10 @@ void set_fused_settlement(bool enabled) noexcept;
 void count_settlement_paths(bool enabled) noexcept;
 SettlementPathCounts settlement_path_counts() noexcept;
 
+// Numeric values shared by settlement close rows and range-end mark rows
+// (defined beside the row builder in engine_orders.cpp).
+bool closed_row_all_finite(const Trade& trade) noexcept;
+
 // ── Report metrics (defined in engine_report.cpp) ──
 // The four metric blocks of a report, computed from explicit values and no
 // engine or host pointer, so one computation serves both readers of a presented

@@ -541,7 +541,7 @@ execution::AccountEffectProjection BacktestEngine::NativeSettlementStage::OneLot
     }
     double realized = engine.net_profit_sum_;
     if (row) {
-        if (!std::isfinite(row->pnl) || !std::isfinite(row->commission))
+        if (!internal::closed_row_all_finite(*row))
             return invalid_projection(Status::InvalidAccounting);
         realized += row->pnl;
     }
@@ -606,7 +606,7 @@ execution::Status BacktestEngine::NativeSettlementStage::OneLot::prepare(
     double next_gross_profit = engine.gross_profit_sum_;
     double next_gross_loss = engine.gross_loss_sum_;
     if (row) {
-        if (!std::isfinite(row->pnl) || !std::isfinite(row->commission))
+        if (!internal::closed_row_all_finite(*row))
             return Status::InvalidAccounting;
         next_profit += row->pnl;
         if (row->pnl > 0.0) next_gross_profit += row->pnl;
@@ -1183,7 +1183,7 @@ execution::Status BacktestEngine::prepare_native_settlement_commit(
     double next_gross_profit = gross_profit_sum_;
     double next_gross_loss = gross_loss_sum_;
     for (const auto& trade : rows.closed_trades) {
-        if (!std::isfinite(trade.pnl) || !std::isfinite(trade.commission))
+        if (!internal::closed_row_all_finite(trade))
             return Status::InvalidAccounting;
         next_profit += trade.pnl;
         if (trade.pnl > 0.0) next_gross_profit += trade.pnl;
