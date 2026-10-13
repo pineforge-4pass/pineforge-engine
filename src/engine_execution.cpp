@@ -1,5 +1,6 @@
 #include "engine_internal.hpp"
 #include "engine_settlement_stage.hpp"
+#include "engine_value_invalid.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -12,6 +13,21 @@
 #include <utility>
 
 namespace pineforge {
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+namespace internal {
+namespace {
+thread_local double (*execution_value_fixture)(const char*, double) = nullptr;
+thread_local std::int64_t (*execution_counter_fixture)(const char*, std::int64_t) = nullptr;
+}
+void fixture_execution_values(double (*fixture)(const char*, double)) noexcept {
+    execution_value_fixture = fixture;
+}
+void fixture_execution_counters(
+        std::int64_t (*fixture)(const char*, std::int64_t)) noexcept {
+    execution_counter_fixture = fixture;
+}
+}
+#endif
 namespace {
 // The fused settlement's test switch and probe (internal::set_fused_settlement,
 // internal::count_settlement_paths; R5 lane PERF-L2). A run only reads the
@@ -21,6 +37,25 @@ constexpr unsigned kSettlementCounting = 2u;
 std::atomic<unsigned> settlement_path_mode{0u};
 std::atomic<std::uint64_t> settlement_path_fused[internal::kSettlementEntries];
 std::atomic<std::uint64_t> settlement_path_staged[internal::kSettlementEntries];
+
+double checked_modeled_execution_commission(double value) {
+    if (!std::isfinite(value)) {
+        engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                              EngineValueReason::numeric_overflow);
+    }
+    return value;
+}
+
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+double fixture_execution_value(const char* site, double value) {
+    return internal::execution_value_fixture
+        ? internal::execution_value_fixture(site, value) : value;
+}
+std::int64_t fixture_execution_counter(const char* site, std::int64_t value) {
+    return internal::execution_counter_fixture
+        ? internal::execution_counter_fixture(site, value) : value;
+}
+#endif
 
 template<class T>
 void reserve_effects(std::vector<T>& values, size_t extra) {
@@ -440,9 +475,24 @@ bool BacktestEngine::NativeSettlementStage::OneLot::finish(
     ticket = 0.0;
     const double costs[2] = {close_cost, open_cost};
     for (int index = closes ? 0 : 1; index < 2; ++index) {
-        if (!std::isfinite(costs[index])) return false;
+        double cost = costs[index];
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        cost = fixture_execution_value("fee.one_lot.cost", cost);
+#endif
+        if (!std::isfinite(cost)) {
+            engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                                  EngineValueReason::nonfinite);
+            return false;
+        }
         ticket += costs[index];
-        if (!std::isfinite(ticket)) return false;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        ticket = fixture_execution_value("fee.one_lot.sum", ticket);
+#endif
+        if (!std::isfinite(ticket)) {
+            engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                                  EngineValueReason::numeric_overflow);
+            return false;
+        }
     }
     if (fill.commission_account) ticket = *fill.commission_account;
     // Nothing survives: the resulting book is the opening alone.
@@ -464,10 +514,11 @@ void BacktestEngine::NativeSettlementStage::OneLot::quote(
     open_cost = 0.0;
     const auto native_modeled_commission = [&](double quantity) {
         if (engine.commission_type_ == CommissionType::PERCENT) {
-            return std::abs(fill.price) * quantity * engine.syminfo_.pointvalue
-                * fx * (engine.commission_value_ / 100.0);
+            return checked_modeled_execution_commission(
+                std::abs(fill.price) * quantity * engine.syminfo_.pointvalue
+                * fx * (engine.commission_value_ / 100.0));
         }
-        return engine.calc_commission(fill.price, quantity);
+        return checked_modeled_execution_commission(engine.calc_commission(fill.price, quantity));
     };
     if (!fill.commission_account && engine.commission_type_ != CommissionType::CASH_PER_ORDER) {
         if (closes) close_cost = native_modeled_commission(closing);
@@ -476,14 +527,25 @@ void BacktestEngine::NativeSettlementStage::OneLot::quote(
     }
     double units = opening;
     if (closes) units += closing;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    units = fixture_execution_value("fee.one_lot.units", units);
+#endif
     if (units == 0.0) return;
     if (!std::isfinite(units)) {
+        engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                              EngineValueReason::numeric_overflow);
         open_cost = std::numeric_limits<double>::quiet_NaN();
         return;
     }
-    const double quoted = fill.commission_account
+    double quoted = fill.commission_account
         ? *fill.commission_account : engine.calc_commission(fill.price, units);
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    quoted = fixture_execution_value("fee.one_lot.ticket", quoted);
+#endif
     if (!std::isfinite(quoted)) {
+        engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+            fill.commission_account ? EngineValueReason::nonfinite
+                                    : EngineValueReason::numeric_overflow);
         open_cost = std::numeric_limits<double>::quiet_NaN();
         return;
     }
@@ -527,10 +589,14 @@ execution::SettlementInspection BacktestEngine::NativeSettlementStage::OneLot::i
 execution::AccountEffectProjection BacktestEngine::NativeSettlementStage::OneLot::project(
         const BacktestEngine& engine, const execution::Fill& fill, const Trade* row) const {
     using execution::Status;
+    std::int64_t next_cycle = engine.next_position_cycle_seq_;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    next_cycle = fixture_execution_counter("counter.one_lot.project", next_cycle);
+#endif
     if (opening > 0.0
-        && (engine.next_position_cycle_seq_ <= 0
-            || engine.next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
-        throw std::overflow_error("position cycle sequence exhausted");
+        && (next_cycle <= 0 || next_cycle == std::numeric_limits<int64_t>::max()))
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "position cycle sequence exhausted");
 
     std::optional<Trade> built;
     if (closes && !row) {
@@ -595,10 +661,14 @@ execution::AccountEffectProjection BacktestEngine::NativeSettlementStage::OneLot
 execution::Status BacktestEngine::NativeSettlementStage::OneLot::prepare(
         const BacktestEngine& engine, const Trade* row) const {
     using execution::Status;
+    std::int64_t next_cycle = engine.next_position_cycle_seq_;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    next_cycle = fixture_execution_counter("counter.one_lot.prepare", next_cycle);
+#endif
     if (opening > 0.0
-        && (engine.next_position_cycle_seq_ <= 0
-            || engine.next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
-        throw std::overflow_error("position cycle sequence exhausted");
+        && (next_cycle <= 0 || next_cycle == std::numeric_limits<int64_t>::max()))
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "position cycle sequence exhausted");
     if (!std::isfinite(after_qty) || !std::isfinite(after_price))
         return Status::InvalidAccounting;
 
@@ -656,7 +726,8 @@ execution::Result BacktestEngine::NativeSettlementStage::OneLot::settle(
     const size_t events = count + (opening > 0.0 ? 1 : 0);
     if (engine.stream_observe_actions_) {
         if (events > std::numeric_limits<uint64_t>::max() - engine.stream_action_sequence_)
-            throw std::overflow_error("stream action sequence overflow");
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                             "stream action sequence overflow");
         reserve_effects(engine.stream_order_actions_, events);
     }
     reserve_effects(engine.trades_, count);
@@ -929,12 +1000,22 @@ void BacktestEngine::finish_native_settlement_stage(
         stage.closing_quantities, stage.opening, fill, stage.fx);
     stage.ticket = 0.0;
     for (double cost : stage.current_costs) {
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        cost = fixture_execution_value("fee.staged.cost", cost);
+#endif
         if (!std::isfinite(cost)) {
+            engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                                  EngineValueReason::nonfinite);
             fail(Status::InvalidAccounting);
             return;
         }
         stage.ticket += cost;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        stage.ticket = fixture_execution_value("fee.staged.sum", stage.ticket);
+#endif
         if (!std::isfinite(stage.ticket)) {
+            engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                                  EngineValueReason::numeric_overflow);
             fail(Status::InvalidAccounting);
             return;
         }
@@ -1285,14 +1366,20 @@ execution::Status BacktestEngine::preflight_native_settlement_effects(
     (void)lifecycle;
     const auto& closed_trades = rows.closed_trades;
     validate_close_trade_counters(closed_trades.data(), closed_trades.size());
+    std::int64_t entry_count = position_entry_count_;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    entry_count = fixture_execution_counter("counter.staged.entry", entry_count);
+#endif
     if (stage.opening > 0.0 && !stage.survivors.empty()
-        && position_entry_count_ == std::numeric_limits<int>::max())
-        throw std::overflow_error("position entry counter exhausted");
+        && entry_count == std::numeric_limits<int>::max())
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "position entry counter exhausted");
 
     const size_t events = closed_trades.size() + (stage.opening > 0.0 ? 1 : 0);
     if (stream_observe_actions_) {
         if (events > std::numeric_limits<uint64_t>::max() - stream_action_sequence_)
-            throw std::overflow_error("stream action sequence overflow");
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                             "stream action sequence overflow");
         reserve_effects(stream_order_actions_, events);
     }
     reserve_effects(trades_, closed_trades.size());
@@ -1505,11 +1592,15 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_sta
         return unchanged_account();
     }
 
+    std::int64_t next_cycle = next_position_cycle_seq_;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    next_cycle = fixture_execution_counter("counter.staged.project", next_cycle);
+#endif
     if (stage.opening > 0.0
         && (position_side_ == PositionSide::FLAT || stage.survivors.empty())
-        && (next_position_cycle_seq_ <= 0
-            || next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
-        throw std::overflow_error("position cycle sequence exhausted");
+        && (next_cycle <= 0 || next_cycle == std::numeric_limits<int64_t>::max()))
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                                         "position cycle sequence exhausted");
 
     execution::PhysicalExecutionContext context;
     context.account_fx = stage.fx;
@@ -1597,10 +1688,11 @@ std::vector<double> BacktestEngine::quote_execution_commissions(
         // absolute resolved notional. Keep calc_commission's signed-price
         // behavior unchanged for all legacy Pine paths.
         if (commission_type_ == CommissionType::PERCENT) {
-            return std::abs(fill.price) * quantity * syminfo_.pointvalue
-                * fx * (commission_value_ / 100.0);
+            return checked_modeled_execution_commission(
+                std::abs(fill.price) * quantity * syminfo_.pointvalue
+                * fx * (commission_value_ / 100.0));
         }
-        return calc_commission(fill.price, quantity);
+        return checked_modeled_execution_commission(calc_commission(fill.price, quantity));
     };
     if (!fill.commission_account && commission_type_ != CommissionType::CASH_PER_ORDER) {
         for (size_t i = 0; i < closed_units.size(); ++i)
@@ -1610,14 +1702,25 @@ std::vector<double> BacktestEngine::quote_execution_commissions(
     }
     double units = opening_units;
     for (double quantity : closed_units) units += quantity;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    units = fixture_execution_value("fee.staged.units", units);
+#endif
     if (units == 0.0) return costs;
     if (!std::isfinite(units)) {
+        engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                              EngineValueReason::numeric_overflow);
         costs.back() = std::numeric_limits<double>::quiet_NaN();
         return costs;
     }
-    const double ticket = fill.commission_account
+    double ticket = fill.commission_account
         ? *fill.commission_account : calc_commission(fill.price, units);
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    ticket = fixture_execution_value("fee.staged.ticket", ticket);
+#endif
     if (!std::isfinite(ticket)) {
+        engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+            fill.commission_account ? EngineValueReason::nonfinite
+                                    : EngineValueReason::numeric_overflow);
         costs.back() = std::numeric_limits<double>::quiet_NaN();
         return costs;
     }

@@ -1,0 +1,4 @@
+//@version=6
+strategy("D6 22 range end percent overflow", initial_capital=100000, margin_long=0, margin_short=0)
+if bar_index == 0
+    strategy.entry("entry", strategy.long, qty=1)

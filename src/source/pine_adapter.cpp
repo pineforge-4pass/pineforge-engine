@@ -10,6 +10,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include "../engine_value_invalid.hpp"
 #include "../native_execution_consumer.hpp"
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
@@ -47,6 +48,14 @@
 #define PF_RARE(condition) __builtin_expect(static_cast<bool>(condition), 0)
 
 namespace pineforge::source {
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+namespace {
+thread_local double (*adapter_execution_value_fixture)(const char*, double) = nullptr;
+}
+void fixture_adapter_execution_values(double (*fixture)(const char*, double)) noexcept {
+    adapter_execution_value_fixture = fixture;
+}
+#endif
 bool PineExecutionAdapter::modeled_input() const {
     if (input_scheduler_ && input_scheduler_->input_is_observed_ticks()) {
         return false;
@@ -59,6 +68,19 @@ bool PineExecutionAdapter::modeled_input() const {
 namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+void check_slippage_fill_price(double value, bool has_basis) {
+    if (has_basis && !std::isfinite(value)) {
+        engine_command_value_invalid_or_count("slippage.fill_price", EngineValueStage::slippage,
+                                              EngineValueReason::numeric_overflow);
+    }
+}
+
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+double fixture_adapter_execution_value(const char* site, double value) {
+    return adapter_execution_value_fixture ? adapter_execution_value_fixture(site, value) : value;
+}
+#endif
 
 bool same_double_bits(double left, double right) noexcept {
     std::uint64_t left_bits = 0;
@@ -3214,13 +3236,25 @@ std::optional<double> PineExecutionAdapter::pooc_fee_units(
 // fee factor: guard (e) of tests/test_adapter_sizing_relower.cpp allows the
 // spelling inside this function alone, by an explicit exception.
 double PineExecutionAdapter::tv_pooc_fee_grossed_unit(double price) const {
-    return source_money_round(price * (1.0 + config_.commission_value / 100.0));
+    double unit = source_money_round(price * (1.0 + config_.commission_value / 100.0));
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    unit = fixture_adapter_execution_value("fee.adapter.grossed_unit", unit);
+#endif
+    if (std::isfinite(price) && !std::isfinite(unit)) {
+        engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                              EngineValueReason::numeric_overflow);
+    }
+    return unit;
 }
 
 bool PineExecutionAdapter::core_sizes_default_opening(bool is_long) const {
     PineSizingSnapshot sizing = sizing_snapshot();
     if (!finite_positive(sizing.mark)) return false;
     sizing.price = default_market_sizing_price(sizing.mark, is_long);
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    sizing.price = fixture_adapter_execution_value("slippage.default.core", sizing.price);
+#endif
+    check_slippage_fill_price(sizing.price, std::isfinite(sizing.mark));
     mark_sizing_equity(sizing, sizing.mark);
     return finite_positive(default_sizing_units(sizing))
         && default_sizing_intent(sizing, is_long).has_value()
@@ -5037,7 +5071,14 @@ void PineExecutionAdapter::record_opening_fee(
         const double total = opened + std::abs(event.closed_units);
         fee = total > 0.0 ? config_.commission_value * opened / total : 0.0;
     }
-    if (!std::isfinite(fee)) return;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    fee = fixture_adapter_execution_value("fee.adapter.opening", fee);
+#endif
+    if (!std::isfinite(fee)) {
+        engine_command_value_invalid_or_count("fee.commission", EngineValueStage::fee,
+                                              EngineValueReason::numeric_overflow);
+        return;
+    }
     open_entry_fees_.push_back({event.handle(), source.source_id, opened, fee});
 }
 
@@ -7338,6 +7379,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             units = kNaN;
             if (finite_positive(sizing.mark)) {
                 sizing.price = default_market_sizing_price(sizing.mark, is_long);
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+                sizing.price = fixture_adapter_execution_value("slippage.default.signal", sizing.price);
+#endif
+                check_slippage_fill_price(sizing.price, std::isfinite(sizing.mark));
                 mark_sizing_equity(sizing, sizing.mark);
                 units = default_sizing_units(sizing);
             }
@@ -7666,6 +7711,12 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         // ab9714be pine_strategy_commands.cpp:325-328: pure stop placement sizing price includes directional slippage ticks
         const double slip = (is_long ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
         default_stop_sizing_price = (marketable ? signal : stop_price) + slip;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        default_stop_sizing_price = fixture_adapter_execution_value(
+            "slippage.default.stop", default_stop_sizing_price);
+#endif
+        check_slippage_fill_price(default_stop_sizing_price,
+                                  std::isfinite(marketable ? signal : stop_price));
     }
     if (default_sized || typed_sized || direction_blocked || affordability_reversal_candidate) {
         request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
@@ -7766,6 +7817,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
             next_extreme, staged_.syminfo.mintick)
             + (is_long ? 1.0 : -1.0) * config_.slippage
                 * staged_.syminfo.mintick;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        coof_market_fill = fixture_adapter_execution_value("slippage.recalc.entry", coof_market_fill);
+#endif
+        check_slippage_fill_price(coof_market_fill, std::isfinite(next_extreme));
         if (finite_positive(coof_market_fill) && finite_positive(current_quote)
             && !source_same_point(current_quote, coof_market_fill, staged_.syminfo.mintick)) {
             const bool falling = coof_market_fill < current_quote;
@@ -7796,6 +7851,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         coof_market_fill = nearest_tick(next_extreme, staged_.syminfo.mintick)
             + (is_long ? 1.0 : -1.0) * config_.slippage
                 * staged_.syminfo.mintick;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        coof_market_fill = fixture_adapter_execution_value("slippage.recalc.entry_tick", coof_market_fill);
+#endif
+        check_slippage_fill_price(coof_market_fill, std::isfinite(next_extreme));
     }
     if (pure_stop_entry && explicit_fixed && current != 0.0
         && ((current > 0.0) != is_long) && source_point
@@ -8107,6 +8166,10 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
     }
     if (default_sized && !priced && finite_positive(snapshot.sizing.mark)) {
         snapshot.sizing.price = default_market_sizing_price(snapshot.sizing.mark, is_long);
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        snapshot.sizing.price = fixture_adapter_execution_value("slippage.default.snapshot", snapshot.sizing.price);
+#endif
+        check_slippage_fill_price(snapshot.sizing.price, std::isfinite(snapshot.sizing.mark));
         mark_sizing_equity(snapshot.sizing, snapshot.sizing.mark);
     }
     const auto predecessor = live_by_source_key_.find(key_for(id));
@@ -10113,6 +10176,10 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             next_waypoint, staged_.syminfo.mintick)
             + (buy ? 1.0 : -1.0) * config_.slippage
                 * staged_.syminfo.mintick;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+        coof_close_fill = fixture_adapter_execution_value("slippage.recalc.close", coof_close_fill);
+#endif
+        check_slippage_fill_price(coof_close_fill, std::isfinite(next_waypoint));
         if (finite_positive(coof_close_fill) && finite_positive(current_quote)
             && !source_same_point(current_quote, coof_close_fill, staged_.syminfo.mintick)) {
             // ab9714be pine_scheduler.cpp:541-563 fills the recalc's market
@@ -14498,6 +14565,10 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
                 next_waypoint, staged_.syminfo.mintick)
                 + (is_long ? 1.0 : -1.0) * config_.slippage
                     * staged_.syminfo.mintick;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+            coof_market_fill = fixture_adapter_execution_value("slippage.recalc.order", coof_market_fill);
+#endif
+            check_slippage_fill_price(coof_market_fill, std::isfinite(next_waypoint));
             if (finite_positive(next_waypoint) && finite_positive(current_quote)
                 && !source_same_point(current_quote, next_waypoint, staged_.syminfo.mintick)) {
                 const bool falling = next_waypoint < current_quote;

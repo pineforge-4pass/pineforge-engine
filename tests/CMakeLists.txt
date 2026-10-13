@@ -3675,6 +3675,26 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+# EN-132 G2: value-injection fixtures. The fee, slippage and counter sites are
+# not reachable from any public input, so this opt-in build compiles the
+# library with PINEFORGE_VALUE_INVALID_FIXTURES (injection hooks that exist
+# only under that macro) and registers the test that drives them. The default
+# profiles never define it, so their archives carry no hook.
+option(PINEFORGE_VALUE_INVALID_FIXTURES "Build EN-132 value-injection fixtures" OFF)
+if(PINEFORGE_VALUE_INVALID_FIXTURES)
+    target_compile_definitions(pineforge PRIVATE PINEFORGE_VALUE_INVALID_FIXTURES)
+    if(TARGET pineforge_kernel)
+        target_compile_definitions(pineforge_kernel PRIVATE PINEFORGE_VALUE_INVALID_FIXTURES)
+    endif()
+    pineforge_add_unit_test(test_value_invalid_fee_slip_settle)
+    target_compile_definitions(test_value_invalid_fee_slip_settle PRIVATE
+        PINEFORGE_VALUE_INVALID_FIXTURES)
+    if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_value_invalid_fee_slip_settle PRIVATE
+            PINEFORGE_VALUE_INVALID_KERNEL_ONLY)
+    endif()
+endif()
+
 # The C bridge test also links the shared window-plan helper, whose bridge
 # (src/selected_window_plan_c.cpp) is not in the kernel archive. The loop above
 # supplies pineforge and the -ffp-contract=off and -UNDEBUG flags.

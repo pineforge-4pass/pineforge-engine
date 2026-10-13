@@ -1,0 +1,4 @@
+//@version=6
+strategy("D6 14 default market slip overflow", initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, slippage=2, margin_long=0, margin_short=0)
+if bar_index == 0
+    strategy.entry("entry", strategy.long)

@@ -1,0 +1,4 @@
+//@version=6
+strategy("D6 12 candidate rejection", initial_capital=100000, slippage=2, margin_long=0, margin_short=0)
+if bar_index == 0
+    strategy.entry("short", strategy.short, qty=1)

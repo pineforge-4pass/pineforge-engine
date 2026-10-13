@@ -1,6 +1,7 @@
 #include "native_execution_consumer.hpp"
 #include "engine_internal.hpp"
 #include "engine_settlement_stage.hpp"
+#include "engine_value_invalid.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
 
@@ -5802,7 +5803,11 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // sole finite-current exception needs a stack-only plan inspection to
         // distinguish a pure close from an opening plan.
         if (!std::isfinite(resolved_price)) {
-            if (current) throw std::overflow_error("native current price is not finite");
+            if (current) {
+                engine_command_value_invalid_or_count("slippage.fill_price", EngineValueStage::slippage,
+                                                      EngineValueReason::nonfinite);
+                throw std::overflow_error("native current price is not finite");
+            }
             return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
         }
         if (!current && resolved_price <= 0.0 && !zero_units_terminal) {

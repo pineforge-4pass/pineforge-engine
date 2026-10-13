@@ -1,0 +1,8 @@
+{
+  "input_tf": "5",
+  "script_tf": "5",
+  "options": [
+    "--syminfo",
+    "syminfo.json"
+  ]
+}
