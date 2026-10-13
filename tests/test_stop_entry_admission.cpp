@@ -783,7 +783,7 @@ double xau_qty(const Probe& p, double L) {
 // = 10.97. Initial cost 10.97 * 200.05 = 2194.5485 passes. Bars 3..5 have
 // lows above 200.00, so the order must rest until bar 6's level touch.
 void test_xau_flatten_once_rests_until_touched() {
-    std::printf("-- synthetic xau flatten once rests until touched --\n");
+    std::printf("-- synthetic flatten once rests until touched --\n");
     Probe p(2198.4, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);
@@ -811,7 +811,7 @@ void test_xau_flatten_once_rests_until_touched() {
 // survive. Bar 6 open costs 10.97 * 200.175 = 2195.91975 > E, whereas
 // the touched level costs 10.97 * 200.00 = 2194.00 <= E.
 void test_xau_flatten_once_c10983_no_recheck_fill_at_level() {
-    std::printf("-- synthetic xau flatten once no recheck fill at level --\n");
+    std::printf("-- synthetic flatten once no recheck fill at level --\n");
     Probe p(2197.5, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);
@@ -838,7 +838,7 @@ void test_xau_flatten_once_c10983_no_recheck_fill_at_level() {
 // cannot fill. Its close costs 10.97 * 200.02 = 2194.2194 and accepts a
 // fresh order; bar 7 touches 200.00, carrying the bar-6 comment.
 void test_xau_flatten_replace_c10983_rejected_reissue_cancels() {
-    std::printf("-- synthetic xau flatten replace rejected reissue cancels --\n");
+    std::printf("-- synthetic flatten replace rejected reissue cancels --\n");
     Probe p(2197.5, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);
@@ -871,7 +871,7 @@ void test_xau_flatten_replace_c10983_rejected_reissue_cancels() {
 // Control E = 2195.90 keeps the same 10.97 lots. Even bar 5 cost
 // 2195.6455 is affordable, so its replacement fills on bar 6's touch.
 void test_xau_flatten_replace_control() {
-    std::printf("-- synthetic xau flatten replace control --\n");
+    std::printf("-- synthetic flatten replace control --\n");
     Probe p(2198.4, 100.0, 0.005, 0.01);
     p.script = [&](Probe& e, int bar) {
         xau_phase_a(e, bar);

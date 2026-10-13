@@ -94,13 +94,13 @@ const Bar kQuarterSignal = mk_bar(8189.00, 8191.00, 8188.00, 8190.00);
 const Bar kQuarterEntry = mk_bar(8190.00, 8191.25, 8189.50, 8190.50);
 const Bar kQuarterTouch = mk_bar(8191.00, 8192.75, 8190.75, 8192.00);
 const Bar kQuarterBeyond = mk_bar(8191.50, 8193.50, 8191.25, 8193.25);
-// Hand-designed five-decimal path: earlier highs stay below 0.80005;
-// bar 3 touches exactly and bar 4 crosses the next tick 0.80006.
-const Bar kDecimalSignal = mk_bar(0.79998, 0.80003, 0.79995, 0.80000);
-const Bar kDecimalEntry = mk_bar(0.80000, 0.80003, 0.79997, 0.80001);
-const Bar kDecimalHold = mk_bar(0.80001, 0.80004, 0.79999, 0.80002);
-const Bar kDecimalTouch = mk_bar(0.80002, 0.80005, 0.80000, 0.80003);
-const Bar kDecimalBeyond = mk_bar(0.80002, 0.80010, 0.80001, 0.80008);
+// Hand-designed five-decimal path: earlier highs stay below 1.20005;
+// bar 3 touches exactly and bar 4 crosses the next tick 1.20006.
+const Bar kDecimalSignal = mk_bar(1.19998, 1.20003, 1.19995, 1.20000);
+const Bar kDecimalEntry = mk_bar(1.20000, 1.20003, 1.19997, 1.20001);
+const Bar kDecimalHold = mk_bar(1.20001, 1.20004, 1.19999, 1.20002);
+const Bar kDecimalTouch = mk_bar(1.20002, 1.20005, 1.20000, 1.20003);
+const Bar kDecimalBeyond = mk_bar(1.20002, 1.20010, 1.20001, 1.20008);
 
 std::vector<Bar> series(std::initializer_list<Bar> bars) {
     std::vector<Bar> out;
@@ -197,17 +197,17 @@ void test_level_on_price_grid() {
     CHECK(std::isnan(f.grid(kNaN)));
     Probe es(0.25);
     CHECK(es.decimals() == 2);                      // pricescale 100, not 1/0.25
-    CHECK(es.grid(8192.75 + 5e-7) == 8192.75);      // lvl-es-lim-5e-7 IN
-    CHECK(es.grid(8192.75 + 1e-6) == 8192.75 + 1e-6);   // lvl-es-lim-1e-6 OUT
+    CHECK(es.grid(8192.75 + 5e-7) == 8192.75);      // lvl-q-lim-5e-7 IN
+    CHECK(es.grid(8192.75 + 1e-6) == 8192.75 + 1e-6);   // lvl-q-lim-1e-6 OUT
     CHECK(es.grid(8192.75 + 2.5e-5) == 8192.75 + 2.5e-5); // 1e-4 ticks is NOT the band
     CHECK(es.grid(8192.76) == 8192.76);             // on the price grid, off the tick grid: kept
     Probe eu(0.00001);
     CHECK(eu.decimals() == 5);
-    CHECK(eu.grid(0.80005 + 1e-13) == 0.80005);     // lvl-eu-lim-1e-13 IN
-    CHECK(eu.grid(0.80005 + 1e-12) == 0.80005);     // lvl-eu-lim-1e-12 IN (FP boundary)
-    CHECK(eu.grid(0.80005 + 2e-12) == 0.80005 + 2e-12); // lvl-eu-lim-2e-12 OUT
-    CHECK(eu.grid(0.80005 + 1e-11) == 0.80005 + 1e-11); // OUT
-    CHECK(eu.grid(0.80005 + 1e-9) == 0.80005 + 1e-9);   // OUT
+    CHECK(eu.grid(1.20005 + 1e-13) == 1.20005);     // lvl-d-lim-1e-13 IN
+    CHECK(eu.grid(1.20005 + 1e-12) == 1.20005);     // lvl-d-lim-1e-12 IN (FP boundary)
+    CHECK(eu.grid(1.20005 + 2e-12) == 1.20005 + 2e-12); // lvl-d-lim-2e-12 OUT
+    CHECK(eu.grid(1.20005 + 1e-11) == 1.20005 + 1e-11); // OUT
+    CHECK(eu.grid(1.20005 + 1e-9) == 1.20005 + 1e-9);   // OUT
     Probe none(0.0);
     CHECK(none.decimals() == -1);
     CHECK(none.grid(64.07 + 1e-6) == 64.07 + 1e-6); // no tick, no grid
@@ -336,25 +336,25 @@ void test_es_band_is_price_not_ticks() {
 // --- five-decimal tick: pricescale 1e5 -> band 1e-12 ------------------------------
 void test_eurusd_band() {
     std::printf("-- synthetic five-decimal sell limit: inside band bar 3, outside band bar 4 --\n");
-    // Entry on bar 1 is 0.80000. Inside-band offsets snap to the exact
-    // bar-3 high 0.80005; outside-band ceil_tick(0.80005 + d) = 0.80006.
-    // Adding 1e-12 leaves 9.9997787828e-13 in binary, within the band
-    // 0.01 / 100000^2 = 1e-12; adding 2e-12 is outside it.
+    // Entry on bar 1 is 1.20000. Inside-band offsets snap to the exact
+    // bar-3 high 1.20005; outside-band ceil_tick(1.20005 + d) = 1.20006.
+    // Adding 1e-12 leaves 1.0000889006e-12 in binary (the engine's slack admits
+    // this FP boundary of the 0.01 / 100000^2 = 1e-12 band); adding 2e-12 is outside it.
     for (double d : {0.0, 1e-13, 1e-12}) {
         Probe eng(0.00001);
         eng.script = "L....";
-        eng.exit_limit_ = 0.80005 + d;
+        eng.exit_limit_ = 1.20005 + d;
         auto bars = series({kDecimalSignal, kDecimalEntry, kDecimalHold, kDecimalTouch, kDecimalBeyond});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, true, 1, 0.80000, 3, 0.80005, 100.0);
+        expect_single_trade(eng, true, 1, 1.20000, 3, 1.20005, 100.0);
     }
     for (double d : {2e-12, 1e-11, 1e-9, 1e-6}) {
         Probe eng(0.00001);
         eng.script = "L....";
-        eng.exit_limit_ = 0.80005 + d;
+        eng.exit_limit_ = 1.20005 + d;
         auto bars = series({kDecimalSignal, kDecimalEntry, kDecimalHold, kDecimalTouch, kDecimalBeyond});
         eng.run(bars.data(), (int)bars.size());
-        expect_single_trade(eng, true, 1, 0.80000, 4, 0.80006, 100.0);
+        expect_single_trade(eng, true, 1, 1.20000, 4, 1.20006, 100.0);
     }
 }
 
