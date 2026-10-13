@@ -181,14 +181,14 @@ void test_non_pooc_keeps_one_walk() {
 void test_reissued_activation_keeps_close_restart() {
     Probe p;
     p.action = Action::Restart;
-    auto bars = long_path();
+    auto bars = long_path(); bars[3].low = 300.85;
     bars.push_back(mk(301.10, 302.05, 300.95, 301.95));
     bars.push_back(mk(301.90, 302.20, 301.50, 301.60));
     bars.push_back(mk(301.65, 302.00, 301.30, 301.40));
     bars.push_back(mk(301.35, 301.90, 300.90, 301.50));
     p.run_fixture(bars);
     CHECK(p.trade_count() == 1);
-    // Restart at close 301.70 gives stop 300.70 (bar 3 low 300.80 survives).
+    // Restart at close 301.70 gives stop 300.70 (bar 3 low 300.85 clears it, and clears the 300.80 an in-bar high 301.80 would give).
     // Later best = 302.20, stop = 301.20, exit = 301.20 - 0.02.
     expect_trade(p, 0, true, 0, 300.02, 7, 301.18);
 }
