@@ -1,0 +1,12 @@
+{
+  "outcome": "failed",
+  "code": "strategy_value_invalid",
+  "args": {
+    "field": "entry.limit_price",
+    "reason": "nonfinite"
+  },
+  "min_trades": 0,
+  "label": "S",
+  "pinned_by": "revision 3 section 4 and Appendix B: entry.limit_price source admission I -> S; Appendix D: positive infinity at an actionable source sink",
+  "native_boundary_control": null
+}

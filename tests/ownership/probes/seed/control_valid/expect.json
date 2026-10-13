@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "revision 3 Appendix B: entry.id/is_long/qty and close.id; Appendix D: defined finite result",
+  "native_boundary_control": null
+}
