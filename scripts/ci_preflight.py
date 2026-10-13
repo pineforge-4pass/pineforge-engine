@@ -683,6 +683,10 @@ def check_commands(source: Path) -> list[tuple]:
         # release.yml's version arithmetic is a tested script.
         ('report-schema-key-tests',
          [sys.executable, str(source / 'scripts/test_report_schema_keys.py')]),
+        # EN-132: the checker itself comes from source_guard_commands above;
+        # its negative controls and independent D4 route need no engine.
+        ('selected-window-ownership-tests',
+         [sys.executable, '-I', '-B', str(source / 'tests/ownership/test_manifest_checker.py')]),
         # Recorded outputs: the keys, order and value rules of run_json's
         # "outputs" block, with no engine (docs/outputs.md).
         ('report-outputs-key-tests',
