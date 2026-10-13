@@ -1,13 +1,9 @@
 {
   "outcome": "failed",
-  "code": "engine_command_value_invalid",
-  "args": {
-    "field": "settlement.row",
-    "stage": "settlement",
-    "reason": "nonfinite"
-  },
+  "code": "engine_invariant",
+  "args": {},
   "min_trades": 0,
-  "label": "G",
-  "pinned_by": "EN-132 D6 FINAL row 22; revision 3 section 4 / Appendix B",
-  "native_boundary_control": "tests/test_value_invalid_fee_slip_settle.cpp"
+  "label": "control",
+  "pinned_by": "EN-132 D6 row 22 ruled KEEP engine_invariant (ENGINE-TOP 14:09; EN-134 decides this branch)",
+  "native_boundary_control": "tests/test_native_settlement_row_finite.cpp"
 }
