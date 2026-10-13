@@ -166,6 +166,17 @@ std::uint64_t host_close(State& state) {
     close.cohort = cohort;
     return submit(state, close);
 }
+std::optional<no::RequestHandle> host_open(State& state) {
+    // Match A-T14's supported current-preview setup. BindCohort closes
+    // are queued-only and return UnsupportedRequest from current preview.
+    no::Request command;
+    command.intent = no::HostSized{no::HostSizedKind::Open, no::Side::Long};
+    command.label = "en132-preview-open";
+    const auto submitted = state.native().submit(command);
+    CHECK(submitted.status == no::SubmitStatus::Accepted);
+    CHECK(submitted.handle.has_value());
+    return submitted.handle;
+}
 void fixture_pending_total(State& state, std::uint64_t incarnation, double total) {
     // Test-local injection into existing state through existing read seams.
     // Commands cannot store this: pending_sum checks it first. The underlying
@@ -305,9 +316,16 @@ void row5_host_sized_nonfinite() {
             state.close_units = units;
             state.script = [preview](State& s, int index) {
                 if (index) return;
-                const auto close = host_close(s);
-                if (preview) (void)s.native().inspect_current_execution({handle(s, close)});
-                else execute(s, close);
+                if (preview) {
+                    const auto target = host_open(s);
+                    if (!target) return;
+                    (void)s.native().inspect_current_execution({*target});
+                    // If the producer is missing, prevent queued execution
+                    // from supplying the fault this preview failed to raise.
+                    (void)s.native().cancel(*target);
+                } else {
+                    execute(s, host_close(s));
+                }
             };
             failed(run(state), "sizing.quantity", "sizing", "nonfinite");
             CHECK(state.close_calls == 1);
@@ -431,25 +449,47 @@ void keep_host_sized_finite_refusal() {
             row = units < 0 ? "row5_keep_negative_host_units" : "row5_keep_zero_host_units";
             State state;
             state.close_units = units;
-            state.script = [preview, units](State& s, int index) {
+            std::uint64_t close = 0;
+            state.script = [preview, units, &close](State& s, int index) {
                 if (index) return;
-                const auto close = host_close(s);
                 if (preview) {
-                    const auto view = s.native().inspect_current_execution({handle(s, close)});
+                    const auto target = host_open(s);
+                    if (!target) return;
+                    const auto hash = s.native().native_continuation_hash();
+                    const auto history = s.native().native_events(0).size();
+                    const auto view = s.native().inspect_current_execution({*target});
+                    CHECK(!view.refusal);
+                    CHECK(s.native().native_continuation_hash() == hash);
+                    CHECK(s.native().native_events(0).size() == history);
+                    // A-T14's pinned outcomes in test_native_execution_terms:
+                    // :1558 (negative) and :1565 (zero), never measured output.
                     if (units < 0) CHECK(view.terms_rejection == no::MatchRejectReason::InvalidTerms);
                     else CHECK(view.settlement_readiness == execution::Status::NoEffect);
+                    (void)s.native().cancel(*target);
+                } else {
+                    close = host_close(s);
+                    execute(s, close);
                 }
-                execute(s, close);
             };
             const auto result = run(state);
             completed(result);
             CHECK(result.trades.empty());
-            CHECK(result.signed_units == 1.0);
-            bool witnessed = false;
-            for (const auto& event : result.events)
-                if (event.kind == (units < 0 ? PF_NATIVE_EVENT_MATCH_REJECTED : PF_NATIVE_EVENT_NO_EFFECT))
-                    witnessed = true;
-            CHECK(witnessed);
+            CHECK(result.signed_units == (preview ? 0.0 : 1.0));
+            CHECK(state.close_calls == 1);
+            if (!preview) {
+                bool witnessed = false;
+                for (const auto& event : result.events) {
+                    if (event.incarnation != close) continue;
+                    if (units < 0) {
+                        if (event.kind == PF_NATIVE_EVENT_MATCH_REJECTED
+                            && event.reason == PF_NATIVE_MATCH_REJECT_INVALID_TERMS)
+                            witnessed = true;
+                    } else if (event.kind == PF_NATIVE_EVENT_NO_EFFECT) {
+                        witnessed = true;
+                    }
+                }
+                CHECK(witnessed);
+            }
         }
     }
 }
