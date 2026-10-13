@@ -156,8 +156,8 @@ observed skips:
 
 | profile | floor, overlay present | floor, overlay absent | registered (present / absent) |
 |---|---|---|---|
-| `release` | 910 | 604 | 910 / 910 |
-| `kernel` | 337 | 307 | 337 / 337 |
+| `release` | 910 | 603 | 910 / 910 |
+| `kernel` | 337 | 306 | 337 / 337 |
 
 With the variable set and non-empty (the private-fixture overlay is present in
 the tree) the floor is the full population and EVERY row of it must run: a row
@@ -189,7 +189,7 @@ plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
 thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
 INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four,
 TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
-kernel floors are the table's own numbers above (604 and 307 rows absent, 910
+kernel floors are the table's own numbers above (603 and 306 rows absent, 910
 and 337 with the overlay present); full runs do not exclude a label.
 
 Preflight also runs the detached-comment census of the kernel compile closure

@@ -7,8 +7,8 @@
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
 // manifest: l50/pr1b-inventory.tsv sha256 4c59bcf9e5ec145df37c23f9ac5c63fdd0fc3d97e69ab81b283fc0fb2a90cdec
 // dirs: 2704
-// files: 10206
-// paths: 12910
+// files: 10221
+// paths: 12925
 D tests/fixtures/add_sibling_margin
 D tests/fixtures/add_sibling_margin/tailb-adds-mkt-c0s0
 D tests/fixtures/add_sibling_margin/tailb-adds-mkt-c10s2
@@ -12803,11 +12803,14 @@ F tests/test_explicit_market_admission_tapes.cpp
 F tests/test_famae_declined_reversal_trail_gap.cpp
 F tests/test_famae_declined_reversal_trail_gap_l4c.cpp
 F tests/test_famae_lot_sizing_ten_digit_equity.cpp
+F tests/test_famag_close_survives.cpp
 F tests/test_famag_close_survives_data.hpp
+F tests/test_famag_close_survives_l4d.cpp
 F tests/test_fams_same_bar_market_tx_data.hpp
 F tests/test_famx_declined_reversal_trail_leg.cpp
 F tests/test_famx_declined_reversal_trail_leg_l4c.cpp
 F tests/test_flat_coof_exit_tapes.cpp
+F tests/test_htf_weekly_lookahead.cpp
 F tests/test_htf_weekly_lookahead_data.hpp
 F tests/test_l10ab_same_bar_reentry_exit_level.cpp
 F tests/test_l10ac_full_equity_single_lot.cpp
@@ -12854,7 +12857,9 @@ F tests/test_margin_open_print_tapes.cpp
 F tests/test_margin_opposite_tapes.cpp
 F tests/test_margin_residual_resolved_fill.cpp
 F tests/test_margin_residual_tapes.cpp
+F tests/test_market_admission_commission.cpp
 F tests/test_market_admission_commission_data.hpp
+F tests/test_market_admission_commission_l4b.cpp
 F tests/test_native_auto_path.cpp
 F tests/test_native_daily_holiday.cpp
 F tests/test_native_daily_holiday_data.hpp
@@ -12898,22 +12903,32 @@ F tests/test_ta_series_length_data.hpp
 F tests/test_ta_series_length_extremes.cpp
 F tests/test_ta_series_length_supertrend.cpp
 F tests/test_ta_simple_length.cpp
+F tests/test_ta_sma_stochrsi_ties.cpp
+F tests/test_ta_sma_stochrsi_ties_data.hpp
 F tests/test_ta_window_round10.cpp
 F tests/test_ta_window_round10_data.hpp
 F tests/test_ta_window_underapplied.cpp
 F tests/test_ta_window_underapplied_data.hpp
 F tests/test_trail_activation_tick_reach.cpp
+F tests/test_trail_close_restart_no_fold.cpp
 F tests/test_trail_close_restart_no_fold_data.hpp
+F tests/test_trail_close_restart_no_fold_l4c.cpp
 F tests/test_trail_fill_snap.cpp
 F tests/test_trail_fill_snap_l4c.cpp
 F tests/test_trail_ref_entry_bar_extreme.cpp
 F tests/test_trail_ref_entry_bar_extreme_l4c.cpp
 F tests/test_tv_fill_rounding.cpp
 F tests/test_tv_fill_rounding_l4d.cpp
+F tests/test_tv_money_band.cpp
 F tests/test_tv_money_band_data.hpp
+F tests/test_tv_money_band_l4b.cpp
+F tests/test_tv_money_carried_pooc.cpp
+F tests/test_tv_money_carried_pooc_l4b.cpp
 F tests/test_tv_money_long_margin_call_eth.cpp
 F tests/test_tv_money_long_margin_call_eth_l4a.cpp
+F tests/test_tv_money_precision.cpp
 F tests/test_tv_money_precision_data.hpp
+F tests/test_tv_money_precision_l4b.cpp
 F tests/test_whole_lot_tie_tapes.cpp
 F tests/test_zero_offset_trail_rides.cpp
 F tests/test_zero_offset_trail_rides_l4c.cpp
