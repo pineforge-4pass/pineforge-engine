@@ -79,7 +79,7 @@ Result run(Probe& probe) {
     CHECK(code && args);
     out.code = code ? code : "<null>";
     out.args = args ? args : "<null>";
-    if (out.rc == 0) CHECK(strategy_stream_end(handle) == 0);
+    if (out.rc == 0) CHECK(strategy_stream_end(handle, 0) == 0);
     pf_report_t report{};
     (void)strategy_stream_fill_report(handle, &report);
     if (report.total_trades > 0 && report.trades)
