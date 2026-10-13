@@ -31,6 +31,7 @@
 #                         this and no cmake --build / ctest / ci_verify runs (poll 60 s, up to
 #                         QUIET_WAIT_S, default 14400); unset = record the load and go on.
 #                         Loads land in _workdir/speed_loads.tsv and speed.md's header.
+#                         Without ps, wait on load alone; quiet is unverified and figures are labelled quiet-unverified.
 #
 # Exit status: every engine run first removes the slot's previous trade list,
 # so a failed run never leaves one behind for compare.py to grade. PineForge is
@@ -297,17 +298,27 @@ fi
 
 # Record the host load before a timing batch (and, with QUIET_LOAD_MAX, wait
 # for a quiet host first). One line per batch in _workdir/speed_loads.tsv.
+# Without ps, the busy count is unknown and figures are labelled quiet-unverified.
+QUIET_UNVERIFIED_NOTICE=""
 quiet_gate() {
-    local label="$1" waited=0 load busy
+    local label="$1" waited=0 load busy ps_available
     while :; do
         load=$( (sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg) | tr -d '{}' | awk '{print $1}')
         # Build/test processes by executable name (a full-command grep also
         # matches any process whose arguments merely quote these commands).
-        busy=$(ps -axo comm=,args= | awk '{ c = $1; sub(".*/", "", c)
-            if (c == "ctest" || (c == "cmake" && / --build /) || (c ~ /^[Pp]ython/ && /ci_verify\.py/)) n++ }
-            END { print n + 0 }')
+        if command -v ps >/dev/null 2>&1; then
+            ps_available=1
+            busy=$(ps -axo comm=,args= | awk '{ c = $1; sub(".*/", "", c)
+                if (c == "ctest" || (c == "cmake" && / --build /) || (c ~ /^[Pp]ython/ && /ci_verify\.py/)) n++ }
+                END { print n + 0 }')
+        else
+            ps_available=0
+            busy="unknown (ps absent)"
+            QUIET_UNVERIFIED_NOTICE="quiet-unverified: no ps on this host, the busy count was not measured; do not use these figures as performance evidence"
+        fi
         if [[ -z "${QUIET_LOAD_MAX:-}" ]] \
-           || { awk -v l="${load}" -v m="${QUIET_LOAD_MAX}" 'BEGIN { exit !(l < m) }' && [[ "${busy}" == 0 ]]; }; then
+           || { awk -v l="${load}" -v m="${QUIET_LOAD_MAX}" 'BEGIN { exit !(l < m) }' \
+                && [[ "${ps_available}" == 0 || "${busy}" == 0 ]]; }; then
             break
         fi
         (( waited >= ${QUIET_WAIT_S:-14400} )) && fail "host never quiet before ${label}: load ${load}, busy ${busy}"
@@ -316,7 +327,11 @@ quiet_gate() {
     done
     printf '%s\t%s\t%s\t%s\n' "${label}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${load}" "${busy}" \
         >> "${WORKDIR}/speed_loads.tsv"
-    log "timing batch ${label}: 1-min load ${load}, build/test processes ${busy}"
+    if [[ "${ps_available}" == 0 ]]; then
+        log "timing batch ${label}: 1-min load ${load}, busy count ${busy}"
+    else
+        log "timing batch ${label}: 1-min load ${load}, build/test processes ${busy}"
+    fi
 }
 
 if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
@@ -368,12 +383,19 @@ if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
             >/dev/null 2>"${WORKDIR}/vbt_speed.err"
         VBT_ARGS=(--vectorbt "${WORKDIR}/vbt_speed.json")
     fi
+    # Unverified figures, even with PyneCore timings, must not replace the committed table.
+    if [[ -n "${QUIET_UNVERIFIED_NOTICE}" ]] && pynecore_harness_has speed/time_pynecore.py; then
+        PC_ARGS+=(--out "${WORKDIR}/speed.md")
+    fi
     (cd "${BENCH_DIR}" && uv run python speed/aggregate.py \
         --pineforge "${WORKDIR}/pf_speed.json" \
         --pineforge-format "${PF_FMT}" \
         ${PC_ARGS[@]+"${PC_ARGS[@]}"} \
         --pinets    "${WORKDIR}/pt_speed.json" \
         --loads     "${WORKDIR}/speed_loads.tsv" ${VBT_ARGS[@]+"${VBT_ARGS[@]}"})
+    if [[ -n "${QUIET_UNVERIFIED_NOTICE}" ]]; then
+        printf '\n%s\n' "${QUIET_UNVERIFIED_NOTICE}" >> "${WORKDIR}/speed.md"
+    fi
 fi
 
 # --- 7) reports -------------------------------------------------------
@@ -392,3 +414,6 @@ fi
 
 log "done."
 log "results: ${BENCH_DIR}/results/{summary,trade_comparison,indicator_comparison}.md"
+if [[ -n "${QUIET_UNVERIFIED_NOTICE}" ]]; then
+    printf '%s\n' "${QUIET_UNVERIFIED_NOTICE}"
+fi

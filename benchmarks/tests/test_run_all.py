@@ -209,6 +209,12 @@ class RunAllFailures(unittest.TestCase):
         node = self.root / "bin" / "node"
         node.write_text('#!/bin/sh\nprintf "{}\\n"\n')
         node.chmod(0o755)
+        # Report tests do not measure the host: keep gate readings deterministic,
+        # including where sysctl or ps is unavailable or disallowed.
+        for tool, output in (("sysctl", "{ 0.25 0.25 0.25 }"), ("ps", "ctest ctest")):
+            stub = self.root / "bin" / tool
+            stub.write_text(f'#!/bin/sh\nprintf "{output}\\n"\n')
+            stub.chmod(0o755)
         (self.strategies / "_indicators").mkdir()
         canonical = bench / "runners" / "run_pineforge_canonical"
         canonical.write_text('#!/bin/sh\nprintf "fresh\\n" > "$2"\n')
@@ -307,6 +313,92 @@ class RunAllFailures(unittest.TestCase):
                 self.assertTrue((bench / "_workdir" / "trade_report.called").exists())
                 # The committed canonical PyneCore indicator output is still there, so the three-way report runs.
                 self.assertTrue((bench / "_workdir" / "indicator_report.called").exists())
+
+    def quiet_gate_path(self, *, ps_present: bool = False) -> Path:
+        # Only these tools and the existing stand-ins are visible; ps cannot
+        # leak in through the host PATH, including in xargs' child shells.
+        no_ps_bin = self.root / "quiet-bin"
+        no_ps_bin.mkdir()
+        for tool in ("bash", "python3", "dirname", "mkdir", "cmp", "cp", "basename",
+                     "rm", "wc", "tr", "xargs", "awk", "date", "sleep", "cat"):
+            executable = shutil.which(tool)
+            self.assertIsNotNone(executable, f"required test tool missing: {tool}")
+            (no_ps_bin / tool).symlink_to(executable)
+        for tool in ("uv", "node", "pyne", "sysctl"):
+            (no_ps_bin / tool).symlink_to(self.root / "bin" / tool)
+        if ps_present:
+            (no_ps_bin / "ps").symlink_to(self.root / "bin" / "ps")
+            self.assertIsNotNone(shutil.which("ps", path=str(no_ps_bin)))
+        else:
+            self.assertIsNone(shutil.which("ps", path=str(no_ps_bin)))
+        return no_ps_bin
+
+    def assert_unverified_quiet_gate(self, load_max: str | None) -> None:
+        ok = self.slot("001-ok")
+        self.prepare_report_stubs()
+        no_ps_bin = self.quiet_gate_path()
+        bench = self.root / "benchmarks"
+        for harness_dir in (None, str(self.harness)):
+            with self.subTest(harness_dir=harness_dir):
+                self.reset_report_case(ok)
+                res = self.run_all(
+                    PATH=str(no_ps_bin), PYNECORE_HARNESS_DIR=harness_dir, SKIP_PYNE="0",
+                    SKIP_SPEED="0", SKIP_VECTORBT="0", SKIP_REPORTS="0",
+                    SKIP_INDICATORS="0", SKIP_PINETS="0", SKIP_PINEFORGE="0",
+                    SLOTS="", RUNNER="docker", QUIET_LOAD_MAX=load_max, QUIET_WAIT_S="0")
+                self.assertEqual(res.returncode, 0, res.stderr)
+                rows = (bench / "_workdir" / "speed_loads.tsv").read_text().splitlines()
+                batches = (["pynecore"] if harness_dir else []) + ["pinets", "vectorbt"]
+                self.assertEqual([row.split("\t")[0] for row in rows], batches)
+                for row in rows:
+                    columns = row.split("\t")
+                    self.assertEqual(len(columns), 4, row)
+                    self.assertEqual(columns[2:], ["0.25", "unknown (ps absent)"], row)
+                timing_lines = [line for line in res.stdout.splitlines() if "timing batch" in line]
+                self.assertEqual(len(timing_lines), len(batches))
+                for line in timing_lines:
+                    self.assertIn("busy count unknown (ps absent)", line)
+                notice = ("quiet-unverified: no ps on this host, the busy count was not measured; "
+                          "do not use these figures as performance evidence")
+                self.assertIn(notice, (bench / "_workdir" / "speed.md").read_text())
+                self.assertEqual(res.stdout.splitlines()[-1], notice)
+                self.assertEqual((bench / "results" / "speed.md").read_bytes(),
+                                 b"COMMITTED SPEED TABLE\n")
+
+    def test_quiet_gate_without_ps_labels_figures(self) -> None:
+        self.assert_unverified_quiet_gate(None)
+
+    def test_quiet_gate_without_ps_uses_load_only(self) -> None:
+        self.assert_unverified_quiet_gate("1")
+
+    def test_quiet_gate_with_ps_preserves_verified_output(self) -> None:
+        ok = self.slot("001-ok")
+        self.prepare_report_stubs()
+        ps_bin = self.quiet_gate_path(ps_present=True)
+        bench = self.root / "benchmarks"
+        for harness_dir in (None, str(self.harness)):
+            with self.subTest(harness_dir=harness_dir):
+                self.reset_report_case(ok)
+                res = self.run_report_case(PATH=str(ps_bin), PYNECORE_HARNESS_DIR=harness_dir)
+                self.assertEqual(res.returncode, 0, res.stderr)
+                rows = (bench / "_workdir" / "speed_loads.tsv").read_text().splitlines()
+                batches = (["pynecore"] if harness_dir else []) + ["pinets", "vectorbt"]
+                self.assertEqual([row.split("\t")[0] for row in rows], batches)
+                for row in rows:
+                    columns = row.split("\t")
+                    self.assertEqual(len(columns), 4, row)
+                    self.assertEqual(columns[2:], ["0.25", "1"], row)
+                timing_lines = [line for line in res.stdout.splitlines() if "timing batch" in line]
+                self.assertEqual(len(timing_lines), len(batches))
+                for batch, line in zip(batches, timing_lines):
+                    self.assertTrue(line.endswith(
+                        f"timing batch {batch}: 1-min load 0.25, build/test processes 1"), line)
+                report = (bench / ("results" if harness_dir else "_workdir") / "speed.md").read_text()
+                self.assertEqual(report, "SPY TABLE\n")
+                for output in (res.stdout, res.stderr, "\n".join(rows), report):
+                    self.assertNotIn("quiet-unverified", output)
+                    self.assertNotIn("unknown", output)
+                    self.assertNotIn("ps absent", output)
 
     def test_absent_harness_without_committed_indicator_output_skips_three_way_report(self) -> None:
         ok = self.slot("001-ok")
