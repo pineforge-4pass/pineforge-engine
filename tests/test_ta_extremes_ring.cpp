@@ -666,64 +666,67 @@ static void test_everybar_na_gap_poisons_the_window() {
     CHECK(!ta::bar_context().installed);
 }
 
-// Conditional, cadence 13 / length 10 (K = 11) on OANDA:XAUUSD 1D
-// (2025-03-01..2025-11-01, bar 0 = 2025-03-03; tape r6/pins/ringkind/out-1):
-// the zero-fill control ta.lowest(low, 10) -- na, 0 x 9 while a never-written
-// slot sits in the window, then the stale minima 2880.3 / 3017.7 / 3210.1 --
-// and the sign-mixed COMPUTED source o = sma(close, 5) - close, where the
-// never-written 0 never wins because every live member is negative: the
-// source kind does not change the rule (13/13 on low, close - 2000,
-// sma(close, 5), low[1], hl2 and o; only C and o are replayed here).
-static const int kXauCallBars[13] = {5, 18, 31, 44, 57, 70, 83, 96, 109, 122, 135, 148, 161};
-static const double kXauLowAtCalls[13] = {
-    2880.310, 3017.655, 3210.065, 3237.790, 3279.235, 3302.015, 3255.850,
-    3319.695, 3345.005, 3325.280, 3626.030, 3734.440, 4140.735};
-static const double kXauTvLowestLow[13] = {NAN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2880.3, 3017.7, 3210.1};
-static const double kXauOscAtCalls[13] = {
-    19.9530, -30.1400, -42.4510, -50.4460, -28.0200, 14.0790, 51.2330,
-    -8.3920, -47.9130, -4.4120, -35.5470, -8.6510, -117.0400};
-// TV: sign via qty 3/5/9 (neg/pos/zero) and |v| via 11 + round(|v| * 100).
-static const double kXauTvLowestOsc[13] = {
-    NAN, -30.14, -42.45, -50.45, -50.45, -50.45, -50.45, -50.45, -47.91,
-    -50.45, -50.45, -50.45, -117.04};
+// Synthetic cadence 13, length 10: call i is at 5+13*i, so K=11
+// visits residues 5,7,9,0,2,4,6,8,10,1,3,5,7. Positive sources follow
+// 200+20*i: unwritten zeros win through i=9; at i=10..12 the oldest
+// available positive members are calls 0,1,2, giving 200,220,240.
+// The sign-mixed source below is designed to keep negative minima ahead
+// of unwritten zeros and to expose the stale slot containing -20.
+static int synthetic_call_bar(int i) { return 5 + 13 * i; }
+static double synthetic_positive_call(int i) { return 200.0 + 20.0 * i; }
+static const double kSyntheticLowestLow[13] = {
+    NAN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 220, 240};
+static const double kSyntheticOsc[13] = {
+    6, -8, -12, -20, -4, 10, 14, -6, -16, -2, -10, -18, -24};
+// At i=8 the -20 slot is excluded: min=-16. At i=9 it aliases back into
+// the window: min=-20 until the fresh -24 at i=12 wins before the rescan.
+static const double kSyntheticLowestOsc[13] = {
+    NAN, -8, -12, -20, -20, -20, -20, -20, -16, -20, -20, -20, -24};
 
 static void test_cadence13_zero_fill_control_and_computed_source() {
     std::printf("test_cadence13_zero_fill_control_and_computed_source\n");
     ta::Lowest lo(10);
     ta::Lowest lo_osc(10);
     for (int i = 0; i < 13; ++i) {
-        ta::BarContextScope scope(kXauCallBars[i], 0);
-        const double v = lo.compute(kXauLowAtCalls[i]);
-        const double w = lo_osc.compute(kXauOscAtCalls[i]);
+        ta::BarContextScope scope(synthetic_call_bar(i), 0);
+        const double v = lo.compute(synthetic_positive_call(i));
+        const double w = lo_osc.compute(kSyntheticOsc[i]);
         if (i == 0) { CHECK(is_na(v)); CHECK(is_na(w)); continue; }
-        CHECK(!is_na(v) && near(v, kXauTvLowestLow[i], 0.051));
-        CHECK(!is_na(w) && near(w, kXauTvLowestOsc[i], 0.006));
+        CHECK(!is_na(v) && near(v, kSyntheticLowestLow[i], 0.051));
+        CHECK(!is_na(w) && near(w, kSyntheticLowestOsc[i], 0.006));
         if (i >= 1 && i <= 9) CHECK(near(v, 0.0));   // a never-written slot in the window reads 0
         if (i >= 1) CHECK(w < 0.0);                  // the 0 never beats a negative member
     }
 }
 
-// Leading-na sites at the same cadence (tape out-nafirst): the first 1 / 2 /
-// 5 calls of ta.lowest(sma(close, N), 10) write na. Every zero run ends at
-// bar 83 when the na slot re-enters at k = 1 (src is the only live member),
-// and the stale first valid write returns from bar 109 on, once it is newer
-// than the na slot -- poison 13/13 on all 7 sites (zero-fill 8-10/13, skip
-// 7-10/13). F and G are the sign-mixed sma(close, N) - close twins.
-static const double kNaFirstSrc[5][13] = {
-    {NAN, 2997.9843, 3111.9871, 3316.0614, 3285.6300, 3329.3643, 3357.6014, 3327.4057, 3350.1189, 3355.1350, 3478.2407, 3689.8500, 3964.3786},        // A: sma 14
-    {NAN, NAN, 3086.7670, 3254.7987, 3287.3295, 3303.4298, 3355.1255, 3333.7838, 3343.2762, 3343.9192, 3435.9715, 3649.7668, 3891.3310},              // B: sma 20
-    {NAN, NAN, NAN, NAN, NAN, 3235.7817, 3301.0254, 3322.9830, 3332.4742, 3348.5481, 3376.0111, 3455.1191, 3593.3572},                                // E: sma 59
-    {NAN, NAN, -143.0280, -79.3963, -7.6805, -19.1802, 80.9505, -13.8162, -30.3588, 5.2092, -190.3435, -110.0882, -316.4390},                         // F: sma 20 - close
-    {NAN, NAN, NAN, NAN, -86.4224, -38.3341, 46.4009, -20.1672, -26.5463, 5.3768, -238.9141, -275.7978, -544.8904},                                   // G: sma 46 - close
-};
+// Synthetic leading-na sources at the same cadence. Positive sites use
+// 400+100*s+20*i after 1,2,5 leading na writes, respectively. Signed sites
+// use the hand-designed values below after 2 and 4 leading na writes.
+// The na at residue 5 is read one slot behind call i=6, clearing older
+// members. Calls i=6,7 therefore answer their own source; subsequent
+// rescans can resurrect only slots NEWER than the last encountered na.
+static double synthetic_na_first_source(int s, int i) {
+    static const int kLeadingNa[5] = {1, 2, 5, 2, 4};
+    static const double kSigned[2][13] = {
+        {NAN, NAN, -24, -14, -2, -6, 12, -4, -8, 4, -32, -20, -48},
+        {NAN, NAN, NAN, NAN, -16, -6, 8, -4, -10, 2, -36, -40, -72},
+    };
+    if (i < kLeadingNa[s]) return na<double>();
+    return s < 3 ? 400.0 + 100.0 * s + 20.0 * i : kSigned[s - 3][i];
+}
+// Positive sites: zeros win until poison removes them; the stale first
+// valid write wins at i=8..11 (site A/B), or i=11..12 (site E).
+// Site A's first write is overwritten at i=12, so its second (440) wins.
+// Signed sites take minima of the live post-poison members: in F the
+// aliased -24 returns at i=9, then -32 wins; in G i=9 restarts on +2.
 static const double kNaFirstTv[5][13] = {
-    {NAN, 2998.00, 0.00, 0.00, 0.00, 0.00, 3357.60, 3327.40, 2998.00, 2998.00, 2998.00, 2998.00, 3112.00},
-    {NAN, NAN, 3086.80, 0.00, 0.00, 0.00, 3355.10, 3333.80, 3086.80, 3086.80, 3086.80, 3086.80, 3086.80},
-    {NAN, NAN, NAN, NAN, NAN, 3235.80, 3301.00, 3323.00, 3332.50, 3348.50, 3376.00, 3235.80, 3235.80},
-    {NAN, NAN, -143.03, -143.03, -143.03, -143.03, 80.95, -13.82, -30.36, -143.03, -190.34, -190.34, -316.44},
-    {NAN, NAN, NAN, NAN, -86.42, -86.42, 46.40, -20.17, -26.55, 5.38, -238.91, -275.80, -544.89},
+    {NAN, 420, 0, 0, 0, 0, 520, 540, 420, 420, 420, 420, 440},
+    {NAN, NAN, 540, 0, 0, 0, 620, 640, 540, 540, 540, 540, 540},
+    {NAN, NAN, NAN, NAN, NAN, 700, 720, 740, 760, 780, 800, 700, 700},
+    {NAN, NAN, -24, -24, -24, -24, 12, -4, -8, -24, -32, -32, -48},
+    {NAN, NAN, NAN, NAN, -16, -16, 8, -4, -10, 2, -36, -40, -72},
 };
-static const double kNaFirstTol[5] = {0.051, 0.051, 0.051, 0.0051, 0.0051};   // qty resolution 0.1 / 0.01
+static const double kNaFirstTol[5] = {0.051, 0.051, 0.051, 0.0051, 0.0051};   // retained 0.1 / 0.01 resolution
 
 static void test_leading_na_site_poison_pin() {
     std::printf("test_leading_na_site_poison_pin\n");
@@ -731,9 +734,9 @@ static void test_leading_na_site_poison_pin() {
         ta::Lowest lo(10);
         ta::LowestBars lb(10);
         for (int i = 0; i < 13; ++i) {
-            ta::BarContextScope scope(kXauCallBars[i], 0);
-            const double v = lo.compute(kNaFirstSrc[s][i]);
-            const double k = lb.compute(kNaFirstSrc[s][i]);
+            ta::BarContextScope scope(synthetic_call_bar(i), 0);
+            const double v = lo.compute(synthetic_na_first_source(s, i));
+            const double k = lb.compute(synthetic_na_first_source(s, i));
             if (is_na(kNaFirstTv[s][i])) {
                 CHECK(is_na(v));
                 CHECK(is_na(k));
@@ -742,41 +745,37 @@ static void test_leading_na_site_poison_pin() {
                 CHECK(!is_na(k));
             }
             if (s == 0) {
-                // Site A, ta.lowest(sma(close, 14), 10): the bars-since of the
-                // extremum among the non-poisoned slots (derived, no tape).
+                // Site A, first valid source at call 1: the bars-since of the
+                // extremum among the non-poisoned slots.
                 if (i == 1) CHECK(near(k, 0.0));     // bar 18: restart on src (slot 6 behind it never read)
                 if (i == 2) CHECK(near(k, -3.0));    // bar 31: never-written slot 6 = bar 28, the oldest 0 past bar 27's na
                 if (i == 6) CHECK(near(k, 0.0));     // bar 83: the na slot at k = 1, src alone
-                if (i == 8) CHECK(near(k, -3.0));    // bar 109: 2998 lives in slot 7 = bar 106
-                if (i == 12) CHECK(near(k, -9.0));   // bar 161: 3112 in slot 9 = bar 152
+                if (i == 8) CHECK(near(k, -3.0));    // bar 109: 420 lives in slot 7 = bar 106
+                if (i == 12) CHECK(near(k, -9.0));   // bar 161: 440 in slot 9 = bar 152
             }
         }
     }
     // Site A, first three calls, spelled out: bar 5 writes na (cache (na, 5)),
-    // bar 18 restarts on 2998 (a rescan would have read the never-written
-    // slot 6 = bar 17 as 0 -- TV says 2998), bar 31 rescans: slots 0..4
+    // bar 18 restarts on 420 (a rescan would have read the never-written
+    // slot 6 = bar 17 as 0 -- the poisoned cache restarts on 420), bar 31 rescans: slots 0..4
     // (bars 22..26) never written -> 0, bar 27 = slot 5 -> na, poison; bar
-    // 28 = slot 6 never written -> 0 restarts; 2998 (bar 29) and 3112 (bar
+    // 28 = slot 6 never written -> 0 restarts; 420 (bar 29) and 440 (bar
     // 31) do not beat it -> 0.
     {
         ta::Lowest lo(10);
         { ta::BarContextScope scope(5, 0);  CHECK(is_na(lo.compute(na<double>()))); }
-        { ta::BarContextScope scope(18, 0); CHECK(near(lo.compute(2997.9843), 2997.9843)); }
-        { ta::BarContextScope scope(31, 0); CHECK(near(lo.compute(3111.9871), 0.0)); }
+        { ta::BarContextScope scope(18, 0); CHECK(near(lo.compute(420.0), 420.0)); }
+        { ta::BarContextScope scope(31, 0); CHECK(near(lo.compute(440.0), 0.0)); }
     }
 }
 
-// Replica of the market-logic VFDO-S site (tape out-mlsite, OANDA:XAUUSD 1D
-// 2025-04-01..2026-05-01): osc = resid / stdev(resid, 50) is na for its
-// first ~100 bars; pivot-gated ta.lowest(osc, 11) on pivot-low bars and
-// ta.highest(osc, 11) on pivot-high bars; qty = 100000 + round(v * 1000).
-// 32 calls: 16 na reads (the poisoned cache), one stale aliased read (bar
-// 240 on the highest ring, src 0.7236: the aged cache rescans bars 230..240;
-// bar 227's 1.3252 sits in slot 227 % 12 = 11, which the window addresses as
-// bar 239, k = 1, past the poison of the na written at bar 70 in slot 10) and
-// one true 0 read (bar 273, highest ring: past the na slots the live members
-// are two never-written 0s and src -0.6354, so 0). Poison 32/32; zero-fill
-// 24/32; skip 25/32.
+// Designed two-ring sparse call schedule, length 11 (K=12).
+// Sixteen initial na writes poison the older slots. All later values are
+// invented integers, with distinct positive, stale and zero-winning cases.
+// The call at bar 240 excludes the na at residue 10 but reads residue 11
+// (written at 227) as bar 239: stale +7 beats the fresh +2. At bar 273
+// the two unwritten zeros beat the fresh -4, after all poison is excluded.
+// The call addresses deliberately preserve those modulo-12 alignments.
 struct MlCall { int bar; bool low_ring; double osc; double tv; };
 static const MlCall kMlCalls[32] = {
     {18, false, NAN, NAN},      {25, true, NAN, NAN},       {28, false, NAN, NAN},
@@ -785,12 +784,12 @@ static const MlCall kMlCalls[32] = {
     {67, true, NAN, NAN},       {70, false, NAN, NAN},      {74, true, NAN, NAN},
     {80, true, NAN, NAN},       {84, false, NAN, NAN},      {89, true, NAN, NAN},
     {96, false, NAN, NAN},
-    {104, true, 1.4057, 1.406},  {147, false, 1.5218, 1.522}, {153, true, 1.1918, 1.192},
-    {165, false, 0.9717, 0.972}, {168, true, 1.0785, 1.078},  {177, false, 0.8948, 0.895},
-    {195, false, 4.2483, 4.248}, {198, true, 3.8822, 3.882},  {218, false, 1.1347, 1.135},
-    {220, true, 1.8796, 1.880},  {227, false, 1.3252, 1.325}, {231, true, 1.4513, 1.451},
-    {240, false, 0.7236, 1.325}, {241, true, 0.8939, 0.894},  {255, true, -1.0579, -1.058},
-    {273, false, -0.6354, 0.000},
+    {104, true, 6, 6},    {147, false, 8, 8},    {153, true, 4, 4},
+    {165, false, 5, 5},   {168, true, 3, 3},     {177, false, 2, 2},
+    {195, false, 20, 20}, {198, true, 16, 16},   {218, false, 6, 6},
+    {220, true, 10, 10},  {227, false, 7, 7},    {231, true, 5, 5},
+    {240, false, 2, 7},   {241, true, 1, 1},     {255, true, -8, -8},
+    {273, false, -4, 0},
 };
 
 static void test_market_logic_replica_pin() {
@@ -804,7 +803,7 @@ static void test_market_logic_replica_pin() {
         const bool hit = is_na(c.tv) ? is_na(v) : (!is_na(v) && near(v, c.tv, 0.0007));
         CHECK(hit);
         ok += hit;
-        if (c.bar == 240) CHECK(!is_na(v) && near(v, 1.3252, 1e-6));   // the aliased bar-227 slot, not src 0.7236
+        if (c.bar == 240) CHECK(!is_na(v) && near(v, 7.0, 1e-6));   // residue 11 aliases bar 227's +7 as bar 239
         if (c.bar == 273) CHECK(!is_na(v) && near(v, 0.0));            // a never-written slot beats every negative member
     }
     CHECK(ok == 32);
@@ -856,13 +855,9 @@ static void test_bars_variants_under_poison() {
     }
 }
 
-// An na source poisons the cache (re-pinned 2026-09-04: the OANDA:XAUUSD 15
-// geometry `ta.lowest(bar_index % 13 == 6 ? na : z, 10)` with the inserted na
-// calls from bar 100 answers na on them, 34/34 -- and every valid call after
-// one answers its own src, which the previous "leave the cache alone" reading
-// only reproduced for a falling series). With a RISING series the old rule
-// rescanned (aged cache) and read the never-written / stale slots; the
-// poisoned cache restarts on src instead.
+// An na source poisons the cache. Every valid call after it must restart
+// on its own source, even for a rising series: retaining the old cache would
+// rescan unwritten/stale slots on expiry. Cadence and sources are invented.
 static void test_na_source_poisons_the_cache() {
     std::printf("test_na_source_poisons_the_cache\n");
     for (int falling = 0; falling < 2; ++falling) {
