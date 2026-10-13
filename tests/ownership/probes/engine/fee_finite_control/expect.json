@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "EN-132 D6 FINAL row 11: defined finite/control outcome",
+  "native_boundary_control": "tests/test_value_invalid_fee_slip_settle.cpp"
+}

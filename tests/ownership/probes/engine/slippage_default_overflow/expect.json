@@ -1,0 +1,13 @@
+{
+  "outcome": "failed",
+  "code": "engine_command_value_invalid",
+  "args": {
+    "field": "slippage.fill_price",
+    "stage": "slippage",
+    "reason": "numeric_overflow"
+  },
+  "min_trades": 0,
+  "label": "G",
+  "pinned_by": "EN-132 D6 FINAL row 14; revision 3 section 4 / Appendix B",
+  "native_boundary_control": "tests/test_value_invalid_fee_slip_settle.cpp"
+}

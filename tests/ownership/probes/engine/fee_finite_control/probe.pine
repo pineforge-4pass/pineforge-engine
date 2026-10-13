@@ -1,0 +1,6 @@
+//@version=6
+strategy("D6 11 finite cash fee", initial_capital=100000, margin_long=0, margin_short=0, commission_type=strategy.commission.cash_per_contract, commission_value=0.125)
+if bar_index == 0
+    strategy.entry("entry", strategy.long, qty=2)
+if bar_index == 4
+    strategy.close_all()
