@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "revision 3 Appendix B: entry.limit_price after na/default selection; Appendix D: preserve legitimate na propagation; owner ruling D1",
+  "native_boundary_control": null
+}

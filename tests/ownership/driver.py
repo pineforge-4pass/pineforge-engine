@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""Real ordinary Pine -> codegen -> g++ -> run_json ownership probes (Python 3.10+)."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+EXPECT_KEYS = {
+    "outcome", "code", "args", "min_trades", "label", "pinned_by",
+    "native_boundary_control",
+}
+RUN_DEFAULTS = {
+    "input_tf": "", "script_tf": "", "inputs": "", "overrides": "",
+    "bar_magnifier": "", "magnifier_samples": 4, "magnifier_dist": "endpoints",
+    "options": [],
+}
+OWNED_FLAGS = {
+    "--so", "--ohlcv", "--inputs", "--overrides", "--input-tf", "--script-tf",
+    "--bar-magnifier", "--magnifier-samples", "--magnifier-dist",
+    "--generated-cpp", "--transpiled",
+    # These routes either skip execution or need transport/inventory this ordinary
+    # driver does not produce. Do not turn such a response into runtime coverage.
+    "--capabilities-json", "--validate-window-only", "--run-phase-fd",
+    "--report-policy", "--request-feed-inventory", "--help", "-h", "--",
+}
+STAGE_TIMEOUT_SECONDS = 300
+
+
+class ProbeError(ValueError):
+    """An invalid probe, expectation, toolchain or subprocess protocol."""
+
+
+def _unique_object(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ProbeError(f"duplicate JSON key: {key}")
+        obj[key] = value
+    return obj
+
+
+def _finite_json(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ProbeError("nonfinite JSON number")
+    if isinstance(value, dict):
+        for child in value.values():
+            _finite_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            _finite_json(child)
+
+
+def _bad_constant(value):
+    raise ProbeError(f"non-JSON numeric token: {value}")
+
+
+def load_json(raw):
+    try:
+        doc = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_bad_constant)
+        _finite_json(doc)
+        return doc
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise ProbeError(f"invalid JSON: {error}") from error
+
+
+def validate_expectation(doc):
+    if not isinstance(doc, dict):
+        raise ProbeError("expect.json must be an object")
+    if set(doc) != EXPECT_KEYS:
+        missing, extra = sorted(EXPECT_KEYS - set(doc)), sorted(set(doc) - EXPECT_KEYS)
+        raise ProbeError(f"expect.json keys: missing={missing}, unknown={extra}")
+    if doc["outcome"] not in ("completed", "failed", "compile_refused"):
+        raise ProbeError("outcome must be completed, failed or compile_refused")
+    if doc["label"] not in ("S", "G", "R", "control"):
+        raise ProbeError("label must be S, G, R or control")
+    if type(doc["min_trades"]) is not int or doc["min_trades"] < 0:
+        raise ProbeError("min_trades must be a nonnegative integer")
+    if not isinstance(doc["args"], dict):
+        raise ProbeError("args must be an object")
+    if not isinstance(doc["pinned_by"], str) or not doc["pinned_by"].strip():
+        raise ProbeError("pinned_by must name the contract row")
+    control = doc["native_boundary_control"]
+    if control is not None and (not isinstance(control, str) or not control.strip() or "\x00" in control):
+        raise ProbeError("native_boundary_control must be a file path or null")
+    if doc["outcome"] == "completed":
+        if doc["code"] is not None or doc["args"]:
+            raise ProbeError("completed expects code=null and args={}")
+    else:
+        if not isinstance(doc["code"], str) or not doc["code"].strip():
+            raise ProbeError("failed/compile_refused expects a nonempty code")
+        if doc["min_trades"] != 0:
+            raise ProbeError("failed/compile_refused expects min_trades=0")
+    return doc
+
+
+def load_expectation(path):
+    return validate_expectation(load_json(Path(path).read_bytes()))
+
+
+def load_run_options(path):
+    path = Path(path)
+    doc = load_json(path.read_bytes()) if path.exists() else {}
+    if not isinstance(doc, dict) or set(doc) - set(RUN_DEFAULTS):
+        raise ProbeError("run.json must be an object with documented option keys")
+    options = {**RUN_DEFAULTS, "options": [], **doc}
+    for key in ("input_tf", "script_tf", "bar_magnifier", "magnifier_dist"):
+        if not isinstance(options[key], str) or "\x00" in options[key]:
+            raise ProbeError(f"run.json {key} must be a string")
+    for key in ("inputs", "overrides"):
+        value = options[key]
+        if isinstance(value, dict):
+            options[key] = json.dumps(value, allow_nan=False, separators=(",", ":"))
+        elif not isinstance(value, str) or "\x00" in value:
+            raise ProbeError(f"run.json {key} must be a JSON object or string")
+    if type(options["magnifier_samples"]) is not int:
+        raise ProbeError("run.json magnifier_samples must be an integer")
+    extra = options["options"]
+    if not isinstance(extra, list) or any(not isinstance(token, str) for token in extra):
+        raise ProbeError("run.json options must be an argv array of strings")
+    for token in extra:
+        name = token.partition("=")[0]
+        if name in OWNED_FLAGS or (name.startswith("--") and any(
+            flag.startswith(name) for flag in OWNED_FLAGS
+        )):
+            raise ProbeError(f"run.json options cannot supply driver-owned flag {name}")
+        if "\x00" in token:
+            raise ProbeError("run.json options cannot contain NUL")
+    # run_json resolves a symbol-feeds index's nested CSV paths itself. Resolve
+    # the two outer file options against the probe, rather than the scratch cwd.
+    extra = list(extra)
+    for index, token in enumerate(extra):
+        flag, equals, value = token.partition("=")
+        if flag in ("--syminfo", "--symbol-feeds"):
+            if equals:
+                extra[index] = flag + "=" + str((path.parent / value).resolve())
+            elif index + 1 < len(extra) and not extra[index + 1].startswith("--"):
+                extra[index + 1] = str((path.parent / extra[index + 1]).resolve())
+            else:
+                raise ProbeError(f"run.json option {flag} needs a file path")
+    options["options"] = extra
+    return options
+
+
+def observation(outcome, code=None, args=None, *, trade_count=None,
+                exit_status=None, stage="runtime", detail=""):
+    return {
+        "outcome": outcome, "code": code, "args": {} if args is None else args,
+        "trade_count": trade_count, "exit_status": exit_status, "stage": stage,
+        "detail": detail,
+    }
+
+
+def observe_runtime(stdout, exit_status):
+    """Accept exactly one report OR typed failure, consistent with process status."""
+    try:
+        lines = stdout.decode("utf-8").splitlines()
+        if len(lines) != 1 or not lines[0].strip():
+            raise ProbeError(f"run_json printed {len(lines)} lines; expected ONE JSON line")
+        doc = load_json(lines[0])
+        if not isinstance(doc, dict) or doc.get("engine") != "pineforge":
+            raise ProbeError("run_json result must be a pineforge object")
+        if "error" in doc:
+            if exit_status <= 0:
+                raise ProbeError("typed failure requires a positive nonzero exit status")
+            if not isinstance(doc["error"], str):
+                raise ProbeError("failure error must be a string")
+            if not isinstance(doc.get("code"), str) or not doc["code"]:
+                raise ProbeError("failure is missing a typed code")
+            if not isinstance(doc.get("args"), dict):
+                raise ProbeError("failure is missing its args object")
+            if {"summary", "trades", "metrics", "equity_curve"} & doc.keys():
+                raise ProbeError("failure also contains a success report")
+            return observation("failed", doc["code"], doc["args"],
+                               trade_count=0, exit_status=exit_status)
+        if exit_status != 0:
+            raise ProbeError("success report requires exit status 0")
+        if "code" in doc or "args" in doc:
+            raise ProbeError("success report also contains failure fields")
+        summary, trades = doc.get("summary"), doc.get("trades")
+        if not isinstance(summary, dict) or not isinstance(trades, list):
+            raise ProbeError("success report is missing summary or trades")
+        count = summary.get("total_trades")
+        if type(count) is not int or count < 0 or count != len(trades):
+            raise ProbeError("summary.total_trades must equal len(trades)")
+        return observation("completed", trade_count=count, exit_status=exit_status)
+    except (ProbeError, UnicodeError) as error:
+        return observation("driver_error", "driver_protocol_invalid", exit_status=exit_status,
+                           detail=str(error))
+
+
+def exact_json_equal(wanted, actual):
+    if type(wanted) is not type(actual):
+        return False
+    if isinstance(wanted, dict):
+        return (wanted.keys() == actual.keys()
+                and all(exact_json_equal(value, actual[key]) for key, value in wanted.items()))
+    if isinstance(wanted, list):
+        return (len(wanted) == len(actual)
+                and all(exact_json_equal(a, b) for a, b in zip(wanted, actual)))
+    return wanted == actual
+
+
+def compare(probe, expected, observed, *, repo_root=None):
+    reasons = []
+    if expected["outcome"] != observed["outcome"]:
+        reasons.append(f"outcome: expected {expected['outcome']}, got {observed['outcome']}")
+    if expected["code"] != observed["code"]:
+        reasons.append(f"code: expected {expected['code']!r}, got {observed['code']!r}")
+    for key, value in expected["args"].items():
+        if key not in observed["args"]:
+            reasons.append(f"args.{key}: missing")
+        elif not exact_json_equal(value, observed["args"][key]):
+            reasons.append(f"args.{key}: expected {value!r}, got {observed['args'][key]!r}")
+    if expected["outcome"] == "completed":
+        count = observed["trade_count"]
+        if type(count) is not int or count < expected["min_trades"]:
+            reasons.append(f"min_trades: expected >= {expected['min_trades']}, got {count}")
+    control = expected["native_boundary_control"]
+    control_exists = control is not None and (Path(repo_root or ROOT) / control).is_file()
+    if expected["outcome"] == "compile_refused" and not control_exists:
+        reasons.append("compile_refused requires native_boundary_control naming an existing file")
+    passed = not reasons
+    runtime_covered = (passed and observed["stage"] == "runtime"
+                       and observed["outcome"] in ("completed", "failed"))
+    coverage = ("COMPILE COVERAGE" if observed["outcome"] == "compile_refused"
+                else "RUNTIME COVERAGE" if runtime_covered else "NONE")
+    if reasons and observed["detail"]:
+        reasons.append(observed["detail"])
+    return {
+        "probe": probe, "outcome": observed["outcome"], "code": observed["code"],
+        "args": observed["args"], "trade_count": observed["trade_count"],
+        "pass": passed, "reason": "; ".join(reasons) if reasons else "matched pinned expectation",
+        "label": expected["label"], "pinned_by": expected["pinned_by"],
+        "exit_status": observed["exit_status"], "stage": observed["stage"],
+        "coverage": coverage, "runtime_covered": runtime_covered,
+        "native_boundary_control": control,
+        "native_boundary_control_exists": control_exists,
+    }
+
+
+def error_result(probe, error):
+    return {
+        "probe": probe, "outcome": "driver_error", "code": "driver_setup_invalid", "args": {},
+        "trade_count": None, "pass": False, "reason": str(error), "label": None,
+        "pinned_by": None, "exit_status": None, "stage": "setup", "coverage": "NONE",
+        "runtime_covered": False, "native_boundary_control": None,
+        "native_boundary_control_exists": False,
+    }
+
+
+def discover_probes(root, only):
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise ProbeError(f"probes directory does not exist: {root}")
+    probes = []
+    for pine in sorted(root.rglob("probe.pine")):
+        relative = pine.parent.relative_to(root).as_posix()
+        probes.append((pine.parent.name if relative == "." else relative, pine.parent))
+    if not probes:
+        raise ProbeError("no probe.pine files found")
+    if not only:
+        return probes
+    selected = set()
+    for name in only:
+        matches = [item for item in probes if item[0] == name or item[1].name == name]
+        if not matches:
+            raise ProbeError(f"unknown probe name: {name}")
+        if len(matches) > 1:
+            raise ProbeError(f"ambiguous probe name: {name}; use family/name")
+        selected.add(matches[0][0])
+    return [item for item in probes if item[0] in selected]
+
+
+def compile_command(prefix, cpp, so):
+    # docker/entrypoint.sh:218-224, token for token; do not add or change flags.
+    return [
+        "g++", "-std=c++17", "-O2", "-ffp-contract=off", "-fPIC", "-shared",
+        f"-I{prefix}/include", "-I/usr/include/eigen3", str(cpp),
+        "-Wl,--whole-archive", f"{prefix}/lib/libpineforge.a", "-Wl,--no-whole-archive",
+        "-o", str(so),
+    ]
+
+
+def runtime_command(run_json, work, options):
+    # docker/entrypoint.sh:287-300, ordinary TRANSPILED=true route.
+    return [
+        sys.executable, str(run_json), "--so", str(work / "strategy.so"),
+        "--ohlcv", str(work / "bars.csv"),
+        "--inputs", options["inputs"], "--overrides", options["overrides"],
+        "--input-tf", options["input_tf"], "--script-tf", options["script_tf"],
+        "--bar-magnifier", options["bar_magnifier"],
+        "--magnifier-samples", str(options["magnifier_samples"]),
+        "--magnifier-dist", options["magnifier_dist"],
+        "--generated-cpp", str(work / "strategy.cpp"), "--transpiled", "true",
+        *options["options"],
+    ]
+
+
+def resolve_toolchain(prefix, codegen, session):
+    prefix, codegen = Path(prefix).resolve(), Path(codegen).resolve()
+    if not (codegen / "pineforge_codegen" / "__init__.py").is_file():
+        raise ProbeError("--codegen must be the pineforge_codegen package parent")
+    if not (prefix / "lib" / "libpineforge.a").is_file():
+        raise ProbeError("--prefix must contain lib/libpineforge.a")
+    cache = prefix / "CMakeCache.txt"
+    source = None
+    if cache.is_file():
+        for line in cache.read_text(encoding="utf-8").splitlines():
+            if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL="):
+                source = Path(line.partition("=")[2]).resolve()
+                break
+    run_json = prefix / "bin" / "run_json.py"
+    if not run_json.is_file():
+        if source is None:
+            raise ProbeError("installed prefix is missing bin/run_json.py")
+        run_json = source / "docker" / "run_json.py"
+        if not run_json.is_file():
+            raise ProbeError("build tree source checkout is missing docker/run_json.py")
+    compile_prefix = prefix
+    if not (prefix / "include" / "pineforge" / "pineforge.h").is_file():
+        if source is None or not (source / "include" / "pineforge" / "pineforge.h").is_file():
+            raise ProbeError("prefix has no installed headers or valid CMake source headers")
+        # A build tree has lib/, but CMake does not copy include/. A scratch view
+        # preserves the exact -IPREFIX/include and whole-archive argv structure.
+        compile_prefix = session / "build-prefix"
+        compile_prefix.mkdir()
+        (compile_prefix / "include").symlink_to(source / "include", target_is_directory=True)
+        (compile_prefix / "lib").symlink_to(prefix / "lib", target_is_directory=True)
+    return compile_prefix, run_json, codegen
+
+
+def _write_json(path, doc):
+    Path(path).write_text(json.dumps(doc, allow_nan=False, ensure_ascii=True, indent=2) + "\n",
+                          encoding="utf-8")
+
+
+def transpile_worker(codegen, pine, cpp, diagnostic):
+    """Isolated child: explicitly load --codegen, preserving ordinary API defaults."""
+    sys.path.insert(0, str(Path(codegen).resolve()))
+    try:
+        from pineforge_codegen import transpile
+        from pineforge_codegen.errors import CompileError
+    except Exception as error:
+        _write_json(diagnostic, observation("driver_error", "driver_toolchain_invalid",
+                                            stage="transpile", detail=str(error)))
+        return 5
+    try:
+        # docker/entrypoint.sh:109-114. No support bypass, timeframe binding,
+        # inventory API, or invented provenance file on this ordinary route.
+        generated = transpile(Path(pine).read_text(encoding="utf-8"), filename="strategy.pine")
+        Path(cpp).write_text(generated, encoding="utf-8")
+    except CompileError as error:
+        errors = [item for item in error.diagnostics
+                  if getattr(item.level, "value", item.level) == "error"]
+        first = errors[0] if errors else None
+        doc = observation("compile_refused", first.code if first else "transpile_refused",
+                          first.args if first else {}, exit_status=5,
+                          stage="transpile", detail=str(error))
+        _write_json(diagnostic, doc)
+        print(f"[pineforge] transpile error: {error}", file=sys.stderr)
+        return 5
+    except Exception as error:
+        # An unexpected codegen fault is not acceptance for a language refusal.
+        _write_json(diagnostic, observation("driver_error", "driver_transpile_error",
+                                            exit_status=5, stage="transpile", detail=str(error)))
+        print(f"[pineforge] transpile error: {error}", file=sys.stderr)
+        return 5
+    return 0
+
+
+def run_stage(command, stage, work):
+    _write_json(work / f"{stage}.command.json", command)
+    try:
+        result = subprocess.run(command, cwd=work, capture_output=True,
+                                timeout=STAGE_TIMEOUT_SECONDS, check=False)
+    except subprocess.TimeoutExpired as error:
+        (work / f"{stage}.stdout").write_bytes(error.stdout or b"")
+        (work / f"{stage}.stderr").write_bytes(error.stderr or b"")
+        raise ProbeError(f"{stage} exceeded {STAGE_TIMEOUT_SECONDS}s; see stage logs") from error
+    (work / f"{stage}.stdout").write_bytes(result.stdout)
+    (work / f"{stage}.stderr").write_bytes(result.stderr)
+    _write_json(work / f"{stage}.exit.json", {"exit_status": result.returncode})
+    return result
+
+
+def execute_probe(work, options, compile_prefix, run_json, codegen):
+    diagnostic = work / "transpile.failure.json"
+    transpile = run_stage([
+        sys.executable, "-I", str(Path(__file__).resolve()), "--_transpile",
+        str(codegen), str(work / "strategy.pine"), str(work / "strategy.cpp"), str(diagnostic),
+    ], "transpile", work)
+    if transpile.returncode != 0:
+        if transpile.returncode < 0:
+            return observation("driver_error", "driver_transpile_error", stage="transpile",
+                               exit_status=transpile.returncode, detail="transpiler ended by signal")
+        if diagnostic.is_file():
+            actual = load_json(diagnostic.read_bytes())
+            actual["exit_status"] = transpile.returncode
+            return actual
+        return observation("driver_error", "driver_transpile_error", stage="transpile",
+                           exit_status=transpile.returncode, detail="no structured transpile diagnostic")
+    compiled = run_stage(compile_command(compile_prefix, work / "strategy.cpp", work / "strategy.so"),
+                         "compile", work)
+    if compiled.returncode != 0:
+        if compiled.returncode < 0:
+            return observation("driver_error", "driver_compiler_error", stage="compile",
+                               exit_status=compiled.returncode, detail="compiler ended by signal")
+        return observation("compile_refused", "cpp_compile_refused", {"stage": "compile"},
+                           stage="compile", exit_status=compiled.returncode,
+                           detail="g++ refused the generated translation unit; see compile.stderr")
+    ran = run_stage(runtime_command(run_json, work, options), "runtime", work)
+    return observe_runtime(ran.stdout, ran.returncode)
+
+
+def run_suite(args):
+    only = [name for group in args.only for name in group]
+    probes = discover_probes(args.probes, only)
+    work_root = args.work.resolve()
+    work_root.mkdir(parents=True, exist_ok=True)
+    session = Path(tempfile.mkdtemp(prefix="ownership-", dir=work_root))
+    rows, prepared = {}, []
+    # Snapshot and validate EVERY selected expectation before any toolchain runs.
+    # Nothing below reads expect.json again or manufactures expectations from output.
+    for index, (name, probe) in enumerate(probes):
+        work = session / f"{index:04d}"
+        work.mkdir()
+        try:
+            pinned = (probe / "expect.json").read_bytes()
+            expected = validate_expectation(load_json(pinned))
+            options = load_run_options(probe / "run.json")
+            (work / "expect.json").write_bytes(pinned)
+            (work / "strategy.pine").write_bytes((probe / "probe.pine").read_bytes())
+            (work / "bars.csv").write_bytes((probe / "bars.csv").read_bytes())
+            (work / "NOTES.md").write_bytes((probe / "NOTES.md").read_bytes())
+            _write_json(work / "run.json", options)
+            prepared.append((name, work, expected, options, hashlib.sha256(pinned).hexdigest()))
+        except (OSError, ProbeError) as error:
+            rows[name] = error_result(name, error)
+            rows[name]["work"] = str(work)
+    if prepared:
+        try:
+            compile_prefix, run_json, codegen = resolve_toolchain(args.prefix, args.codegen, session)
+            toolchain_error = None
+        except (OSError, ProbeError, UnicodeError) as error:
+            toolchain_error = error
+        for name, work, expected, options, digest in prepared:
+            try:
+                if toolchain_error is not None:
+                    raise ProbeError(str(toolchain_error))
+                actual = execute_probe(work, options, compile_prefix, run_json, codegen)
+            except (OSError, ProbeError, UnicodeError) as error:
+                actual = observation("driver_error", "driver_execution_invalid",
+                                     stage="driver", detail=str(error))
+            row = compare(name, expected, actual)
+            row.update(expect_sha256=digest, work=str(work))
+            rows[name] = row
+    return [rows[name] for name, _ in probes]
+
+
+def write_report(path, rows):
+    doc = {
+        "schema": "pineforge-ownership-probes/v1", "results": rows,
+        "summary": {
+            "total": len(rows), "passed": sum(row["pass"] for row in rows),
+            "failed": sum(not row["pass"] for row in rows),
+            "runtime_covered": sum(row["runtime_covered"] for row in rows),
+            "compile_coverage": sum(row["coverage"] == "COMPILE COVERAGE" for row in rows),
+        },
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(path, doc)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--probes", required=True, type=Path)
+    parser.add_argument("--only", action="append", nargs="+", default=[], metavar="PROBE")
+    parser.add_argument("--prefix", required=True, type=Path)
+    parser.add_argument("--codegen", required=True, type=Path)
+    parser.add_argument("--work", required=True, type=Path)
+    parser.add_argument("--report", required=True, type=Path)
+    args = parser.parse_args(argv)
+    try:
+        rows = run_suite(args)
+    except (OSError, ProbeError) as error:
+        rows = [error_result("<driver>", error)]
+    if not rows:
+        rows = [error_result("<driver>", "no result rows; refusing an empty PASS")]
+    try:
+        write_report(args.report, rows)
+    except OSError as error:
+        print(f"cannot write report: {error}", file=sys.stderr)
+        return 1
+    for row in rows:
+        print(f"{'PASS' if row['pass'] else 'FAIL'} {row['probe']}: {row['reason']}", file=sys.stderr)
+    return int(any(not row["pass"] for row in rows))
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["--_transpile"]:
+        raise SystemExit(transpile_worker(*sys.argv[2:]))
+    raise SystemExit(main())
