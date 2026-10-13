@@ -594,22 +594,6 @@ public:
         if (bar_index_ == 0) strategy_entry("quote-entry", true);
         if (bar_index_ == 1) CHECK(signed_position_size() == 1.0);
     }
-    void present_report(pineforge::ReportC* report) const override {
-        ++presentations;
-        CHECK(report->trades_len == 1 && report->trades != nullptr);
-        if (report->trades && report->trades_len == 1) {
-            const auto& row = report->trades[0];
-            CHECK(row.open_at_end == 1 && row.entry_price == row.exit_price);
-            CHECK(row.qty == 1.0 && row.pnl == 0.0 && row.pnl_pct == 0.0);
-            CHECK(row.commission == 0.0);
-            snapshot_trade(before, row);
-        }
-        // Only the actual product presentation runs; no injected report row,
-        // excursion override, direct predicate call or protected book edit.
-        pineforge::source::PineStrategyHost::present_report(report);
-    }
-    mutable int presentations = 0;
-    mutable Snapshot before;
 };
 
 void run_terminal_quote_row(const char* name, QuoteCase which, bool emit_snapshot) {
@@ -634,18 +618,49 @@ void run_terminal_quote_row(const char* name, QuoteCase which, bool emit_snapsho
         CHECK(std::isfinite(entry / instrument.mintick));
         CHECK(!std::isfinite(quote / instrument.mintick));
     }
+    // Same selected run, differing only in the absent terminal quote. Read
+    // its presented row through the public report surface; no override calls
+    // the host's private presentation hook or changes a product report.
+    TerminalQuoteHost unquoted_host;
+    select_source_window(unquoted_host, kStart + 75 * 60000LL);
+    unquoted_host.run(bars.data(), static_cast<int>(bars.size()), "1", "15", {}, instrument,
+                      nullptr, true);
+    pineforge::ReportC unquoted{};
+    unquoted_host.fill_report(&unquoted);
+    CHECK(unquoted_host.last_run_status() == 0 && unquoted_host.last_error().empty());
+    CHECK(unquoted_host.native_state().kind == pineforge::NativeLifecycleKind::Completed);
+    CHECK(!unquoted_host.report_terminal_quote_applied(unquoted));
+    CHECK(unquoted.total_trades == 1 && unquoted.trades_len == 1 && unquoted.trades != nullptr);
+    Snapshot before;
+    if (unquoted.trades && unquoted.trades_len == 1) {
+        auto row = unquoted.trades[0];
+        CHECK(row.open_at_end == 1 && row.is_long == 1);
+        CHECK(row.entry_price == entry && row.exit_price == entry);
+        CHECK(row.qty == 1.0 && row.pnl == 0.0 && row.pnl_pct == 0.0);
+        CHECK(row.commission == 0.0);
+        CHECK(std::isfinite(row.max_runup) && std::isfinite(row.max_drawdown));
+        // Exit time may change with the quote; normalize both copies to a
+        // literal before comparing every field the quote must leave intact.
+        row.exit_time = 0;
+        snapshot_trade(before, row);
+    }
+    CHECK(before.words.size() == 14);
+    CHECK(unquoted.net_profit == 0.0 && unquoted.metrics.all.net_profit == 0.0);
+    CHECK(unquoted.equity_curve_len > 0 && unquoted.equity_curve != nullptr);
+    if (unquoted.equity_curve && unquoted.equity_curve_len > 0)
+        CHECK(unquoted.equity_curve[unquoted.equity_curve_len - 1].equity == 10000.0);
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "15", {}, instrument,
              nullptr, true);
     pineforge::ReportC report{};
     host.fill_report(&report);
-    CHECK(host.presentations == 1);
-    CHECK(host.before.words.size() == 14);
     CHECK(host.trade_count() == 0 && host.report_trade_count() == 1);
     if (host.report_trade_count() == 1) {
         const auto& original = host.get_report_trade(0);
         check_finite_source_trade(original);
+        CHECK(original.open_at_end && original.is_long && original.qty == 1.0);
         CHECK(original.entry_price == entry && original.exit_price == entry);
         CHECK(original.pnl == 0.0 && original.pnl_pct == 0.0);
+        CHECK(original.commission == 0.0);
     }
     if (fault) {
         check_source_failure(host, "non-finite terminal-quote report row", report);
@@ -659,21 +674,23 @@ void run_terminal_quote_row(const char* name, QuoteCase which, bool emit_snapsho
         if (report.trades && report.trades_len == 1 && report.equity_curve) {
             CHECK(host.report_terminal_quote_applied(report));
             auto projected = report.trades[0];
+            CHECK(projected.entry_price == 100.0 && projected.qty == 1.0);
+            CHECK(projected.open_at_end == 1 && projected.is_long == 1);
             CHECK(projected.exit_time == quote_time && projected.exit_price == quote);
             CHECK(projected.pnl == 12.0 && projected.pnl_pct == 12.0);
             CHECK(projected.commission == 0.0);
-            projected.exit_time = host.get_report_trade(0).exit_time;
+            projected.exit_time = 0;
             projected.exit_price = entry;
             projected.pnl = projected.pnl_pct = 0.0;
             Snapshot normalized;
             snapshot_trade(normalized, projected);
-            CHECK(normalized.words == host.before.words);
+            CHECK(normalized.words == before.words);
             CHECK(report.net_profit == 12.0 && report.metrics.all.net_profit == 12.0);
             const auto& last = report.equity_curve[report.equity_curve_len - 1];
             CHECK(last.time_ms == quote_time && last.equity == 10012.0);
             pineforge::ReportC repeated{};
             host.fill_report(&repeated);
-            CHECK(host.presentations == 1 && repeated.trades_len == 1 && repeated.trades != nullptr);
+            CHECK(repeated.trades_len == 1 && repeated.trades != nullptr);
             if (repeated.trades && repeated.trades_len == 1) {
                 Snapshot left, right;
                 snapshot_trade(left, report.trades[0]);
@@ -685,6 +702,7 @@ void run_terminal_quote_row(const char* name, QuoteCase which, bool emit_snapsho
         }
     }
     pineforge::BacktestEngine::free_report(&report);
+    pineforge::BacktestEngine::free_report(&unquoted);
 }
 
 class AmendedTradeHost final : public pineforge::source::PineStrategyHost {
