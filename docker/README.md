@@ -266,6 +266,20 @@ docker run --rm \
   or an index naming no symbol: the key is absent and the report is what it was
   before this variable existed, apart from `elapsed_seconds`.
 
+### Selected-window contract revision
+
+The engine/codegen **1.6.0** image's `run_json.py --so <strategy.so>
+--capabilities-json` probe declares revision `1.3`, meaning complete value
+ownership with `strategy_value_invalid`, `engine_command_value_invalid`,
+`report_result_invalid` and `report_post_execution_failed`.
+
+| Capability member | Supported runtime | Unsupported runtime |
+| --- | --- | --- |
+| `selected_window_contract_revisions` | `["1.3"]` | `[]` |
+
+This member belongs to the probe's `capabilities` object. The selected-window
+wire version remains 1, the phase version 1 and the fingerprint/schema version 2.
+
 ### Recorded outputs (the harness's `--outputs`)
 
 This section describes support released in **1.5.0**. Released

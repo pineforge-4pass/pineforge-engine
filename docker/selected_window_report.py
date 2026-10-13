@@ -10,7 +10,7 @@ that are pure data or a thin native wrapper, so each can be controlled on its ow
   * the in-place trim view and the hash of the retained rows in the existing primary hash domain;
   * the exact report_window record R (its lookback member is the one triple of a build with no
     lookback producer), the full/v1 report_shape and the capability record (its
-    contract revision is this prerelease build's parity declaration, CONTRACT_REVISIONS);
+    contract revision is this build's complete value-ownership declaration, CONTRACT_REVISIONS);
   * the frozen selected_window ABI as a ctypes wrapper, and
     the exact comparison of the engine's native counts with the planned counts.
 
@@ -53,14 +53,14 @@ WIRE_VERSION = 1
 FINGERPRINT_VERSION = 2
 # The contract revision this build declares in its capability record (the member
 # selected_window_contract_revisions of --capabilities-json). This is the ONE place it is
-# written; capabilities_record is the code that reads it. It is a PRERELEASE PARITY capability:
-# the selected window without the value-ownership producers of the full contract, and NOT a
-# claim of full 1.3 coverage. A parity build lists ("1.3-parity",) and a full build lists
-# ("1.3",), never both: a future full build changes this one tuple and nothing else (no
-# feature switch, environment knob or second constant exists). It is a declaration only: no
-# request, report_window, phase record or fingerprint member carries it, and the wire version
-# (1), the phase version (1) and the fingerprint/schema version (2) are unchanged.
-CONTRACT_REVISIONS = ("1.3-parity",)
+# written; capabilities_record is the code that reads it. Revision 1.3 declares complete
+# value ownership: strategy_value_invalid, engine_command_value_invalid,
+# report_result_invalid and report_post_execution_failed. The supported runtime lists
+# this singleton tuple, with no feature switch, environment knob or second constant.
+# It is a declaration only: no request, report_window, phase record or fingerprint member
+# carries it, and the wire version (1), the phase version (1) and the fingerprint/schema
+# version (2) are unchanged.
+CONTRACT_REVISIONS = ("1.3",)
 REPORT_SHAPE = "full/v1"
 METERING_BASIS = "window-primary-input-bars/v1"
 MAX_PREROLL_BARS = 5000
@@ -692,8 +692,9 @@ def capabilities_record(supported: bool) -> Dict[str, Any]:
     members of features this build does not offer (compact shape, digest) are always absent.
 
     selected_window_contract_revisions is CONTRACT_REVISIONS as a fresh list when supported:
-    exactly ["1.3-parity"], the prerelease parity declaration (not full 1.3 coverage), and
-    never "1.3", which only a full build carries. It is [] when the runtime is not supported,
+    exactly ["1.3"], declaring complete value ownership through strategy_value_invalid,
+    engine_command_value_invalid, report_result_invalid and report_post_execution_failed.
+    It is [] when the runtime is not supported,
     so an unsupported runtime lists no revision at all. No other member of this document
     changes with the declaration."""
     return {
