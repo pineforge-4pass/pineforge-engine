@@ -1,0 +1,6 @@
+//@version=6
+strategy("EN132 sizing_finite_cash_boundary", initial_capital=1000, default_qty_type=strategy.cash, default_qty_value=299.99999999999994, margin_long=0, margin_short=0, commission_type=strategy.commission.percent, commission_value=0, slippage=0)
+if bar_index == 1
+    strategy.entry("L", strategy.long)
+if bar_index == 8
+    strategy.close("L")

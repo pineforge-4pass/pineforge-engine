@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": "",
+  "args": {},
+  "min_trades": 0,
+  "label": "control",
+  "pinned_by": "D6 row 4 defined zero fraction / row 1 zero money KEEP",
+  "native_boundary_control": "tests/test_value_invalid_sizing_margin.cpp"
+}

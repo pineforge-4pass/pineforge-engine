@@ -1,0 +1,13 @@
+{
+  "outcome": "failed",
+  "code": "engine_command_value_invalid",
+  "args": {
+    "field": "margin.restore",
+    "stage": "margin",
+    "reason": "numeric_overflow"
+  },
+  "min_trades": 0,
+  "label": "G",
+  "pinned_by": "D6 row 10 restore division",
+  "native_boundary_control": "tests/test_value_invalid_sizing_margin.cpp"
+}

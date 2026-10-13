@@ -1,6 +1,7 @@
 #include "native_execution_consumer.hpp"
 #include "engine_internal.hpp"
 #include "engine_settlement_stage.hpp"
+#include "engine_value_invalid.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
 
@@ -626,8 +627,14 @@ double floor_to_quantity_grid(double units, double step) noexcept {
 
 std::optional<double> representable_units(double units,
                                           native_order::ExecutionGridPolicy policy,
-                                          const std::optional<double>& grid) noexcept {
-    if (!std::isfinite(units) || units <= 0.0) return std::nullopt;
+                                          const std::optional<double>& grid) {
+    if (!std::isfinite(units) || units <= 0.0) {
+        if (!std::isfinite(units)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::numeric_overflow);
+        }
+        return std::nullopt;
+    }
     if (policy != native_order::ExecutionGridPolicy::SnapToGrid || !grid) return units;
     const double snapped = floor_to_quantity_grid(units, *grid);
     if (!(snapped > 0.0) || !native_order::quantity_on_grid(snapped, *grid)) return std::nullopt;
@@ -645,20 +652,34 @@ std::optional<double> representable_units(double units,
 // 0.1 %, not 10 %.
 std::optional<double> sized_basis_units(const native_order::Sized& sized, double price,
                                         double equity, double fx,
-                                        const NativeRunSpec& spec) noexcept {
+                                        const NativeRunSpec& spec) {
     double cash = 0.0;
     if (const auto* value = std::get_if<native_order::CashValue>(&sized.basis)) {
         cash = value->cash;
     } else {
+        if (!std::isfinite(equity)) {
+            engine_command_value_invalid_or_count("sizing.basis", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
         cash = std::get<native_order::EquityFraction>(sized.basis).fraction * equity;
     }
     if (sized.reserve_percent_fee && spec.fee_kind == NativeFeeKind::Percent) {
         const double divisor = 1.0 + spec.fee_value / 100.0;
-        if (!std::isfinite(divisor) || divisor <= 0.0) return std::nullopt;
+        if (!std::isfinite(divisor) || divisor <= 0.0) {
+            if (!std::isfinite(divisor)) {
+                engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                     EngineValueReason::nonfinite);
+            }
+            return std::nullopt;
+        }
         cash /= divisor;
     }
     const double denominator = price * spec.point_value * fx;
     if (!std::isfinite(cash) || !std::isfinite(denominator) || denominator <= 0.0) {
+        if (!std::isfinite(cash) || !std::isfinite(denominator)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
         return std::nullopt;
     }
     return representable_units(cash / denominator, sized.grid_policy, spec.quantity_grid);
@@ -3628,6 +3649,10 @@ bool NativeExecutionConsumer::admit_opening_inspect(
         const double equity = engine.marked_equity_at(resolved_price, fx) - inspect.current_ticket;
         const double required = inspect.resulting_abs_notional * fraction;
         if (!std::isfinite(equity) || !std::isfinite(required) || required > equity) {
+            if (!std::isfinite(equity) || !std::isfinite(required)) {
+                engine_command_value_invalid_or_count("margin.required", EngineValueStage::margin,
+                                                     EngineValueReason::nonfinite);
+            }
             if (reason) *reason = native_order::MatchRejectReason::InitialMargin;
             return false;
         }
@@ -3818,6 +3843,11 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
     const double held = std::abs(book.signed_units);
     const double point_value = engine.syminfo_.pointvalue;
     const double fx = margin_check_fx(engine, cursor);
+    if (!std::isfinite(held) || !std::isfinite(mark)
+        || !std::isfinite(point_value) || !std::isfinite(fx)) {
+        engine_command_value_invalid_or_count("margin.maintenance", EngineValueStage::margin,
+                                             EngineValueReason::nonfinite);
+    }
     if (!(held > 0.0) || !std::isfinite(mark) || !(mark > 0.0)
         || !std::isfinite(point_value) || !(point_value > 0.0)
         || !std::isfinite(fx) || !(fx > 0.0)) {
@@ -3826,6 +3856,10 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
     const double unit_margin = mark * point_value * fx * *fraction;
     double equity = margin_equity(engine, mark, fx);
     double required = held * unit_margin;
+    if (!std::isfinite(unit_margin) || !std::isfinite(equity) || !std::isfinite(required)) {
+        engine_command_value_invalid_or_count("margin.maintenance", EngineValueStage::margin,
+                                             EngineValueReason::nonfinite);
+    }
     const auto* host = native_host(engine);
     // The host's money rule, BEFORE the breach test. The kernel still owns
     // the mechanism; the two numbers it compares are where brokers differ, so
@@ -3842,6 +3876,8 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
         view.cursor = cursor;
         if (const auto decision = host->resolve_margin_requirement(view)) {
             if (!std::isfinite(decision->required) || !std::isfinite(decision->equity)) {
+                engine_command_value_invalid_or_count("margin.maintenance", EngineValueStage::margin,
+                                                     EngineValueReason::nonfinite);
                 return std::nullopt;
             }
             equity = decision->equity;
@@ -3857,6 +3893,10 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
         return std::nullopt;
     }
     const double restore = (required - equity) / unit_margin;
+    if (!std::isfinite(restore)) {
+        engine_command_value_invalid_or_count("margin.restore", EngineValueStage::margin,
+                                             EngineValueReason::numeric_overflow);
+    }
     double units = 0.0;
     switch (margin->sizing) {
     case NativeLiquidationSizing::RestoreMinimum:
@@ -3870,6 +3910,10 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
         break;
     }
     if (!std::isfinite(units) || !(units > 0.0)) {
+        if (!std::isfinite(units) && std::isfinite(restore)) {
+            engine_command_value_invalid_or_count("margin.restore", EngineValueStage::margin,
+                                                 EngineValueReason::numeric_overflow);
+        }
         // A breach the kernel's own numbers do not see has no restore of its
         // own. Only a forced one survives it, and then the units hook is the
         // whole sizing authority.
@@ -3893,7 +3937,13 @@ std::optional<double> NativeExecutionConsumer::margin_call_units(
         view.required = required;
         view.cursor = cursor;
         if (const auto override_units = host->resolve_margin_call_units(view)) {
-            if (!std::isfinite(*override_units) || !(*override_units > 0.0)) return std::nullopt;
+            if (!std::isfinite(*override_units) || !(*override_units > 0.0)) {
+                if (!std::isfinite(*override_units)) {
+                    engine_command_value_invalid_or_count("margin.restore", EngineValueStage::margin,
+                                                         EngineValueReason::nonfinite);
+                }
+                return std::nullopt;
+            }
             units = std::min(*override_units, held);
         }
     }
@@ -5713,6 +5763,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
+            if (!std::isfinite(*terms.units)) {
+                engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                     EngineValueReason::nonfinite);
+            }
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
         const bool own_quantity = closing_size && terms.units
@@ -5731,6 +5785,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (unresolved) {
             if (!native_order::WorkingRequestCore::effective_host_units(
                     live->pending, *terms.units, &deduction, &after, &exhausted)) {
+                engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                     EngineValueReason::numeric_overflow);
                 native_order::TermsResolvedInput probe;
                 probe.price_kind = price_kind;
                 probe.shared_cursor_collision = shared_cursor_collision;
@@ -7280,6 +7336,10 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         return out;
     }
     if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
+        if (!std::isfinite(*terms.units)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::nonfinite);
+        }
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
@@ -7299,6 +7359,8 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     if (unresolved) {
         if (!native_order::WorkingRequestCore::effective_host_units(
                 live->pending, *terms.units, &deduction, &after, &exhausted)) {
+            engine_command_value_invalid_or_count("sizing.quantity", EngineValueStage::sizing,
+                                                 EngineValueReason::numeric_overflow);
             throw std::overflow_error("native host-sized deduction is not representable");
         }
         if (const auto* budget = std::get_if<native_order::PointBudget>(&live->request().capacity)) {

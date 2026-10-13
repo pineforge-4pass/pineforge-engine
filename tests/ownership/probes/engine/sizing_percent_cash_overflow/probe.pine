@@ -1,0 +1,4 @@
+//@version=6
+strategy("EN132 sizing_percent_cash_overflow", initial_capital=1e100, default_qty_type=strategy.percent_of_equity, default_qty_value=1e308, margin_long=0, margin_short=0, commission_type=strategy.commission.percent, commission_value=0, slippage=0)
+if bar_index == 1
+    strategy.entry("L", strategy.long)

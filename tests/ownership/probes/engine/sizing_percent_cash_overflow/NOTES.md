@@ -1,0 +1,9 @@
+# sizing_percent_cash_overflow
+
+Pinned before execution: D6 row 1.
+
+All declarations and entry arguments are finite. The adapter computes (1e308 / 100) * 1e100, whose derived cash is +Infinity. Row 1 must fail before absent sizing becomes zero units.
+
+Feed: 40 synthetic one-minute bars, starting at 1736121600000 ms, volume 1. Each OHLC is the same deterministic price in its row. No market data, private fixture, generated C++, or output-derived expectation is used. Run through the P0 ordinary-source driver with input/script timeframe 1; no quantity, tick, FX, commission or margin overrides. Authored only: transpilation, compilation and runtime reachability have not been checked here.
+
+The native boundary control names the requested source-free test TU. Its relevant native producer/control is an arithmetic counterpart; source-specific cash/equity/placement checks are in the proposed source companion. No source probe claims coverage of the internal pending-deduction corruption used for D6 row 6.
