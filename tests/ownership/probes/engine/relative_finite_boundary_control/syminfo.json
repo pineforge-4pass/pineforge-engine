@@ -1,0 +1,15 @@
+{
+  "syminfo": {
+    "mintick": 1,
+    "pointvalue": 1,
+    "mincontract": 1,
+    "qty_step": 1,
+    "timezone": "UTC",
+    "session": "24x7",
+    "type": "crypto",
+    "currency": "USD",
+    "basecurrency": "G3",
+    "ticker": "G3",
+    "tickerid": "TEST:G3"
+  }
+}

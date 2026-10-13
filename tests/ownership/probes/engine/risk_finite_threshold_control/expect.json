@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "EN-132 FINAL D6 row 18: defined finite/absence behavior retained",
+  "native_boundary_control": "tests/test_value_invalid_relative_risk_source.cpp"
+}

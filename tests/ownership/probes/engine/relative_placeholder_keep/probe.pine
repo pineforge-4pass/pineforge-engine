@@ -1,0 +1,7 @@
+//@version=6
+strategy("EN132 risk", initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0, commission_value=0)
+if bar_index == 0
+    strategy.entry("E", strategy.short, qty=1)
+    strategy.exit("X", "E", profit=200)
+if bar_index == 4
+    strategy.close("E", immediately=true)

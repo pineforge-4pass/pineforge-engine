@@ -10,6 +10,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include "../engine_value_invalid.hpp"
 #include "../native_execution_consumer.hpp"
 #include <pineforge/compat/pine/trail_ticks.hpp>
 #include "../timezone.hpp"
@@ -11106,15 +11107,29 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     if (known_parent_level && finite_positive(entry_price) && finite_positive(tick)) {
         const bool long_side = physical.signed_units != 0.0 ? physical.signed_units > 0.0 : parent_long;
-        if (!finite_positive(limit_price) && finite_positive(profit_ticks))
+        if (!finite_positive(limit_price) && finite_positive(profit_ticks)) {
             limit_price = entry_price + (long_side ? 1.0 : -1.0) * profit_ticks * tick;
-        if (!finite_positive(stop_price) && finite_positive(loss_ticks))
+            if (!std::isfinite(limit_price)) {
+                engine_command_value_invalid_or_count("relative_price.level",
+                    EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
+            }
+        }
+        if (!finite_positive(stop_price) && finite_positive(loss_ticks)) {
             stop_price = entry_price - (long_side ? 1.0 : -1.0) * loss_ticks * tick;
+            if (!std::isfinite(stop_price)) {
+                engine_command_value_invalid_or_count("relative_price.level",
+                    EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
+            }
+        }
         if (std::isfinite(source_trail_points)) {
             const double trail_ticks = source_trail_points_ticks(source_trail_points, tick);
             trail_price = directional_tick(entry_price
                 + (long_side ? 1.0 : -1.0) * trail_ticks * tick,
                 tick, long_side);
+            if (std::isfinite(trail_ticks) && !std::isfinite(trail_price)) {
+                engine_command_value_invalid_or_count("relative_price.level",
+                    EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
+            }
         }
     }
     limit_price = source_level_on_price_grid(limit_price, tick);
@@ -13815,10 +13830,18 @@ void PineExecutionAdapter::materialize_relative_exits(
         if (finite_positive(value.profit_ticks)) {
             limit = directional_tick(event.resolved_price + side * value.profit_ticks * tick,
                                      tick, opening.is_long);
+            if (std::isfinite(event.resolved_price) && !std::isfinite(limit)) {
+                engine_command_value_invalid_or_count("relative_price.level",
+                    EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
+            }
         }
         if (finite_positive(value.loss_ticks)) {
             stop = directional_tick(event.resolved_price - side * value.loss_ticks * tick,
                                     tick, !opening.is_long);
+            if (std::isfinite(event.resolved_price) && !std::isfinite(stop)) {
+                engine_command_value_invalid_or_count("relative_price.level",
+                    EngineValueStage::relative_price, EngineValueReason::numeric_overflow);
+            }
         }
         // An omitted trail_offset is a one-shot activation leg in Pine.  Do
         // not synthesize a trailing distance from trail_points here; an
@@ -17283,6 +17306,10 @@ void PineExecutionAdapter::update_risk_state(double mark_price) {
         const double threshold = risk_.max_drawdown_percent
             ? risk_.observed_peak_equity * risk_.max_drawdown / 100.0
             : risk_.max_drawdown;
+        if (std::isfinite(risk_.max_drawdown) && !std::isfinite(threshold)) {
+            engine_command_value_invalid_or_count("risk.threshold",
+                EngineValueStage::risk, EngineValueReason::numeric_overflow);
+        }
         if (risk_.observed_max_drawdown >= threshold) {
             risk_.halted = true;
             return;
@@ -17294,7 +17321,7 @@ void PineExecutionAdapter::update_risk_state(double mark_price) {
     }
 }
 
-bool PineExecutionAdapter::intraday_loss_breached(double mark_price) const noexcept {
+bool PineExecutionAdapter::intraday_loss_breached(double mark_price) const {
     if (!(risk_.max_intraday_loss > 0.0) || intraday_loss_orders_blocked()
         || !std::isfinite(day_ledger_.intraday_start_equity)
         || !std::isfinite(mark_price)) {
@@ -17305,6 +17332,10 @@ bool PineExecutionAdapter::intraday_loss_breached(double mark_price) const noexc
     const double threshold = risk_.max_intraday_loss_percent
         ? day_ledger_.intraday_start_equity * risk_.max_intraday_loss / 100.0
         : risk_.max_intraday_loss;
+    if (std::isfinite(risk_.max_intraday_loss) && !std::isfinite(threshold)) {
+        engine_command_value_invalid_or_count("risk.threshold",
+            EngineValueStage::risk, EngineValueReason::numeric_overflow);
+    }
     if (!(threshold > 0.0) || !(loss > 0.0) || !std::isfinite(loss)) return false;
     const double epsilon = 1e-9 * std::max(1.0, std::abs(threshold));
     return loss + epsilon >= threshold;
@@ -24449,6 +24480,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         const double threshold = risk_.max_intraday_loss_percent
             ? day_ledger_.intraday_start_equity * risk_.max_intraday_loss / 100.0
             : risk_.max_intraday_loss;
+        if (std::isfinite(risk_.max_intraday_loss) && !std::isfinite(threshold)) {
+            engine_command_value_invalid_or_count("risk.threshold",
+                EngineValueStage::risk, EngineValueReason::numeric_overflow);
+        }
         const double epsilon = 1e-9 * std::max(1.0, std::abs(threshold));
         preclose_intraday_loss = std::isfinite(before) && threshold > 0.0
             && loss > 0.0 && loss + epsilon >= threshold;

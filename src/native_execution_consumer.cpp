@@ -1,5 +1,6 @@
 #include "native_execution_consumer.hpp"
 #include "engine_internal.hpp"
+#include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
@@ -4343,6 +4344,10 @@ void NativeExecutionConsumer::risk_evaluate(BacktestEngine& engine,
         risk_.has_peak = true;
     }
     // A run block is terminal: nothing further is measured or reported.
+    if (!risk_.run_block && !std::isfinite(equity)) {
+        engine_command_value_invalid_or_count("risk.equity",
+            EngineValueStage::risk, EngineValueReason::nonfinite);
+    }
     if (risk_.run_block || !std::isfinite(equity)) return;
     const bool day_blocked = risk_.day_block.has_value() && risk_.has_day
         && risk_.day_ordinal == risk_.day_block_day;
@@ -4352,6 +4357,11 @@ void NativeExecutionConsumer::risk_evaluate(BacktestEngine& engine,
         const double limit = risk->max_drawdown->percent
             ? risk_.peak_equity * risk->max_drawdown->value / 100.0
             : risk->max_drawdown->value;
+        if (std::isfinite(risk->max_drawdown->value) && !std::isfinite(limit)) {
+            engine_command_value_invalid_or_count("risk.threshold", EngineValueStage::risk,
+                std::isfinite(risk_.peak_equity) ? EngineValueReason::numeric_overflow
+                                               : EngineValueReason::nonfinite);
+        }
         const double observed = risk_.peak_equity - equity;
         if (std::isfinite(limit) && limit > 0.0 && observed >= limit) {
             risk_fire(engine, native_order::RiskLimitKind::MaxDrawdown, limit, observed,
@@ -4363,6 +4373,11 @@ void NativeExecutionConsumer::risk_evaluate(BacktestEngine& engine,
         const double limit = risk->max_intraday_loss->percent
             ? risk_.day_open_equity * risk->max_intraday_loss->value / 100.0
             : risk->max_intraday_loss->value;
+        if (std::isfinite(risk->max_intraday_loss->value) && !std::isfinite(limit)) {
+            engine_command_value_invalid_or_count("risk.threshold", EngineValueStage::risk,
+                std::isfinite(risk_.day_open_equity) ? EngineValueReason::numeric_overflow
+                                                   : EngineValueReason::nonfinite);
+        }
         const double observed = risk_.day_open_equity - equity;
         if (std::isfinite(limit) && limit > 0.0 && observed >= limit) {
             risk_fire(engine, native_order::RiskLimitKind::MaxIntradayLoss, limit, observed,

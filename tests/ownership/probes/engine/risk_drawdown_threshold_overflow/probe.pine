@@ -1,0 +1,3 @@
+//@version=6
+strategy("EN132 risk", initial_capital=8.98846567431158e307, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=0, margin_short=0, commission_value=0)
+strategy.risk.max_drawdown(50, strategy.percent_of_equity)

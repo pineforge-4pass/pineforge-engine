@@ -584,6 +584,11 @@ protected:
         return adapter_.chart_day_key(timestamp_ms);
     }
     std::uint64_t fixture_applied_receipt_count() const;
+#ifdef PINEFORGE_VALUE_INVALID_FIXTURES
+    void fixture_value_invalid_drawdown_limit(double value, bool percent) noexcept {
+        adapter_.fixture_value_invalid_drawdown_limit(value, percent);
+    }
+#endif
     bool fixture_cap_due_pending() const noexcept {
         return adapter_.cap.due_cause().has_value();
     }

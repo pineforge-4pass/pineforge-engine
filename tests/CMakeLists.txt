@@ -6,6 +6,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 set(TEST_SOURCES
+    test_value_invalid_relative_risk
+    test_value_invalid_relative_risk_source
     # R4-D L4a native-route behavioral twins.  These retain the legacy
     # oracle literals while driving the switched host only through its public
     # source commands and projections.
@@ -3674,6 +3676,11 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+if(TARGET test_value_invalid_relative_risk_source)
+    target_compile_definitions(test_value_invalid_relative_risk_source PRIVATE
+        PINEFORGE_VALUE_INVALID_FIXTURES)
+endif()
 
 # The C bridge test also links the shared window-plan helper, whose bridge
 # (src/selected_window_plan_c.cpp) is not in the kernel archive. The loop above
