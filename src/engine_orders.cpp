@@ -195,6 +195,10 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     return trade;
 }
 
+// Settlement SAFETY GUARD (an invariant), not Pine parity: a closed or marked
+// row whose money, price, quantity or excursion figure is not finite must never
+// be committed or presented. Generic over the kernel's own Trade row; every
+// settlement or close entry point calls it (the census is in the EN-132 notes).
 bool internal::closed_row_all_finite(const Trade& trade) noexcept {
     return std::isfinite(trade.entry_price)
         && std::isfinite(trade.exit_price)
