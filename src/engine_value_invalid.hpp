@@ -9,6 +9,7 @@
 
 #include <pineforge/run_failure.hpp>
 
+#include <cstdio>
 #include <stdexcept>
 
 namespace pineforge {
@@ -51,6 +52,23 @@ inline const char* engine_value_reason_name(EngineValueReason reason) noexcept {
                        {"stage", engine_value_stage_name(stage)},
                        {"reason", engine_value_reason_name(reason)}},
         "the engine derived an invalid execution value");
+}
+
+/// The call-site form every G producer uses, so one build can COUNT instead of
+/// fail. Normal build: throws engine_command_value_invalid and never returns.
+/// Counting ("tripwire") build, compiled with -DPINEFORGE_VALUE_TRIPWIRE: writes
+/// one line `EN132_TRIPWIRE engine <field> <stage> <reason>` to stderr and
+/// RETURNS, so the caller's code that follows runs exactly as it ran before the
+/// producer existed (the old silent branch). Call sites therefore keep their old
+/// branch after the call; a producer that throws unconditionally is wrong.
+inline void engine_command_value_invalid_or_count(
+        const char* field, EngineValueStage stage, EngineValueReason reason) {
+#ifdef PINEFORGE_VALUE_TRIPWIRE
+    std::fprintf(stderr, "EN132_TRIPWIRE engine %s %s %s\n", field,
+                 engine_value_stage_name(stage), engine_value_reason_name(reason));
+#else
+    throw_engine_command_value_invalid(field, stage, reason);
+#endif
 }
 
 }  // namespace pineforge
