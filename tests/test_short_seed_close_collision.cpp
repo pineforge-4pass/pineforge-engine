@@ -1,5 +1,7 @@
 /*
- * Regression coverage for the raw-TV SHORT-seed default-FIFO close collision.
+ * Regression coverage for the SHORT-seed default-FIFO close collision.
+ * Pinned against TradingView behaviour (recorded tapes are kept outside this
+ * repository). All bars below are hand-designed synthetic data.
  */
 
 #include <cmath>
@@ -184,7 +186,7 @@ void run_source_order_chain(bool source_long) {
     CHECK(probe.queued_ids() == expected_ids);
     CHECK(probe.queued_types() == expected_types);
     if (!source_long) {
-        // Authoritative SHORT-seed tape: the ordinary broker order is
+        // SHORT-seed rule: the ordinary broker order is
         // Long -> __close__Short -> Short. The middle object materializes a
         // second LONG lot; final Short closes both LONG lots and leaves flat.
         CHECK(probe.final_side() == PositionSide::FLAT);
@@ -237,10 +239,8 @@ void run_source_order_chain(bool source_long) {
             CHECK(std::fabs(close_short_long.qty - 1.0) < 1e-9);
         }
     } else {
-        // Long-seed mirror, pinned by the round-8 family-S tape
-        // famS-dbl-long-mirror-closefirst (CME_MINI:ES1! 15m, 115/115 cycles;
-        // ledger note log-20260905t143024z-76025577): the reversal Short is
-        // frozen at 2, the over-cap Long is KEPT because an opposite market is
+        // Long-seed mirror: the reversal Short is frozen at 2,
+        // the over-cap Long is KEPT because an opposite market is
         // pending and buys its frozen 2 while still long (long 3), close(Short)
         // places nothing, close(Long) is sized to the seed lot. Buys fill first
         // (Long +2), then the sells in placement order: Short -2 closes the seed
@@ -401,14 +401,12 @@ void run_mismatched_reentry_qty_fail_closed(bool source_long) {
     probe.run(bars, 4);
 
     CHECK(probe.queued_count() == 3);
-    // round 8 family S (famS-dbl-short-q1-entry2, 115/115 cycles): the
-    // held-side re-entry with qty 2 is frozen at own 2 + the opposite pending
+    // The held-side re-entry with qty 2 is frozen at own 2 + the opposite pending
     // open leg 1 = 3; close(held) is sized to the seed lot (1) and fills as
     // the artifact lot when its side is gone. Short seed: Long +2 (long 1),
     // artifact +1 (long 2), Short -3 closes both and opens 1 -> SHORT 1, three
-    // rows. Long seed (the mirror, model-derived from the mirror-closefirst
-    // tape): Long +3 adds while long (long 4), Short -2 (long 2), close(Long)
-    // -1 -> LONG 1, three rows.
+    // rows. Long seed (the symmetric construction): Long +3 adds while long
+    // (long 4), Short -2 leaves long 2, close(Long) -1 leaves LONG 1, three rows.
     CHECK(probe.final_side() ==
           (source_long ? PositionSide::LONG : PositionSide::SHORT));
     CHECK(std::fabs(std::fabs(probe.final_qty()) - 1.0) < 1e-9);
@@ -509,14 +507,12 @@ void run_projected_final_admission_fail_closed() {
     };
     probe.run(bars, 4);
 
-    // round 8 family S (famS-adm-es-1e6 / famS-adm-nq-1e6): TradingView admits
-    // the kept over-cap Short at PLACEMENT on held + own + the opposite pending
-    // open leg — 3 + 3 + 3 = 9 lots = $900 <= $1,000 — and never re-costs it at
-    // the fill (the projected fill-time form, $900 against $400 of free funds
-    // after the artifact lot, is exactly what the ES tape refutes: 3 x 5,627 x
-    // 50 = $844k fills on $1e6 with the artifact open). So the whole
-    // transaction executes: Long +6 (long 3), artifact +3 (long 6), Short -6
-    // closes both -> FLAT, three rows.
+    // Placement admits the kept over-cap Short using held + own + opposite
+    // pending open leg: (3 + 3 + 3) * synthetic price 100 = 900 <= 1000.
+    // After the artifact opens, free funds are 1000 - 6 * 100 = 400.
+    // Re-costing 900 at fill would wrongly reject an admitted transaction.
+    // Long +6 reverses to long 3, artifact +3 makes long 6, Short -6 closes
+    // both lots: FLAT, three rows. No open materialized lot may remain.
     CHECK(probe.final_side() == PositionSide::FLAT);
     CHECK(std::fabs(probe.final_qty()) < 1e-9);
     CHECK(probe.trade_count() == 3);
@@ -613,7 +609,7 @@ void run_internal_close_id_collision_fail_closed() {
     // round 8 family S: the transaction model keys on the target id ("Short")
     // and the pending same-id entry, not on the synthesized close id, so a
     // user entry occupying the "__close__Short" namespace is just a long id
-    // string to the broker — the book is famS-dbl-short-full's: FLAT, three
+    // string to the broker — the constructed book finishes FLAT, with three
     // rows (the user's long lot and the artifact lot both carry that string as
     // entry_id, which is what TradingView's list would show too).
     CHECK(probe.final_side() == PositionSide::FLAT);
@@ -753,9 +749,9 @@ void run_gate_control(GateControl control) {
     // (PendingOrder::sbmt_member) does not need the kernel's exact-object
     // provenance. A placement-rejected extra call leaves no order, a same-id
     // re-issue replaces its predecessor, and a cancelled sibling is gone — the
-    // surviving book is the tape's Long / Short / close(Short) and TradingView
-    // fills the artifact lot (famS-dbl-short-full). The kernel's other
-    // controls stay outside the model's scope and keep the ordinary result.
+    // surviving book is Long / Short / close(Short), which must fill the
+    // artifact lot. The kernel's other controls stay outside the model's scope
+    // and keep the ordinary result.
     const bool artifact_expected =
         control == GateControl::RejectedExtraCall
         || control == GateControl::SameIdReplacement
