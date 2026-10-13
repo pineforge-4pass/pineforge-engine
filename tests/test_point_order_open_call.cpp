@@ -179,8 +179,9 @@ int main() {
     // 3*199.98*0.0005 = 0.29997. At the signal close, equity =
     // 600.1 - 0.29997 - 3*0.02 = 599.74003 against margin 600:
     // q_restore = 0.25997/200 < 0.01, hence the one-unit queued call.
-    // At the gap, q_restore = (603 - 597.04003)/201 = 0.02965...,
-    // floor-to-0.01 then 4x = 0.08 <= the queued one unit: no re-sizing.
+    // At the gap, equity = 600.1 - 0.29997 - 3*1.02 = 596.74003 and
+    // q_restore = (603 - 596.74003)/201 = 0.03114...,
+    // floor-to-0.01 then 4x = 0.12 <= the queued one unit: no re-sizing.
     // Both gap exits buy at 201 + 2*0.01 = 201.02.
     const Scenario call_sized_at_close{"close-sized call, then the gapped stop",
         "close-call", 0.01, 0.01, 600.1, false, 3.0, 0.05, 2, true,

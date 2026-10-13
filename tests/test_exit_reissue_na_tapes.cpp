@@ -136,7 +136,7 @@ void show(const char* tag, const std::vector<Row>& rows) {
 }  // namespace
 
 int main() {
-    std::printf("-- fran-x1-exit-reissue-na-limit\n");
+    std::printf("-- exit-reissue-na-limit\n");
     const std::vector<Bar> bars = feed();
     const std::vector<Row> tape = tape_trades();
     ReissueNaHost host;
