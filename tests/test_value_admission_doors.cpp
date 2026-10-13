@@ -154,6 +154,9 @@ void put_number(Raw& raw, Arg arg, double number) {
 
 class DoorHost final : public source::PineStrategyHost {
 public:
+    // The host exposes this accessor to derived classes only; the rows read it
+    // from outside the class.
+    using source::PineStrategyHost::signed_position_size;
     DoorHost(Door door, Placement placement, const Raw& raw, int oca_type = 0)
         : door_(door), placement_(placement), raw_(raw), oca_type_(oca_type) {
         attach_pine_execution_adapter();
