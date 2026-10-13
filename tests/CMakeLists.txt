@@ -115,6 +115,7 @@ set(TEST_SOURCES
     test_native_selected_settlement
     test_native_settlement_projection
     test_native_settlement_callers
+    test_native_settlement_row_finite
     test_native_reversal_contract
     test_native_reverse_to
     test_source_exact_reversal
@@ -3674,6 +3675,22 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+# EN-134: each public C ABI fault run is also addressable for red-before and
+# mutant checks. The aggregate and these rows run in the kernel-only profile.
+foreach(_pf_settlement_row_case
+        closed_runup_nan closed_drawdown_nan
+        closed_runup_posinf closed_drawdown_posinf
+        closed_runup_neginf closed_drawdown_neginf
+        range_runup_nan range_drawdown_nan
+        range_runup_posinf range_drawdown_posinf
+        range_runup_neginf range_drawdown_neginf
+        closed_pnl_pct_overflow range_pnl_pct_overflow)
+    pineforge_add_twin_test(test_native_settlement_row_${_pf_settlement_row_case}
+        test_native_settlement_row_finite ${_pf_settlement_row_case})
+endforeach()
+pineforge_add_twin_test(test_native_settlement_row_controls
+    test_native_settlement_row_finite --controls)
 
 # The C bridge test also links the shared window-plan helper, whose bridge
 # (src/selected_window_plan_c.cpp) is not in the kernel archive. The loop above

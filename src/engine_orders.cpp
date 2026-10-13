@@ -195,6 +195,17 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     return trade;
 }
 
+bool internal::closed_row_all_finite(const Trade& trade) noexcept {
+    return std::isfinite(trade.entry_price)
+        && std::isfinite(trade.exit_price)
+        && std::isfinite(trade.qty)
+        && std::isfinite(trade.pnl)
+        && std::isfinite(trade.pnl_pct)
+        && std::isfinite(trade.max_runup)
+        && std::isfinite(trade.max_drawdown)
+        && std::isfinite(trade.commission);
+}
+
 
 
 
