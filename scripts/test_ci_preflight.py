@@ -624,7 +624,7 @@ class PreflightFailures(unittest.TestCase):
             ci.write_text(in_job(ci.read_text(), *mutation))
         result = subprocess.run(
             [sys.executable, str(tree / 'scripts/ci_preflight.py'), '--check-ci-workflow'],
-            cwd=tree, capture_output=True, text=True, timeout=120)
+            cwd=tree, capture_output=True, text=True)
         return result.returncode, result.stdout + result.stderr
 
     def test_the_preflight_stage_fails_a_slow_or_fork_reachable_runner(self):
@@ -830,6 +830,7 @@ class IndependentNativeProfiles(unittest.TestCase):
             ('--require-websocket', '--min-tests 1'),
             (NATIVE_EXCLUSION, "${{ inputs.exclude_slow && '--exclude-label slow' || '' }}"),
             ('id: verify\n', 'id: verify\n        if: success()\n'),
+            ('id: verify\n', 'id: verify\n        timeout-minutes: 360\n'),
             ('      - name: Stage and summarize diagnostics\n        if: always()',
              '      - name: Stage and summarize diagnostics\n        if: success()'),
             ('      - name: Retain CI diagnostics\n        if: always()',
@@ -879,8 +880,13 @@ class IndependentNativeProfiles(unittest.TestCase):
         for result in ('success', 'failure', 'cancelled', 'skipped', ''):
             with self.subTest(result=result):
                 ran = subprocess.run(['bash', '-e', '-c', script], capture_output=True,
-                                     env={**os.environ, 'PROFILES_RESULT': result}, timeout=10)
+                                     env={**os.environ, 'PROFILES_RESULT': result})
                 self.assertEqual(ran.returncode == 0, result == 'success', ran.stdout)
+                if result != 'success':
+                    self.assertEqual(ran.returncode, 1, ran.stdout)
+                # A cancelled profile job is how the platform stops a hang at the job maximum: the
+                # aggregate still fails, and the log names it as a HANG to re-run (EN-116).
+                self.assertEqual(b'HANG (re-run)' in ran.stdout, result == 'cancelled', ran.stdout)
 
     def test_three_profiles_share_the_platform_maximum_and_no_fail_fast(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
@@ -889,7 +895,8 @@ class IndependentNativeProfiles(unittest.TestCase):
         for profile in ('native', 'live-sanitizers', 'live-tsan'):
             self.assertIn(f'- profile: {profile}\n', job)
         # 360 minutes: GitHub's own job maximum, the only hang catcher left.
-        self.assertEqual(job.count('timeout-minutes: 360'), 2)
+        self.assertEqual(job.count('timeout-minutes: 360'), 1)
+        self.assertNotRegex(job, r'(?m)^        timeout-minutes:')
         for budget in ('matrix.job_minutes', 'matrix.verify_minutes',
                        '--test-timeout', '--ctest-timeout'):
             self.assertNotIn(budget, job)

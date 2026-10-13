@@ -45,7 +45,7 @@ def main():
                     "--feed", str(feed), "--ledger", str(ledger), "--mode", mode,
                     "--script-tf", timeframe, "--symbol", "BINANCE:ETHUSDT.P",
                     "--control-dir", str(controls), "--status-file", str(health)] + options,
-                    capture_output=True, text=True, timeout=30)
+                    capture_output=True, text=True)
                 assert result.returncode == 1 and declaration in result.stderr, (name, result)
                 assert not ledger.exists() and not list(root.glob(ledger.name + "*"))
                 assert not controls.exists() and not health.exists()

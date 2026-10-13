@@ -71,7 +71,7 @@ class OracleFixtureChecks(unittest.TestCase):
 
     def run_check(self, root: Path, script: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-B", str(root / "scripts" / script)],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True)
 
     def assert_fails(self, root: Path, script: str, needle: str) -> None:
         result = self.run_check(root, script)

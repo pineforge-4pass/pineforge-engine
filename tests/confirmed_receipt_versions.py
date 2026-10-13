@@ -18,7 +18,7 @@ def main():
             result = subprocess.run([runner, "run", "--strategy", library, "--warmup", str(warmup),
                                      "--feed", str(feed), "--ledger", str(ledger), "--mode", "bars",
                                      "--script-tf", "1", "--symbol", "BINANCE:ETHUSDT.P"],
-                                    capture_output=True, text=True, timeout=30)
+                                    capture_output=True, text=True)
             if name == "ordinary":
                 assert result.returncode == 0, (name, result)
                 assert ledger.exists()

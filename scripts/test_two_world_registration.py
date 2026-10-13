@@ -258,7 +258,7 @@ class TwoWorldControls(unittest.TestCase):
             env['PINEFORGE_PRIVATE_FIXTURES'] = '1'
         return subprocess.run(
             [PY, '-B', str(CHECK), '--root', str(self.root), *args],
-            capture_output=True, text=True, timeout=1800, env=env)
+            capture_output=True, text=True, env=env)
 
     # control 1: the drift guard names a recorded row whose record was removed
     @needs_overlay

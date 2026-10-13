@@ -194,22 +194,20 @@ class Scripted:
         self.profile = profile
         self.exits = exits
         self.calls: list[list[str]] = []
-        # Every invocation's bound, beside the calls fixture (which existing
-        # tests assert verbatim). None is the code's own default: no stage
-        # subprocess carries a time limit of ci_verify.py's (owner rule,
-        # 2026-10-12).
-        self.timeouts: list[tuple[list[str], int | None]] = []
+        # Include discovery calls when checking every profile's dispatch.
+        # The runner signature rejects any deadline keyword.
+        self.invocations: list[list[str]] = []
         self.cxx = shutil.which('c++') or '/usr/bin/c++'
         self.secret_seen_in_argv = False
 
-    def __call__(self, argv, *, extra_env=None, timeout=None, combine_stderr=True,
+    def __call__(self, argv, *, extra_env=None, combine_stderr=True,
                  stream_output=False) -> Completed:
         argv = list(map(str, argv))
         if argv[0] == 'setarch':
             if argv[2] != '-R':
                 raise AssertionError('ThreadSanitizer must disable ASLR only for its child')
             argv = argv[3:]
-        self.timeouts.append((argv, timeout))
+        self.invocations.append(argv)
         # Discovery invocations are asserted through Driver stages. Keep the
         # existing execution-call fixture stable for pre-existing tests.
         if argv[0] != 'ctest' or ('-N' not in argv and '--show-only=json-v1' not in argv):
@@ -222,10 +220,10 @@ class Scripted:
         if argv[0] == 'ctest' and '--help' in argv:
             if self.exits.get('junit_help') == 'absent':
                 return Completed(0, b'CTest help without junit\n', b'')
-            return default_runner(argv, extra_env=None, timeout=timeout,
+            return default_runner(argv, extra_env=None,
                                   combine_stderr=True, stream_output=False)
         if argv[0] in {'cmake', 'ctest', 'git'} and '--version' in argv:
-            return default_runner(argv, extra_env=None, timeout=timeout,
+            return default_runner(argv, extra_env=None,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'git' and 'submodule' in argv:
             if 'update' in argv:
@@ -293,7 +291,7 @@ class Scripted:
                                          b'tests/fixtures/native_cpp_abi/host-fixture/headers.tar\n',
                                          b'')
                     return Completed(int(self.exits[key]), b'', b'injected source-guard failure\n')
-            return default_runner(argv, extra_env=guard_environment(), timeout=timeout,
+            return default_runner(argv, extra_env=guard_environment(),
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'cmake' and '-S' in argv and 'smoke_consumer' in joined:
             return Completed(int(self.exits.get('smoke-configure', 0)), b'ok\n', b'')
@@ -318,7 +316,7 @@ class Scripted:
                 return Completed(0, json.dumps({'tests': [{'name': name}
                                   for name in sorted(names)]}).encode(), b'')
             if self.exits.get('actual_empty_ctest'):
-                return default_runner(argv, extra_env=extra_env, timeout=timeout,
+                return default_runner(argv, extra_env=extra_env,
                                       combine_stderr=combine_stderr, stream_output=False)
             registered = self.exits.get(
                 'ctest_registered',
@@ -1590,6 +1588,65 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertEqual('native-include-independence' in stage_names(summary), expected)
 
+    def test_slow_native_include_compile_passes_real_verifier_stage(self):
+        """Slowness must never fail a required check; takes about two minutes on purpose."""
+        from shlex import quote
+
+        compiler = shutil.which('c++') or shutil.which('clang++') or shutil.which('g++')
+        if not compiler:
+            self.skipTest('C++ compiler not found')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'slow.cpp'
+            output = root / 'slow.o'
+            depfile = root / 'slow.d'
+            source.write_text('int slow_native_include_probe() { return 0; }\n')
+            wrapper = root / 'slow-c++'
+            wrapper.write_text(
+                '#!/bin/sh\nset -e\nsleep 122\n'
+                f'exec {quote(compiler)} "$@"\n')
+            wrapper.chmod(0o755)
+            fixture = root / 'compile_fixture.py'
+            fixture.write_text(
+                'from pathlib import Path\n'
+                'import sys\n'
+                'sys.path.insert(0, sys.argv[1])\n'
+                'from check_native_include_independence import compile_object\n'
+                'root = Path(sys.argv[2])\n'
+                'result = compile_object(\n'
+                '    compiler=str(root / "slow-c++"), flags=["-std=c++17"],\n'
+                '    source=root / "slow.cpp", output=root / "slow.o",\n'
+                '    depfile=root / "slow.d", include_root=root,\n'
+                '    label="slow native include compile")\n'
+                'sys.stdout.write(result.stdout)\n'
+                'sys.stderr.write(result.stderr)\n'
+                'print(f"compile_object exit code: {result.returncode}", flush=True)\n'
+                'raise SystemExit(result.returncode)\n')
+            cfg = ci_verify.build_config(
+                ['release', '--build-dir', str(root / 'build')],
+                runner=default_runner, stream_output=False)
+            driver = ci_verify.Driver(cfg)
+            result = driver.invoke(
+                'native-include-independence',
+                [sys.executable, str(fixture), str(ROOT / 'scripts'), str(root)])
+            diagnostic = (result.stdout + result.stderr).decode('utf-8', 'replace')
+            summary = load_summary(cfg.build_dir)
+            stage = summary['stages'][0]
+            stage_log = (cfg.build_dir / stage['log']).read_text()
+            self.assertEqual(result.returncode, 0, diagnostic)
+            self.assertIn('compile_object exit code: 0', diagnostic, diagnostic)
+            self.assertTrue(output.is_file(), diagnostic)
+            self.assertTrue(depfile.is_file(), diagnostic)
+            self.assertEqual(stage['exitCode'], 0, diagnostic)
+            self.assertEqual(stage['status'], 'passed', diagnostic)
+            self.assertEqual(driver.failures, [], diagnostic)
+            self.assertEqual(summary['failures'], [], diagnostic)
+            for captured in (diagnostic, stage_log):
+                for forbidden in ('TIMEOUT', 'TimeoutExpired', 'timed out'):
+                    self.assertNotIn(forbidden, captured, diagnostic)
+                self.assertNotRegex(captured, r'(?i)\bdeadline\b|\btime\s*limit\b',
+                                    diagnostic)
+
     def test_kernel_asserts_the_kernel_archive_and_others_do_not(self):
         for profile, expected in (("kernel", True), ("release", False), ("native", False)):
             with self.subTest(profile=profile):
@@ -1740,9 +1797,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_no_profile_bounds_a_stage_by_default(self):
         # Owner rule, 2026-10-12: no time limit of ours may fail a run for
-        # slowness. Every stage invocation of every profile therefore passes
-        # no timeout at all (None through to subprocess.run), and the only
-        # per-test deadline CTest is given is the platform's own maximum.
+        # slowness. The scripted runner rejects deadline keywords, and CTest
+        # receives an explicit zero default per-test timeout.
         for profile, extra in (('sanitizers', []),
                                ('sanitizers', ['--exclude-label', 'slow']),
                                ('debug', []), ('debug', ['--exclude-label', 'slow']),
@@ -1751,13 +1807,12 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             with self.subTest(profile=profile, extra=extra):
                 code, summary, scripted, _ = self.run_profile(profile, extra=extra)
                 self.assertEqual(code, 0, summary['failures'])
-                self.assertTrue(scripted.timeouts)
-                self.assertEqual({timeout for _, timeout in scripted.timeouts}, {None})
-                self.assertIsNone(summary['testTimeoutSeconds'])
-                self.assertIsNone(summary['ctestTimeoutSeconds'])
-                ctest_argv = next(argv for argv, _ in scripted.timeouts
+                self.assertTrue(scripted.invocations)
+                self.assertNotIn('testTimeoutSeconds', summary)
+                self.assertNotIn('ctestTimeoutSeconds', summary)
+                ctest_argv = next(argv for argv in scripted.invocations
                                   if argv[0] == 'ctest' and '--output-on-failure' in argv)
-                self.assertEqual(ctest_argv[ctest_argv.index('--timeout') + 1], '21600')
+                self.assertEqual(ctest_argv[ctest_argv.index('--timeout') + 1], '0')
 
     def test_ctest_discovery_count_rejects_missing_or_ambiguous_summary(self):
         self.assertEqual(ci_verify.ctest_list_count(b'Test #1: a\nTotal Tests: 1\n'), 1)
@@ -3880,107 +3935,105 @@ class DiagnosticsCollection(unittest.TestCase):
 
 class CTestDeadlines(unittest.TestCase):
     def test_no_stage_deadline_never_refuses_a_row_however_slow(self):
-        # Without an explicit --ctest-timeout there is no stage deadline for a
-        # row to outlive, so a slow row is never refused a run (owner rule,
-        # 2026-10-12). This holds with and without an explicit --test-timeout.
-        inventory = {'tests': [
-            {'name': 'slow-default'},
-            {'name': 'explicit', 'properties': [{'name': 'TIMEOUT', 'value': 999999}]}]}
-        for flags in ([], ['--test-timeout', '900'], ['--exclude-label', 'slow']):
+        # Dispatch has no stage deadline or row-vs-stage inventory restriction.
+        for flags in ([], ['--exclude-label', 'slow']):
             with self.subTest(flags=flags):
-                cfg = ci_verify.build_config(['native', *flags])
-                self.assertIsNone(ci_verify.ctest_timeout(cfg))
-                self.assertEqual(ci_verify.ctest_deadline_errors(inventory, cfg), [])
+                runner = mock.Mock(return_value=Completed(0, b'row finished\n'))
+                cfg = ci_verify.build_config(['native', *flags], runner=runner,
+                                             stream_output=False)
+                with tempfile.TemporaryDirectory() as temporary:
+                    cfg.build_dir = Path(temporary)
+                    driver = ci_verify.Driver(cfg)
+                    argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False)
+                    result = driver.invoke('ctest', argv)
+                self.assertEqual(result.returncode, 0)
+                runner.assert_called_once_with(argv, extra_env=None,
+                                               combine_stderr=True, stream_output=False)
+                self.assertEqual([stage['name'] for stage in driver.stages], ['ctest'])
 
-    def test_explicit_stage_deadline_still_bounds_every_selected_row(self):
-        cfg = ci_verify.build_config(['native', '--test-timeout', '2100',
-                                      '--ctest-timeout', '2400'])
-        inventory = {'tests': [
-            {'name': 'slow-default'},
-            {'name': 'explicit', 'properties': [{'name': 'TIMEOUT', 'value': 900}]}]}
-        self.assertEqual(ci_verify.ctest_deadline_errors(inventory, cfg), [])
-        for seconds in (0, -1, 2400, 9999, float('nan'), float('inf')):
-            inventory['tests'][1]['properties'][0]['value'] = seconds
-            self.assertIn('explicit', ci_verify.ctest_deadline_errors(inventory, cfg)[0])
-        # A row without its own TIMEOUT rides the explicit default, which is
-        # itself checked against the explicit deadline.
-        inventory['tests'][0]['properties'] = [{'name': 'TIMEOUT', 'value': 2400}]
-        self.assertIn('slow-default', ci_verify.ctest_deadline_errors(inventory, cfg)[0])
+    def test_subprocess_dispatch_has_no_deadline_and_keeps_exit_status(self):
+        for code in (0, 8, -9):
+            with self.subTest(code=code), mock.patch('ci_verify.subprocess.run') as run:
+                run.return_value = subprocess.CompletedProcess(['ctest'], code,
+                                                              b'row output', b'diagnostic')
+                result = ci_verify.call_runner(default_runner, ['ctest'],
+                                              combine_stderr=False, stream_output=False)
+                run.assert_called_once()
+                self.assertNotIn('timeout', run.call_args.kwargs)
+                self.assertEqual(result, Completed(code, b'row output', b'diagnostic'))
 
     def test_commands_keep_every_profile_inventory_and_only_explicit_label_exclusion(self):
         for profile in ('native', 'live-sanitizers', 'live-tsan'):
-            cfg = ci_verify.build_config([profile, '--test-timeout', '900',
-                                          '--ctest-timeout', '1200'])
+            cfg = ci_verify.build_config([profile])
             argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=True)
             self.assertNotIn('-R', argv)
             self.assertNotIn('-E', argv)
             self.assertNotIn('-LE', argv)
             self.assertIn('--no-tests=error', argv)
-            self.assertEqual(argv[argv.index('--timeout') + 1], '900')
+            self.assertEqual(argv[argv.index('--timeout') + 1], '0')
         cfg = ci_verify.build_config(['native', '--exclude-label', 'slow'])
         argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=False)
         self.assertEqual(argv[argv.index('-LE') + 1], 'slow')
-        # No flag of ours: the per-test deadline is the platform job maximum
-        # itself, so no row can be cut off before the platform's own limit.
-        self.assertEqual(argv[argv.index('--timeout') + 1], '21600')
+        self.assertEqual(argv[argv.index('--timeout') + 1], '0')
 
-    def test_defaults_bound_nothing_and_explicit_deadlines_are_recorded(self):
+    def test_profiles_have_no_deadline_config_or_summary_fields(self):
         for profile in ('release', 'debug', 'kernel', 'native', 'sanitizers',
                         'live-sanitizers', 'live-tsan'):
             with self.subTest(profile=profile):
                 cfg = ci_verify.build_config([profile])
-                self.assertIsNone(cfg.test_timeout)
-                self.assertIsNone(ci_verify.ctest_timeout(cfg))
+                self.assertFalse(hasattr(cfg, 'test_timeout'))
+                self.assertFalse(hasattr(cfg, 'ctest_stage_timeout'))
                 summary = ci_verify.Driver(cfg).summary
-                self.assertIsNone(summary['testTimeoutSeconds'])
-                self.assertIsNone(summary['ctestTimeoutSeconds'])
-                cfg = ci_verify.build_config(
-                    [profile, '--test-timeout', '900', '--ctest-timeout', '1200'])
-                summary = ci_verify.Driver(cfg).summary
-                self.assertEqual(summary['testTimeoutSeconds'], 900)
-                self.assertEqual(summary['ctestTimeoutSeconds'], 1200)
-        # An exclusion label no longer changes any bound: nothing is bounded.
+                self.assertNotIn('testTimeoutSeconds', summary)
+                self.assertNotIn('ctestTimeoutSeconds', summary)
+                argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False)
+                self.assertEqual(argv[argv.index('--timeout') + 1], '0')
+        # An exclusion label does not introduce a deadline.
         cfg = ci_verify.build_config(['sanitizers', '--exclude-label', 'slow'])
-        self.assertIsNone(ci_verify.ctest_timeout(cfg))
+        argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False)
+        self.assertEqual(argv[argv.index('--timeout') + 1], '0')
 
-    def test_invalid_deadlines_are_refused(self):
+    def test_removed_deadline_options_are_unrecognised(self):
         for flags in (['--test-timeout', '0'], ['--test-timeout', '-1'],
                       ['--ctest-timeout', '0'], ['--ctest-timeout', '-1'],
+                      ['--test-timeout', '1800'], ['--ctest-timeout', '2400'],
                       ['--test-timeout', '900', '--ctest-timeout', '900'],
                       ['--test-timeout', '2401', '--ctest-timeout', '2400']):
-            with self.subTest(flags=flags), self.assertRaises(ConfigError):
+            with self.subTest(flags=flags), self.assertRaisesRegex(ConfigError, 'unrecognized arguments'):
                 ci_verify.build_config(['native', *flags])
-        # A row bound alone has no stage deadline to outlive: accepted, and
-        # the flag stays parseable as the documented opt-in.
-        cfg = ci_verify.build_config(['native', '--test-timeout', '1800'])
-        self.assertEqual(cfg.test_timeout, 1800)
-        self.assertIsNone(ci_verify.ctest_timeout(cfg))
 
     def test_real_ctest_names_the_hang_and_runs_the_remaining_row(self):
-        # Real CTest, with no engine build or mocked timer: a hanging child
-        # must be named, the other row must run, and supported JUnit must survive.
+        # A deliberate fixture TIMEOUT must still fail with exit 8, name its
+        # row, run the witness and retain supported JUnit. No verifier deadline.
         with tempfile.TemporaryDirectory() as temporary:
             build = Path(temporary)
             (build / 'CTestTestfile.cmake').write_text(
                 f'add_test(hanging "{shutil.which("cmake")}" -E sleep 20)\n'
+                'set_tests_properties(hanging PROPERTIES TIMEOUT 1)\n'
                 f'add_test(witness "{shutil.which("cmake")}" -E echo executed)\n')
             cfg = ci_verify.build_config(['native', '--build-dir', str(build),
-                                          '--test-timeout', '1', '--ctest-timeout', '10'])
+                                          '--min-tests', '2'])
             driver = ci_verify.Driver(cfg)
             junit = ci_verify.ctest_supports_junit(ci_verify.default_runner)
             argv = ci_verify.ctest_command(cfg, build, jobs=1, junit=junit)
-            result = driver.invoke('ctest', argv, timeout=ci_verify.ctest_timeout(cfg),
-                                   stream_output=False)
+            result = driver.invoke('ctest', argv, stream_output=False)
             driver.enforce_test_floor(result, registered=2, selected=2)
             self.assertEqual(result.returncode, 8, result.stdout)
             self.assertIn(b'hanging', result.stdout)
             self.assertIn(b'Timeout', result.stdout)
             self.assertIn(b'witness', result.stdout)
+            self.assertRegex(result.stdout, rb'witness\s+\.+\s+Passed')
             self.assertEqual(driver.summary['ctestRows'], 2)
             self.assertEqual(driver.summary['ctestSkipped'], [])
-            self.assertLess(driver.stages[0]['durationSeconds'], 10)
+            self.assertEqual(driver.stages[0]['status'], 'failed')
+            self.assertEqual(driver.stages[0]['exitCode'], 8)
+            self.assertIn('ctest', [failure['stage'] for failure in driver.failures])
             if junit:
                 self.assertTrue((build / 'ctest-junit.xml').is_file())
+                junit_text = (build / 'ctest-junit.xml').read_text()
+                self.assertIn('hanging', junit_text)
+                self.assertIn('witness', junit_text)
+                self.assertIn('<failure', junit_text)
             self.assertIn('Timeout', (build / 'ci-logs/ctest.log').read_text())
 
     def test_failed_and_skipped_labelled_rows_keep_their_counts(self):

@@ -71,8 +71,7 @@ def image_e2e(image, artifacts, harness=None):
                 if values is not None:
                     command += ["-e", f"PINEFORGE_{name}={json.dumps(values)}"]
             command.append(image)
-            process = subprocess.run(command, capture_output=True, text=True,
-                                     timeout=180)
+            process = subprocess.run(command, capture_output=True, text=True)
             (artifacts / f"{label}.command.json").write_text(json.dumps(command))
             (artifacts / f"{label}.stdout.json").write_text(process.stdout)
             (artifacts / f"{label}.stderr.log").write_text(process.stderr)
@@ -274,7 +273,7 @@ def review_e2e(image, artifacts, legacy_cpp):
                    "--mount", f"type=bind,src={compiled},dst=/proof",
                    "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs),
                    "-e", "PINEFORGE_OVERRIDES=" + json.dumps(settings), image]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        result = subprocess.run(command, capture_output=True, text=True)
         case = artifacts / label
         (case / "command.json").write_text(json.dumps(command))
         (case / "stdout.json").write_text(result.stdout)
@@ -400,7 +399,7 @@ def legacy_declaration_e2e(image, artifacts, escaped_cpp, enum_cpp):
                    "--mount", f"type=bind,src={source},dst=/in,readonly",
                    "--mount", f"type=bind,src={compiled},dst=/proof",
                    "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        result = subprocess.run(command, capture_output=True, text=True)
         (case / "command.json").write_text(json.dumps(command))
         (case / "stdout.json").write_text(result.stdout)
         (case / "stderr.log").write_text(result.stderr)
@@ -562,7 +561,7 @@ def class_matrix_e2e(image, artifacts, unicode_only=False):
                       "--mount", f"type=bind,src={Path(__file__).resolve()},dst=/probe.py,readonly",
                       "--entrypoint", "python3", image, "/probe.py",
                       "--producer-unicode" if unicode_only else "--producer-classes"]
-    oracle = subprocess.run(oracle_command, capture_output=True, text=True, timeout=120)
+    oracle = subprocess.run(oracle_command, capture_output=True, text=True)
     (artifacts / "producer.command.json").write_text(json.dumps(oracle_command))
     (artifacts / "producer.stdout.json").write_text(oracle.stdout)
     (artifacts / "producer.stderr.log").write_text(oracle.stderr)
@@ -589,7 +588,7 @@ def class_matrix_e2e(image, artifacts, unicode_only=False):
                    "--mount", f"type=bind,src={source},dst=/in,readonly",
                    "--mount", f"type=bind,src={compiled},dst=/proof",
                    "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        result = subprocess.run(command, capture_output=True, text=True)
         (case / "command.json").write_text(json.dumps(command))
         (case / "stdout.json").write_text(result.stdout)
         (case / "stderr.log").write_text(result.stderr)
@@ -657,7 +656,7 @@ def shadow_binding_e2e(image, artifacts, enum_cpp):
                    "--mount", f"type=bind,src={source},dst=/in,readonly",
                    "--mount", f"type=bind,src={compiled},dst=/proof",
                    "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        result = subprocess.run(command, capture_output=True, text=True)
         (case / "command.json").write_text(json.dumps(command))
         (case / "stdout.json").write_text(result.stdout)
         (case / "stderr.log").write_text(result.stderr)
@@ -671,7 +670,7 @@ def shadow_binding_e2e(image, artifacts, enum_cpp):
                    "--mount", f"type=bind,src={Path(__file__).resolve()},dst=/probe.py,readonly",
                    "--mount", f"type=bind,src={compiled},dst=/proof,readonly",
                    "--entrypoint", "python3", image, "/probe.py", "--native-receipt", "/proof/" + plugin.name]
-        observed = subprocess.run(observe, capture_output=True, text=True, timeout=60)
+        observed = subprocess.run(observe, capture_output=True, text=True)
         (case / "native.command.json").write_text(json.dumps(observe))
         (case / "native.stdout.json").write_text(observed.stdout)
         (case / "native.stderr.log").write_text(observed.stderr)
@@ -741,7 +740,7 @@ def allowlist_witness_e2e(image, artifacts):
         command = ["docker", "run", "--rm", "--network", "none",
                    "--mount", f"type=bind,src={source},dst=/in,readonly",
                    "-e", "PINEFORGE_TRANSPILE_ONLY=1", image]
-        emitted = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        emitted = subprocess.run(command, capture_output=True, text=True)
     (artifacts / "strategy.pine").write_text(ALLOWLIST_STRATEGY, encoding="utf-8")
     (artifacts / "transpile.command.json").write_text(json.dumps(command))
     (artifacts / "transpile.cpp").write_text(emitted.stdout, encoding="utf-8")
@@ -823,7 +822,7 @@ def allowlist_witness_e2e(image, artifacts):
                    "--mount", f"type=bind,src={cpp_dir},dst=/in,readonly",
                    "--mount", f"type=bind,src={compiled},dst=/proof",
                    "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs), image]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        result = subprocess.run(command, capture_output=True, text=True)
         (case / "command.json").write_text(json.dumps(command))
         (case / "stdout.json").write_text(result.stdout)
         (case / "stderr.log").write_text(result.stderr)
@@ -841,7 +840,7 @@ def allowlist_witness_e2e(image, artifacts):
                    "--mount", f"type=bind,src={compiled},dst=/proof,readonly",
                    "--entrypoint", "python3", image, "/probe.py", "--allowlist-native",
                    "/proof/" + plugin.name, json.dumps(inputs)]
-        observed = subprocess.run(observe, capture_output=True, text=True, timeout=60)
+        observed = subprocess.run(observe, capture_output=True, text=True)
         (case / "native.command.json").write_text(json.dumps(observe))
         (case / "native.stdout.json").write_text(observed.stdout)
         (case / "native.stderr.log").write_text(observed.stderr)
@@ -974,7 +973,7 @@ def producer_boundary_e2e(image, artifacts):
     (source / "strategy.pine").write_text(STRATEGY)
     command = ["docker", "run", "--rm", "--network", "none", "--mount",
                f"type=bind,src={source},dst=/in,readonly", "-e", "PINEFORGE_TRANSPILE_ONLY=1", image]
-    emitted = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    emitted = subprocess.run(command, capture_output=True, text=True)
     (artifacts / "transpile.command.json").write_text(json.dumps(command))
     (artifacts / "transpile.cpp").write_text(emitted.stdout)
     (artifacts / "transpile.stderr.log").write_text(emitted.stderr)
@@ -1023,7 +1022,7 @@ def producer_boundary_e2e(image, artifacts):
                    f"type=bind,src={inputs_dir},dst=/in,readonly", "--mount",
                    f"type=bind,src={compiled},dst=/proof", "-e", "PINEFORGE_INPUTS=" + json.dumps(inputs),
                    "-e", "PINEFORGE_OVERRIDES=" + json.dumps(overrides), image]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        result = subprocess.run(command, capture_output=True, text=True)
         for suffix, data in (("command.json", json.dumps(command)), ("stdout.json", result.stdout),
                              ("stderr.log", result.stderr), ("exit", str(result.returncode))):
             (case / suffix).write_text(data)

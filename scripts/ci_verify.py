@@ -704,13 +704,8 @@ WEBSOCKET_SKIP_ROW = 'test_native_live_websocket'
 #   EXCLUDED_REGISTERED_MIN 876/867/963 = the 861/852/948 registered at
 #     873b25da plus the fifteen, counted before -LE (-LE slow selects
 #     847/838/934).
-# Every CTest row runs under the platform's own maximum instead of a bound of
-# ours (owner rule, 2026-10-12: no time limit may fail a run for slowness --
-# a stage bound killed the hosted kernel-only job at 1800 s and a row bound
-# 3600 s collided with main's native-live stage deadline). 21600 s (6 h) is
-# GitHub's 360-minute job maximum, whose job limit is therefore the only hang
-# catcher; an explicit --test-timeout still wins.
-PLATFORM_JOB_MAX_SECONDS = 21600
+# The verifier supplies no stage or per-test deadline (owner rule,
+# 2026-10-12); the platform's job envelope is the only hang catcher.
 LIVE_SANITIZERS_MIN_TESTS = 12
 # Overlay-aware row floors. The private-fixture campaign splits the tree in
 # two: the private-fixture PR removes the private fixture data, and P1-B
@@ -852,15 +847,6 @@ def private_fixture_rows(source: Path) -> 'frozenset[str]':
     return frozenset(names)
 
 
-def ctest_timeout(cfg: 'VerifyConfig') -> int | None:
-    """The CTest stage's own bound: None unless --ctest-timeout pinned one.
-
-    By default no stage, row or profile carries a bound of ours, so a slow row
-    can never fail a run (owner rule, 2026-10-12).
-    """
-    return cfg.ctest_stage_timeout
-
-
 # CTest's closing summary: '100% tests passed out of N' when nothing failed,
 # '97% tests passed, 3 tests failed out of N' otherwise. N includes a skipped
 # row (counted as passed) and a row CTest could not start (counted as
@@ -996,12 +982,6 @@ class VerifyConfig:
     # True when --min-tests was given: the floor's own note keys on the table
     # having lowered the profile floor, never on a value that merely matches.
     min_tests_explicit: bool = False
-    # Opt-in CI bounds, None by default: no time limit may fail a run for
-    # slowness (owner rule, 2026-10-12). --test-timeout gives CTest a default
-    # per-test deadline and --ctest-timeout the stage's own; with neither flag
-    # no stage subprocess is bounded and every row runs to a verdict.
-    test_timeout: int | None = None
-    ctest_stage_timeout: int | None = None
 
 
 class Parser(argparse.ArgumentParser):
@@ -1022,9 +1002,9 @@ def default_build_dir(source: Path, profile: str) -> Path:
 
 
 def call_runner(runner: Runner, argv: list[str], *, extra_env: dict[str, str] | None = None,
-                timeout: int | None = None, combine_stderr: bool = True,
+                combine_stderr: bool = True,
                 stream_output: bool = False) -> Completed:
-    return runner(argv, extra_env=extra_env, timeout=timeout,
+    return runner(argv, extra_env=extra_env,
                   combine_stderr=combine_stderr, stream_output=stream_output)
 
 
@@ -1121,7 +1101,7 @@ def ctest_rows(output: bytes) -> CTestRows | None:
 def ctest_supports_junit(runner: Runner) -> bool:
     try:
         result = call_runner(runner, ['ctest', '--help'], stream_output=False)
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return False
     return '--output-junit' in (result.stdout + result.stderr).decode('utf-8', 'replace')
 
@@ -1216,12 +1196,6 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE')
-    parser.add_argument('--test-timeout', type=int, default=None,
-                        help='opt-in CTest default per-test deadline in seconds; no limit by '
-                             'default, and an explicit TIMEOUT property is preserved')
-    parser.add_argument('--ctest-timeout', type=int, default=None,
-                        help='opt-in CTest stage deadline in seconds; no limit by default, so '
-                             'only the platform job maximum stops a hung stage')
     parser.add_argument('--min-tests', type=int, default=None,
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
@@ -1242,17 +1216,6 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
                     which: Callable[[str], str | None] = shutil.which) -> VerifyConfig:
     if not JOBS_MIN <= args.jobs <= JOBS_MAX:
         raise ConfigError(f'--jobs must be {JOBS_MIN}..{JOBS_MAX}')
-    for name in ('test_timeout', 'ctest_timeout'):
-        value = getattr(args, name)
-        if value is not None and value < 1:
-            raise ConfigError(f'--{name.replace("_", "-")} must be at least 1 second')
-    # A refusal here needs BOTH explicit flags: a row bound only outlives the
-    # collecting CTest process when a stage deadline was pinned too. With no
-    # --ctest-timeout there is no deadline to outlive and no run is refused
-    # for a slow row (owner rule, 2026-10-12).
-    if (args.ctest_timeout is not None and args.test_timeout is not None
-            and args.test_timeout >= args.ctest_timeout):
-        raise ConfigError('--test-timeout must be shorter than the CTest stage deadline')
     if args.require_websocket and args.profile not in {'native', 'live-sanitizers', 'live-tsan'}:
         raise ConfigError('--require-websocket is only valid with the native or '
                           'live-sanitizers or live-tsan profile')
@@ -1297,23 +1260,15 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         min_tests=(args.min_tests if args.min_tests is not None else
                    profile_min_tests(PROFILE[args.profile], source)),
         min_tests_explicit=args.min_tests is not None,
-        test_timeout=args.test_timeout,
-        ctest_stage_timeout=args.ctest_timeout,
     )
 
 
 def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int, junit: bool) -> list[str]:
     argv = ['ctest', '--test-dir', str(test_dir), '--output-on-failure',
             '--no-tests=error', '--parallel', str(jobs)]
-    # Always pass a per-test deadline, and by default the platform's own
-    # maximum rather than a bound of ours: CTest's own default per-test
-    # timeout (1500 s: include(CTest)'s DART_TESTING_TIMEOUT, the figure the
-    # repository's comments used; this tree calls enable_testing() only, so
-    # the built-in default is not confirmed by a run here) must never decide a run,
-    # while a bound of ours must never fail a run for slowness (owner rule,
-    # 2026-10-12). An explicit --test-timeout still wins.
-    argv += ['--timeout', str(cfg.test_timeout if cfg.test_timeout is not None
-                              else PLATFORM_JOB_MAX_SECONDS)]
+    # Explicit zero requests no default per-test deadline; a row's own
+    # TIMEOUT property remains untouched.
+    argv += ['--timeout', '0']
     if cfg.exclude_label:
         argv += ['-LE', cfg.exclude_label]
     if junit:
@@ -1321,37 +1276,8 @@ def ctest_command(cfg: VerifyConfig, test_dir: Path, *, jobs: int, junit: bool) 
     return argv
 
 
-def ctest_deadline_errors(inventory: dict, cfg: VerifyConfig) -> list[str]:
-    """Name a row whose own timeout would outlive the collecting CTest process.
-
-    Only meaningful under an EXPLICIT stage deadline: without --ctest-timeout
-    no stage bound exists for a row to outlive, so no row, however slow, is
-    refused and this answers no error under the owner rule of 2026-10-12.
-    With one, every selected row's effective deadline -- its own TIMEOUT
-    property, else the --test-timeout default, else nothing to check -- must be
-    positive and shorter than that deadline.
-    """
-    stage_deadline = ctest_timeout(cfg)
-    if stage_deadline is None:
-        return []
-    errors = []
-    for test in inventory['tests']:
-        properties = {p['name']: p['value'] for p in test.get('properties', [])}
-        if cfg.exclude_label and any(re.search(cfg.exclude_label, label)
-                                     for label in properties.get('LABELS', [])):
-            continue
-        seconds = properties.get('TIMEOUT', cfg.test_timeout)
-        if seconds is None:
-            continue
-        seconds = float(seconds)
-        if not 0 < seconds < stage_deadline:
-            errors.append(f'{test["name"]}: TIMEOUT {seconds:g} must be positive and '
-                          f'less than stage deadline {stage_deadline}')
-    return errors
-
-
 def default_runner(argv: list[str], *, extra_env: dict[str, str] | None = None,
-                   timeout: int | None = None, combine_stderr: bool = True,
+                   combine_stderr: bool = True,
                    stream_output: bool = True) -> Completed:
     env = os.environ.copy()
     if extra_env:
@@ -1359,14 +1285,7 @@ def default_runner(argv: list[str], *, extra_env: dict[str, str] | None = None,
     stderr = subprocess.STDOUT if combine_stderr else subprocess.PIPE
     try:
         result = subprocess.run(
-            argv, stdout=subprocess.PIPE, stderr=stderr, env=env, timeout=timeout)
-    except subprocess.TimeoutExpired as error:
-        out = error.stdout or b''
-        err = b'' if combine_stderr else (error.stderr or b'')
-        if stream_output and out:
-            sys.stdout.buffer.write(out)
-            sys.stdout.buffer.flush()
-        return Completed(124, out, err)
+            argv, stdout=subprocess.PIPE, stderr=stderr, env=env)
     except OSError as error:
         return Completed(127, b'', str(error).encode())
     if stream_output and result.stdout:
@@ -1667,8 +1586,6 @@ class Driver:
             'curlDir': str(cfg.curl_dir) if cfg.curl_dir else None,
             'minTests': cfg.min_tests,
             'excludeLabel': cfg.exclude_label,
-            'testTimeoutSeconds': cfg.test_timeout,
-            'ctestTimeoutSeconds': ctest_timeout(cfg),
             'ctestRegistered': None,
             'ctestSelected': None,
             # Rows that ran, the floor's count; CTest's own count; the rows
@@ -1709,7 +1626,7 @@ class Driver:
         self.summary_path.write_text(json.dumps(self.summary, indent=2, sort_keys=True) + '\n')
 
     def invoke(self, name: str, argv: list[str], *, extra_env: dict[str, str] | None = None,
-               timeout: int | None = None, combine_stderr: bool = True,
+               combine_stderr: bool = True,
                stream_output: bool | None = None, accept_skip: bool = False) -> Completed:
         if self.cfg.profile.thread_sanitizers and name in {'ctest', 'native-help', 'require-websocket'}:
             argv = ['setarch', os.uname().machine, '-R', *argv]
@@ -1732,7 +1649,7 @@ class Driver:
             print(f'ci_verify: {name}: {shlex.join(map(str, argv))}', flush=True)
         try:
             result = call_runner(
-                self.cfg.runner, list(map(str, argv)), extra_env=extra_env, timeout=timeout,
+                self.cfg.runner, list(map(str, argv)), extra_env=extra_env,
                 combine_stderr=combine_stderr, stream_output=stream)
         except Exception as error:
             result = Completed(1, b'', str(error).encode())
@@ -2231,29 +2148,9 @@ class Driver:
         if registered is None or selected is None:
             self.fail_stage('ctest-discovery', 'could not read registered/selected CTest counts')
         self.write_summary()
-        if self.cfg.ctest_stage_timeout is not None:
-            # Only an explicit stage deadline can be outlived: with none, the
-            # stage is skipped and no slow row is refused (owner rule).
-            deadline_inventory = self.invoke(
-                'ctest-deadline-inventory',
-                ['ctest', '--test-dir', str(test_dir), '--show-only=json-v1'],
-                stream_output=False)
-            try:
-                if deadline_inventory.returncode != 0:
-                    raise ValueError('CTest deadline discovery failed')
-                errors = ctest_deadline_errors(json.loads(deadline_inventory.stdout), self.cfg)
-                if errors:
-                    raise ValueError('\n'.join(errors))
-            except (KeyError, TypeError, ValueError) as error:
-                self.fail_stage('ctest-deadlines', str(error))
-                return self.finish('failed', 1)
-            self.pass_stage('ctest-deadlines',
-                            f'every selected row shorter than the explicit stage deadline '
-                            f'{ctest_timeout(self.cfg)}s')
         ctest = ctest_command(self.cfg, test_dir, jobs=ctest_jobs,
                               junit=ctest_supports_junit(self.cfg.runner))
-        ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env(),
-                          timeout=ctest_timeout(self.cfg))
+        ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env())
         registered_names = (ctest_list_names(all_rows.stdout + all_rows.stderr)
                             if all_rows.returncode == 0 else None)
         self.enforce_test_floor(ran, registered=registered, selected=selected,

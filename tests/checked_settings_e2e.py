@@ -41,7 +41,7 @@ try:
                 ['--override', 'default_qty_type=typo'], ['--override', 'slippage=Inf']]):
             ledger = root / f'bad-{index}.sqlite'
             result = subprocess.run(base + ['--strategy', checked_library, '--ledger', str(ledger)] + setting,
-                                    capture_output=True, text=True, timeout=20)
+                                    capture_output=True, text=True)
             assert result.returncode == 1, result
             assert 'refused' in result.stderr, result.stderr
             assert not ledger.exists(), result.stderr
@@ -50,7 +50,7 @@ try:
         settings = ['--input', 'Length=4', '--input', 'Enabled=false',
                     '--override', 'default_qty_value=200', '--override', 'default_qty_type=cash']
         command = base + ['--strategy', checked_library, '--ledger', str(ledger)] + settings
-        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(command, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         summary = json.loads(result.stdout)
         receipt = summary['effective_settings']
@@ -65,23 +65,23 @@ try:
         assert overrides['default_qty_type']['effective_value'] == 'cash'
         with sqlite3.connect(ledger) as database:
             assert database.execute('SELECT identity FROM metadata').fetchone()[0] == summary['deployment']
-        replay = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        replay = subprocess.run(command, capture_output=True, text=True)
         assert replay.returncode == 0 and json.loads(replay.stdout)['deployment'] == summary['deployment'], replay.stderr
         changed_ledger = root / 'changed.sqlite'
         changed = subprocess.run(base + ['--strategy', checked_library, '--ledger', str(changed_ledger)]
                                  + ['Length=5.0' if argument == 'Length=4' else argument for argument in settings],
-                                 capture_output=True, text=True, timeout=20)
+                                 capture_output=True, text=True)
         assert changed.returncode == 0, changed.stderr
         changed_summary = json.loads(changed.stdout)
         assert changed_summary['deployment'] != summary['deployment']
         assert {entry['name']: entry for entry in changed_summary['effective_settings']['inputs']}['Length']['effective_value'] == '5'
         incompatible = subprocess.run(base + ['--strategy', checked_library, '--ledger', str(ledger)]
                                       + ['Length=5.0' if argument == 'Length=4' else argument for argument in settings],
-                                      capture_output=True, text=True, timeout=20)
+                                      capture_output=True, text=True)
         assert incompatible.returncode == 1, incompatible.stderr
         old_ledger = root / 'legacy.sqlite'
         old = subprocess.run(base + ['--strategy', legacy_library, '--ledger', str(old_ledger),
-                                    '--input', 'unknown=7'], capture_output=True, text=True, timeout=20)
+                                    '--input', 'unknown=7'], capture_output=True, text=True)
         assert old.returncode == 0, old.stderr
         assert 'warning' in old.stderr and 'legacy settings' in old.stderr
         assert json.loads(old.stdout)['effective_settings'] is None

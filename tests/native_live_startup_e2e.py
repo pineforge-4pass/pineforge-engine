@@ -68,7 +68,7 @@ def warmup_csv(path, rows):
 
 
 def invoke(args, success=True):
-    p = subprocess.run(args, capture_output=True, text=True, timeout=25)
+    p = subprocess.run(args, capture_output=True, text=True)
     if success:
         assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
         return json.loads(p.stdout) if p.stdout.strip().startswith('{') else p

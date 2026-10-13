@@ -109,7 +109,6 @@ jobs:
 
       - name: Verify (${{ matrix.profile }})
         id: verify
-        timeout-minutes: 360
         run: python3 scripts/ci_verify.py ${{ matrix.profile }} --build-dir ${{ matrix.build_dir }} --jobs "$(getconf _NPROCESSORS_ONLN)" --generator Ninja --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" --ccache ${{ matrix.profile == 'native' && '--require-websocket' || '' }} ${{ matrix.profile == 'native' && inputs.exclude_slow && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
@@ -154,4 +153,7 @@ jobs:
           PROFILES_RESULT: ${{ needs.native-live.result }}
         run: |
           printf 'native profiles: %s\n' "$PROFILES_RESULT"
+          if test "$PROFILES_RESULT" = cancelled; then
+            printf 'HANG (re-run): a native profile job was cancelled, which is how the platform stops a job at its 360-minute maximum\n'
+          fi
           test "$PROFILES_RESULT" = success

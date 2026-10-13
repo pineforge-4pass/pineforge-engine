@@ -59,7 +59,11 @@ class TimedProcess:
             destination.write(json.dumps(cost, indent=2, allow_nan=False) + "\n")
         return self.returncode
 
-    def wait(self, timeout):
+    def wait(self, timeout=None):
+        if timeout is None:
+            while self.poll() is None:
+                time.sleep(0.01)
+            return self.returncode
         deadline = time.monotonic() + timeout
         while self.poll() is None:
             remaining = deadline - time.monotonic()

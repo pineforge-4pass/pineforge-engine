@@ -74,7 +74,7 @@ std::string read_exact(int socket, std::size_t length) {
     std::size_t received = 0;
     while (received < length) {
         pollfd waiting {socket, POLLIN, 0};
-        if (poll(&waiting, 1, 3000) <= 0) throw std::runtime_error("WS test receive timeout");
+        if (poll(&waiting, 1, -1) <= 0) throw std::runtime_error("WS test receive poll failed");
         const auto n = recv(socket, result.data() + received, length - received, 0);
         if (n <= 0) throw std::runtime_error("WS test receive failed");
         received += static_cast<std::size_t>(n);
@@ -145,7 +145,7 @@ private:
         int client = -1;
         try {
             pollfd waiting {listener_, POLLIN, 0};
-            if (poll(&waiting, 1, 3000) <= 0) throw std::runtime_error("WS test accept timeout");
+            if (poll(&waiting, 1, -1) <= 0) throw std::runtime_error("WS test accept poll failed");
             client = accept(listener_, nullptr, nullptr);
             if (client < 0) throw std::runtime_error("WS test accept failed");
 #ifdef SO_NOSIGPIPE

@@ -64,16 +64,14 @@ class Receiver:
                             newer_actions_arrived.set()
                     if initial_barrier is not None:
                         try:
-                            initial_barrier.wait(timeout=30)
+                            initial_barrier.wait()
                         except threading.BrokenBarrierError:
                             self.send_error(503, 'delivery concurrency barrier broken')
                             return
                     if mode == 'reset-first' and action['sequence'] == 1:
-                        if not newer_arrived.wait(timeout=20):
-                            raise AssertionError('newer action did not reach the receiver')
+                        newer_arrived.wait()
                     if mode == 'retry-hold' and action['sequence'] == 1 and sequence_receipts > 1:
-                        if not newer_actions_arrived.wait(timeout=20):
-                            raise AssertionError('newer actions were parked behind a retry')
+                        newer_actions_arrived.wait()
                     if (mode == 'reset' or (mode == 'keepalive-replay' and self.request_count > 1) or
                             (mode == 'reset-first' and action['sequence'] == 1) or
                             (mode == 'retry-hold' and action['sequence'] == 1 and sequence_receipts == 1)):
@@ -125,22 +123,27 @@ class Receiver:
         self.newer_actions_arrived.set()
         self.server.shutdown()
         self.server.server_close()
-        self.thread.join(timeout=30)
+        self.thread.join()
         assert not self.thread.is_alive()
 
 
-def wait_for(predicate, timeout=30):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+def wait_for(predicate):
+    while True:
         if predicate():
             return
         time.sleep(0.01)
-    raise AssertionError('timed out waiting for local test condition')
 
 
 def query(ledger, sql):
-    with sqlite3.connect(ledger, timeout=30) as database:
-        return database.execute(sql).fetchall()
+    while True:
+        try:
+            # Disable SQLite's finite busy wait; poll only lock contention.
+            with sqlite3.connect(ledger, timeout=0) as database:
+                return database.execute(sql).fetchall()
+        except sqlite3.OperationalError as error:
+            if str(error) != 'database is locked':
+                raise
+        time.sleep(0.01)
 
 
 def committed_actions(ledger):
@@ -174,7 +177,7 @@ def invoke(arguments, expected=0, env=None, auto_deployment=True):
         ledger = arguments[arguments.index('--ledger') + 1]
         arguments = arguments + ['--deployment', query(ledger, 'SELECT identity FROM metadata')[0][0]]
     process = subprocess.run([runner] + arguments, capture_output=True, text=True,
-                             env=environment if env is None else env, timeout=120)
+                             env=environment if env is None else env)
     assert process.returncode == expected, (arguments, process.returncode, process.stdout, process.stderr)
     for secret in secrets.values():
         assert secret not in process.stdout + process.stderr
@@ -221,12 +224,12 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
         reader = threading.Thread(target=lambda: [streamed.put(line.rstrip('\n')) for line in follower.stdout], daemon=True)
         reader.start()
         run(journal)
-        observed = [streamed.get(timeout=30) for _ in range(4)]
+        observed = [streamed.get() for _ in range(4)]
         expected_payloads = [row[0] for row in query(journal, 'SELECT payload FROM events ORDER BY ordinal')]
         assert observed == expected_payloads
         follower.send_signal(signal.SIGTERM)
-        follower.wait(timeout=30)
-        reader.join(timeout=30)
+        follower.wait()
+        reader.join()
         assert not reader.is_alive()
         assert follower.returncode == 130 and not follower.stderr.read()
         exported = invoke(['actions', '--ledger', str(journal), '--after', '2'])
@@ -446,7 +449,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             wait_for(first_attempt_failed)
             wait_for(lambda: sum(row['action']['sequence'] == 1 for row in main_receiver.rows) == 2)
             retry_process.stdin.write(''.join(feed_lines[prefix_count:])); retry_process.stdin.flush()
-            stdout, stderr = retry_process.communicate(timeout=90)
+            stdout, stderr = retry_process.communicate()
             assert retry_process.returncode == 0, stderr
             assert not main_receiver.errors, main_receiver.errors
             assert json.loads(stdout)['webhooks_delivered'] == 4, stdout
@@ -457,7 +460,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             assert query(retry_ledger, 'SELECT count(*) FROM inputs')[0][0] == len(events)
         finally:
             if retry_process.poll() is None:
-                retry_process.kill(); retry_process.communicate(timeout=30)
+                retry_process.kill(); retry_process.communicate()
         # This row covers newer starts while a transport retry is held in flight. A worker that only sleeps through its
         # backoff would not be told apart from one that does not: that case stays untested.
         print('PASS newer actions start after a transport failure and after its retry starts, before that held retry completes; pure sleeping-backoff delay untested', flush=True)
@@ -544,11 +547,11 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             assert query(crash_ledger, "SELECT count(*) FROM delivery_log WHERE phase='started'")[0][0] == 1
             before_crash = stored(crash_ledger)
             process.kill()
-            process.communicate(timeout=30)
+            process.communicate()
             assert process.returncode == -signal.SIGKILL
         finally:
             if process.poll() is None:
-                process.kill(); process.wait(timeout=30)
+                process.kill(); process.wait()
         main_receiver.clear(); main_receiver.mode = 'ok'
         run(crash_ledger, crash_routes)
         assert [row['action']['sequence'] for row in main_receiver.rows] == [1, 2, 3, 4]
@@ -588,12 +591,10 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             try:
                 fatal.stdin.write(feed.read_text()); fatal.stdin.flush()
                 wait_for(lambda: committed_actions(fatal_ledger))
-                started = time.monotonic()
-                stdout, stderr = fatal.communicate(input='malformed\n', timeout=60)
-                # The 3x bound is the guard this row keeps. Telling one timeout from two is deferred until a tighter
-                # check passes repeated ASan runs under load.
-                drain_bound = 3 * fatal_document['delivery']['total_timeout_ms'] / 1000
-                assert fatal.returncode == 1 and time.monotonic() - started < drain_bound, stderr
+                stdout, stderr = fatal.communicate(input='malformed\n')
+                # Slowness never fails this row (owner rule, EN-116): the fatal drain's own total timeout bounds
+                # what is delivered, and the unsent-action accounting below is what the row checks.
+                assert fatal.returncode == 1, stderr
                 status = json.loads(invoke(['status', '--ledger', str(fatal_ledger)]).stdout)['targets']
                 pending = sum(target['unsent'] for target in status.values())
                 completed = query(fatal_ledger, "SELECT count(DISTINCT event_id) FROM delivery_log WHERE phase='completed'")[0][0]
@@ -608,8 +609,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                 assert not main_receiver.errors, main_receiver.errors
             finally:
                 if fatal.poll() is None:
-                    fatal.kill(); fatal.communicate(timeout=30)
-        print('PASS fatal feed drains four same-target actions below a 3x global-timeout guard without retries and reports every unsent action; one-versus-two-timeout distinction untested', flush=True)
+                    fatal.kill(); fatal.communicate()
+        print('PASS fatal feed drains four same-target actions without retries and reports every unsent action; one-versus-two-timeout distinction untested', flush=True)
 
         entries.mode = exits.mode = 'ok'
         main_receiver.clear(); main_receiver.mode = 'hang'
@@ -620,31 +621,29 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
             wait_for(lambda: committed_actions(signal_ledger) and bool(main_receiver.rows))
             refusal = invoke(['redeliver', '--ledger', str(signal_ledger), '--target', 'main'], expected=1)
             assert 'the runner is running: stop it first; it resumes from its ledger' in refusal.stderr
-            started = time.monotonic()
             active.send_signal(signal.SIGTERM)
-            active.communicate(timeout=30)
-            assert active.returncode == 0 and time.monotonic() - started < 10
+            active.communicate()
+            assert active.returncode == 0
             assert query(signal_ledger, "SELECT count(*) FROM delivery_log WHERE phase='completed'")[0][0] == 0
             status = json.loads(invoke(['status', '--ledger', str(signal_ledger)]).stdout)['targets']
             assert status['main']['unsent'] == 4
         finally:
             if active.poll() is None:
-                active.kill(); active.communicate(timeout=30)
+                active.kill(); active.communicate()
         main_receiver.clear()
         redelivery = subprocess.Popen([runner, 'redeliver', '--ledger', str(signal_ledger), '--target', 'main',
                                       '--deployment', query(signal_ledger, 'SELECT identity FROM metadata')[0][0]],
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
         try:
             wait_for(lambda: bool(main_receiver.rows))
-            started = time.monotonic()
             redelivery.send_signal(signal.SIGTERM)
-            stdout, stderr = redelivery.communicate(timeout=30)
-            assert redelivery.returncode == 0 and time.monotonic() - started < 10
+            stdout, stderr = redelivery.communicate()
+            assert redelivery.returncode == 0
             assert json.loads(stdout)['pending'] == 4
         finally:
             if redelivery.poll() is None:
-                redelivery.kill(); redelivery.communicate(timeout=30)
-        print('PASS SIGTERM cancels EOF drain and redelivery within 10 s; live redelivery is explicitly refused', flush=True)
+                redelivery.kill(); redelivery.communicate()
+        print('PASS SIGTERM cancels EOF drain and redelivery; live redelivery is explicitly refused', flush=True)
 
         for receiver in receivers:
             assert not receiver.errors, receiver.errors

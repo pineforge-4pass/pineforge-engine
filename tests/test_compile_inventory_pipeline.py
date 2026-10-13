@@ -367,7 +367,7 @@ def run_entrypoint(box, extra=None, xtrace=False, pythonpath=None):
     command = ["bash", "-x", str(ENTRYPOINT)] if xtrace else ["bash", str(ENTRYPOINT)]
     return subprocess.run(command, env=box.env(extra, pythonpath), stdin=subprocess.DEVNULL,
                           capture_output=True, encoding="utf-8", errors="replace",
-                          timeout=120, check=False)
+                          check=False)
 
 
 def run_helper(box, inventory, cpp, so, out, pythonpath=None):
@@ -375,7 +375,7 @@ def run_helper(box, inventory, cpp, so, out, pythonpath=None):
                "--so", str(so), "--out", str(out)]
     return subprocess.run(command, env=box.env(None, pythonpath), stdin=subprocess.DEVNULL,
                           capture_output=True, encoding="utf-8", errors="replace",
-                          timeout=120, check=False)
+                          check=False)
 
 
 def helper_files(box, inventory=None, entries=SAME_TICKER_DAILY):
@@ -525,7 +525,7 @@ def test_helper_refuses_and_keeps_the_original_bytes_when_out_appears_at_the_lin
                "--so", str(so), "--out", str(out)]
     result = subprocess.run(command, env=box.env({"RACE_BYTES_HEX": racer.hex()}),
                             stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
-                            errors="replace", timeout=120, check=False)
+                            errors="replace", check=False)
     assert result.returncode == 15, result.stderr
     assert result.stderr.startswith("bind_compiled_inventory: ")
     assert "exists already" in result.stderr

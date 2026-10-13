@@ -85,7 +85,7 @@ def epoch_from_headers(include: Path) -> str:
 
 def _archive_symbols(archive: Path) -> str:
     result = subprocess.run(["nm", "-g", "-C", str(archive)], text=True,
-                            capture_output=True, timeout=90)
+                            capture_output=True)
     if result.returncode:
         raise PairingError("cannot inspect ABI archive " + str(archive) + ":\n" + result.stderr)
     return result.stdout
@@ -205,7 +205,7 @@ def _compile(compiler: str, flags: Iterable[str], name: str, text: str, include:
     argv = [compiler, "-std=c++17", "-O0", "-ffp-contract=off", *flags,
             "-I", str(include), "-I", str(generated_include), "-c", str(source),
             "-o", str(object_file)]
-    result = subprocess.run(argv, text=True, capture_output=True, timeout=120)
+    result = subprocess.run(argv, text=True, capture_output=True)
     (root / (name + ".compile.log")).write_text(result.stdout + result.stderr)
     if result.returncode:
         raise PairingError(name + " failed to compile:\n" + result.stdout + result.stderr)
@@ -222,7 +222,7 @@ def _link(compiler: str, flags: Iterable[str], name: str, object_file: Path, arc
     output = root / name
     argv = [compiler, "-std=c++17", *flags, str(object_file), str(archive), "-pthread",
             "-o", str(output)]
-    result = subprocess.run(argv, text=True, capture_output=True, timeout=120)
+    result = subprocess.run(argv, text=True, capture_output=True)
     diagnostic = result.stdout + result.stderr
     (root / (name + ".link.log")).write_text(diagnostic)
     if expected == "accept":
@@ -337,12 +337,12 @@ def run_synthetic_pair(compiler: str) -> list[str]:
         provider.write_text('#include "v16.hpp"\nint pairing::v16::witness() { return 7; }\n')
         provider_object = root / "provider.o"
         compiled = subprocess.run([compiler, "-std=c++17", "-c", str(provider), "-o",
-                                   str(provider_object)], text=True, capture_output=True, timeout=60)
+                                   str(provider_object)], text=True, capture_output=True)
         if compiled.returncode:
             raise PairingError("synthetic v16 provider did not compile: " + compiled.stderr)
         archive = root / "libpair.a"
         packed = subprocess.run([ar, "rcs", str(archive), str(provider_object)], text=True,
-                                capture_output=True, timeout=60)
+                                capture_output=True)
         if packed.returncode:
             raise PairingError("synthetic v16 provider did not archive: " + packed.stderr)
 
@@ -351,7 +351,7 @@ def run_synthetic_pair(compiler: str) -> list[str]:
             output = root / (header + ".out")
             source.write_text('#include "' + header + '.hpp"\nint main() { return pairing::witness(); }\n')
             result = subprocess.run([compiler, "-std=c++17", str(source), str(archive), "-o",
-                                     str(output)], text=True, capture_output=True, timeout=60)
+                                     str(output)], text=True, capture_output=True)
             if expectation == "accept" and result.returncode:
                 raise PairingError("synthetic accepted pair rejected: " + result.stderr)
             if expectation == "reject" and result.returncode == 0:

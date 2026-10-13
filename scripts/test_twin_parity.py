@@ -146,7 +146,7 @@ void test() {
                 [sys.executable, str(script), "--name", "test_aux_security_feed"],
                 cwd=directory, text=True, capture_output=True,
                 env={key: value for key, value in os.environ.items()
-                     if key != "PINEFORGE_R4D_EV"}, timeout=60)
+                     if key != "PINEFORGE_R4D_EV"})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("not a git repository", result.stdout + result.stderr)
 

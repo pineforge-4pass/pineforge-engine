@@ -52,7 +52,6 @@ class Receiver(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 time.sleep(0.02)
             if idle:
-                self.connection.settimeout(20)
                 while self.connection.recv(4096):
                     pass
         except OSError:
@@ -123,7 +122,7 @@ try:
             command = base + ['--ledger', str(ledger), '--feed-url',
                               f'ws://127.0.0.1:{server.server_port}/stream']
             started = time.monotonic()
-            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(command, capture_output=True, text=True)
             elapsed = time.monotonic() - started
             inputs, events = ledger_counts(ledger)
             no_support = 'libcurl build with WS/WSS support enabled' in result.stderr
@@ -161,7 +160,7 @@ try:
             for scheme in ('ws', 'wss'):
                 result = subprocess.run(base + ['--ledger', str(sentinel), '--feed-url',
                                         f'{scheme}://127.0.0.1:{server.server_port}/stream'],
-                                        capture_output=True, text=True, timeout=10)
+                                        capture_output=True, text=True)
                 assert result.returncode != 0
                 assert 'libcurl' in result.stderr
                 assert sentinel.read_bytes() == before

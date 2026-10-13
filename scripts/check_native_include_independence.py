@@ -273,7 +273,7 @@ def kernel_archive_findings(archive: Path, *, evidence_dir: Path | None = None) 
     kernel-only build promises it is not."""
     if not archive.is_file():
         raise InfrastructureError("kernel archive is missing: " + str(archive))
-    listed = run_command(["nm", "-C", str(archive)], label="nm " + str(archive), timeout=120)
+    listed = run_command(["nm", "-C", str(archive)], label="nm " + str(archive))
     if listed.returncode:
         raise InfrastructureError("nm " + str(archive) + " failed:\n"
                                   + listed.stdout + listed.stderr)
@@ -288,9 +288,9 @@ def independence_exit_code(findings: list[Finding], *, expect_fail: bool) -> int
     return 1 if findings else 0
 
 
-def run_command(argv: list[str], *, label: str, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+def run_command(argv: list[str], *, label: str) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(argv, text=True, capture_output=True, timeout=timeout)
+        return subprocess.run(argv, text=True, capture_output=True)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise InfrastructureError(label + " could not run: " + str(error)) from error
 
@@ -301,7 +301,7 @@ def compile_object(compiler: str, flags: list[str], *, source: Path, output: Pat
     depfile.parent.mkdir(parents=True, exist_ok=True)
     argv = [compiler, *flags, "-I", str(include_root), "-MMD", "-MF", str(depfile),
             "-c", str(source), "-o", str(output)]
-    result = run_command(argv, label=label, timeout=120)
+    result = run_command(argv, label=label)
     if result.returncode == 0 and not output.is_file():
         raise InfrastructureError(label + " reported success without producing " + str(output))
     return result
@@ -356,7 +356,7 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
     if prefix in {ROOT, build_dir} or ROOT in prefix.parents or build_dir in prefix.parents:
         raise InfrastructureError("--prefix must be a disposable path outside source and build directories")
     installed = run_command(["cmake", "--install", str(build_dir), "--prefix", str(prefix)],
-                            label="cmake install", timeout=180)
+                            label="cmake install")
     if installed.returncode:
         raise InfrastructureError("cmake install failed:\n" + installed.stdout + installed.stderr)
     include_root = prefix / "include"
@@ -430,7 +430,7 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
                 continue
             for dependency in forbidden_dependency_entries(parse_depfile(depfile)):
                 findings.append(Finding("dependency", relative, dependency))
-            nm = run_command(["nm", "-C", str(output)], label="nm " + relative, timeout=60)
+            nm = run_command(["nm", "-C", str(output)], label="nm " + relative)
             if nm.returncode:
                 raise InfrastructureError("nm " + relative + " failed:\n" + nm.stdout + nm.stderr)
             archive_text(evidence_dir, Path("nm") / (name + ".txt"), nm.stdout)

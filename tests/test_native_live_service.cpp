@@ -131,8 +131,7 @@ void commit_races_finish(const fs::path& root) {
             return false;
         });
         armed = &worker;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (!fired && std::chrono::steady_clock::now() < deadline)
+        while (!fired)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         worker.finish();
         assert(fired);
@@ -170,9 +169,7 @@ int main() {
         };
         const auto initial = read();
         auto periodic = initial;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (periodic.at("written_at_ms").value == initial.at("written_at_ms").value &&
-               std::chrono::steady_clock::now() < deadline) {
+        while (periodic.at("written_at_ms").value == initial.at("written_at_ms").value) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             periodic = read();
         }

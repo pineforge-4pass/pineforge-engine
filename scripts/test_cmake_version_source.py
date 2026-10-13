@@ -132,7 +132,7 @@ class VersionSourceTests(unittest.TestCase):
         build.mkdir(parents=True, exist_ok=True)
         return subprocess.run(
             [self.cmake_bin, "-S", str(source), "-B", str(build), *defs],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def probe(self, source: Path, label: str, *defs: str) -> dict[str, str]:
         build = self.base / "build" / label

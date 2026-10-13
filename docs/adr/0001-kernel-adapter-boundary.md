@@ -450,7 +450,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   and checks its own numbers before it prints its summary line. `PINEFORGE_BUILD_EXAMPLES`
   (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:386`) and
   registers each as a CTest row that runs through `examples/native/run_example.cmake`, which
-  fails on a nonzero exit, a signal, a timeout **or** a missing summary line — so a row asserts
+  fails on a nonzero exit, a signal **or** a missing summary line — so a row asserts
   both, which a bare `PASS_REGULAR_EXPRESSION` cannot. `scripts/test_example_runner.py` proves
   the runner fails in each of those ways and that no `example_*` row sets a property that would
   override its verdict. Each example is compiled `-UNDEBUG`, so an `assert()` in one aborts its

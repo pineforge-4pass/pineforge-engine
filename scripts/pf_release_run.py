@@ -53,7 +53,6 @@ def run_release(
     warmup: int = 3,
     repeats: int = 20,
     network: bool = False,
-    timeout: int = 600,
 ) -> dict:
     """Run one strategy in the container; return the parsed JSON report dict.
 
@@ -112,7 +111,7 @@ def run_release(
     cmd += [image]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True)
     finally:
         if tmp_syminfo is not None:
             tmp_syminfo.unlink(missing_ok=True)

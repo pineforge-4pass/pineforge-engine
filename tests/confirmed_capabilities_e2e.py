@@ -10,7 +10,7 @@ from native_live_report_e2e import action_key, equal, write_csv
 
 
 def checked(command):
-    result = subprocess.run(command, text=True, capture_output=True, timeout=180)
+    result = subprocess.run(command, text=True, capture_output=True)
     assert result.returncode == 0, (command, result.stdout, result.stderr)
     return json.loads(result.stdout)
 

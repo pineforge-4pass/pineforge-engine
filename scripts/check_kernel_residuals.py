@@ -844,7 +844,7 @@ def run_tool(argv: list[str]) -> str:
     if shutil.which(argv[0]) is None:
         raise InfrastructureError(argv[0] + " is not on PATH")
     try:
-        result = subprocess.run(argv, text=True, capture_output=True, timeout=300)
+        result = subprocess.run(argv, text=True, capture_output=True)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise InfrastructureError(" ".join(argv) + " could not run: " + str(error)) from error
     if result.returncode:

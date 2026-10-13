@@ -1217,7 +1217,7 @@ class AbsentModeTextChecks(unittest.TestCase):
     def run_script(self, root: Path) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, '-B', str(root / 'scripts' / 'check_native_cpp_versions.py')],
-            cwd=root, capture_output=True, text=True, timeout=300)
+            cwd=root, capture_output=True, text=True)
 
     def test_green_absent_untampered_the_partial_skip_still_prints(self):
         result = self.run_script(self.scratch_tree(tamper=False))

@@ -61,7 +61,9 @@ BAD_VALUES = (
     pytest.param(float("-inf"), id="negative-infinity"),
 )
 MODES = ("ordinary", "selected")
-BASE_SOURCE = "26296bb8ce0ffb0b6fe113deae8853a375aaac37:docker/run_json.py"
+# The frozen producer: docker/run_json.py on engine main just before EN-133 (the file is
+# byte-identical at the commit the change was authored on, 9da4c984, and here).
+BASE_SOURCE = "7da487ab2907c428bdfc755e10452811f95beaf2:docker/run_json.py"
 
 
 def reject_constant(token):

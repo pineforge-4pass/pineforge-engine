@@ -112,7 +112,7 @@ class RunAllFailures(unittest.TestCase):
         return subprocess.run(
             ["bash", str(self.root / "benchmarks" / "run_all.sh")],
             env={**os.environ, **QUIET, "PATH": path, "JOBS": "2", **env},
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True)
 
     def assert_output(self, slot: Path, csv: str, content: str | None) -> None:
         path = slot / csv
