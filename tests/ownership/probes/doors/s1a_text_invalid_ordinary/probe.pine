@@ -1,0 +1,4 @@
+//@version=6
+strategy("s1a_text_invalid_ordinary", initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=2)
+if bar_index == 2
+    strategy.entry("P", strategy.long, qty=na, comment=str.substring("é", 0, 1))

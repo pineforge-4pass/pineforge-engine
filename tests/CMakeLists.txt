@@ -1869,6 +1869,8 @@ list(APPEND TEST_SOURCES
     test_value_admission_arith
     test_value_admission_decl
     test_value_admission_risk
+    # EN-132 source command admission: public host, synthetic feed, no fixtures.
+    test_value_admission_doors
     # The source of test_selected_quote_seal is supplied by a separate change
     # and integrated with this registration before configure.
     test_selected_quote_seal

@@ -1,0 +1,12 @@
+{
+  "outcome": "failed",
+  "code": "strategy_value_invalid",
+  "args": {
+    "field": "entry.limit_price",
+    "reason": "nonfinite"
+  },
+  "min_trades": 0,
+  "label": "S",
+  "pinned_by": "EN-132 S1a rule 2 and rule 6; revision 3 Appendix B entry.limit_price",
+  "native_boundary_control": "tests/test_value_admission_doors.cpp"
+}

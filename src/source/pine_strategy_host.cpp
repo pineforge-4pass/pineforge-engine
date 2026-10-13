@@ -11,6 +11,7 @@
 #include "pine_host_reads.hpp"
 #include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"
+#include "pine_value_admit_doors.hpp"
 #include "pine_run_failure.hpp"
 #include "pine_value_admit_decl.hpp"
 #include "pine_value_admit_risk.hpp"
@@ -2538,41 +2539,56 @@ namespace {
 // first, then the six risk setter statements.
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentEntry& row) {
+    source::admit_strategy_entry(row.id, row.is_long, row.limit_price, row.stop_price,
+                                 row.qty, row.comment, row.oca_name, row.oca_type, row.qty_type);
     adapter.entry(row.id, row.is_long, row.limit_price, row.stop_price, row.qty, row.comment,
                   row.oca_name, row.oca_type, row.qty_type);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentClose& row) {
+    source::admit_strategy_close(row.id, row.comment, row.qty, row.qty_percent, row.immediately);
     adapter.close(row.id, row.comment, row.qty, row.qty_percent, row.immediately);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentCloseToken& row) {
+    source::admit_strategy_close_token(row.id, row.comment, row.qty, row.qty_percent,
+                                       row.immediately, row.callsite_token);
     adapter.close(row.id, row.comment, row.qty, row.qty_percent, row.immediately,
                   row.callsite_token);
 }
 void replay_intent(source::PineExecutionAdapter& adapter, const source::detail::IntentCloseAll&) {
+    source::admit_strategy_close_all();
     adapter.close_all();
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentExit& row) {
+    source::admit_strategy_exit(row.id, row.from_entry, row.limit_price, row.stop_price,
+                                row.trail_points, row.trail_offset, row.trail_price,
+                                row.qty_percent, row.comment, row.qty, row.oca_name,
+                                row.profit_ticks, row.loss_ticks);
     adapter.exit(row.id, row.from_entry, row.limit_price, row.stop_price, row.trail_points,
                  row.trail_offset, row.trail_price, row.qty_percent, row.comment, row.qty,
                  row.oca_name, row.profit_ticks, row.loss_ticks);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentExitCancelBracket& row) {
+    source::admit_strategy_exit_cancel_bracket(row.exit_id, row.from_entry, row.comment);
     adapter.exit_cancel_bracket(row.exit_id, row.from_entry, row.comment);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentCancel& row) {
+    source::admit_strategy_cancel(row.id);
     adapter.cancel(row.id);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentCancelAll&) {
+    source::admit_strategy_cancel_all();
     adapter.cancel_all();
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentOrder& row) {
+    source::admit_strategy_order(row.id, row.is_long, row.qty, row.limit_price, row.stop_price,
+                                 row.oca_name, row.oca_type);
     adapter.order(row.id, row.is_long, row.qty, row.limit_price, row.stop_price, row.oca_name,
                   row.oca_type);
 }

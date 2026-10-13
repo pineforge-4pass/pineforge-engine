@@ -1,0 +1,8 @@
+//@version=6
+strategy("s1a_ticks_neginf_retained", initial_capital=1000000, default_qty_type=strategy.fixed, default_qty_value=2)
+if bar_index == 1
+    strategy.exit("X", from_entry="L", profit=-math.exp(close * 100.0))
+if bar_index == 3
+    strategy.entry("W", strategy.long, qty=1)
+if bar_index == 5
+    strategy.close_all()

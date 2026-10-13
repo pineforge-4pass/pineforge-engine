@@ -1,6 +1,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include "pine_intent_state.hpp"
+#include "pine_value_admit_doors.hpp"
 
 #include <limits>
 
@@ -41,6 +42,8 @@ void PineStrategyHost::strategy_entry(const std::string& id, bool is_long,
     if (!trading_window_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_))
         return;
     adapter_.set_configuration(config_);
+    admit_strategy_entry(id, is_long, limit_price, stop_price, qty, comment, oca_name,
+                         oca_type, qty_type);
     adapter_.entry(id, is_long, limit_price, stop_price, qty, comment, oca_name,
                    oca_type, qty_type);
 }
@@ -53,6 +56,7 @@ void PineStrategyHost::strategy_close(const std::string& id, const std::string& 
         return;
     }
     adapter_.set_configuration(config_);
+    admit_strategy_close(id, comment, qty, qty_percent, immediately);
     adapter_.close(id, comment, qty, qty_percent, immediately);
 }
 
@@ -68,6 +72,7 @@ void PineStrategyHost::strategy_close(const std::string& id, const std::string& 
     if (!trading_window_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_))
         return;
     adapter_.set_configuration(config_);
+    admit_strategy_close_token(id, comment, qty, qty_percent, immediately, callsite_token);
     adapter_.close(id, comment, qty, qty_percent, immediately, callsite_token);
 }
 
@@ -80,6 +85,7 @@ void PineStrategyHost::strategy_close_all() {
     if (!trading_window_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_))
         return;
     adapter_.set_configuration(config_);
+    admit_strategy_close_all();
     adapter_.close_all();
 }
 
@@ -100,6 +106,9 @@ void PineStrategyHost::strategy_exit(const std::string& id, const std::string& f
     if (!trading_window_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_))
         return;
     adapter_.set_configuration(config_);
+    admit_strategy_exit(id, from_entry, limit_price, stop_price, trail_points, trail_offset,
+                        trail_price, qty_percent, comment, qty, oca_name, profit_ticks,
+                        loss_ticks);
     adapter_.exit(id, from_entry, limit_price, stop_price, trail_points, trail_offset,
                   trail_price, qty_percent, comment, qty, oca_name, profit_ticks,
                   loss_ticks);
@@ -116,6 +125,7 @@ void PineStrategyHost::strategy_exit_cancel_bracket(const std::string& exit_id,
     if (!trading_window_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_))
         return;
     adapter_.set_configuration(config_);
+    admit_strategy_exit_cancel_bracket(exit_id, from_entry, comment);
     adapter_.exit_cancel_bracket(exit_id, from_entry, comment);
 }
 
@@ -126,6 +136,7 @@ void PineStrategyHost::strategy_cancel(const std::string& id) {
         return;
     }
     adapter_.set_configuration(config_);
+    admit_strategy_cancel(id);
     adapter_.cancel(id);
 }
 
@@ -136,6 +147,7 @@ void PineStrategyHost::strategy_cancel_all() {
         return;
     }
     adapter_.set_configuration(config_);
+    admit_strategy_cancel_all();
     adapter_.cancel_all();
 }
 
@@ -151,6 +163,7 @@ void PineStrategyHost::strategy_order(const std::string& id, bool is_long, doubl
     if (!trading_window_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_))
         return;
     adapter_.set_configuration(config_);
+    admit_strategy_order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type);
     adapter_.order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type);
 }
 

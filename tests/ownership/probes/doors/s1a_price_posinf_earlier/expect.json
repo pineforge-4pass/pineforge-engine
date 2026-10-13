@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "EN-132 S1a rules 2, 5; D2; revision 3 Appendix B entry.limit_price and Appendix D",
+  "native_boundary_control": "tests/test_value_admission_doors.cpp"
+}

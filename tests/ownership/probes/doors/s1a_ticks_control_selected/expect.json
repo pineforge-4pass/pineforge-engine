@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "EN-132 S1a rules 1-3, D1; revision 3 Appendix D legitimate na/default control",
+  "native_boundary_control": "tests/test_value_admission_doors.cpp"
+}
