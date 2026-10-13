@@ -192,6 +192,13 @@ double source::PineStrategyHost::margin_liquidation_price() const {
 
 PineStrategyConfig source::PineStrategyHost::apply_overrides(
         PineStrategyConfig config, const StrategyOverrides& overrides) {
+    if (std::isinf(overrides.default_qty_value)) {
+        throw coded<std::invalid_argument>(
+            RunFailureCode::setting_rejected,
+            {{"entrypoint", "strategy_set_override"},
+             {"reason", "number_out_of_finite_range"}},
+            "default_qty_value: number out of finite range");
+    }
     if (!std::isnan(overrides.initial_capital)) config.initial_capital = overrides.initial_capital;
     if (!std::isnan(overrides.commission_value)) config.commission_value = overrides.commission_value;
     if (!std::isnan(overrides.default_qty_value)) config.default_qty_value = overrides.default_qty_value;

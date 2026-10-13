@@ -251,14 +251,37 @@ void test_override_sentinels_and_caller_infinity_stay() {
                         : "override_default_qty_neg_inf_deferred_D3b";
         DeclarationHost caller;
         PineStrategyConfig original{};
+        original.initial_capital = 123456.0;
+        original.commission_value = 0.25;
+        original.default_qty_value = 7.0;
+        original.margin_long = 25.0;
+        original.margin_short = 50.0;
         if (!configure_ok(caller, original)) continue;
         StrategyOverrides supplied{};
         supplied.default_qty_value = value;
-        caller.set_strategy_override(supplied);
-        original.default_qty_value = value;
+        supplied.initial_capital = 654321.0;
+        supplied.commission_value = 0.5;
+        supplied.pyramiding = 4;
+        supplied.slippage = 3;
+        supplied.default_qty_type = static_cast<int>(QtyType::CASH);
+        supplied.commission_type = static_cast<int>(CommissionType::CASH_PER_ORDER);
+        supplied.process_orders_on_close = 1;
+        supplied.calc_on_order_fills = 1;
+        supplied.close_entries_rule = 1;
+        // D3-b is now ruled: these two former acceptance pins must be red
+        // without the caller producer, and preserve the entire prior config.
+        bool rejected = false;
+        try {
+            caller.set_strategy_override(supplied);
+        } catch (const std::exception& error) {
+            rejected = true;
+            check_failure(error, RunFailureCode::setting_rejected,
+                          "{\"entrypoint\":\"strategy_set_override\",\"reason\":\"number_out_of_finite_range\"}");
+        }
+        CHECK(rejected);
         check_config(caller.observed(), original);
         caller.set_strategy_override(StrategyOverrides{});
-        check_config(caller.observed(), original);  // NaN leaves even a caller infinity.
+        check_config(caller.observed(), original);  // NaN leaves the prior accepted config.
     }
 }
 
@@ -287,6 +310,124 @@ void test_existing_financial_refusals_stay() {
     }
 }
 
+enum class OverridePath { Setter, Begin };
+
+PineStrategyConfig override_fixture_config() {
+    PineStrategyConfig config{};
+    config.initial_capital = 123456.0;
+    config.commission_value = 0.25;
+    config.default_qty_value = 7.0;
+    config.margin_long = 25.0;
+    config.margin_short = 50.0;
+    return config;
+}
+
+void run_with_opaque_overrides(DeclarationHost& host, const StrategyOverrides& supplied) {
+    static const Bar bars[] = {
+        {100.0, 101.0, 99.0, 100.0, 1.0, 1736121600000LL},
+        {100.0, 101.0, 99.0, 100.0, 1.0, 1736121660000LL},
+    };
+    // The public rich-run overload forwards this exact struct as begin's
+    // opaque pointer. It records begin refusal rather than unwinding it.
+    host.run(bars, 2, "1", "1", InputsMap{}, SymInfo{}, &supplied);
+}
+
+bool override_ok(DeclarationHost& host, const StrategyOverrides& supplied, OverridePath path) {
+    try {
+        if (path == OverridePath::Setter) host.set_strategy_override(supplied);
+        else run_with_opaque_overrides(host, supplied);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "unexpected override rejection [%s]: %s\n", row, error.what());
+        CHECK(false);
+        return false;
+    }
+    const bool accepted = host.last_error().empty()
+        && run_failure_value_of(host).code == RunFailureCode::none;
+    CHECK(accepted);
+    if (accepted && path == OverridePath::Begin) CHECK(host.script_bars_processed() == 2);
+    return accepted;
+}
+
+void test_override_default_qty_nan_stays() {
+    for (const auto path : {OverridePath::Setter, OverridePath::Begin}) {
+        row = path == OverridePath::Setter ? "override_default_qty_setter_nan_leaves_declared"
+                                           : "override_default_qty_begin_nan_leaves_declared";
+        DeclarationHost host;
+        auto expected = override_fixture_config();
+        if (!configure_ok(host, expected)) continue;
+        StrategyOverrides supplied{};
+        supplied.default_qty_value = std::numeric_limits<double>::quiet_NaN();
+        supplied.pyramiding = 4;  // Witness that the merge really executed.
+        if (!override_ok(host, supplied, path)) continue;
+        expected.pyramiding = 4;
+        check_config(host.observed(), expected);
+    }
+}
+
+void test_override_default_qty_finite_stays() {
+    const double values[] = {
+        1.0, -1.0, 0.0, -0.0,
+        std::numeric_limits<double>::max(), std::numeric_limits<double>::lowest(),
+        std::numeric_limits<double>::min(), std::numeric_limits<double>::denorm_min(),
+    };
+    for (const auto path : {OverridePath::Setter, OverridePath::Begin}) {
+        row = path == OverridePath::Setter ? "override_default_qty_setter_finite"
+                                           : "override_default_qty_begin_finite";
+        for (const double value : values) {
+            DeclarationHost host;
+            auto expected = override_fixture_config();
+            if (!configure_ok(host, expected)) continue;
+            StrategyOverrides supplied{};
+            supplied.default_qty_value = value;
+            supplied.pyramiding = 4;
+            if (!override_ok(host, supplied, path)) continue;
+            expected.default_qty_value = value;
+            expected.pyramiding = 4;
+            check_config(host.observed(), expected);
+        }
+    }
+}
+
+void test_override_default_qty_begin_infinity_rejected() {
+    const double inf = std::numeric_limits<double>::infinity();
+    for (const double value : {inf, -inf}) {
+        row = value > 0 ? "override_default_qty_begin_pos_inf_rejected"
+                        : "override_default_qty_begin_neg_inf_rejected";
+        DeclarationHost host;
+        const auto before = override_fixture_config();
+        if (!configure_ok(host, before)) continue;
+        StrategyOverrides supplied{};
+        supplied.default_qty_value = value;
+        supplied.initial_capital = 654321.0;
+        supplied.commission_value = 0.5;
+        supplied.pyramiding = 4;
+        supplied.slippage = 3;
+        supplied.default_qty_type = static_cast<int>(QtyType::CASH);
+        supplied.commission_type = static_cast<int>(CommissionType::CASH_PER_ORDER);
+        supplied.process_orders_on_close = 1;
+        supplied.calc_on_order_fills = 1;
+        supplied.close_entries_rule = 1;
+        run_with_opaque_overrides(host, supplied);
+        CHECK(!host.last_error().empty());
+        const auto failure = run_failure_value_of(host);
+        CHECK(failure.code == RunFailureCode::setting_rejected);
+        CHECK(failure.args != nullptr);
+        if (failure.args) {
+            CHECK(*failure.args ==
+                  "{\"entrypoint\":\"strategy_set_override\",\"reason\":\"number_out_of_finite_range\"}");
+        }
+        // These are also the functions behind the public C ABI getters.
+        CHECK(std::string(run_failure_code_of(host)) == "setting_rejected");
+        CHECK(std::string(run_failure_args_of(host)) ==
+              "{\"entrypoint\":\"strategy_set_override\",\"reason\":\"number_out_of_finite_range\"}");
+        CHECK(host.script_bars_processed() == 0);
+        check_config(host.observed(), before);
+        // A later NaN begin still uses the accepted config, not rejected qty.
+        if (override_ok(host, StrategyOverrides{}, OverridePath::Begin))
+            check_config(host.observed(), before);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -296,6 +437,9 @@ int main() {
         test_nan_declarations_stay();
         test_finite_values_stay();
         test_nonpositive_margin_suppression_stays();
+        test_override_default_qty_nan_stays();
+        test_override_default_qty_finite_stays();
+        test_override_default_qty_begin_infinity_rejected();
         test_override_sentinels_and_caller_infinity_stay();
         test_existing_financial_refusals_stay();
     } catch (const std::exception& error) {
