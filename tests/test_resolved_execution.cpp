@@ -1,5 +1,6 @@
 // Literal native settlement contracts; no Engine::run, feed or reference data.
 #include <pineforge/engine.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
@@ -331,9 +332,22 @@ void quoted_fee_overrides_unsuitable_modeled_rate() {
     Book modeled;
     modeled.fee(CommissionType::PERCENT, std::numeric_limits<double>::infinity());
     const auto before = modeled.fingerprint();
+#ifdef PINEFORGE_VALUE_TRIPWIRE
     const auto refused = modeled.settle(order_action::Transact{2},100);
     CHECK(refused.status==execution::Status::InvalidAccounting);
     CHECK(refused.closed_units==0 && refused.opened_units==0);
+#else
+    bool caught = false;
+    try {
+        modeled.settle(order_action::Transact{2},100);
+    } catch (const coded<std::runtime_error>& error) {
+        caught = true;
+        CHECK(error.run_failure_code()==RunFailureCode::engine_command_value_invalid);
+        const auto& args = error.run_failure().args;
+        CHECK(args && *args=="{\"field\":\"fee.commission\",\"reason\":\"numeric_overflow\",\"stage\":\"fee\"}");
+    }
+    CHECK(caught);
+#endif
     CHECK(modeled.fingerprint()==before && modeled.position()==0);
     CHECK(modeled.lots().empty() && modeled.rows().empty() && modeled.actions().empty());
 }
