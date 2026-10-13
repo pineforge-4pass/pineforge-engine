@@ -278,7 +278,7 @@ void test_market_logic_tape() {
     std::vector<Row> got;
     std::vector<Row> want;
 
-    const auto run_pair = [&](int offset, bool first_long, double capital,
+    const auto run_pair = [&](int offset, double capital,
                               double seed, double signal, double fill,
                               double exit, double survivor) {
         const auto bars = synth_bars({
@@ -292,38 +292,65 @@ void test_market_logic_tape() {
         Probe p(capital, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
         p.script = [=](Probe& e, const Bar& bar) {
             if (bar.timestamp == stamp(offset)) {
-                e.entry_market(first_long ? "Long" : "Short", first_long, 1.0);
+                e.entry_market("Long", true, 1.0);
             }
             if (bar.timestamp == stamp(offset + 2)) {
-                // Retain the two command orders: close-then-short and
-                // reverse-to-long-then-close-short.
-                if (first_long) {
-                    e.strategy_close("Long");
-                    e.entry_market("Short", false);
-                } else {
-                    e.entry_market("Long", true);
-                    e.strategy_close("Short");
-                }
+                // The close-then-short command pair.
+                e.strategy_close("Long");
+                e.entry_market("Short", false);
             }
             if (bar.timestamp == stamp(offset + 4)) {
-                e.strategy_close(first_long ? "Short" : "Long");
+                e.strategy_close("Short");
             }
         };
         p.run(bars.data(), (int)bars.size());
         const auto rows = p.rows();
         got.insert(got.end(), rows.begin(), rows.end());
-        // Initial leg closes at the new entry's fill; trim has zero duration
-        // and PnL; remaining leg earns signed (exit - fill) * survivor.
+        // The long leg closes at the short's fill; the trim has zero duration
+        // and PnL; the surviving short earns (fill - exit) * survivor.
         want.push_back({stamp(offset + 1), seed, 1.0, stamp(offset + 3),
-                        fill, kExitClose, first_long ? fill - seed : seed - fill,
-                        first_long});
+                        fill, kExitClose, fill - seed, true});
         want.push_back({stamp(offset + 3), fill, 1.0, stamp(offset + 3),
-                        fill, kExitMarginCall, 0.0, !first_long});
+                        fill, kExitMarginCall, 0.0, false});
         want.push_back({stamp(offset + 3), fill, survivor, stamp(offset + 5),
-                        exit, kExitClose,
-                        first_long ? (fill - exit) * survivor
-                                   : (exit - fill) * survivor,
-                        !first_long});
+                        exit, kExitClose, (fill - exit) * survivor, false});
+        CHECK(p.flat());
+    };
+
+    // The long side's control: a short is reversed to long (the long entry
+    // first, then the short's close, as the strategy script orders them).
+    const auto run_long_reversal = [&](int offset, double capital,
+                                       double seed, double signal,
+                                       double fill, double exit,
+                                       double survivor) {
+        const auto bars = synth_bars({
+            {seed, seed, seed, seed},
+            {seed, seed, seed, seed},
+            {signal, signal, signal, signal},
+            {fill, fill + 0.7, fill - 0.3, fill},
+            {fill, fill, fill, fill},
+            {exit, exit, exit, exit},
+        }, stamp(offset));
+        Probe p(capital, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+        p.script = [=](Probe& e, const Bar& bar) {
+            if (bar.timestamp == stamp(offset)) {
+                e.entry_market("Short", false, 1.0);
+            }
+            if (bar.timestamp == stamp(offset + 2)) {
+                e.entry_market("Long", true);
+                e.strategy_close("Short");
+            }
+            if (bar.timestamp == stamp(offset + 4)) e.strategy_close("Long");
+        };
+        p.run(bars.data(), (int)bars.size());
+        const auto rows = p.rows();
+        got.insert(got.end(), rows.begin(), rows.end());
+        want.push_back({stamp(offset + 1), seed, 1.0, stamp(offset + 3),
+                        fill, kExitClose, seed - fill, false});
+        want.push_back({stamp(offset + 3), fill, 1.0, stamp(offset + 3),
+                        fill, kExitMarginCall, 0.0, true});
+        want.push_back({stamp(offset + 3), fill, survivor, stamp(offset + 5),
+                        exit, kExitClose, (exit - fill) * survivor, true});
         CHECK(p.flat());
     };
 
@@ -331,15 +358,19 @@ void test_market_logic_tape() {
     // floor(260/110/0.01)*0.01=2.36. Fill equity 260.3, cost
     // 2.36*110.3=260.308: q_restore=0.008/110.3 < 0.01 -> one unit.
     // Survivor 2.36-1=1.36; close PnL=(110.3-112)*1.36=-2.312.
-    run_pair(0, true, 250.0, 100.0, 110.0, 110.3, 112.0, 1.36);
-    // Long control 1: signal equity 250+(100-90)=260 -> 2.88 units.
-    // Fill equity 259.6, cost 2.88*90.4=260.352; deficit/90.4 =
-    // 0.008318... < 0.01 -> one unit; (92-90.4)*1.88=3.008 PnL.
-    run_pair(10, false, 250.0, 100.0, 90.0, 90.4, 92.0, 1.88);
-    // Long control 2: signal equity 300+(120-100)=320 -> 3.20 units.
-    // Fill equity 319.8, cost 3.20*100.2=320.64; deficit/100.2 =
-    // 0.008383... < 0.01 -> one unit; (101.5-100.2)*2.20=2.86 PnL.
-    run_pair(20, false, 300.0, 120.0, 100.0, 100.2, 101.5, 2.20);
+    run_pair(0, 250.0, 100.0, 110.0, 110.3, 112.0, 1.36);
+    // Long control 1: signal equity 250+(100-90)=260 -> 2.88 units. Fill
+    // equity 250+(100-90.21)=259.79, cost 2.88*90.21=259.8048 (below the
+    // signal equity, which is what keeps the reversal admitted): deficit
+    // 0.0148, q_restore=0.0148/90.21=0.000164 < 0.01 -> one unit; survivor
+    // 1.88, (92-90.21)*1.88=3.3652 PnL.
+    run_long_reversal(10, 250.0, 100.0, 90.0, 90.21, 92.0, 1.88);
+    // Long control 2: signal equity 300.5+(120-100)=320.5 -> 3.20 units. Fill
+    // equity 300.5+(120-100.14)=320.36, cost 3.20*100.14=320.448 (below the
+    // signal equity, which is what keeps the reversal admitted): deficit
+    // 0.088, q_restore=0.088/100.14=0.000879 < 0.01 -> one unit; survivor
+    // 2.20, (101.5-100.14)*2.20=2.992 PnL.
+    run_long_reversal(20, 300.5, 120.0, 100.0, 100.14, 101.5, 2.20);
 
     // Dropped reversal: signal equity 250 freezes 2.5 units at 100.
     // At the next open 102, cost 255 exceeds marked equity
