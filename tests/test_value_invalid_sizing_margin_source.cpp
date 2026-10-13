@@ -193,18 +193,77 @@ void row3_nonfinite_equity() {
     }
 }
 void row7_placement_requirement_overflow() {
-    row = "row7_explicit_placement_overflow";
-    Probe explicit_units(QtyType::FIXED, 1.0, CommissionType::PERCENT, 0.0, 100.0);
-    explicit_units.script = [](Probe& p, int index) {
-        if (!index) p.strategy_entry("L", true, nan, nan, 1.0e308);
-    };
-    failed(run(explicit_units), "margin.required", "margin", "nonfinite");
-    row = "row7_default_placement_overflow";
-    Probe default_units(QtyType::FIXED, 1.0e308, CommissionType::PERCENT, 0.0, 100.0);
-    default_units.script = [](Probe& p, int index) {
-        if (!index) p.strategy_entry("L", true);
-    };
-    failed(run(default_units), "margin.required", "margin", "nonfinite");
+    // L6: finite explicit overflow is KEEP; declaration-derived requirements
+    // and nonfinite placement inputs remain G. Preserve the exact G payload.
+    for (const bool is_long : {false, true}) {
+        row = is_long ? "row7_default_long_placement_overflow"
+                      : "row7_default_short_placement_overflow";
+        Probe default_units(QtyType::FIXED, 1.0e308, CommissionType::PERCENT, 0.0, 100.0);
+        default_units.script = [is_long](Probe& p, int index) {
+            if (!index) p.strategy_entry("L", is_long);
+        };
+        failed(run(default_units), "margin.required", "margin", "nonfinite");
+    }
+    for (const bool default_quantity : {false, true}) {
+        for (const double value : {inf, -inf, nan}) {
+            row = default_quantity ? "row7_default_pointvalue_nonfinite"
+                                   : "row7_explicit_pointvalue_nonfinite";
+            Probe probe(QtyType::FIXED, 1.0, CommissionType::PERCENT, 0.0, 100.0);
+            probe.script = [default_quantity, value](Probe& p, int index) {
+                if (index) return;
+                // Inject the derived placement tuple on an adapter bound to
+                // the running host. The host's admitted run spec stays valid;
+                // a declaration refusal must not stand in for the G producer.
+                PineExecutionAdapter placement(p);
+                PineStrategyConfig config;
+                config.initial_capital = 1000.0;
+                config.margin_long = config.margin_short = 100.0;
+                placement.set_configuration(config);
+                StagedConfiguration staged;
+                staged.syminfo.mintick = 0.01;
+                staged.syminfo.pointvalue = value;
+                placement.set_staged_configuration(staged);
+                placement.entry("G", true, nan, nan, default_quantity ? nan : 1.0);
+            };
+            failed(run(probe), "margin.required", "margin", "nonfinite");
+        }
+    }
+}
+void keep_finite_explicit_placement_overflow() {
+    for (const double margin : {100.0, 200.0}) {
+        for (const bool is_long : {false, true}) {
+            for (const double units : {1.0e307, 1.0e308}) {
+                row = margin == 100.0 ? "keep_explicit_signal_overflow_continues"
+                                     : "keep_explicit_affordability_overflow_continues";
+                Probe probe(QtyType::FIXED, 1.0, CommissionType::PERCENT, 0.0, margin);
+                bool continued = false;
+                probe.script = [is_long, units, &continued](Probe& p, int index) {
+                    if (!index) {
+                        p.strategy_entry("overflow", is_long, nan, nan, units);
+                        continued = true;
+                        p.strategy_entry("L", is_long, nan, nan, 1.0);
+                    }
+                    if (index == 2) {
+                        CHECK(p.position_units() == (is_long ? 1.0 : -1.0));
+                        p.strategy_close("L");
+                    }
+                };
+                const auto result = run(probe);
+                completed(result);
+                CHECK(continued);
+                CHECK(result.trades.size() == 1);
+                CHECK(probe.position_units() == 0.0);
+                if (result.trades.size() == 1) {
+                    const auto& trade = result.trades[0];
+                    CHECK(same_bits(trade.qty, 1.0));
+                    CHECK(same_bits(trade.entry_price, 100.0));
+                    CHECK(same_bits(trade.exit_price, 100.0));
+                    CHECK(trade.pnl == 0.0);
+                    CHECK(trade.commission == 0.0);
+                }
+            }
+        }
+    }
 }
 void keep_defined_zero_equity() {
     for (const bool cash_fee : {false, true}) {
@@ -331,6 +390,7 @@ int main() {
     row1_nonfinite_conversion_input();
     row3_nonfinite_equity();
     row7_placement_requirement_overflow();
+    keep_finite_explicit_placement_overflow();
     keep_defined_zero_equity();
     keep_disabled_margin();
     finite_boundary_is_bit_identical();

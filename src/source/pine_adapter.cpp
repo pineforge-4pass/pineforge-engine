@@ -7364,8 +7364,15 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                 : mark;
             const double required = units * admission_mark
                 * staged_.syminfo.pointvalue * fx * margin / 100.0;
+            // Finite explicit overflow is a signal-time refusal below, with
+            // cancellation and callback continuation. Nonfinite inputs or
+            // equity still fault before that refusal.
+            const bool finite_explicit_requirement = std::isfinite(units)
+                && std::isfinite(admission_mark) && std::isfinite(staged_.syminfo.pointvalue)
+                && std::isfinite(fx);
             if (finite_positive(margin) && margin <= 100.0
-                && (!std::isfinite(required) || !std::isfinite(equity))) {
+                && ((!std::isfinite(required) && !finite_explicit_requirement)
+                    || !std::isfinite(equity))) {
                 engine_command_value_invalid_or_count("margin.required", EngineValueStage::margin,
                                                      EngineValueReason::nonfinite);
             }
@@ -8541,8 +8548,15 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         }
         const double required = (charged_held + std::abs(own_units)) * signal * staged_.syminfo.pointvalue
             * snapshot.sizing.fx * margin / 100.0;
+        // The flat/same-side refusal below also owns finite explicit overflow.
+        // Default sizing, reversals and nonfinite inputs retain the G fault.
+        const bool finite_explicit_rejection = !default_sized && !reverses
+            && std::isfinite(charged_held) && std::isfinite(own_units)
+            && std::isfinite(signal) && std::isfinite(staged_.syminfo.pointvalue)
+            && std::isfinite(snapshot.sizing.fx) && std::isfinite(margin);
         if (margin > 0.0
-            && (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity))) {
+            && ((!std::isfinite(required) && !finite_explicit_rejection)
+                || !std::isfinite(snapshot.sizing.equity))) {
             engine_command_value_invalid_or_count("margin.required", EngineValueStage::margin,
                                                  EngineValueReason::nonfinite);
         }

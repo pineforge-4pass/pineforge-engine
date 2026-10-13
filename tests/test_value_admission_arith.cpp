@@ -341,7 +341,11 @@ void trail_rows() {
     TrailHost fallback(-kMax, 1e308, 1e308);
     fallback.run_probe();
     source::detail::set_pine_callback_lifecycle_rule(rule, previous);
-    CHECK(fallback.failure.code == RunFailureCode::none);
+    // The constant fallback keeps ticks finite; G3 rejects the derived level.
+    CHECK(fallback.failure.code == RunFailureCode::engine_command_value_invalid);
+    CHECK(fallback.failure.args && *fallback.failure.args ==
+        "{\"field\":\"relative_price.level\",\"reason\":\"numeric_overflow\","
+        "\"stage\":\"relative_price\"}");
 
     row = "trail_invalid_mintick_fallback_bits";
     for (double tick : {0.0, -1.0, kNaN, kInf}) {

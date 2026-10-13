@@ -330,7 +330,7 @@ class ManifestCheckerTests(unittest.TestCase):
         text, changed = re.subn(r'^\s*\{"outputs_limit",[^\n]*\n', "", text, flags=re.M)
         self.assertEqual(changed, 1)
         path.write_text(text, encoding="utf-8")
-        self.reject("registry-set", "missing outputs_limit", copied_tree=True)
+        self.reject("registry-set", "stale outputs_limit", copied_tree=True)
 
     def test_unknown_producer_field_is_rejected_by_vocabulary(self):
         # Killer for vocabulary-check-disabled, even if another check also fails.
