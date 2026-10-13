@@ -541,7 +541,11 @@ execution::AccountEffectProjection BacktestEngine::NativeSettlementStage::OneLot
     }
     double realized = engine.net_profit_sum_;
     if (row) {
-        if (!internal::closed_row_all_finite(*row))
+        // The preview stage keeps its money-only check: the staged route has no
+        // full-row check before its commit stage either, and the fused and staged
+        // transcripts must fail at the same step. The full-row settlement safety
+        // guard (an invariant, not Pine parity) sits in OneLot::prepare below.
+        if (!std::isfinite(row->pnl) || !std::isfinite(row->commission))
             return invalid_projection(Status::InvalidAccounting);
         realized += row->pnl;
     }
