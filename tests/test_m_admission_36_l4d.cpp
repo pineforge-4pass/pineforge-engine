@@ -12,39 +12,14 @@
 #define coof_cursor_is_bar_close_ l4d_coof_cursor_is_bar_close()
 
 /*
- * test_m_admission_36.cpp — round 7 family M, mechanisms 3 and 6: the
- * short-side entry-price affordability trim and the stop-entry reversal
- * admission equity.
+ * test_m_admission_36.cpp -- market fill-price trim and stop reversal equity.
  *
- * Sources: campaign notes "round 7 family M mechanism 3/7" (market-logic-
- * india low-lag-strength-oscillator OANDA:XAUUSD@1D, moderate 100 count 2)
- * and "mechanism 6/7" (jaysharmaofficial alphamojo supertrend HA-with-buffer
- * BINANCE:BTCUSDT@1D, weak 75 count 1), 2026-09-05 11:16Z; the family-G pin
- * (reversal sizing marks at tick(close): "a positive fill-time shortfall
- * becomes the 1-lot entry-bar 'Margin call' trim at the entry price, PnL
- * 0"), the family-H pin (market-entry admission: the fee-only shortfall is
- * filled and trimmed at the fill), the family-E pin (stop-entry admission:
- * "a still-open opposite position costs nothing"; fill check at the level
- * against equity at fill) and the family-L rule (entry-bar margin call over
- * the post-fill OHLC path). The two probe tapes are replayed row-for-row on
- * the registry's own 1D bars (test_m_admission_36_data.hpp).
- *
- * Rule 3 (mechanism 3): a default-sized percent_of_equity 100 SHORT opened
- * by a MARKET order at 100% margin takes the same fill checkpoint as the
- * long side, with or without a commission — when its fill cost exceeds the
- * equity the fill left (the closing leg of a close-then-short realized at
- * the open), TradingView books the floor-before-4x trim (sub-lot shortfall:
- * ONE lot) AT THE FILL PRICE, PnL 0, tagged "Margin call", and only then
- * marks the survivor over the post-fill path. market-logic 2025-12-04
- * 06:00 (bar 12-03 22:00Z, open 4206.465): E_s = 8983.64 + 1.2 x (4203.115
- * - 4088.255) = 9121.47 -> Q = 2.17; cost 2.17 x 4206.465 = 9128.03 against
- * 9125.49 realized -> TV 22 "Margin call" 1.0 @4206.465 (PnL 0), TV 23 =
- * 1.17 carried to 12-11. The engine's short event was scoped to commissioned
- * shapes only, so the whole 2.17 rode into the ordinary cascade (0.04
- * @4219.62 + 0.04 @4259.34, EN 22-24) and every later quantity drifted with
- * the equity (EN 27/28 reversal 01-05 where TV drops it, EN 29-34 re-short
- * 01-08 vs TV 30 held to 03-09). The long side's trims (TV 7 09-22, TV 20
- * 11-20: 1.0 @ the entry price, PnL 0) are the control and stay as they are.
+ * Pinned against TradingView behaviour (recorded restricted-market tapes
+ * are kept outside this repository). The market cases use invented bars:
+ * a close-then-short whose frozen size slightly exceeds fill-time equity
+ * loses one unit at the fill, PnL zero, before marking its survivor. Two
+ * long controls require the same fill-price trim. A simultaneous pair of
+ * signals whose reversal gaps over equity must preserve the existing short.
  *
  * Rule 6 (mechanism 6): the fill-time admission of a STOP entry that
  * REVERSES a position costs qty x tick(fill) against realized equity PLUS
@@ -63,21 +38,8 @@
  * held the long to 01-30 (3 trades vs 8). Flat fills are unchanged (no open
  * position); same-direction adds keep the realized-only basis (unpinned).
  *
- *   A. market-logic XAUUSD@1D: 33 TV rows row-for-row; the 12-04 trim and
- *      carry by name; the long trims (TV 7, TV 20) unchanged; the pinned
- *      01-04 dropped reversal (no fill 01-05, short held to 03-09).
- *   B. jaysharma BTCUSDT@1D: 8 TV rows row-for-row; the 08-26 reversal by
- *      name; the 10-03 close-only leg (no long opened); the range-end row.
- *   C. Controls (synthetic, mintick 0.01, 1-share lots):
- *      C1 a stop reversal whose cost exceeds realized + open PnL at the
- *         fill is still DECLINED although realized alone would admit it;
- *      C2 the mirror (jaysharma in miniature): realized alone declines,
- *         realized + the closing leg's profit admits;
- *      C3 a FLAT stop entry is byte-identical (admitted at cost == equity,
- *         declined one cent over);
- *      C4 a zero-commission TRUE-FLAT default short: the gap-reject drops
- *         an over-equity fill and an exact-cost fill carries no PnL-0 trim
- *         (the ordinary cascade only).
+ * The BTC replay remains unchanged. Synthetic controls C1-C4 pin marked
+ * reversal equity, flat stop admission and true-flat short gap rejection.
  */
 
 #include <algorithm>
@@ -181,9 +143,9 @@ struct Ohlc {
 };
 
 // Synthetic daily bars at 1-day spacing from an arbitrary epoch.
-std::vector<Bar> synth_bars(const std::vector<Ohlc>& rows) {
+std::vector<Bar> synth_bars(const std::vector<Ohlc>& rows,
+                            int64_t t0 = 1735689600000LL) {
     std::vector<Bar> out;
-    const int64_t t0 = 1735689600000LL;  // 2025-01-01 00:00Z
     for (size_t i = 0; i < rows.size(); ++i) {
         Bar b;
         b.timestamp = t0 + (int64_t)i * 86400000LL;
@@ -196,9 +158,8 @@ std::vector<Bar> synth_bars(const std::vector<Ohlc>& rows) {
 }
 
 // The probes' broker: zero commission, 1x margin both sides, margin calls
-// on, market fills at the next open, pyramiding 0 (both scripts). Sizing is
-// the script's default: percent_of_equity 100 (market-logic) or the fixed
-// 1-contract default (jaysharma, whose strategy() sets neither).
+// on, market fills at the next open, pyramiding 0. Synthetic market pairs
+// use percent_of_equity 100; the BTC replay uses a fixed one-contract default.
 class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, double mintick, double lot, QtyType qty_type,
@@ -307,73 +268,143 @@ std::vector<Row> rows_entered_at(const std::vector<Row>& rows, int64_t ts) {
 }
 
 // ---------------------------------------------------------------------------
-// A. market-logic-india low-lag-strength-oscillator @ OANDA:XAUUSD 1D.
-//    strategy(initial_capital=10000, percent_of_equity 100), no commission:
-//      if longSig:  strategy.entry("Long", long)
-//      if shortSig: strategy.close("Long"); strategy.entry("Short", short)
-//      if longSig:  strategy.close("Short")
-//    Signal bars from the range-start model; fills at the next bar's open.
+// A. Invented market close-then-open paths at the sub-lot equity boundary.
 // ---------------------------------------------------------------------------
 void test_market_logic_tape() {
-    std::printf("A. market-logic XAUUSD@1D tape replay (short-side entry-price trim)\n");
-    const std::vector<Bar> bars = to_bars(kXauDaily);
-    std::map<int64_t, std::pair<bool, bool>> signals;
-    for (const Signal& s : kMarketLogicSignals) {
-        signals[s.ts] = {s.long_sig, s.short_sig};
-    }
-    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+    std::printf("A. synthetic market fill-price trims and dropped reversal\n");
+    constexpr int64_t epoch = 946684800000LL;
+    constexpr int64_t day = 86400000LL;
+    const auto stamp = [=](int index) { return epoch + index * day; };
+    std::vector<Row> got;
+    std::vector<Row> want;
+
+    const auto run_pair = [&](int offset, bool first_long, double capital,
+                              double seed, double signal, double fill,
+                              double exit, double survivor) {
+        const auto bars = synth_bars({
+            {seed, seed, seed, seed},
+            {seed, seed, seed, seed},
+            {signal, signal, signal, signal},
+            {fill, fill + 0.7, fill - 0.3, fill},
+            {fill, fill, fill, fill},
+            {exit, exit, exit, exit},
+        }, stamp(offset));
+        Probe p(capital, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+        p.script = [=](Probe& e, const Bar& bar) {
+            if (bar.timestamp == stamp(offset)) {
+                e.entry_market(first_long ? "Long" : "Short", first_long, 1.0);
+            }
+            if (bar.timestamp == stamp(offset + 2)) {
+                // Retain the two command orders: close-then-short and
+                // reverse-to-long-then-close-short.
+                if (first_long) {
+                    e.strategy_close("Long");
+                    e.entry_market("Short", false);
+                } else {
+                    e.entry_market("Long", true);
+                    e.strategy_close("Short");
+                }
+            }
+            if (bar.timestamp == stamp(offset + 4)) {
+                e.strategy_close(first_long ? "Short" : "Long");
+            }
+        };
+        p.run(bars.data(), (int)bars.size());
+        const auto rows = p.rows();
+        got.insert(got.end(), rows.begin(), rows.end());
+        // Initial leg closes at the new entry's fill; trim has zero duration
+        // and PnL; remaining leg earns signed (exit - fill) * survivor.
+        want.push_back({stamp(offset + 1), seed, 1.0, stamp(offset + 3),
+                        fill, kExitClose, first_long ? fill - seed : seed - fill,
+                        first_long});
+        want.push_back({stamp(offset + 3), fill, 1.0, stamp(offset + 3),
+                        fill, kExitMarginCall, 0.0, !first_long});
+        want.push_back({stamp(offset + 3), fill, survivor, stamp(offset + 5),
+                        exit, kExitClose,
+                        first_long ? (fill - exit) * survivor
+                                   : (exit - fill) * survivor,
+                        !first_long});
+        CHECK(p.flat());
+    };
+
+    // Short: signal equity 250+(110-100)=260, hence
+    // floor(260/110/0.01)*0.01=2.36. Fill equity 260.3, cost
+    // 2.36*110.3=260.308: q_restore=0.008/110.3 < 0.01 -> one unit.
+    // Survivor 2.36-1=1.36; close PnL=(110.3-112)*1.36=-2.312.
+    run_pair(0, true, 250.0, 100.0, 110.0, 110.3, 112.0, 1.36);
+    // Long control 1: signal equity 250+(100-90)=260 -> 2.88 units.
+    // Fill equity 259.6, cost 2.88*90.4=260.352; deficit/90.4 =
+    // 0.008318... < 0.01 -> one unit; (92-90.4)*1.88=3.008 PnL.
+    run_pair(10, false, 250.0, 100.0, 90.0, 90.4, 92.0, 1.88);
+    // Long control 2: signal equity 300+(120-100)=320 -> 3.20 units.
+    // Fill equity 319.8, cost 3.20*100.2=320.64; deficit/100.2 =
+    // 0.008383... < 0.01 -> one unit; (101.5-100.2)*2.20=2.86 PnL.
+    run_pair(20, false, 300.0, 120.0, 100.0, 100.2, 101.5, 2.20);
+
+    // Dropped reversal: signal equity 250 freezes 2.5 units at 100.
+    // At the next open 102, cost 255 exceeds marked equity
+    // 250+(100-102)*2=246. Closing the old short must be voided too.
+    // A later empty bar confirms no deferred entry; the two-unit short
+    // remains until range end at 101, PnL=(100-101)*2=-2.
+    const auto bars = synth_bars({
+        {100.0, 100.0, 100.0, 100.0},
+        {100.0, 100.0, 100.0, 100.0},
+        {100.0, 100.0, 100.0, 100.0},
+        {102.0, 103.0, 101.0, 102.0},
+        {102.0, 103.0, 101.0, 102.0},
+        {101.0, 102.0, 100.0, 101.0},
+        {101.0, 102.0, 100.0, 101.0},
+        {101.0, 102.0, 100.0, 101.0},
+    }, stamp(30));
+    Probe p(250.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
     p.script = [&](Probe& e, const Bar& bar) {
-        auto it = signals.find(bar.timestamp);
-        if (it == signals.end()) return;
-        const bool long_sig = it->second.first;
-        const bool short_sig = it->second.second;
-        if (long_sig) e.entry_market("Long", true);
-        if (short_sig) {
+        if (bar.timestamp == stamp(30)) e.entry_market("Short", false, 2.0);
+        if (bar.timestamp == stamp(32)) {
+            e.entry_market("Long", true);
             e.strategy_close("Long");
             e.entry_market("Short", false);
+            e.strategy_close("Short");
         }
-        if (long_sig) e.strategy_close("Short");
     };
     p.run(bars.data(), (int)bars.size());
-    const std::vector<Row> got = p.rows();
-    const std::vector<Row> want = to_rows(kMarketLogicTape);
-    check_rows_match("market-logic XAUUSD@1D", got, want);
+    const auto held = p.rows();
+    got.insert(got.end(), held.begin(), held.end());
+    want.push_back({stamp(31), 100.0, 2.0, stamp(37), 101.0,
+                    kExitOpenAtEnd, -2.0, false});
+    CHECK(p.is_short());
+    CHECK_NEAR(p.pos_qty(), 2.0, 1e-9);
+    CHECK(p.closed_count() == 0);
+    std::sort(got.begin(), got.end(), row_before);
+    std::sort(want.begin(), want.end(), row_before);
+    check_rows_match("synthetic market admission", got, want);
 
-    // The mechanism-3 rows by name: 2025-12-04 06:00 (bar 12-03 22:00Z).
-    const int64_t t1204 = 1764799200000LL;
-    const std::vector<Row> dec04 = rows_entered_at(got, t1204);
-    CHECK(dec04.size() == 2);
-    if (dec04.size() == 2) {
-        // TV 22: the 1-lot entry-price trim, "Margin call", PnL 0, duration 0.
-        CHECK(!dec04[0].is_long);
-        CHECK_NEAR(dec04[0].entry_price, 4206.465, 1e-9);
-        CHECK_NEAR(dec04[0].qty, 1.0, 1e-9);
-        CHECK(dec04[0].exit_ts == t1204);
-        CHECK_NEAR(dec04[0].exit_price, 4206.465, 1e-9);
-        CHECK(dec04[0].kind == kExitMarginCall);
-        CHECK_NEAR(dec04[0].pnl, 0.0, 1e-9);
-        // TV 23: the 1.17 survivor carried to the 12-11 06:00 long (bar
-        // 12-10 22:00Z open 4228.245) — no slice at the entry bar's high
-        // 4219.62 nor at the next day's 4259.34.
-        CHECK_NEAR(dec04[1].qty, 1.17, 1e-9);
-        CHECK(dec04[1].exit_ts == 1765404000000LL);
-        CHECK_NEAR(dec04[1].exit_price, 4228.245, 1e-9);
-        CHECK(dec04[1].kind == kExitClose);
-        CHECK_NEAR(dec04[1].pnl, -25.4826, 5e-3);
+    const int64_t short_fill = stamp(3);
+    const std::vector<Row> short_rows = rows_entered_at(got, short_fill);
+    CHECK(short_rows.size() == 2);
+    if (short_rows.size() == 2) {
+        CHECK(!short_rows[0].is_long);
+        CHECK_NEAR(short_rows[0].entry_price, 110.3, 1e-9);
+        CHECK_NEAR(short_rows[0].qty, 1.0, 1e-9);
+        CHECK(short_rows[0].exit_ts == short_fill);
+        CHECK_NEAR(short_rows[0].exit_price, 110.3, 1e-9);
+        CHECK(short_rows[0].kind == kExitMarginCall);
+        CHECK_NEAR(short_rows[0].pnl, 0.0, 1e-9);
+        CHECK_NEAR(short_rows[1].qty, 1.36, 1e-9);
+        CHECK(short_rows[1].exit_ts == stamp(5));
+        CHECK_NEAR(short_rows[1].exit_price, 112.0, 1e-9);
+        CHECK(short_rows[1].kind == kExitClose);
+        CHECK_NEAR(short_rows[1].pnl, -2.312, 5e-3);  // (110.3-112)*1.36
     }
     int slices_at_high = 0;
     for (const Row& r : got) {
-        if (r.entry_ts == t1204 && r.kind == kExitMarginCall
+        if (r.entry_ts == short_fill && r.kind == kExitMarginCall
             && std::fabs(r.exit_price - r.entry_price) > 1e-9) {
             ++slices_at_high;
         }
     }
     CHECK(slices_at_high == 0);
 
-    // Control: the LONG side's entry-price trims are unchanged — TV 7
-    // (2025-09-22 06:00, bar 09-21 21:00Z) and TV 20 (2025-11-20 06:00, bar
-    // 11-19 22:00Z): 1.0 @ the entry price, "Margin call", PnL 0.
-    for (int64_t ts : {1758488400000LL, 1763589600000LL}) {
+    for (int64_t ts : {stamp(13), stamp(23)}) {
         const std::vector<Row> rows = rows_entered_at(got, ts);
         CHECK(rows.size() == 2);
         if (rows.size() == 2) {
@@ -385,14 +416,8 @@ void test_market_logic_tape() {
             CHECK_NEAR(rows[0].pnl, 0.0, 1e-9);
         }
     }
-
-    // The pinned dropped reversal: the 2026-01-04 22:00Z bar fires longSig
-    // AND shortSig; TV's Q = 2.05 x open 4454.8 = 9132 > E_s 9121.9, the
-    // reversal is dropped and the same-bar close("Short") voided — nothing
-    // fills 2026-01-05 22:00Z and TV 30 (1.15 short from 12-30) rides to
-    // 03-09 05:00. The engine printed EN 27/28 here with its drifted equity.
-    CHECK(rows_entered_at(got, 1767650400000LL).empty());
-    CHECK(rows_entered_at(got, 1767909600000LL).empty());  // 2026-01-08 22:00Z
+    CHECK(rows_entered_at(got, stamp(33)).empty());
+    CHECK(rows_entered_at(got, stamp(36)).empty());
 }
 
 // ---------------------------------------------------------------------------
