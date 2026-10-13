@@ -3681,6 +3681,38 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
     }
 
 
+def _validate_report_result(out: dict) -> None:
+    """Canonical trade and summary doubles have no defined non-finite absence.
+    Keep the failure fields as engine-owned literals; metrics, equity and
+    recorded outputs retain their existing _num-to-null convention."""
+    for trade in out["trades"]:
+        for key, field in (
+            ("entry_price", "trades.entry_price"),
+            ("exit_price", "trades.exit_price"),
+            ("qty", "trades.qty"),
+            ("pnl", "trades.pnl"),
+            ("pnl_pct", "trades.pnl_pct"),
+            ("max_runup", "trades.max_runup"),
+            ("max_drawdown", "trades.max_drawdown"),
+            ("commission", "trades.commission"),
+        ):
+            if not math.isfinite(trade[key]):
+                raise RunFailure(f"the report result {field} is not finite",
+                                 "report_result_invalid",
+                                 {"field": field, "reason": "nonfinite"})
+    for key, field in (
+        ("net_pnl", "summary.net_pnl"),
+        ("avg_trade", "summary.avg_trade"),
+        ("best_trade", "summary.best_trade"),
+        ("worst_trade", "summary.worst_trade"),
+        ("max_drawdown", "summary.max_drawdown"),
+    ):
+        if not math.isfinite(out["summary"][key]):
+            raise RunFailure(f"the report result {field} is not finite",
+                             "report_result_invalid",
+                             {"field": field, "reason": "nonfinite"})
+
+
 def _request_invalid(text: str, option: str, exit_status: int = 1) -> RunFailure:
     return RunFailure(text, "run_request_invalid", {"option": option},
                       exit_status=exit_status)
@@ -4161,7 +4193,7 @@ def _capabilities_main(args) -> int:
     import selected_window_report as swr
     lib = load_strategy(args.so)
     document = swr.capabilities_record(_runtime_supports_selected_window(lib))
-    return _write_report(json.dumps(document, separators=(",", ":")) + "\n")
+    return _write_report(json.dumps(document, separators=(",", ":"), allow_nan=False) + "\n")
 
 
 def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
@@ -4235,7 +4267,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                                          calendar=calendar)
         return _write_report(json.dumps(
             {"engine": "pineforge", "validation_only": True, "report_window": window},
-            separators=(",", ":")) + "\n")
+            separators=(",", ":"), allow_nan=False) + "\n")
     symbol_feeds = load_symbol_feeds(args.symbol_feeds) if args.symbol_feeds else None
 
     # 5. Execution begins before the strategy library loads.
@@ -4356,6 +4388,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         out = build_report_dict(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
             elapsed, inputs, overrides, applied_runtime, trade_entry_incarnations)
+        _validate_report_result(out)
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(len(out["equity_curve"]),
                                                     len(out["trades"]))
@@ -4396,7 +4429,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         _advance(phases, "serialization")
         out["diagnostics"]["phase_timing"] = phases.writer.phase_timing()
         buffer = io.StringIO()
-        json.dump(out, buffer, separators=(",", ":"))
+        json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
         buffer.write("\n")
     except Exception as error:
         # Once the engine has acknowledged result_assembly (the REAL writer phase), an
@@ -4776,6 +4809,7 @@ def _main(argv=None) -> int:
             report, args.ohlcv, n, first_ts, last_ts,
             elapsed, inputs, overrides, applied_runtime,
             trade_entry_incarnations)
+        _validate_report_result(out)
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -4811,7 +4845,7 @@ def _main(argv=None) -> int:
         # Serialized whole before any byte is written (the same json.dump), so
         # a failure while it is built never follows half a report.
         buffer = io.StringIO()
-        json.dump(out, buffer, separators=(",", ":"))
+        json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
         buffer.write("\n")
     except Exception as error:
         # Without --run-phase-fd there is no boundary and this re-raises the error unchanged.
