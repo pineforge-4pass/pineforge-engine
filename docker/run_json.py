@@ -4845,10 +4845,25 @@ def _main(argv=None) -> int:
         # Serialized whole before any byte is written (the same json.dump), so
         # a failure while it is built never follows half a report.
         buffer = io.StringIO()
-        json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
+        try:
+            json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
+        except ValueError as error:
+            # Match only the encoder's allow_nan=False refusal, including the
+            # versions that append repr(value); other ValueErrors keep their code.
+            if (_boundary_phase(phases) is None and str(error) in (
+                "Out of range float values are not JSON compliant",
+                "Out of range float values are not JSON compliant: nan",
+                "Out of range float values are not JSON compliant: inf",
+                "Out of range float values are not JSON compliant: -inf",
+            )):
+                raise RunFailure("the report document holds a non-finite number",
+                                 "report_result_invalid",
+                                 {"field": "report.document", "reason": "nonfinite"}) from error
+            raise
         buffer.write("\n")
     except Exception as error:
-        # Without --run-phase-fd there is no boundary and this re-raises the error unchanged.
+        # Without --run-phase-fd the writer above types its non-finite refusal;
+        # other errors keep their existing classification.
         classified = _post_boundary_failure(error, phases)
         if classified is None:
             raise

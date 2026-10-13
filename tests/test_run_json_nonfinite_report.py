@@ -274,18 +274,29 @@ def test_writer_backstop(harness, mode, bad):
                    serialization=True, mode=mode)
 
 
-def test_writer_backstop_without_phase_fd_keeps_existing_classification(harness):
+def test_writer_backstop_without_phase_fd_is_report_result_invalid(harness):
     result = harness.run("ordinary", phase_fd=False,
                          inject=lambda document: document.update(elapsed_seconds=float("inf")))
+    assert_failure(result, RESULT_INVALID,
+                   {"field": "report.document", "reason": NONFINITE_REASON}, phase_fd=False)
+    assert strict_line(result.stdout)["error"] == "the report document holds a non-finite number"
+
+
+def test_writer_other_value_error_without_phase_fd_keeps_existing_classification(harness):
+    def make_circular(document):
+        document["diagnostics"]["cycle"] = document
+
+    result = harness.run("ordinary", phase_fd=False, inject=make_circular)
     document = strict_line(result.stdout)
     assert result.status == 1
-    # _post_boundary_failure explicitly has no boundary without this descriptor.
     assert (document["code"], document["args"]) == ("harness_internal_error", {})
-    assert "ValueError" in document["error"]
-    assert "ValueError" in result.stderr
+    assert "ValueError: Circular reference detected" in document["error"]
+    assert "ValueError: Circular reference detected" in result.stderr
     assert result.records == []
     assert result.events.count("stdout.write") == 1
+    assert result.events.count("stdout.flush") == 1
     assert [call[0] for call in result.library.calls][-2:] == ["report_free", "strategy_free"]
+    assert result.library.observer_descriptor is None
 
 
 @pytest.mark.parametrize("bad", BAD_VALUES)
