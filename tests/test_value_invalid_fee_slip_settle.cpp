@@ -383,27 +383,9 @@ void counter_rows() {
     }
 }
 
-// These are prospective rows for the exact after-g134 hunk in CHANGES.md.
-// They are intentionally red until that coordinated follow-up is applied.
-void deferred_settlement_rows() {
-    if (row("d6_21_settlement_pnl")) {
-        FixtureScope scope(false);
-        Script script;
-        script.quantity = 4.0;
-        auto tape = bars(1.0);
-        for (std::size_t i = 4; i < tape.size(); ++i) {
-            tape[i].open = tape[i].high = tape[i].low = tape[i].close = 1e308;
-        }
-        expect_g(run(script, spec(), tape), "settlement.row", "settlement", "nonfinite");
-    }
-    if (row("d6_22_settlement_excursion")) {
-        FixtureScope scope(false);
-        Script script;
-        script.invalid_excursion = true;
-        expect_g(run(script, spec(), bars()), "settlement.row", "settlement", "nonfinite");
-        CHECK(script.excursions > 0);
-    }
-}
+// D6 rows 21 and 22 are ruled KEEP engine_invariant (ENGINE-TOP 14:09, EN-134 decides that branch):
+// a non-finite settlement row keeps the typed engine_invariant failure that EN-134's own rows pin
+// (tests/test_native_settlement_row_finite.cpp), so this file carries no settlement.row row.
 
 void finite_fee_slippage_bits() {
     if (!row("d6_11_13_finite_bits")) return;
@@ -649,7 +631,6 @@ int main(int argc, char** argv) {
     fee_injected_rows();
     current_and_candidate_prices();
     counter_rows();
-    deferred_settlement_rows();
     finite_fee_slippage_bits();
     fee_evaluation_order_bits();
 #ifndef PINEFORGE_VALUE_INVALID_KERNEL_ONLY
