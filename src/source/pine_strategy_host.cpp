@@ -12,6 +12,7 @@
 #include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"
 #include "pine_run_failure.hpp"
+#include "pine_value_admit_risk.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -865,6 +866,8 @@ void source::PineStrategyHost::set_syminfo_session(const std::string& session) {
 // The six risk setters apply live as they always did. While a selected window's
 // pre-roll evaluation captures they also append an ordered row, so the replay
 // can set them again in the script's own order against the saved configuration.
+// The three int arguments cannot represent NaN/infinity; their existing
+// direction/count/cap behavior needs no numeric admission.
 void source::PineStrategyHost::set_pine_risk_direction(int direction) {
     detail::capture_risk_row(*this, config_, detail::IntentRiskDirection{direction});
     adapter_.set_risk_direction(direction);
@@ -876,11 +879,13 @@ void source::PineStrategyHost::set_pine_risk_max_cons_loss_days(int value) {
 }
 
 void source::PineStrategyHost::set_pine_risk_max_drawdown(double value, bool percent) {
+    admit_pine_risk_max_drawdown(value, percent);
     detail::capture_risk_row(*this, config_, detail::IntentRiskMaxDrawdown{value, percent});
     adapter_.set_risk_max_drawdown(value, percent);
 }
 
 void source::PineStrategyHost::set_pine_risk_max_intraday_loss(double value, bool percent) {
+    admit_pine_risk_max_intraday_loss(value, percent);
     detail::capture_risk_row(*this, config_, detail::IntentRiskMaxIntradayLoss{value, percent});
     adapter_.set_risk_max_intraday_loss(value, percent);
 }
@@ -892,6 +897,7 @@ void source::PineStrategyHost::set_pine_risk_max_intraday_filled_orders(int limi
 }
 
 void source::PineStrategyHost::set_pine_risk_max_position_size(double value) {
+    admit_pine_risk_max_position_size(value);
     detail::capture_risk_row(*this, config_, detail::IntentRiskMaxPositionSize{value});
     adapter_.set_risk_max_position_size(value);
 }
@@ -2552,6 +2558,7 @@ void replay_intent(source::PineExecutionAdapter& adapter,
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentRiskDirection& row) {
+    // The retained int direction/count/cap rows cannot carry NaN/infinity.
     adapter.set_risk_direction(row.direction);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
@@ -2560,10 +2567,12 @@ void replay_intent(source::PineExecutionAdapter& adapter,
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentRiskMaxDrawdown& row) {
+    admit_pine_risk_max_drawdown(row.value, row.percent);
     adapter.set_risk_max_drawdown(row.value, row.percent);
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentRiskMaxIntradayLoss& row) {
+    admit_pine_risk_max_intraday_loss(row.value, row.percent);
     adapter.set_risk_max_intraday_loss(row.value, row.percent);
 }
 // As the host setter: the script's own statement adopts the count switches first.
@@ -2574,6 +2583,7 @@ void replay_intent(source::PineExecutionAdapter& adapter,
 }
 void replay_intent(source::PineExecutionAdapter& adapter,
                    const source::detail::IntentRiskMaxPositionSize& row) {
+    admit_pine_risk_max_position_size(row.value);
     adapter.set_risk_max_position_size(row.value);
 }
 
@@ -2666,6 +2676,7 @@ void source::PineStrategyHost::selected_replay_at_open(const Bar& bar,
     // then its receipts and the legs staged before its body, as
     // scheduler_publish_source_bar takes them.
     state->replay_point = &state->terminal_point;
+    assert_admitted_pine_replay_risk_config(state->start_risk);
     adapter_.restore_replay_risk_config(state->start_risk);
     adapter_.set_configuration(state->start_config);
     adapter_.begin_source_evaluation();
@@ -2690,6 +2701,7 @@ void source::PineStrategyHost::selected_replay_at_open(const Bar& bar,
     // never a counter), then the drains every source evaluation ends with.
     state->replay_point = &state->terminal_point;
     adapter_.set_configuration(state->end_config);
+    assert_admitted_pine_replay_risk_config(state->end_risk);
     adapter_.restore_replay_risk_config(state->end_risk);
     finish_adapter_evaluation();
     stop_if_failed();
