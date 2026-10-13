@@ -116,6 +116,9 @@ In JSON reports, each trade's `entry_price`, `exit_price`, `qty`, `pnl`,
 `net_pnl`, `avg_trade`, `best_trade`, `worst_trade` and `max_drawdown`, must be
 finite or the run fails with `report_result_invalid`, `field` naming the
 corresponding `trades.<leaf>` or `summary.<leaf>` and `reason` equal to `nonfinite`.
+In ordinary mode without `--run-phase-fd`, a non-finite double elsewhere in the
+report document fails with `report_result_invalid`, `field` equal to
+`report.document` and `reason` equal to `nonfinite`.
 
 ## Bar processing
 
