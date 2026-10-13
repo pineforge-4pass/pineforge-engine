@@ -3604,8 +3604,8 @@ And the money band's *affordable price*, `sig10(sig10(equity) / notional per
 unit of price)` compared against the sizing price at placement, at the terms
 boundary and in the paired-reversal and carried-money checks: that is not a
 conversion of money into units but TradingView's ten-significant-digit
-whole-drop price (the famr / famr3 tapes of `tests/test_tv_money_precision_l4b.cpp`
-and `tests/test_tv_money_band_l4b.cpp`), and on a decimal tie the kernel's
+whole-drop price (the famr / famr3 tapes of two tests that live in the private
+fixtures), and on a decimal tie the kernel's
 conversion and plain binary64 both refuse the lot the rule admits
 (`tests/test_adapter_fill_qty_probe.cpp`, section 2; design row SZ10a).
 

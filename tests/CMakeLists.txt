@@ -265,7 +265,6 @@ set(TEST_SOURCES
     test_ta_rma_warmup
     test_ta_sma_exact_order
     test_ta_sma_window_residual
-    test_ta_sma_stochrsi_ties
     test_ta_na_source_rules
     test_matrix
     test_matrix_identity
@@ -3646,6 +3645,7 @@ list(APPEND _pf_private_fixture_rows
     test_ta_series_length_extremes
     test_ta_series_length_supertrend
     test_ta_simple_length
+    test_ta_sma_stochrsi_ties
     test_ta_voltrend_edge
     test_ta_window_round10
     test_ta_window_underapplied
@@ -6327,6 +6327,13 @@ elseif(NOT test_ta_simple_length IN_LIST _pf_kernel_absent_rows)
     set_tests_properties(test_ta_simple_length PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
 endif()
 
+if(NOT test_ta_sma_stochrsi_ties IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ta_sma_stochrsi_ties.cpp")
+    pineforge_add_unit_test(test_ta_sma_stochrsi_ties)
+elseif(NOT test_ta_sma_stochrsi_ties IN_LIST _pf_kernel_absent_rows)
+    add_test(NAME test_ta_sma_stochrsi_ties COMMAND ${CMAKE_COMMAND} -E echo "SKIP private fixtures not present: tests/test_ta_sma_stochrsi_ties.cpp")
+    set_tests_properties(test_ta_sma_stochrsi_ties PROPERTIES SKIP_REGULAR_EXPRESSION "^SKIP private fixtures not present: " LABELS private_fixtures)
+endif()
+
 if(NOT test_ta_voltrend_edge IN_LIST _pf_kernel_absent_rows AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/supertrend_warmup/bars.inc")
     pineforge_add_unit_test(test_ta_voltrend_edge)
 elseif(NOT test_ta_voltrend_edge IN_LIST _pf_kernel_absent_rows)
@@ -7052,8 +7059,8 @@ foreach(_pf_python_row IN ITEMS
     endif()
 endforeach()
 
-# The two gate suites (registered unconditionally at tests/CMakeLists.txt:2215
-# and :2217) drive the real ci_verify Driver over the floor, exclusion, overlay
+# The two gate suites (registered unconditionally at tests/CMakeLists.txt:2214
+# and :2216) drive the real ci_verify Driver over the floor, exclusion, overlay
 # and live-profile paths, and build their tamper trees through
 # tempfile.TemporaryDirectory, which honours TMPDIR: pin TMPDIR to a
 # configure-time directory under the build dir, the shape the private-fixture
