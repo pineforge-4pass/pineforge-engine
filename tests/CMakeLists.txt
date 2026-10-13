@@ -1860,6 +1860,8 @@ list(APPEND TEST_SOURCES
     test_selected_window_report_integration
     test_selected_window_routes
     test_selected_production_routes
+    # EN-132 source command admission: public host, synthetic feed, no fixtures.
+    test_value_admission_doors
     # The source of test_selected_quote_seal is supplied by a separate change
     # and integrated with this registration before configure.
     test_selected_quote_seal

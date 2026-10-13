@@ -1,0 +1,12 @@
+{
+  "outcome": "failed",
+  "code": "strategy_value_invalid",
+  "args": {
+    "field": "exit.profit_ticks",
+    "reason": "nonfinite"
+  },
+  "min_trades": 0,
+  "label": "S",
+  "pinned_by": "EN-132 S1a rules 2, 5; D2; revision 3 Appendix B exit.profit_ticks and Appendix D",
+  "native_boundary_control": "tests/test_value_admission_doors.cpp"
+}

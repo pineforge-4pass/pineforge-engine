@@ -1,0 +1,12 @@
+{
+  "outcome": "failed",
+  "code": "strategy_value_invalid",
+  "args": {
+    "field": "entry.comment",
+    "reason": "invalid_unicode"
+  },
+  "min_trades": 0,
+  "label": "S",
+  "pinned_by": "EN-132 S1a rule 1 and rule 6; revision 3 Appendix B entry.comment",
+  "native_boundary_control": "tests/test_value_admission_doors.cpp"
+}
