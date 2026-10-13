@@ -1,0 +1,7 @@
+//@version=6
+strategy("s_default_qty_value_neg_inf_unconstructible", default_qty_type=strategy.fixed, default_qty_value=-1e400)
+
+if bar_index == 0
+    strategy.entry("L", strategy.long, qty=1)
+if bar_index == 3
+    strategy.close("L")

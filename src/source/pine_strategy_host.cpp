@@ -12,6 +12,7 @@
 #include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"
 #include "pine_run_failure.hpp"
+#include "pine_value_admit_decl.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -843,6 +844,7 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
 
 void source::PineStrategyHost::configure_pine_strategy(const PineStrategyConfig& config) {
     guard_native_mutation("configure_pine_strategy");
+    admit_strategy_declaration(config);
     config_ = config;
     adapter_.set_configuration(config_);
     scheduler_.set_source_series_active(config_.src_series_active);

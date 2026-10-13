@@ -1,0 +1,9 @@
+{
+  "outcome": "compile_refused",
+  "code": "",
+  "args": {},
+  "min_trades": 0,
+  "label": "S",
+  "pinned_by": "EN-132 D3 declaration margin_short: infinity -> S nonfinite; MAP section 1 source constructibility",
+  "native_boundary_control": "tests/test_value_admission_decl.cpp"
+}
