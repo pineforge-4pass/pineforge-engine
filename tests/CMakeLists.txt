@@ -3692,6 +3692,42 @@ endforeach()
 pineforge_add_twin_test(test_native_settlement_row_controls
     test_native_settlement_row_finite --controls)
 
+# EN-132 round b: real one-lot fused runs, individually selectable. All
+# round-a targets/rows retain their source-free kernel include closure.
+foreach(_pf_one_lot_row_case
+        one_lot_runup_nan one_lot_drawdown_nan
+        one_lot_runup_posinf one_lot_drawdown_posinf
+        one_lot_runup_neginf one_lot_drawdown_neginf
+        one_lot_pnl_pct_overflow
+        finite_one_lot_zero finite_one_lot_owned finite_one_lot_signed
+        kernel_one_lot_normal)
+    pineforge_add_twin_test(test_native_settlement_row_${_pf_one_lot_row_case}
+        test_native_settlement_row_finite ${_pf_one_lot_row_case})
+endforeach()
+
+# The adapter rows live in the same TU as requested, compiled a second time
+# with an explicit public source-header dependency. Only this target sees it;
+# the native target above cannot include/link the source layer in any profile.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_source_settlement_row_finite test_native_settlement_row_finite.cpp)
+    target_link_libraries(test_source_settlement_row_finite PRIVATE pineforge)
+    target_compile_options(test_source_settlement_row_finite PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_source_settlement_row_finite PRIVATE ${_pf_cov_test_flags})
+    endif()
+    target_compile_definitions(test_source_settlement_row_finite PRIVATE
+        "PINEFORGE_SETTLEMENT_SOURCE_HEADER=\"pineforge/source/pine_strategy_host.hpp\"")
+    add_test(NAME test_source_settlement_row_finite COMMAND test_source_settlement_row_finite)
+    foreach(_pf_source_settlement_row_case
+            terminal_quote_pnl_pct_overflow terminal_quote_price_overflow
+            finite_terminal_quote amended_trade_commission_overflow finite_amended_trade)
+        pineforge_add_twin_test(test_source_settlement_row_${_pf_source_settlement_row_case}
+            test_source_settlement_row_finite ${_pf_source_settlement_row_case})
+    endforeach()
+    pineforge_add_twin_test(test_source_settlement_row_controls
+        test_source_settlement_row_finite --controls)
+endif()
+
 # The C bridge test also links the shared window-plan helper, whose bridge
 # (src/selected_window_plan_c.cpp) is not in the kernel archive. The loop above
 # supplies pineforge and the -ffp-contract=off and -UNDEBUG flags.
