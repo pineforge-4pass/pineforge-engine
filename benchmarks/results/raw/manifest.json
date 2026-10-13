@@ -3,7 +3,7 @@
   "evidence": {
     "sha256": "c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019",
     "bytes": 20109399,
-    "what": "the 101 closed slots (101-201): strategy.pine, generated.cpp (codegen 121b3e6a), inputs.json (with the pre-2026-09-24 strategy() default pins), metrics.json, PROVENANCE.json, tv_trades.csv, strategy_pyne.py, pineforge_trades.csv and pynecore_trades.csv of this refresh, and _selection/ with the full selection manifest; TradingView-scraped third-party scripts, not redistributed",
+    "what": "the 101 closed slots (101-201): strategy.pine, generated.cpp (codegen 121b3e6a), inputs.json (with the pre-2026-09-24 strategy() default pins), metrics.json, PROVENANCE.json, tv_trades.csv, strategy_pyne.py, pineforge_trades.csv and pynecore_trades.csv of this refresh, and _selection/ with the full selection manifest; held-out private strategies, not redistributed",
     "lane": "BENCH-REFRESH",
     "fetch": "lab evidence get <sha256> --out <file> (maintainers, campaign environment); tar -xzf <file> -C benchmarks",
     "previous": {

@@ -15,7 +15,7 @@ Last refresh **2026-09-29**. Versions: engine `main` `35db01c8` running the comm
 **Population: 200 strategies in 201 slots**, selected by [`select_population.py`](select_population.py) with seed 20260921. The manifest is [`results/selection.md`](results/selection.md).
 
 - **100 corpus probes** (slots `001`–`100`) are public. They come from `corpus/validation/` at gitlink `442d497`: at least one per each of 19 mechanism families, drawn by TradingView trade-count bins.
-- **100 closed strategies** (slots `101`–`200`) are TradingView-scraped community scripts on `BINANCE:ETHUSDT.P` 15m, the only market and timeframe that both the bench feed and the TradingView tapes cover. Their artifacts are in the maintainers' private evidence store (sha256 `c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019`) and are not public; the committed results name each by its slot number only.
+- **100 closed strategies** (slots `101`–`200`) are held-out private strategies on `BINANCE:ETHUSDT.P` 15m, the only market and timeframe that both the bench feed and the TradingView tapes cover. Their artifacts are in the maintainers' private evidence store (sha256 `c77a9c70891b5e4e97405fe6673389c06652a0cc449b380a4d982f1709e62019`) and are not public; the committed results name each by its slot number only.
 - **Slot `201` stands in for slot `192` in the PyneCore count.** PyneSys rejects `192`'s source with `"Empty document."`, so the next strategy from the same bin became slot `201`. PineForge runs all 201 slots.
 
 Each engine's trade list is graded against TradingView's own export (266,451 trades) by the canonical corpus rubric, [`scripts/verify_corpus.py`](../scripts/verify_corpus.py)'s `analyze_strategy`:
@@ -253,7 +253,7 @@ Binance USDT-M futures ETH/USDT-USDT 15-minute OHLCV: 53,929 bars from 2024-10-1
 
 ### `assets/strategies/<NNN-slug>/strategy.pine`
 
-The 100 public slots are probes of the public PineForge corpus: clean-room PineForge originals under the corpus's Apache-2.0 license. The 100 closed scripts are third-party TradingView publications. They are used as a factual reference and are not redistributed.
+The 100 public slots are probes of the public PineForge corpus: clean-room PineForge originals under the corpus's Apache-2.0 license. The 100 closed strategies (slots `101`–`200`) are held-out private strategies on `BINANCE:ETHUSDT.P` 15m. They are used as a factual reference and are not redistributed.
 
 ### `assets/strategies/<NNN-slug>/strategy_pyne.py`
 

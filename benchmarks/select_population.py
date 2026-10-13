@@ -18,7 +18,7 @@ Corpus half (public)
     are cut into as many contiguous bins as the family has slots and one
     member is drawn per bin.
 
-Closed half (private artifacts, public manifest)
+Closed half (held-out private strategies, public manifest)
     Drawn from the campaign population document: ``source == "scrapper"``,
     ``symbol == "BINANCE:ETHUSDT.P"``, ``timeframe == "15"`` -- the only
     dataset the bench feed (Binance ETH/USDT-USDT perp 15m) and the TV tapes
@@ -76,7 +76,7 @@ MIN_TV_TRADES_CORPUS = 5
 CLOSED_SYMBOL = "BINANCE:ETHUSDT.P"
 CLOSED_TIMEFRAME = "15"
 CORPUS_LICENSE = "Apache-2.0 (pineforge-corpus LICENSE)"
-CLOSED_LICENSE = "TradingView scraped, not redistributed"
+CLOSED_LICENSE = "Held-out private strategy, not redistributed"
 
 # Mechanism families, first match wins: the cross-cutting broker/runtime
 # mechanisms a probe name spells anywhere, then the corpus README's own
@@ -493,7 +493,7 @@ def render_md(m: dict) -> str:
         lines.append(f"| {f} | {v['eligible']} | {v['slots']} |")
     lines += [
         "",
-        f"Closed: {s['laneProbes']} BINANCE:ETHUSDT.P 15 scraped probes → {s['eligible']} eligible "
+        f"Closed: {s['laneProbes']} BINANCE:ETHUSDT.P 15 held-out private probes → {s['eligible']} eligible "
         f"(excluded: {', '.join(f'{k} {v}' for k, v in s['excluded'].items()) or 'none'}).",
         "",
         "| Surface | Eligible | Slots |",

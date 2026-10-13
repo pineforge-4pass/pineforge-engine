@@ -345,7 +345,7 @@ def corpus_half(tree, m):
 
 
 @claim(r"\*\*(?P<n>\d+) closed strategies\*\* \(slots `(?P<lo>\d+)`–`(?P<hi>\d+)`\) are "
-       r"TradingView-scraped community scripts on `BINANCE:ETHUSDT\.P` (?P<tf>\d+m), .*?"
+       r"held-out private strategies on `BINANCE:ETHUSDT\.P` (?P<tf>\d+m), .*?"
        r"\(sha256 `(?P<evidence>[0-9a-f]{64})`\)")
 def closed_half(tree, m):
     slots = [int(s["slot"][:3]) for s in tree.json(SELECTION)["slots"]

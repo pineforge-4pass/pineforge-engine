@@ -353,7 +353,7 @@ The corpus feed is a 1-minute Binance ETH/USDT:USDT tape; `scripts/derive_corpus
 [`benchmarks/`](benchmarks/) runs **200 strategies** through PineForge, [PyneCore](https://github.com/PyneSys/pynecore), [PineTS](https://github.com/LuxAlgo/PineTS) and [vectorbt](https://github.com/polakowo/vectorbt). Every engine gets the same 53,929-bar Binance ETH/USDT perpetual 15m feed, and each trade list is graded against TradingView's own export (266,451 trades):
 
 - **100 corpus probes** (slots 001–100) are drawn by mechanism family from the public corpus. Their fixtures are in the public [`benchmarks/assets`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets) submodule.
-- **100 closed strategies** (slots 101–200) are third-party community scripts published on TradingView, on `BINANCE:ETHUSDT.P` 15m. Their artifacts are in the maintainers' evidence store (sha `c77a9c70…`) and are not public.
+- **100 closed strategies** (slots 101–200) are held-out private strategies on `BINANCE:ETHUSDT.P` 15m. Their artifacts are in the maintainers' evidence store (sha `c77a9c70…`) and are not public.
 - PyneSys rejects slot 192's source, so slot 201, from the same stratum, stands in for it in the PyneCore count. PineForge runs all 201 slots.
 
 PyneCore sources are official PyneSys cloud-compiler output, with no hand-ports. PineTS runs only the canonical indicator script: the harness has no PineTS strategy runner, although PineTS has shipped a `strategy.*` namespace since 0.9.17. vectorbt runs the 13 hand-written ports that load. `bash benchmarks/run_all.sh` reproduces the public half with no API keys once the `benchmarks/assets` submodule, uv and Node ≥ 20 are in place ([recipe](benchmarks/README.md#reproduce)).
