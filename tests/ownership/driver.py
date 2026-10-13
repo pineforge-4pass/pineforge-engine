@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real ordinary Pine -> codegen -> g++ -> run_json ownership probes (Python 3.10+)."""
+"""Real ordinary/Selected-window Pine -> codegen -> g++ -> run_json probes (Python 3.10+)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,11 @@ import argparse
 import hashlib
 import json
 import math
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 
@@ -18,6 +20,14 @@ EXPECT_KEYS = {
     "outcome", "code", "args", "min_trades", "label", "pinned_by",
     "native_boundary_control",
 }
+EXPECT_OPTIONAL_KEYS = {"phase_final"}
+SELECTED_FLAGS = {
+    "--report-policy", "--window-start-ms", "--window-end-ms", "--preroll-bars", "--fed-start-ms",
+}
+RUN_PHASES = ("preflight", "execution", "result_assembly", "results_digest",
+              "serialization", "completed")
+MAX_PHASE_RECORD_BYTES = 1024
+MAX_PHASE_RECORDS = 6
 RUN_DEFAULTS = {
     "input_tf": "", "script_tf": "", "inputs": "", "overrides": "",
     "bar_magnifier": "", "magnifier_samples": 4, "magnifier_dist": "endpoints",
@@ -27,10 +37,10 @@ OWNED_FLAGS = {
     "--so", "--ohlcv", "--inputs", "--overrides", "--input-tf", "--script-tf",
     "--bar-magnifier", "--magnifier-samples", "--magnifier-dist",
     "--generated-cpp", "--transpiled",
-    # These routes either skip execution or need transport/inventory this ordinary
-    # driver does not produce. Do not turn such a response into runtime coverage.
+    # Admission-only routes skip execution; inventory and transport are produced
+    # by the driver on the Selected route and must never be supplied by a probe.
     "--capabilities-json", "--validate-window-only", "--run-phase-fd",
-    "--report-policy", "--request-feed-inventory", "--help", "-h", "--",
+    "--request-feed-inventory", "--help", "-h", "--",
 }
 STAGE_TIMEOUT_SECONDS = 300
 
@@ -75,9 +85,13 @@ def load_json(raw):
 def validate_expectation(doc):
     if not isinstance(doc, dict):
         raise ProbeError("expect.json must be an object")
-    if set(doc) != EXPECT_KEYS:
-        missing, extra = sorted(EXPECT_KEYS - set(doc)), sorted(set(doc) - EXPECT_KEYS)
+    missing = sorted(EXPECT_KEYS - set(doc))
+    extra = sorted(set(doc) - EXPECT_KEYS - EXPECT_OPTIONAL_KEYS)
+    if missing or extra:
         raise ProbeError(f"expect.json keys: missing={missing}, unknown={extra}")
+    if "phase_final" in doc and (not isinstance(doc["phase_final"], str)
+                                  or doc["phase_final"] not in RUN_PHASES):
+        raise ProbeError("phase_final must name a run phase: " + ", ".join(RUN_PHASES))
     if doc["outcome"] not in ("completed", "failed", "compile_refused"):
         raise ProbeError("outcome must be completed, failed or compile_refused")
     if doc["label"] not in ("S", "G", "R", "control"):
@@ -106,6 +120,42 @@ def load_expectation(path):
     return validate_expectation(load_json(Path(path).read_bytes()))
 
 
+def selected_request(options):
+    """Recognize the five exact window flags in S1a's existing options array.
+
+    Values stay verbatim for run_json's request validation; a partial request,
+    duplicate flag or unsupported policy must never choose ordinary execution.
+    """
+    extra = options.get("options", [])
+    declared = {}
+    index = 0
+    while index < len(extra):
+        name, equals, value = extra[index].partition("=")
+        index += 1
+        if name not in SELECTED_FLAGS:
+            continue
+        if name in declared:
+            raise ProbeError(f"run.json duplicates selected flag {name}")
+        if not equals:
+            if index == len(extra) or extra[index].startswith("--"):
+                raise ProbeError(f"run.json selected flag {name} needs a value")
+            value = extra[index]
+            index += 1
+        if not value:
+            raise ProbeError(f"run.json selected flag {name} needs a value")
+        declared[name] = value
+    if not declared:
+        return None
+    if declared.get("--report-policy") != "selected-window/v1":
+        raise ProbeError("run.json selected route requires --report-policy selected-window/v1")
+    missing = sorted(SELECTED_FLAGS - declared.keys())
+    if missing:
+        raise ProbeError(f"run.json selected route is missing {missing}")
+    if not options.get("input_tf", "").strip() or not options.get("script_tf", "").strip():
+        raise ProbeError("run.json selected route requires explicit input_tf and script_tf timeframes")
+    return declared
+
+
 def load_run_options(path):
     path = Path(path)
     doc = load_json(path.read_bytes()) if path.exists() else {}
@@ -128,8 +178,8 @@ def load_run_options(path):
         raise ProbeError("run.json options must be an argv array of strings")
     for token in extra:
         name = token.partition("=")[0]
-        if name in OWNED_FLAGS or (name.startswith("--") and any(
-            flag.startswith(name) for flag in OWNED_FLAGS
+        if name in OWNED_FLAGS or (name.startswith("--") and name not in SELECTED_FLAGS and any(
+            flag.startswith(name) for flag in OWNED_FLAGS | SELECTED_FLAGS
         )):
             raise ProbeError(f"run.json options cannot supply driver-owned flag {name}")
         if "\x00" in token:
@@ -147,6 +197,7 @@ def load_run_options(path):
             else:
                 raise ProbeError(f"run.json option {flag} needs a file path")
     options["options"] = extra
+    selected_request(options)
     return options
 
 
@@ -224,6 +275,11 @@ def compare(probe, expected, observed, *, repo_root=None):
         count = observed["trade_count"]
         if type(count) is not int or count < expected["min_trades"]:
             reasons.append(f"min_trades: expected >= {expected['min_trades']}, got {count}")
+    if "phase_final" in expected:
+        records = observed.get("phase_records", [])
+        final = records[-1]["phase"] if records else None
+        if final != expected["phase_final"]:
+            reasons.append(f"phase_final: expected {expected['phase_final']!r}, got {final!r}")
     control = expected["native_boundary_control"]
     control_exists = control is not None and (Path(repo_root or ROOT) / control).is_file()
     if expected["outcome"] == "compile_refused" and not control_exists:
@@ -235,7 +291,7 @@ def compare(probe, expected, observed, *, repo_root=None):
                 else "RUNTIME COVERAGE" if runtime_covered else "NONE")
     if reasons and observed["detail"]:
         reasons.append(observed["detail"])
-    return {
+    row = {
         "probe": probe, "outcome": observed["outcome"], "code": observed["code"],
         "args": observed["args"], "trade_count": observed["trade_count"],
         "pass": passed, "reason": "; ".join(reasons) if reasons else "matched pinned expectation",
@@ -245,6 +301,9 @@ def compare(probe, expected, observed, *, repo_root=None):
         "native_boundary_control": control,
         "native_boundary_control_exists": control_exists,
     }
+    if "phase_records" in observed:
+        row["phase_records"] = observed["phase_records"]
+    return row
 
 
 def error_result(probe, error):
@@ -290,9 +349,9 @@ def compile_command(prefix, cpp, so):
     ]
 
 
-def runtime_command(run_json, work, options):
+def runtime_command(run_json, work, options, *, phase_fd=None):
     # docker/entrypoint.sh:287-300, ordinary TRANSPILED=true route.
-    return [
+    command = [
         sys.executable, str(run_json), "--so", str(work / "strategy.so"),
         "--ohlcv", str(work / "bars.csv"),
         "--inputs", options["inputs"], "--overrides", options["overrides"],
@@ -302,6 +361,27 @@ def runtime_command(run_json, work, options):
         "--magnifier-dist", options["magnifier_dist"],
         "--generated-cpp", str(work / "strategy.cpp"), "--transpiled", "true",
         *options["options"],
+    ]
+    if selected_request(options) is not None:
+        if type(phase_fd) is not int or not 3 <= phase_fd <= 2 ** 31 - 1:
+            raise ProbeError("selected runtime needs a run phase descriptor from 3 up")
+        command += ["--request-feed-inventory", str(work / "request_feed_inventory.json"),
+                    "--run-phase-fd", str(phase_fd)]
+    return command
+
+
+def bind_inventory_command(run_json, work, codegen):
+    # docker/entrypoint.sh:238-242. The helper beside this run_json delegates
+    # all inventory validation/hashing to the explicitly selected codegen.
+    helper = Path(run_json).with_name("bind_compiled_inventory.py")
+    if not helper.is_file():
+        raise ProbeError(f"selected harness is missing {helper}")
+    return [
+        sys.executable, "-I", str(Path(__file__).resolve()), "--_bind-inventory",
+        str(codegen), str(helper),
+        "--inventory", str(work / "request_feed_inventory.source.json"),
+        "--cpp", str(work / "strategy.cpp"), "--so", str(work / "strategy.so"),
+        "--out", str(work / "request_feed_inventory.json"),
     ]
 
 
@@ -343,21 +423,34 @@ def _write_json(path, doc):
                           encoding="utf-8")
 
 
-def transpile_worker(codegen, pine, cpp, diagnostic):
-    """Isolated child: explicitly load --codegen, preserving ordinary API defaults."""
+def transpile_worker(codegen, pine, cpp, diagnostic, inventory_out=None):
+    """Isolated child: use the entrypoint's API for the explicitly chosen route."""
     sys.path.insert(0, str(Path(codegen).resolve()))
     try:
-        from pineforge_codegen import transpile
+        if inventory_out is None:
+            from pineforge_codegen import transpile
+        else:
+            from pineforge_codegen import transpile_with_request_inventory
         from pineforge_codegen.errors import CompileError
     except Exception as error:
         _write_json(diagnostic, observation("driver_error", "driver_toolchain_invalid",
                                             stage="transpile", detail=str(error)))
         return 5
     try:
-        # docker/entrypoint.sh:109-114. No support bypass, timeframe binding,
-        # inventory API, or invented provenance file on this ordinary route.
-        generated = transpile(Path(pine).read_text(encoding="utf-8"), filename="strategy.pine")
-        Path(cpp).write_text(generated, encoding="utf-8")
+        if inventory_out is None:
+            # docker/entrypoint.sh:109-114. No support bypass, timeframe binding,
+            # inventory API, or invented provenance file on this ordinary route.
+            generated = transpile(Path(pine).read_text(encoding="utf-8"), filename="strategy.pine")
+            Path(cpp).write_text(generated, encoding="utf-8")
+        else:
+            # docker/entrypoint.sh:139-146, including no primary_chart_timeframe
+            # binding. Serialize only the inventory returned by pinned codegen.
+            result = transpile_with_request_inventory(
+                Path(pine).read_text(encoding="utf-8"), filename="strategy.pine")
+            Path(cpp).write_bytes(result["cpp"].encode("utf-8"))
+            with Path(inventory_out).open("w", encoding="utf-8") as handle:
+                json.dump(result["request_feed_inventory"], handle, ensure_ascii=True,
+                          allow_nan=False, separators=(",", ":"))
     except CompileError as error:
         errors = [item for item in error.diagnostics
                   if getattr(item.level, "value", item.level) == "error"]
@@ -377,11 +470,22 @@ def transpile_worker(codegen, pine, cpp, diagnostic):
     return 0
 
 
-def run_stage(command, stage, work):
+def bind_inventory_worker(codegen, helper, *arguments):
+    """Run the real companion binder with --codegen on this isolated child's path."""
+    import runpy
+
+    sys.path.insert(0, str(Path(codegen).resolve()))
+    sys.argv = [str(helper), *arguments]
+    runpy.run_path(str(helper), run_name="__main__")
+    return 0
+
+
+def run_stage(command, stage, work, *, pass_fds=()):
     _write_json(work / f"{stage}.command.json", command)
     try:
+        inherited = {"pass_fds": pass_fds} if pass_fds else {}
         result = subprocess.run(command, cwd=work, capture_output=True,
-                                timeout=STAGE_TIMEOUT_SECONDS, check=False)
+                                timeout=STAGE_TIMEOUT_SECONDS, check=False, **inherited)
     except subprocess.TimeoutExpired as error:
         (work / f"{stage}.stdout").write_bytes(error.stdout or b"")
         (work / f"{stage}.stderr").write_bytes(error.stderr or b"")
@@ -392,12 +496,95 @@ def run_stage(command, stage, work):
     return result
 
 
+def _collect_phase_records(parent, records, errors, finished):
+    """Drain UTF-8 NDJSON while the child runs; preserve complete ordered records.
+
+    Limits and framing are phase transport v1 (docker/run_phase_transport.py),
+    not an interpretation of stdout or a substitute for the native observer.
+    """
+    pending = b""
+    try:
+        parent.settimeout(0.1)
+        while True:
+            try:
+                chunk = parent.recv(4096)
+            except socket.timeout:
+                if finished.is_set():
+                    raise ProbeError("phase transport stayed open after the runtime child exited")
+                continue
+            if not chunk:
+                break
+            pending += chunk
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                if len(line) + 1 > MAX_PHASE_RECORD_BYTES or len(records) >= MAX_PHASE_RECORDS:
+                    raise ProbeError("phase stream exceeds phase transport v1 bounds")
+                record = load_json(line.decode("utf-8"))
+                required = {"record", "version", "sequence", "scope", "trial_id", "phase", "elapsed_ms"}
+                if (not isinstance(record, dict) or not required <= record.keys()
+                        or record["record"] != "run_phase" or type(record["version"]) is not int
+                        or record["version"] != 1 or record["scope"] != "run"
+                        or record["trial_id"] is not None or type(record["sequence"]) is not int
+                        or record["sequence"] != len(records) + 1
+                        or record["phase"] not in RUN_PHASES):
+                    raise ProbeError("invalid run phase record envelope or sequence")
+                position = RUN_PHASES.index(record["phase"])
+                previous = RUN_PHASES.index(records[-1]["phase"]) if records else -1
+                if position != previous + 1 and (previous, position) != (2, 4):
+                    raise ProbeError("run phase records are out of order")
+                elapsed = record["elapsed_ms"]
+                if (type(elapsed) not in (int, float) or elapsed < 0
+                        or (not records and elapsed != 0)
+                        or (records and elapsed < records[-1]["elapsed_ms"])):
+                    raise ProbeError("invalid run phase elapsed_ms")
+                records.append(record)
+            if len(pending) >= MAX_PHASE_RECORD_BYTES:
+                raise ProbeError("phase record exceeds phase transport v1 byte bound")
+        if pending:
+            raise ProbeError("phase stream ended with an incomplete record")
+    except (OSError, ProbeError, UnicodeError) as error:
+        errors.append(str(error))
+
+
+def run_selected_runtime(run_json, work, options):
+    records, errors = [], []
+    finished = threading.Event()
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    actual = None
+    with parent, child:
+        reader = threading.Thread(target=_collect_phase_records,
+                                  args=(parent, records, errors, finished))
+        reader.start()
+        try:
+            command = runtime_command(run_json, work, options, phase_fd=child.fileno())
+            ran = run_stage(command, "runtime", work, pass_fds=(child.fileno(),))
+            actual = observe_runtime(ran.stdout, ran.returncode)
+        except (OSError, ProbeError) as error:
+            actual = observation("driver_error", "driver_execution_invalid", stage="runtime",
+                                 detail=str(error))
+        finally:
+            child.close()
+            finished.set()
+            reader.join()
+    if errors:
+        actual = observation("driver_error", "driver_phase_protocol_invalid", stage="runtime",
+                             exit_status=actual["exit_status"], detail="; ".join(errors))
+    actual["phase_records"] = records
+    _write_json(work / "runtime.phase_records.json", records)
+    return actual
+
+
 def execute_probe(work, options, compile_prefix, run_json, codegen):
+    selected = selected_request(options) is not None
     diagnostic = work / "transpile.failure.json"
-    transpile = run_stage([
-        sys.executable, "-I", str(Path(__file__).resolve()), "--_transpile",
+    transpile_argv = [
+        sys.executable, "-I", str(Path(__file__).resolve()),
+        "--_transpile-selected" if selected else "--_transpile",
         str(codegen), str(work / "strategy.pine"), str(work / "strategy.cpp"), str(diagnostic),
-    ], "transpile", work)
+    ]
+    if selected:
+        transpile_argv.append(str(work / "request_feed_inventory.source.json"))
+    transpile = run_stage(transpile_argv, "transpile", work)
     if transpile.returncode != 0:
         if transpile.returncode < 0:
             return observation("driver_error", "driver_transpile_error", stage="transpile",
@@ -417,6 +604,13 @@ def execute_probe(work, options, compile_prefix, run_json, codegen):
         return observation("compile_refused", "cpp_compile_refused", {"stage": "compile"},
                            stage="compile", exit_status=compiled.returncode,
                            detail="g++ refused the generated translation unit; see compile.stderr")
+    if selected:
+        bound = run_stage(bind_inventory_command(run_json, work, codegen), "bind", work)
+        if bound.returncode != 0:
+            return observation("driver_error", "driver_inventory_binding_failed", stage="bind",
+                               exit_status=bound.returncode,
+                               detail="request-feed inventory binding failed; see bind.stderr")
+        return run_selected_runtime(run_json, work, options)
     ran = run_stage(runtime_command(run_json, work, options), "runtime", work)
     return observe_runtime(ran.stdout, ran.returncode)
 
@@ -460,6 +654,8 @@ def run_suite(args):
             except (OSError, ProbeError, UnicodeError) as error:
                 actual = observation("driver_error", "driver_execution_invalid",
                                      stage="driver", detail=str(error))
+            if selected_request(options) is not None:
+                actual.setdefault("phase_records", [])
             row = compare(name, expected, actual)
             row.update(expect_sha256=digest, work=str(work))
             rows[name] = row
@@ -509,4 +705,8 @@ def main(argv=None):
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--_transpile"]:
         raise SystemExit(transpile_worker(*sys.argv[2:]))
+    if sys.argv[1:2] == ["--_transpile-selected"]:
+        raise SystemExit(transpile_worker(*sys.argv[2:]))
+    if sys.argv[1:2] == ["--_bind-inventory"]:
+        raise SystemExit(bind_inventory_worker(*sys.argv[2:]))
     raise SystemExit(main())
