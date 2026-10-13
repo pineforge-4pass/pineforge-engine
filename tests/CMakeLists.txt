@@ -2252,6 +2252,9 @@ add_test(NAME test_selected_window_plan_python
 add_test(NAME test_run_json_selected_window
     COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_window.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+add_test(NAME test_run_json_nonfinite_report
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_run_json_nonfinite_report.py
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 add_test(NAME test_compile_inventory_pipeline
     COMMAND ${Python3_EXECUTABLE} -B -m pytest ${PROJECT_SOURCE_DIR}/tests/test_compile_inventory_pipeline.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

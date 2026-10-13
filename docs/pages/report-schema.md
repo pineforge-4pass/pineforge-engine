@@ -111,6 +111,15 @@ typedef struct pf_trade_s {
 Favorable Excursion (MFE) and Maximum Adverse Excursion (MAE) in account
 currency, net of entry fees — already scaled by `qty` and the point value.
 
+In JSON reports, each trade's `entry_price`, `exit_price`, `qty`, `pnl`,
+`pnl_pct`, `max_runup`, `max_drawdown` and `commission`, and the summary's
+`net_pnl`, `avg_trade`, `best_trade`, `worst_trade` and `max_drawdown`, must be
+finite or the run fails with `report_result_invalid`, `field` naming the
+corresponding `trades.<leaf>` or `summary.<leaf>` and `reason` equal to `nonfinite`.
+In ordinary mode without `--run-phase-fd`, a non-finite double elsewhere in the
+report document fails with `report_result_invalid`, `field` equal to
+`report.document` and `reason` equal to `nonfinite`.
+
 ## Bar processing
 
 | Field | Meaning |
