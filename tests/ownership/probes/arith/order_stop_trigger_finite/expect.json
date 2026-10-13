@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 0,
+  "label": "control",
+  "pinned_by": "revision 3 section 4 raw-argument arithmetic; Appendix B order.stop_price; Appendix D",
+  "native_boundary_control": "tests/test_value_admission_arith.cpp"
+}
