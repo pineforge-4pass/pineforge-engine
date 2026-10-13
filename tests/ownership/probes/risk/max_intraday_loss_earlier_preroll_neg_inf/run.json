@@ -1,0 +1,16 @@
+{
+  "input_tf": "1",
+  "script_tf": "1",
+  "options": [
+    "--report-policy",
+    "selected-window/v1",
+    "--window-start-ms",
+    "1736121780000",
+    "--window-end-ms",
+    "1736124000000",
+    "--preroll-bars",
+    "3",
+    "--fed-start-ms",
+    "1736121600000"
+  ]
+}

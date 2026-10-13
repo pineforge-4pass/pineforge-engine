@@ -1,0 +1,12 @@
+{
+  "outcome": "failed",
+  "code": "strategy_value_invalid",
+  "args": {
+    "field": "risk.max_position_size",
+    "reason": "nonfinite"
+  },
+  "min_trades": 0,
+  "label": "S",
+  "pinned_by": "revision 3 section 4 Appendix B risk setters; EN-132 D1 (NaN absence), D2 (risk live in pre-roll)",
+  "native_boundary_control": "tests/test_value_admission_risk.cpp"
+}

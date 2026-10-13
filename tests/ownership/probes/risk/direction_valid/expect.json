@@ -1,0 +1,9 @@
+{
+  "outcome": "completed",
+  "code": null,
+  "args": {},
+  "min_trades": 1,
+  "label": "control",
+  "pinned_by": "revision 3 section 4 Appendix B risk setters; EN-132 valid/int setter preservation",
+  "native_boundary_control": "tests/test_value_admission_risk.cpp"
+}

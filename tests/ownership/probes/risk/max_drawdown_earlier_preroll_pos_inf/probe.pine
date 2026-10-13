@@ -1,0 +1,11 @@
+//@version=6
+strategy("Ownership risk max_drawdown_earlier_preroll_pos_inf", initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1)
+
+float riskValue = math.exp(close * 10.0)
+if bar_index == 0
+    strategy.risk.max_drawdown(riskValue, strategy.percent_of_equity)
+
+if bar_index == 5
+    strategy.entry("L", strategy.long, qty=1.0)
+if bar_index == 10
+    strategy.close("L")
