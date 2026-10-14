@@ -4,7 +4,9 @@
 # Outputs:   docs/site/html/         (static HTML, ready to deploy)
 # Requires:  doxygen, dot (graphviz), curl, awk, python3
 #
-# CI usage:  bash docs/build.sh
+# CI usage (.github/workflows/docs.yml, build job, Build site step):
+#            bash docs/build.sh --self-test-seo
+#            bash docs/build.sh
 # Local:     bash docs/build.sh        # docs/site/html/index.html
 #            python3 -m http.server -d docs/site/html 8080
 

@@ -48,11 +48,17 @@ jobs:
           doxygen --version
           dot -V
 
-      # docs/build.sh fails when a warning lands in the guarded public surface
+      # Run the SEO assertion on a synthetic site before the real docs build.
+      # A failure stops this job. The real build also fails on warnings in the
+      # guarded public surface
       # (the kernel / native API headers, the C API header, the C ABI header,
       # the layer map and the examples). See its 3b step.
       - name: Build site
-        run: bash docs/build.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash docs/build.sh --self-test-seo
+          bash docs/build.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

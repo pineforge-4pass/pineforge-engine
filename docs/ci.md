@@ -771,23 +771,32 @@ A pull request or a push to `main` whose change is documentation only runs
 pages is a `preflight` stage: `doc-anchors`, `doc-lint`, `doc-reverts`,
 `doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
 surface table (`source-guard-native-c-surface`) and their self-tests, beside
-the workflow wiring guards. `docs.yml` builds the Doxygen site on every pull
-request and push, as before.
+the workflow wiring guards. The `build` job's `Build site` step in
+`.github/workflows/docs.yml` runs `bash docs/build.sh --self-test-seo` before
+the real Doxygen build on every pull request, pushes to `main` or `v*` tags,
+and manual dispatches. The self-test uses a synthetic site and the Python
+standard library, with no CMake configure or C++ build, and a failure stops
+the job. This is a CI-only check: neither `ctest` nor `scripts/ci_verify.py`
+nor `scripts/ci_preflight.py` runs it, so a change to
+`docs/seo_postprocess.py` is first checked by the docs workflow on the pull
+request.
 
 The first job of `ci.yml`, `changes`, decides with
 [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
 documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
 unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a
 CMake file or a git control file such as `.gitattributes`, or is one of the
-five files a proof job reads:
+five files explicitly excluded by `PROOF_READS`:
 `docs/pages/pine-to-native.md` and `docs/pages/native-engine.md`, whose code
 blocks `test_pine_to_native_worked` and `test_native_engine_complete_host`
 compile and run; `docs/adr/0001-kernel-adapter-boundary.md`, which
 `test_kernel_residuals`, `test_native_feature_rulings` and the kernel
 profile's `kernel-residuals` stage hold the kernel against;
-`docs/build.sh`, whose self-tests are `test_docs_doxygen_retry` and
-`test_docs_seo`; and `docs/seo_postprocess.py`, which `test_docs_seo` executes
-on synthetic pages. A change
+`docs/build.sh`, whose `--self-test-retry` runs in `test_docs_doxygen_retry`
+and whose `--self-test-seo` runs in the `docs.yml` build job before the real
+site build; and `docs/seo_postprocess.py`, which that job executes on synthetic
+pages through `bash docs/build.sh --self-test-seo`. The SEO postprocessor
+remains conservatively excluded as a documentation-build input. A change
 to one of those five runs every job. A change is documentation only when every
 path it changes, both sides of a rename, is documentation. The change is the
 checked-out commit against its first parent: for a pull request, the merge
@@ -825,9 +834,10 @@ full run on `main` holds the code's verdict.
 holds the rule against real git histories, pull request merges and pushes
 alike. It also fails when a CMake file names, through `${PROJECT_SOURCE_DIR}`
 or a sibling source-directory variable, a path the rule would call
-documentation. The five files above were found by reading every CMake file,
-every `ci_verify.py` stage and every script a CTest row runs; a reader added
-outside CMake must list its file in `PROOF_READS` by hand. The
+documentation. The proof-job inputs above were found by reading every CMake
+file, every `ci_verify.py` stage and every script a CTest row runs; a reader
+added outside CMake must list its file in `PROOF_READS` by hand. The SEO
+postprocessor remains listed after its self-test moved to `docs.yml`. The
 `ci-workflow-contract` stage pins the wiring, the classification step
 verbatim, and `scripts/test_ci_preflight.py` runs that step's own shell and
 the aggregate's own shell, the latter over every outcome of every lane.
