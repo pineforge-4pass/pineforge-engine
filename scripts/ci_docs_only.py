@@ -62,11 +62,15 @@ PROOF_READS = {
     'docs/adr/0001-kernel-adapter-boundary.md':
         'test_kernel_residuals and test_native_feature_rulings hold the kernel against '
         "its tables, and so does the kernel profile's kernel-residuals stage",
-    'docs/build.sh': 'test_docs_doxygen_retry runs its --self-test-retry',
+    'docs/build.sh':
+        'test_docs_doxygen_retry runs its --self-test-retry and '
+        'test_docs_seo runs its --self-test-seo',
     'docs/pages/native-engine.md':
         'test_native_engine_complete_host compiles and runs its Complete host block',
     'docs/pages/pine-to-native.md':
         'test_pine_to_native_worked compiles and runs its worked migration',
+    'docs/seo_postprocess.py':
+        'test_docs_seo executes it on synthetic pages through docs/build.sh --self-test-seo',
 }
 SHA = re.compile(r'[0-9a-f]{40}')
 NO_COMMIT = '0' * 40
