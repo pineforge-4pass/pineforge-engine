@@ -356,6 +356,27 @@ void current_and_candidate_prices() {
         configuration.slippage_ticks = 2;
         expect_g(run(script, configuration, bars(1.0)), "slippage.fill_price", "slippage", "nonfinite");
     }
+    if (row("d6_13_current_slippage_bits")) {
+        FixtureScope scope(true);
+        Script script;
+        script.current = true;
+        auto configuration = spec();
+        configuration.price_tick = 0.1;
+        configuration.slippage_ticks = 1;
+        const auto out = run(script, configuration, bars(100.0));
+        CHECK(out.rc == PF_NATIVE_OK);
+        CHECK(out.status == 0);
+        CHECK(out.code.empty());
+        CHECK(out.trades.size() == 1);
+        if (out.trades.size() == 1) {
+            // python3 -I -B .lane-out/find_inputs.py; grid None gives on_grid=100.0.
+            // ADD: 100.1 (0x1.9066666666666p+6); DIVIDE: 100.10000000000001
+            // (0x1.9066666666667p+6).
+            const double expected_double = 0x1.9066666666666p+6;
+            const double price = out.trades.front().entry_price;
+            CHECK(price == expected_double);
+        }
+    }
 }
 
 void counter_rows() {
