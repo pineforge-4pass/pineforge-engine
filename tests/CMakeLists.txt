@@ -7079,3 +7079,10 @@ set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+
+# Registered here, at the end of the file, so no earlier line moves: the private
+# fixture read evidence (tests/private_fixture_reads.evidence) pins CMake lines
+# by number. docs/build.sh --self-test-seo runs docs/seo_postprocess.py on a
+# synthetic site (standard library only; no Doxygen).
+add_test(NAME test_docs_seo
+    COMMAND bash ${PROJECT_SOURCE_DIR}/docs/build.sh --self-test-seo)
