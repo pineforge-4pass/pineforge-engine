@@ -22,6 +22,8 @@ LANDING_DESCRIPTION = (
 )
 DESCRIPTION_SUFFIX = " — PineForge C++17 engine API documentation."
 PAGE_LINK = re.compile(r"(?P<page>(?:\./)?[^/\\:?#]+)\.html(?P<anchor>#.*)?\Z")
+# Doxygen encodes the file extension as _8<ext>; references omit _source.
+SOURCE_LISTING = re.compile(r".+_8[a-zA-Z0-9]+_source\.html\Z")
 # Consume whole quoted attributes so href text inside another attribute's
 # value (or a data-href attribute) cannot be mistaken for a link.
 QUOTED_ATTRIBUTE = re.compile(
@@ -32,6 +34,12 @@ QUOTED_ATTRIBUTE = re.compile(
 
 def canonical_url(page: Path) -> str:
     return SITE_URL if page.name == "index.html" else SITE_URL + quote(page.stem, safe="")
+
+
+def is_source_listing(page: Path, title: str) -> bool:
+    # Explicit page ids can collide with Doxygen's source-listing file names.
+    return (SOURCE_LISTING.fullmatch(page.name) is not None
+            and title.strip().endswith("Source File"))
 
 
 def rewrite_href(attribute: re.Match) -> str:
@@ -58,6 +66,8 @@ class PageMarkup(HTMLParser):
         self.line_offsets = [0] + [match.end() for match in re.finditer("\n", document)]
         self.edits: list[tuple[int, int, str]] = []
         self.descriptions: list[tuple[int, int]] = []
+        self.robots: list[tuple[int, int]] = []
+        self.noindex = False
         self.head_ends: list[int] = []
         self.title_parts: list[str] = []
         self.in_title = False
@@ -80,6 +90,10 @@ class PageMarkup(HTMLParser):
             self.edits.append((start, end, ""))
         elif tag == "meta" and (attributes.get("name") or "").lower() == "description":
             self.descriptions.append((start, end))
+        elif tag == "meta" and (attributes.get("name") or "").lower() == "robots":
+            self.robots.append((start, end))
+            directives = re.split(r"[\s,]+", (attributes.get("content") or "").lower())
+            self.noindex = self.noindex or any(value in ("noindex", "none") for value in directives)
         else:
             rewritten = QUOTED_ATTRIBUTE.sub(rewrite_href, raw)
             if rewritten != raw:
@@ -116,6 +130,14 @@ def process_page(page: Path, document: str) -> str:
     description = LANDING_DESCRIPTION if page.name == "index.html" else title + DESCRIPTION_SUFFIX
     meta = f'<meta name="description" content="{escape(description, quote=True)}"/>'
     addition = f'<link rel="canonical" href="{escape(canonical_url(page), quote=True)}"/>\n'
+    if is_source_listing(page, title):
+        # Keep source listings crawlable: robots.txt Disallow would hide noindex.
+        # Replace existing directives and consume newlines for byte-identical reruns.
+        for start, end in markup.robots:
+            if document[end:end + 1] == "\n":
+                end += 1
+            markup.edits.append((start, end, ""))
+        addition = '<meta name="robots" content="noindex">\n' + addition
     if markup.descriptions:
         for number, (start, end) in enumerate(markup.descriptions):
             markup.edits.append((start, end, meta if number == 0 else ""))
@@ -128,6 +150,14 @@ def process_page(page: Path, document: str) -> str:
     return document
 
 
+def has_noindex(document: str) -> bool:
+    """Read the emitted robots directive before choosing sitemap entries."""
+    markup = PageMarkup(document)
+    markup.feed(document)
+    markup.close()
+    return markup.noindex
+
+
 def postprocess(site: Path) -> int:
     if not site.is_dir():
         raise ValueError(f"not a site directory: {site}")
@@ -136,12 +166,14 @@ def postprocess(site: Path) -> int:
         raise ValueError("site has no top-level documentation pages")
     # Validate all pages before writing any of them.
     processed = [(page, process_page(page, page.read_bytes().decode("utf-8"))) for page in pages]
+    sitemap_pages = [page for page, document in processed
+                     if page.name != "404.html" and not has_noindex(document)]
     for page, document in processed:
         page.write_bytes(document.encode("utf-8"))
 
     ET.register_namespace("", SITEMAP_NS)
     urlset = ET.Element(f"{{{SITEMAP_NS}}}urlset")
-    for url in sorted(canonical_url(page) for page in pages if page.name != "404.html"):
+    for url in sorted(canonical_url(page) for page in sitemap_pages):
         entry = ET.SubElement(urlset, f"{{{SITEMAP_NS}}}url")
         ET.SubElement(entry, f"{{{SITEMAP_NS}}}loc").text = url
     (site / "sitemap.xml").write_bytes(ET.tostring(urlset, encoding="utf-8", xml_declaration=True) + b"\n")

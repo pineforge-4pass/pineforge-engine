@@ -781,6 +781,23 @@ nor `scripts/ci_preflight.py` runs it, so a change to
 `docs/seo_postprocess.py` is first checked by the docs workflow on the pull
 request.
 
+The SEO postprocessor adds one `<meta name="robots" content="noindex">` in
+the head of raw Doxygen source listings whose names match
+`*_8<extension>_source.html` and whose stripped `<title>` text ends with
+"Source File". Hand-written pages with colliding explicit page ids remain
+indexable.
+File reference pages such as `*_8hpp.html` and `*_8cpp.html`, class, struct,
+namespace, member, directory, group and hand-written pages, and the landing
+page remain indexable. The 404 page is left untouched. `sitemap.xml` lists
+the sorted canonical URLs of top-level documentation pages without a
+noindex directive and omits the 404 page. `robots.txt` keeps `Allow: /` so
+crawlers can fetch source listings and see their noindex metadata. The
+synthetic self-test checks which HTML pages receive noindex, the sitemap
+URL set, existing robots metadata, and a byte-identical second pass,
+including the sitemap. Both footer
+variants already include a visible link to <https://pineforge.dev> on every
+page rendered by the theme, including source listings.
+
 The first job of `ci.yml`, `changes`, decides with
 [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
 documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
