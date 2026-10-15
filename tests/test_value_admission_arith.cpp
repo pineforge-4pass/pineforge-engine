@@ -371,14 +371,98 @@ public:
     }
 };
 
+// A cash-typed entry reaches the grid floor through typed_quantity_units,
+// without explicit_entry_quantity_floor's noexcept boundary. One signal bar
+// admits the order; its public fill-quantity probe observes the fallback in
+// contracts without involving later fill/margin arithmetic.
+class QuantityFallbackHost final : public source::PineStrategyHost {
+public:
+    QuantityFallbackHost(double cash, double grid) : cash_(cash) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1e6;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.margin_long = config.margin_short = 0.0;
+        config.commission_value = 0.0;
+        config.slippage = 0;
+        configure_pine_strategy(config);
+        qty_step_ = grid;
+        fixture_retain_all_events();
+    }
+    void on_source_bar(const Bar&) override {
+        if (bar_index_ != 0) return;
+        called = true;
+        try {
+            strategy_entry("fallback", true, kNaN, kNaN, cash_, "", "", 0,
+                           static_cast<int>(QtyType::CASH));
+        } catch (const std::exception& error) {
+            failure = classify_run_failure(error);
+            CHECK(false &&
+                "the quantity grid arithmetic overflowed: expected the defined fallback (units unchanged), got a thrown value failure");
+        }
+    }
+    bool called = false;
+    RunFailureValue failure{};
+private:
+    double cash_;
+};
+
 void quantity_rows() {
     row = "quantity_infinite_intermediate_fallback";
-    QuantityHost host;
-    try { host.project(1e308, 0.001); }
-    catch (const std::exception&) { CHECK(false); }
+    const double cash = 1e308;
+    const double price = 2.0;
+    const double quantity_grid = 0.001;
+    // These four CHECKs document setup arithmetic and do not cover the product.
+    // Point value and account FX are both 1; no fee is reserved for CASH.
+    const double unquantized_units = cash / price;
+    CHECK(std::isfinite(unquantized_units) && unquantized_units > 0.0);
+    CHECK(std::isfinite(quantity_grid) && quantity_grid > 0.0);
+    const double grid_quotient = unquantized_units / quantity_grid + 1e-6;
+    CHECK(!std::isfinite(grid_quotient));
+    CHECK(!std::isfinite(std::floor(grid_quotient) * quantity_grid));
+
+    QuantityFallbackHost host(cash, quantity_grid);
+    const Bar input = bar(0, price);
+    host.run(&input, 1, "1", "1", false);
+    CHECK(host.called);
+    CHECK(host.failure.code == RunFailureCode::none);
     pf_pending_order_v1_t pending{};
-    CHECK(host.pending_intent_view().copy_v1(0, &pending) == 0);
-    CHECK(same_bits(pending.qty, 1e308));
+    const bool projected = host.pending_intent_view().copy_v1(0, &pending) == 0;
+    CHECK(projected);
+    bool accepted = false;
+    for (const auto& event : host.native_events(0)) {
+        if (!event.command) continue;
+        const auto* admission = std::get_if<native_order::AcceptedEvent>(&*event.command);
+        if (admission && admission->request().label == "fallback") accepted = true;
+    }
+    CHECK(accepted);
+    if (host.failure.code == RunFailureCode::none && projected && accepted) {
+        // pending.qty retains the cash argument. The probe converts that
+        // admitted order to contracts using the real quantity-grid helper.
+        // Its underlying view is noexcept; skip it after a placement failure.
+        // The guard only helps when the failure was raised at placement; a throw
+        // first reached inside the noexcept probe would terminate the process.
+        double contracts = kNaN;
+        int close_only = -1, partition = -1;
+        CHECK(host.probe_fill_qty(0, price, &contracts, &close_only, &partition) == 0);
+        CHECK(same_bits(contracts, unquantized_units));
+        CHECK(close_only == 0);
+        CHECK(partition == 0);
+    }
+    CHECK(host.last_error().empty());
+    CHECK(run_failure_value_of(host).code == RunFailureCode::none);
+
+    row = "quantity_explicit_overflow_fallback";
+    // On head the CASH host has no failure, so this row runs; after the mutant's
+    // CHECK failure, skip the explicit noexcept door to avoid terminating the process.
+    if (host.failure.code == RunFailureCode::none) {
+        QuantityHost explicit_host;
+        try { explicit_host.project(1e308, 0.001); }
+        catch (const std::exception&) { CHECK(false); }
+        pf_pending_order_v1_t explicit_pending{};
+        CHECK(explicit_host.pending_intent_view().copy_v1(0, &explicit_pending) == 0);
+        CHECK(same_bits(explicit_pending.qty, 1e308));
+    }
 
     row = "quantity_decimal_tolerance_control";
     // A real decimal refinement: +epsilon lifts floor(q), while the exact
