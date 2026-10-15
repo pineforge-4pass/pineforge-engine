@@ -144,6 +144,17 @@ def assert_failure(result, mode, code, args, phases, *, stderr="", message=None,
     # then assert that the harness itself wrote exactly one complete line.
     assert result.stdout.startswith(stdout_prefix)
     owned_line = result.stdout[len(stdout_prefix):]
+    stdout_error = (
+        "stdout was not one whole JSON document: stdout was not exactly one JSON "
+        "object line (empty stdout, more than one line, not a JSON object, or a "
+        "report prefix before the failure document); "
+        f"first 80 characters={owned_line[:80]!r}; length={len(owned_line)}"
+    )
+    try:
+        assert len(owned_line.splitlines()) == 1 and isinstance(
+            json.loads(owned_line), dict), stdout_error
+    except json.JSONDecodeError as error:
+        raise AssertionError(stdout_error) from error
     document = reports.strict_line(owned_line)
     assert result.status == 1
     assert set(document) == {"engine", "error", "code", "args"}
@@ -281,6 +292,19 @@ def test_encoder_failure_after_report_chunks(harness, mode, factory, reason):
     assert len(fault.prefix) > 32  # actual chunks existed before the failure
     with pytest.raises(json.JSONDecodeError):
         json.loads(fault.prefix)
+    # Every report chunk must stay buffered; stdout gets only the failure write.
+    assert (not result.stdout.startswith(fault.prefix)
+            and fault.prefix not in result.stdout), (
+        "stdout was not one whole JSON document: a half-written report prefix "
+        "was found before the failure document; "
+        f"report prefix first 80 characters={fault.prefix[:80]!r}; "
+        f"report prefix length={len(fault.prefix)}; "
+        f"stdout first 80 characters={result.stdout[:80]!r}; length={len(result.stdout)}"
+    )
+    assert result.events.count("stdout.write") == 1, (
+        f"observed {result.events.count('stdout.write')} stdout writes; "
+        "expected exactly one stdout write (the failure document)"
+    )
     assert len(result.built) == 1
     assert_post_failure(result, mode, reason, phase="serialization")
 
