@@ -273,26 +273,28 @@ catalog is not proof that the source paths it names enforce anything.
   `engine_command_value_invalid` (a command value the engine derived from its
   own book, equity, margin, sizing, fee, slippage or settlement state, as
   opposed to one the script supplied).
-- **Producers in this tree.** Twelve of the 24 have a raise site here, all in
-  the Python wrappers under `docker/`: `window_mode_unsupported`; the
+- **Producers in this tree.** Fifteen of the 24 have a raise site here.
+  The C++ source layer raises `strategy_value_invalid` for invalid actionable
+  values supplied by the script; the engine kernel, native engine and Pine
+  adapter raise `engine_command_value_invalid` for invalid execution values.
+  The Python wrappers under `docker/` raise `window_mode_unsupported`; the
   selected-window request refusals `window_request_invalid`,
   `window_range_invalid`, `window_preroll_out_of_range`,
   `window_legacy_flag_conflict`, `window_calendar_unsupported`,
   `window_boundary_unaligned` and `window_feed_range_invalid`; the report-option
   refusals `report_shape_request_invalid`, `report_shape_unsupported` and
-  `results_digest_unsupported`; and `report_post_execution_failed`, for a
-  failure after the strategy has finished. The other twelve have none:
+  `results_digest_unsupported`; `report_result_invalid`, for a non-finite
+  canonical result; and `report_post_execution_failed`, for a failure after
+  the strategy has finished. The other nine have none:
   `window_report_mismatch` is the caller's (above), and the producers of
   `window_no_observations`, `window_lineage_mismatch`,
   `window_feed_identity_changed`, `window_input_cap_exceeded`,
   `window_prestart_state_violation`, `window_prestart_fill`,
-  `report_platform_unavailable`, `report_result_invalid`,
-  `strategy_value_invalid`, `engine_command_value_invalid` and
-  `window_pruner_unsupported` are not in this tree. `report_shape_unsupported`
-  and `results_digest_unsupported` are the typed refusals this build raises
-  for the compact shape and the digest it does not declare;
-  `report_platform_unavailable` is meaningful only in an image that claims the
-  digest. `window_pruner_unsupported` is optimizer-only:
+  `report_platform_unavailable` and `window_pruner_unsupported` are not in
+  this tree. `report_shape_unsupported` and `results_digest_unsupported` are
+  the typed refusals this build raises for the compact shape and the digest
+  it does not declare; `report_platform_unavailable` is meaningful only in an
+  image that claims the digest. `window_pruner_unsupported` is optimizer-only:
   `run_json` never raises it, because a backtest has no pruner. The contract
   has both study admissions (the Python study specification and the native
   command line) refuse a selected window combined with a pruner other than
