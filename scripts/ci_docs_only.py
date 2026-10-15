@@ -5,10 +5,12 @@ The workflow's ``changes`` job runs this script before anything else. On a
 docs-only change the proof jobs -- the four ``build`` legs, ``sanitizers``,
 ``kernel-only``, ``native-live`` and ``corpus-parity-subset`` -- are skipped,
 and the ``build`` aggregate accepts exactly that skip. ``preflight`` still runs,
-and every check that reads the pages outside PROOF_READS is one of its stages
+and page checks outside PROOF_READS are among its stages
 (doc-anchors, doc-lint, doc-reverts, doc-pine-coverage, design-inventory,
 kernel-seam-rows, the native C surface table), as are the workflow wiring
-guards. ``docs.yml``, the Doxygen build, runs as before.
+guards. PROOF_READS lists documentation inputs with checks outside preflight,
+in a proof job's CTest row or the docs workflow. ``docs.yml``, the Doxygen
+build, runs as before.
 
 A changed path is documentation when it is a Markdown file (``*.md``) or lies
 under ``docs/``, unless
@@ -18,7 +20,7 @@ under ``docs/``, unless
   (the benchmark provenance README, the twin-parity ledger, fixture READMEs);
 * it is a CMake file or a git control file (``.gitattributes`` decides how a
   checkout writes the files beside it); or
-* a proof job reads it (PROOF_READS, each with the rows that read it).
+* it is listed in PROOF_READS (each with its check's home).
 
 A change is docs-only when it changes at least one path and every path it
 changes, both sides of a rename, is documentation. Whatever the script cannot
@@ -56,17 +58,23 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 # CI itself, and Markdown the proof jobs' own rows read: never documentation.
 NOT_DOCUMENTATION_DIRS = ('.github/', 'benchmarks/', 'scripts/', 'tests/')
-# Documentation a proof job reads, with the rows that read it. Preflight does
-# not build, so these checks run in the proof jobs alone.
+# Documentation inputs whose checks run outside preflight, in a proof job's
+# CTest row or the docs workflow, with each input's check home. These inputs
+# remain excluded from docs-only skips.
 PROOF_READS = {
     'docs/adr/0001-kernel-adapter-boundary.md':
         'test_kernel_residuals and test_native_feature_rulings hold the kernel against '
         "its tables, and so does the kernel profile's kernel-residuals stage",
-    'docs/build.sh': 'test_docs_doxygen_retry runs its --self-test-retry',
+    'docs/build.sh':
+        'test_docs_doxygen_retry runs its --self-test-retry and '
+        'the docs.yml build job runs its --self-test-seo before building the site',
     'docs/pages/native-engine.md':
         'test_native_engine_complete_host compiles and runs its Complete host block',
     'docs/pages/pine-to-native.md':
         'test_pine_to_native_worked compiles and runs its worked migration',
+    'docs/seo_postprocess.py':
+        'the docs.yml build job executes it on synthetic pages through '
+        'docs/build.sh --self-test-seo before building the site',
 }
 SHA = re.compile(r'[0-9a-f]{40}')
 NO_COMMIT = '0' * 40

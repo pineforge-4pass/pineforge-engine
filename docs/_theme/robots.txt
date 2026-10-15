@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://cdocs.pineforge.dev/sitemap.xml

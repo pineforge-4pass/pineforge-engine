@@ -202,6 +202,7 @@ HTML_EXTRA_FILES       = _theme/doxygen-awesome/doxygen-awesome-darkmode-toggle.
                          _theme/doxygen-awesome/doxygen-awesome-paragraph-link.js \
                          _theme/doxygen-awesome/doxygen-awesome-interactive-toc.js \
                          _theme/doxygen-awesome/doxygen-awesome-tabs.js \
+                         _theme/robots.txt \
                          _theme/404.html
 HTML_COLORSTYLE        = LIGHT
 HTML_COLORSTYLE_HUE    = 209
