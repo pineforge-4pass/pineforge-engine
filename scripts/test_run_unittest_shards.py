@@ -391,6 +391,9 @@ class UnittestShardsTests(unittest.TestCase):
                         deadline = time.monotonic() + 5.0
                         while time.monotonic() < deadline:
                             if _locked(lock_dir / "a.lock") and _locked(lock_dir / "b.lock"):
+                                (lock_dir / "sig_sent.txt").write_text(
+                                    f"{{time.monotonic():.6f}}\\n", encoding="utf-8"
+                                )
                                 os.kill(os.getpid(), {int(sig)})
                                 return
                             time.sleep(0.02)
@@ -405,22 +408,14 @@ class UnittestShardsTests(unittest.TestCase):
                     text=True,
                 )
                 try:
-                    ready_deadline = time.monotonic() + 5.0
-                    both_locked = False
-                    while time.monotonic() < ready_deadline:
-                        if _is_locked(lock_dir / 'a.lock') and _is_locked(lock_dir / 'b.lock'):
-                            both_locked = True
-                            break
-                        time.sleep(0.02)
-                    self.assertTrue(both_locked, 'both shards failed to acquire locks within 5s')
-
-                    sig_sent_at = time.monotonic()
                     try:
                         output, _ = proc.communicate(timeout=5.0)
                     except subprocess.TimeoutExpired:
                         self.fail(f'runner did not exit within 5s after {sig.name}')
-                    elapsed = time.monotonic() - sig_sent_at
+                    exited_at = time.monotonic()
                 finally:
+                    if proc.stdout is not None:
+                        proc.stdout.close()
                     if proc.poll() is None:
                         try:
                             proc.kill()
@@ -431,6 +426,13 @@ class UnittestShardsTests(unittest.TestCase):
                         except subprocess.TimeoutExpired:
                             pass
 
+                sig_sent_file = lock_dir / 'sig_sent.txt'
+                self.assertTrue(
+                    sig_sent_file.is_file(),
+                    f'both shards did not acquire locks before exit; output={output!r}',
+                )
+                sig_sent_at = float(sig_sent_file.read_text(encoding='utf-8').strip())
+                elapsed = exited_at - sig_sent_at
                 self.assertEqual(proc.returncode, expected_rc, output)
                 self.assertLess(elapsed, 5.0, f'{sig.name} took {elapsed:.2f}s to exit (expected < 5s)')
 

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Run a unittest module across parallel subprocess shards."""
+"""Run a unittest module across parallel subprocess shards.
+
+Note: Each shard must execute all test IDs assigned to it (`Ran N` must equal
+the assigned test count). Consequently, a module-level `SkipTest` (such as in
+`setUpModule`, which causes `unittest` to report `Ran 0 tests` with exit status
+0) counts as a failed shard, unlike serial `unittest`.
+"""
 from __future__ import annotations
 
 import argparse
@@ -43,7 +49,7 @@ _devnull_fd = os.open(os.devnull, os.O_RDONLY)
 os.dup2(_devnull_fd, 0)
 os.close(_devnull_fd)
 threading.Thread(target=_watch_parent_stdin, args=(_watch_fd,), daemon=True).start()
-sys.argv = ['unittest', *sys.argv[1:]]
+sys.argv = ['unittest', '-v', *sys.argv[1:]]
 unittest.main(module=None)
 """
 
@@ -222,7 +228,12 @@ def run_shards(
     log_dir: Path | str | None = None,
     shards_override: Sequence[Sequence[str]] | None = None,
 ) -> int:
-    """Discover, partition, and run unittest shards in parallel subprocesses."""
+    """Discover, partition, and run unittest shards in parallel subprocesses.
+
+    A module-level `SkipTest` (reporting `Ran 0` for a non-empty shard) counts
+    as a failed shard, unlike serial `unittest`, because each shard verifies
+    that `Ran N` matches its assigned test count.
+    """
     path = Path(module_path).resolve()
     count = default_shard_count() if shard_count is None else shard_count
     if count < 1:
@@ -259,15 +270,27 @@ def run_shards(
     use_signals = threading.current_thread() is threading.main_thread()
     prev_sigint = signal.getsignal(signal.SIGINT) if use_signals else None
     prev_sigterm = signal.getsignal(signal.SIGTERM) if use_signals else None
+    installed_sigint = False
+    installed_sigterm = False
     if use_signals:
-        signal.signal(signal.SIGINT, _handle_signal)
-        signal.signal(signal.SIGTERM, _handle_signal)
+        if prev_sigint != signal.SIG_IGN:
+            signal.signal(signal.SIGINT, _handle_signal)
+            installed_sigint = True
+        if prev_sigterm != signal.SIG_IGN:
+            signal.signal(signal.SIGTERM, _handle_signal)
+            installed_sigterm = True
 
     try:
         with tempfile.TemporaryDirectory(prefix='pf-unittest-shards-', dir=str(temp_base)) as temp_root_str:
             temp_root = Path(temp_root_str)
             resolved_log_dir = Path(log_dir).resolve() if log_dir is not None else (temp_root / 'logs')
             resolved_log_dir.mkdir(parents=True, exist_ok=True)
+            planned_log_names = {
+                f'shard-{index + 1:0{width}d}.log' for index in range(total_shards)
+            }
+            for stale_log in resolved_log_dir.glob('shard-*.log'):
+                if stale_log.name not in planned_log_names and stale_log.is_file():
+                    stale_log.unlink()
 
             running: list[tuple[int, list[str], subprocess.Popen[bytes] | None, Path, TextIO | None, float]] = []
             try:
@@ -283,11 +306,20 @@ def run_shards(
                             f'({len(shard_ids)} tests, log: {log_path})',
                             flush=True,
                         )
+                    header = ''.join(
+                        [
+                            f'# shard {shard_num}/{total_shards} ({len(shard_ids)} tests)\n',
+                            *(f'#   {test_id}\n' for test_id in shard_ids),
+                            '\n',
+                        ]
+                    )
                     if not shard_ids:
-                        log_path.write_text('', encoding='utf-8')
+                        log_path.write_text(header, encoding='utf-8')
                         running.append((shard_num, shard_ids, None, log_path, None, started))
                         continue
                     log_handle = log_path.open('w', encoding='utf-8', buffering=1)
+                    log_handle.write(header)
+                    log_handle.flush()
                     proc = subprocess.Popen(
                         [sys.executable, '-B', '-u', '-c', _SHARD_BOOTSTRAP, *shard_ids],
                         stdin=subprocess.PIPE,
@@ -354,8 +386,14 @@ def run_shards(
                         print(status_line, flush=True)
                     return shard_num, shard_ids, returncode, ran_count, output, elapsed, status_line
 
-                with ThreadPoolExecutor(max_workers=max(1, total_shards)) as pool:
+                pool = ThreadPoolExecutor(max_workers=max(1, total_shards))
+                try:
                     results = list(pool.map(_collect, running))
+                except BaseException:
+                    _terminate_live_shards(running)
+                    raise
+                finally:
+                    pool.shutdown(wait=True)
             finally:
                 _terminate_live_shards(running)
                 for _, _, _, _, log_handle, _ in running:
@@ -374,9 +412,9 @@ def run_shards(
         return 128 + sig
     finally:
         if use_signals:
-            if prev_sigint is not None:
+            if installed_sigint and prev_sigint is not None:
                 signal.signal(signal.SIGINT, prev_sigint)
-            if prev_sigterm is not None:
+            if installed_sigterm and prev_sigterm is not None:
                 signal.signal(signal.SIGTERM, prev_sigterm)
 
     failed_shards: list[int] = []
