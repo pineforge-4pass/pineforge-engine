@@ -11,7 +11,8 @@ version number follows semantic versioning over the surfaces the
 
 ## 1.6.1-rc.1 — 2026-10-17
 
-**1.6.1-rc.1**, paired with pineforge-codegen's release candidate.
+**[1.6.1-rc.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1-rc.1)**,
+tag commit `196592ddba0cd8f1b3d5549c96973d1816607c0e`, paired with pineforge-codegen's release candidate.
 This first candidate for 1.6.1 declares selected-window contract revision
 `1.3-parity` rather than `1.3` until a completeness proof exists ([#401]),
 records per-stage `startedAt` and `seconds` in `preflight-summary.json`
