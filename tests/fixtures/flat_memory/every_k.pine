@@ -1,0 +1,31 @@
+//@version=6
+//
+// CR-150 lane L0 fixture (acceptance (b)): one closed trade every k bars.
+//
+// The flat-memory test runs this script over the same bar count with k set for
+// about ten trades and for about ten thousand trades (run_json --inputs
+// '{"k":6}' / '{"k":6600}'). The rest of the process (peak RSS minus every
+// mapped OHLCV byte) must not move by more than 1 MiB between the two runs.
+//
+// No strategy.closedtrades.* / opentrades.* reads: the script is streamable by
+// the 1.7.0 codegen flag (DESIGN.md 3.4).
+//
+strategy("Flat memory: trade every k bars",
+     overlay            = false,
+     initial_capital    = 100000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+k = input.int(6, "Bars per trade", minval = 1)
+
+if bar_index % k == 0
+    strategy.entry("Long", strategy.long)
+
+if bar_index % k == k - 1
+    strategy.close("Long")

@@ -1,0 +1,30 @@
+//@version=6
+//
+// CR-150 lane L0 fixture (acceptance (j)): one position kept open with adds and
+// a strategy.exit(qty_percent = 50). Every fill writes a trade row while the
+// position stays open, which is the shape the position-tail spill of
+// DESIGN.md 3.4 exists for.
+//
+// The flat-memory test runs it at 1k and 100k exits over the same bar count and
+// requires the process rest (peak RSS minus every mapped OHLCV byte) to stay
+// flat within 1 MiB, and the trades to equal the sink-off run.
+//
+strategy("Flat memory: scale out of an open position",
+     overlay            = false,
+     initial_capital    = 100000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1000,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+addEvery = input.int(1, "Add every k bars", minval = 1)
+
+if bar_index % addEvery == 0
+    strategy.entry("Long", strategy.long, qty = 1)
+
+if strategy.position_size > 0
+    strategy.exit("Partial", from_entry = "Long", qty_percent = 50)
