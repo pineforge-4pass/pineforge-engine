@@ -14,9 +14,9 @@ arithmetic and report production. It ships the
 [1.6.0-rc.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.0-rc.1)
 candidate (`04607c191b9f149dd7bbac05996c58f7988aacb5`, with [#388] merged
 before that tag) plus the documentation and test-only changes merged since the
-candidate ([#390], [#393], [#394], [#395], [#396], [#397]); no file under
-`src/`, `include/`, `cmake/`, `docker/` or `runner/` changed after
-`v1.6.0-rc.1`. Regenerate strategy C++ with the matching codegen and relink
+candidate ([#390], [#393], [#394], [#395], [#396], [#397]); no code or
+harness file under `src/`, `include/`, `cmake/`, `docker/` or `runner/`
+changed after `v1.6.0-rc.1` (these notes reword `docker/README.md` only). Regenerate strategy C++ with the matching codegen and relink
 against the matching engine headers and archive; replacing the archive alone
 does not update a statically linked strategy library.
 
@@ -77,7 +77,8 @@ does not update a statically linked strategy library.
   All 163 restored trees pass, and all 10 settlement pairings were killed.
   The two follow-ups planned before the 1.6.0 final to make the two
   error-detected tests fail by an assertion landed after `v1.6.0-rc.1`
-  ([#396], [#397]), described below.
+  ([#396], [#397], each checked against its own deliberate bug), described
+  below; the figures above are the candidate's.
   The proof does not close every
   word-composition or census gap: four mutant rows and an equivalent mutant
   remain uncovered.
@@ -159,9 +160,8 @@ does not update a statically linked strategy library.
     `test_encoder_failure_after_report_chunks` asserts from the recorded fault
     prefix that no report chunk reached stdout and that `stdout.write` was
     called once.
-- **HPO.** Pair with the matching `pineforge-codegen 1.6.0` and the matching
-  `pineforge-hpo` release for selected-window contract revision `1.3`
-  (`pineforge-hpo` 0.13.2 pinned `pineforge-codegen <1.4`, and 0.14.0 added
+- **HPO.** Pair with the matching `pineforge-codegen 1.6.0` and `pineforge-hpo`
+  1.6.0 (`pineforge-hpo` 0.13.2 pinned `pineforge-codegen <1.4`, and 0.14.0 added
   support for codegen 1.4 and 1.5).
 
 [#390]: https://github.com/pineforge-4pass/pineforge-engine/pull/390

@@ -50,8 +50,8 @@ headers and archive. Published 1.3.0 download and installation examples below
 remain pinned to that earlier pair.
 
 The engine/codegen **1.6.0** image advertises selected-window contract revision
-`1.3` through `docker/run_json.py --capabilities-json`: complete value ownership
-with `strategy_value_invalid`, `engine_command_value_invalid`,
+`1.3` through `docker/run_json.py --capabilities-json`: value ownership through
+`strategy_value_invalid`, `engine_command_value_invalid`,
 `report_result_invalid` and `report_post_execution_failed`.
 `capabilities.selected_window_contract_revisions` is `["1.3"]` when the runtime
 supports selected windows and `[]` otherwise; see the
