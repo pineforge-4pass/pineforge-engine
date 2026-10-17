@@ -5,6 +5,172 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## 1.6.0 — 2026-10-17
+
+**[1.6.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.0)**,
+paired with [pineforge-codegen 1.6.0](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.6.0).
+This minor release extends typed failures from source values through engine
+arithmetic and report production. It ships the
+[1.6.0-rc.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.0-rc.1)
+candidate (`04607c191b9f149dd7bbac05996c58f7988aacb5`, with [#388] merged
+before that tag) plus the documentation and test-only changes merged since the
+candidate ([#390], [#393], [#394], [#395], [#396], [#397]); no code or
+harness file under `src/`, `include/`, `cmake/`, `docker/` or `runner/`
+changed after `v1.6.0-rc.1` (these notes reword `docker/README.md` only). Regenerate strategy C++ with the matching codegen and relink
+against the matching engine headers and archive; replacing the archive alone
+does not update a statically linked strategy library.
+
+- **The selected-window contract is revision 1.3 ([#388]).** The
+  `docker/run_json.py --capabilities-json` probe declares
+  `capabilities.selected_window_contract_revisions` as `["1.3"]` when the
+  runtime supports selected windows and `[]` otherwise. This revision covers
+  value ownership through `strategy_value_invalid`,
+  `engine_command_value_invalid`, `report_result_invalid` and
+  `report_post_execution_failed`. The selected-window wire version stays 1,
+  the phase version 1 and the fingerprint/schema version 2.
+- **Invalid values receive typed failures ([#388]).** Source entry, exit,
+  order, cancel, risk and declaration/margin paths check actionable text,
+  levels and quantities through typed codes. Invalid derived sizing, margin,
+  fee/commission, slippage, relative-price, risk threshold/equity and
+  settlement arithmetic fails closed as `engine_command_value_invalid`.
+  Native settlement guards refuse an invalid closed row.
+- **Trade and summary doubles must be finite ([#384], [#388]).** In ordinary
+  and selected-window runs, a non-finite trade or summary double fails with
+  `report_result_invalid`, `field` naming `trades.<leaf>` or
+  `summary.<leaf>` and `reason` equal to `nonfinite`. Every report writer
+  enforces JSON, so the document carries no bare `NaN` or `Infinity` token.
+  After an acknowledged execution boundary, a writer fault stays
+  `report_post_execution_failed` with `phase: serialization`; without
+  `--run-phase-fd` in ordinary mode, a non-finite value elsewhere in the report
+  document fails with `report_result_invalid`, `field: report.document` and
+  `reason: nonfinite`. Other encoder `ValueError`s in unphased runs, and
+  encoder refusals in the capabilities and `--validate-window-only` documents,
+  keep `harness_internal_error` ([#384]). Metrics, the equity curve and
+  recorded outputs keep their existing handling; a non-finite metric stays
+  `null`.
+- **Retained refusals and diagnostic gaps ([#388]).** Native arming overflow
+  of `relative_price.level` retains its typed `NonrepresentableQuantity`
+  refusal, and the retained settlement row guards still use
+  `engine_invariant`. The pinned signal-time rejection keeps precedence.
+  An unknown `commission_type` integer still becomes `Percent`, and the
+  generated legacy `strategy_set_override` export can lose a carried reason.
+- **Limits of the value-ownership proof ([#388], [#396], [#397]).** Eight
+  changed report tests pass on both engine main and the candidate and provide
+  no fail-before evidence; they have no advance preservation/control
+  declaration. They cover post-boundary `out_of_memory` as reason
+  `resource`, post-boundary `engine_unclassified_error` as reason
+  `exception`, a missing observer acknowledgement stopping before report
+  access, and a results-digest request refused before execution, each in
+  ordinary and selected-window mode. Evidence for those behaviors rests on
+  passing checks, the sweep and parity.
+  Of 163 mutant pairings, 160 were killed by an assertion in the paired test.
+  Two were detected by errors rather than assertions and are not counted as
+  kills.
+  `quantity_defined_fallback_becomes_error` in
+  `test_value_admission_arith`: the test process aborted.
+  `06-stream-half-report-to-stdout` in
+  `test_encoder_failure_after_report_chunks[exception-selected]`: the test
+  body's JSON decode of the child output raised.
+  The one survivor, `d6_13_slippage_evaluation_order`, was closed in this release:
+  the new row `d6_13_current_slippage_bits` passes on the head and fails under
+  the mutant.
+  All 163 restored trees pass, and all 10 settlement pairings were killed.
+  The two follow-ups planned before the 1.6.0 final to make the two
+  error-detected tests fail by an assertion landed after `v1.6.0-rc.1`
+  ([#396], [#397], each checked against its own deliberate bug), described
+  below; the figures above are the candidate's.
+  The proof does not close every
+  word-composition or census gap: four mutant rows and an equivalent mutant
+  remain uncovered.
+- **The C API documentation uses the shared PineForge favicon ([#355]).**
+  The documentation selects the canonical icon through Doxygen's
+  `PROJECT_ICON` setting.
+- **Tests, CI and benchmarks.** More test sources move from the public tree to
+  private fixtures; rows that need them register SKIP placeholders when absent,
+  and these source moves do not affect the release-built assets ([#375],
+  [#386]). The rewritten public tests keep their intent, registration and
+  pinned assertions ([#382]). Corpus
+  updates keep the default validation sweep's scope and the baseline digests;
+  corpus regeneration is pinned to codegen 1.5.0 ([#376], [#377]). Corpus
+  probe directories that need non-public inputs are removed; the default
+  validation sweep never included them and the baseline digests stay unchanged
+  ([#376]). CI removes stage and subprocess deadlines and native-live test wait
+  bounds; a stop at the platform job maximum is labelled `HANG (re-run)` and
+  the check fails. Two registered rows retain a 600-second wait and a 5-second
+  read bound ([#378]). The native-live service test's cleanup no longer has a
+  kill fallback ([#378]).
+- **Removed command-line options ([#378]).** `scripts/ci_verify.py` removes
+  `--test-timeout`, `--ctest-timeout`, their config fields and the summary
+  fields `testTimeoutSeconds` and `ctestTimeoutSeconds` ([#378]).
+- **Benchmark comparison and quiet gate.** Benchmarks describe the closed
+  strategies as held-out private strategies, not redistributed ([#385]). The
+  external comparison harness is optional: without it the comparison leg is
+  skipped and a run leaves committed speed results intact ([#383]). The
+  external comparison harness and the 2026-09-29 load-time table leave this
+  repository; the optional leg requires a supplied harness directory, and speed
+  reports without its timings omit that comparison's columns and rows ([#383]).
+  Without `ps`, the busy count is `unknown (ps absent)` and timing figures are
+  labelled `quiet-unverified`; those figures are not performance evidence and
+  do not replace committed speed results ([#387]). Without `ps`, a benchmark
+  run proceeds with an unknown busy count; `QUIET_LOAD_MAX` then uses load
+  average alone and remains bounded by `QUIET_WAIT_S` ([#387]).
+- **Documentation and test-only changes since `v1.6.0-rc.1` ([#390], [#393], [#394], [#395], [#396], [#397]).**
+  - **API documentation theme, canonical URLs, `robots.txt`, `sitemap.xml` and version label ([#390], [#394]).**
+    The Doxygen footer links `https://pineforge.dev` in both footer branches,
+    `docs/_theme/404.html` and `docs/_theme/robots.txt` are copied to the site
+    root through `HTML_EXTRA_FILES` in `docs/Doxyfile`, and
+    `docs/_theme/header.html` uses per-page title descriptions ([#390], [#394]).
+    `docs/seo_postprocess.py` runs after Doxygen in `docs/build.sh` to add one
+    `rel="canonical"` link per top-level page (`https://cdocs.pineforge.dev/<page>`,
+    the landing page as the site root), rewrite relative `.html` page links
+    (`index.html` to `./`, anchors preserved), set one meta description per
+    page, and generate `sitemap.xml` from the built top-level pages excluding
+    `404.html`. `docs/build.sh` sets the site version label to the tag name
+    only for a clean checkout of an exact tag and to `unreleased` otherwise.
+    The `.github/workflows/docs.yml` build job runs
+    `bash docs/build.sh --self-test-seo` before building the site, and
+    `scripts/ci_docs_only.py` (`PROOF_READS`), `scripts/test_ci_docs_only.py`
+    and `docs/ci.md` list `docs/seo_postprocess.py` among the five
+    documentation-build inputs excluded from docs-only CI skips ([#394]).
+  - **Release-candidate notes, README apex link and 1.5.0 notes additions ([#393]).**
+    Added the `1.6.0-rc.1` changelog entry, updated the `README.md` header
+    link from `https://www.pineforge.dev` to `https://pineforge.dev`, and added
+    *Additions to the 1.5.0 notes* in `CHANGELOG.md` for the opt-in
+    selected-window mode ([#363]) and `_typed_failure` in `docker/run_json.py`.
+  - **Value-failure raise sites on the run-failure-codes page ([#395]).**
+    `docs/pages/run-failure-codes.md` lists fifteen of the 24 selected-window
+    and report-contract codes as having a raise site in this tree:
+    `strategy_value_invalid` in the C++ source layer,
+    `engine_command_value_invalid` in the engine kernel, native engine and Pine
+    adapter, and `report_result_invalid` in `docker/run_json.py`, alongside the
+    twelve `docker/` wrapper codes, leaving nine codes with no producer in this
+    tree.
+  - **Assertion on the quantity-grid overflow fallback ([#396]).**
+    In `tests/test_value_admission_arith.cpp`,
+    `quantity_infinite_intermediate_fallback` places a cash-typed entry (`cash`
+    `1e308`, `price` `2`, `grid` `0.001`) through `strategy_entry`, catches a
+    thrown failure as a failed `CHECK` rather than terminating through a
+    `noexcept` boundary, and asserts the admitted contracts equal `cash / price`
+    bit for bit; the explicit fixed-quantity overflow check stays in
+    `quantity_explicit_overflow_fallback` when the cash row records no failure.
+  - **Assertion that a failed report writes one whole JSON document on stdout ([#397]).**
+    In `tests/test_run_json_post_execution.py`, `assert_failure` requires the
+    owned stdout to be one JSON-object line (turning a JSON decode error into
+    an `AssertionError` naming the prefix and length), and
+    `test_encoder_failure_after_report_chunks` asserts from the recorded fault
+    prefix that no report chunk reached stdout and that `stdout.write` was
+    called once.
+- **HPO.** Pair with the matching `pineforge-codegen 1.6.0` and `pineforge-hpo`
+  1.6.0 (`pineforge-hpo` 0.13.2 pinned `pineforge-codegen <1.4`, and 0.14.0 added
+  support for codegen 1.4 and 1.5).
+
+[#390]: https://github.com/pineforge-4pass/pineforge-engine/pull/390
+[#393]: https://github.com/pineforge-4pass/pineforge-engine/pull/393
+[#394]: https://github.com/pineforge-4pass/pineforge-engine/pull/394
+[#395]: https://github.com/pineforge-4pass/pineforge-engine/pull/395
+[#396]: https://github.com/pineforge-4pass/pineforge-engine/pull/396
+[#397]: https://github.com/pineforge-4pass/pineforge-engine/pull/397
+
 ## 1.6.0-rc.1 — 2026-10-14
 
 **[1.6.0-rc.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.0-rc.1)**,

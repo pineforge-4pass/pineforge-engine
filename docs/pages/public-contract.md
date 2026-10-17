@@ -39,7 +39,20 @@ gives each run's report to the call that began it. The repository's
 [CHANGELOG.md](../../CHANGELOG.md#150--2026-10-12), under
 *1.5.0 — 2026-10-12*, inventories both and the test inputs' move to a
 private repository.
-Use the same-version 1.5.0 pair, with regeneration and relinking as below.
+
+1.6.0 followed on 2026-10-17: engine v1.6.0 with pineforge-codegen 1.6.0.
+It declares selected-window contract revision `1.3` (`["1.3"]` under
+`capabilities.selected_window_contract_revisions` when the runtime supports
+selected windows and `[]` otherwise) and extends typed failures across source
+value admission (`strategy_value_invalid`), derived execution and settlement
+arithmetic (`engine_command_value_invalid`), non-finite canonical trade or
+summary doubles (`report_result_invalid`) and post-boundary serialization
+faults (`report_post_execution_failed`), without changing C layouts or
+`PF_ABI_VERSION` 4. The repository's
+[CHANGELOG.md](../../CHANGELOG.md#160--2026-10-17), under
+*1.6.0 — 2026-10-17*, inventories these changes and the documentation, test,
+CI and benchmark updates since 1.5.0.
+Use the same-version 1.6.0 pair, with regeneration and relinking as below.
 
 ## Versions
 
