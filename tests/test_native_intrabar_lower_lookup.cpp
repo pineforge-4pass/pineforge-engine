@@ -253,6 +253,17 @@ constexpr int kBars = 4000;
 constexpr int kMaxRepeats = 1024;
 constexpr double kMinLegSeconds = 0.1;
 constexpr double kShapeBound = 6.0;
+#if defined(__SANITIZE_ADDRESS__)
+constexpr bool kUnderAsan = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+constexpr bool kUnderAsan = true;
+#else
+constexpr bool kUnderAsan = false;
+#endif
+#else
+constexpr bool kUnderAsan = false;
+#endif
 
 int calibrated_repeats() {
     return ratio_timing::presized(1, kMaxRepeats, kMinLegSeconds,
@@ -275,7 +286,11 @@ void the_lower_feed_lookup_is_linear_in_the_run() {
     CHECK(small > 0.0);
     CHECK(small >= kMinLegSeconds);
     CHECK(large >= kMinLegSeconds);
-    CHECK(ratio < kShapeBound);
+    if (kUnderAsan) {
+        std::printf("lower-feed shape bound skipped under AddressSanitizer (timing is not representative)\n");
+    } else {
+        CHECK(ratio < kShapeBound);
+    }
 }
 
 struct Observed {
