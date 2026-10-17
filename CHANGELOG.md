@@ -15,13 +15,15 @@ version number follows semantic versioning over the surfaces the
   only with `value_ownership` `"complete"`, and no completeness proof has run
   (EN-115). The probe now declares `["1.3-parity"]` when the runtime supports
   selected windows and `[]` otherwise (`value_ownership`
-  `parity_with_reference`, as in 1.5.0): value parity with the 1.4.0 reference
-  on the tested cases, with the four typed value-ownership codes
+  `parity_with_reference`, as 1.5.0 declared): value parity with the 1.4.0
+  reference on the tested cases, with the four typed value-ownership codes
   (`strategy_value_invalid`, `engine_command_value_invalid`,
   `report_result_invalid` and `report_post_execution_failed`) emitted, and no
-  completeness claim. The C layouts stay at ABI 4, `PF_ABI_VERSION` stays 4,
-  the selected-window wire version stays 1, the phase version 1 and the
-  fingerprint/schema version 2.
+  completeness claim. A build declaring `1.3-parity` cannot be promoted to a
+  stable app pin; the app pins it only as a prerelease (`1.6.1-rc.N`), and
+  only a completeness proof (EN-115) allows `"1.3"` again. The C layouts stay
+  at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays
+  1, the phase version 1 and the fingerprint/schema version 2.
 
 ## 1.6.0 — 2026-10-17
 
