@@ -81,10 +81,10 @@ jobs:
   preflight:
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     # 360 minutes is GitHub's job maximum and deliberately the only limit:
-    # its verifier-tests stage is one serial process, and no stage of this
-    # preflight carries a timeout of its own any more (owner rule,
-    # 2026-10-12). A hang reaches the platform maximum; a slow stage never
-    # fails the run.
+    # its verifier-tests stage runs test_ci_verify.py across parallel unittest
+    # shards, and no stage of this preflight carries a timeout of its own any
+    # more (owner rule, 2026-10-12). A hang reaches the platform maximum; a
+    # slow stage never fails the run.
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
