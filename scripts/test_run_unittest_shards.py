@@ -5,13 +5,16 @@ from __future__ import annotations
 import io
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -24,7 +27,9 @@ SCRIPT = ROOT / 'scripts' / 'run_unittest_shards.py'
 FAKE_MODULE_SOURCE = textwrap.dedent("""
     import os
     import signal
+    import sys
     import tempfile
+    import time
     import unittest
 
     MODULE_SETUP_RAN = False
@@ -38,11 +43,18 @@ FAKE_MODULE_SOURCE = textwrap.dedent("""
     class AlphaTests(unittest.TestCase):
         def test_one(self):
             self.assertTrue(MODULE_SETUP_RAN)
-            print(f"TMPDIR_SEEN={tempfile.gettempdir()}")
+            print("EARLY_OUTPUT_TEST_ONE", flush=True)
+            print(f"TMPDIR_SEEN={tempfile.gettempdir()}", flush=True)
+            if os.environ.get("FAKE_EARLY_EXIT_TARGET") == "test_one":
+                os._exit(0)
 
         def test_two(self):
             self.assertTrue(MODULE_SETUP_RAN)
-            print(f"TMPDIR_SEEN={tempfile.gettempdir()}")
+            print(f"TMPDIR_SEEN={tempfile.gettempdir()}", flush=True)
+            sleep_sec = float(os.environ.get("FAKE_SLEEP_SECONDS", "0"))
+            if sleep_sec > 0:
+                print(f"SLEEPING_PID={os.getpid()}", flush=True)
+                time.sleep(sleep_sec)
 
         def test_three(self):
             self.assertTrue(MODULE_SETUP_RAN)
@@ -50,6 +62,8 @@ FAKE_MODULE_SOURCE = textwrap.dedent("""
                 self.fail("deliberate failure in test_three")
             if os.environ.get("FAKE_SIGNAL_TARGET") == "test_three":
                 os.kill(os.getpid(), signal.SIGTERM)
+            if os.environ.get("FAKE_EARLY_EXIT_TARGET") == "test_three":
+                os._exit(0)
 
 
     class BetaTests(unittest.TestCase):
@@ -60,7 +74,7 @@ FAKE_MODULE_SOURCE = textwrap.dedent("""
 
         def test_five(self):
             self.assertTrue(MODULE_SETUP_RAN)
-            print(f"TMPDIR_SEEN={tempfile.gettempdir()}")
+            print(f"TMPDIR_SEEN={tempfile.gettempdir()}", flush=True)
 """)
 
 
@@ -85,7 +99,7 @@ class UnittestShardsTests(unittest.TestCase):
             env=env,
         )
 
-    def test_default_shard_count_caps_at_16_and_floors_at_1(self) -> None:
+    def test_default_shard_count_uses_sched_getaffinity_else_cpu_count_and_caps_at_16(self) -> None:
         self.assertEqual(shards_runner.default_shard_count(32), 16)
         self.assertEqual(shards_runner.default_shard_count(16), 16)
         self.assertEqual(shards_runner.default_shard_count(8), 8)
@@ -93,6 +107,31 @@ class UnittestShardsTests(unittest.TestCase):
         self.assertEqual(shards_runner.default_shard_count(0), 1)
         self.assertGreaterEqual(shards_runner.default_shard_count(), 1)
         self.assertLessEqual(shards_runner.default_shard_count(), 16)
+
+        with mock.patch.object(
+            shards_runner.os,
+            'sched_getaffinity',
+            create=True,
+            return_value={0, 1, 2, 3, 4, 5},
+        ) as affinity_mock, mock.patch.object(shards_runner.os, 'cpu_count', return_value=32):
+            self.assertEqual(shards_runner.default_shard_count(), 6)
+            affinity_mock.assert_called_once_with(0)
+
+        with mock.patch.object(
+            shards_runner.os,
+            'sched_getaffinity',
+            create=True,
+            return_value=set(range(24)),
+        ), mock.patch.object(shards_runner.os, 'cpu_count', return_value=4):
+            self.assertEqual(shards_runner.default_shard_count(), 16)
+
+        with mock.patch.object(
+            shards_runner.os,
+            'sched_getaffinity',
+            create=True,
+            side_effect=AttributeError('no sched_getaffinity'),
+        ), mock.patch.object(shards_runner.os, 'cpu_count', return_value=12):
+            self.assertEqual(shards_runner.default_shard_count(), 12)
 
     def test_shards_union_equals_full_id_list_with_no_duplicates(self) -> None:
         full_ids = shards_runner.discover_test_ids(self.module_path)
@@ -112,8 +151,9 @@ class UnittestShardsTests(unittest.TestCase):
                 output = result.stdout + result.stderr
                 self.assertEqual(result.returncode, 0, output)
                 self.assertIn('5 tests', output)
-                for index in range(count):
-                    self.assertIn(f'shard {index}/{count}:', output)
+                self.assertNotIn(f'shard 0/{count}', output)
+                for shard_num in range(1, count + 1):
+                    self.assertIn(f'shard {shard_num}/{count}:', output)
 
     def test_lost_or_duplicated_test_ids_print_and_fail(self) -> None:
         full_ids = shards_runner.discover_test_ids(self.module_path)
@@ -141,7 +181,9 @@ class UnittestShardsTests(unittest.TestCase):
         shards = shards_runner.split_into_shards(full_ids, 2)
         for target_method in ('test_three', 'test_four'):
             target_id = next(test_id for test_id in full_ids if test_id.endswith('.' + target_method))
-            expected_shard = next(index for index, shard in enumerate(shards) if target_id in shard)
+            expected_shard = next(
+                index + 1 for index, shard in enumerate(shards) if target_id in shard
+            )
             with self.subTest(target=target_method, expected_shard=expected_shard):
                 result = self.run_cli(
                     str(self.module_path),
@@ -159,7 +201,9 @@ class UnittestShardsTests(unittest.TestCase):
         full_ids = shards_runner.discover_test_ids(self.module_path)
         shards = shards_runner.split_into_shards(full_ids, 2)
         target_id = next(test_id for test_id in full_ids if test_id.endswith('.test_three'))
-        expected_shard = next(index for index, shard in enumerate(shards) if target_id in shard)
+        expected_shard = next(
+            index + 1 for index, shard in enumerate(shards) if target_id in shard
+        )
         result = self.run_cli(
             str(self.module_path),
             '--shards',
@@ -171,6 +215,204 @@ class UnittestShardsTests(unittest.TestCase):
         self.assertIn(f'shard {expected_shard}/2: FAILED', output)
         self.assertIn('signal', output.lower())
         self.assertIn('5 tests', output)
+
+    def test_shard_exiting_zero_with_fewer_tests_ran_fails_and_names_the_shard(self) -> None:
+        full_ids = shards_runner.discover_test_ids(self.module_path)
+        shards = shards_runner.split_into_shards(full_ids, 2)
+        target_id = next(test_id for test_id in full_ids if test_id.endswith('.test_one'))
+        expected_shard = next(
+            index + 1 for index, shard in enumerate(shards) if target_id in shard
+        )
+        self.assertGreater(len(shards[expected_shard - 1]), 1)
+        result = self.run_cli(
+            str(self.module_path),
+            '--shards',
+            '2',
+            extra_env={'FAKE_EARLY_EXIT_TARGET': 'test_one'},
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn(f'shard {expected_shard}/2: FAILED', output)
+        self.assertIn(f'failed: shard {expected_shard}', output)
+
+    def test_live_shard_log_file_holds_earlier_output_while_shard_runs_and_progress_lines_flush(self) -> None:
+        log_dir = self.root / 'shard-logs'
+        env = os.environ.copy()
+        env['FAKE_SLEEP_SECONDS'] = '1.5'
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                '-B',
+                str(SCRIPT),
+                str(self.module_path),
+                '--shards',
+                '1',
+                '--log-dir',
+                str(log_dir),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+        try:
+            assert proc.stdout is not None
+            first_line = proc.stdout.readline()
+            self.assertIn('shard 1/1: starting', first_line)
+            self.assertIsNone(proc.poll(), 'runner should still be running after start line')
+
+            deadline = time.monotonic() + 5.0
+            shard_log: Path | None = None
+            seen_early = False
+            while time.monotonic() < deadline:
+                if log_dir.is_dir():
+                    candidates = sorted(log_dir.glob('*.log'))
+                    if candidates:
+                        shard_log = candidates[0]
+                        content = shard_log.read_text(encoding='utf-8', errors='replace')
+                        if 'EARLY_OUTPUT_TEST_ONE' in content and 'SLEEPING_PID=' in content:
+                            seen_early = True
+                            break
+                time.sleep(0.05)
+
+            self.assertTrue(
+                seen_early,
+                f'shard log did not flush early output while still running; '
+                f'log_dir={list(log_dir.glob("*")) if log_dir.is_dir() else []}',
+            )
+            self.assertIsNone(proc.poll(), 'runner should still be running while test_two sleeps')
+            rest_output, _ = proc.communicate(timeout=10.0)
+            output = first_line + (rest_output or '')
+        finally:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except PermissionError:
+                    pass
+                try:
+                    proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    pass
+
+        self.assertEqual(proc.returncode, 0, output)
+        self.assertIn('shard 1/1: starting', output)
+        self.assertIn('EARLY_OUTPUT_TEST_ONE', output)
+        self.assertIn('shard 1/1: ok (5 tests,', output)
+        assert shard_log is not None
+        final_log = shard_log.read_text(encoding='utf-8', errors='replace')
+        self.assertIn('EARLY_OUTPUT_TEST_ONE', final_log)
+        self.assertIn('Ran 5 tests', final_log)
+
+    def test_sigterm_terminates_live_shard_processes_and_exits_nonzero(self) -> None:
+        import fcntl
+
+        lock_dir = self.root / 'locks'
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        sleeping_module = self.root / 'sleeping_suite.py'
+        sleeping_module.write_text(
+            textwrap.dedent(f"""
+                import fcntl
+                import os
+                import time
+                import unittest
+                from pathlib import Path
+
+                LOCK_DIR = Path({str(lock_dir)!r})
+                _HELD_LOCKS = []
+
+                def _hold_lock(name: str) -> None:
+                    lock_file = (LOCK_DIR / f"{{name}}.lock").open("w", encoding="utf-8")
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    lock_file.write(f"{{os.getpid()}}\\n")
+                    lock_file.flush()
+                    _HELD_LOCKS.append(lock_file)
+
+                class SleepTests(unittest.TestCase):
+                    def test_sleep_a(self):
+                        _hold_lock("a")
+                        time.sleep(2.5)
+
+                    def test_sleep_b(self):
+                        _hold_lock("b")
+                        time.sleep(2.5)
+            """),
+            encoding='utf-8',
+        )
+
+        def _is_locked(lock_path: Path) -> bool:
+            if not lock_path.is_file():
+                return False
+            with lock_path.open('r+', encoding='utf-8') as probe:
+                try:
+                    fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return True
+                fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                return False
+
+        # Invoke runner in a child Python process that sends SIGTERM to itself
+        # once both shard processes are holding their exclusive locks.
+        driver_code = textwrap.dedent(f"""
+            import fcntl
+            import os
+            import signal
+            import sys
+            import threading
+            import time
+            from pathlib import Path
+
+            sys.path.insert(0, {str(ROOT / 'scripts')!r})
+            import run_unittest_shards
+
+            lock_dir = Path({str(lock_dir)!r})
+
+            def _locked(p: Path) -> bool:
+                if not p.is_file():
+                    return False
+                with p.open("r+", encoding="utf-8") as f:
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        return True
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    return False
+
+            def _trigger_sigterm() -> None:
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if _locked(lock_dir / "a.lock") and _locked(lock_dir / "b.lock"):
+                        os.kill(os.getpid(), signal.SIGTERM)
+                        return
+                    time.sleep(0.02)
+
+            threading.Thread(target=_trigger_sigterm, daemon=True).start()
+            raise SystemExit(run_unittest_shards.main([{str(sleeping_module)!r}, "--shards", "2"]))
+        """)
+        proc = subprocess.Popen(
+            [sys.executable, '-B', '-c', driver_code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        output, _ = proc.communicate(timeout=10.0)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+        # Immediately after the runner exits from SIGTERM, no shard process
+        # may remain alive (verified within 0.3s while the 2.5s sleep would
+        # still be running if the shard had been orphaned).
+        reap_deadline = time.monotonic() + 0.3
+        alive_locks = ['a', 'b']
+        while time.monotonic() < reap_deadline and alive_locks:
+            alive_locks = [
+                name for name in ('a', 'b') if _is_locked(lock_dir / f'{name}.lock')
+            ]
+            if alive_locks:
+                time.sleep(0.02)
+        self.assertEqual(
+            alive_locks,
+            [],
+            f'shard processes for {alive_locks} remained alive after runner exited on SIGTERM',
+        )
 
     def test_per_shard_tmpdir_is_isolated_and_outside_repo(self) -> None:
         in_repo_tmp = ROOT / 'build-ci-tmp-probe'
@@ -190,8 +432,9 @@ class UnittestShardsTests(unittest.TestCase):
             self.assertNotEqual(resolved, repo_resolved)
             self.assertNotIn(repo_resolved, resolved.parents)
 
-    def test_ci_preflight_wires_verifier_tests_and_registers_this_test_file(self) -> None:
-        commands = {entry[0]: entry[1] for entry in ci_preflight.check_commands(ROOT)}
+    def test_ci_preflight_wires_verifier_tests_with_log_dir_and_registers_this_test_file(self) -> None:
+        out_dir = self.root / 'custom-preflight-out'
+        commands = {entry[0]: entry[1] for entry in ci_preflight.check_commands(ROOT, out_dir)}
         self.assertIn('verifier-tests', commands)
         verifier_argv = commands['verifier-tests']
         self.assertEqual(
@@ -200,6 +443,19 @@ class UnittestShardsTests(unittest.TestCase):
                 sys.executable,
                 str(ROOT / 'scripts/run_unittest_shards.py'),
                 str(ROOT / 'scripts/test_ci_verify.py'),
+                '--log-dir',
+                str(out_dir / 'verifier-tests-shards'),
+            ],
+        )
+        default_commands = {entry[0]: entry[1] for entry in ci_preflight.check_commands(ROOT)}
+        self.assertEqual(
+            default_commands['verifier-tests'],
+            [
+                sys.executable,
+                str(ROOT / 'scripts/run_unittest_shards.py'),
+                str(ROOT / 'scripts/test_ci_verify.py'),
+                '--log-dir',
+                str(ROOT / 'build-ci-preflight' / 'verifier-tests-shards'),
             ],
         )
         registered_scripts = {Path(argv[-1]).name for argv in commands.values() if argv}
