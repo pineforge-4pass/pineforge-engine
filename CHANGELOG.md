@@ -7,6 +7,16 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **EN-115 selected-window completeness proof completed.** The image declares
+  selected-window contract revision `1.3` again: the section-4 producers and
+  manifest are present, `value_ownership` is `complete`, and a revision `1.3`
+  pairs only with a `complete` receipt. The `docker/run_json.py
+  --capabilities-json` probe reports
+  `capabilities.selected_window_contract_revisions` as `["1.3"]` on a
+  supported runtime and `[]` otherwise; `1.3-parity` remains the parity
+  build's literal, and a tuple holding both is invalid. No wire or ABI change:
+  the selected-window wire version stays 1, the phase version 1 and the
+  fingerprint/schema version 2.
 - `scripts/ci_preflight.py` runs `verifier-tests` (`scripts/test_ci_verify.py`) across parallel `unittest` subprocess shards with per-shard `TMPDIR` isolation via `scripts/run_unittest_shards.py` (`scripts/test_run_unittest_shards.py`).
 
 ## 1.6.1-rc.1 — 2026-10-17

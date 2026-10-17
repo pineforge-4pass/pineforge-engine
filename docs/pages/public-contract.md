@@ -48,12 +48,15 @@ It extends typed failures across source value admission
 (`report_post_execution_failed`), without changing C layouts or
 `PF_ABI_VERSION` 4; from 1.6.1 (unreleased; see
 [CHANGELOG.md](../../CHANGELOG.md#161-rc1--2026-10-17)) the image declares
-selected-window contract revision `1.3-parity` (`["1.3-parity"]` under
+selected-window contract revision `1.3` again (`["1.3"]` under
 `capabilities.selected_window_contract_revisions` when the runtime supports
-selected windows and `[]` otherwise), which emits the four typed codes
+selected windows and `[]` otherwise), now with the EN-115 completeness proof:
+the section-4 producers and manifest are present and value ownership is
+`complete`, and it emits the four typed codes
 (`strategy_value_invalid`, `engine_command_value_invalid`,
-`report_result_invalid` and `report_post_execution_failed`), with parity with
-the 1.4.0 reference on tested cases, and no completeness claim (1.6.0 declared
+`report_result_invalid` and `report_post_execution_failed`). A build declaring
+`1.3` pairs only with a `complete` receipt; `1.3-parity` remains the parity
+build's literal, and a tuple holding both is invalid (1.6.0 declared
 `1.3` without a completeness proof). The repository's
 [CHANGELOG.md](../../CHANGELOG.md#160--2026-10-17), under
 *1.6.0 — 2026-10-17*, inventories these changes and the documentation, test,

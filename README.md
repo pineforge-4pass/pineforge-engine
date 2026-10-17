@@ -45,18 +45,21 @@ The [release notes](CHANGELOG.md#160--2026-10-17) cover typed failures across
 source values, engine arithmetic and report production, finite trade and
 summary doubles, and the documentation, test, CI and benchmark updates since
 1.5.0; in [1.6.1 (unreleased)](CHANGELOG.md#161-rc1--2026-10-17) the selected-window
-contract revision is `1.3-parity` rather than `1.3`.
+contract revision is `1.3` again, now with the EN-115 completeness proof.
 For the 1.6.0 pair, regenerate strategy C++ and relink against that pair's
 headers and archive. Published 1.3.0 download and installation examples below
 remain pinned to that earlier pair.
 
 From 1.6.1 (unreleased), the engine/codegen image advertises selected-window
-contract revision `1.3-parity` through `docker/run_json.py --capabilities-json`:
-it emits the four typed codes (`strategy_value_invalid`,
+contract revision `1.3` through `docker/run_json.py --capabilities-json`:
+with the section-4 producers and manifest present and value ownership
+`complete` (EN-115), it emits the four typed codes (`strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
-`report_post_execution_failed`), with parity with the 1.4.0 reference on tested
-cases, and no completeness claim (the published 1.6.0 image declares `1.3`).
-`capabilities.selected_window_contract_revisions` is `["1.3-parity"]` when the
+`report_post_execution_failed`). A build declaring `1.3` pairs only with a
+`complete` receipt; `1.3-parity` remains the parity build's literal, and a
+tuple holding both is invalid (the published 1.6.0 image declared `1.3`
+without that proof).
+`capabilities.selected_window_contract_revisions` is `["1.3"]` when the
 runtime supports selected windows and `[]` otherwise; see the
 [capability table](docker/README.md#selected-window-contract-revision) and
 [report schema](docs/pages/report-schema.md).

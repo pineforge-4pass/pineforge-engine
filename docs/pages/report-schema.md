@@ -8,13 +8,15 @@ each field to its meaning and units.
 @see #pf_report_t for the verbatim struct declaration.
 
 The published engine/codegen **1.6.0** image declares selected-window contract
-revision `1.3`. From 1.6.1 (unreleased), the image declares `1.3-parity`
-instead: it emits the four typed codes (`strategy_value_invalid`,
-`engine_command_value_invalid`, `report_result_invalid` and
-`report_post_execution_failed`), with value parity with the 1.4.0 reference on
-tested cases, and no completeness claim.
+revision `1.3`. From 1.6.1 (unreleased), the image declares `1.3` again, now
+with the EN-115 completeness proof: the section-4 producers and manifest are
+present, value ownership is `complete`, and it emits the four typed codes
+(`strategy_value_invalid`, `engine_command_value_invalid`,
+`report_result_invalid` and `report_post_execution_failed`). A build declaring
+`1.3` pairs only with a `complete` receipt; `1.3-parity` remains the parity
+build's literal, and a tuple holding both is invalid.
 The `--capabilities-json` probe's
-`capabilities.selected_window_contract_revisions` is `["1.3-parity"]` for a
+`capabilities.selected_window_contract_revisions` is `["1.3"]` for a
 supported runtime and `[]` otherwise. The declaration lives in that capability
 record; the selected-window wire version remains 1, the phase version 1 and the
 fingerprint/schema version 2.
