@@ -260,6 +260,117 @@ for invalid_site in (empty, only_404, fixture / "missing"):
     result = subprocess.run(command[:-1] + [str(invalid_site)], capture_output=True)
     assert result.returncode != 0, "missing or empty documentation must fail"
     assert not (invalid_site / "sitemap.xml").exists(), "invalid input produced a sitemap"
+
+# Add Doxygen source listings only after checking the original site's exact output.
+# These names follow the encoding of the configured headers and C/C++ examples.
+source_metadata = {
+    "pineforge_8h_source.html": "",
+    "native__host_8hpp_source.html": old_meta,
+    "hello__kernel_8cpp_source.html": old_meta + '<meta name="robots" content="noindex">\n',
+    "hello__kernel__c_8c_source.html": old_meta + '<META NAME="ROBOTS" CONTENT="index, follow"/>\n',
+    "native__order_8hpp_source.html": (
+        old_meta + '<meta name="robots" content="noindex, follow"/>\n'
+        '<meta name="robots" content="index"/>\n'
+    ),
+}
+api_titles = {
+    "classpineforge_1_1data__source.html": "PineForge: data_source Class Reference",
+    "classpineforge_1_1data__8hpp__source.html": "PineForge: data_8hpp_source Class Reference",
+    "structpineforge_1_1NativeRunSpec.html": "PineForge: NativeRunSpec Struct Reference",
+    "namespacepineforge.html": "PineForge: pineforge Namespace Reference",
+    "pineforge_8h.html": "PineForge: pineforge.h File Reference",
+    "native__host_8hpp.html": "PineForge: native_host.hpp File Reference",
+    "hello__kernel_8cpp.html": "PineForge: hello_kernel.cpp File Reference",
+    "hello__kernel__c_8c.html": "PineForge: hello_kernel_c.c File Reference",
+    "dir_0123456789abcdef0123456789abcdef.html": "PineForge: Directory Reference",
+    "group__kernel.html": "PineForge: Kernel API",
+    "functions.html": "PineForge: Documented Members",
+    "md_pages_2raw__source.html": "PineForge: Source integration guide",
+}
+api_robots = '<meta name="robots" content="index, follow"/>\n'
+for name, metadata in source_metadata.items():
+    body = '<div class="fragment"><div class="line">int example;</div></div>'
+    (site / name).write_bytes(page(f"PineForge: {name} Source File", body, metadata).encode("utf-8"))
+for name, title in api_titles.items():
+    metadata = old_meta + (api_robots if name == "namespacepineforge.html" else "")
+    (site / name).write_bytes(page(title, "<p>Documented API.</p>", metadata).encode("utf-8"))
+
+# An explicit page id can match a source-listing name without being a listing.
+guide_name = "guide_8cpp_source.html"
+guide_url = "https://cdocs.pineforge.dev/guide_8cpp_source"
+guide_canonical = f'<link rel="canonical" href="{guide_url}"/>\n'
+(site / guide_name).write_bytes(page(
+    "PineForge: Integration guide", "<p>Integration guide.</p>", old_meta + guide_canonical
+).encode("utf-8"))
+
+# The parser must strip trailing whitespace inside the title before classifying.
+whitespace_source = "whitespace_8hpp_source.html"
+source_metadata[whitespace_source] = old_meta
+(site / whitespace_source).write_bytes(page(
+    "PineForge: whitespace.hpp Source File \t\n",
+    '<div class="fragment"><div class="line">int whitespace_example;</div></div>',
+    source_metadata[whitespace_source],
+).encode("utf-8"))
+
+class RobotsMetadata(Metadata):
+    def __init__(self):
+        super().__init__()
+        self.robots = []
+        self.in_head = False
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        if tag == "head":
+            self.in_head = True
+        attrs = dict(attrs)
+        if tag == "meta" and (attrs.get("name") or "").lower() == "robots":
+            self.robots.append((attrs.get("content"), self.in_head))
+
+    def handle_endtag(self, tag):
+        if tag == "head":
+            self.in_head = False
+
+subprocess.run(command, check=True)
+for path in sorted(site.glob("*.html")):
+    actual = path.read_bytes().decode("utf-8")
+    parsed = RobotsMetadata()
+    parsed.feed(actual)
+    parsed.close()
+    if path.name in source_metadata:
+        assert parsed.robots == [("noindex", True)], f"{path.name}: expected one noindex tag in the head"
+        url = "https://cdocs.pineforge.dev/" + path.stem
+        expected_tail = ('<meta name="robots" content="noindex">\n'
+                         f'<link rel="canonical" href="{url}"/>\n</head>')
+        assert expected_tail in actual, f"{path.name}: robots tag must precede the canonical at the end of the head"
+        assert parsed.canonicals == [url], f"{path.name}: source canonical must occur exactly once"
+        assert len(parsed.descriptions) == 1, f"{path.name}: source description must occur exactly once"
+    elif path.name == "namespacepineforge.html":
+        assert parsed.robots == [("index, follow", True)], "API robots metadata must stay unchanged"
+        assert api_robots in actual, "API robots markup must stay byte-identical"
+    else:
+        assert parsed.robots == [], f"{path.name}: API, landing and error pages must not receive robots metadata"
+    if path.name in titles:
+        assert path.read_bytes() == first_pass[Path(path.name)], f"{path.name}: original page changed after adding source listings"
+    if path.name == guide_name:
+        assert parsed.robots == [], "a hand-written page with a colliding explicit id must not receive robots metadata"
+        assert parsed.canonicals == [guide_url], "the colliding guide must keep exactly one canonical"
+        assert guide_canonical + "</head>" in actual, "the colliding guide must keep its canonical at the end of the head"
+for name, contents in untouched.items():
+    assert (site / name).read_bytes() == contents, f"{name}: source processing changed an asset or nested page"
+
+source_root = ET.parse(site / "sitemap.xml").getroot()
+source_urls = [entry.findtext(namespace + "loc") for entry in source_root]
+indexable_names = [name for name in titles if name != "404.html"] + list(api_titles)
+indexable_names.append(guide_name)
+indexable_urls = sorted("https://cdocs.pineforge.dev/" + ("" if name == "index.html" else name[:-5])
+                        for name in indexable_names)
+assert source_urls == indexable_urls, "sitemap must keep all API pages and omit every source listing and 404"
+assert guide_url in source_urls, "the hand-written guide with a colliding explicit id must stay in the sitemap"
+
+source_first_pass = {path.relative_to(site): path.read_bytes() for path in site.rglob("*") if path.is_file()}
+subprocess.run(command, check=True)
+source_second_pass = {path.relative_to(site): path.read_bytes() for path in site.rglob("*") if path.is_file()}
+assert source_second_pass == source_first_pass, "source robots metadata and the full site must be byte-identical on a second pass"
 PY
     if python3 -I -B "$fixture/check_seo.py" "$script" "$fixture"; then
         result=0
@@ -268,7 +379,7 @@ PY
     fi
     rm -rf "$fixture"
     if (( result == 0 )); then
-        echo "==> Docs SEO self-test: canonical, links, descriptions, sitemap, assets, version ... OK"
+        echo "==> Docs SEO self-test: canonical, links, descriptions, sitemap, assets, version, source noindex ... OK"
     fi
     return "$result"
 }
@@ -325,6 +436,10 @@ CONFIG="$(mktemp "${TMPDIR:-/tmp}/pineforge-doxyfile.XXXXXX")"
 trap 'rm -f "$CONFIG"' EXIT
 { cat Doxyfile; echo "PROJECT_NUMBER = $VERSION"; } > "$CONFIG"
 run_doxygen_with_retry
+# Add metadata to top-level *.html pages and write their canonical sitemap.
+# Raw _8<ext>_source.html listings with a title ending in "Source File" get
+# noindex and stay out of the sitemap; file references and other docs remain
+# indexable, with 404 untouched.
 python3 -I -B seo_postprocess.py site/html
 
 # 3b. The scoped warning gate (R5 lane L14-A).
