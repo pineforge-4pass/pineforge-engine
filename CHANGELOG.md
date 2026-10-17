@@ -5,9 +5,19 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
-## 1.6.1 — Unreleased
+## 1.6.1-rc.1 — 2026-10-17
 
-- **The selected-window contract is revision `1.3-parity` (EN-115).** Since
+**1.6.1-rc.1**, paired with pineforge-codegen's release candidate.
+This first candidate for 1.6.1 declares selected-window contract revision
+`1.3-parity` rather than `1.3` until a completeness proof exists ([#401]),
+records per-stage `startedAt` and `seconds` in `preflight-summary.json`
+([#402]), and includes the API documentation updates since 1.6.0 ([#398],
+[#400]). The changes below are since 1.6.0. Regenerate strategy C++ with the
+matching codegen release candidate and relink against the matching engine
+headers and archive; replacing the archive alone does not update a statically
+linked strategy library.
+
+- **The selected-window contract is revision `1.3-parity` (EN-115, [#401]).** Since
   [#388], `docker/selected_window_report.py` (`CONTRACT_REVISIONS`) and the
   `docker/run_json.py --capabilities-json` probe declared
   `capabilities.selected_window_contract_revisions` as `["1.3"]` in 1.6.0.
@@ -24,7 +34,30 @@ version number follows semantic versioning over the surfaces the
   only a completeness proof (EN-115) allows `"1.3"` again. The C layouts stay
   at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays
   1, the phase version 1 and the fingerprint/schema version 2.
-- **Preflight stage timings.** `scripts/ci_preflight.py` records `startedAt` (UTC ISO-8601) and `seconds` (monotonic duration; `null` while a stage is running) on each stage and on the top-level `preflight-summary.json` summary.
+- **Preflight stage timings ([#402]).** `scripts/ci_preflight.py` records `startedAt` (UTC ISO-8601) and `seconds` (monotonic duration; `null` while a stage is running) on each stage and on the top-level `preflight-summary.json` summary.
+- **API documentation (`noindex` on Doxygen source listings and report-schema wording, [#398], [#400]).**
+  `docs/seo_postprocess.py` adds `<meta name="robots" content="noindex">` in
+  the `<head>` of raw Doxygen source listings whose file name matches
+  `*_8<ext>_source.html` and whose stripped `<title>` ends with
+  `"Source File"`, replacing any existing `robots` meta tag, and omits pages
+  carrying a `noindex` or `none` robots directive from `sitemap.xml` while
+  keeping `Allow: /` in `robots.txt` and leaving API reference pages,
+  hand-written pages (including colliding explicit page ids), the landing
+  page and `404.html` unchanged; `docs/build.sh --self-test-seo` and
+  `docs/ci.md` cover the source-listing pass ([#398]).
+  `docs/pages/report-schema.md` replaced "meaning complete value ownership
+  with" by "covering value ownership through" for the 1.6.0 selected-window
+  contract revision sentence before [#401] updated the page for `1.3-parity`
+  ([#400]).
+- **HPO.** Pair with the matching `pineforge-codegen` and `pineforge-hpo`
+  release candidates (`pineforge-hpo` 0.13.2 pinned `pineforge-codegen <1.4`,
+  0.14.0 added support for codegen 1.4 and 1.5, and 1.6.0 paired with
+  codegen 1.6.0).
+
+[#398]: https://github.com/pineforge-4pass/pineforge-engine/pull/398
+[#400]: https://github.com/pineforge-4pass/pineforge-engine/pull/400
+[#401]: https://github.com/pineforge-4pass/pineforge-engine/pull/401
+[#402]: https://github.com/pineforge-4pass/pineforge-engine/pull/402
 
 ## 1.6.0 — 2026-10-17
 

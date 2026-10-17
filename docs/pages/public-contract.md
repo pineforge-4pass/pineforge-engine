@@ -47,7 +47,7 @@ It extends typed failures across source value admission
 (`report_result_invalid`) and post-boundary serialization faults
 (`report_post_execution_failed`), without changing C layouts or
 `PF_ABI_VERSION` 4; from 1.6.1 (unreleased; see
-[CHANGELOG.md](../../CHANGELOG.md#161--unreleased)) the image declares
+[CHANGELOG.md](../../CHANGELOG.md#161-rc1--2026-10-17)) the image declares
 selected-window contract revision `1.3-parity` (`["1.3-parity"]` under
 `capabilities.selected_window_contract_revisions` when the runtime supports
 selected windows and `[]` otherwise), which emits the four typed codes

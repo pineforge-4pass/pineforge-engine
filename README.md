@@ -44,7 +44,7 @@ was released on 2026-10-17**, paired with
 The [release notes](CHANGELOG.md#160--2026-10-17) cover typed failures across
 source values, engine arithmetic and report production, finite trade and
 summary doubles, and the documentation, test, CI and benchmark updates since
-1.5.0; in [1.6.1 (unreleased)](CHANGELOG.md#161--unreleased) the selected-window
+1.5.0; in [1.6.1 (unreleased)](CHANGELOG.md#161-rc1--2026-10-17) the selected-window
 contract revision is `1.3-parity` rather than `1.3`.
 For the 1.6.0 pair, regenerate strategy C++ and relink against that pair's
 headers and archive. Published 1.3.0 download and installation examples below
