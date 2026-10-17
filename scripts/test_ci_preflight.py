@@ -768,6 +768,94 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(summary['status'], 'passed')
         self.assertIn('full verification still required', summary['scope'])
 
+    def test_summary_and_stages_record_started_at_and_seconds_while_preserving_existing_keys(self):
+        iso_utc_second = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+        observer_cmd = [
+            sys.executable, '-c',
+            'import json, pathlib; '
+            'p = pathlib.Path("logs/preflight-summary.json"); '
+            'pathlib.Path("logs/mid-run.json").write_text(p.read_text())'
+        ]
+        code, summary, logs = self.run_preflight([
+            ('first', [sys.executable, '-c', 'pass']),
+            ('second', observer_cmd),
+        ])
+        self.assertEqual(code, 0)
+        mid = json.loads((logs / 'mid-run.json').read_text())
+
+        # Mid-run summary: top-level startedAt is present, top-level seconds is not yet written.
+        self.assertEqual(set(mid.keys()),
+                         {'schemaVersion', 'status', 'scope', 'stages', 'startedAt'})
+        self.assertEqual(mid['schemaVersion'], 'pineforge-ci-preflight/v1')
+        self.assertEqual(mid['status'], 'incomplete')
+        self.assertEqual(mid['scope'],
+                         'workflow and source checks only; full verification still required')
+        self.assertIsInstance(mid['startedAt'], str)
+        self.assertRegex(mid['startedAt'], iso_utc_second)
+        self.assertEqual(len(mid['stages']), 2)
+
+        # While the second stage is running, the first stage already has its finished seconds
+        # and the second stage has startedAt set and seconds null.
+        finished_first = mid['stages'][0]
+        self.assertIsInstance(finished_first['startedAt'], str)
+        self.assertRegex(finished_first['startedAt'], iso_utc_second)
+        self.assertIsInstance(finished_first['seconds'], float)
+        self.assertNotIsInstance(finished_first['seconds'], bool)
+        self.assertGreaterEqual(finished_first['seconds'], 0.0)
+        self.assertEqual(round(finished_first['seconds'], 3), finished_first['seconds'])
+
+        running = mid['stages'][1]
+        self.assertEqual(set(running.keys()),
+                         {'name', 'argv', 'status', 'exitCode', 'advisory', 'log',
+                          'startedAt', 'seconds'})
+        self.assertEqual(running['name'], 'second')
+        self.assertEqual(running['argv'], observer_cmd)
+        self.assertEqual(running['status'], 'running')
+        self.assertIsNone(running['exitCode'])
+        self.assertIs(running['advisory'], False)
+        self.assertEqual(running['log'], 'second.log')
+        self.assertIsInstance(running['startedAt'], str)
+        self.assertRegex(running['startedAt'], iso_utc_second)
+        self.assertIsNone(running['seconds'])
+
+        # Finished summary: top-level startedAt and seconds are present alongside existing keys.
+        self.assertEqual(set(summary.keys()),
+                         {'schemaVersion', 'status', 'scope', 'stages', 'exitCode',
+                          'startedAt', 'seconds'})
+        self.assertEqual(summary['schemaVersion'], 'pineforge-ci-preflight/v1')
+        self.assertEqual(summary['status'], 'passed')
+        self.assertEqual(summary['scope'],
+                         'workflow and source checks only; full verification still required')
+        self.assertEqual(summary['exitCode'], 0)
+        self.assertEqual(summary['startedAt'], mid['startedAt'])
+        self.assertIsInstance(summary['seconds'], float)
+        self.assertNotIsInstance(summary['seconds'], bool)
+        self.assertGreaterEqual(summary['seconds'], 0.0)
+        self.assertEqual(round(summary['seconds'], 3), summary['seconds'])
+
+        for index, (expected_name, expected_argv) in enumerate((
+                ('first', [sys.executable, '-c', 'pass']),
+                ('second', observer_cmd))):
+            stage = summary['stages'][index]
+            self.assertEqual(set(stage.keys()),
+                             {'name', 'argv', 'status', 'exitCode', 'advisory', 'log',
+                              'startedAt', 'seconds'})
+            self.assertEqual(stage['name'], expected_name)
+            self.assertEqual(stage['argv'], expected_argv)
+            self.assertEqual(stage['status'], 'passed')
+            self.assertEqual(stage['exitCode'], 0)
+            self.assertIs(stage['advisory'], False)
+            self.assertEqual(stage['log'], f'{expected_name}.log')
+            self.assertIsInstance(stage['startedAt'], str)
+            self.assertRegex(stage['startedAt'], iso_utc_second)
+            self.assertIsInstance(stage['seconds'], float)
+            self.assertNotIsInstance(stage['seconds'], bool)
+            self.assertGreaterEqual(stage['seconds'], 0.0)
+            self.assertEqual(round(stage['seconds'], 3), stage['seconds'])
+        self.assertEqual(summary['stages'][0]['startedAt'], finished_first['startedAt'])
+        self.assertEqual(summary['stages'][0]['seconds'], finished_first['seconds'])
+        self.assertEqual(summary['stages'][1]['startedAt'], running['startedAt'])
+
 
 class PinnedLiveCurl(unittest.TestCase):
     def test_all_live_profiles_use_the_shared_pinned_dependency(self):
