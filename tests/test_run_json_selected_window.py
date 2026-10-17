@@ -1036,6 +1036,24 @@ class AbiAndNativeCountsTests(unittest.TestCase):
         self.assertEqual(again, ["1.3"])                 # ... nor the next record
         self.assertIsNot(first, again)
 
+    def test_without_a_completeness_proof_the_probe_declares_1_3_parity_only(self):
+        # Under amendment 6, "1.3" pairs only with value_ownership "complete", and no
+        # completeness proof has run (EN-115). Both capabilities_record(True) and the
+        # --capabilities-json probe must declare ["1.3-parity"] alone, never ["1.3"].
+        self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3-parity",))
+        record = swr.capabilities_record(True)["capabilities"]
+        self.assertEqual(record["selected_window_contract_revisions"], ["1.3-parity"])
+        self.assertNotIn("1.3", record["selected_window_contract_revisions"])
+        lib = FakeLib(full_plan())
+        FakePlanner.reset(None)
+        with mock.patch.object(run_json, "load_strategy", lambda p: lib), \
+                mock.patch.object(swp, "SelectedPrimaryPlanner", FakePlanner):
+            status, out, _ = run_main(["--so", "x.so", "--capabilities-json"])
+        self.assertEqual(status, 0)
+        probed = json.loads(out)["capabilities"]["selected_window_contract_revisions"]
+        self.assertEqual(probed, ["1.3-parity"])
+        self.assertNotIn("1.3", probed)
+
 
 # --- admission: nothing is touched before it passes --------------------------
 
