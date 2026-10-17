@@ -20,6 +20,7 @@ so neither had drift to report or anything to wait for.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -27,6 +28,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
@@ -762,6 +764,10 @@ def check_commands(source: Path, output: Path | None = None) -> list[tuple]:
     ]
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
 def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> int:
     """Run every stage, log it, and answer 0 only when every binding one passed.
 
@@ -770,9 +776,10 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
     as ``reported`` and does not fail the preflight.
     """
     output.mkdir(parents=True, exist_ok=True)
+    run_t0 = time.monotonic()
     summary = {'schemaVersion': 'pineforge-ci-preflight/v1', 'status': 'incomplete',
                'scope': 'workflow and source checks only; full verification still required',
-               'stages': []}
+               'startedAt': _utc_now(), 'stages': []}
     summary_path = output / 'preflight-summary.json'
 
     def record() -> None:
@@ -784,8 +791,10 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
         advisory = bool(entry[2]) if len(entry) > 2 else False
         print(f'ci_preflight: {name}: {shlex.join(argv)}'
               + (' [advisory]' if advisory else ''), flush=True)
+        stage_t0 = time.monotonic()
         stage = {'name': name, 'argv': argv, 'status': 'running', 'exitCode': None,
-                 'advisory': advisory, 'log': name + '.log'}
+                 'advisory': advisory, 'log': name + '.log',
+                 'startedAt': _utc_now(), 'seconds': None}
         summary['stages'].append(stage)
         record()
         try:
@@ -793,6 +802,7 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
             code, log = result.returncode, result.stdout + result.stderr
         except OSError as error:
             code, log = 127, str(error).encode()
+        stage['seconds'] = round(time.monotonic() - stage_t0, 3)
         (output / stage['log']).write_bytes(log)
         if log:
             print(log.decode('utf-8', 'replace'), end='', flush=True)
@@ -816,7 +826,8 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
     passed = bool(commands) and all(stage['exitCode'] == 0 or stage['advisory']
                                     or stage['status'] == 'skipped'
                                     for stage in summary['stages'])
-    summary.update(status='passed' if passed else 'failed', exitCode=0 if passed else 1)
+    summary.update(status='passed' if passed else 'failed', exitCode=0 if passed else 1,
+                   seconds=round(time.monotonic() - run_t0, 3))
     record()
     return summary['exitCode']
 
