@@ -7025,6 +7025,79 @@ if(TARGET test_percent_entry_reservation_tapes)
         PINEFORGE_PERCENT_ENTRY_RESERVATION_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/percent_entry_reservation")
 endif()
 
+# CR-150 lane L0: the red acceptance tests of DESIGN.md section 7.
+#
+# They are registered only under an explicit opt-in and carry the l4-pending
+# label, so neither a default build nor the current CI runs a row whose feature
+# (the 1.7.0 report sink and the .bin input path) does not exist yet. The label
+# is the repository's example of a pending-lane exclusion (scripts/test_ci_verify.py
+# passes --exclude-label l4-pending); the option is the actual gate, because the
+# default CI invocations in .github/workflows/ci.yml exclude only `slow`.
+#
+# Lab queue command:
+#   cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+#       -DPINEFORGE_BUILD_TESTS=ON -DPINEFORGE_BUILD_SOURCE_LAYER=ON \
+#       -DPINEFORGE_BUILD_FLAT_MEMORY_TESTS=ON \
+#       -DPINEFORGE_FLAT_MEMORY_MODULE_DIR=/path/to/modules
+# The three C++ rows then fail to compile on 3fc010a8b with the recorded
+# diagnostics (missing pineforge/report_sink.h, missing src/report_sink_writer.hpp
+# and src/sha256.hpp, missing src/report_scratch.hpp), which is the fail-before.
+# The RSS row needs macd.so (built here) plus every_k.so, xsym.so, scale_out.so
+# (and the F13 modules) built by the codegen pipeline into the module directory.
+option(PINEFORGE_BUILD_FLAT_MEMORY_TESTS
+    "Register the CR-150 L0 red acceptance tests (pending 1.7.0 lanes)" OFF)
+if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
+    if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
+        message(FATAL_ERROR
+            "PINEFORGE_BUILD_FLAT_MEMORY_TESTS needs PINEFORGE_BUILD_SOURCE_LAYER=ON "
+            "(the fixture module binds pineforge/source)")
+    endif()
+    set(PINEFORGE_FLAT_MEMORY_MODULE_DIR "${CMAKE_BINARY_DIR}/flat_memory_modules"
+        CACHE PATH "Where the CR-150 fixture strategy modules live")
+    file(MAKE_DIRECTORY "${PINEFORGE_FLAT_MEMORY_MODULE_DIR}")
+
+    # The tutorial's committed generated.cpp, built with the release-shaped
+    # MODULE + whole-archive recipe (the block at tests/CMakeLists.txt:3014-3041).
+    add_library(flat_memory_macd MODULE
+        ${PROJECT_SOURCE_DIR}/tutorial/macd/generated.cpp)
+    target_link_libraries(flat_memory_macd PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(flat_memory_macd PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(flat_memory_macd PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(flat_memory_macd PRIVATE -O0 -ffp-contract=off
+        -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
+        -Wno-unused-function -Wno-sign-compare)
+    set_target_properties(flat_memory_macd PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${PINEFORGE_FLAT_MEMORY_MODULE_DIR}"
+        PREFIX "" SUFFIX ".so")
+
+    # The three C++ rows. Each links the generated module into the executable
+    # and drives it through the real C ABI; no Python and no fake engine.
+    foreach(_pf_fm_row IN ITEMS
+            test_report_sink_flat_heap test_report_sink_metrics test_report_sink_format)
+        add_executable(${_pf_fm_row}
+            ${_pf_fm_row}.cpp ${PROJECT_SOURCE_DIR}/tutorial/macd/generated.cpp)
+        target_link_libraries(${_pf_fm_row} PRIVATE pineforge)
+        target_compile_options(${_pf_fm_row} PRIVATE -ffp-contract=off -UNDEBUG)
+        add_test(NAME ${_pf_fm_row} COMMAND ${_pf_fm_row})
+        set_tests_properties(${_pf_fm_row} PROPERTIES LABELS "l4-pending;slow;mem")
+    endforeach()
+
+    # (a), (b), (f), (g), (h), (j) and the INPUTS item 1 guard: the real
+    # run_json process, peak RSS from os.wait4 (DESIGN.md 7).
+    add_test(NAME test_flat_memory_rss_e2e
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/flat_memory_rss_e2e.py
+            --run-json ${PROJECT_SOURCE_DIR}/docker/run_json.py
+            --module-dir ${PINEFORGE_FLAT_MEMORY_MODULE_DIR})
+    set_tests_properties(test_flat_memory_rss_e2e PROPERTIES
+        LABELS "l4-pending;slow;mem")
+endif()
+
 # Every row in PINEFORGE_PR_SLOW_TESTS (top of this file) must be a registered
 # ctest row on every profile: real, or the private-fixture SKIP placeholder its
 # own guarded block above registered.  The check and the `slow` label therefore
