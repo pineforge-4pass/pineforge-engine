@@ -5,6 +5,10 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+- `scripts/ci_preflight.py` runs `verifier-tests` (`scripts/test_ci_verify.py`) across parallel `unittest` subprocess shards with per-shard `TMPDIR` isolation via `scripts/run_unittest_shards.py` (`scripts/test_run_unittest_shards.py`).
+
 ## 1.6.0 — 2026-10-17
 
 **[1.6.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.0)**,
