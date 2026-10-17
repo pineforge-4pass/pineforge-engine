@@ -268,8 +268,8 @@ docker run --rm \
 
 ### Selected-window contract revision
 
-From 1.6.1 (unreleased), the engine/codegen image's `run_json.py --so
-<strategy.so> --capabilities-json` probe declares revision `1.3-parity`: it
+The engine/codegen **1.6.1** image's `run_json.py --so <strategy.so>
+--capabilities-json` probe declares revision `1.3-parity`: it
 emits the four typed codes (`strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`), with value parity with the 1.4.0 reference on

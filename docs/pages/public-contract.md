@@ -46,19 +46,26 @@ It extends typed failures across source value admission
 (`engine_command_value_invalid`), non-finite canonical trade or summary doubles
 (`report_result_invalid`) and post-boundary serialization faults
 (`report_post_execution_failed`), without changing C layouts or
-`PF_ABI_VERSION` 4; from 1.6.1 (unreleased; see
-[CHANGELOG.md](../../CHANGELOG.md#161-rc1--2026-10-17)) the image declares
-selected-window contract revision `1.3-parity` (`["1.3-parity"]` under
-`capabilities.selected_window_contract_revisions` when the runtime supports
-selected windows and `[]` otherwise), which emits the four typed codes
-(`strategy_value_invalid`, `engine_command_value_invalid`,
-`report_result_invalid` and `report_post_execution_failed`), with parity with
-the 1.4.0 reference on tested cases, and no completeness claim (1.6.0 declared
-`1.3` without a completeness proof). The repository's
+`PF_ABI_VERSION` 4. The repository's
 [CHANGELOG.md](../../CHANGELOG.md#160--2026-10-17), under
 *1.6.0 — 2026-10-17*, inventories these changes and the documentation, test,
 CI and benchmark updates since 1.5.0.
-Use the same-version 1.6.0 pair, with regeneration and relinking as below.
+
+1.6.1 followed on 2026-10-18: engine v1.6.1 with pineforge-codegen 1.6.1.
+It declares selected-window contract revision `1.3-parity` (`["1.3-parity"]`
+under `capabilities.selected_window_contract_revisions` when the runtime
+supports selected windows and `[]` otherwise), which emits the four typed codes
+(`strategy_value_invalid`, `engine_command_value_invalid`,
+`report_result_invalid` and `report_post_execution_failed`), with parity with
+the 1.4.0 reference on tested cases, and no completeness claim (1.6.0 declared
+`1.3` without a completeness proof). It also records per-stage `startedAt` and
+`seconds` in the preflight summary and adds `noindex` to raw Doxygen source
+listings and omits them from `sitemap.xml`, without changing C layouts or
+`PF_ABI_VERSION` 4. The repository's
+[CHANGELOG.md](../../CHANGELOG.md#161--2026-10-18), under
+*1.6.1 — 2026-10-18*, inventories these changes and the CI, documentation and
+test updates since 1.6.0.
+Use the same-version 1.6.1 pair, with regeneration and relinking as below.
 
 ## Versions
 
