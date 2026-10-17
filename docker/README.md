@@ -268,14 +268,17 @@ docker run --rm \
 
 ### Selected-window contract revision
 
-The engine/codegen **1.6.0** image's `run_json.py --so <strategy.so>
---capabilities-json` probe declares revision `1.3`, covering value ownership
-through `strategy_value_invalid`, `engine_command_value_invalid`,
-`report_result_invalid` and `report_post_execution_failed`.
+From 1.6.1 (unreleased), the engine/codegen image's `run_json.py --so
+<strategy.so> --capabilities-json` probe declares revision `1.3-parity`: it
+emits the four typed codes (`strategy_value_invalid`,
+`engine_command_value_invalid`, `report_result_invalid` and
+`report_post_execution_failed`), with value parity with the 1.4.0 reference on
+tested cases, and no completeness claim (the published 1.6.0 image declares
+`1.3`).
 
 | Capability member | Supported runtime | Unsupported runtime |
 | --- | --- | --- |
-| `selected_window_contract_revisions` | `["1.3"]` | `[]` |
+| `selected_window_contract_revisions` | `["1.3-parity"]` | `[]` |
 
 This member belongs to the probe's `capabilities` object. The selected-window
 wire version remains 1, the phase version 1 and the fingerprint/schema version 2.
