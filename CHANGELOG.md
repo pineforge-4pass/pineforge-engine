@@ -5,6 +5,24 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## 1.6.1 — Unreleased
+
+- **The selected-window contract is revision `1.3-parity` (EN-115).** Since
+  [#388], `docker/selected_window_report.py` (`CONTRACT_REVISIONS`) and the
+  `docker/run_json.py --capabilities-json` probe declared
+  `capabilities.selected_window_contract_revisions` as `["1.3"]` in 1.6.0.
+  Under amendment 6 of the selected-window contract, revision `"1.3"` pairs
+  only with `value_ownership` `"complete"`, and no completeness proof has run
+  (EN-115). The probe now declares `["1.3-parity"]` when the runtime supports
+  selected windows and `[]` otherwise (`value_ownership`
+  `parity_with_reference`, as in 1.5.0): value parity with the 1.4.0 reference
+  on the tested cases, with the four typed value-ownership codes
+  (`strategy_value_invalid`, `engine_command_value_invalid`,
+  `report_result_invalid` and `report_post_execution_failed`) emitted, and no
+  completeness claim. The C layouts stay at ABI 4, `PF_ABI_VERSION` stays 4,
+  the selected-window wire version stays 1, the phase version 1 and the
+  fingerprint/schema version 2.
+
 ## 1.6.0 — 2026-10-17
 
 **[1.6.0](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.0)**,

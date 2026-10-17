@@ -7,14 +7,15 @@ each field to its meaning and units.
 
 @see #pf_report_t for the verbatim struct declaration.
 
-The engine/codegen **1.6.0** image declares selected-window contract revision
-`1.3`, meaning complete value ownership with `strategy_value_invalid`,
+The engine/codegen image declares selected-window contract revision
+`1.3-parity`, covering value ownership through `strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
-`report_post_execution_failed`.
+`report_post_execution_failed`, value parity with the 1.4.0 reference on tested
+cases, and no completeness claim.
 The `--capabilities-json` probe's
-`capabilities.selected_window_contract_revisions` is `["1.3"]` for a supported
-runtime and `[]` otherwise. The declaration lives in that capability record;
-the selected-window wire version remains 1, the phase version 1 and the
+`capabilities.selected_window_contract_revisions` is `["1.3-parity"]` for a
+supported runtime and `[]` otherwise. The declaration lives in that capability
+record; the selected-window wire version remains 1, the phase version 1 and the
 fingerprint/schema version 2.
 
 ## Top-level layout
