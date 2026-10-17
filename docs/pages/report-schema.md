@@ -8,7 +8,7 @@ each field to its meaning and units.
 @see #pf_report_t for the verbatim struct declaration.
 
 The engine/codegen **1.6.0** image declares selected-window contract revision
-`1.3`, meaning complete value ownership with `strategy_value_invalid`,
+`1.3`, covering value ownership through `strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`.
 The `--capabilities-json` probe's
