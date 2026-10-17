@@ -270,16 +270,25 @@ class UnittestShardsTests(unittest.TestCase):
                     if candidates:
                         shard_log = candidates[0]
                         content = shard_log.read_text(encoding='utf-8', errors='replace')
-                        if 'EARLY_OUTPUT_TEST_ONE' in content and 'SLEEPING_PID=' in content:
+                        if (
+                            'EARLY_OUTPUT_TEST_ONE' in content
+                            and 'SLEEPING_PID=' in content
+                            and 'test_two (fake_suite.AlphaTests' in content
+                        ):
                             seen_early = True
                             break
                 time.sleep(0.05)
 
             self.assertTrue(
                 seen_early,
-                f'shard log did not flush early output while still running; '
+                f'shard log did not flush early output / verbose test name while still running; '
                 f'log_dir={list(log_dir.glob("*")) if log_dir.is_dir() else []}',
             )
+            assert shard_log is not None
+            running_log = shard_log.read_text(encoding='utf-8', errors='replace')
+            full_ids = shards_runner.discover_test_ids(self.module_path)
+            for test_id in full_ids:
+                self.assertIn(test_id, running_log.split('EARLY_OUTPUT_TEST_ONE')[0])
             self.assertIsNone(proc.poll(), 'runner should still be running while test_two sleeps')
             rest_output, _ = proc.communicate(timeout=10.0)
             output = first_line + (rest_output or '')
@@ -302,117 +311,220 @@ class UnittestShardsTests(unittest.TestCase):
         final_log = shard_log.read_text(encoding='utf-8', errors='replace')
         self.assertIn('EARLY_OUTPUT_TEST_ONE', final_log)
         self.assertIn('Ran 5 tests', final_log)
+        self.assertIn('test_one (fake_suite.AlphaTests', final_log)
 
     def test_sigterm_terminates_live_shard_processes_and_exits_nonzero(self) -> None:
         import fcntl
 
-        lock_dir = self.root / 'locks'
-        lock_dir.mkdir(parents=True, exist_ok=True)
         sleeping_module = self.root / 'sleeping_suite.py'
-        sleeping_module.write_text(
-            textwrap.dedent(f"""
-                import fcntl
-                import os
-                import time
-                import unittest
-                from pathlib import Path
+        for sig, expected_rc in ((signal.SIGTERM, 143), (signal.SIGINT, 130)):
+            with self.subTest(signal=sig.name):
+                lock_dir = self.root / f'locks-{sig.name.lower()}'
+                lock_dir.mkdir(parents=True, exist_ok=True)
+                sleeping_module.write_text(
+                    textwrap.dedent(f"""
+                        import fcntl
+                        import os
+                        import time
+                        import unittest
+                        from pathlib import Path
 
-                LOCK_DIR = Path({str(lock_dir)!r})
-                _HELD_LOCKS = []
+                        LOCK_DIR = Path({str(lock_dir)!r})
+                        _HELD_LOCKS = []
 
-                def _hold_lock(name: str) -> None:
-                    lock_file = (LOCK_DIR / f"{{name}}.lock").open("w", encoding="utf-8")
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    lock_file.write(f"{{os.getpid()}}\\n")
-                    lock_file.flush()
-                    _HELD_LOCKS.append(lock_file)
+                        def _hold_lock(name: str) -> None:
+                            lock_file = (LOCK_DIR / f"{{name}}.lock").open("w", encoding="utf-8")
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            lock_file.write(f"{{os.getpid()}}\\n")
+                            lock_file.flush()
+                            _HELD_LOCKS.append(lock_file)
 
-                class SleepTests(unittest.TestCase):
-                    def test_sleep_a(self):
-                        _hold_lock("a")
-                        time.sleep(2.5)
+                        class SleepTests(unittest.TestCase):
+                            def test_sleep_a(self):
+                                _hold_lock("a")
+                                time.sleep(30.0)
 
-                    def test_sleep_b(self):
-                        _hold_lock("b")
-                        time.sleep(2.5)
-            """),
-            encoding='utf-8',
-        )
+                            def test_sleep_b(self):
+                                _hold_lock("b")
+                                time.sleep(30.0)
+                    """),
+                    encoding='utf-8',
+                )
 
-        def _is_locked(lock_path: Path) -> bool:
-            if not lock_path.is_file():
-                return False
-            with lock_path.open('r+', encoding='utf-8') as probe:
+                def _is_locked(lock_path: Path) -> bool:
+                    if not lock_path.is_file():
+                        return False
+                    with lock_path.open('r+', encoding='utf-8') as probe:
+                        try:
+                            fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            return True
+                        fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                        return False
+
+                driver_code = textwrap.dedent(f"""
+                    import fcntl
+                    import os
+                    import signal
+                    import sys
+                    import threading
+                    import time
+                    from pathlib import Path
+
+                    sys.path.insert(0, {str(ROOT / 'scripts')!r})
+                    import run_unittest_shards
+
+                    lock_dir = Path({str(lock_dir)!r})
+
+                    def _locked(p: Path) -> bool:
+                        if not p.is_file():
+                            return False
+                        with p.open("r+", encoding="utf-8") as f:
+                            try:
+                                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                return True
+                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                            return False
+
+                    def _trigger_signal() -> None:
+                        deadline = time.monotonic() + 5.0
+                        while time.monotonic() < deadline:
+                            if _locked(lock_dir / "a.lock") and _locked(lock_dir / "b.lock"):
+                                os.kill(os.getpid(), {int(sig)})
+                                return
+                            time.sleep(0.02)
+
+                    threading.Thread(target=_trigger_signal, daemon=True).start()
+                    raise SystemExit(run_unittest_shards.main([{str(sleeping_module)!r}, "--shards", "2"]))
+                """)
+                proc = subprocess.Popen(
+                    [sys.executable, '-B', '-c', driver_code],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
                 try:
-                    fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    return True
-                fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
-                return False
+                    ready_deadline = time.monotonic() + 5.0
+                    both_locked = False
+                    while time.monotonic() < ready_deadline:
+                        if _is_locked(lock_dir / 'a.lock') and _is_locked(lock_dir / 'b.lock'):
+                            both_locked = True
+                            break
+                        time.sleep(0.02)
+                    self.assertTrue(both_locked, 'both shards failed to acquire locks within 5s')
 
-        # Invoke runner in a child Python process that sends SIGTERM to itself
-        # once both shard processes are holding their exclusive locks.
-        driver_code = textwrap.dedent(f"""
-            import fcntl
-            import os
-            import signal
-            import sys
-            import threading
-            import time
-            from pathlib import Path
-
-            sys.path.insert(0, {str(ROOT / 'scripts')!r})
-            import run_unittest_shards
-
-            lock_dir = Path({str(lock_dir)!r})
-
-            def _locked(p: Path) -> bool:
-                if not p.is_file():
-                    return False
-                with p.open("r+", encoding="utf-8") as f:
+                    sig_sent_at = time.monotonic()
                     try:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        return True
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                    return False
+                        output, _ = proc.communicate(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        self.fail(f'runner did not exit within 5s after {sig.name}')
+                    elapsed = time.monotonic() - sig_sent_at
+                finally:
+                    if proc.poll() is None:
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+                        try:
+                            proc.wait(timeout=5.0)
+                        except subprocess.TimeoutExpired:
+                            pass
 
-            def _trigger_sigterm() -> None:
-                deadline = time.monotonic() + 5.0
-                while time.monotonic() < deadline:
-                    if _locked(lock_dir / "a.lock") and _locked(lock_dir / "b.lock"):
-                        os.kill(os.getpid(), signal.SIGTERM)
-                        return
-                    time.sleep(0.02)
+                self.assertEqual(proc.returncode, expected_rc, output)
+                self.assertLess(elapsed, 5.0, f'{sig.name} took {elapsed:.2f}s to exit (expected < 5s)')
 
-            threading.Thread(target=_trigger_sigterm, daemon=True).start()
-            raise SystemExit(run_unittest_shards.main([{str(sleeping_module)!r}, "--shards", "2"]))
-        """)
-        proc = subprocess.Popen(
-            [sys.executable, '-B', '-c', driver_code],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        output, _ = proc.communicate(timeout=10.0)
-        self.assertNotEqual(proc.returncode, 0, output)
+                reap_deadline = time.monotonic() + 0.3
+                alive_locks = ['a', 'b']
+                while time.monotonic() < reap_deadline and alive_locks:
+                    alive_locks = [
+                        name for name in ('a', 'b') if _is_locked(lock_dir / f'{name}.lock')
+                    ]
+                    if alive_locks:
+                        time.sleep(0.02)
+                self.assertEqual(
+                    alive_locks,
+                    [],
+                    f'shard processes for {alive_locks} remained alive after runner exited on {sig.name}',
+                )
 
-        # Immediately after the runner exits from SIGTERM, no shard process
-        # may remain alive (verified within 0.3s while the 2.5s sleep would
-        # still be running if the shard had been orphaned).
-        reap_deadline = time.monotonic() + 0.3
-        alive_locks = ['a', 'b']
-        while time.monotonic() < reap_deadline and alive_locks:
-            alive_locks = [
-                name for name in ('a', 'b') if _is_locked(lock_dir / f'{name}.lock')
-            ]
-            if alive_locks:
-                time.sleep(0.02)
+    def test_sig_ign_for_sigint_or_sigterm_is_preserved(self) -> None:
+        observed_handlers: list[ tuple[object, object] ] = []
+        original_popen = shards_runner.subprocess.Popen
+
+        def _spy_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            observed_handlers.append(
+                (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+            )
+            return original_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+        prev_int = signal.getsignal(signal.SIGINT)
+        prev_term = signal.getsignal(signal.SIGTERM)
+        try:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            observed_handlers.clear()
+            out = io.StringIO()
+            with mock.patch.object(shards_runner.subprocess, 'Popen', side_effect=_spy_popen), \
+                    redirect_stdout(out), redirect_stderr(out):
+                rc = shards_runner.run_shards(self.module_path, shard_count=1)
+            self.assertEqual(rc, 0)
+            self.assertTrue(observed_handlers)
+            self.assertEqual(observed_handlers[0][0], signal.SIG_IGN)
+            self.assertNotEqual(observed_handlers[0][1], signal.SIG_DFL)
+            self.assertEqual(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            observed_handlers.clear()
+            out = io.StringIO()
+            with mock.patch.object(shards_runner.subprocess, 'Popen', side_effect=_spy_popen), \
+                    redirect_stdout(out), redirect_stderr(out):
+                rc = shards_runner.run_shards(self.module_path, shard_count=1)
+            self.assertEqual(rc, 0)
+            self.assertTrue(observed_handlers)
+            self.assertNotEqual(observed_handlers[0][0], signal.SIG_DFL)
+            self.assertEqual(observed_handlers[0][1], signal.SIG_IGN)
+            self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+        finally:
+            signal.signal(signal.SIGINT, prev_int)
+            signal.signal(signal.SIGTERM, prev_term)
+
+    def test_stale_shard_logs_in_log_dir_are_removed_at_start(self) -> None:
+        log_dir = self.root / 'reused-logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        for name in ('shard-01.log', 'shard-02.log', 'shard-03.log', 'shard-04.log', 'shard-99.log'):
+            (log_dir / name).write_text('STALE_LOG_MARKER\n', encoding='utf-8')
+        keep_file = log_dir / 'other-notes.txt'
+        keep_file.write_text('keep this\n', encoding='utf-8')
+        keep_log = log_dir / 'summary.log'
+        keep_log.write_text('keep summary\n', encoding='utf-8')
+
+        result = self.run_cli(str(self.module_path), '--shards', '2', '--log-dir', str(log_dir))
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
         self.assertEqual(
-            alive_locks,
-            [],
-            f'shard processes for {alive_locks} remained alive after runner exited on SIGTERM',
+            sorted(p.name for p in log_dir.iterdir()),
+            ['other-notes.txt', 'shard-01.log', 'shard-02.log', 'summary.log'],
         )
+        for active_name in ('shard-01.log', 'shard-02.log'):
+            content = (log_dir / active_name).read_text(encoding='utf-8')
+            self.assertNotIn('STALE_LOG_MARKER', content)
+        self.assertEqual(keep_file.read_text(encoding='utf-8'), 'keep this\n')
+        self.assertEqual(keep_log.read_text(encoding='utf-8'), 'keep summary\n')
+
+    def test_docstring_notes_module_level_skiptest_ran_zero_fails_shard(self) -> None:
+        combined_docs = '\n'.join(
+            filter(
+                None,
+                [
+                    shards_runner.__doc__,
+                    shards_runner.run_shards.__doc__,
+                ],
+            )
+        )
+        self.assertIn('SkipTest', combined_docs)
+        self.assertIn('Ran 0', combined_docs)
 
     def test_per_shard_tmpdir_is_isolated_and_outside_repo(self) -> None:
         in_repo_tmp = ROOT / 'build-ci-tmp-probe'
