@@ -49,10 +49,6 @@ linked strategy library.
   with" by "covering value ownership through" for the 1.6.0 selected-window
   contract revision sentence before [#401] updated the page for `1.3-parity`
   ([#400]).
-- **HPO.** Pair with the matching `pineforge-codegen` and `pineforge-hpo`
-  release candidates (`pineforge-hpo` 0.13.2 pinned `pineforge-codegen <1.4`,
-  0.14.0 added support for codegen 1.4 and 1.5, and 1.6.0 paired with
-  codegen 1.6.0).
 
 [#398]: https://github.com/pineforge-4pass/pineforge-engine/pull/398
 [#400]: https://github.com/pineforge-4pass/pineforge-engine/pull/400
