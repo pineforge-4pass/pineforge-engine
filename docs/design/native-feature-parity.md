@@ -502,7 +502,7 @@ inside the per-bar body (corpus 442d497,
 `set_pine_risk_max_intraday_filled_orders(3)`), so the adapter first sees a
 limit on script bar 0, from `PineStrategyHost::set_pine_risk_*`
 (pine_strategy_host.cpp:895) — after `prepare_native_begin` has already
-projected the spec (pine_strategy_host.cpp:243) and `configure_native` has
+projected the spec (pine_strategy_host.cpp:245) and `configure_native` has
 folded it into the continuation digest. Measured: an env-gated probe printing
 the adapter's risk configuration inside `project()` on the corpus reads
 `max_drawdown=0 cap.active=0` for every risk probe. `NativeRunSpec::risk` is a
