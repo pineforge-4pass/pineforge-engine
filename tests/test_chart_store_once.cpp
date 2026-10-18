@@ -314,6 +314,8 @@ NativeRunSpec spec() {
     s.timezone = "UTC";
     s.session = "24x7";
     s.initial_capital = 10000.0;
+    s.point_value = 1.0;
+    s.account_fx = 1.0;
     s.price_tick = 0.01;
     return s;
 }
