@@ -55,6 +55,25 @@ retention exception are binding doc contracts (3.4:610-617,687-708).
 `set_trade_history_streamable` and its feature probe remain the engine/codegen
 lanes' work; P00 neither advertises them nor changes `trades_`.
 
+## Metric accumulator and point sources
+
+| File / declaration | DESIGN section and lines | Implementing lane |
+|---|---|---|
+| `include/pineforge/metrics_stream.hpp`: 24-byte `pf_equity_point_t` layout assertions | 3.3:538-540; 3.8:903-904 | L6b-4/L7c |
+| `metrics::TradeStatsAccumulator` constructor/destructor, copy declarations, opaque `State` | 3.3:515-526,544-550 | L7a |
+| `TradeStatsAccumulator::fold(const TradeC&)`, `finish() const` | 3.3:526,544-548 | L7a |
+| `metrics::ArrayCurve` constructor, `size() const`, `operator[](int64_t) const` | 3.3:532-540 | L7b |
+| `metrics::ScratchCurveRegion` | 3.8:899-906; 3.3:534,538-540 | L6b-4 |
+| `metrics::SpillCurve` constructor/destructor, `size() const`, `operator[](int64_t) const`, opaque `State` | 3.3:532-543; 3.8:901-906 | L6b-4/L7c |
+| `metrics::compute_equity_stats<PointSource>(...)` (ordinary denominator) | 3.3:528-543 | L7b/L7c |
+| `metrics::compute_equity_stats<PointSource>(...,observation_count)` | 3.3:528-543; 3.6:742-746,766-770 | L7b/L7c/L17b |
+
+Only the named accumulator/point-source operations are frozen here. The
+month/per-bar generators are the metric implementation's internal walks;
+their unprescribed helper names and storage are not made a second API.
+Scratch curve/position-tail placement remains either regions or separate
+private files, as DESIGN permits. No mapped scratch or text-based metrics.
+
 ## OPEN items
 
 | ID | Unspecified by DESIGN; no policy inferred | Owner |
@@ -62,6 +81,7 @@ lanes' work; P00 neither advertises them nor changes `trades_`.
 | S1 | Receipt query return codes, required caller initialization, refusal output, and query behavior without a configured sink (6:1279). | CORE-TOP / L6b-1 |
 | S2 | Internal writer error transport, oversized-line/unsafe-integer failure details, and what a repeated fill/capture does after a trailer; DESIGN requires repeatable metric reads but gives no writer reset/idempotence contract (3.3:547-548; 3.7:787,878-885). | CORE-TOP / L6a/L6b-1 |
 | T1 | Ledger reset/capacity API, reference/iterator invalidation, and empty-back/above-end error policy are not specified. Below-base internal access MUST throw engine_invariant; C accessors MUST use existing sentinels (3.4:610-613,661-667). | CORE-TOP / L8a/L8d |
+| M1 | Point-source malformed-region/bounds/short-read error transport and concurrent-reader rules are not specified; the 24-byte binary points, 64 KiB pread window and repeated forward walks ARE fixed (3.3:532-543; 3.8:899-906). | CORE-TOP / L6b-4/L7c |
 
 ## Lab handoff
 
