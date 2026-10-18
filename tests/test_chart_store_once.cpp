@@ -151,6 +151,11 @@ public:
     bool has_retained_after() const {
         return scheduler_.retained_input_from(0, kStart).has_value();
     }
+    std::optional<Bar> broker_bar_at(std::int64_t timestamp) const {
+        NativeDecisionContext context{};
+        context.sub_bar_open_ms = timestamp;
+        return scheduler_.broker_bar(*this, context);
+    }
     std::uint64_t scheduler_hash() const {
         BrokerStateHashSink f;
         scheduler_.hash_state(f);
@@ -161,11 +166,15 @@ public:
 // Run through each existing overload, including an erased BacktestEngine*.
 // Do not hash between the return and the retained-span assertions: cleanup
 // must happen at run exit even if no caller ever asks for a hash/report.
-void batch_lifetime(int overload, const char* script_tf, bool recording) {
+void batch_lifetime(int overload, const char* script_tf, bool recording, bool gaps = false) {
     scenario = "batch end: null span, preserved consumed digests";
     SourceProbe pine;
     pine.set_broker_state_hash_recording(recording);
     auto bars = chart(30);
+    // Missing input forces a boundary completion on the aggregated path.
+    if (gaps) {
+        for (std::size_t i = 2; i < bars.size(); ++i) bars[i].timestamp += 4 * kMinute;
+    }
     const int n = static_cast<int>(bars.size());
     if (overload == 0) pine.run(bars.data(), n);
     if (overload == 1) pine.run(bars.data(), n, "1", script_tf);
@@ -184,10 +193,25 @@ void batch_lifetime(int overload, const char* script_tf, bool recording) {
     CHECK(pine.last_error().empty());
     CHECK(pine.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(!pine.seen.empty());
+    if (std::string(script_tf) == "1") {
+        CHECK(pine.seen.size() == bars.size());
+        for (std::size_t i = 0; i < pine.seen.size() && i < bars.size(); ++i) {
+            CHECK(pine.seen[i].timestamp == bars[i].timestamp);
+            CHECK(pine.seen[i].open == bars[i].open);
+            CHECK(pine.seen[i].high == bars[i].high);
+            CHECK(pine.seen[i].low == bars[i].low);
+            CHECK(pine.seen[i].close == bars[i].close);
+            CHECK(pine.seen[i].volume == bars[i].volume);
+        }
+    }
     CHECK(pine.retained_data() == nullptr);
     CHECK(pine.retained_size() == 0);
     CHECK(!pine.has_next());
     CHECK(!pine.has_retained_after());
+    const auto broker_bar = pine.broker_bar_at(kStart);
+    CHECK(broker_bar.has_value());
+    if (broker_bar && !pine.seen.empty())
+        CHECK(broker_bar->timestamp == pine.seen.back().timestamp);
     const auto hash = strategy_broker_state_hash(static_cast<BacktestEngine*>(&pine));
     if (recording) {
         ReportC report{};
@@ -213,6 +237,34 @@ void batch_lifetime(int overload, const char* script_tf, bool recording) {
     CHECK(pine.seen.size() == next.size());
     CHECK(pine.seen.back().close == next.back().close);
     CHECK(pine.retained_data() == nullptr);
+}
+
+void empty_and_refused_begins() {
+    scenario = "empty batch and refusals leave no caller span";
+    SourceProbe pine;
+    pine.run(nullptr, 0, "1", "1");
+    CHECK(pine.last_error().empty());
+    CHECK(pine.retained_data() == nullptr);
+    CHECK(pine.retained_size() == 0);
+    CHECK(!pine.has_next());
+    CHECK(!pine.has_retained_after());
+
+    const auto bars = chart(8);
+    pine.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    CHECK(pine.last_error().empty());
+    pine.run(nullptr, 2, "1", "1");
+    CHECK(!pine.last_error().empty());
+    CHECK(pine.retained_data() == nullptr);
+    CHECK(pine.retained_size() == 0);
+
+    // This changes the session key on a reused host. The refusal follows
+    // capture_begin, before run_begin has reset the source counters.
+    pine.set_syminfo_timezone("Etc/UTC");
+    pine.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    CHECK(!pine.last_error().empty());
+    CHECK(pine.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(pine.retained_data() == nullptr);
+    CHECK(pine.retained_size() == 0);
 }
 
 void failed_batch_releases_input(bool throws) {
@@ -323,7 +375,9 @@ int main() {
             batch_lifetime(overload, "1", recording);
         batch_lifetime(1, "5", recording);
         batch_lifetime(3, "5", recording);
+        batch_lifetime(1, "5", recording, true);
     }
+    empty_and_refused_begins();
     failed_batch_releases_input(false);
     failed_batch_releases_input(true);
     c_wrappers_pass_the_original_array();
