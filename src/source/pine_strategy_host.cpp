@@ -230,8 +230,12 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
     staged.instrument_feeds.reserve(symbol_feeds_.size());
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& feed = installed_symbol_feed(i);
+        const auto views = NativeExecutionConsumer::bound(*this).bar_views();
+        const auto* slot = views.instrument_feed_count == 0
+            ? nullptr : views.instrument_feeds[i];
+        const auto data = native_instrument_feed_view(feed, slot);
         staged.instrument_feeds.push_back(
-            {feed.instrument, feed.tf, feed.bars.size(), feed.columns.size()});
+            {feed.instrument, feed.tf, data.bars.size, feed.columns.size()});
     }
     return staged;
 }
@@ -342,6 +346,7 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     std::vector<NativeInstrumentFeed> lent = lend_feed_bytes(symbol_feeds_);
     NativeRunSpec spec = [&] {
         try {
+            NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(nullptr, 0);
             return adapter_.project(effective, staged, args, path_order, &lent);
         } catch (...) {
             return_feed_bytes(symbol_feeds_, lent);

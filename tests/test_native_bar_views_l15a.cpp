@@ -7,6 +7,7 @@
 #include <pineforge/native_bar_views.hpp>
 #include <pineforge/run_failure.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <memory>
@@ -173,6 +174,11 @@ class VectorSource final : public NativeLowerPathSource {
     const std::vector<Bar>& bars_;
     int& destroyed_;
     bool throws_;
+    bool selected_ = false;
+    std::int64_t begin_ = 0;
+    std::int64_t end_ = 0;
+    NativeBarView active_{nullptr, 0};
+    const Bar* next_ = nullptr;
 public:
     VectorSource(const std::vector<Bar>& bars, int& destroyed, bool throws = false)
         : bars_(bars), destroyed_(destroyed), throws_(throws) {}
@@ -180,13 +186,26 @@ public:
     std::size_t count() const override { return bars_.size(); }
     bool for_each(Visitor visitor, void* context) const override {
         if (throws_) throw std::runtime_error("l15a-walk-fault");
+        if (visitor == nullptr)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "null visitor");
         for (const auto& bar : bars_) if (!visitor(context, bar)) return false;
         return true;
     }
-    NativeBarView segment(std::int64_t, std::int64_t) override {
-        return {bars_.data(), bars_.size()};
+    NativeBarView segment(std::int64_t begin, std::int64_t end) override {
+        if (end < begin || (selected_ && (begin < begin_ || end < end_)))
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "window order");
+        if (selected_ && begin == begin_ && end == end_) return active_;
+        const auto less = [](const Bar& bar, std::int64_t time) { return bar.timestamp < time; };
+        const auto first = std::lower_bound(bars_.begin(), bars_.end(), begin, less);
+        const auto last = std::lower_bound(first, bars_.end(), end, less);
+        active_ = {first == last ? nullptr : &*first, static_cast<std::size_t>(last - first)};
+        next_ = last == bars_.end() ? nullptr : &*last;
+        selected_ = true;
+        begin_ = begin;
+        end_ = end;
+        return active_;
     }
-    const Bar* next_after_segment() const noexcept override { return nullptr; }
+    const Bar* next_after_segment() const noexcept override { return next_; }
 };
 
 void lower_context_and_exception_atomicity() {
@@ -227,6 +246,16 @@ void lower_context_and_exception_atomicity() {
     assert(destroyed == 2);
     assert(host.configure_native(spec).status == NativeSetupStatus::Applied);
 
+    HashHost stream;
+    auto& stream_consumer = NativeExecutionConsumer::bound(stream);
+    stream_consumer.stage_lower_path_source(std::make_unique<VectorSource>(chart, destroyed));
+    assert(stream.configure_native(lent).status == NativeSetupStatus::Applied);
+    assert(stream_consumer.bar_views().lower_path != nullptr);
+    assert(!stream.stream_begin(chart.data(), static_cast<int>(chart.size()), "15", "15"));
+    assert(stream_consumer.bar_views().lower_path == nullptr);
+    assert(destroyed == 3);
+    (void)stream.native_continuation_hash();
+
     // A null staging table is a programmer invariant; active state is intact.
     bool invalid_table = false;
     try { consumer.stage_instrument_feed_views(nullptr, 1); }
@@ -252,6 +281,10 @@ void refused_configure_discards_pending() {
     auto& retry_consumer = NativeExecutionConsumer::bound(retry);
     const auto logical = spec_for(metadata(owned));
     retry_consumer.stage_instrument_feed_views(slots, 1);
+    bool table_error = false;
+    try { retry_consumer.stage_instrument_feed_views(nullptr, 1); }
+    catch (const std::logic_error&) { table_error = true; }
+    assert(table_error);
     assert(retry.configure_native(logical).status == NativeSetupStatus::Applied);
     auto malformed = make_bar(monday(), 0, 1.0);
     malformed.high = malformed.low - 1.0;
