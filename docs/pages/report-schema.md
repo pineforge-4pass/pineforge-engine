@@ -8,8 +8,9 @@ each field to its meaning and units.
 @see #pf_report_t for the verbatim struct declaration.
 
 The published engine/codegen **1.6.0** image declares selected-window contract
-revision `1.3`. From 1.6.1 (unreleased), the image declares `1.3` again, now
-with the EN-115 completeness proof: the section-4 producers and manifest are
+revision `1.3`. The **1.6.1** image declares `1.3-parity`; from 1.6.2
+(unreleased) the image declares `1.3` again, now with the EN-115 completeness
+proof: the section-4 producers and manifest are
 present, value ownership is `complete`, and it emits the four typed codes
 (`strategy_value_invalid`, `engine_command_value_invalid`,
 `report_result_invalid` and `report_post_execution_failed`). A build declaring

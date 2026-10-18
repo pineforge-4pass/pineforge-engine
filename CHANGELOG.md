@@ -7,17 +7,82 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
-- **EN-115 selected-window completeness proof completed.** The image declares
-  selected-window contract revision `1.3` again: the section-4 producers and
-  manifest are present, `value_ownership` is `complete`, and a revision `1.3`
-  pairs only with a `complete` receipt. The `docker/run_json.py
+- **EN-115 selected-window completeness proof completed.** From 1.6.2 the image
+  declares selected-window contract revision `1.3` again: the section-4
+  producers and manifest are present, `value_ownership` is `complete`, and a
+  revision `1.3` pairs only with a `complete` receipt. The `docker/run_json.py
   --capabilities-json` probe reports
   `capabilities.selected_window_contract_revisions` as `["1.3"]` on a
-  supported runtime and `[]` otherwise; `1.3-parity` remains the parity
-  build's literal, and a tuple holding both is invalid. No wire or ABI change:
-  the selected-window wire version stays 1, the phase version 1 and the
-  fingerprint/schema version 2.
-- `scripts/ci_preflight.py` runs `verifier-tests` (`scripts/test_ci_verify.py`) across parallel `unittest` subprocess shards with per-shard `TMPDIR` isolation via `scripts/run_unittest_shards.py` (`scripts/test_run_unittest_shards.py`).
+  supported runtime and `[]` otherwise; the 1.6.1 image declared
+  `1.3-parity`, which remains the parity build's literal, and a tuple holding
+  both is invalid. No wire or ABI change: the selected-window wire version
+  stays 1, the phase version 1 and the fingerprint/schema version 2.
+
+## 1.6.1 — 2026-10-18
+
+**[1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)**,
+paired with [pineforge-codegen 1.6.1](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.6.1).
+This patch release declares selected-window contract revision `1.3-parity`
+rather than `1.3` until a completeness proof exists, records per-stage
+`startedAt` and `seconds` in `preflight-summary.json`, and includes the API
+documentation updates since 1.6.0. It ships the
+[1.6.1-rc.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1-rc.1)
+candidate (tag commit `196592ddba0cd8f1b3d5549c96973d1816607c0e`) plus the
+CI, documentation and test-only changes merged since the candidate ([#404],
+[#405], [#406]); no file under `src/`, `include/`, `cmake/`, `docker/` or
+`runner/` changed after `v1.6.1-rc.1`. Regenerate strategy C++ with the
+matching codegen and relink against the matching engine headers and archive;
+replacing the archive alone does not update a statically linked strategy
+library.
+
+- **The selected-window contract is revision `1.3-parity` (EN-115, [#401]).** Since
+  [#388], `docker/selected_window_report.py` (`CONTRACT_REVISIONS`) and the
+  `docker/run_json.py --capabilities-json` probe declared
+  `capabilities.selected_window_contract_revisions` as `["1.3"]` in 1.6.0.
+  Under amendment 6 of the selected-window contract, revision `"1.3"` pairs
+  only with `value_ownership` `"complete"`, and no completeness proof has run
+  (EN-115). The probe now declares `["1.3-parity"]` when the runtime supports
+  selected windows and `[]` otherwise (`value_ownership`
+  `parity_with_reference`, as 1.5.0 declared): value parity with the 1.4.0
+  reference on the tested cases, with the four typed value-ownership codes
+  (`strategy_value_invalid`, `engine_command_value_invalid`,
+  `report_result_invalid` and `report_post_execution_failed`) emitted, and no
+  completeness claim. A build declaring `1.3-parity` cannot be promoted to a
+  stable app pin; the app pins it only as a prerelease (`1.6.1-rc.N`), and
+  only a completeness proof (EN-115) allows `"1.3"` again. The C layouts stay
+  at ABI 4, `PF_ABI_VERSION` stays 4, the selected-window wire version stays
+  1, the phase version 1 and the fingerprint/schema version 2.
+- **Preflight stage timings ([#402]).** `scripts/ci_preflight.py` records `startedAt` (UTC ISO-8601) and `seconds` (monotonic duration; `null` while a stage is running) on each stage and on the top-level `preflight-summary.json` summary.
+- **API documentation (`noindex` on Doxygen source listings and report-schema wording, [#398], [#400]).**
+  `docs/seo_postprocess.py` adds `<meta name="robots" content="noindex">` in
+  the `<head>` of raw Doxygen source listings whose file name matches
+  `*_8<ext>_source.html` and whose stripped `<title>` ends with
+  `"Source File"`, replacing any existing `robots` meta tag, and omits pages
+  carrying a `noindex` or `none` robots directive from `sitemap.xml` while
+  keeping `Allow: /` in `robots.txt` and leaving API reference pages,
+  hand-written pages (including colliding explicit page ids), the landing
+  page and `404.html` unchanged; `docs/build.sh --self-test-seo` and
+  `docs/ci.md` cover the source-listing pass ([#398]).
+  `docs/pages/report-schema.md` replaced "meaning complete value ownership
+  with" by "covering value ownership through" for the 1.6.0 selected-window
+  contract revision sentence before [#401] updated the page for `1.3-parity`
+  ([#400]).
+- **CI, documentation and test-only changes since `v1.6.1-rc.1` ([#404], [#405], [#406]).**
+  - **Verifier tests run in parallel shards ([#404]).**
+    `scripts/ci_preflight.py` runs `verifier-tests` (`scripts/test_ci_verify.py`)
+    across parallel `unittest` subprocess shards with per-shard `TMPDIR`
+    isolation via `scripts/run_unittest_shards.py`
+    (`scripts/test_run_unittest_shards.py`).
+  - **Release-candidate notes link and tag commit ([#405]).**
+    The `1.6.1-rc.1` entry links its release and names its tag commit
+    `196592dd`.
+  - **Lower-feed timing ratio under AddressSanitizer ([#406]).**
+    `tests/test_native_intrabar_lower_lookup.cpp` skips the lower-feed timing
+    ratio only under AddressSanitizer; release and debug builds keep the
+    `ratio < kShapeBound` check.
+- **HPO.** Pair with the matching `pineforge-codegen 1.6.1` and `pineforge-hpo`
+  1.6.1 (`pineforge-hpo` 0.13.2 pinned `pineforge-codegen <1.4`, and 0.14.0 added
+  support for codegen 1.4 and 1.5).
 
 ## 1.6.1-rc.1 — 2026-10-17
 
@@ -69,6 +134,9 @@ linked strategy library.
 [#400]: https://github.com/pineforge-4pass/pineforge-engine/pull/400
 [#401]: https://github.com/pineforge-4pass/pineforge-engine/pull/401
 [#402]: https://github.com/pineforge-4pass/pineforge-engine/pull/402
+[#404]: https://github.com/pineforge-4pass/pineforge-engine/pull/404
+[#405]: https://github.com/pineforge-4pass/pineforge-engine/pull/405
+[#406]: https://github.com/pineforge-4pass/pineforge-engine/pull/406
 
 ## 1.6.0 — 2026-10-17
 
