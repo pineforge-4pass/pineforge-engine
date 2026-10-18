@@ -268,8 +268,9 @@ docker run --rm \
 
 ### Selected-window contract revision
 
-The engine/codegen **1.6.1** image's `run_json.py --so <strategy.so>
---capabilities-json` probe declares revision `1.3-parity`: it
+Engine 1.6.1 (released without a hub image) declares selected-window contract
+revision `1.3-parity` through its `run_json.py --so <strategy.so>
+--capabilities-json` probe: it
 emits the four typed codes (`strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`), with value parity with the 1.4.0 reference on
@@ -283,9 +284,10 @@ section-4 producers and manifest present and value ownership `complete`
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`). A build declaring `1.3` pairs only with a
 `complete` receipt; `1.3-parity` remains the parity build's literal, and a
-tuple holding both is invalid (the published images up to 1.6.0 declared
-`1.3-parity` without that proof, and engine 1.6.1, released without a hub
-image, declares it too).
+tuple holding both is invalid (the published 1.5.0 image declared
+`1.3-parity`, earlier images carried no revision member; the published 1.6.0
+image declared `1.3` without a completeness proof; and engine 1.6.1, released
+without a hub image, declares `1.3-parity`).
 
 | Capability member | Supported runtime | Unsupported runtime |
 | --- | --- | --- |

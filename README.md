@@ -49,7 +49,7 @@ For the 1.6.1 pair, regenerate strategy C++ and relink against that pair's
 headers and archive. Published 1.3.0 download and installation examples below
 remain pinned to that earlier pair.
 
-The engine/codegen **1.6.1** image advertises selected-window
+Engine 1.6.1 (released without a hub image) declares selected-window
 contract revision `1.3-parity` through `docker/run_json.py --capabilities-json`:
 it emits the four typed codes (`strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
@@ -65,9 +65,10 @@ with the section-4 producers and manifest present and value ownership
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`). A build declaring `1.3` pairs only with a
 `complete` receipt; `1.3-parity` remains the parity build's literal, and a
-tuple holding both is invalid (the published images up to 1.6.0 declared
-`1.3-parity` without that proof, and engine 1.6.1, released without a hub
-image, declares it too).
+tuple holding both is invalid (the published 1.5.0 image declared
+`1.3-parity`, earlier images carried no revision member; the published 1.6.0
+image declared `1.3` without a completeness proof; and engine 1.6.1, released
+without a hub image, declares `1.3-parity`).
 `capabilities.selected_window_contract_revisions` is `["1.3"]` when the
 runtime supports selected windows and `[]` otherwise; see the
 [capability table](docker/README.md#selected-window-contract-revision) and

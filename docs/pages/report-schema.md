@@ -8,8 +8,10 @@ each field to its meaning and units.
 @see #pf_report_t for the verbatim struct declaration.
 
 The published engine/codegen **1.6.0** image declares selected-window contract
-revision `1.3`. The published images up to 1.6.0 declared `1.3-parity`, and
-engine 1.6.1 (released, no hub image) declares it too; from 1.6.2
+revision `1.3`. The published 1.5.0 image declared `1.3-parity` (earlier
+images carried no revision member), the 1.6.0 image declared `1.3` without a
+completeness proof, and engine 1.6.1 (released, no hub image) declares
+`1.3-parity`; from 1.6.2
 (unreleased) the image declares `1.3` again, now with the EN-115 completeness
 proof: the section-4 producers and manifest are
 present, value ownership is `complete`, and it emits the four typed codes

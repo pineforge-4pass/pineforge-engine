@@ -13,10 +13,11 @@ version number follows semantic versioning over the surfaces the
   revision `1.3` pairs only with a `complete` receipt. The `docker/run_json.py
   --capabilities-json` probe reports
   `capabilities.selected_window_contract_revisions` as `["1.3"]` on a
-  supported runtime and `[]` otherwise. The published images up to 1.6.0
-  declared `1.3-parity`, and engine 1.6.1 (released, no hub image) declares it
-  too; it remains the parity build's literal, and a tuple holding both is
-  invalid. No wire or ABI change: the selected-window wire version
+  supported runtime and `[]` otherwise. The published 1.5.0 image declared
+  `1.3-parity` (earlier images carried no revision member), the published
+  1.6.0 image declared `1.3` without a completeness proof, and engine 1.6.1
+  (released, no hub image) declares `1.3-parity`; it remains the parity
+  build's literal, and a tuple holding both is invalid. No wire or ABI change: the selected-window wire version
   stays 1, the phase version 1 and the fingerprint/schema version 2.
 
 ## 1.6.1 — 2026-10-18
