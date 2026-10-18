@@ -207,7 +207,11 @@ BAR_VIEW_READS = {
         'const bool inactive_sampler_path = inert != nullptr && inert->bars.empty()',
     ),
     'src/source/pine_scheduler_native.cpp': (
-        'if (args.bars && args.n > 0) next.bars.assign(args.bars, args.bars + args.n);',
+        'if (args.bars && args.n > 0) {',
+        'if (args.is_stream) next.owned.assign(args.bars, args.bars + args.n);',
+        'next.bars = InputView(args.is_stream ? next.owned.data() : args.bars,',
+        'retained_n_ = retained_.bars.size();',
+        'retained_.bars = {};',
         'input_script_completes_.assign(retained_.bars.size(), 1U);',
         'input_script_boundary_completes_.assign(retained_.bars.size(), 0U);',
         'retained_.bars.data(), retained_.bars.size(), input_script_completes_,',
