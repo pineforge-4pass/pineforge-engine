@@ -194,7 +194,7 @@ BAR_VIEW_READS = {
         'lent[i].close_ms.swap(store[i].close_ms);',
         'store[i].bars.swap(lent[i].bars);',
         'store[i].close_ms.swap(lent[i].close_ms);',
-        '{feed.instrument, feed.tf, data.bars.size, feed.columns.size()});',
+        '? symbol_feed_views_[i].size : data.bars.size;',
         'if (effective_input.empty() && args.n >= 2 && args.bars != nullptr)',
         'effective_input = detect_timeframe(args.bars, args.n);',
         'descriptors[i] = {{slot.bars, slot.size}, slot.close_ms};',

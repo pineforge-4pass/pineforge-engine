@@ -501,8 +501,8 @@ inside the per-bar body (corpus 442d497,
 `set_pine_risk_direction(1)` / `set_pine_risk_max_position_size(2)` /
 `set_pine_risk_max_intraday_filled_orders(3)`), so the adapter first sees a
 limit on script bar 0, from `PineStrategyHost::set_pine_risk_*`
-(pine_strategy_host.cpp:886) — after `prepare_native_begin` has already
-projected the spec (pine_strategy_host.cpp:243) and `configure_native` has
+(pine_strategy_host.cpp:895) — after `prepare_native_begin` has already
+projected the spec (pine_strategy_host.cpp:245) and `configure_native` has
 folded it into the continuation digest. Measured: an env-gated probe printing
 the adapter's risk configuration inside `project()` on the corpus reads
 `max_drawdown=0 cap.active=0` for every risk probe. `NativeRunSpec::risk` is a
@@ -1623,7 +1623,7 @@ the rule gives 9.9 + 9.89).
 | P5 | **Test asymmetry:** 430 adapter test files vs 14 native when this plan was written (on this tree 543 `tests/*.cpp` name `source::PineStrategyHost`, 110 `NativeStrategyHost`) | native-only tests in every lane (§3.1 b) | O |
 | P6 | **Stream vs batch.** The stream refuses monthly input, mixed modes, in-session gaps, security feeds and source setters, and tick input under an FX curve (any non-empty curve until audit lane N6) (`native-engine.md`, "Stream limitations (current)") | L5 and L6 must state which refusals are generic and which are deliberate source limits | S |
 | P7 | **C ABI variant growth** | §2.iii hardening rules | S |
-| P8 | **Unverified in the inputs:** whether `execution::LifecycleEffects` (execution.hpp:136-139) is ever non-empty from the Pine path, else `PlacementSnapshot::legs` (pine_adapter.hpp:364) is the only live lifecycle (O); the `strategy.risk.allow_entry_in` setter chain beyond `set_pine_risk_direction` pine_strategy_host.cpp:886 → `set_risk_direction` pine_adapter.cpp:26474 (O); what the ABI receipts pin (F); the probe corpus itself lives outside this tree (F) | verify inside the lane that touches each | F O |
+| P8 | **Unverified in the inputs:** whether `execution::LifecycleEffects` (execution.hpp:136-139) is ever non-empty from the Pine path, else `PlacementSnapshot::legs` (pine_adapter.hpp:364) is the only live lifecycle (O); the `strategy.risk.allow_entry_in` setter chain beyond `set_pine_risk_direction` pine_strategy_host.cpp:895 → `set_risk_direction` pine_adapter.cpp:26474 (O); what the ABI receipts pin (F); the probe corpus itself lives outside this tree (F) | verify inside the lane that touches each | F O |
 
 ### 4.3 Open design questions (supervisor level)
 

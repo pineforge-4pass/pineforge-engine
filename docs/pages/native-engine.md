@@ -3969,9 +3969,9 @@ hands the runtime a callback table and gets the same kernel back.
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the compiled-strategy runtime symbols and their
 counts are untouched, and `scripts/check_c_abi_runtime.py` pins the new set as
-a second, disjoint inventory. No epoch bump or reordering occurs: the borrowed
+a second, disjoint inventory (70ddaa3). No epoch bump or reordering occurs: the borrowed
 symbol-feed setter is an additive compiled-strategy runtime symbol, and
-`scripts/check_c_abi_runtime.py` pins it alongside the established inventory.
+`scripts/check_c_abi_runtime.py` pins it alongside the established inventory (0d8b203).
 
 ```c
 #include <pineforge/pineforge.h>
