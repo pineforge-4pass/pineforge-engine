@@ -62839,11 +62839,34 @@ void test_writer(const std::string& directory) {
     require(bytes.find("[\"T\",1,\"long\",1700000000000,1700000060000,2000.0,2010.0,1.0,10.0,0.5,12.0,3.5,0.0,1,10,false,9007199254740991,1,\"L\",\"\",\"\\\"\\\\\\u000a\"]\n")
             != std::string::npos, "T field order and spellings");
     require(bytes.find(PINEFORGE_VERSION_STRING) != std::string::npos, "engine version comes from build");
+    const auto repeated = writer.write_trailer();
+    require(std::strcmp(receipt.sha256_hex, repeated.sha256_hex) == 0
+            && contents(sample) == bytes, "repeated finalization returns the receipt without writing");
+    must_fail([&] { writer.write_e(first); }, "records after a trailer must fail");
 
     const std::string all = directory + "/all-descriptors.jsonl";
     sink::LineWriter described(descriptor(all));
     described.write_header({true, true, true, 2, 0});
     described.write_trailer();
+
+    const std::string shaped = directory + "/other-shape.jsonl";
+    sink::LineWriter other(descriptor(shaped));
+    other.write_header({true, false, false, 0, 2});
+    other.write_trailer();
+
+    const std::string boundary = directory + "/boundary.jsonl";
+    sink::LineWriter exact(descriptor(boundary));
+    exact.write_header({false, false, false, 0, 0});
+    const std::string prefix = "[\"T\",1,\"long\",0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0,false,1,0,\"";
+    const std::string suffix = "\",\"\",\"\"]\n";
+    pf_trade_t zero{};
+    zero.is_long = 1;
+    exact.write_t(1, zero, 1, 0, std::string(1024 * 1024 - prefix.size() - suffix.size(), 'x'), "", "");
+    exact.write_trailer();
+    const auto boundary_bytes = contents(boundary);
+    const auto header_end = boundary_bytes.find('\n');
+    const auto record_end = boundary_bytes.find('\n', header_end + 1);
+    require(record_end - header_end == 1024 * 1024, "exactly 1 MiB including LF is admitted");
 
     const std::string aborted = directory + "/aborted.jsonl";
     {
@@ -62900,7 +62923,10 @@ def packed(header, rows):
     prefix = compact(header) + b''.join(row if isinstance(row, bytes) else compact(row) for row in rows)
     counts = {d['type']: 0 for d in header['records']}
     for row in rows:
-        parsed = json.loads(row) if isinstance(row, bytes) else row
+        try:
+            parsed = json.loads(row) if isinstance(row, bytes) else row
+        except (ValueError, RecursionError):
+            parsed = None
         if isinstance(parsed, list) and parsed and isinstance(parsed[0], str) and parsed[0] in counts:
             counts[parsed[0]] += 1
     return prefix + compact({'trailer':'pf-report-sink','version':1,'counts':counts,
@@ -62932,6 +62958,18 @@ assert rows[3].as_dict()['exit_id'] == '\ufffd'
 assert trailer['counts'] == {'E':2,'T':2}
 assert trailer['sha256'] == hashlib.sha256(b''.join(lines[:-1])).hexdigest()
 assert list(header) == ['schema','version','run_id','engine','records']
+assert header['records'][0] == {'type':'E', 'fields':['time_ms','equity','open_profit'],
+                               'types':['i64','f64?','f64?'],
+                               'units':['unix_ms','account_ccy','account_ccy']}
+assert header['records'][1] == {
+    'type':'T',
+    'fields':['n','side','entry_time','exit_time','entry_price','exit_price','qty','pnl','pnl_pct',
+              'max_runup','max_drawdown','commission','entry_bar_index','exit_bar_index','open_at_end',
+              'entry_incarnation','close_cause','entry_id','exit_id','exit_comment'],
+    'types':['i64','str','i64','i64','f64?','f64?','f64?','f64?','f64?','f64?','f64?','f64?',
+             'i64','i64','bool','u64','i64','str','str','str'],
+    'units':['','','unix_ms','unix_ms','quote_ccy','quote_ccy','qty','account_ccy','percent',
+             'account_ccy','account_ccy','account_ccy','script_bar','script_bar','','','','','','']}
 for end in range(len(lines)):
     refused(b''.join(lines[:end]))
 refused(sample.read_bytes() + b'\n')
@@ -62946,6 +62984,20 @@ refused(sample.read_bytes().replace(b'"version":1', b'"version":true', 1))
 refused(sample.read_bytes().replace(b'"version":1', b'"version":1,"version":1', 1))
 refused(sample.read_bytes().replace(b'"schema":', b'"unknown":', 1))
 refused(sample.read_bytes().replace(b'"engine":', b'"engine":"\\ud800","old_engine":', 1))
+refused(sample.read_bytes().replace(b'"schema":"pf-report-sink","version":1',
+                                   b'"version":1,"schema":"pf-report-sink"', 1))
+refused(packed(header, []).replace(b'"trailer":"pf-report-sink"', b'"wrong":"pf-report-sink"'))
+refused(packed(header, []).replace(b'"E":0,"T":0', b'"E":false,"T":0'))
+refused(packed(header, []).replace(b'"E":0,"T":0', b'"E":0'))
+refused(packed(header, []).replace(b'"E":0,"T":0', b'"E":0,"T":0,"H":0'))
+refused(packed(header, [b'null\n']))
+refused(packed(header, [b'42\n']))
+refused(packed(header, [b'["E",0,1.0,"\\ud800"]\n']))
+refused(packed(header, [b'["E",0,1.0,"\xff"]\n']))
+refused(packed(header, [b'["E",+0,1.0,0.0]\n']))
+refused(packed(header, [b'["E",00,1.0,0.0]\n']))
+refused(packed(header, [b'["E",0,1.0,0.0] \n']))
+refused(packed(header, [b'["E",0,1.0,0.0]\r\n']))
 for replacement in (b'10000', b'1e4', b'1.00000e+04', b'NaN', b'Infinity', b'-Infinity', b'1e+999'):
     refused(packed(header, [b'["E",0,' + replacement + b',0.0]\n']))
 for record in (["E", True, 1.0, 0.0], ["E", 9007199254740992, 1.0, 0.0],
@@ -62968,11 +63020,23 @@ refused(packed(bad, []))
 bad = copy.deepcopy(header)
 bad['records'] = bad['records'][:1]
 refused(packed(bad, []))
+bad = copy.deepcopy(header)
+bad['records'][1]['type'] = 'Z'
+refused(packed(bad, []))
 
 all_header, _, _ = checked(root / 'all-descriptors.jsonl')
 assert [d['type'] for d in all_header['records']] == list('ETOVKXH')
 assert all_header['records'][2]['fields'] == ['row','open_ms','close_ms','v0','v1']
 assert all_header['records'][4]['fields'] == []
+other_header, _, _ = checked(root / 'other-shape.jsonl')
+assert other_header['records'][2]['fields'] == ['row','open_ms','close_ms']
+assert other_header['records'][4]['fields'] == ['c0','c1']
+bad = copy.deepcopy(all_header)
+bad['records'][2]['fields'][-1] = 'v2'
+refused(packed(bad, []))
+bad = copy.deepcopy(all_header)
+bad['records'].pop(3)
+refused(packed(bad, []))
 every = [['E',0,1.0,None],
          ['T',1,'long',0,1,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,0,1,False,1,1,'L','X',''],
          ['O',0,None,1,1.0,None],
@@ -62989,6 +63053,13 @@ for tag, column, value in (('V',1,-1), ('V',1,9007199254740992), ('V',10,'012345
     next(r for r in bad_rows if r[0] == tag)[column] = value
     refused(packed(all_header, bad_rows))
 refused(packed(all_header, [b'["H","' + b'x' * (1024 * 1024) + b'"]\n']))
+_, boundary_rows, _ = checked(root / 'boundary.jsonl')
+assert len(boundary_rows) == 1
+assert len((root / 'boundary.jsonl').read_bytes().splitlines(keepends=True)[1]) == 1024 * 1024
+with pf_sink.SinkReader(sample) as partial:
+    next(partial)
+    assert not partial.complete and partial.trailer is None and partial.sha256 == ''
+assert not partial.complete
 refused((root / 'aborted.jsonl').read_bytes())
 refused((root / 'unsafe.jsonl').read_bytes())
 refused((root / 'oversized.jsonl').read_bytes())
