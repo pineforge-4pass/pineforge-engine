@@ -52,7 +52,7 @@ public:
         if (parked_entry && bar_index_ == 0) strategy_entry("Parked", true, 1.0, qnan, 0.001);
         if (bar_index_ == 3) { final_view = signed_position_size(); strategy_close_all(); }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 const std::vector<Bar> bars = {
@@ -148,7 +148,7 @@ public:
         }
         if (bar_index_ == 1) { view = signed_position_size(); strategy_close_all(); }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 private:
     bool stop_;
 };
@@ -206,7 +206,7 @@ public:
         }
         if (bar_index_ == 3) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_full_liquidation_retires_only_the_old_owned_bracket() {
