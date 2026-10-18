@@ -152,8 +152,11 @@ class PreflightFailures(unittest.TestCase):
             (0, 'preflight', LINUX_RUNNER, 'pf-linux-x64-16', 'ci.yml job preflight must run on'),
             (0, 'sanitizers', LINUX_RUNNER, 'macos-26-xlarge', 'ci.yml job sanitizers must run on'),
             (0, 'kernel-only', LINUX_RUNNER, 'ubuntu-latest', 'ci.yml job kernel-only must run on'),
-            (0, 'build', MATRIX_RUNNER, 'macos-26-large', 'ci.yml job build must run on'),
-            (0, 'build', MATRIX_RUNNER, '${{ matrix.larger_runner }}', 'ci.yml job build must run on'),
+            # Target runs-on exactly: matrix.os also occurs earlier in the leg name.
+            (0, 'build', f'    runs-on: {MATRIX_RUNNER}\n',
+             '    runs-on: macos-26-large\n', 'ci.yml job build must run on'),
+            (0, 'build', f'    runs-on: {MATRIX_RUNNER}\n',
+             '    runs-on: ${{ matrix.larger_runner }}\n', 'ci.yml job build must run on'),
             (1, 'native-live', LINUX_RUNNER, 'pf-linux-x64-16', 'native-live.yml job native-live must run on'),
             (4, 'corpus-parity', LINUX_RUNNER, 'pf-linux-x64-16', 'corpus-parity.yml job corpus-parity must run on'),
             (4, 'corpus-parity-subset', LINUX_RUNNER, 'pf-linux-x64-16',
