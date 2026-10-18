@@ -77,7 +77,15 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
 
     outputs:
       tag:        ${{ steps.bump.outputs.tag }}
@@ -340,7 +348,13 @@ jobs:
       matrix:
         include:
           - triple: linux-x86_64
-            runner: ubuntu-22.04
+            runner: >-
+              ${{ github.event_name != 'pull_request_target' &&
+                  github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+                  contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+                  (github.event_name != 'pull_request' ||
+                   (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+                  fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
             cmake_extra: ""
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
@@ -352,6 +366,8 @@ jobs:
             runner: macos-latest
             cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
     runs-on: ${{ matrix.runner }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 
     steps:
       # A dry run has no tag yet: it builds the dispatched commit.
@@ -468,7 +484,15 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     steps:
       - name: Mint org App token (hub dispatch)
         id: app
