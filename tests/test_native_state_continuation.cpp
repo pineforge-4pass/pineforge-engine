@@ -388,7 +388,7 @@ struct NativeExecutionConsumerProbe {
     }
 
     static std::uint64_t precommit_count(const C& c) { return c.precommit_digest_.count; }
-    static bool holds(const C& c, const std::vector<Trade>& rows) {
+    static bool holds(const C& c, const TradeLedger& rows) {
         return c.closed_rows_digest_holds(rows);
     }
 };
@@ -465,8 +465,8 @@ struct Host : NativeStrategyHost {
         return verdict;
     }
     NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
-    const std::vector<Trade>& rows() const { return trades_; }
-    std::vector<Trade>& mutable_rows() { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
+    TradeLedger& mutable_rows() { return trades_; }
 };
 
 bool run(Host& host, const NativeRunSpec& spec, int bars) {
