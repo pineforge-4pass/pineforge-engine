@@ -65,7 +65,7 @@ public:
         if (bar_index_ == end_) strategy_close("", "END");
     }
     void extra_order() { extra_order_ = true; }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
     double remaining() const { return position_qty_; }
     int observed_after_exit = 0;
     int exit_seen_bar = -1;

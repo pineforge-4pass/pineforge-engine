@@ -906,7 +906,16 @@ class NativeFxCurveVersions(unittest.TestCase):
             check_texts(changed)
 
     def test_new_paths_append_without_reindexing_existing_pins(self):
-        self.assertEqual(FILES[-2:], (NATIVE_FX_CURVE_HEADER, NATIVE_FX_CURVE_SOURCE))
+        self.assertEqual(FILES[12:14], (NATIVE_FX_CURVE_HEADER, NATIVE_FX_CURVE_SOURCE))
+        self.assertEqual(FILES[14:], (
+            'include/pineforge/native_bar_views.hpp',
+            'src/native_bar_views.cpp',
+            'src/source/pine_security_eval.cpp',
+            'src/source/pine_strategy_host.cpp',
+            'src/source/pine_adapter.cpp',
+            'src/source/pine_scheduler_native.cpp',
+            'src/source/magnifier_intrabars.cpp',
+        ))
         self.assertEqual(FILES[11], 'include/pineforge/native_order_identity.hpp')
         self.assertEqual(FILES.count(NATIVE_FX_CURVE_HEADER), 1)
         self.assertEqual(FILES.count(NATIVE_FX_CURVE_SOURCE), 1)
