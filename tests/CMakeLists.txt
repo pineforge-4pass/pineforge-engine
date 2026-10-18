@@ -7087,3 +7087,8 @@ pineforge_add_unit_test(test_cr150_contract_headers)
 target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c.c)
 set_target_properties(test_cr150_contract_headers PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+# CR-150 L7B: point-source equity metrics.  This registration intentionally
+# follows the P00 line-pinned block above (scope ruling SCOPE-RULING-1818.md).
+list(APPEND TEST_SOURCES test_metrics_point_source)
+pineforge_add_unit_test(test_metrics_point_source)
