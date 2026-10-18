@@ -122,17 +122,20 @@ def test_cli_refusal_is_exit_two_one_json_line_on_stderr(tmp_path, feed, reason)
 
 
 @pytest.mark.parametrize("timestamp", [2**63, -2**63 - 1], ids=["above-int64", "below-int64"])
-def test_cli_chart_timestamp_overflow_is_json_internal_error(tmp_path, timestamp):
-    path = source(tmp_path, [(timestamp, 1, 2, .5, 1.5, 3)])
-    result = cli("--chart", "--symbol", "ETHUSDT", "--tf", "1", path, tmp_path / "out.bin")
-    assert result.returncode == 1
+@pytest.mark.parametrize("later_row", [False, True], ids=["first-row", "later-row"])
+def test_cli_chart_timestamp_overflow_is_value_refusal(tmp_path, timestamp, later_row):
+    rows = [(T0, 1, 2, .5, 1.5, 3)] if later_row else []
+    path = source(tmp_path, rows + [(timestamp, 1, 2, .5, 1.5, 3)])
+    output = tmp_path / "out.bin"
+    result = cli("--chart", "--symbol", "ETHUSDT", "--tf", "1", path, output)
+    assert result.returncode == 2
     assert result.stdout == ""
     assert len(result.stderr.splitlines()) == 1
     document = json.loads(result.stderr)
     assert document["engine"] == "pineforge"
-    assert document["code"] == "harness_internal_error"
-    assert document["args"] == {}
-    assert document["error"].startswith("harness internal error: ")
+    assert document["code"] == "chart_bars_unreadable"
+    assert document["args"] == {"reason": "value"}
+    assert not any(path.exists() for path in finals(output))
 
 
 def test_cli_unexpected_converter_exception_is_one_json_line(pf, tmp_path, monkeypatch, capsys):
@@ -163,15 +166,18 @@ def test_cli_usage_refusal_is_also_one_json_line(tmp_path, arguments):
     assert document["args"] == {"option": "arguments"}
 
 
-@pytest.mark.parametrize("mode", ["--chart", "--feed"])
-def test_cli_invalid_timeframe_uses_symbol_timeframe_vocabulary(tmp_path, mode):
+@pytest.mark.parametrize("mode,code", [("--chart", "chart_bars_unreadable"),
+                                      ("--feed", "symbol_feeds_refused")])
+def test_cli_invalid_timeframe_uses_mode_failure_code(tmp_path, mode, code):
     path = source(tmp_path)
-    result = cli(mode, "--symbol", "ETHUSDT", "--tf", "4h", path, tmp_path / "out.bin")
+    output = tmp_path / "out.bin"
+    result = cli(mode, "--symbol", "ETHUSDT", "--tf", "4h", path, output)
     assert result.returncode == 2 and result.stdout == ""
     assert len(result.stderr.splitlines()) == 1
     document = json.loads(result.stderr)
-    assert document["code"] == "symbol_feeds_refused"
+    assert document["code"] == code
     assert document["args"] == {"reason": "timeframe_invalid"}
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["input.csv"]
 
 
 def test_layout_is_headerless_48_bytes_and_little_endian(pf, tmp_path):
@@ -217,8 +223,9 @@ def test_timeframe_invalid_before_any_output(pf, tmp_path, tf, feed):
     output = tmp_path / "out.bin"
     with pytest.raises(pf.BarsError) as caught:
         pf.convert_csv(path, output, feed=feed, symbol="ETHUSDT", tf=tf)
-    assert caught.value.code == "symbol_feeds_refused"
+    assert caught.value.code == ("symbol_feeds_refused" if feed else "chart_bars_unreadable")
     assert caught.value.code_args == {"reason": "timeframe_invalid"}
+    assert "timeframe_invalid" in (pf.FEED_REASONS if feed else pf.CHART_REASONS)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["input.csv"]
 
 
@@ -278,6 +285,13 @@ def test_chart_empty_volume_is_value(pf, tmp_path):
 
 def test_chart_noninteger_timestamp_is_value(pf, tmp_path):
     refused(pf, tmp_path, "value", rows=[("1.5", 1, 2, .5, 1.5, 3)])
+
+
+@pytest.mark.parametrize("timestamp", [2**63, -2**63 - 1], ids=["above-int64", "below-int64"])
+@pytest.mark.parametrize("later_row", [False, True], ids=["first-row", "later-row"])
+def test_chart_integer_timestamp_outside_int64_is_value(pf, tmp_path, timestamp, later_row):
+    rows = [(T0, 1, 2, .5, 1.5, 3)] if later_row else []
+    refused(pf, tmp_path, "value", rows=rows + [(timestamp, 1, 2, .5, 1.5, 3)])
 
 
 def test_chart_reordered_columns_and_extra_column(pf, tmp_path):
