@@ -4922,6 +4922,10 @@ def _main(argv, binary_inputs) -> int:
                     help="Refused: this build offers no results digest.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
+    if not argv:
+        # With no request, both the library and chart are missing. Preserve
+        # the legacy aggregate refusal now that --ohlcv has alternatives.
+        ap.error("the following arguments are required: --so, --ohlcv")
     args = ap.parse_args(argv)
 
     if args.capabilities_json:
