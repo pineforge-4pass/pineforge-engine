@@ -1091,12 +1091,12 @@ void source::PineStrategyHost::restore_symbol_feeds() {
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& held = spec->instrument_feeds[i];
         NativeInstrumentFeed& feed = symbol_feeds_[i];
-        if (i >= symbol_feed_views_.size() || !symbol_feed_views_[i].present) {
+        const auto views = NativeExecutionConsumer::bound(*this).bar_views();
+        const auto* slot = views.instrument_feed_count == 0
+            ? nullptr : views.instrument_feeds[i];
+        if (slot == nullptr) {
             feed.bars = held.bars;
             feed.close_ms = held.close_ms;
-        } else if (!held.bars.empty() || !held.close_ms.empty()) {
-            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                          "request data: borrowed feed acquired owned bytes");
         }
         for (std::size_t c = 0; c < feed.columns.size(); ++c)
             feed.columns[c].values = held.columns[c].values;

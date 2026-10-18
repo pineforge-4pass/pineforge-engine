@@ -171,7 +171,6 @@ BAR_VIEW_READS = {
     'src/source/pine_security_eval.cpp': (
         'feed.bars = held.bars;',
         'feed.close_ms = held.close_ms;',
-        '} else if (!held.bars.empty() || !held.close_ms.empty()) {',
         'site.close_ms = 0;',
         'site.close_ms = close_ms;',
         'while (static_cast<std::size_t>(site.delivered) < feed.bars.size) {',
@@ -180,9 +179,10 @@ BAR_VIEW_READS = {
         'run_foreign_site_bar(site, feed.bars.data[at], feed.close_ms[at]);',
         'feed.bars.assign(bars, bars + n);',
         'feed.close_ms.assign(close_ms, close_ms + n);',
+        '? symbol_feed_views_[static_cast<std::size_t>(found)].size : data.bars.size;',
+        ': data.bars.size;',
         'feed.bars.clear();',
         'feed.close_ms.clear();',
-        '? symbol_feed_views_[static_cast<std::size_t>(found)].size : data.bars.size;',
         ': data.bars.size;',
     ),
     'src/source/pine_strategy_host.cpp': (
@@ -198,6 +198,7 @@ BAR_VIEW_READS = {
         '{feed.instrument, feed.tf, data.bars.size, feed.columns.size()});',
         'if (effective_input.empty() && args.n >= 2 && args.bars != nullptr)',
         'effective_input = detect_timeframe(args.bars, args.n);',
+        'descriptors[i] = {{slot.bars, slot.size}, slot.close_ms};',
     ),
     'src/source/pine_adapter.cpp': (
         'if (effective_input.empty() && args.n >= 2 && args.bars != nullptr) {',
