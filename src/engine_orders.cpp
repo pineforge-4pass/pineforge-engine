@@ -12,6 +12,7 @@
 
 #include "engine_internal.hpp"
 #include <pineforge/order_action.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -324,5 +325,141 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
 // NativeMarginModel::initial_long / initial_short, and the order of two fills
 // at one point is the consumer's acceptance and incarnation ordinals
 // (ADR-0001, detached comment residue).
+
+inline namespace engine_script_run_v19 {
+
+struct TradeLedger::State {
+    std::vector<Trade> rows;
+    size_type first = 0;
+
+    size_type offset(size_type global) const {
+        if (global < first || global - first >= rows.size())
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "trade ledger: row outside resident window");
+        return global - first;
+    }
+};
+
+TradeLedger::TradeLedger() : state_(std::make_unique<State>()) {}
+TradeLedger::~TradeLedger() = default;
+
+TradeLedger::TradeLedger(const TradeLedger& other)
+    : state_(std::make_unique<State>(*other.state_)) {}
+
+TradeLedger& TradeLedger::operator=(const TradeLedger& other) {
+    if (this != &other) {
+        auto next = std::make_unique<State>(*other.state_);
+        state_.swap(next);
+    }
+    return *this;
+}
+
+TradeLedger::TradeLedger(TradeLedger&& other) : TradeLedger() {
+    state_.swap(other.state_);
+}
+
+TradeLedger& TradeLedger::operator=(TradeLedger&& other) {
+    if (this != &other) {
+        TradeLedger next(std::move(other));
+        state_.swap(next.state_);
+    }
+    return *this;
+}
+
+void TradeLedger::clear() {
+    state_->rows.clear();
+    state_->first = 0;
+}
+
+void TradeLedger::reserve(size_type count) {
+    // The hint is a resident row count. Keep the settlement preallocation's
+    // geometric growth inside the opaque storage, including its overflow guard.
+    auto& rows = state_->rows;
+    if (count > rows.max_size())
+        throw std::length_error("execution effect capacity exhausted");
+    if (count <= rows.capacity()) return;
+    const size_type grown = rows.capacity() > rows.max_size() / 2
+        ? rows.max_size() : rows.capacity() * 2;
+    rows.reserve(std::max(count, grown));
+}
+
+TradeLedger::size_type TradeLedger::size() const {
+    return state_->first + state_->rows.size();
+}
+
+TradeLedger::size_type TradeLedger::base() const { return state_->first; }
+bool TradeLedger::empty() const { return size() == 0; }
+
+Trade& TradeLedger::operator[](size_type global) { return at(global); }
+const Trade& TradeLedger::operator[](size_type global) const { return at(global); }
+
+Trade& TradeLedger::at(size_type global) {
+    return state_->rows[state_->offset(global)];
+}
+
+const Trade& TradeLedger::at(size_type global) const {
+    return state_->rows[state_->offset(global)];
+}
+
+Trade& TradeLedger::back() {
+    if (state_->rows.empty())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: no resident last row");
+    return state_->rows.back();
+}
+
+const Trade& TradeLedger::back() const {
+    if (state_->rows.empty())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: no resident last row");
+    return state_->rows.back();
+}
+
+void TradeLedger::push_back(const Trade& trade) {
+    if (size() == std::numeric_limits<size_type>::max())
+        throw std::length_error("trade ledger: logical end exhausted");
+    state_->rows.push_back(trade);
+}
+
+void TradeLedger::push_back(Trade&& trade) {
+    if (size() == std::numeric_limits<size_type>::max())
+        throw std::length_error("trade ledger: logical end exhausted");
+    state_->rows.push_back(std::move(trade));
+}
+
+void TradeLedger::resize(size_type global_end) {
+    if (global_end < state_->first)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: rewind below resident window");
+    state_->rows.resize(global_end - state_->first);
+}
+
+TradeLedger::iterator TradeLedger::begin() { return state_->rows.data(); }
+TradeLedger::const_iterator TradeLedger::begin() const { return state_->rows.data(); }
+
+TradeLedger::iterator TradeLedger::end() {
+    auto& rows = state_->rows;
+    return rows.empty() ? rows.data() : rows.data() + rows.size();
+}
+
+TradeLedger::const_iterator TradeLedger::end() const {
+    const auto& rows = state_->rows;
+    return rows.empty() ? rows.data() : rows.data() + rows.size();
+}
+
+void TradeLedger::seal(size_type global_end) {
+    if (global_end < state_->first || global_end > size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: seal outside resident window");
+    const size_type count = global_end - state_->first;
+    if (count == 0) return;
+    auto& rows = state_->rows;
+    rows.erase(rows.begin(), rows.begin()
+               + static_cast<std::vector<Trade>::difference_type>(count));
+    state_->first = global_end;
+    if (rows.empty()) std::vector<Trade>().swap(rows);
+}
+
+} // inline namespace engine_script_run_v19
 
 }  // namespace pineforge

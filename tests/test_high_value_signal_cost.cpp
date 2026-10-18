@@ -46,7 +46,7 @@ public:
         }
         if (bar_index_ == 2) { observed = signed_position_size(); strategy_close_all(); }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_reversal_signal_cost_boundary() {
@@ -123,7 +123,7 @@ public:
         }
         if (bar_index_ == 1) { observed = signed_position_size(); strategy_close_all(); }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_flat_signal_cost_across_price_scales() {

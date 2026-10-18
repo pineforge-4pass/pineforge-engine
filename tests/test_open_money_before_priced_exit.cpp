@@ -73,7 +73,7 @@ public:
         }
         if (bar_index_ == 5 && mode_ == Mode::Half) strategy_close_all();
     }
-    const std::vector<Trade>& closed() const { return trades_; }
+    const TradeLedger& closed() const { return trades_; }
 };
 bool near(double a, double b, double eps = 1e-8) { return std::abs(a-b) < eps; }
 void check_priced_exit(Mode mode, bool call, double price) {
@@ -147,7 +147,7 @@ public:
         pyramid_entries_.push_back(entry);
         strategy_exit("Resting", "Boundary", 11.0, 9.0);
     }
-    const std::vector<Trade>& closed() const { return trades_; }
+    const TradeLedger& closed() const { return trades_; }
     double position() const { return signed_position_size(); }
 };
 void check_original_money_scope_is_preserved() {

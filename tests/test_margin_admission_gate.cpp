@@ -132,7 +132,7 @@ public:
     using BacktestEngine::initial_capital_;
     using BacktestEngine::margin_long_;
     using BacktestEngine::margin_short_;
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 static void run_constant_100_script(Probe& eng, const std::string& script) {

@@ -121,7 +121,7 @@ public:
         rc = probe_fill_qty(index, row_.level, &probed, &close_only, &partition);
     }
     double held() const { return physical_position().signed_units; }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 private:
     Row row_;
 };
