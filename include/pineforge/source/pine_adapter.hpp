@@ -661,7 +661,7 @@ public:
         erased_rows_ = 0;
         erased_digest_ = kFoldBasis;
         sequence_index_.clear();
-        unfolded_.clear();
+        std::vector<std::uint64_t>().swap(unfolded_);
         erased_minima_.clear();
         erased_foreign_ids_.clear();
 #if PINEFORGE_PLACEMENT_AUDIT
@@ -774,6 +774,7 @@ public:
             place(incarnation, std::move(node));
         } catch (...) {
             unfolded_.pop_back();
+            if (unfolded_.empty()) std::vector<std::uint64_t>().swap(unfolded_);
             throw;
         }
         ++size_;
@@ -786,7 +787,7 @@ public:
     void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
         at(incarnation) = std::move(snapshot);
         sequence_index_.clear();
-        unfolded_.clear();
+        std::vector<std::uint64_t>().swap(unfolded_);
         for (const auto& row : *this) unfolded_.push_back(row.first);
     }
 
@@ -796,6 +797,14 @@ public:
     bool erase(std::uint64_t incarnation) {
         std::unique_ptr<PlacementSnapshot> node = take(incarnation);
         if (!node) return false;
+        // A row that leaves before the next command-sequence lookup no longer
+        // belongs in the pending index fold. Release the allocation when the
+        // pending set becomes empty; retained rows stay the only live ids.
+        const auto pending_end = std::remove(unfolded_.begin(), unfolded_.end(), incarnation);
+        if (pending_end != unfolded_.end()) {
+            unfolded_.erase(pending_end, unfolded_.end());
+            if (unfolded_.empty()) std::vector<std::uint64_t>().swap(unfolded_);
+        }
         remember_erased(*node);
         --size_;
         ++erased_rows_;
@@ -1052,8 +1061,9 @@ class BracketRoster {
     };
 
 public:
-    // Every member in roster order: the settled prefix, then the working tail
-    // with each parked run in its place.
+    // Every materialized member in roster order after the settled prefix,
+    // with each parked run in its place. The settled prefix is represented by
+    // its count and digest rather than by historical handle bytes.
     class const_iterator {
     public:
         using iterator_category = std::forward_iterator_tag;
@@ -1075,8 +1085,7 @@ public:
             return before;
         }
         bool operator==(const const_iterator& other) const noexcept {
-            return owner_ == other.owner_ && settled_ == other.settled_
-                && offset_ == other.offset_ && hot_ == other.hot_ && run_ == other.run_
+            return owner_ == other.owner_ && hot_ == other.hot_ && run_ == other.run_
                 && in_run_ == other.in_run_ && run_offset_ == other.run_offset_;
         }
         bool operator!=(const const_iterator& other) const noexcept { return !(*this == other); }
@@ -1085,8 +1094,6 @@ public:
         friend class BracketRoster;
         const_iterator(const BracketRoster* owner, bool at_end) : owner_(owner) {
             if (at_end) {
-                settled_ = owner->settled_count_;
-                offset_ = owner->settled_.size();
                 hot_ = owner->hot_.size();
                 run_ = owner->parked_.size();
                 return;
@@ -1097,10 +1104,7 @@ public:
             return run_ < owner_->parked_.size() && owner_->parked_[run_].at == hot_;
         }
         void load() {
-            if (settled_ < owner_->settled_count_) {
-                previous_ = get(owner_->settled_, offset_, previous_);
-                current_ = native_order::RequestHandle{owner_->run_, previous_};
-            } else if (in_parked()) {
+            if (in_parked()) {
                 run_previous_ = get(owner_->parked_[run_].bytes, run_offset_, run_previous_);
                 current_ = native_order::RequestHandle{owner_->run_, run_previous_};
             } else if (hot_ < owner_->hot_.size()) {
@@ -1108,9 +1112,7 @@ public:
             }
         }
         void advance() {
-            if (settled_ < owner_->settled_count_) {
-                ++settled_;
-            } else if (in_parked()) {
+            if (in_parked()) {
                 if (++in_run_ == owner_->parked_[run_].count) {
                     ++run_;
                     in_run_ = 0;
@@ -1124,13 +1126,10 @@ public:
         }
 
         const BracketRoster* owner_ = nullptr;
-        std::size_t settled_ = 0;
-        std::size_t offset_ = 0;
         std::size_t hot_ = 0;
         std::size_t run_ = 0;
         std::size_t in_run_ = 0;
         std::size_t run_offset_ = 0;
-        std::uint64_t previous_ = 0;
         std::uint64_t run_previous_ = 0;
         native_order::RequestHandle current_{};
     };
@@ -1140,10 +1139,11 @@ public:
         hot_.push_back(handle);
         ++count;
     }
-    // Every member, materialized (the bracket cancel's roster).
+    // Every materialized member after the settled prefix (the bracket
+    // cancel's roster). `size()` still includes the settled prefix count.
     std::vector<native_order::RequestHandle> members() const {
         std::vector<native_order::RequestHandle> out;
-        out.reserve(size());
+        out.reserve(size() - settled_count_);
         for (const auto& handle : *this) out.push_back(handle);
         return out;
     }
@@ -1181,7 +1181,7 @@ public:
             if (moved == hot_.size()) break;
             const auto& handle = hot_[moved];
             if (!erased(handle.incarnation) || !claims(handle)) break;
-            put(settled_, settled_last_, handle.incarnation);
+            settled_last_ = handle.incarnation;
             ++settled_count_;
             settled_digest_ = fold(settled_digest_, handle.incarnation);
             uncount(handle.incarnation);
@@ -1351,16 +1351,17 @@ private:
         std::uint64_t previous = 0;
         for (std::size_t index = 0; index < run.count; ++index) {
             previous = get(run.bytes, offset, previous);
-            put(settled_, settled_last_, previous);
+            settled_last_ = previous;
             settled_digest_ = fold(settled_digest_, previous);
         }
         settled_count_ += run.count;
         parked_count_ -= run.count;
     }
 
-    // The settled prefix: incarnations of run_, as zigzag varint deltas.
+    // The settled prefix is represented by its last incarnation, count and
+    // running digest. Its historical varint bytes are intentionally dropped;
+    // walks begin at the parked runs and working tail below it.
     native_order::RunIdentity run_{};
-    std::vector<std::uint8_t> settled_;
     std::uint64_t settled_last_ = 0;
     std::size_t settled_count_ = 0;
     std::uint64_t settled_digest_ = kDigestBasis;

@@ -902,7 +902,9 @@ std::uint64_t PlacementTable::command_sequence_for(const std::string& source_id,
     for (const auto incarnation : unfolded_) {
         if (const PlacementSnapshot* row = locate(incarnation)) fold_sequence(sequence_index_, *row);
     }
-    unfolded_.clear();
+    // The pending ids are folded now; release their storage so an erased
+    // history cannot leave a capacity-sized allocation behind.
+    std::vector<std::uint64_t>().swap(unfolded_);
     constexpr auto absent = std::numeric_limits<std::uint64_t>::max();
     bool known = false;
     std::uint64_t any = absent;
