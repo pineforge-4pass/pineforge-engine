@@ -79,7 +79,7 @@ public:
         if (bar_index_ == flatten_bar_) strategy_close("Next", "END");
     }
 
-    std::vector<Trade> rows() const { return trades_; }
+    std::vector<Trade> rows() const { return {trades_.begin(), trades_.end()}; }
     double remaining_position() const { return signed_position_size(); }
 
 private:

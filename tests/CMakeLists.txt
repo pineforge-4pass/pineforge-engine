@@ -7059,8 +7059,8 @@ foreach(_pf_python_row IN ITEMS
     endif()
 endforeach()
 
-# The two gate suites (registered unconditionally at tests/CMakeLists.txt:2214
-# and :2216) drive the real ci_verify Driver over the floor, exclusion, overlay
+# The two gate suites (test_ci_verify and test_ci_preflight, registered above)
+# drive the real ci_verify Driver over the floor, exclusion, overlay
 # and live-profile paths, and build their tamper trees through
 # tempfile.TemporaryDirectory, which honours TMPDIR: pin TMPDIR to a
 # configure-time directory under the build dir, the shape the private-fixture
@@ -7079,6 +7079,26 @@ set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+
+# CR-150 P00: append after the pre-existing line-pinned registrations.
+# Keep the unit-test inventory in sync; its main registration loop is above.
+list(APPEND TEST_SOURCES test_cr150_contract_headers)
+pineforge_add_unit_test(test_cr150_contract_headers)
+target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c.c)
+set_target_properties(test_cr150_contract_headers PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+# CR-150 L15a: append after every existing line-pinned registration.
+list(APPEND TEST_SOURCES test_native_bar_views_l15a)
+pineforge_add_unit_test(test_native_bar_views_l15a)
+
+add_test(NAME test_native_bar_views_guard_l15a
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_versions.py
+            --self-test-bar-views)
+
+# CR-150 L8a: keep the existing CMake line pins stable.
+list(APPEND TEST_SOURCES test_trade_ledger)
+pineforge_add_unit_test(test_trade_ledger)
 
 # CR-150 L2: append after the private-fixture line evidence. The preflight
 # harness glob also discovers docker/run_json_bin_test.py automatically.
