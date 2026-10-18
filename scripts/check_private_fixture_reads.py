@@ -39,8 +39,10 @@ matched exits 1.
 
 The list() subcommands the two files use are modelled, and the model is
 printed as a table (subcommand, uses, modelled). APPEND and REMOVE_ITEM edit
-the tracked list; SORT orders a tracked list (a file(GLOB)-fed list remains
-unknown); LENGTH writes the tracked length into its out-var; GET, SUBLIST and
+the tracked list; SORT orders a tracked list (default ascending or ORDER
+DESCENDING) and refuses an input the walk never saw built. The exact CR-150
+lane glob is tracked, including when empty. LENGTH writes the tracked length
+into its out-var; GET, SUBLIST and
 POP_FRONT write the element(s) they select, so a value a row gets through them
 is swept like any other. POP_FRONT follows CMake: N out-vars take the first N
 elements (the rest of the list is removed), no out-var removes exactly one
@@ -282,6 +284,7 @@ class Rows:
         self.dynamic_names: list[tuple[int, str]] = []
         self.list_uses: dict[str, int] = {}
         self.unresolved_list_inputs: list[tuple[int, str, str, str]] = []
+        self.cr150_lane_files: list[Path] | None = None
         self._check_sites_readable()
         self._scan_list_subcommands()
         top_env: dict[str, list[str]] = {}
@@ -451,6 +454,8 @@ class Rows:
                 continue
             if name == 'set':
                 self._do_set(body, env)
+            elif name == 'file':
+                self._do_cr150_glob(body, i, env)
             elif name == 'list':
                 self._do_list(body, i, env)
             elif name == 'string':
@@ -550,6 +555,26 @@ class Rows:
             if value not in values:
                 values.append(value)
 
+    def _do_cr150_glob(self, body: str, line_i: int, env: dict) -> None:
+        """Bind only the lane glob whose files this sweep will include."""
+        if self.path != self.root / 'tests' / 'CMakeLists.txt':
+            return
+        if not re.fullmatch(
+                r'\s*GLOB\s+CR150_LANE_CMAKE\s+CONFIGURE_DEPENDS\s+'
+                r'"\$\{CMAKE_CURRENT_SOURCE_DIR\}/cr150\.d/\*\.cmake"\s*', body):
+            return
+        directory = self.root / 'tests' / 'cr150.d'
+        try:
+            paths = list(directory.iterdir())
+        except FileNotFoundError:
+            paths = []                         # CMake's empty-glob semantics
+        except OSError as error:
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: cannot read {directory}: {error}') from error
+        self.cr150_lane_files = sorted(path for path in paths
+                                       if path.name.endswith('.cmake'))
+        env['CR150_LANE_CMAKE'] = [str(path) for path in self.cr150_lane_files]
+
     def _do_list(self, body: str, line_i: int, env: dict) -> None:
         """Model the list() subcommands the two files use. What the walk does
         not model is exit 2 (see _scan_list_subcommands): a list() whose
@@ -596,22 +621,16 @@ class Rows:
             name = tokens[0]
             values = env.get(name)
             if values is None:
-                # Sorting does not create or remove a path-bearing value. A
-                # list populated by file(GLOB), which this sweep does not
-                # model, is therefore safe to leave unknown.
-                return
-            order = 'ASCENDING'
-            position = 1
-            while position < len(tokens):
-                if (tokens[position] == 'ORDER' and position + 1 < len(tokens)
-                        and tokens[position + 1] in ('ASCENDING', 'DESCENDING')):
-                    order = tokens[position + 1]
-                    position += 2
-                    continue
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: list(SORT) is not a '
+                    f'subcommand this sweep models: its effect on the tracked '
+                    f'lists would be skipped, and skipped is not clean')
+            options = tokens[1:]
+            if options not in ([], ['ORDER', 'DESCENDING']):
                 raise Unparseable(
                     f'{self.path}:{line_i + 1}: list(SORT) option '
-                    f'{tokens[position]!r} is not modelled')
-            values.sort(reverse=order == 'DESCENDING')
+                    f'{" ".join(options)!r} is not modelled')
+            env[name] = sorted(values, reverse=bool(options))
             return
 
         tokens = rest.split()
