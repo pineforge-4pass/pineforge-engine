@@ -377,8 +377,11 @@ struct ConsumerRun {
 
 ConsumerRun consumer_run(const k3_book::BookConfig& config, bool window,
                          bool direct, bool every_point) {
-    k3_book::BookHost host(config);
-    auto& consumer = as_native_consumer(host.execution_consumer_for_test());
+    struct ReceiptBook : k3_book::BookHost {
+        using k3_book::BookHost::BookHost;
+        using k3_book::BookHost::execution_consumer;
+    } host(config);
+    auto& consumer = as_native_consumer(host.execution_consumer());
     consumer.set_retention_override(window ? NativeEventRetention::Window
                                           : NativeEventRetention::Commands);
     consumer.set_retire_every_point(every_point);
