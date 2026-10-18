@@ -7104,7 +7104,7 @@ pineforge_add_unit_test(test_trade_ledger)
 # harness glob also discovers docker/run_json_bin_test.py automatically.
 add_test(NAME test_run_json_bin
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
-        ${PROJECT_SOURCE_DIR}/docker/run_json_bin_test.py)
+        ${PROJECT_SOURCE_DIR}/tests/test_run_json_bin.py)
 if(TARGET outputs_fixture_strategy)
     set_tests_properties(test_run_json_bin PROPERTIES
         ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
