@@ -230,12 +230,10 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
     staged.instrument_feeds.reserve(symbol_feeds_.size());
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& feed = installed_symbol_feed(i);
-        const auto views = NativeExecutionConsumer::bound(*this).bar_views();
-        const auto* slot = views.instrument_feed_count == 0
-            ? nullptr : views.instrument_feeds[i];
-        const auto data = native_instrument_feed_view(feed, slot);
+        const std::size_t count = i < symbol_feed_views_.size() && symbol_feed_views_[i].present
+            ? symbol_feed_views_[i].size : feed.bars.size();
         staged.instrument_feeds.push_back(
-            {feed.instrument, feed.tf, data.bars.size, feed.columns.size()});
+            {feed.instrument, feed.tf, count, feed.columns.size()});
     }
     return staged;
 }
@@ -346,7 +344,7 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     std::vector<NativeInstrumentFeed> lent = lend_feed_bytes(symbol_feeds_);
     NativeRunSpec spec = [&] {
         try {
-            NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(nullptr, 0);
+            stage_symbol_feed_views();
             return adapter_.project(effective, staged, args, path_order, &lent);
         } catch (...) {
             return_feed_bytes(symbol_feeds_, lent);
@@ -3071,3 +3069,23 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
 }
 
 } // namespace pineforge
+
+namespace pineforge {
+
+void source::PineStrategyHost::stage_symbol_feed_views() {
+    if (symbol_feed_views_.size() != symbol_feeds_.size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "request data: symbol feed view table is out of sync");
+    std::vector<NativeInstrumentFeedView> descriptors(symbol_feed_views_.size());
+    std::vector<const NativeInstrumentFeedView*> slots(symbol_feed_views_.size(), nullptr);
+    for (std::size_t i = 0; i < symbol_feed_views_.size(); ++i) {
+        const BorrowedFeedSlot& slot = symbol_feed_views_[i];
+        if (!slot.present) continue;
+        descriptors[i] = {{slot.bars, slot.size}, slot.close_ms};
+        slots[i] = &descriptors[i];
+    }
+    NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(
+        slots.empty() ? nullptr : slots.data(), slots.size());
+}
+
+}  // namespace pineforge

@@ -519,11 +519,11 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 The counts below include recorded outputs and describe the released 1.5.0 API.
 
-A newly generated strategy `.so` exposes 96 compiled-strategy `PF_API` declarations
-(80 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 139 `PF_API` exports in total; `use_bar_magnifier = true` adds
+A newly generated strategy `.so` exposes 97 compiled-strategy `PF_API` declarations
+(81 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 140 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 100 and 143. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 101 and 144. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s
@@ -548,7 +548,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_set_chart_timezone` / `strategy_set_syminfo_timezone` / `strategy_set_syminfo_session` | Chart and exchange time |
 | `strategy_set_syminfo_mintick` / `_pointvalue` / `_metadata` / `_type` / `_string` | Symbol tick size, point value, numeric metadata, instrument class, string members |
 | `strategy_set_native_security_feed` / `strategy_set_aux_security_feed` | Feed `request.security()` from a native higher-timeframe series / an auxiliary bar-aligned feed |
-| `strategy_set_symbol_feed` / `_feed_column` / `strategy_set_symbol_facts` / `strategy_set_recorded_series` | Another symbol's data for `request.security()` of that symbol: its own bars (each with its close) and named columns, its `syminfo.*` facts, and recorded request values per chart bar (each behind its own `PINEFORGE_HAS_…_V1` probe; historical runs only) |
+| `strategy_set_symbol_feed` / `strategy_set_symbol_feed_borrowed_v1` / `_feed_column` / `strategy_set_symbol_facts` / `strategy_set_recorded_series` | Another symbol's data for `request.security()` of that symbol: its own copied or borrowed bars (each with its close) and named columns, its `syminfo.*` facts, and recorded request values per chart bar (each behind its own `PINEFORGE_HAS_…_V1` probe; historical runs only) |
 | `strategy_set_account_currency_fx_series` | Effective-time quote-to-account FX |
 | `strategy_get_last_error` | The latest runtime error |
 | `strategy_get_last_error_code` / `strategy_get_last_error_args` | The latest failure's stable code from the closed [run-failure vocabulary](docs/pages/run-failure-codes.md) (`""` when the run succeeded) and its typed arguments as canonical JSON; behind `PINEFORGE_HAS_RUN_FAILURE_CODES_V1` |

@@ -1091,12 +1091,12 @@ void source::PineStrategyHost::restore_symbol_feeds() {
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& held = spec->instrument_feeds[i];
         NativeInstrumentFeed& feed = symbol_feeds_[i];
-        const auto views = NativeExecutionConsumer::bound(*this).bar_views();
-        const auto* slot = views.instrument_feed_count == 0
-            ? nullptr : views.instrument_feeds[i];
-        if (slot == nullptr) {
+        if (i >= symbol_feed_views_.size() || !symbol_feed_views_[i].present) {
             feed.bars = held.bars;
             feed.close_ms = held.close_ms;
+        } else if (!held.bars.empty() || !held.close_ms.empty()) {
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "request data: borrowed feed acquired owned bytes");
         }
         for (std::size_t c = 0; c < feed.columns.size(); ++c)
             feed.columns[c].values = held.columns[c].values;
@@ -1391,9 +1391,14 @@ bool source::PineStrategyHost::set_symbol_feed(const std::string& key,
     if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
         return refuse("restore_failed", why);
     if (existing >= 0) {
-        symbol_feeds_[static_cast<std::size_t>(existing)] = std::move(feed);
+        const std::size_t at = static_cast<std::size_t>(existing);
+        symbol_feeds_[at] = std::move(feed);
+        symbol_feed_views_[at] = {};
     } else {
+        symbol_feeds_.reserve(symbol_feeds_.size() + 1);
+        symbol_feed_views_.reserve(symbol_feed_views_.size() + 1);
         symbol_feeds_.push_back(std::move(feed));
+        symbol_feed_views_.push_back({});
     }
     refresh_symbol_data_digest();
     clear_run_failure(*this);
@@ -1425,10 +1430,12 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
     if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
         return refuse("restore_failed", why);
     NativeInstrumentFeed& feed = symbol_feeds_[static_cast<std::size_t>(found)];
-    const auto data = native_instrument_feed_view(feed, nullptr);
-    if (n < 0 || static_cast<std::size_t>(n) != data.bars.size || (n > 0 && values == nullptr))
+    const std::size_t feed_count = static_cast<std::size_t>(found) < symbol_feed_views_.size()
+        && symbol_feed_views_[static_cast<std::size_t>(found)].present
+        ? symbol_feed_views_[static_cast<std::size_t>(found)].size : feed.bars.size();
+    if (n < 0 || static_cast<std::size_t>(n) != feed_count || (n > 0 && values == nullptr))
         return refuse("column_length", "column '" + name + "' has " + std::to_string(n)
-                      + " values for " + std::to_string(data.bars.size) + " bars");
+                      + " values for " + std::to_string(feed_count) + " bars");
     // The kernel's judgement of the name, here rather than at the next begin:
     // a feed of the same key without bars carries it (the count is checked
     // above, and no column value is refused).
@@ -1548,7 +1555,11 @@ void source::PineStrategyHost::refresh_symbol_data_digest() noexcept {
     for (const auto& feed : symbol_feeds_) {
         f.s(feed.instrument);
         f.s(feed.tf);
-        f.u(native_instrument_feed_view(feed, nullptr).bars.size);
+        const std::size_t count = (&feed - symbol_feeds_.data()) < symbol_feed_views_.size()
+            && symbol_feed_views_[static_cast<std::size_t>(&feed - symbol_feeds_.data())].present
+            ? symbol_feed_views_[static_cast<std::size_t>(&feed - symbol_feeds_.data())].size
+            : feed.bars.size();
+        f.u(count);
         f.u(feed.columns.size());
         for (const auto& column : feed.columns) f.s(column.name);
     }
@@ -1574,6 +1585,72 @@ void source::PineStrategyHost::refresh_symbol_data_digest() noexcept {
         }
     }
     symbol_data_digest_ = f.h;
+}
+
+}  // namespace pineforge
+
+namespace pineforge {
+
+bool source::PineStrategyHost::set_symbol_feed_borrowed(
+        const std::string& key, const std::string& timeframe,
+        const Bar* bars, const int64_t* close_ms, int n) {
+    guard_native_mutation("set_symbol_feed_borrowed");
+    const auto refuse = [this](const char* reason, const std::string& why,
+                               const char* field = nullptr) {
+        RunFailureArgs args{{"reason", reason}};
+        if (field) args.emplace_back("field", field);
+        note_run_failure(*this, "strategy_set_symbol_feed_borrowed_v1: " + why,
+                         RunFailureCode::symbol_feeds_refused, args);
+        return false;
+    };
+    if (run_in_progress(*this)) return refuse("run_in_progress", kRunInProgress);
+    if (key.empty()) return refuse("empty_key", "empty symbol key");
+    const std::string tf = canonical_symbol_timeframe(timeframe);
+    if (tf.empty() || !native_calendar::parse_timeframe(tf))
+        return refuse("timeframe_unparsable", "timeframe '" + timeframe + "' does not parse");
+    if (n < 0 || (n > 0 && (bars == nullptr || close_ms == nullptr)))
+        return refuse("invalid_bars", "invalid bar array");
+
+    const std::size_t count = static_cast<std::size_t>(n);
+    NativeInstrumentFeedView view{{bars, count}, close_ms};
+    const NativeInstrumentFeedView* slots[] = {&view};
+    NativeBarViews views{slots, 1};
+    std::vector<NativeInstrumentFeed> judged_feeds(1);
+    judged_feeds.front().instrument = key;
+    judged_feeds.front().tf = tf;
+    const auto judged = validate_native_instrument_feeds(judged_feeds, views);
+    if (!judged) {
+        return refuse("kernel_refused", "feed refused (NativeRunSpecError "
+                      + std::to_string(static_cast<int>(judged.error)) + ", field "
+                      + std::to_string(static_cast<int>(judged.field)) + ")",
+                      instrument_feed_field_name(judged.field));
+    }
+    if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
+        return refuse("restore_failed", why);
+
+    const std::int64_t existing = find_symbol_feed(key, tf);
+    const BorrowedFeedSlot replacement{bars, close_ms, count, true};
+    if (existing >= 0) {
+        const std::size_t at = static_cast<std::size_t>(existing);
+        NativeInstrumentFeed& feed = symbol_feeds_[at];
+        feed.instrument = key;
+        feed.tf = tf;
+        feed.bars.clear();
+        feed.close_ms.clear();
+        feed.columns.clear();
+        symbol_feed_views_[at] = replacement;
+    } else {
+        symbol_feeds_.reserve(symbol_feeds_.size() + 1);
+        symbol_feed_views_.reserve(symbol_feed_views_.size() + 1);
+        NativeInstrumentFeed feed;
+        feed.instrument = key;
+        feed.tf = tf;
+        symbol_feeds_.push_back(std::move(feed));
+        symbol_feed_views_.push_back(replacement);
+    }
+    refresh_symbol_data_digest();
+    clear_run_failure(*this);
+    return true;
 }
 
 }  // namespace pineforge
