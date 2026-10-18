@@ -363,13 +363,41 @@ void failed_observer_and_reuse(Directory& directory) {
     CHECK(receipt(host).complete == 0);
     CHECK(read(path).find("{\"trailer\":") == std::string::npos);
     CHECK(native_set_execution_observer_v1(&host, nullptr) == 0);
-    run(host, bars, window(5), 2);
-    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
-    CHECK(receipt(host).count_e == 1);
+    // An observer fault is a permanent failure, not a recoverable abort.
+    // Clearing the pending observer cannot reopen that host's lifecycle.
+    const auto refused_setup = host.configure_native(spec(false, 2));
+    CHECK(refused_setup.status == NativeSetupStatus::Failed);
+    CHECK(refused_setup.validation.error == NativeRunSpecError::WrongPhase);
+    CHECK(refused_setup.validation.field == NativeRunSpecField::None);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+    Report failed_report;
+    host.fill_report(&failed_report.value);
+    CHECK(failed_report.value.trades == nullptr && failed_report.value.equity_curve == nullptr);
+    CHECK(receipt(host).complete == 0);
+    CHECK(read(path).find("{\"trailer\":") == std::string::npos);
+
+    // Reuse is legal after Completed, with the same session and a higher run
+    // number. First populate a nonempty selected sink, then prove that the
+    // same host resets it to the new T's anchor-only (M = 0) curve.
+    Host reusable;
+    const auto reuse_path = directory.file("reuse-completed.ndjson");
+    install(reusable, reuse_path);
+    run(reusable, bars, first);
+    CHECK(reusable.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(receipt(reusable).count_e == 4);
+    Report before_reuse;
+    reusable.fill_report(&before_reuse.value);
+    CHECK(receipt(reusable).complete == 1 && receipt(reusable).count_e == 4);
+    CHECK(equity_lines(read(reuse_path)).size() == 4);
+    run(reusable, bars, window(5), 2);
+    CHECK(reusable.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(receipt(reusable).count_e == 1);
     Report report;
-    host.fill_report(&report.value);
-    CHECK(receipt(host).complete == 1 && receipt(host).count_e == 1);
-    CHECK(equity_lines(read(path)).size() == 1);
+    reusable.fill_report(&report.value);
+    CHECK(receipt(reusable).complete == 1 && receipt(reusable).count_e == 1);
+    CHECK(equity_lines(read(reuse_path)).size() == 1);
+    CHECK(equity_lines(read(reuse_path)) == (std::vector<std::string>{
+        equity_line({kBase + 5 * kMinute, kCapital, 0.0})}));
 }
 
 // These rows hold the new O(1) latch boundary itself to the contract; they
