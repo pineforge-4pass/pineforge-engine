@@ -44,9 +44,9 @@
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink_writer.hpp>
-// Generated modules using the full script lifecycle reset must be rebuilt
-// against a runtime providing this hook. This is an internal C++ capability;
-// it does not change any public C POD or exported C function signature.
+// Generated script lifecycle users must be rebuilt against this runtime.
+// These internal C++ capabilities change no public C POD or C signature.
+#define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
 namespace pineforge {
@@ -2297,8 +2297,8 @@ private:
         bool enabled = false;
         bool trade_history_streamable = false;
         std::string path, run_id, scratch_dir;
-        unsigned active_calls = 0;
-        unsigned stream_calls = 0;
+        std::uint32_t active_calls = 0;
+        std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
         pf_report_sink_receipt_v1 receipt{};
         ReportSinkState() = default;
@@ -2342,7 +2342,6 @@ public:
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
     // Codegen opts in only for modules that do not read closedtrades.*.
     // L6B1 still retains every row; L8c consumes this policy at sealing.
-#define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
     void set_trade_history_streamable(bool streamable);
     bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
 };
