@@ -7101,3 +7101,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_magnifier_path_source_l16)
     pineforge_add_unit_test(test_magnifier_path_source_l16)
 endif()
+
+# CR-150 L8a: keep the existing CMake line pins stable.
+list(APPEND TEST_SOURCES test_trade_ledger)
+pineforge_add_unit_test(test_trade_ledger)

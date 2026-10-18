@@ -11919,7 +11919,7 @@ void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
 }  // namespace
 
 uint64_t NativeExecutionConsumer::closed_rows_digest(
-        const std::vector<Trade>& rows) const {
+        const TradeLedger& rows) const {
     const std::size_t final_rows = std::min(closed_rows_final_, rows.size());
     if (closed_rows_digested_ > final_rows) rewind_closed_rows(final_rows);
     BrokerStateHashSink f;
@@ -11944,7 +11944,7 @@ void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const noexce
 }
 
 bool NativeExecutionConsumer::closed_rows_digest_holds(
-        const std::vector<Trade>& rows) const noexcept {
+        const TradeLedger& rows) const noexcept {
     if (closed_rows_digested_ > rows.size()) return false;
     BrokerStateHashSink f;
     for (std::size_t index = 0; index < closed_rows_digested_; ++index) {
