@@ -120,6 +120,28 @@ def test_cli_refusal_is_exit_two_one_json_line_on_stderr(tmp_path, feed, reason)
     assert document["error"]
 
 
+@pytest.mark.parametrize("arguments", [[], ["--chart", "--feed"], ["--unknown"]])
+def test_cli_usage_refusal_is_also_one_json_line(tmp_path, arguments):
+    result = cli(*arguments)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert len(result.stderr.splitlines()) == 1
+    document = json.loads(result.stderr)
+    assert document["code"] == "run_request_invalid"
+    assert document["args"] == {"option": "arguments"}
+
+
+@pytest.mark.parametrize("mode", ["--chart", "--feed"])
+def test_cli_invalid_timeframe_uses_symbol_timeframe_vocabulary(tmp_path, mode):
+    path = source(tmp_path)
+    result = cli(mode, "--symbol", "ETHUSDT", "--tf", "4h", path, tmp_path / "out.bin")
+    assert result.returncode == 2 and result.stdout == ""
+    assert len(result.stderr.splitlines()) == 1
+    document = json.loads(result.stderr)
+    assert document["code"] == "symbol_feeds_refused"
+    assert document["args"] == {"reason": "timeframe_invalid"}
+
+
 def test_layout_is_headerless_48_bytes_and_little_endian(pf, tmp_path):
     output, metadata = convert(pf, tmp_path)
     assert pf.BAR_RECORD.size == 48
@@ -226,6 +248,18 @@ def test_chart_noninteger_timestamp_is_value(pf, tmp_path):
     refused(pf, tmp_path, "value", rows=[("1.5", 1, 2, .5, 1.5, 3)])
 
 
+def test_chart_reordered_columns_and_extra_column(pf, tmp_path):
+    output, _ = convert(pf, tmp_path, header="extra,volume,close,low,high,open,timestamp",
+                        rows=[("ignored", 3, 1.5, .5, 2, 1, T0)])
+    assert output.read_bytes() == BAR.pack(1, 2, .5, 1.5, 3, T0)
+
+
+def test_chart_timestamp_keeps_the_int64_domain(pf, tmp_path):
+    rows = [(-2**63, 1, 2, .5, 1.5, 3), (2**63 - 1, 1, 2, .5, 1.5, 3)]
+    output, _ = convert(pf, tmp_path, rows)
+    assert output.read_bytes() == b"".join(BAR.pack(1, 2, .5, 1.5, 3, row[0]) for row in rows)
+
+
 def test_chart_not_utf8_is_value(pf, tmp_path):
     refused(pf, tmp_path, "value", raw=b"\xff" + HEADER.encode() + b"\n")
 
@@ -323,6 +357,13 @@ def test_feed_time_out_of_range(pf, tmp_path, timestamp, close):
 def test_feed_derived_close_out_of_range(pf, tmp_path):
     refused(pf, tmp_path, "feed_time_out_of_range", feed=True,
             rows=[(LIMIT, 1, 2, .5, 1.5, 3)])
+
+
+def test_feed_time_range_is_inclusive(pf, tmp_path):
+    output, _ = convert(pf, tmp_path, feed=True, header=HEADER + ",time_close",
+        rows=[(-LIMIT, 1, 2, .5, 1.5, 3, -LIMIT + 1),
+              (LIMIT - 1, 1, 2, .5, 1.5, 3, LIMIT)])
+    assert output.with_suffix(".close.bin").read_bytes() == struct.pack("<2q", -LIMIT + 1, LIMIT)
 
 
 @pytest.mark.parametrize("timestamp", [-62135596800001, 253402300800000, 253399622400000])

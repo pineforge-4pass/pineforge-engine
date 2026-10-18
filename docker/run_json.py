@@ -4465,6 +4465,36 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     return 0
 
 
+def _csv2bin_main(argv) -> int:
+    """Standalone conversion: no strategy library, one refusal line on stderr."""
+    import pf_bars
+
+    class ConverterParser(argparse.ArgumentParser):
+        def error(self, message):
+            raise RunFailure(f"csv2bin: {message}", "run_request_invalid",
+                             {"option": "arguments"}, exit_status=2)
+
+    parser = ConverterParser(prog="run_json.py csv2bin",
+                             description="Convert a chart or feed CSV to pf_bar_t/v1 files.",
+                             allow_abbrev=False)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--chart", action="store_true", help="write chart bars and sidecar")
+    mode.add_argument("--feed", action="store_true", help="also write feed close times")
+    parser.add_argument("--symbol", required=True, help="exact LAKE symbol for the sidecar")
+    parser.add_argument("--tf", required=True, help="minutes or <n>S|D|W|M; bare S/D/W/M allowed")
+    parser.add_argument("input_csv", type=Path, metavar="IN.csv")
+    parser.add_argument("output_bin", type=Path, metavar="OUT.bin")
+    try:
+        args = parser.parse_args(argv)
+        pf_bars.convert_csv(args.input_csv, args.output_bin, symbol=args.symbol,
+                            tf=args.tf, feed=args.feed)
+    except (pf_bars.BarsError, RunFailure) as failure:
+        sys.stderr.write(failure_line(str(failure), failure.code, failure.code_args))
+        sys.stderr.flush()
+        return 2
+    return 0
+
+
 def main(argv=None) -> int:
     """Run the harness. Every failure ends as the one failure line on stdout:
     run_json's own (RunFailure) with its code, a selected-window helper's typed error
@@ -4472,7 +4502,11 @@ def main(argv=None) -> int:
     harness_internal_error (its traceback on stderr). Exit status 1, or 2 for a
     command line argparse refuses. The one exception is a success report stdout
     cannot take whole (_main): exit 1 with the reason on stderr and no line after
-    the part written."""
+    the part written. The csv2bin subcommand instead returns 2 on refusal and
+    writes its one failure line to stderr (CR-150's converter contract)."""
+    tokens = sys.argv[1:] if argv is None else argv
+    if tokens and tokens[0] == "csv2bin":
+        return _csv2bin_main(tokens[1:])
     try:
         return _main(argv)
     except RunFailure as failure:
