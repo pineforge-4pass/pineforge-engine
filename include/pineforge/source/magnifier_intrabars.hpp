@@ -1,7 +1,9 @@
 #pragma once
 
 #include <pineforge/bar.hpp>
+#include <pineforge/native_bar_views.hpp>
 
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,5 +48,14 @@ std::vector<Bar> tradingview_magnifier_bars(const Bar* bars, int n,
                                             const std::string& script_tf,
                                             const std::string& session,
                                             const std::string& timezone);
+
+/// The same logical path without retaining the input or a whole-run path.
+/// Input stays immutable and alive through the consumer's public run exit.
+/// Construction decides whole-input fallback and caches count; whole walks
+/// have independent cursors, and segment storage survives all const reads.
+std::unique_ptr<NativeLowerPathSource> make_magnifier_path_source(
+    const Bar* bars, int n, const std::string& input_tf,
+    const std::string& script_tf, const std::string& session,
+    const std::string& timezone);
 
 }  // namespace pineforge::source
