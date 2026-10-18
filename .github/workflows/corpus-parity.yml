@@ -80,15 +80,23 @@ env:
   # pin is almost entirely cache hits.
   CCACHE_MAXSIZE: 2G
 
-# Both jobs use the free standard runner for every event (owner cost stop,
-# 2026-10-18). The ci-spot labels replace it when that pool is live. The build
-# uses every core of the runner. scripts/ci_preflight.py pins runners and limits.
+# Both jobs use the live ci-spot 16-vCPU class with the hosted fallback for
+# forks and untrusted events. The build uses every core of the runner.
+# scripts/ci_preflight.py pins runners and limits.
 jobs:
   # The whole population. Nightly, on demand, and on a pull request that
   # touches the pin or the parity tooling. Never reached by `mode: subset`.
   corpus-parity:
     if: inputs.mode != 'subset'
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 16.3-26.2 min on the standard runner; 360 minutes is the platform maximum,
     # the only hang catcher (owner rule,
     # 2026-10-12: no bound of our own may fail a run for slowness).
@@ -165,7 +173,15 @@ jobs:
   # names, judged against the same pinned sha256 rows. Reached through CI.
   corpus-parity-subset:
     if: inputs.mode == 'subset'
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 1.8-4.7 min on the standard runner; 360 minutes is the platform
     # maximum, the only hang catcher (owner rule, 2026-10-12).
     timeout-minutes: 360
