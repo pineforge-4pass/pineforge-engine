@@ -38,7 +38,7 @@ ACTIONLINT_VERSION = '1.7.12'
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
 # The pool is live (CR-171, 2026-10-18). Pin the public and engine-x64-16
-# fragments from pf-ci-spot 1fe46216, including Dependabot and event fallback.
+# fragments from pf-ci-spot b240f6d7, including the ubuntu-24.04 fallback.
 # Values retain their YAML folding marker and job-level indentation so mutation
 # tests replace the whole value, never an earlier matrix name or step string.
 LIGHT_LABELS = '["self-hosted","pf-ci","pf-ci-x64"]'
@@ -49,7 +49,7 @@ LIGHT_RUNNER = '''>-
           contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}'''
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}'''
 LINUX_RUNNER = LIGHT_RUNNER.replace(LIGHT_LABELS, LINUX_LABELS)
 MATRIX_RUNNER = '${{ matrix.runner }}'
 MATRIX_LINUX_RUNNER = LINUX_RUNNER.replace('\n', '\n        ')
@@ -71,7 +71,7 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '      matrix:\n'
                     '        include:\n'
                     '          - triple: linux-x86_64\n'
-                    f'            runner: {MATRIX_LINUX_RUNNER}\n'
+                    '            runner: ubuntu-22.04\n'
                     '            cmake_extra: ""\n'
                     '          - triple: linux-aarch64\n'
                     '            runner: ubuntu-22.04-arm\n'
@@ -116,17 +116,17 @@ JOB_RUNNERS = {
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
 }
-# Other existing workflows pin routing and labels without adding time limits
-# or changing their commands. Release no longer has a runner exemption.
-OTHER_JOB_RUNNERS = {
-    'docs.yml': {'build': LIGHT_RUNNER},
-    'promote-baseline.yml': {'promote': LIGHT_RUNNER},
-    'release.yml': {'release': LIGHT_RUNNER, 'prebuilt': MATRIX_RUNNER,
-                    'notify-hub': LIGHT_RUNNER},
+# L6: credential-bearing deployment jobs and the entire release workflow
+# retain their exact pre-CR-171 hosted routing, including its older images.
+HOSTED_JOB_RUNNERS = {
+    'docs.yml': {'build': 'ubuntu-latest'},
+    'promote-baseline.yml': {'promote': 'ubuntu-latest'},
+    'release.yml': {'release': 'ubuntu-latest', 'prebuilt': MATRIX_RUNNER,
+                    'notify-hub': 'ubuntu-latest'},
 }
-# New Linux x64 jobs must use the public fragment. Target-only workflows and
-# explicitly Dependabot-only jobs stay hosted; macOS and ARM stay hosted too.
-STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
+# New credential-bearing jobs use standard hosted labels. Existing hosted
+# exceptions above are pinned separately; macOS and ARM never use the pool.
+STANDARD_RUNNERS = ('ubuntu-24.04', 'macos-26')
 # Refuse paid labels and the old matrix key in every workflow, including the
 # release matrix. Scan code so nested/flow mappings count too.
 _LARGER_RUNNER_LABEL = re.compile(
@@ -317,8 +317,33 @@ def _events(workflow: str) -> set[str] | None:
     return {event.group(1) for event in events}
 
 
+def _holds_credentials(workflow: str, body: str) -> bool:
+    """L6: non-GITHUB_TOKEN secrets, OIDC writes or a deployment environment.
+
+    Include inherited workflow env and permissions. Bracket/dynamic secret
+    access and inherited reusable-workflow secrets must not bypass the rule.
+    """
+    if _job_values(body, 'environment') or _job_values(body, 'secrets') == ['inherit']:
+        return True
+    permissions = _job_values(workflow, 'permissions') + _job_values(body, 'permissions')
+    oidc_write = r'''(?<![\w-])["']?id-token["']?\s*:\s*(?:"write"|'write'|write)(?=$|[\s,}])'''
+    if any(value == 'write-all' or re.search(oidc_write, value, re.IGNORECASE)
+           for value in permissions):
+        return True
+    text = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(body))
+    text += '\n' + '\n'.join(_job_values(workflow, 'env'))
+    for match in re.finditer(r'\bsecrets\s*(?:\.\s*([A-Za-z_]\w*)|\[([^\]]+)\])',
+                             text, re.IGNORECASE):
+        if match.group(1) is not None:
+            if match.group(1).upper() != 'GITHUB_TOKEN':
+                return True
+        elif match.group(2).strip().upper() not in ("'GITHUB_TOKEN'", '"GITHUB_TOKEN"'):
+            return True
+    return False
+
+
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Pin ci-spot fragments and labels; retain hosted exceptions and refuse paid labels."""
+    """Keep credentials hosted; pin current pool fragments and refuse paid labels."""
     findings = []
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
@@ -327,9 +352,9 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _LARGER_RUNNER_KEY.search(code):
             findings.append(f'{name} must not define a larger_runner key; use ci-spot or hosted exceptions')
         timed = JOB_RUNNERS.get(name, {})
+        fixed_hosted = HOSTED_JOB_RUNNERS.get(name, {})
         pinned = {job: values[0] for job, values in timed.items()}
-        pinned.update(OTHER_JOB_RUNNERS.get(name, {}))
-        events = _events(workflow)
+        pinned.update(fixed_hosted)
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
@@ -339,39 +364,50 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
-            runner = pinned.get(job, LIGHT_RUNNER)
+            credentials = _holds_credentials(workflow, body)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
-                    continue
                 if uses and not runs_on:
+                    if credentials:
+                        findings.append(f'{name} job {job} must prove credential-bearing '
+                                        'reusable workflow calls stay hosted')
                     continue
                 if len(runs_on) != 1:
                     findings.append(f'{name} job {job} has a runs-on the runner contract '
                                     'cannot read')
                     continue
-                if (runs_on == ['macos-26'] or re.fullmatch(
-                        r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0])):
-                    continue
-                # No existing job is Dependabot-specific. Keep an explicit
-                # future one hosted; do not broaden the dispatcher's actor list.
-                dependabot = _job_values(body, 'if') in (
-                    ["github.actor == 'dependabot[bot]'"],
-                    ["${{ github.actor == 'dependabot[bot]' }}"])
-                if events == {'pull_request_target'} or dependabot:
-                    if runs_on[0] not in STANDARD_RUNNERS:
-                        findings.append(f'{name} job {job} must stay on a hosted runner')
-                    continue
-            if runs_on != [' '.join(runner.split())]:
-                findings.append(f'{name} job {job} must run on {runner}')
-            labels = LINUX_LABELS if runner in (LINUX_RUNNER, MATRIX_RUNNER) else LIGHT_LABELS
-            env = _job_block(body, 'env')
-            label_values = [_key_value(line, 'PF_CI_LABELS') for line in env[1:]
-                            if _key_value(line, 'PF_CI_LABELS') is not None]
-            if (len(_job_values(body, 'env')) != 1
-                    or _job_values('\n'.join(env[1:]), 'PF_CI_LABELS') != [labels]
-                    or label_values != [f"'{labels}'"]):
-                findings.append(f'{name} job {job} must set job env PF_CI_LABELS to {labels} exactly once')
+            hosted_platform = (len(runs_on) == 1 and (runs_on[0] == 'macos-26' or
+                               bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
+            if job in fixed_hosted or credentials or (job not in pinned and hosted_platform):
+                # Restored deployment/release jobs retain their exact original
+                # labels; new credential jobs use ubuntu-24.04 or hosted macOS.
+                if job in fixed_hosted:
+                    hosted_ok = runs_on == [fixed_hosted[job]]
+                    if not hosted_ok:
+                        findings.append(f'{name} job {job} must run on {fixed_hosted[job]} (hosted)')
+                else:
+                    hosted_ok = (len(runs_on) == 1 and
+                                 (runs_on[0] in STANDARD_RUNNERS or hosted_platform))
+                if credentials and not hosted_ok:
+                    findings.append(f'{name} job {job} must keep production credentials '
+                                    'on a hosted standard runner')
+                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS on a hosted job')
+            else:
+                runner = pinned.get(job, LINUX_RUNNER if runs_on == [' '.join(LINUX_RUNNER.split())]
+                                    else LIGHT_RUNNER)
+                if runs_on != [' '.join(runner.split())]:
+                    findings.append(f'{name} job {job} must run on {runner}')
+                labels = LINUX_LABELS if runner in (LINUX_RUNNER, MATRIX_RUNNER) else LIGHT_LABELS
+                env = _job_block(body, 'env')
+                label_values = [_key_value(line, 'PF_CI_LABELS') for line in env[1:]
+                                if _key_value(line, 'PF_CI_LABELS') is not None]
+                if (len(_job_values(body, 'env')) != 1
+                        or _job_values('\n'.join(env[1:]), 'PF_CI_LABELS') != [labels]
+                        or label_values != [f"'{labels}'"]):
+                    findings.append(f'{name} job {job} must set job env PF_CI_LABELS to {labels} exactly once')
             if job not in timed:
                 continue
             _, minutes, command = timed[job]
@@ -388,8 +424,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
-            findings.append('release.yml prebuilt must use exactly the ci-spot Linux x64 '
-                            'and unchanged hosted ARM/macOS matrix')
+            findings.append('release.yml prebuilt must use exactly the original hosted '
+                            'Linux x64/ARM/macOS matrix')
     return findings
 
 
