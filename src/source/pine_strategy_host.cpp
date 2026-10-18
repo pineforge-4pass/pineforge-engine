@@ -794,8 +794,8 @@ void source::PineStrategyHost::on_native_applied(
     // recalculation next, in the same drain iteration and at the same cursor
     // (NativeCalculationTrigger::BarCloseAndFills). The range-end row stays
     // after it, exactly where the adapter's own cascade used to put it.
-    if (!scheduler_.coof_recalculation_due(event, context, *this))
-        record_applied_range_end();
+    // Finish the same range-end mark, then any post-calculation journal tail.
+    finish_applied_admission(event, context);
 }
 
 void source::PineStrategyHost::record_applied_range_end() {
@@ -3068,6 +3068,23 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     }
     if (is_na(open)) return na<int64_t>();
     return close ? tf_close_of(open) : open;
+}
+
+void source::PineStrategyHost::finish_applied_admission(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) {
+    const bool recalculation_due = scheduler_.coof_recalculation_due(event, context, *this);
+    if (!recalculation_due) record_applied_range_end();
+    // A process-on-close fill can settle after on_native_bar captured the
+    // script's row. Its adapter receipts and final book belong to that row,
+    // not to the following bar. A synchronous fill inside an unfinished
+    // command is folded by the enclosing on_bar_close instead.
+    if (!recalculation_due && context.is_terminal_sub_bar
+        && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+        && !adapter_.admission_journal.has_unfinished_events()) {
+        adapter_.finish_admission_bar();
+        capture_script_continuation_hash();
+    }
 }
 
 } // namespace pineforge

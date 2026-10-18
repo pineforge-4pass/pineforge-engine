@@ -1298,6 +1298,8 @@ protected:
     // hold_script_average_price() wrote position_entry_price_ on the flat
     // book this pass; release_script_average_price() clears it.
     bool script_average_held_ = false;
+    void finish_applied_admission(const native_order::ExecutionAppliedEvent&,
+                                  const NativeDecisionContext&);
 };
 
 using PineNativeHost = PineStrategyHost;

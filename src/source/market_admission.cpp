@@ -80,6 +80,8 @@ Journal::Journal(const Journal& other) {
     next_sequence_ = other.next_sequence_;
     outstanding_sequences_ = other.outstanding_sequences_;
     events_ = other.events_;
+    retired_prefix_ = other.retired_prefix_;
+    retain_full_observation_history_ = other.retain_full_observation_history_;
 }
 Journal& Journal::operator=(const Journal& other) {
     if (this == &other) return *this;
@@ -90,6 +92,8 @@ Journal& Journal::operator=(const Journal& other) {
     std::swap(next_sequence_, copy.next_sequence_);
     outstanding_sequences_.swap(copy.outstanding_sequences_);
     events_.swap(copy.events_);
+    std::swap(retired_prefix_, copy.retired_prefix_);
+    std::swap(retain_full_observation_history_, copy.retain_full_observation_history_);
     return *this;
 }
 Journal::Journal(Journal&& other) {
@@ -99,9 +103,13 @@ Journal::Journal(Journal&& other) {
     next_sequence_ = other.next_sequence_;
     outstanding_sequences_ = std::move(other.outstanding_sequences_);
     events_ = std::move(other.events_);
+    retired_prefix_ = other.retired_prefix_;
+    retain_full_observation_history_ = other.retain_full_observation_history_;
     other.outstanding_sequences_.clear();
     other.events_.clear();
     other.next_sequence_ = 1;
+    other.retired_prefix_ = {};
+    other.retain_full_observation_history_ = false;
 }
 Journal& Journal::operator=(Journal&& other) {
     if (this == &other) return *this;
@@ -112,6 +120,8 @@ Journal& Journal::operator=(Journal&& other) {
     std::swap(next_sequence_, moved.next_sequence_);
     outstanding_sequences_.swap(moved.outstanding_sequences_);
     events_.swap(moved.events_);
+    std::swap(retired_prefix_, moved.retired_prefix_);
+    std::swap(retain_full_observation_history_, moved.retain_full_observation_history_);
     return *this;
 }
 uint64_t Journal::next_sequence() {
@@ -162,7 +172,46 @@ void Journal::reset() {
     if (!outstanding_sequences_.empty() || active_allocations_ != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "cannot reset admission journal with unfinished events");
-    events_.clear();next_sequence_=1;
+    events_.clear();next_sequence_=1;retired_prefix_={};
+}
+void Journal::retain_full_observation_history() {
+    if (next_sequence_ != 1 || has_unfinished_events() || !events_.empty()
+        || retired_prefix_.count != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "full admission observation requires a fresh journal");
+    retain_full_observation_history_ = true;
+}
+void Journal::retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence) {
+    if (!outstanding_sequences_.empty() || active_allocations_ != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "cannot retire admission journal with unfinished events");
+    if (events_.size() > std::numeric_limits<std::size_t>::max() - retired_prefix_.count
+        || count != retired_prefix_.count + events_.size()
+        || last_sequence != (events_.empty() ? retired_prefix_.last_sequence
+                                             : sequence(events_.back()))
+        || (events_.empty() && digest != retired_prefix_.digest))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "admission retirement requires the exact folded window");
+    if (retain_full_observation_history_) return;
+    auto prefix = retired_prefix_;
+    for (const auto& event : events_)
+        if (const auto* command = std::get_if<CommandEvent>(&event)) {
+            switch (command->outcome) {
+            case Outcome::RejectedIntradayCap: case Outcome::RejectedFrozenMarketCap:
+            case Outcome::RejectedAffordability: case Outcome::RejectedPricedCap:
+            case Outcome::OpeningRejectedReductionAdmitted:
+                prefix.last_rejected_command_bar = command->observation->bar;
+                break;
+            default: break;
+            }
+        }
+    prefix.count = count;
+    prefix.digest = digest;
+    prefix.last_sequence = last_sequence;
+    retired_prefix_ = prefix;
+    // Clear destroys all variant payloads, including before/book/review vectors
+    // and shared observations. Capacity is bounded by the largest live bar.
+    events_.clear();
 }
 CommandCapture::CommandCapture(Allocation allocation,CommandObservation input,std::vector<BookObservation> before,
         std::function<void(CommandEvent)> complete):allocation_(std::move(allocation)),input_(std::move(input)),before_(std::move(before)),complete_(std::move(complete)) {
@@ -301,6 +350,14 @@ void Journal::reflect(const std::string& path,const FieldVisitor& visit)const {
     r.field(path,"active_allocations",active_allocations_);
     r.array(outstanding_sequences_,path+".outstanding_sequences",[&](auto sequence,const auto& p){r.field(p,"sequence",sequence);});
     r.array(events_,path+".events",[&](const auto& event,const auto& p){r.event(event,p);});
+    // These are the original event fold and its derived lookup index, not new
+    // broker hash bytes. The v4 count/digest already covers their observations.
+    if (retired_prefix_.count != 0) {
+        r.field(path+".base","count",uint64_t(retired_prefix_.count));
+        r.field(path+".base","digest",retired_prefix_.digest);
+        r.field(path+".base","last_sequence",retired_prefix_.last_sequence);
+        r.field(path+".base","last_rejected_command_bar",retired_prefix_.last_rejected_command_bar);
+    }
 }
 std::vector<Field> fields(const Draft& draft) {
     std::vector<Field> result;reflect(draft,"draft",[&](const auto& field){result.push_back(field);});return result;

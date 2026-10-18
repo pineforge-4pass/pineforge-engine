@@ -11,6 +11,9 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -180,6 +183,251 @@ void rejection_reader_survives_retirement_and_reset() {
     CHECK(host.market_admission_journal().events().empty());
     CHECK(compat::pine::last_rejected_command_bar(host.market_admission_journal()) == 0);
 }
+
+// Test-only access to the v4 cache, using the same explicit-instantiation
+// access pattern as the existing admission mutation controls.
+template<class Tag, auto Member> struct Access {
+    friend auto access(Tag) { return Member; }
+};
+#define MEMBER(Tag, field) \
+    struct Tag { friend auto access(Tag); }; \
+    template struct Access<Tag, &source::PineExecutionAdapter::field>
+MEMBER(Fold, fold_admission_events);
+MEMBER(Count, admission_events_folded_);
+MEMBER(Digest, admission_events_digest_);
+MEMBER(Last, admission_events_last_);
+#undef MEMBER
+
+std::uint64_t reference_fold(std::uint64_t digest, const admission::Event& event) {
+    BrokerStateHashSink sink;
+    sink.h = digest;
+    admission::reflect(event, "event", [&](const admission::Field& field) {
+        sink.s(field.path);
+        sink.u(field.value.index());
+        std::visit([&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, std::uint64_t>) sink.u(value);
+            else if constexpr (std::is_same_v<T, std::int64_t>) sink.i(value);
+            else if constexpr (std::is_same_v<T, double>) sink.d(value);
+            else sink.s(value);
+        }, field.value);
+    });
+    return sink.h;
+}
+
+void fold(source::PineExecutionAdapter& adapter) {
+    (adapter.*access(Fold{}))();
+}
+void retire(source::PineExecutionAdapter& adapter) {
+    adapter.admission_journal.retire_prefix(adapter.*access(Count{}),
+        adapter.*access(Digest{}), adapter.*access(Last{}));
+}
+template<class Fn> void invariant(Fn&& call) {
+    bool rejected = false;
+    try { call(); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected);
+}
+
+admission::CommandEvent command(admission::Journal& journal, int bar,
+                                admission::Outcome outcome = admission::Outcome::Admitted) {
+    auto observation = std::make_shared<admission::CommandObservation>();
+    observation->command = journal.next_sequence();
+    observation->bar = bar;
+    observation->id = std::string(128, 'a') + std::to_string(bar);
+    observation->requested_quantity = 2.5;
+    admission::CommandEvent event;
+    event.observation = std::move(observation);
+    event.outcome = outcome;
+    event.removed = {13, 17};
+    return event;
+}
+
+void variants_fold_once_and_release_payloads() {
+    source::PineExecutionAdapter adapter;
+    auto& journal = adapter.admission_journal;
+    std::uint64_t expected = 1469598103934665603ULL;
+    for (int bar = 0; bar < 128; ++bar) {
+        std::weak_ptr<const admission::CommandObservation> lifetime;
+        {
+            const auto gap = journal.next_sequence();
+            journal.abandon(gap); // Sequence frontier is not the event count.
+            auto opening = command(journal, bar, admission::Outcome::RejectedAffordability);
+            lifetime = opening.observation;
+            expected = reference_fold(expected, opening);
+            const auto origin = opening.observation;
+            journal.append(std::move(opening));
+            admission::ReviewEvent review;
+            review.receipt = {journal.next_sequence(), admission::Checkpoint::DefaultGross, bar, 0};
+            admission::BookObservation book;
+            book.draft.bind(origin);
+            book.bar = bar;
+            book.id = origin->id;
+            review.book.push_back(book);
+            review.reviewed.push_back(book);
+            review.causes = {origin->command};
+            expected = reference_fold(expected, review);
+            journal.append(std::move(review));
+            admission::SizingEvent sizing;
+            sizing.receipt = {journal.next_sequence(), 21, bar, origin->command};
+            sizing.before.quantity = 2.5;
+            sizing.after.quantity = 1.25;
+            expected = reference_fold(expected, sizing);
+            journal.append(std::move(sizing));
+        }
+        CHECK(!lifetime.expired());
+        fold(adapter);
+        fold(adapter);
+        CHECK(adapter.*access(Digest{}) == expected);
+        CHECK(adapter.*access(Count{}) == static_cast<std::size_t>((bar + 1) * 3));
+        retire(adapter);
+        CHECK(journal.events().empty());
+        CHECK(lifetime.expired());
+        CHECK(journal.retired_prefix().digest == expected);
+        CHECK(journal.retired_prefix().count == static_cast<std::size_t>((bar + 1) * 3));
+        CHECK(compat::pine::last_rejected_command_bar(journal) == bar);
+        fold(adapter);
+        CHECK(adapter.*access(Digest{}) == expected);
+    }
+    const auto& prefix = journal.retired_prefix();
+    CHECK(prefix.last_sequence == journal.sequence_frontier() - 1);
+    bool count = false, digest = false, bar = false;
+    journal.reflect("journal", [&](const admission::Field& field) {
+        if (field.path == "journal.base.count")
+            count = std::get<std::uint64_t>(field.value) == prefix.count;
+        if (field.path == "journal.base.digest")
+            digest = std::get<std::uint64_t>(field.value) == prefix.digest;
+        if (field.path == "journal.base.last_rejected_command_bar")
+            bar = std::get<std::int64_t>(field.value) == 127;
+    });
+    CHECK(count && digest && bar);
+}
+
+void unfinished_captures_and_window_restart() {
+    source::PineExecutionAdapter adapter;
+    auto& journal = adapter.admission_journal;
+    auto first = command(journal, 0);
+    std::uint64_t expected = reference_fold(1469598103934665603ULL, first);
+    journal.append(std::move(first));
+    fold(adapter);
+    retire(adapter);
+    const auto base = journal.retired_prefix();
+    {
+        auto allocation = journal.reserve();
+        auto observation = std::make_shared<admission::CommandObservation>();
+        observation->command = allocation.sequence();
+        admission::CommandEvent event;
+        event.observation = std::move(observation);
+        expected = reference_fold(expected, event);
+        journal.append(std::move(event));
+        fold(adapter);
+        invariant([&] { retire(adapter); });
+        CHECK(journal.retired_prefix().count == base.count);
+    }
+    retire(adapter);
+    CHECK(journal.retired_prefix().digest == expected);
+    auto outer = command(journal, 1);
+    auto inner = command(journal, 1);
+    journal.append(inner);
+    fold(adapter);
+    invariant([&] { retire(adapter); }); // The earlier allocation is unfinished.
+    journal.append(outer);
+    expected = reference_fold(reference_fold(expected, outer), inner);
+    fold(adapter);
+    CHECK(adapter.*access(Digest{}) == expected);
+    retire(adapter);
+
+    const auto stable = journal.retired_prefix();
+    auto removed = command(journal, 2);
+    auto kept = command(journal, 2);
+    journal.append(removed);
+    journal.append(kept);
+    fold(adapter);
+    journal.retain({kept.observation->command});
+    fold(adapter); // Restart from the nonzero retired base, not the FNV seed.
+    CHECK(adapter.*access(Count{}) == stable.count + 1);
+    CHECK(adapter.*access(Digest{}) == reference_fold(stable.digest, kept));
+    retire(adapter);
+    invariant([&] { journal.retire_prefix(0, 0, 0); });
+    CHECK(journal.retired_prefix().count == stable.count + 1);
+    const admission::Journal replacement = journal;
+    journal.reset();
+    fold(adapter);
+    CHECK(adapter.*access(Count{}) == 0);
+    CHECK(adapter.*access(Digest{}) == 1469598103934665603ULL);
+    journal = replacement;
+    fold(adapter);
+    CHECK(adapter.*access(Digest{}) == replacement.retired_prefix().digest);
+}
+
+void retired_prefix_value_semantics() {
+    source::PineExecutionAdapter adapter;
+    auto& journal = adapter.admission_journal;
+    journal.append(command(journal, 4, admission::Outcome::RejectedPricedCap));
+    fold(adapter);
+    retire(adapter);
+    const auto check_prefix = [&](const admission::Journal& value) {
+        CHECK(value.events().empty());
+        CHECK(value.retired_prefix().count == 1);
+        CHECK(value.retired_prefix().digest == journal.retired_prefix().digest);
+        CHECK(value.retired_prefix().last_sequence == journal.retired_prefix().last_sequence);
+        CHECK(compat::pine::last_rejected_command_bar(value) == 4);
+    };
+    admission::Journal copied(journal);
+    check_prefix(copied);
+    admission::Journal assigned;
+    assigned = journal;
+    check_prefix(assigned);
+    admission::Journal moved(std::move(copied));
+    check_prefix(moved);
+    CHECK(copied.retired_prefix().count == 0 && copied.sequence_frontier() == 1);
+    admission::Journal move_assigned;
+    move_assigned = std::move(assigned);
+    check_prefix(move_assigned);
+    CHECK(assigned.retired_prefix().count == 0 && assigned.sequence_frontier() == 1);
+    moved.reset();
+    CHECK(moved.retired_prefix().count == 0);
+    CHECK(moved.retired_prefix().digest == 1469598103934665603ULL);
+    CHECK(moved.retired_prefix().last_sequence == 0);
+    CHECK(compat::pine::last_rejected_command_bar(moved) == -1);
+    source::PineExecutionAdapter other;
+    other.admission_journal.append(command(other.admission_journal, 9));
+    fold(other);
+    retire(other);
+    CHECK(other.admission_journal.retired_prefix().count == journal.retired_prefix().count);
+    CHECK(other.admission_journal.retired_prefix().last_sequence
+          == journal.retired_prefix().last_sequence);
+    journal = other.admission_journal;
+    fold(adapter);
+    CHECK(adapter.*access(Digest{}) == other.admission_journal.retired_prefix().digest);
+}
+
+void full_observation_preserves_execution() {
+    const auto bars = chart(64);
+    TradingHost window;
+    TradingHost full;
+    full.market_admission_journal().retain_full_observation_history();
+    window.set_broker_state_hash_recording(true);
+    full.set_broker_state_hash_recording(true);
+    window.run(bars.data(), 64, "1", "1");
+    full.run(bars.data(), 64, "1", "1");
+    CHECK(window.last_error().empty() && full.last_error().empty());
+    CHECK(window.market_admission_journal().events().empty());
+    CHECK(!full.market_admission_journal().events().empty());
+    CHECK(window.market_admission_journal().event_count()
+          == full.market_admission_journal().event_count());
+    CHECK(window.broker_state_hash() == full.broker_state_hash());
+    ReportC a{}, b{};
+    window.fill_report(&a);
+    full.fill_report(&b);
+    CHECK(a.broker_state_hash_len == 64 && b.broker_state_hash_len == 64);
+    if (a.broker_state_hash_len == 64 && b.broker_state_hash_len == 64)
+        for (int i = 0; i < 64; ++i) CHECK(a.broker_state_hash[i] == b.broker_state_hash[i]);
+    CHECK(a.total_trades == b.total_trades && a.total_trades == 32);
+    BacktestEngine::free_report(&a);
+    BacktestEngine::free_report(&b);
+    invariant([&] { window.market_admission_journal().retain_full_observation_history(); });
+}
 } // namespace
 
 int main() {
@@ -188,6 +436,10 @@ int main() {
         {"recording and prefix identity", recording_and_prefix_identity},
         {"split script boundaries", split_script_boundaries},
         {"rejection reader and reset", rejection_reader_survives_retirement_and_reset},
+        {"v4 variants and payload release", variants_fold_once_and_release_payloads},
+        {"unfinished captures and restart", unfinished_captures_and_window_restart},
+        {"prefix value semantics", retired_prefix_value_semantics},
+        {"full observation execution identity", full_observation_preserves_execution},
     };
     for (const auto& test : cases) {
         std::printf("CASE %s\n", test.name);

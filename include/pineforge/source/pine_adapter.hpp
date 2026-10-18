@@ -2748,11 +2748,11 @@ private:
     // folded once into exit_phase_digest_; a write below the mark refolds.
     std::size_t exit_phase_final_ = 0;
     std::uint64_t exit_phase_digest_ = 1469598103934665603ULL;
-    // R5 lane V19-E: the admission journal's events as the v4 fold reads them:
-    // a running digest over its first admission_events_folded_ events (the
-    // last of them carrying sequence admission_events_last_), extended over
-    // the events appended since, refolded when one arrived before them or one
-    // was removed.
+    // The v4 admission fold uses global event counts. Its retired prefix is
+    // the restart point; the window may still change within a command/bar.
+    // Folding at each script-bar end keeps recording-off runs bounded too.
+    // admission_events_last_ validates the boundary without indexing a row
+    // below the journal's retired prefix.
     mutable std::size_t admission_events_folded_ = 0;
     mutable std::uint64_t admission_events_last_ = 0;
     mutable std::uint64_t admission_events_digest_ = 1469598103934665603ULL;
@@ -2894,6 +2894,9 @@ private:
                                       double price) const;
     // Item 3: a flat market-and-priced pair at a process_orders_on_close close.
     bool fill_pooc_close_pair(double raw_close, const NativeDecisionContext& context);
+    void finish_admission_bar();
+    void on_bar_close_policy(const Bar&, const NativeDecisionContext&);
+    void fold_admission_events() const;
 };
 
 namespace detail {
