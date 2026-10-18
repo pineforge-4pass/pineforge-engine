@@ -15,6 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import types
@@ -201,10 +202,13 @@ def frozen():
     module = types.ModuleType("cr150_l9a_frozen")
     module.__file__ = str(ROOT / "docker/run_json.py")
     exec(compile(source, BASE_SOURCE, "exec"), module.__dict__)
+    # Both producers read the same unchanged C ABI allocations. In particular
+    # _stats_dict's isinstance check must recognize the shared equity struct.
+    module.ReportC, module.EquityStatsC = run_json.ReportC, run_json.EquityStatsC
     return module
 
 
-def invoke(tmp_path, monkeypatch, runner=run_json, *, library=None, extra=()):
+def invoke(tmp_path, monkeypatch, runner=run_json, *, library=None, extra=(), forbid_output_arrays=False):
     source = bars.csv_file(tmp_path)
     library = library or SinkLibrary()
     reader = outputs_reader()
@@ -213,7 +217,10 @@ def invoke(tmp_path, monkeypatch, runner=run_json, *, library=None, extra=()):
         patch.setattr(runner.time, "time", lambda: 10.)
         patch.setattr(runner, "require_outputs", lambda lib: None)
         patch.setattr(runner, "enable_outputs", lambda lib, state: None)
-        patch.setattr(runner, "make_outputs_reader", lambda lib, state: reader)
+        def read_outputs(lib, state):
+            assert not forbid_output_arrays, "streamed outputs must not call the retained-array readers"
+            return reader
+        patch.setattr(runner, "make_outputs_reader", read_outputs)
         patch.setattr(runner, "_outputs_manifest", lambda lib, state: reader.manifest())
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -226,7 +233,8 @@ def invoke(tmp_path, monkeypatch, runner=run_json, *, library=None, extra=()):
 def test_full_json_installs_sink_and_matches_frozen(tmp_path, monkeypatch, frozen, outputs, pnls):
     extra = ["--outputs"] if outputs else []
     before = invoke(tmp_path, monkeypatch, frozen, library=SinkLibrary(outputs=outputs, pnls=pnls), extra=extra)
-    after = invoke(tmp_path, monkeypatch, library=SinkLibrary(outputs=outputs, pnls=pnls), extra=extra)
+    after = invoke(tmp_path, monkeypatch, library=SinkLibrary(outputs=outputs, pnls=pnls),
+                   extra=extra, forbid_output_arrays=outputs)
     assert after[3].installed, "L9A missing: main never installs the available report-sink ABI"
     assert after[3].queried == 1
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, "")
@@ -262,6 +270,129 @@ def test_bench_uses_a_fresh_sink_for_every_state(tmp_path, monkeypatch):
     assert json.loads(text)["summary"]["total_trades"] == 3
 
 
+def test_sink_ctypes_layout_and_runtime_binding(tmp_path, monkeypatch):
+    library = SinkLibrary()
+    monkeypatch.setattr(ctypes, "CDLL", lambda path: library)
+    run_json.load_strategy(tmp_path / "strategy.so")
+    assert library.pf_report_sink_version.restype is ctypes.c_uint32
+    assert library.strategy_set_report_sink_v1.argtypes == [
+        ctypes.c_void_p, ctypes.POINTER(run_json.ReportSinkC)]
+    assert library.strategy_report_sink_receipt_v1.argtypes == [
+        ctypes.c_void_p, ctypes.POINTER(run_json.ReportSinkReceiptC)]
+    assert ctypes.sizeof(run_json.ReportSinkReceiptC) == ctypes.sizeof(Receipt) == 144
+    for name, _ in Receipt._fields_:
+        assert getattr(run_json.ReportSinkReceiptC, name).offset == getattr(Receipt, name).offset
+
+
+def test_serialization_fault_discards_all_prepared_bytes_and_closes_files(tmp_path, monkeypatch):
+    files, real_temporary = [], run_json.tempfile.TemporaryFile
+    def temporary(*args, **kwargs):
+        file = real_temporary(*args, **kwargs)
+        files.append(file)
+        assert os.fstat(file.fileno()).st_nlink == 0
+        return file
+    monkeypatch.setattr(run_json.tempfile, "TemporaryFile", temporary)
+    original = run_json._stream_json
+    def fail_after_trades(value, destination):
+        if isinstance(value, run_json._JSONRecordArray):
+            destination.write("[partial")
+            raise OSError(28, "injected full report disk")
+        return original(value, destination)
+    monkeypatch.setattr(run_json, "_stream_json", fail_after_trades)
+    status, text, _, library = invoke(tmp_path, monkeypatch)
+    assert status == 1 and library.installed
+    assert json.loads(text)["code"] == "harness_internal_error"
+    assert len(text.splitlines()) == 1 and "[partial" not in text
+    assert files and all(file.closed for file in files)
+
+
+def test_sink_open_failure_has_the_existing_sink_failure_code(tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError(28, "injected full sink disk")
+    monkeypatch.setattr(run_json.tempfile, "TemporaryFile", refuse)
+    status, text, stderr, library = invoke(tmp_path, monkeypatch)
+    assert status == 1 and stderr == ""
+    assert json.loads(text)["code"] == "report_sink_failed"
+    assert library.calls[-1] == "strategy_free"
+
+
+def test_prepared_report_is_copied_in_bounded_chunks(tmp_path):
+    expected = "x" * (2 * 1024 * 1024 + 17)
+    chunks = []
+    class Stdout:
+        def write(self, text):
+            assert 0 < len(text) <= 1024 * 1024
+            chunks.append(text)
+            return len(text)
+        def flush(self):
+            pass
+    with contextlib.ExitStack() as resources:
+        file = run_json._prepare_stream_report({"value": expected}, resources, str(tmp_path))
+        with contextlib.redirect_stdout(Stdout()):
+            assert run_json._write_report(file) == 0
+    assert len(chunks) == 3
+    assert "".join(chunks) == json.dumps({"value": expected}, separators=(",", ":")) + "\n"
+
+
+def test_stdout_failure_never_appends_a_failure_document(tmp_path, monkeypatch):
+    class BrokenStdout:
+        def __init__(self):
+            self.calls = 0
+        def write(self, text):
+            self.calls += 1
+            raise BrokenPipeError("injected closed pipe")
+        def flush(self):
+            pytest.fail("a failed write must not flush or publish completion")
+    stdout, stderr = BrokenStdout(), io.StringIO()
+    # This is an in-memory stdout without a file descriptor; do not redirect
+    # the test runner's process-wide fd when exercising the partial-write rule.
+    monkeypatch.setattr(run_json, "_discard_stdout", lambda: None)
+    with contextlib.ExitStack() as resources:
+        file = run_json._prepare_stream_report({"value": 1}, resources, str(tmp_path))
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            status = run_json._write_report(file)
+    assert status == 1 and stdout.calls == 1
+    assert "report could not be written" in stderr.getvalue()
+
+
+def test_l6b1_output_compatibility_reads_bounded_windows(tmp_path, monkeypatch):
+    reader = outputs_reader()
+    def no_array(*args):
+        pytest.fail("the compatibility path must not materialize a whole output array")
+    reader.bar_times = reader.series = no_array
+    monkeypatch.setattr(run_json, "make_outputs_reader", lambda lib, state: reader)
+    n, requests = 8195, []
+    def times(state, offset, opens, closes, count, copied):
+        assert count <= 4096 and offset + count <= n
+        requests.append(("times", offset, count))
+        for i in range(count):
+            opens[i], closes[i] = bars.T0 + offset + i, bars.T0 + offset + i + 1
+        copied._obj.value = count
+        return 0
+    def series(state, slot, offset, values, count, copied):
+        assert count <= 4096 and offset + count <= n
+        requests.append((slot, offset, count))
+        for i in range(count):
+            values[i] = float(offset + i) if slot == 0 else 4294967295.
+        copied._obj.value = count
+        return 0
+    library = types.SimpleNamespace(
+        strategy_outputs_series_count=lambda state: 2,
+        strategy_outputs_bars_len=lambda state: n,
+        strategy_outputs_bar_times_copy=times, strategy_outputs_series_copy=series)
+    with contextlib.ExitStack() as resources:
+        document = run_json._legacy_streamed_outputs_block(library, 7)
+        file = run_json._prepare_stream_report(document, resources, str(tmp_path))
+        result = json.load(file)
+    assert len(result["bars"]["open_ms"]) == len(result["bars"]["close_ms"]) == n
+    assert result["bars"]["open_ms"][-1] == bars.T0 + n - 1
+    assert result["series"][0]["values"][4096] == 4096.
+    assert result["series"][0]["values"][-1] == float(n - 1)
+    assert result["series"][1]["values"][-1] == 4294967295
+    assert type(result["series"][1]["values"][-1]) is int
+    assert len(requests) == 12  # 3 windows each for opens, closes and both slots
+
+
 def mask_bytes(text, *, binary=False):
     document = json.loads(text)
     # Assert the wire bytes are already compact canonical json.dump output.
@@ -291,15 +422,27 @@ raise SystemExit(runner.main(sys.argv[4:]))
 '''
 
 
-def native_compare(tmp_path, module, argv, *, binary=False):
+def native_compare(tmp_path, module, argv, *, binary=False, phase_fd=False):
     frozen_path = tmp_path / "frozen_run_json.py"
     frozen_path.write_bytes(subprocess.run(["git", "show", BASE_SOURCE], cwd=ROOT,
                                           check=True, capture_output=True).stdout)
     results = []
     for mode, producer in (("frozen", frozen_path), ("stream", ROOT / "docker/run_json.py")):
-        result = subprocess.run([sys.executable, "-B", "-c", NATIVE_DRIVER, str(ROOT / "docker"),
-                                 str(producer), mode, "--so", str(module), *map(str, argv)],
-                                cwd=ROOT, capture_output=True, text=True)
+        parent, child = socket.socketpair()
+        try:
+            phase_options = ["--run-phase-fd", str(child.fileno())] if phase_fd else []
+            result = subprocess.run([sys.executable, "-B", "-c", NATIVE_DRIVER, str(ROOT / "docker"),
+                                     str(producer), mode, "--so", str(module), *map(str, argv), *phase_options],
+                                    cwd=ROOT, capture_output=True, text=True,
+                                    pass_fds=(child.fileno(),) if phase_fd else ())
+            child.close()
+            if phase_fd:
+                with parent.makefile("r") as records:
+                    phases = [json.loads(line)["phase"] for line in records]
+                assert phases == ["preflight", "execution", "result_assembly", "serialization", "completed"]
+        finally:
+            child.close()
+            parent.close()
         assert result.returncode == 0, (mode, result.stdout, result.stderr)
         assert result.stderr == ""
         results.append(mask_bytes(result.stdout, binary=binary))
@@ -311,7 +454,8 @@ def native_compare(tmp_path, module, argv, *, binary=False):
                                             ("PINEFORGE_L9A_OUTPUTS_SO", True)])
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize("bench", [False, True])
-def test_native_frozen_producer_bytes(tmp_path, fixture, outputs, binary, bench):
+@pytest.mark.parametrize("phase_fd", [False, True])
+def test_native_frozen_producer_bytes(tmp_path, fixture, outputs, binary, bench, phase_fd):
     module = os.environ.get(fixture)
     if not module:
         pytest.skip("SKIP lab module not supplied: " + fixture + "; CTest wires the native targets")
@@ -327,7 +471,7 @@ def test_native_frozen_producer_bytes(tmp_path, fixture, outputs, binary, bench)
         argv += ["--outputs"]
     if bench:
         argv += ["--bench", "--warmup", "1", "--repeats", "2"]
-    native_compare(tmp_path, module, argv)
+    native_compare(tmp_path, module, argv, phase_fd=phase_fd)
 
 
 def test_lab_corpus_subset_frozen_bytes(tmp_path):
