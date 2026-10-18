@@ -51,7 +51,7 @@ public:
   }
   if(bar_index_==(cfg.shape==Shape::Earlier?5:3))strategy_close("S","END");
  }
- const std::vector<Trade>& rows()const{return trades_;}
+ const TradeLedger& rows()const{return trades_;}
  // Consume the real queued order after a synthetic between-event state
  // change. The initial two-bar run performs the actual margin call.
  void consume(const Bar& b,int index){bar_index_=index;current_bar_=b;process_pending_orders(b);}

@@ -68,7 +68,7 @@ public:
         if (carried_half && bar_index_ == 2) strategy_close("Short", "carry half", qnan, 50.0);
         if (bar_index_ == 4) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_full_stop_liquidation_and_replacement() {
@@ -157,7 +157,7 @@ public:
         }
         if (preserve && signed_position_size() > 0) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_prior_high_and_pending_entry_lifetime() {

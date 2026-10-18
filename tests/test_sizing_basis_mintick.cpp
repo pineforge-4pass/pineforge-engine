@@ -102,7 +102,7 @@ public:
     double nearest(double p) const { return round_to_mintick(p); }
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 // A. Invented midpoint: 64.035 / 0.01 = 6403.499999999999, so the
