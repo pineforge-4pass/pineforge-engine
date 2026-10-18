@@ -43,6 +43,7 @@ void no_throw(const char* accessor, int index, F action) {
 
 class Probe final : public BacktestEngine {
 public:
+    Probe() : BacktestEngine(NativeConsumerBindTag{}) {}
     void on_bar(const pineforge::Bar&) override {}
     void append(const Trade& trade) { trades_.push_back(trade); }
     void append_range_end(const Trade& trade) { range_end_trades_.push_back(trade); }
