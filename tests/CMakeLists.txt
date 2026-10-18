@@ -7096,9 +7096,17 @@ add_test(NAME test_native_bar_views_guard_l15a
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_versions.py
             --self-test-bar-views)
 
+# CR-150 L16: source-layer differential, appended after all line-pinned rows.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_magnifier_path_source_l16)
+    pineforge_add_unit_test(test_magnifier_path_source_l16)
+endif()
+
 # CR-150 L8a: keep the existing CMake line pins stable.
 list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
+list(APPEND TEST_SOURCES test_report_sink_format)
+pineforge_add_unit_test(test_report_sink_format)
 
 # CR-150 L2: append after the private-fixture line evidence. The preflight
 # harness glob also discovers docker/run_json_bin_test.py automatically.
