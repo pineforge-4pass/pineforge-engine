@@ -4,7 +4,7 @@
  * bases, annualization) are pinned in the per-field doxygen of
  * <pineforge/pineforge.h>; docs/pages/report-schema.md summarizes them.
  */
-#include <pineforge/metrics.hpp>
+#include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_calendar.hpp>
 
 #include <algorithm>
@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <ctime>
 #include <limits>
+#include <memory>
 #include <vector>
 
 #include "metrics_month_memo.hpp"
@@ -121,16 +122,29 @@ int keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
 
 pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
                                      TradeFilter filter, double initial_capital) {
-    pf_trade_stats_t s{};
+    TradeStatsAccumulator accumulator(filter, initial_capital);
+    for (int i = 0; i < n; ++i) accumulator.fold(trades[i]);
+    return accumulator.finish();
+}
+
+// Report-only state, independent of broker decision counters. These are the
+// old array loop's locals, retained across fold calls without regrouping sums.
+struct TradeStatsAccumulator::State {
+    TradeFilter filter;
+    double initial_capital;
+    pf_trade_stats_t stats{};
     double pct_sum = 0.0, win_pct_sum = 0.0, loss_pct_sum = 0.0;
     double bars_sum = 0.0, win_bars_sum = 0.0, loss_bars_sum = 0.0;
-    int streak_w = 0, streak_l = 0;
+    std::int32_t streak_w = 0, streak_l = 0;
     double largest_win = 0.0, largest_win_pct = 0.0;
     double largest_loss = 0.0, largest_loss_pct = 0.0;  // magnitudes
 
-    for (int i = 0; i < n; ++i) {
-        const TradeC& t = trades[i];
-        if (!match(t, filter)) continue;
+    State(TradeFilter selected_filter, double capital)
+        : filter(selected_filter), initial_capital(capital) {}
+
+    void fold(const TradeC& t) {
+        if (!match(t, filter)) return;
+        pf_trade_stats_t& s = stats;
         ++s.num_trades;
         s.net_profit += t.pnl;
         s.commission_paid += t.commission;
@@ -170,34 +184,60 @@ pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
         }
     }
 
-    const bool cap_ok = initial_capital > 0.0;
-    s.net_profit_pct   = cap_ok ? s.net_profit   / initial_capital * 100.0 : kNaN;
-    s.gross_profit_pct = cap_ok ? s.gross_profit / initial_capital * 100.0 : kNaN;
-    s.gross_loss_pct   = cap_ok ? s.gross_loss   / initial_capital * 100.0 : kNaN;
-    s.percent_profitable = s.num_trades > 0
-        ? (double)s.num_wins / (double)s.num_trades * 100.0 : kNaN;
-    s.profit_factor = s.gross_loss > 0.0 ? s.gross_profit / s.gross_loss : kNaN;
-    s.avg_trade     = s.num_trades > 0 ? s.net_profit / s.num_trades : kNaN;
-    s.avg_trade_pct = s.num_trades > 0 ? pct_sum / s.num_trades : kNaN;
-    s.avg_win       = s.num_wins   > 0 ? s.gross_profit / s.num_wins : kNaN;
-    s.avg_win_pct   = s.num_wins   > 0 ? win_pct_sum / s.num_wins : kNaN;
-    s.avg_loss      = s.num_losses > 0 ? s.gross_loss / s.num_losses : kNaN;
-    s.avg_loss_pct  = s.num_losses > 0 ? loss_pct_sum / s.num_losses : kNaN;
-    s.ratio_avg_win_avg_loss =
-        (s.num_wins > 0 && s.num_losses > 0 && s.avg_loss > 0.0)
-            ? s.avg_win / s.avg_loss : kNaN;
-    s.largest_win      = s.num_wins   > 0 ? largest_win      : kNaN;
-    s.largest_win_pct  = s.num_wins   > 0 ? largest_win_pct  : kNaN;
-    s.largest_loss     = s.num_losses > 0 ? largest_loss     : kNaN;
-    s.largest_loss_pct = s.num_losses > 0 ? largest_loss_pct : kNaN;
-    s.expectancy = s.num_trades > 0
-        ? ((double)s.num_wins / s.num_trades) * (s.num_wins > 0 ? s.avg_win : 0.0)
-          - ((double)s.num_losses / s.num_trades) * (s.num_losses > 0 ? s.avg_loss : 0.0)
-        : kNaN;
-    s.avg_bars_in_trade  = s.num_trades > 0 ? bars_sum / s.num_trades : kNaN;
-    s.avg_bars_in_wins   = s.num_wins   > 0 ? win_bars_sum / s.num_wins : kNaN;
-    s.avg_bars_in_losses = s.num_losses > 0 ? loss_bars_sum / s.num_losses : kNaN;
-    return s;
+    pf_trade_stats_t finish() const {
+        // Finalize a value copy: a subsequent fold, copy or report read must
+        // still see the unfinalized prefix and its original left-fold sums.
+        pf_trade_stats_t s = stats;
+        const bool cap_ok = initial_capital > 0.0;
+        s.net_profit_pct   = cap_ok ? s.net_profit   / initial_capital * 100.0 : kNaN;
+        s.gross_profit_pct = cap_ok ? s.gross_profit / initial_capital * 100.0 : kNaN;
+        s.gross_loss_pct   = cap_ok ? s.gross_loss   / initial_capital * 100.0 : kNaN;
+        s.percent_profitable = s.num_trades > 0
+            ? (double)s.num_wins / (double)s.num_trades * 100.0 : kNaN;
+        s.profit_factor = s.gross_loss > 0.0 ? s.gross_profit / s.gross_loss : kNaN;
+        s.avg_trade     = s.num_trades > 0 ? s.net_profit / s.num_trades : kNaN;
+        s.avg_trade_pct = s.num_trades > 0 ? pct_sum / s.num_trades : kNaN;
+        s.avg_win       = s.num_wins   > 0 ? s.gross_profit / s.num_wins : kNaN;
+        s.avg_win_pct   = s.num_wins   > 0 ? win_pct_sum / s.num_wins : kNaN;
+        s.avg_loss      = s.num_losses > 0 ? s.gross_loss / s.num_losses : kNaN;
+        s.avg_loss_pct  = s.num_losses > 0 ? loss_pct_sum / s.num_losses : kNaN;
+        s.ratio_avg_win_avg_loss =
+            (s.num_wins > 0 && s.num_losses > 0 && s.avg_loss > 0.0)
+                ? s.avg_win / s.avg_loss : kNaN;
+        s.largest_win      = s.num_wins   > 0 ? largest_win      : kNaN;
+        s.largest_win_pct  = s.num_wins   > 0 ? largest_win_pct  : kNaN;
+        s.largest_loss     = s.num_losses > 0 ? largest_loss     : kNaN;
+        s.largest_loss_pct = s.num_losses > 0 ? largest_loss_pct : kNaN;
+        s.expectancy = s.num_trades > 0
+            ? ((double)s.num_wins / s.num_trades) * (s.num_wins > 0 ? s.avg_win : 0.0)
+              - ((double)s.num_losses / s.num_trades) * (s.num_losses > 0 ? s.avg_loss : 0.0)
+            : kNaN;
+        s.avg_bars_in_trade  = s.num_trades > 0 ? bars_sum / s.num_trades : kNaN;
+        s.avg_bars_in_wins   = s.num_wins   > 0 ? win_bars_sum / s.num_wins : kNaN;
+        s.avg_bars_in_losses = s.num_losses > 0 ? loss_bars_sum / s.num_losses : kNaN;
+        return s;
+    }
+};
+
+TradeStatsAccumulator::TradeStatsAccumulator(TradeFilter filter, double initial_capital)
+    : state_(std::make_unique<State>(filter, initial_capital)) {}
+
+TradeStatsAccumulator::~TradeStatsAccumulator() = default;
+
+TradeStatsAccumulator::TradeStatsAccumulator(const TradeStatsAccumulator& other)
+    : state_(std::make_unique<State>(*other.state_)) {}
+
+TradeStatsAccumulator& TradeStatsAccumulator::operator=(const TradeStatsAccumulator& other) {
+    if (this != &other) *state_ = *other.state_;
+    return *this;
+}
+
+void TradeStatsAccumulator::fold(const TradeC& trade) {
+    state_->fold(trade);
+}
+
+pf_trade_stats_t TradeStatsAccumulator::finish() const {
+    return state_->finish();
 }
 
 pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n,
