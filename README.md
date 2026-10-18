@@ -517,7 +517,7 @@ API, the script ABI epoch and the pairing with codegen — is the
 [public contract](docs/pages/public-contract.md); what a 0.x user must act on
 is in [CHANGELOG.md](CHANGELOG.md).
 
-The counts below describe the current API, including recorded outputs and the report sink.
+The counts below include recorded outputs and describe the released 1.5.0 API.
 
 A newly generated strategy `.so` exposes 99 compiled-strategy `PF_API` declarations
 (83 runtime implementations plus sixteen generated exports) plus 43 native-host
