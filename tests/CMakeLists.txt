@@ -7087,3 +7087,9 @@ pineforge_add_unit_test(test_cr150_contract_headers)
 target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c.c)
 set_target_properties(test_cr150_contract_headers PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+# CR-150 L3: append after every pre-existing line-pinned registration.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_chart_store_once)
+    pineforge_add_unit_test(test_chart_store_once)
+endif()
