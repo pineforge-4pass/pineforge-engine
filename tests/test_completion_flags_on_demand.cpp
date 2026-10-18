@@ -50,6 +50,8 @@ NativeRunSpec spec_for(const char* input, const char* script,
     spec.timezone = zone;
     spec.session = session;
     spec.initial_capital = 10000.0;
+    spec.point_value = 1.0;
+    spec.account_fx = 1.0;
     spec.price_tick = 0.01;
     return spec;
 }

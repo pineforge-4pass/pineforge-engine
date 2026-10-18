@@ -2,6 +2,7 @@
 #include <pineforge/source/pine_native_host.hpp>
 
 #include "../broker_state_hash_internal.hpp"
+#include "../native_execution_consumer.hpp"
 #include "pine_intent_state.hpp"
 
 #include <algorithm>
@@ -859,15 +860,31 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(prior_input_script_open_ms_);
     f.i(awaiting_legacy_script_open_ms_);
     f.i(last_stream_input_open_ms_);
-    const std::size_t completion_prefix = std::min(input_script_completes_.size(), consumed);
+    const std::size_t completion_prefix = std::min(input_script_size_, consumed);
+    // Both flags come from one independent walk. A shorter consumed prefix
+    // restarts that walk and both digests, preserving the former vector fold.
+    if (consumed_completes_folded_ > completion_prefix
+        || consumed_boundaries_folded_ > completion_prefix) {
+        consumed_completes_folded_ = 0;
+        consumed_completes_digest_ = 1469598103934665603ULL;
+        consumed_boundaries_folded_ = 0;
+        consumed_boundaries_digest_ = 1469598103934665603ULL;
+        if (consumed_script_cursor_) consumed_script_cursor_->reset();
+    }
     extend(consumed_completes_folded_, consumed_completes_digest_, completion_prefix,
-        [&](BrokerStateHashSink& g, std::size_t index) { g.u(input_script_completes_[index]); });
-    f.u(completion_prefix); f.u(consumed_completes_digest_);
-    const std::size_t boundary_prefix = std::min(input_script_boundary_completes_.size(), consumed);
-    extend(consumed_boundaries_folded_, consumed_boundaries_digest_, boundary_prefix,
         [&](BrokerStateHashSink& g, std::size_t index) {
-            g.u(input_script_boundary_completes_[index]);
+            const auto flags = consumed_script_cursor_
+                ? consumed_script_cursor_->next(retained_.bars[index])
+                : ScriptBucketCursor::Flags{};
+            g.u(flags.complete);
+            BrokerStateHashSink boundary;
+            boundary.h = consumed_boundaries_digest_;
+            boundary.u(flags.boundary);
+            consumed_boundaries_digest_ = boundary.h;
+            consumed_boundaries_folded_ = index + 1;
         });
+    f.u(completion_prefix); f.u(consumed_completes_digest_);
+    const std::size_t boundary_prefix = std::min(input_script_size_, consumed);
     f.u(boundary_prefix); f.u(consumed_boundaries_digest_);
     f.b(uses_aux_security_feed_);
     if (retained_.is_stream) f.b(input_is_observed_ticks_);
