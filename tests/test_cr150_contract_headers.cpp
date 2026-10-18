@@ -6,14 +6,18 @@
 #include <pineforge/trade_ledger.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_bar_views.hpp>
+#include "../src/native_execution_consumer.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 // DESIGN revision 6, section 6:1283-1306: fixed prefix, three native
 // pointers, and the explicitly padded 144-byte receipt. The descriptor's
@@ -112,6 +116,67 @@ static_assert(std::is_same_v<decltype(BarView::size), std::size_t>);
 static_assert(std::is_standard_layout_v<FeedView>);
 static_assert(std::is_same_v<decltype(FeedView::bars), BarView>);
 static_assert(std::is_same_v<decltype(FeedView::close_ms), const std::int64_t*>);
+
+// CORE-TOP rev 6 amendment (10-18 19:24), V1/V2 as amended by changes 1-9.
+namespace bv = pineforge::native_bar_views_v1;
+using ReadView = bv::NativeInstrumentFeedReadView;
+using Views = bv::NativeBarViews;
+using Source = bv::NativeLowerPathSource;
+using Consumer = pineforge::NativeExecutionConsumer;
+static_assert(std::is_standard_layout_v<ReadView>);
+static_assert(std::is_same_v<decltype(ReadView::bars), BarView>);
+static_assert(std::is_same_v<decltype(ReadView::close_ms), const std::int64_t*>);
+static_assert(std::is_same_v<decltype(ReadView::close_count), std::size_t>);
+static_assert(std::is_standard_layout_v<Views>);
+static_assert(std::is_same_v<decltype(Views::instrument_feeds), const FeedView* const*>);
+static_assert(std::is_same_v<decltype(Views::instrument_feed_count), std::size_t>);
+static_assert(std::is_same_v<decltype(Views::lower_path), const Source*>);
+static_assert(std::is_same_v<decltype(Views::lower_segment), BarView>);
+static_assert(Views{}.instrument_feeds == nullptr);
+static_assert(Views{}.instrument_feed_count == 0);
+static_assert(Views{}.lower_path == nullptr);
+static_assert(Views{}.lower_segment.data == nullptr);
+static_assert(Views{}.lower_segment.size == 0);
+
+static_assert(std::is_same_v<decltype(&bv::native_instrument_feed_view),
+    ReadView (*)(const pineforge::NativeInstrumentFeed&, const FeedView*) noexcept>);
+static_assert(std::is_same_v<decltype(&bv::normalize_native_run_spec),
+    pineforge::NativeRunSpecValidation (*)(pineforge::NativeRunSpec&, const Views&) noexcept>);
+static_assert(std::is_same_v<decltype(&bv::validate_native_instrument_feeds),
+    pineforge::NativeRunSpecValidation (*)(
+        const std::vector<pineforge::NativeInstrumentFeed>&, const Views&) noexcept>);
+static_assert(std::is_same_v<decltype(&bv::validate_native_timeframe_subscriptions),
+    pineforge::NativeRunSpecValidation (*)(
+        const std::vector<pineforge::NativeTimeframeSubscription>&, const std::string&, bool,
+        const std::optional<pineforge::NativeAuxiliaryFeed>&,
+        const std::vector<pineforge::NativeInstrumentFeed>&, const Views&) noexcept>);
+static_assert(std::is_same_v<decltype(&bv::native_instrument_feeds_digest),
+    std::uint64_t (*)(const std::vector<pineforge::NativeInstrumentFeed>&,
+                     const Views&) noexcept>);
+static_assert(std::is_same_v<decltype(&bv::native_run_spec_digest),
+    std::uint64_t (*)(const pineforge::NativeRunSpec&, const Views&)>);
+static_assert(std::is_same_v<decltype(&bv::native_intrabar_path_digest),
+    std::uint64_t (*)(const pineforge::IntrabarPath&, const Source*)>);
+
+static_assert(std::is_abstract_v<Source>);
+static_assert(std::has_virtual_destructor_v<Source>);
+static_assert(std::is_nothrow_destructible_v<Source>);
+static_assert(std::is_same_v<Source::Visitor,
+    bool (*)(void*, const pineforge::Bar&) noexcept>);
+static_assert(std::is_same_v<decltype(&Source::count), std::size_t (Source::*)() const>);
+static_assert(std::is_same_v<decltype(&Source::for_each),
+    bool (Source::*)(Source::Visitor, void*) const>);
+static_assert(std::is_same_v<decltype(&Source::segment),
+    BarView (Source::*)(std::int64_t, std::int64_t)>);
+static_assert(std::is_same_v<decltype(&Source::next_after_segment),
+    const pineforge::Bar* (Source::*)() const noexcept>);
+
+static_assert(std::is_same_v<decltype(&Consumer::stage_instrument_feed_views),
+    void (Consumer::*)(const FeedView* const*, std::size_t)>);
+static_assert(std::is_same_v<decltype(&Consumer::stage_lower_path_source),
+    void (Consumer::*)(std::unique_ptr<Source>) noexcept>);
+static_assert(std::is_same_v<decltype(&Consumer::bar_views),
+    Views (Consumer::*)() const noexcept>);
 
 int main() {
     // CTest reports the build-time witness; it does not exercise future APIs.

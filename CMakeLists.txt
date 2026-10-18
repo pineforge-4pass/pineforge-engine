@@ -152,6 +152,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/sha256.cpp
     src/native_run_spec.cpp
     src/native_fx_curve.cpp
+    src/native_bar_views.cpp
     src/selected_report_view.cpp
     src/selected_window_plan.cpp
 )
