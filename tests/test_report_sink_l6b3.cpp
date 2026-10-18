@@ -297,6 +297,23 @@ template<class Host> void equal_run(Host& baseline, Host& streamed, const std::s
     require(after.trace == nullptr && after.broker_state_hash == nullptr, "sink report contains historical arrays");
     require(streamed.output_bars_len() <= 1 && streamed.output_events_len() <= 2,
             "outputs retain more than the held row");
+    if (baseline.output_bars_len() > 0) {
+        std::int64_t want_open = 0, want_close = 0, got_open = 0, got_close = 0, written = 0;
+        const auto last = baseline.output_bars_len() - 1;
+        require(baseline.output_bar_times_copy(last, &want_open, &want_close, 1, &written)
+                && written == 1, "baseline held time read failed");
+        require(streamed.output_bars_len() == 1
+                && streamed.output_bar_times_copy(0, &got_open, &got_close, 1, &written)
+                && written == 1 && got_open == want_open && got_close == want_close,
+                "sink output readers do not return the held row times");
+        for (int slot = 0; slot < baseline.output_series_count(); ++slot) {
+            double want = 0.0, actual = 0.0;
+            require(baseline.output_series_copy(slot, last, &want, 1, &written) && written == 1,
+                    "baseline held value read failed");
+            require(streamed.output_series_copy(slot, 0, &actual, 1, &written) && written == 1
+                    && f64(actual) == f64(want), "sink output reader changed the held value");
+        }
+    }
     const auto expected = path + ".expected";
     expected_rows(baseline, before, expected);
     reference_reader(path, expected);
@@ -342,6 +359,8 @@ void cleared_events_and_failure(const std::string& directory) {
             require(!host.last_error().empty() && receipt(host).complete == 0,
                     "failed run completed its sink");
             require(read(path).find("{\"trailer\":") == std::string::npos, "failed run wrote a trailer");
+            require(host.set_outputs_enabled(false) && host.output_bars_len() == 0
+                    && host.output_events_len() == 0, "failed sink run prevented output reset");
         } else {
             // Seven output rows after one recalculation, two events each;
             // clearing row 3's queue must not erase any event from the sink.
@@ -353,6 +372,31 @@ void cleared_events_and_failure(const std::string& directory) {
         BacktestEngine::free_report(&report);
     }
 }
+
+void callback_io_failure() {
+    // Linux's real checked-write fault, reached while retiring a row inside
+    // a callback. Keep the existing no-trailer checks for callback failures.
+    std::ifstream full("/dev/full");
+    if (!full) return;
+    NativeProbe host(true);
+    host.message_bytes = 20000;
+    require(host.configure_native(spec()).status == NativeSetupStatus::Applied, "native configure refused");
+    require(host.set_outputs_enabled(true), "output enable refused");
+    host.set_trace_enabled(true);
+    host.set_broker_state_hash_recording(true);
+    install(host, "/dev/full");
+    const auto bars = feed();
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    const auto handle = static_cast<pf_strategy_t>(static_cast<BacktestEngine*>(&host));
+    require(host.last_run_status() != 0
+            && std::strcmp(strategy_get_last_error_code(handle), "report_sink_failed") == 0,
+            "callback sink I/O failure lost its resource failure code");
+    ReportC report{};
+    host.fill_report(&report);
+    const auto got = receipt(host);
+    require(got.complete == 0 && got.sha256_hex[0] == '\0', "failed callback write completed its sink");
+    BacktestEngine::free_report(&report);
+}
 }
 
 int main() {
@@ -361,6 +405,7 @@ int main() {
         require(mkdtemp(directory) != nullptr, "cannot create test directory");
         native_rows(directory);
         cleared_events_and_failure(directory);
+        callback_io_failure();
 #ifdef PINEFORGE_L6B3_SOURCE
         PineProbe baseline, streamed;
         equal_run(baseline, streamed, std::string(directory) + "/pine.ndjson");

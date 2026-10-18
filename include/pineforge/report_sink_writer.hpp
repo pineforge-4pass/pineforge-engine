@@ -62,7 +62,7 @@ std::string escaped_string(std::string_view utf8);
 /// (docker/run_failure_codes.json; 3.7:881-888). OPEN S2: DESIGN does not
 /// choose the internal C++ error transport or repeated-finalization policy;
 /// no exception type, retry or idempotence guarantee is declared here.
-/// O/V/K/X/H writer operations are the later L6b-3 extension, not guessed here.
+/// O/V/K/X/H operations below implement the same fixed version-1 descriptors.
 class LineWriter {
 public:
     /// Descriptor strings are copied, as required by 6:1307. This is a
@@ -103,6 +103,17 @@ public:
     /// SHA-256 runs inside the engine with no new external dependency
     /// (3.7:881-888). No destructor-generated success trailer is promised.
     Trailer write_trailer();
+
+    // L6b-3 additions implementing the existing v1 descriptors. INT64_MIN
+    // represents a null output time. Spans are consumed during the call.
+    void write_o(std::int64_t row, std::int64_t open_ms, std::int64_t close_ms,
+                 const double* values, std::int64_t count);
+    // event.message selects null versus present; message supplies the exact
+    // bytes of a present message, including embedded NULs.
+    void write_v(const pf_output_event_v1_t& event, std::string_view message);
+    void write_k(const double* values, std::int64_t count);
+    void write_x(const pf_trace_entry_t& entry, std::string_view name);
+    void write_h(std::uint64_t hash);
 
 private:
     struct State;

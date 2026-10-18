@@ -8913,6 +8913,7 @@ void NativeExecutionConsumer::record_script_report_point(
     if (spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks)
         engine.update_equity_extremes();
     if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
+    engine.retire_report_sink_hashes();
     engine.record_equity_point(script_open_ms);
     engine.last_script_continuation_hash_ = continuation_hash();
     engine.last_script_continuation_valid_ = true;
@@ -8920,7 +8921,6 @@ void NativeExecutionConsumer::record_script_report_point(
         engine.broker_state_hashes_.push_back(engine.broker_state_hash());
     }
 }
-
 // The same fold and the same append, at an instant only the host can name
 // (NativeReportPolicy::KernelRecordedAtHostMarks). A host whose report
 // cadence is its own — a source adapter that publishes a script bar to its
@@ -8943,10 +8943,10 @@ bool NativeExecutionConsumer::mark_script_report_point(
 // mark cadence is the host's needs, because there the two are never apart.
 void NativeExecutionConsumer::record_report_point(
         BacktestEngine& engine, int64_t report_ts) const {
+    engine.retire_report_sink_hashes();
     engine.update_equity_extremes();
     engine.record_equity_point(report_ts);
 }
-
 // The generic mark-to-market producer both report shapes share. One row per
 // open physical lot at `mark_price`, built by the same non-mutating builder a
 // full close uses and appended to the engine's range-end row space; the summed
