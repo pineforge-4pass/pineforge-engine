@@ -3075,19 +3075,15 @@ void source::PineStrategyHost::finish_applied_admission(
         const NativeDecisionContext& context) {
     const bool recalculation_due = scheduler_.coof_recalculation_due(event, context, *this);
     if (!recalculation_due) record_applied_range_end();
-    // A process-on-close fill can settle after on_native_bar captured the
-    // script's row. Its adapter receipts and final book belong to that row,
-    // not to the following bar. A synchronous fill inside an unfinished
-    // command is folded by the enclosing on_bar_close instead.
+    // A process-on-close fill can append admission events after on_native_bar.
+    // Retire that completed tail without recapturing the broker-state row:
+    // F0a preserves the existing recording and continuation boundaries.
+    // A synchronous fill inside an unfinished command is folded by the
+    // enclosing on_bar_close instead.
     if (!recalculation_due && context.is_terminal_sub_bar
         && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
         && !adapter_.admission_journal.has_unfinished_events()) {
         adapter_.finish_admission_bar();
-        // Retire on every completed bar, but keep the ordinary recording-off
-        // snapshot cadence: final batch point or the realtime stream point.
-        if (broker_state_hash_recording_ || scheduler_.terminal_source_bar()
-            || stream_phase_ == StreamPhase::REALTIME)
-            capture_script_continuation_hash();
     }
 }
 
