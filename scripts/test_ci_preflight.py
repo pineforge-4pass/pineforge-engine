@@ -740,10 +740,10 @@ class PreflightFailures(unittest.TestCase):
                 pool = in_job(hosted, 'deploy', '    runs-on: ubuntu-24.04\n',
                               f'    runs-on: {runner}\n')
                 marker = f"      PF_CI_LABELS: '{labels}'\n"
-                if '    env:\n' in _jobs(pool)['deploy']:
-                    pool = in_job(pool, 'deploy', '    env:\n', '    env:\n' + marker)
+                if '\n    env:\n' in _jobs(pool)['deploy']:
+                    pool = in_job(pool, 'deploy', '\n    env:\n', '\n    env:\n' + marker)
                 else:
-                    pool = in_job(pool, 'deploy', '    steps:\n', '    env:\n' + marker + '    steps:\n')
+                    pool = in_job(pool, 'deploy', '\n    steps:\n', '\n    env:\n' + marker + '    steps:\n')
                 with self.subTest(reason=reason, pool=labels):
                     findings = ci_workflow_findings(*original, others=dict(others, **{'deploy.yml': pool}))
                     self.assertTrue(any('deploy.yml job deploy must keep production credentials '
@@ -781,15 +781,19 @@ class PreflightFailures(unittest.TestCase):
                     {'ci.yml': original[0], **workflows}, **{name: pool}))
                 self.assertTrue(any(f'{name} job {job} must run on' in line for line in findings), findings)
                 marker = f"      PF_CI_LABELS: '{LIGHT_LABELS}'\n"
-                if '    env:\n' in _jobs(workflows[name])[job]:
-                    hosted = in_job(workflows[name], job, '    env:\n', '    env:\n' + marker)
+                # Anchor job keys: four spaces alone also match the tail of
+                # a step-level env key, which would leave the job env empty.
+                if '\n    env:\n' in _jobs(workflows[name])[job]:
+                    hosted = in_job(workflows[name], job, '\n    env:\n', '\n    env:\n' + marker)
                 else:
-                    hosted = in_job(workflows[name], job, '    steps:\n',
-                                    '    env:\n' + marker + '    steps:\n')
+                    hosted = in_job(workflows[name], job, '\n    steps:\n',
+                                    '\n    env:\n' + marker + '    steps:\n')
+                env = ci_preflight._job_block(_jobs(hosted)[job], 'env')
+                self.assertEqual(ci_preflight._job_values('\n'.join(env[1:]), 'PF_CI_LABELS'),
+                                 [LIGHT_LABELS], f'{name} job {job} fixture must set job-level PF_CI_LABELS')
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: hosted}))
-                self.assertTrue(any(f'{name} job {job} must not set PF_CI_LABELS' in line
-                                    for line in findings), findings)
+                self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on a hosted job', findings)
 
     def test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum(self):
         # Owner rule, 2026-10-12: no stage of this preflight is run under a
