@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * CR-150 P00: report sink C ABI declarations, DESIGN.md revision 6,
- * section 3.7 lines 779-897 and section 6 lines 1255-1294.
+ * section 3.7 lines 782-901 and section 6 lines 1278-1317.
  * No definitions or runtime feature probe are supplied by this contract.
  * Include this additive header explicitly, as for execution_observer.h.
  */
@@ -16,13 +16,13 @@
 extern "C" {
 #endif
 
-/** Path sink descriptor (DESIGN 6:1260-1266, 1284-1286).
+/** Path sink descriptor (DESIGN 6:1283-1289, 1307-1309).
  *  struct_size is sizeof(pf_report_sink_v1), version is 1. The setter copies
  *  the strings. The engine creates or truncates path, writes the version-1
- *  header at run begin, and writes checked, buffered records (3.7:878-885).
+ *  header at run begin, and writes checked, buffered records (3.7:881-888).
  *  NULL run_id means ""; NULL scratch_dir means the directory of path.
  *  Scratch files are engine-private and live until handle destruction
- *  (3.8:899-906). */
+ *  (3.8:902-909). */
 typedef struct pf_report_sink_v1 {
     uint32_t    struct_size;
     uint32_t    version;
@@ -31,7 +31,7 @@ typedef struct pf_report_sink_v1 {
     const char* scratch_dir;
 } pf_report_sink_v1;
 
-/** Trailer receipt (DESIGN 6:1268-1283).
+/** Trailer receipt (DESIGN 6:1291-1298,1305-1306).
  *  The seven counts correspond to E, T, O, V, K, X, H in that order.
  *  sha256_hex is the trailer's lowercase SHA-256, NUL-terminated, and is ""
  *  until the trailer exists. complete becomes 1 once the trailer is written.
@@ -56,27 +56,27 @@ PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, reserved) == 129);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, complete) == 136);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, trades_retained) == 140);
 
-/** Returns report sink ABI version 1 (DESIGN 6:1277). */
+/** Returns report sink ABI version 1 (DESIGN 6:1300). */
 PF_API uint32_t pf_report_sink_version(void);
 
-/** Install, replace or remove (NULL descriptor) the sink (6:1278, 1284-1286).
+/** Install, replace or remove (NULL descriptor) the sink (6:1301, 1307-1309).
  *  Returns 0 accepted; -1 bad struct_size, version, path or handle; -2 a
  *  stream is running or begins; -3 run in progress. Strings are copied.
  *  The sink composes with the execution observer and selected window.
  *  Write errors fail the run with the sink I/O code planned for
- *  docker/run_failure_codes.json (DESIGN 3.7:878-885; 6:1307-1309).
+ *  docker/run_failure_codes.json (DESIGN 3.7:881-888; 6:1330-1332).
  *
  *  With a sink, pf_report_t contains summary scalars, total_trades and
  *  metrics; trades, equity_curve, broker_state_hash and trace are NULL with
  *  length 0. Thus total_trades need not equal trades_len, and the equity
- *  and hash lengths need not equal script_bars_processed (6:1289-1294).
+ *  and hash lengths need not equal script_bars_processed (6:1312-1317).
  *  Counts and SHA-256 come from the receipt. Without a sink the existing
- *  entry points and report behavior stay unchanged (6:1329-1331). */
+ *  entry points and report behavior stay unchanged (6:1352-1354). */
 PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
 
-/** Query the sink receipt (DESIGN 6:1279; OPEN S1 above).
+/** Query the sink receipt (DESIGN 6:1302; OPEN S1 above).
  *  Failed, refused, aborted or truncated runs have no valid trailer
- *  (3.7:788-790); a receipt without completion is not a valid sink. */
+ *  (3.7:791-793); a receipt without completion is not a valid sink. */
 PF_API int strategy_report_sink_receipt_v1(pf_strategy_t, pf_report_sink_receipt_v1*);
 
 #ifdef __cplusplus

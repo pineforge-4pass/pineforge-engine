@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-150 P00 declarations only. DESIGN.md revision 6, section 3.4:565-712.
+// CR-150 P00 declarations only. DESIGN.md revision 6, section 3.4:568-716.
 // No container swap, streaming, codegen flag or execution change is installed.
 #include <cstddef>
 #include <memory>
@@ -9,16 +9,16 @@ namespace pineforge {
 
 struct Trade;
 
-// The engine-side additions stay in this existing epoch (DESIGN 6:1321-1324).
+// The engine-side additions stay in this existing epoch (DESIGN 6:1344-1347).
 inline namespace engine_script_run_v19 {
 
-/// Closed rows with stable global indices (DESIGN 3.4:609-617). size() is
+/// Closed rows with stable global indices (DESIGN 3.4:612-620). size() is
 /// the logical global end, including the sealed prefix; base() is the first
 /// resident global index. The resident window is [base(),size()). Iteration
 /// visits only that window, in row order; event/adapter indices never rebase.
 /// Tail resize/replacement still uses global indices, as today's vector does.
 ///
-/// Retention policy (3.4:616-617,687-708): the engine defaults to retaining
+/// Retention policy (3.4:619-620,690-711): the engine defaults to retaining
 /// every row. Seal/drop is permitted only with BOTH an installed sink and
 /// codegen's streamable policy. A closedtrades.* accessor, or missing policy
 /// in an old module, retains all rows, while still writing the same sink.
@@ -27,9 +27,9 @@ inline namespace engine_script_run_v19 {
 /// disable streaming; their counts/prefix folds remain available.
 ///
 /// Below-base internal reads, edits and rewinds throw engine_invariant
-/// (3.4:661-662). C accessors must check the window before indexing: a
+/// (3.4:664-665). C accessors must check the window before indexing: a
 /// streamed row answers 0 for entry incarnation, NULL for ids/comment, -1
-/// for close cause; no exception crosses C (3.4:663-667).
+/// for close cause; no exception crosses C (3.4:666-670).
 ///
 /// OPEN T1: DESIGN does not specify reset/capacity operations, reference or
 /// iterator invalidation, or empty-back/above-end error policy. Those are
@@ -48,32 +48,32 @@ public:
     TradeLedger(TradeLedger&&);
     TradeLedger& operator=(TradeLedger&&);
 
-    /// Total logical row count, NOT resident count (3.4:610-615).
+    /// Total logical row count, NOT resident count (3.4:613-618).
     /// Resident count is size()-base(); sealed rows remain in total counts.
     size_type size() const;
     size_type base() const;
 
-    /// Global-index access to the resident window (3.4:610-613,661-662).
+    /// Global-index access to the resident window (3.4:613-616,664-665).
     Trade& operator[](size_type global);
     const Trade& operator[](size_type global) const;
     Trade& back();
     const Trade& back() const;
 
-    /// Append at the logical global end (3.4:610-613).
+    /// Append at the logical global end (3.4:613-616).
     void push_back(const Trade& trade);
     void push_back(Trade&& trade);
 
-    /// Resize the unsealed tail using a global end >= base() (3.4:611).
-    /// Rewinding below base() is an engine_invariant (3.4:661-662).
+    /// Resize the unsealed tail using a global end >= base() (3.4:614).
+    /// Rewinding below base() is an engine_invariant (3.4:664-665).
     void resize(size_type global_end);
 
-    /// Iterate only resident rows, in global-index order (3.4:612).
+    /// Iterate only resident rows, in global-index order (3.4:615).
     iterator begin();
     iterator end();
     const_iterator begin() const;
     const_iterator end() const;
 
-    /// Retire [base(),global_end) after publication (3.4:619-662).
+    /// Retire [base(),global_end) after publication (3.4:622-665).
     /// This is the storage operation; its caller owns the following proof.
     /// Once per script bar, AFTER same-bar sorting and BEFORE the script
     /// body, choose the longest prefix whose every row i satisfies:
@@ -93,12 +93,12 @@ public:
     /// Preserve each digest/money/exit-phase fold's state at the new base;
     /// seal no farther than exit_phase_final_. Prefix/phase storage below
     /// base is retired too, and restart/Debug re-folds start at base with
-    /// those seeds (3.4:636-660). The sink remains the all-row report.
+    /// those seeds (3.4:639-663). The sink remains the all-row report.
     ///
     /// Position-tail spill is 30 B + entry_id per row, walked backwards
     /// after the resident tail in the same addition order. Truncate when
     /// the position-open mark changes or a sealed row predates that mark
-    /// (3.4:669-685). No unbounded in-memory history is substituted for it.
+    /// (3.4:672-688). No unbounded in-memory history is substituted for it.
     ///
     /// base() <= global_end <= size(); size()/global row numbering survive
     /// retirement. No predicate evaluation, folding or writing is defined

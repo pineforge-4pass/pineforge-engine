@@ -1,7 +1,7 @@
 /* CR-150 P00: report_sink.h must also parse as C, as existing test targets
  * already compile C callers. This TU is part of test_cr150_contract_headers;
  * it declares no runtime objects/functions and uses no sink implementation.
- * DESIGN revision 6, section 6:1260-1283 and section 3.8:903-904. */
+ * DESIGN revision 6, section 6:1283-1306 and section 3.8:906-907. */
 #include <pineforge/report_sink.h>
 
 #include <stddef.h>

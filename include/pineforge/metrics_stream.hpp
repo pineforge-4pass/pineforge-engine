@@ -1,7 +1,7 @@
 #pragma once
 
-// CR-150 P00 declarations only. DESIGN.md revision 6, section 3.3:510-563,
-// with scratch storage in 3.8:899-906 and selected observations in 3.6:742-770.
+// CR-150 P00 declarations only. DESIGN.md revision 6, section 3.3:513-567,
+// with scratch storage in 3.8:902-909 and selected observations in 3.6:745-773.
 // Existing array entry points in metrics.hpp remain unchanged.
 #include <pineforge/metrics.hpp>
 
@@ -16,7 +16,7 @@ PF_STATIC_ASSERT(offsetof(pf_equity_point_t, time_ms) == 0);
 PF_STATIC_ASSERT(offsetof(pf_equity_point_t, equity) == 8);
 PF_STATIC_ASSERT(offsetof(pf_equity_point_t, open_profit) == 16);
 
-/// Report-only O(1) trade fold (DESIGN 3.3:512-530,544-550).
+/// Report-only O(1) trade fold (DESIGN 3.3:515-533,547-553).
 /// One accumulator per existing TradeFilter ALL/LONG/SHORT. Initialization
 /// and filtering match compute_trade_stats; fold is exactly its loop body,
 /// finish exactly its tail. Sums are plain left folds from 0.0 in row order,
@@ -24,11 +24,11 @@ PF_STATIC_ASSERT(offsetof(pf_equity_point_t, open_profit) == 16);
 /// compensation or reuse of the engine's differently seeded running counters.
 ///
 /// Fold sealed rows first, then finish a COPY with the unsealed tail and the
-/// final, re-marked range-end rows (3.3:544-548). Copies preserve the prefix;
+/// final, re-marked range-end rows (3.3:547-551). Copies preserve the prefix;
 /// finish() never consumes or mutates it, so repeated report reads agree.
 /// The implementations replace the old loop only in L7a; none are supplied
 /// here. Report state is added to the broker hash waiver list by that lane,
-/// not silently treated as new decision state (3.3:549-550).
+/// not silently treated as new decision state (3.3:552-553).
 class TradeStatsAccumulator {
 public:
     TradeStatsAccumulator(TradeFilter filter, double initial_capital);
@@ -44,7 +44,7 @@ private:
     std::unique_ptr<State> state_;
 };
 
-/// Array point source, the first source of 3.3:532-540. data stays caller-
+/// Array point source, the first source of 3.3:535-543. data stays caller-
 /// owned and alive throughout the metric walk. Indexing returns a point
 /// value, so callers do not keep references to a source's refillable window.
 /// Required structural interface for BOTH sources: size() -> int64_t and
@@ -60,10 +60,10 @@ private:
     std::int64_t point_count_;
 };
 
-/// A region of the engine-private scratch file (3.8:899-906). A point is
+/// A region of the engine-private scratch file (3.8:902-909). A point is
 /// exactly the 24-byte binary pf_equity_point_t: time_ms, equity, open_profit.
 /// This describes either a region or a separate file without choosing the
-/// curve/position-tail placement that DESIGN leaves open (3.8:905).
+/// curve/position-tail placement that DESIGN leaves open (3.8:908).
 /// The engine owns descriptor and its lifetime; a reader borrows the region.
 struct ScratchCurveRegion {
     int descriptor;
@@ -71,7 +71,7 @@ struct ScratchCurveRegion {
     std::int64_t point_count;
 };
 
-/// Scratch point source (3.3:532-543; 3.8:901-906). Read exact binary doubles
+/// Scratch point source (3.3:535-546; 3.8:904-909). Read exact binary doubles
 /// with pread into ONE 64 KiB window; never mmap the scratch or parse sink
 /// text. Index i refers to byte_offset + 24*i. The descriptor and region
 /// remain valid during the walk. State/cache is opaque and O(1) in bars.
@@ -94,7 +94,7 @@ private:
 };
 
 /// Equity computation over the structural point-source interface above
-/// (3.3:528-543). Same parameters, guards and formulas as the array overload
+/// (3.3:531-546). Same parameters, guards and formulas as the array overload
 /// in metrics.hpp; only curve[i] goes through PointSource. n is the number
 /// of points to walk (within source.size()), not an observation denominator.
 /// Ordinary calls use observation_count=n; the second overload states it.
@@ -103,8 +103,8 @@ private:
 /// month-end returns twice, generated per-bar returns twice. Pass 1 sums and
 /// counts; pass 2 accumulates variance/downside in today's exact order, with
 /// today's final-n/span risk-free rate. Do not change grouping/rounding or
-/// -ffp-contract=off (3.3:515-540). A non-UTC chart holds ONE ScopedTimezone
-/// for the whole fill-time walk, never a nested lock (3.3:542-543).
+/// -ffp-contract=off (3.3:518-543). A non-UTC chart holds ONE ScopedTimezone
+/// for the whole fill-time walk, never a nested lock (3.3:545-546).
 /// These are template declarations, with no metric bodies/instantiations.
 template <class PointSource>
 pf_equity_stats_t compute_equity_stats(
@@ -116,8 +116,8 @@ pf_equity_stats_t compute_equity_stats(
 /// n=M+1, observation_count=M (including M=0). The anchor is the first
 /// return's base, not a bar. Only time_in_market_pct uses the observation
 /// denominator, as the existing metrics.hpp overload documents
-/// (3.6:742-746,766-770). Metrics read the scratch curve at each report read;
-/// they do not consume it or change the engine's held point (3.2:496-506).
+/// (3.6:745-749,769-773). Metrics read the scratch curve at each report read;
+/// they do not consume it or change the engine's held point (3.2:499-509).
 template <class PointSource>
 pf_equity_stats_t compute_equity_stats(
     const PointSource& curve, std::int64_t n, double initial_capital,

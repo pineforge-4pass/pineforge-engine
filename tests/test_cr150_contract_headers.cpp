@@ -15,7 +15,7 @@
 #include <type_traits>
 #include <utility>
 
-// DESIGN revision 6, section 6:1260-1283: fixed prefix, three native
+// DESIGN revision 6, section 6:1283-1306: fixed prefix, three native
 // pointers, and the explicitly padded 144-byte receipt. The descriptor's
 // pointer-dependent size is stated without assuming an LP64-only caller.
 static_assert(std::is_standard_layout_v<pf_report_sink_v1>);
@@ -45,7 +45,7 @@ static_assert(offsetof(pf_report_sink_receipt_v1, complete) == 136);
 static_assert(offsetof(pf_report_sink_receipt_v1, trades_retained) == 140);
 static_assert(PF_ABI_VERSION == 4);
 
-// DESIGN 3.7:822,830-834,855-876: formatting and writer declarations are
+// DESIGN 3.7:825,833-837,858-879: formatting and writer declarations are
 // type-checked without taking an evaluated address of an undefined symbol.
 namespace sink = pineforge::report_sink;
 static_assert(std::is_same_v<decltype(&sink::f64), std::string (*)(double)>);
@@ -57,7 +57,7 @@ static_assert(std::is_same_v<decltype(&sink::LineWriter::write_trailer),
                              sink::Trailer (sink::LineWriter::*)()>);
 static_assert(sizeof(decltype(sink::Trailer::sha256_hex)) == 65);
 
-// DESIGN 3.4:610-613: global counts and indices use the declared size_type;
+// DESIGN 3.4:613-616: global counts and indices use the declared size_type;
 // these expressions do not instantiate a ledger or its opaque State.
 using Ledger = pineforge::TradeLedger;
 static_assert(std::is_same_v<Ledger::size_type, std::size_t>);
@@ -71,7 +71,7 @@ static_assert(std::is_same_v<decltype(std::declval<Ledger&>()[Ledger::size_type{
 static_assert(std::is_same_v<decltype(std::declval<const Ledger&>()[Ledger::size_type{}]),
                              const pineforge::Trade&>);
 
-// DESIGN 3.3:526,532-548 and 3.8:903-904: the accumulator accepts TradeC,
+// DESIGN 3.3:529,535-551 and 3.8:906-907: the accumulator accepts TradeC,
 // finish is a const read, and both sources expose exact 24-byte points.
 using Accumulator = pineforge::metrics::TradeStatsAccumulator;
 using ArrayCurve = pineforge::metrics::ArrayCurve;
@@ -93,7 +93,7 @@ static_assert(std::is_same_v<decltype(std::declval<const SpillCurve&>().size()),
 static_assert(std::is_same_v<decltype(std::declval<const SpillCurve&>()[std::int64_t{}]),
                              pf_equity_point_t>);
 
-// DESIGN 2.2:344-346: exact borrowed bar/close fields in their own namespace.
+// DESIGN 2.2:347-349: exact borrowed bar/close fields in their own namespace.
 using BarView = pineforge::native_bar_views_v1::NativeBarView;
 using FeedView = pineforge::native_bar_views_v1::NativeInstrumentFeedView;
 static_assert(std::is_standard_layout_v<BarView>);
