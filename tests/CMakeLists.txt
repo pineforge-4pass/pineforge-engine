@@ -7116,6 +7116,10 @@ pineforge_add_unit_test(test_report_sink_format)
 list(APPEND TEST_SOURCES test_trade_percent_prefix)
 pineforge_add_unit_test(test_trade_percent_prefix)
 
+# CR-150 L7A: isolated trade-fold proof, after all line-pinned registrations.
+list(APPEND TEST_SOURCES test_trade_stats_accumulator)
+pineforge_add_unit_test(test_trade_stats_accumulator)
+
 # CR-150 L8d: append after every pre-existing line-pinned registration.
 list(APPEND TEST_SOURCES test_trade_accessors_l8d)
 pineforge_add_unit_test(test_trade_accessors_l8d)
