@@ -213,7 +213,7 @@ subprocess.run(command, check=True)
 parsed_descriptions = []
 canonical_urls = {}
 for name, title in titles.items():
-    url = "https://cdocs.pineforge.dev/" + ("" if name == "index.html" else name[:-5])
+    url = "https://cdocs.tunaxis.com/" + ("" if name == "index.html" else name[:-5])
     canonical_urls[name] = url
     canonical = f'<link rel="canonical" href="{url}"/>\n'
     actual = (site / name).read_bytes().decode("utf-8")
@@ -297,7 +297,7 @@ for name, title in api_titles.items():
 
 # An explicit page id can match a source-listing name without being a listing.
 guide_name = "guide_8cpp_source.html"
-guide_url = "https://cdocs.pineforge.dev/guide_8cpp_source"
+guide_url = "https://cdocs.tunaxis.com/guide_8cpp_source"
 guide_canonical = f'<link rel="canonical" href="{guide_url}"/>\n'
 (site / guide_name).write_bytes(page(
     "PineForge: Integration guide", "<p>Integration guide.</p>", old_meta + guide_canonical
@@ -338,7 +338,7 @@ for path in sorted(site.glob("*.html")):
     parsed.close()
     if path.name in source_metadata:
         assert parsed.robots == [("noindex", True)], f"{path.name}: expected one noindex tag in the head"
-        url = "https://cdocs.pineforge.dev/" + path.stem
+        url = "https://cdocs.tunaxis.com/" + path.stem
         expected_tail = ('<meta name="robots" content="noindex">\n'
                          f'<link rel="canonical" href="{url}"/>\n</head>')
         assert expected_tail in actual, f"{path.name}: robots tag must precede the canonical at the end of the head"
@@ -362,7 +362,7 @@ source_root = ET.parse(site / "sitemap.xml").getroot()
 source_urls = [entry.findtext(namespace + "loc") for entry in source_root]
 indexable_names = [name for name in titles if name != "404.html"] + list(api_titles)
 indexable_names.append(guide_name)
-indexable_urls = sorted("https://cdocs.pineforge.dev/" + ("" if name == "index.html" else name[:-5])
+indexable_urls = sorted("https://cdocs.tunaxis.com/" + ("" if name == "index.html" else name[:-5])
                         for name in indexable_names)
 assert source_urls == indexable_urls, "sitemap must keep all API pages and omit every source listing and 404"
 assert guide_url in source_urls, "the hand-written guide with a colliding explicit id must stay in the sitemap"

@@ -1,3 +1,3 @@
 User-agent: *
 Allow: /
-Sitemap: https://cdocs.pineforge.dev/sitemap.xml
+Sitemap: https://cdocs.tunaxis.com/sitemap.xml

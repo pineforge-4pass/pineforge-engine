@@ -12,7 +12,7 @@ from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
 
-SITE_URL = "https://cdocs.pineforge.dev/"
+SITE_URL = "https://cdocs.tunaxis.com/"
 SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 # The opening layer description in docs/pages/index.md, condensed to one sentence.
 LANDING_DESCRIPTION = (
