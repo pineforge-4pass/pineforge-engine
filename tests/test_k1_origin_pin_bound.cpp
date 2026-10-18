@@ -277,25 +277,31 @@ void same_public_result(const Outcome& erased, const Outcome& retained) {
 void k1_is_bounded_while_the_origin_is_open() {
     for (Pattern pattern : {Pattern::Moving, Pattern::RecancelMoving, Pattern::RecancelSame}) {
         for (int ratio : {1, 3}) for (bool magnifier : {false, true}) {
-            const auto small = run(pattern, 48, ratio, magnifier, false, false, false);
-            const auto large = run(pattern, 192, ratio, magnifier, false, false, false);
-            const auto retained = run(pattern, 192, ratio, magnifier, true, false, false);
+            const auto small = run(pattern, 96, ratio, magnifier, false, false, false);
+            const auto large = run(pattern, 384, ratio, magnifier, false, false, false);
+            const auto retained = run(pattern, 384, ratio, magnifier, true, false, false);
             std::printf("K1 pattern=%d ratio=%d magnifier=%d: origin rows %zu -> %zu, retained %zu\n",
                         static_cast<int>(pattern), ratio, magnifier ? 1 : 0,
                         small.peak_origin_rows, large.peak_origin_rows, retained.peak_origin_rows);
             same_public_result(large, retained);
             CHECK(small.error.empty());
             CHECK(large.open == 4.0);
-            CHECK(large.exit_calls >= 180);
+            CHECK(large.exit_calls >= 360);
             CHECK(large.peak_origin_rows > 0);
             // A stop + limit per open origin; allow the just-retired pair
             // between its callback and the next bar-open sweep.
             CHECK(large.peak_origin_rows <= 4);
             CHECK(large.peak_origin_rows <= small.peak_origin_rows + 2);
             if (pattern != Pattern::Moving) {
-                // Non-vacuous red control: the unbounded base retains the
-                // withdrawn dormant rows under the SAME opened origin.
+                // Calls can stage/replace legs and move their lifecycle. Run
+                // long enough to populate the ORIGINAL 180-row red control.
+                const auto retained_small = run(pattern, 96, ratio, magnifier, true, false, false);
+                std::printf("K1 retaining ladder: %zu -> %zu origin rows\n",
+                            retained_small.peak_origin_rows, retained.peak_origin_rows);
+                CHECK(retained_small.error.empty());
                 CHECK(retained.peak_origin_rows >= 180);
+                CHECK(retained.peak_origin_rows >= 2 * retained_small.peak_origin_rows);
+                CHECK(retained_small.peak_origin_rows > 4);
             }
         }
     }
