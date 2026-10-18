@@ -7099,6 +7099,8 @@ add_test(NAME test_native_bar_views_guard_l15a
 # CR-150 L8a: keep the existing CMake line pins stable.
 list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
+list(APPEND TEST_SOURCES test_report_sink_format)
+pineforge_add_unit_test(test_report_sink_format)
 
 # CR-150 L8d: append after every pre-existing line-pinned registration.
 list(APPEND TEST_SOURCES test_trade_accessors_l8d)
