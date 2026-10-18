@@ -8,7 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -75,6 +77,8 @@ public:
         commands = max_retained = max_capacity = 0;
         trace.clear();
         CHECK(core().cohort_receipts().empty());
+        CHECK(core().cohort_receipt_base() == 0);
+        CHECK(core().cohort_receipt_count() == 0);
     }
 
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
@@ -112,11 +116,14 @@ private:
                  const no::RequestHandle& origin, no::CohortReceiptStatus status) {
         ++commands;
         const auto& rows = core().cohort_receipts();
+        CHECK(core().cohort_receipt_count() == commands);
         max_retained = std::max(max_retained, rows.size());
         max_capacity = std::max(max_capacity, rows.capacity());
         if (retention_ == NativeEventRetention::Window) {
             CHECK(rows.empty());
+            CHECK(core().cohort_receipt_base() == commands);
         } else {
+            CHECK(core().cohort_receipt_base() == 0);
             CHECK(rows.size() == commands);
             if (!rows.empty()) {
                 const auto& receipt = rows.back();
@@ -195,6 +202,81 @@ Result differential(int count) {
     CHECK(again.capacity <= 1);
     return actual;
 }
+
+bool same(const no::CohortReceipt& a, const no::CohortReceipt& b) {
+    return a.operation == b.operation && a.status == b.status
+        && a.cohort == b.cohort && a.origin == b.origin;
+}
+
+void window_mechanics() {
+    const no::RunIdentity identity{"cohort-window-with-a-non-SSO-session-key", 1};
+    no::WorkingRequestCore core(identity);
+    std::uint64_t incarnation = 1;
+    std::uint64_t ordinal = 1;
+    no::Request request{no::Transact{1.0}, "resting", ""};
+    request.trigger = no::Limit{50.0};
+    const auto accepted = core.submit(request, kStart, incarnation, ordinal);
+    CHECK(accepted.status == no::SubmitStatus::Accepted && accepted.handle);
+    if (!accepted.handle) return;
+    const auto origin = *accepted.handle;
+    const auto cohort = core.cohort_open();
+    core.cohort_add(cohort, origin);
+    core.cohort_add(no::CohortHandle{}, origin);
+    core.cohort_remove(cohort, origin);
+    core.cohort_add(cohort, origin);
+    const auto rows = core.cohort_receipts();
+    CHECK(rows.size() == 4 && core.cohort_receipt_base() == 0);
+    CHECK(core.cohort_receipt_count() == 4);
+    const auto last_ordinal = core.last_ordinal();
+    const auto last_incarnation = core.last_incarnation();
+    const auto history_end = core.history_end();
+    CHECK(core.retire_cohort_receipts(2) == 2);
+    CHECK(core.cohort_receipt_base() == 2 && core.cohort_receipt_count() == 4);
+    CHECK(core.cohort_receipts().size() == 2);
+    if (core.cohort_receipts().size() == 2) {
+        CHECK(same(core.cohort_receipts()[0], rows[2]));
+        CHECK(same(core.cohort_receipts()[1], rows[3]));
+    }
+    CHECK(core.retire_cohort_receipts(2) == 0);
+    CHECK(core.retire_cohort_receipts(0) == 0);
+    CHECK(core.last_ordinal() == last_ordinal);
+    CHECK(core.last_incarnation() == last_incarnation);
+    CHECK(core.history_end() == history_end);
+    CHECK(core.cohort_contains(cohort, origin));
+    core.cohort_remove(cohort, origin);
+    CHECK(!core.cohort_contains(cohort, origin));
+    CHECK(core.cohort_receipt_base() == 2 && core.cohort_receipt_count() == 5);
+    CHECK(core.cohort_receipts().back().operation == no::CohortReceiptOperation::Remove);
+    CHECK(core.retire_cohort_receipts(std::numeric_limits<std::size_t>::max()) == 3);
+    CHECK(core.cohort_receipts().empty());
+    CHECK(core.cohort_receipt_base() == 5 && core.cohort_receipt_count() == 5);
+    core.cohort_add(cohort, origin);
+    CHECK(core.cohort_receipt_base() == 5 && core.cohort_receipt_count() == 6);
+    CHECK(core.cohort_receipts().size() == 1);
+    CHECK(core.cohort_receipts().back().status == no::CohortReceiptStatus::Applied);
+
+    no::WorkingRequestCore moved(std::move(core));
+    CHECK(moved.cohort_receipt_base() == 5 && moved.cohort_receipt_count() == 6);
+    CHECK(moved.cohort_receipts().size() == 1 && moved.cohort_contains(cohort, origin));
+    CHECK(core.cohort_receipt_base() == 0 && core.cohort_receipt_count() == 0);
+    CHECK(core.cohort_receipts().empty());
+    no::WorkingRequestCore assigned({"discarded-run", 7});
+    assigned.cohort_add(no::CohortHandle{}, no::RequestHandle{});
+    assigned = std::move(moved);
+    CHECK(assigned.cohort_receipt_base() == 5 && assigned.cohort_receipt_count() == 6);
+    CHECK(assigned.cohort_receipts().size() == 1 && assigned.cohort_contains(cohort, origin));
+    CHECK(moved.cohort_receipt_base() == 0 && moved.cohort_receipt_count() == 0);
+    CHECK(moved.cohort_receipts().empty());
+    auto* alias = &assigned;
+    assigned = std::move(*alias);
+    CHECK(assigned.cohort_receipt_base() == 5 && assigned.cohort_receipt_count() == 6);
+    CHECK(assigned.retire_cohort_receipts(6) == 1);
+    CHECK(assigned.retire_cohort_receipts(6) == 0);
+    assigned.reset({"reset-run", 2});
+    CHECK(assigned.cohort_receipt_base() == 0 && assigned.cohort_receipt_count() == 0);
+    CHECK(assigned.cohort_receipts().empty() && assigned.cohorts().empty());
+    CHECK(assigned.cohort_open().value == 1);
+}
 }  // namespace
 
 int main() {
@@ -202,6 +284,7 @@ int main() {
     const auto large = differential(128);
     CHECK(large.commands == 4 * small.commands);
     CHECK(large.capacity == small.capacity);
+    window_mechanics();
     std::printf("test_cohort_receipt_window: %d checks, %d failures; "
                 "%zu/%zu commands, %zu/%zu retained capacity\n",
                 checks, failures, small.commands, large.commands, small.capacity, large.capacity);
