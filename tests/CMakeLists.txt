@@ -7097,3 +7097,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     target_link_libraries(test_heap_census_unique_ids PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
+
+# CR-150 L19B: append after every pre-existing line-pinned registration.
+list(APPEND TEST_SOURCES test_group_receipt_retirement)
+pineforge_add_unit_test(test_group_receipt_retirement)
+target_compile_definitions(test_group_receipt_retirement PRIVATE
+    PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
