@@ -7115,3 +7115,13 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
     add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
 endif()
+
+# CR-150 L2: append after the private-fixture line evidence. The preflight
+# harness glob also discovers docker/run_json_bin_test.py automatically.
+add_test(NAME test_run_json_bin
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+        ${PROJECT_SOURCE_DIR}/docker/run_json_bin_test.py)
+if(TARGET outputs_fixture_strategy)
+    set_tests_properties(test_run_json_bin PROPERTIES
+        ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
