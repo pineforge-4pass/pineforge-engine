@@ -7122,3 +7122,15 @@ if(UNIX)
     list(APPEND TEST_SOURCES test_report_sink_selected_l17a)
     pineforge_add_unit_test(test_report_sink_selected_l17a)
 endif()
+
+# CR-150 L15a: append after every existing line-pinned registration.
+list(APPEND TEST_SOURCES test_native_bar_views_l15a)
+pineforge_add_unit_test(test_native_bar_views_l15a)
+
+add_test(NAME test_native_bar_views_guard_l15a
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_versions.py
+            --self-test-bar-views)
+
+# CR-150 L8a: keep the existing CMake line pins stable.
+list(APPEND TEST_SOURCES test_trade_ledger)
+pineforge_add_unit_test(test_trade_ledger)
