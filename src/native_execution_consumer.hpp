@@ -362,8 +362,8 @@ public:
     // definition for the finality rule. closed_rows_digest_holds re-folds the
     // rows the digest has taken and answers whether they still match: the
     // Debug check a run's end makes, and a witness's probe.
-    uint64_t closed_rows_digest(const std::vector<Trade>& rows) const;
-    bool closed_rows_digest_holds(const std::vector<Trade>& rows) const noexcept;
+    uint64_t closed_rows_digest(const TradeLedger& rows) const;
+    bool closed_rows_digest_holds(const TradeLedger& rows) const noexcept;
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
     void closed_rows_amended(std::size_t first) noexcept { rewind_closed_rows(first); }
