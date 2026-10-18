@@ -74,6 +74,47 @@ their unprescribed helper names and storage are not made a second API.
 Scratch curve/position-tail placement remains either regions or separate
 private files, as DESIGN permits. No mapped scratch or text-based metrics.
 
+## Bar and close views
+
+| File / declaration | DESIGN section and lines | Implementing lane |
+|---|---|---|
+| `include/pineforge/native_bar_views.hpp`: `inline namespace native_bar_views_v1` | 2.2:336-344; 6:1305-1306 | L15a |
+| `NativeBarView { const Bar* data; std::size_t size; }` | 2.2:345 | L15a |
+| `NativeInstrumentFeedView { NativeBarView bars; const int64_t* close_ms; }` | 2.2:346 | L15a/L15b |
+| `class NativeLowerPathSource;` (forward declaration only; OPEN V2) | 2.2:347-348; 5:1214-1239 | L15a/L16 |
+
+L15a implements staging and the common accessor, with no caller. It also adds
+the new header/source and namespace check to the native ownership guard
+(2.2:349-375). Neither the existing v3 run-spec nor native-host declarations
+change here. The borrowed-feed C export/probe belongs to L15b (6:1295-1306).
+
+### L15a read inventory
+
+This is DESIGN's required source-guard read set (2.2:354-368; 5:1198-1205),
+including the indirect count/hash consumers. Source line references are the
+revision-6 design's snapshot; L15a must refresh offsets and mechanically pin
+every current `.bars`/`.close_ms` read when it installs the accessor/guard.
+P00 does not open the measured consumer or source-layer units.
+
+| Reader to route through the view/source | Existing source references from DESIGN | DESIGN lines |
+|---|---|---|
+| Kernel instrument-feed pump: current bar, close, next open, count | `src/native_execution_consumer.cpp:9932-9983` | 354-355 |
+| Host feed lookup/delivery and column reads | `src/source/pine_security_eval.cpp:1059-1068,1286-1293,1312-1320` | 356-357 |
+| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `src/native_run_spec.cpp:254-276,730,995-998`; `src/native_execution_consumer.cpp:9470-9471,9494-9495` | 358-360 |
+| Instrument-feed digest and cached/uncached continuation folds | `src/native_run_spec.cpp:1124-1160`; `src/native_execution_consumer.cpp:321-323,1935-1936,12730-12735` | 361-362 |
+| Staged feed counts in host state and its hash | `src/source/pine_strategy_host.cpp:230-234`; `src/source/pine_state_hash.cpp:292-299` | 363-364 |
+| Refresh of symbol-data digest and host hash fold | `src/source/pine_security_eval.cpp:1536-1544`; `src/source/pine_state_hash.cpp:1123-1129` | 364-365 |
+| Restore/store upkeep and column-setter length check | `src/source/pine_security_eval.cpp:1091-1096,1420-1422` | 366-367 |
+| Lower-path preflight/validation | `src/native_execution_consumer.cpp:3148-3181` | 368,1198-1199 |
+| Lower-path digest (count first) and continuation hash | `src/native_run_spec.cpp:867-895`; `src/native_execution_consumer.cpp:288` | 368,1200-1201 |
+| Per-script-bar lower-path binary search/walk | `src/native_execution_consumer.cpp:8562-8576` | 368,1202 |
+| Scheduler sub-bar lookup and one-bar look-ahead | `src/source/pine_scheduler_native.cpp:252-264,296-298` | 368,1203-1204 |
+| Lower-path emptiness test | `src/source/pine_adapter.cpp:3420-3422` | 368,1205 |
+
+Every count/digest must fold the same bytes/order for copied and borrowed
+feeds, including cached and uncached paths (2.2:369-372). Views replace storage;
+metadata, validation and continuation identity remain the existing contract.
+
 ## OPEN items
 
 | ID | Unspecified by DESIGN; no policy inferred | Owner |
@@ -82,6 +123,8 @@ private files, as DESIGN permits. No mapped scratch or text-based metrics.
 | S2 | Internal writer error transport, oversized-line/unsafe-integer failure details, and what a repeated fill/capture does after a trailer; DESIGN requires repeatable metric reads but gives no writer reset/idempotence contract (3.3:547-548; 3.7:787,878-885). | CORE-TOP / L6a/L6b-1 |
 | T1 | Ledger reset/capacity API, reference/iterator invalidation, and empty-back/above-end error policy are not specified. Below-base internal access MUST throw engine_invariant; C accessors MUST use existing sentinels (3.4:610-613,661-667). | CORE-TOP / L8a/L8d |
 | M1 | Point-source malformed-region/bounds/short-read error transport and concurrent-reader rules are not specified; the 24-byte binary points, 64 KiB pread window and repeated forward walks ARE fixed (3.3:532-543; 3.8:899-906). | CORE-TOP / L6b-4/L7c |
+| V1 | Typed staging/accessor signatures, feed binding/lookup and absent-versus-present-empty view representation are not specified. DESIGN names stage_instrument_feed_views / stage_lower_path_source but no prototypes; none are invented (2.2:349-353). | CORE-TOP / L15a |
+| V2 | NativeLowerPathSource operation return/parameter types, visitor protocol and dispatch/error model are not specified. Only its forward declaration and required behavior are frozen; typed members await a ruling (2.2:347-348; 5:1214-1239). | CORE-TOP / L15a/L16 |
 
 ## Lab handoff
 
