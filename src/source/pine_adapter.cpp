@@ -3601,7 +3601,7 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // plans.
 // Pins, one per scan that reads rows of requests that are no longer live:
 //   K1 a lifecycle bound to an askable origin, an origin-free current-cycle
-//      leg, or a non-dormant current-cycle leg: the margin revival
+//      leg, or a completed non-dormant leg while flat: the margin revival
 //      resurrects dormant legs of the current cycle, the reversal suspension
 //      and the pair hold rewrite lifecycles, and exit() asks whether an
 //      opened origin's leg was consumed;
@@ -3694,15 +3694,15 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         return false;
     });
     const auto pinned_by_itself = [&](const PlacementSnapshot& value) {
-        // K1: completed non-dormant rows keep the legacy cycle/hash pin.
+        // K1: another open lot cannot pin a closed origin's leg for the cycle.
+        // Preserve completed non-dormant rows while flat, until the next cycle.
         const bool askable = contains(askable_origins, value.bracket_origin.incarnation);
         if (value.legs.target().incarnation != 0
             && ((value.placement_cycle >= cycle && !withdrawn(value.legs)
-                 && (!value.legs.dormant() || value.bracket_origin.incarnation == 0 || askable))
+                 && ((current_position_sign_ == 0 && !value.legs.dormant())
+                     || value.bracket_origin.incarnation == 0 || askable))
                 || (askable && !value.legs.dormant())
-                || std::find(origin_pins.begin(), origin_pins.end(), &value) != origin_pins.end())) {
-            return true;
-        }
+                || std::find(origin_pins.begin(), origin_pins.end(), &value) != origin_pins.end())) return true;
         // K4
         if (value.family == PineOrderFamily::Close && value.immediately
             && value.projection_created_bar >= interval) {
