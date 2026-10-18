@@ -229,7 +229,7 @@ public:
         return execution_consumer().continuation_hash();
     }
 
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
     std::vector<std::uint64_t> boundary;
     std::vector<std::size_t> quiet_allocations;
 
@@ -793,7 +793,7 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
     BacktestEngine::free_report(&report);
     out.final_hash = host.broker_state_hash();
     if (!portable) out.continuation = host.continuation();
-    out.trades = host.rows();
+    out.trades.assign(host.rows().begin(), host.rows().end());
     return out;
 }
 

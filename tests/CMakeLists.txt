@@ -7088,6 +7088,38 @@ target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c
 set_target_properties(test_cr150_contract_headers PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
+# CR-150 L7B: point-source equity metrics.  This registration intentionally
+# follows the P00 line-pinned block above (scope ruling SCOPE-RULING-1818.md).
+list(APPEND TEST_SOURCES test_metrics_point_source)
+pineforge_add_unit_test(test_metrics_point_source)
+
+# CR-150 L15a: append after every existing line-pinned registration.
+list(APPEND TEST_SOURCES test_native_bar_views_l15a)
+pineforge_add_unit_test(test_native_bar_views_l15a)
+
+add_test(NAME test_native_bar_views_guard_l15a
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_versions.py
+            --self-test-bar-views)
+
+# CR-150 L16: source-layer differential, appended after all line-pinned rows.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_magnifier_path_source_l16)
+    pineforge_add_unit_test(test_magnifier_path_source_l16)
+endif()
+
+# CR-150 L8a: keep the existing CMake line pins stable.
+list(APPEND TEST_SOURCES test_trade_ledger)
+pineforge_add_unit_test(test_trade_ledger)
+list(APPEND TEST_SOURCES test_report_sink_format)
+pineforge_add_unit_test(test_report_sink_format)
+
+list(APPEND TEST_SOURCES test_trade_percent_prefix)
+pineforge_add_unit_test(test_trade_percent_prefix)
+
+# CR-150 L7A: isolated trade-fold proof, after all line-pinned registrations.
+list(APPEND TEST_SOURCES test_trade_stats_accumulator)
+pineforge_add_unit_test(test_trade_stats_accumulator)
+
 # CR-150 L0B: append only; private_fixture_reads.evidence pins earlier lines.
 add_test(NAME test_heap_census
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_heap_census.py)

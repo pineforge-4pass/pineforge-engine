@@ -93,29 +93,43 @@ def parse_massif(text: str) -> Snapshot:
 # Attribution is deliberately symbol-specific. A whole-file match would hide
 # a newly discovered adapter allocation under an already assigned lane.
 # Unknown, ambiguous, stripped and threshold leaves all go to L19j.
+# Tokens name pushing functions or element types, never data members. A tuple
+# is an all-of rule: try_emplace allocates both uint64_t unfolded entries and
+# PlacementSnapshot nodes, and only the former belongs to L19h. The unsigned
+# long spellings below are the demangled forms of that uint64_t element type.
 OWNERS = (
-    ("L19d", ("OriginRoster::push_back", "OriginRoster::positions_")),
-    ("L19h", ("BracketRoster::", "PlacementTable::unfolded_")),
-    ("L19e", ("CommandObservation", "admission::Journal::append", "admission::Journal::reserve")),
-    ("L19c", ("vector<pineforge::native_order_v7::CohortReceipt", "cohort_receipts_")),
-    ("L19b", ("ReceiptKey", "group_effect_receipt", "receipts_")),
-    ("L19a", ("successor_roots_",)),
-    ("L19j", ("PlacementSnapshot", "PlacementTable::place")),
+    ("L19d", ("OriginRoster::push_back",)),
+    ("L19h", ("BracketRoster::",
+              ("PlacementTable::try_emplace", "vector<unsigned long,"),
+              ("PlacementTable::try_emplace", "vector<unsigned long long,"),
+              ("PlacementTable::replace", "vector<unsigned long,"),
+              ("PlacementTable::replace", "vector<unsigned long long,"))),
+    ("L19e", ("CommandObservation", "Journal::append", "Journal::reserve", "Journal::next_sequence")),
+    ("L19c", ("CohortReceipt",)),
+    ("L19b", ("ReceiptKey",)),
+    ("L19a", ("WorkingRequestCore::index_committed",)),
     ("L19l", ("PineExecutionAdapter::cohort_for", "CohortFacts", "CohortRoster",
-              "exit_rank_keys_", "cohorts_by_id_", "cohort_order_", "sequence_index_",
-              "erased_minima_", "consumed_partial_exit_cycles_")),
-    ("L19i (or L3/L4)", ("input_next_ms_",)),
+              "PineExecutionAdapter::note_exit_rank_key", "PlacementTable::fold_sequence",
+              "PlacementTable::SequenceMinima",
+              ("PineExecutionAdapter::on_applied", "basic_string<char", ", long"))),
+    ("L19j", ("PlacementSnapshot", "PlacementTable::place")),
+    ("L19i (or L3/L4)", ("NativeExecutionConsumer::begin_timeframe_subscriptions",)),
     ("L19k", ("tradingview_multi_day_stamps", "TimeframeAggregator::set_native_periods")),
-    ("L3", ("PineScheduler::capture_begin", "RetainedBegin::bars", "native_module::copy_bar")),
-    ("L4", ("script_bucket_completions", "completion_flags", "source_boundaries")),
-    ("L15a/L15b", ("PineStrategyHost::set_symbol_feed", "InstrumentFeed::bars")),
-    ("L16", ("build_tradingview_magnifier", "build_magnifier_intrabar", "magnifier_intrabars")),
-    ("L7b/L17b", ("compute_equity_stats", "monthly_returns", "month_end_values")),
-    ("L8a/L8c/L18", ("vector<pineforge::Trade", "pineforge::Trade::Trade", "closed_row_prefix_",
-                     "trade_exit_phase_", "append_native_close_trade")),
-    ("L6b-1/L6b-2/L17a", ("equity_curve_", "vector<pf_equity_point_t", "vector<pineforge::EquityPoint")),
-    ("L6b-3", ("output_values_", "broker_state_hashes_", "trace_values_")),
-    ("L9a/L9s/L17a", ("fill_equity_section", "fill_trades_section", "capture_presentation")),
+    ("L3", ("PineScheduler::capture_begin", "native_module::run_batch")),
+    ("L4", ("NativeExecutionConsumer::script_bucket_completions", "PineScheduler::run_begin")),
+    ("L15a/L15b", ("PineStrategyHost::set_symbol_feed",)),
+    ("L16", ("tradingview_magnifier_bars",)),
+    ("L7b/L17b", ("compute_equity_stats",)),
+    ("L8a/L8c/L18", ("vector<pineforge::Trade", "pineforge::Trade::Trade",
+                     "BacktestEngine::record_close_trade", "NativeExecutionConsumer::closed_rows_digest",
+                     "PineExecutionAdapter::set_exit_phase")),
+    ("L6b-1/L6b-2/L17a", ("BacktestEngine::record_equity_point", "vector<pf_equity_point_s",
+                         "vector<pf_equity_point_t")),
+    ("L6b-3", ("NativeExecutionConsumer::record_script_report_point", "PineStrategyHost::scheduler_record_broker_hash",
+               "BacktestEngine::output_bar", "BacktestEngine::record_output_event",
+               "BacktestEngine::trace(", "BacktestEngine::intern_trace_name", "BacktestEngine::fill_trace_section")),
+    ("L9a/L9s/L17a", ("BacktestEngine::fill_metrics_section", "BacktestEngine::fill_trades_section",
+                     "NativeExecutionConsumer::capture_presentation")),
 )
 
 
@@ -125,7 +139,8 @@ def owner(site: str) -> tuple[str, bool]:
     if "census_chart_ohlcv(" in site or "census_feed_close_ms(" in site:
         return "caller OHLCV", True
     for lane, symbols in OWNERS:
-        if any(symbol in site for symbol in symbols):
+        if any(all(token in site for token in ((symbol,) if isinstance(symbol, str) else symbol))
+               for symbol in symbols):
             return lane, False
     return "L19j", False
 
@@ -306,15 +321,19 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
     """Drive the real corpus CLI, preserving all of its per-probe settings.
 
     Wrap its documented on_report callback: after a successful engine call,
-    before report_free/strategy_free. Prefix only the primary chart; other
-    _load_bars feed loads use its final timestamp as their upper bound. This
-    is a retained-heap census, not a peak/load-transient measurement.
+    before report_free/strategy_free. Prefix the chart loaded inside Strategy.run,
+    not a planner's earlier report-only quote. Other _load_bars feed loads use
+    its final timestamp as their upper bound. Probe-request feeds use their
+    separate parser and are mapped before the request dictionary retains them.
+    This is a retained-heap census, not a peak/load-transient measurement.
     """
     sys.path.insert(0, str(ROOT / "scripts"))
     import run_strategy as runner
 
     original_load, original_run, original_init = runner._load_bars, runner.Strategy.run, runner.Strategy.__init__
+    original_parse_feed = runner._parse_requests_feed
     chart = {}
+    active_chart = None
     sink_state = {"sink": False, "streamable_policy": False, "history_declared": None}
     mappings = []
 
@@ -345,31 +364,48 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
 
             lib.run_backtest_full = full
 
+    def map_array(array, count=None):
+        count = len(array) if count is None else count
+        if not 0 <= count <= len(array):
+            raise ValueError("caller tape population exceeds its backing array")
+        if count == 0:
+            return (array._type_ * 0)()
+        # Keep caller-owned data out of the malloc census. This copies the
+        # exact bytes, including NaN payloads and negative zero, for bars,
+        # feed closes and named columns; engine-owned copies remain visible.
+        path = output / f"caller-ohlcv-{len(mappings)}.bin"
+        with path.open("w+b") as tape:
+            tape.write(memoryview(array).cast("B")[:ctypes.sizeof(array._type_) * count])
+            tape.flush()
+            mapping = mmap.mmap(tape.fileno(), 0)
+        mappings.append(mapping)
+        return (array._type_ * count).from_buffer(mapping)
+
+    def parse_feed(*args, **kwargs):
+        bars, closes, count, extras = original_parse_feed(*args, **kwargs)
+        # _read_probe_requests stores these returned arrays. Mapping only at
+        # the setter would leave the original ctypes allocations resident in
+        # its request dictionary and still manufacture L19j growth.
+        return (map_array(bars, count), map_array(closes, count), count,
+                [(name, map_array(values, count)) for name, values in extras])
+
     def load(path, **kwargs):
+        if active_chart is None:
+            return original_load(path, **kwargs)
+        is_chart = not chart and Path(path).resolve() == active_chart
         if chart:
             previous = kwargs.get("ohlcv_end_ms")
             kwargs["ohlcv_end_ms"] = min(previous, chart["end"]) if previous is not None else chart["end"]
         bars, count, identity = original_load(path, **kwargs)
-        if not chart:
+        if is_chart:
             if count < bars_limit:
                 raise ValueError(f"corpus prefix too short: {probe} has {count}, needs {bars_limit}")
             count = bars_limit
             chart.update(bars=count, end=int(bars[count - 1].timestamp))
-        if count == 0:
-            return bars, count, identity
-        # Only caller OHLCV may grow. Put these exact bytes in a mapping so
-        # Massif's malloc census does not mistake a ctypes input tape for an
-        # engine leak. Engine-owned copies remain malloc allocations and fail.
-        # Input-loading/transient RSS stays the L0 acceptance harness's job.
-        path = output / f"caller-ohlcv-{len(mappings)}.bin"
-        with path.open("w+b") as tape:
-            tape.write(memoryview(bars).cast("B")[:ctypes.sizeof(runner.BarC) * count])
-            tape.flush()
-            mapping = mmap.mmap(tape.fileno(), 0)
-        mappings.append(mapping)
-        return (runner.BarC * count).from_buffer(mapping), count, identity
+        return map_array(bars, count), count, identity
 
-    def run(self, *args, **kwargs):
+    def run(self, bars_csv, *args, **kwargs):
+        nonlocal active_chart
         previous = kwargs.get("on_report")
 
         def checkpoint(report):
@@ -384,7 +420,12 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
                 previous(report)
 
         kwargs["on_report"] = checkpoint
-        return original_run(self, *args, **kwargs)
+        chart.clear()
+        active_chart = Path(bars_csv).resolve()
+        try:
+            return original_run(self, bars_csv, *args, **kwargs)
+        finally:
+            active_chart = None
 
     # Derived feeds must be made fresh ONCE by CORE-TOP before starting the
     # census. Refuse a derivation attempt rather than racing its fixed .new.
@@ -395,6 +436,7 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
             raise ValueError("CORE-TOP must prepare derived corpus feeds before census")
 
     runner._load_bars, runner.Strategy.run, runner.ensure_derived = load, run, no_derive
+    runner._parse_requests_feed = parse_feed
     runner.Strategy.__init__ = initialize
     sys.argv = [str(ROOT / "scripts/run_strategy.py"), str(probe),
                 "--output", str(output / "engine_trades.csv"), "--no-trim-output"]
