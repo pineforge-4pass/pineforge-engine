@@ -60,6 +60,9 @@ public:
         spec.fee_kind = pineforge::NativeFeeKind::CashPerExecution;
         spec.fee_value = 0.0;
         spec.report_policy = pineforge::NativeReportPolicy::KernelRecorded;
+        // The lot stays open: include its range-end trade row so capture reaches
+        // the trade-before-window check ahead of the separate open-lot check.
+        spec.report_open_position_at_end = true;
         if (configure_native(spec).status != pineforge::NativeSetupStatus::Applied)
             throw std::runtime_error("carry-in fixture configuration rejected");
     }
@@ -450,6 +453,8 @@ void refusals(const Api& api, const std::string& directory) {
         assert(got.complete == 0 && got.sha256_hex[0] == '\0');
         assert(api.status(handle) != 0 || api.error(handle)[0] != '\0');
         if (mode == "selected") {
+            std::fprintf(stderr, "selected carry-in refusal: code=%s error=%s\n",
+                api.code(handle), api.error(handle));
             assert(std::strcmp(api.code(handle), "engine_invariant") == 0);
             assert(std::strstr(api.error(handle),
                 "native selected report: a trade was entered before the window start") != nullptr);

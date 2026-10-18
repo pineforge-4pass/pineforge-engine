@@ -135,7 +135,7 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
-The counts below describe the current API, including recorded outputs and the report sink.
+The counts below include recorded outputs and describe the released 1.5.0 API.
 
 The public C surface is **148 `PF_API` declarations** across the six installed headers that declare any:
 
