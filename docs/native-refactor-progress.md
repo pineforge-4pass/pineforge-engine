@@ -196,7 +196,7 @@ default `NativeEventRetention::Window` keeps no driver point and retires its
 journal at every script-bar boundary, so K4 has nothing to size.
 `reserve_driver_log` (`src/native_execution_consumer.cpp:3243-3248`) returns
 unless the retention is Full, and `presize_logs`
-(`src/native_execution_consumer.cpp:10278-10289`) sizes no journal under Window.
+(`src/native_execution_consumer.cpp:10276-10287`) sizes no journal under Window.
 `NativeRunSpec::event_retention` (`include/pineforge/native_run_spec.hpp:714`)
 defaults to Window, and the Pine adapter declares
 `NativeEventRetention::Window` (`src/source/pine_adapter.cpp:2996`). K4 still
