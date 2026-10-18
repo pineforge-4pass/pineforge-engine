@@ -51,10 +51,10 @@ strategy_set_magnifier_volume_weighted(s, 1);
 When the input feed is finer than the script timeframe, a compiled Pine
 strategy's magnifier does not walk the input bars: it walks the intrabars
 TradingView's bar magnifier walks, which the Pine host builds from the input
-(`tradingview_magnifier_bars` magnifier_intrabars.hpp:44). TradingView's help
+(`tradingview_magnifier_bars` magnifier_intrabars.hpp:46). TradingView's help
 centre ("What is bar magnifier backtesting mode") fixes the intrabar timeframe
 per chart timeframe, each row covering the charts from it up to the next row
-(`tradingview_intrabar_timeframe` magnifier_intrabars.hpp:19):
+(`tradingview_intrabar_timeframe` magnifier_intrabars.hpp:21):
 
 | Chart | Intrabar | Buildable from 1-minute bars |
 | --- | --- | --- |
