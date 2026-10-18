@@ -3679,9 +3679,9 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             && value.projection_created_bar >= interval) {
             return true;
         }
-        // K5: birth.bar() is script space; projection_created_bar is input space.
+        // K5: before on_bar_open updates it, policy_script_bar_ is the prior script bar.
         return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
-            && value.birth.bar() >= interval - 1;
+            && (!policy_script_bar_valid_ || value.placement_script_open_ms >= policy_script_bar_.timestamp);
     };
     // K1's cycle clause alone: a leg lifecycle of the current cycle, not
     // withdrawn, bound to no askable origin (a live one is askable itself).
