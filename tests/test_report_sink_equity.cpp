@@ -115,6 +115,9 @@ int l6b2_run_only(pf_strategy_t handle, const pf_bar_t* bars, int n, int magnifi
 void l6b2_snapshot(pf_strategy_t handle, EquitySnapshot* out) { *out = fixture(handle)->snapshot(); }
 int l6b2_rewalk(pf_strategy_t handle) { return fixture(handle)->matches_rewalk() ? 1 : 0; }
 void l6b2_remark(pf_strategy_t handle, double close) { fixture(handle)->remark(close); }
+int l6b2_quote(pf_strategy_t handle, std::int64_t time, double close) {
+    return fixture(handle)->set_report_terminal_quote(time, close) ? 1 : 0;
+}
 void l6b2_fill(pf_strategy_t handle, pf_report_t* out) {
     fixture(handle)->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
 }
@@ -167,6 +170,7 @@ struct Api {
     void (*snapshot)(pf_strategy_t, EquitySnapshot*) = symbol<decltype(snapshot)>(module, "l6b2_snapshot");
     int (*rewalk)(pf_strategy_t) = symbol<decltype(rewalk)>(module, "l6b2_rewalk");
     void (*remark)(pf_strategy_t, double) = symbol<decltype(remark)>(module, "l6b2_remark");
+    int (*quote)(pf_strategy_t, std::int64_t, double) = symbol<decltype(quote)>(module, "l6b2_quote");
     void (*fill)(pf_strategy_t, pf_report_t*) = symbol<decltype(fill)>(module, "l6b2_fill");
 };
 std::string read(const std::string& path) {
@@ -220,6 +224,8 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
     require(api.set(streamed, &sink) == 0, "sink install failed");
     for (const auto handle : {baseline, streamed}) {
         api.mode(handle, "mode", mode);
+        if (std::strcmp(mode, "quote") == 0)
+            require(api.quote(handle, bars.back().timestamp, 112.0) == 1, "terminal quote failed");
         if (selected) {
             // M=0: exercise the anchor-only presentation too.
             const auto start = bars.back().timestamp + 60000;
@@ -236,7 +242,7 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
     auto before = snapshot(api, streamed);
     if (!selected) {
         // FIRST RED on f00151f2: E is written only at fill, so this is zero.
-        require(receipt(api, streamed).count_e == before.count - 1,
+        require(receipt(api, streamed).count_e == (before.count > 0 ? before.count - 1 : 0),
                 "missing E hold-back: N-point run must emit N-1 E records before fill");
     }
     require(receipt(api, streamed).complete == 0, "sink completed before successful fill");
@@ -264,7 +270,8 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
             "F7: presentation mutated the engine's held point");
     require(std::memcmp(before.extremes, after.extremes, sizeof before.extremes) == 0,
             "presentation mutated engine extrema");
-    require(after.presented_length == 1, "sink presentation must receive a one-point copy");
+    require(after.presented_length == (expected.equity_curve_len > 0 ? 1 : 0),
+            "sink presentation must receive a one-point copy");
     require(std::memcmp(&expected.metrics, &actual.metrics, sizeof expected.metrics) == 0,
             "sink-on/off metrics differ");
     require(expected.net_profit == actual.net_profit && expected.total_trades == actual.total_trades,
@@ -286,7 +293,8 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
     require(std::memcmp(&before.last, &repeated.last, sizeof before.last) == 0,
             "repeated presentation mutated held point");
     // Reuse resets the streamed prefix; one point stays held until fill.
-    require(api.run(streamed, bars.data(), 1, 0) == 0, "reused run failed");
+    const auto single = feed(1);
+    require(api.run(streamed, single.data(), 1, 0) == 0, "reused run failed");
     require(receipt(api, streamed).count_e == 0 && receipt(api, streamed).complete == 0,
             "reused run retained the old E prefix");
     api.free(&again); api.free(&actual); api.free(&expected);
@@ -315,10 +323,13 @@ int main() {
         const std::string root = directory;
         compare(api, root + "/open.ndjson", "open", 17, false, false, false, true);
         compare(api, root + "/single.ndjson", "flat", 1);
+        compare(api, root + "/empty.ndjson", "flat", 0);
+        compare(api, root + "/two.ndjson", "open", 2, false, false, false, true);
         compare(api, root + "/random.ndjson", "open", 513);
         compare(api, root + "/present.ndjson", "present", 17);
         compare(api, root + "/observed.ndjson", "present", 17, true);
         compare(api, root + "/magnifier.ndjson", "open", 61, false, false, true);
+        compare(api, root + "/quote.ndjson", "quote", 61, false, false, true);
         compare(api, root + "/anchor.ndjson", "flat", 8, false, true);
         failed_run(api, root + "/failed.ndjson");
         std::printf("L6b-2 hold-back, exact tail fold, presentation copy: passed (%s)\n", directory);
