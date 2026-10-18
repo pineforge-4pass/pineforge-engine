@@ -5,10 +5,13 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <limits>
+#include <memory>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -72,8 +75,23 @@ public:
         set_syminfo_mintick(0.25);
     }
     void on_source_bar(const Bar&) override {
-        if (bar_index_ == 0 || bar_index_ == 2)
+        if (bar_index_ == 0 || bar_index_ == 2) {
             strategy_entry("unaffordable", true, kNa, kNa, 100000.0);
+            // The native route refuses this quantity before submit() appends
+            // an Admitted observation. Exercise the rejection reader with an
+            // explicit Journal API input, independent of that producer path.
+            auto& journal = market_admission_journal();
+            auto observation = std::make_shared<admission::CommandObservation>();
+            observation->command = journal.next_sequence();
+            observation->bar = bar_index_;
+            observation->id = "reader-rejection";
+            observation->requested_quantity = 100000.0;
+            admission::CommandEvent event;
+            event.observation = std::move(observation);
+            event.outcome = admission::Outcome::RejectedAffordability;
+            journal.append(std::move(event));
+            CHECK(compat::pine::last_rejected_command_bar(journal) == bar_index_);
+        }
     }
 };
 
@@ -112,6 +130,7 @@ void recording_and_prefix_identity() {
     CHECK(prefix.market_admission_journal().events().empty());
     CHECK(off.broker_state_hash() == on.broker_state_hash());
     CHECK(off.trade_count() == on.trade_count());
+    const auto before_report = on.broker_state_hash();
     ReportC whole{};
     ReportC part{};
     on.fill_report(&whole);
@@ -121,8 +140,13 @@ void recording_and_prefix_identity() {
     if (whole.broker_state_hash_len == 64 && part.broker_state_hash_len == 32) {
         for (int i = 0; i < 32; ++i)
             CHECK(part.broker_state_hash[i] == whole.broker_state_hash[i]);
+        if (whole.broker_state_hash[63] != on.broker_state_hash())
+            std::fprintf(stderr, "hash boundary: recorded=%016" PRIx64
+                " scalar_after_run=%016" PRIx64 " scalar_after_report=%016" PRIx64 "\n",
+                whole.broker_state_hash[63], before_report, on.broker_state_hash());
         CHECK(whole.broker_state_hash[63] == on.broker_state_hash());
     }
+    CHECK(on.broker_state_hash() == before_report);
     const auto digest = on.broker_state_hash();
     CHECK(on.broker_state_hash() == digest);
     BacktestEngine::free_report(&whole);
