@@ -3679,9 +3679,9 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             && value.projection_created_bar >= interval) {
             return true;
         }
-        // K5
+        // K5: birth.bar() is script space; projection_created_bar is input space.
         return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
-            && value.projection_created_bar >= interval - 1;
+            && value.birth.bar() >= interval - 1;
     };
     // K1's cycle clause alone: a leg lifecycle of the current cycle, not
     // withdrawn, bound to no askable origin (a live one is askable itself).
@@ -3694,9 +3694,9 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     auto& held = sweep.held;
     bool unpinned = false;
     // A row no cycle holds that a pin of its own keeps is passed over
-    // whatever the askable origins say, so it is tested before their search:
-    // on a chart that gathers input bars K5 keeps every entry row of the run,
-    // and this walk visits each of them at every bar open.
+    // whatever the askable origins say, so it is tested before their search.
+    // K5 ages in script-bar space even when a chart gathers finer input;
+    // only the current and previous script bars keep their retired commands.
     auto askable_cursor = askable_origins.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         const bool cycle_held = held_by_cycle(value);
