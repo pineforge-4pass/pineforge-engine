@@ -14492,13 +14492,23 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
     // Cancellation can synchronously change source state. Copy the family
     // roster and release the map iterator before issuing any host operation.
     std::vector<native_order::RequestHandle> handles;
+    std::size_t settled = 0;
+    native_order::RunIdentity settled_run{};
     bool found_family = false;
     if (const auto found = bracket_families_.find(key); found != bracket_families_.end()) {
         handles = found->second.members();
+        settled = found->second.settled_count();
+        settled_run = found->second.run_identity();
         bracket_families_.erase(found);
         found_family = true;
     }
     if (!found_family) return;
+    // Settled members no longer retain incarnation bytes. They have already
+    // left the working book, so a same-run sentinel is classified as
+    // NotWorking and emits the same compact cancel event while advancing the
+    // command ordinal once per settled member.
+    for (std::size_t index = 0; index < settled; ++index)
+        (void)require_host().cancel(native_order::RequestHandle{settled_run, 0});
     for (const auto& handle : handles) {
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);

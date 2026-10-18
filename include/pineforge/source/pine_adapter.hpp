@@ -1255,6 +1255,9 @@ public:
     // its running digest -- with every parked run's place, count and digest
     // folded after it while any is parked (R5 lane V19-D).
     std::size_t settled_count() const noexcept { return settled_count_; }
+    // The run identity is enough to reproduce a settled member's non-working
+    // cancel outcome after its incarnation bytes have been dropped.
+    native_order::RunIdentity run_identity() const noexcept { return run_; }
     std::uint64_t settled_digest() const noexcept {
         std::uint64_t digest = settled_digest_;
         for (const auto& run : parked_) {
