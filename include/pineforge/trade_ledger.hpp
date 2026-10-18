@@ -31,9 +31,9 @@ inline namespace engine_script_run_v19 {
 /// streamed row answers 0 for entry incarnation, NULL for ids/comment, -1
 /// for close cause; no exception crosses C (3.4:666-670).
 ///
-/// OPEN T1: DESIGN does not specify reset/capacity operations, reference or
-/// iterator invalidation, or empty-back/above-end error policy. Those are
-/// not additional guarantees of this declaration. Representation is opaque.
+/// RESOLVED T1: CORE-TOP's rev 6 amendment (10-18 16:04) supplies reset,
+/// capacity hints, checked access and the empty query below. References and
+/// iterators invalidate as a std::vector's. Representation is opaque.
 class TradeLedger {
 public:
     using size_type = std::size_t;
@@ -48,14 +48,29 @@ public:
     TradeLedger(TradeLedger&&);
     TradeLedger& operator=(TradeLedger&&);
 
+    /// Reset size() to 0 and base() to 0 (RESOLVED T1 amendment).
+    void clear();
+
+    /// Capacity hint (RESOLVED T1 amendment).
+    void reserve(size_type);
+
     /// Total logical row count, NOT resident count (3.4:613-618).
     /// Resident count is size()-base(); sealed rows remain in total counts.
     size_type size() const;
     size_type base() const;
 
+    /// True exactly when size() == 0 (RESOLVED T1 amendment).
+    bool empty() const;
+
     /// Global-index access to the resident window (3.4:613-616,664-665).
     Trade& operator[](size_type global);
     const Trade& operator[](size_type global) const;
+
+    /// Checked global-index access (RESOLVED T1 amendment). Both forms
+    /// throw engine_invariant below base() or at/after size().
+    Trade& at(size_type global);
+    const Trade& at(size_type global) const;
+
     Trade& back();
     const Trade& back() const;
 

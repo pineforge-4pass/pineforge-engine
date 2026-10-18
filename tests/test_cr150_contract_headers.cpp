@@ -71,6 +71,16 @@ static_assert(std::is_same_v<decltype(std::declval<Ledger&>()[Ledger::size_type{
 static_assert(std::is_same_v<decltype(std::declval<const Ledger&>()[Ledger::size_type{}]),
                              const pineforge::Trade&>);
 
+// CORE-TOP rev 6 amendment (10-18 16:04), T1: new frozen signatures only.
+static_assert(std::is_same_v<decltype(&Ledger::clear), void (Ledger::*)()>);
+static_assert(std::is_same_v<decltype(&Ledger::reserve),
+                             void (Ledger::*)(Ledger::size_type)>);
+static_assert(std::is_same_v<decltype(&Ledger::empty), bool (Ledger::*)() const>);
+static_assert(std::is_same_v<decltype(std::declval<Ledger&>().at(Ledger::size_type{})),
+                             pineforge::Trade&>);
+static_assert(std::is_same_v<decltype(std::declval<const Ledger&>().at(Ledger::size_type{})),
+                             const pineforge::Trade&>);
+
 // DESIGN 3.3:529,535-551 and 3.8:906-907: the accumulator accepts TradeC,
 // finish is a const read, and both sources expose exact 24-byte points.
 using Accumulator = pineforge::metrics::TradeStatsAccumulator;

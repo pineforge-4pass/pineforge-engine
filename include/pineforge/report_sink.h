@@ -38,8 +38,8 @@ typedef struct pf_report_sink_v1 {
  *  trades_retained is 1 when closedtrades.* history also stays in RAM.
  *  The explicit seven-byte reserved field gives a 144-byte layout with no
  *  implicit padding. PF_ABI_VERSION stays 4; no existing report/trade grows.
- *  OPEN S1: receipt query return codes, caller initialization and output on
- *  refusal are not specified by DESIGN; see docs/design/cr150-contracts.md. */
+ *  RESOLVED S1: receipt query initialization and outcomes follow the
+ *  CORE-TOP rev 6 amendment (10-18 16:04); see the query declaration below. */
 typedef struct pf_report_sink_receipt_v1 {
     uint32_t struct_size, version;
     int64_t  count_e, count_t, count_o, count_v, count_k, count_x, count_h;
@@ -74,7 +74,15 @@ PF_API uint32_t pf_report_sink_version(void);
  *  entry points and report behavior stay unchanged (6:1352-1354). */
 PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
 
-/** Query the sink receipt (DESIGN 6:1302; OPEN S1 above).
+/** Query the sink receipt (DESIGN 6:1302; RESOLVED S1).
+ *  CORE-TOP's rev 6 amendment (10-18 16:04) uses the observation query
+ *  strategy_execution_observation_v1 in execution_observer.h as its model.
+ *  The caller first sets out->struct_size and out->version.
+ *
+ *  Returns 0 with the receipt filled; -1 with *out unchanged for a bad
+ *  handle, struct_size or version. With no sink installed, returns 0 with
+ *  all counts 0, sha256_hex "", complete 0.
+ *
  *  Failed, refused, aborted or truncated runs have no valid trailer
  *  (3.7:791-793); a receipt without completion is not a valid sink. */
 PF_API int strategy_report_sink_receipt_v1(pf_strategy_t, pf_report_sink_receipt_v1*);

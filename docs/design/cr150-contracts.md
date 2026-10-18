@@ -8,6 +8,11 @@ design lane's `PARALLEL-PLAN.md`, lines 27–30 and 63. C++ declarations spell
 the operations described by DESIGN; OPEN items below preserve its unspecified
 policies.
 
+CORE-TOP's rev 6 amendment (10-18 16:04) in the external design lane's
+`core-cr150-design/work/REVISION.md`, lines 342–348, resolves S1 and T1.
+References to amendment S1 or T1 below name that ruling, which binds L6b-1
+and L8a respectively.
+
 These are declarations only. No existing file, execution path, feature probe,
 version or caller-visible layout is changed. Definitions and lab proof belong
 to CORE-TOP and the implementation lanes. Nothing is built, compiled or tested
@@ -15,13 +20,13 @@ on the P00 machine.
 
 ## Sink ABI and line writer
 
-| File / declaration | DESIGN section and lines | Implementing lane |
+| File / declaration | DESIGN / amendment authority | Implementing lane |
 |---|---|---|
 | `include/pineforge/report_sink.h`: `pf_report_sink_v1` | 6:1283-1289,1307-1309 | L6b-1 |
 | `pf_report_sink_receipt_v1` and its layout assertions | 6:1291-1298,1305-1306 | L6b-1 |
 | `pf_report_sink_version(void)` | 6:1300 | L6b-1 |
 | `strategy_set_report_sink_v1(pf_strategy_t,const pf_report_sink_v1*)` | 6:1301,1307-1317 | L6b-1 |
-| `strategy_report_sink_receipt_v1(pf_strategy_t,pf_report_sink_receipt_v1*)` | 6:1302; 3.7:791-793 | L6b-1 |
+| `strategy_report_sink_receipt_v1(pf_strategy_t,pf_report_sink_receipt_v1*)` | 6:1302; 3.7:791-793; amendment S1 | L6b-1 |
 | `include/pineforge/report_sink_writer.hpp`: `report_sink::RecordSet` | 3.7:795-809,823-831; 6:1310-1311 | L6a/L6b-3 |
 | `report_sink::Trailer` | 3.7:833-837; 6:1291-1298 | L6a |
 | `report_sink::f64(double)` | 3.7:850-853,858-875 | L6a |
@@ -43,11 +48,16 @@ header in P00. O/V/K/X/H operations remain L6b-3's extension.
 
 ## TradeLedger
 
-| File / declaration | DESIGN section and lines | Implementing lane |
+| File / declaration | DESIGN / amendment authority | Implementing lane |
 |---|---|---|
 | `include/pineforge/trade_ledger.hpp`: `engine_script_run_v19::TradeLedger`, type aliases, lifetime/copy/move declarations, opaque `State` | 3.4:612-620; 6:1344-1347 | L8a |
+| `TradeLedger::clear()` | Amendment T1: size 0, base 0 | L8a |
+| `TradeLedger::reserve(size_type)` | Amendment T1: a capacity hint | L8a |
 | `TradeLedger::size() const`, `base() const` | 3.4:613-618 | L8a |
+| `TradeLedger::empty() const` | Amendment T1: size() == 0 | L8a |
 | `TradeLedger::operator[](size_type)` (mutable/const), `back()` (mutable/const) | 3.4:613-616,664-670 | L8a/L8d |
+| `TradeLedger::at(size_type global)` | Amendment T1: engine_invariant below base() or at/after size() | L8a |
+| `TradeLedger::at(size_type global) const` | Amendment T1: the same checked bounds and const result | L8a |
 | `TradeLedger::push_back(const Trade&)`, `push_back(Trade&&)` | 3.4:613-616 | L8a |
 | `TradeLedger::resize(size_type)` | 3.4:614,664-665 | L8a |
 | `TradeLedger::begin()/end()` (mutable/const) | 3.4:615 | L8a |
@@ -57,6 +67,8 @@ The total-count versus resident-window distinction and closedtrades.*
 retention exception are binding doc contracts (3.4:613-620,690-711).
 `set_trade_history_streamable` and its feature probe remain the engine/codegen
 lanes' work; P00 neither advertises them nor changes `trades_`.
+
+References and iterators invalidate as a `std::vector`'s (amendment T1).
 
 ## Metric accumulator and point sources
 
@@ -118,16 +130,19 @@ Every count/digest must fold the same bytes/order for copied and borrowed
 feeds, including cached and uncached paths (2.2:372-375). Views replace storage;
 metadata, validation and continuation identity remain the existing contract.
 
-## OPEN items
+## Contract item status
 
-| ID | Unspecified by DESIGN; no policy inferred | Owner |
-|---|---|---|
-| S1 | Receipt query return codes, required caller initialization, refusal output, and query behavior without a configured sink (6:1302). | CORE-TOP / L6b-1 |
-| S2 | Internal writer error transport, oversized-line/unsafe-integer failure details, and what a repeated fill/capture does after a trailer; DESIGN requires repeatable metric reads but gives no writer reset/idempotence contract (3.3:550-551; 3.7:790,881-888). | CORE-TOP / L6a/L6b-1 |
-| T1 | Ledger reset/capacity API, reference/iterator invalidation, and empty-back/above-end error policy are not specified. Below-base internal access MUST throw engine_invariant; C accessors MUST use existing sentinels (3.4:613-616,664-670). | CORE-TOP / L8a/L8d |
-| M1 | Point-source malformed-region/bounds/short-read error transport and concurrent-reader rules are not specified; the 24-byte binary points, 64 KiB pread window and repeated forward walks ARE fixed (3.3:535-546; 3.8:902-909). | CORE-TOP / L6b-4/L7c |
-| V1 | Typed staging/accessor signatures, feed binding/lookup and absent-versus-present-empty view representation are not specified. DESIGN names stage_instrument_feed_views / stage_lower_path_source but no prototypes; none are invented (2.2:352-356). | CORE-TOP / L15a |
-| V2 | NativeLowerPathSource operation return/parameter types, visitor protocol and dispatch/error model are not specified. Only its forward declaration and required behavior are frozen; typed members await a ruling (2.2:350-351; 5:1237-1262). | CORE-TOP / L15a/L16 |
+| ID | Status | Contract / remaining gap | Owner |
+|---|---|---|---|
+| S1 | RESOLVED | Amendment S1: caller sets struct_size and version; 0 with the receipt filled; -1 with *out unchanged for a bad handle, struct_size or version. No sink installed: 0, counts 0, sha256_hex "", complete 0. | L6b-1 |
+| S2 | OPEN | Internal writer error transport, oversized-line/unsafe-integer failure details, and what a repeated fill/capture does after a trailer; DESIGN requires repeatable metric reads but gives no writer reset/idempotence contract (3.3:550-551; 3.7:790,881-888). | CORE-TOP / L6a/L6b-1 |
+| T1 | RESOLVED | Amendment T1: clear() resets size/base to 0; reserve(size_type) is a hint; both at(size_type global) forms throw engine_invariant below base() or at/after size(); empty() const means size() == 0. References and iterators invalidate as a std::vector's. | L8a |
+| M1 | OPEN | Point-source malformed-region/bounds/short-read error transport and concurrent-reader rules are not specified; the 24-byte binary points, 64 KiB pread window and repeated forward walks ARE fixed (3.3:535-546; 3.8:902-909). | CORE-TOP / L6b-4/L7c |
+| V1 | OPEN | Typed staging/accessor signatures, feed binding/lookup and absent-versus-present-empty view representation are not specified. DESIGN names stage_instrument_feed_views / stage_lower_path_source but no prototypes; none are invented (2.2:352-356). | CORE-TOP / L15a |
+| V2 | OPEN | NativeLowerPathSource operation return/parameter types, visitor protocol and dispatch/error model are not specified. Only its forward declaration and required behavior are frozen; typed members await a ruling (2.2:350-351; 5:1237-1262). | CORE-TOP / L15a/L16 |
+
+S1's model is the observation query, `strategy_execution_observation_v1`
+`include/pineforge/execution_observer.h:134-141`.
 
 ## Lab handoff
 
