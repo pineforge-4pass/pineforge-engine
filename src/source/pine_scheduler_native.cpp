@@ -21,7 +21,11 @@ PineScheduler::~PineScheduler() = default;
 
 void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     RetainedBegin next;
-    if (args.bars && args.n > 0) next.bars.assign(args.bars, args.bars + args.n);
+    if (args.bars && args.n > 0) {
+        if (args.is_stream) next.owned.assign(args.bars, args.bars + args.n);
+        next.bars = InputView(args.is_stream ? next.owned.data() : args.bars,
+                              static_cast<std::size_t>(args.n));
+    }
     next.input_tf = args.input_tf; next.script_tf = args.script_tf;
     next.bar_magnifier = args.bar_magnifier; next.magnifier_samples = args.magnifier_samples;
     next.distribution = args.magnifier_distribution;
@@ -31,6 +35,7 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     next.is_stream = args.is_stream; next.warmup_n = args.warmup_n;
     next.simple_run = args.simple_run;
     retained_ = std::move(next);
+    retained_n_ = retained_.bars.size();
     confirmed_input_bars_ = {};
     confirmed_input_next_ = 0;
     confirmed_input_count_ = 0;
@@ -38,6 +43,12 @@ void PineScheduler::capture_begin(const NativeBeginArgs& args) {
     confirmed_open_input_next_ = 0;
     confirmed_open_input_count_ = 0;
     reset_consumed_digests();
+}
+
+void PineScheduler::release_batch_input() noexcept {
+    if (retained_.is_stream) return;
+    fold_consumed_digests();
+    retained_.bars = {};
 }
 
 void PineScheduler::reset_consumed_digests() noexcept {
@@ -150,7 +161,7 @@ namespace {
 // engine's fault and fails as engine_invariant; no count is guessed.
 int selected_executed_source_bars(const PineStrategyHost& host, const NativeRunSpec* spec,
                                   const pf_selected_window_config_v1& window,
-                                  const std::vector<Bar>& retained) {
+                                  PineScheduler::InputView retained) {
     if (spec == nullptr) {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "selected run begin without a running spec for its "

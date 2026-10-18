@@ -130,6 +130,9 @@ public:
     std::vector<Bar> seen;
     int stop_at = -1;
     bool throw_at_stop = false;
+    bool reenter = false;
+    bool reentered = false;
+    bool kept_outer_input = false;
 
     SourceProbe() {
         set_syminfo_timezone("UTC");
@@ -141,6 +144,13 @@ public:
     }
     void on_source_bar(const Bar& bar) override {
         seen.push_back(bar);
+        if (reenter && !reentered) {
+            reentered = true;
+            const Bar* input = retained_data();
+            const std::size_t n = retained_size();
+            static_cast<BacktestEngine*>(this)->run(nullptr, 0, "1", "1");
+            kept_outer_input = retained_data() == input && retained_size() == n;
+        }
         if (pine_bar_index() != stop_at) return;
         if (throw_at_stop) throw std::runtime_error("L3 callback failure");
         request_abort();
@@ -288,6 +298,20 @@ void failed_batch_releases_input(bool throws) {
     CHECK(!pine.has_retained_after());
 }
 
+void nested_batch_keeps_outer_input() {
+    scenario = "refused nested batch leaves the outer input attached";
+    SourceProbe pine;
+    pine.reenter = true;
+    const auto bars = chart(8);
+    pine.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    CHECK(pine.reentered);
+    CHECK(pine.kept_outer_input);
+    CHECK(pine.retained_data() == nullptr);
+    CHECK(pine.retained_size() == 0);
+    CHECK(!pine.has_next());
+    CHECK(!pine.has_retained_after());
+}
+
 // Use a bare native host so its begin callback observes only the wrapper's
 // transport: both C entries must pass the original pointer. The source
 // scheduler's independent check above proves warmup owns its one copy.
@@ -382,6 +406,7 @@ int main() {
     empty_and_refused_begins();
     failed_batch_releases_input(false);
     failed_batch_releases_input(true);
+    nested_batch_keeps_outer_input();
     c_wrappers_pass_the_original_array();
     stream_keeps_owned_warmup();
     std::printf("test_chart_store_once: %d checks, %d failures\n", checks, failures);

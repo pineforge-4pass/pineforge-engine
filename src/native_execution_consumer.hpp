@@ -2318,7 +2318,11 @@ private:
             if (tracked_)
                 c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
                                             allow_live_);
-            if (!allow_live_ || !c_.running()) c_.detach_bar_views();
+            if (!allow_live_ || !c_.running()) {
+                if (c_.batch_input_release_)
+                    c_.batch_input_release_(c_.batch_input_owner_);
+                c_.detach_bar_views();
+            }
         }
         EntryExitGuard(const EntryExitGuard&) = delete;
         EntryExitGuard& operator=(const EntryExitGuard&) = delete;
@@ -2423,7 +2427,19 @@ private:
     std::optional<CalcGroup> calc_group_;
     bool calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const;
 
+    // Transport lifetime only, not broker state: the attached host releases
+    // its borrowed begin array at the outer public exit. Neither address nor
+    // callback identity affects matching or the consumed-prefix hash. They
+    // remain installed for the host lifetime; nested entries never call them.
+    void* batch_input_owner_ = nullptr;
+    void (*batch_input_release_)(void*) noexcept = nullptr;
+
 public:
+    void set_batch_input_release(void* owner, void (*release)(void*) noexcept) noexcept {
+        batch_input_owner_ = owner;
+        batch_input_release_ = release;
+    }
+
     // Projection judges the host's pending context without publishing it via
     // bar_views(), which is active-only. No installed host surface changes.
     NativeRunSpecValidation normalize_projected_spec(NativeRunSpec& spec) const noexcept {
