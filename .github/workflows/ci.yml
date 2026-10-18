@@ -32,8 +32,8 @@ env:
   # catalog from the checked-in diff), which only a clone without tags needs.
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
-# Every job uses the free standard runners for every event (owner cost stop,
-# 2026-10-18). The ci-spot labels replace them when that pool is live.
+# The ci-spot pool is live (2026-10-18): Linux x64 builds use its 16-vCPU
+# class, light jobs its 4-vCPU class. Forks and untrusted events stay hosted.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner, time limit and job count; every
 # job's limit is the platform's own 360-minute maximum, the only hang catcher
@@ -44,10 +44,18 @@ jobs:
   # rule, and every doubt answers no. On a docs-only pull request or push the
   # proof jobs below skip and the build aggregate accepts exactly that skip.
   # Preflight, where the documentation guards run, does not wait for it, and
-  # docs.yml builds the site as before. A few seconds of git: the standard
-  # runner, for every event.
+  # docs.yml builds the site as before. A few seconds of git: the light pool
+  # class, with the public fragment's hosted fallback.
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     timeout-minutes: 360
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
@@ -76,7 +84,15 @@ jobs:
           fi
 
   preflight:
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     # 360 minutes is GitHub's job maximum and deliberately the only limit:
     # its verifier-tests stage runs test_ci_verify.py across parallel unittest
     # shards, and no stage of this preflight carries a timeout of its own any
@@ -150,9 +166,22 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-26]
         build_type: [Release, Debug]
+        include:
+          - os: ubuntu-24.04
+            runner: >-
+              ${{ github.event_name != 'pull_request_target' &&
+                  github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+                  contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+                  (github.event_name != 'pull_request' ||
+                   (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+                  fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+          - os: macos-26
+            runner: macos-26
 
-    # matrix.os selects the standard runner for every event.
-    runs-on: ${{ matrix.os }}
+    # Only Linux x64 legs use the pool; macOS keeps its hosted image and name.
+    runs-on: ${{ matrix.runner }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 
     steps:
       - uses: actions/checkout@v4
@@ -231,13 +260,20 @@ jobs:
   sanitizers:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
     # 360 minutes (the platform maximum). No CTest stage bound remains: main's
     # full set ran out of the old 30- and 60-minute stage bounds twice, and
     # the owner rule of 2026-10-12 removed the bounds rather than raising
     # them again.
     timeout-minutes: 360
     env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
@@ -295,7 +331,15 @@ jobs:
   kernel-only:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 22.3 min on the standard runner at 0d76a099; every event runs the whole
     # kernel set. 360 minutes is the platform maximum, the only hang catcher
     # (owner rule, 2026-10-12).
@@ -377,8 +421,16 @@ jobs:
     name: build
     needs: [changes, preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
     if: always()
-    # A few seconds of shell: the standard runner, for every event.
-    runs-on: ubuntu-24.04
+    # A few seconds of shell: the light class, with the hosted fallback.
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     timeout-minutes: 360
     steps:
       - name: Require every verification lane to have passed
