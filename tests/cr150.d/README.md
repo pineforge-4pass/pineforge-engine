@@ -1,0 +1,1 @@
+Each CR-150 lane has one file named `<lane>.cmake` holding that lane's `list(APPEND TEST_SOURCES ...)` and `pineforge_add_unit_test(...)` lines in the same one-line-per-item form; files are included in sorted name order after everything else in `tests/CMakeLists.txt`, and a lane must never edit another lane's file.

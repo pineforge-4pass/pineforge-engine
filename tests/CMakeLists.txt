@@ -7110,3 +7110,12 @@ pineforge_add_unit_test(test_report_sink_format)
 
 list(APPEND TEST_SOURCES test_trade_percent_prefix)
 pineforge_add_unit_test(test_trade_percent_prefix)
+
+add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
+
+# CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
+file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
+list(SORT CR150_LANE_CMAKE)
+foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
+    include("${cr150_lane_file}")
+endforeach()
