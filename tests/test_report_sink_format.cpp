@@ -4,6 +4,7 @@
 #include <pineforge/version.h>
 #include "../src/sha256.hpp"
 
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -63071,12 +63072,14 @@ void test_reader(const std::string& directory) {
     const pid_t child = fork();
     require(child >= 0, "cannot fork reader proof");
     if (child == 0) {
-        execlp("python3", "python3", "-c", reader_checks, docker.c_str(), directory.c_str(),
+        execlp("python3", "python3", "-I", "-B", "-c", reader_checks, docker.c_str(), directory.c_str(),
                static_cast<char*>(nullptr));
         _exit(127);
     }
     int status = 0;
-    require(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+    pid_t waited;
+    do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+    require(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
             "Python reference reader proof failed");
 }
 
