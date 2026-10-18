@@ -9,6 +9,7 @@
 #include "../src/source/pine_placement_retention.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -38,6 +39,13 @@ struct PlacementTag {
     friend type access(PlacementTag);
 };
 template struct PrivateAccess<PlacementTag, &source::PineExecutionAdapter::placement_>;
+
+struct SubmitTag {
+    using type = std::optional<native_order::RequestHandle> (source::PineExecutionAdapter::*)(
+        native_order::Request, source::PlacementSnapshot, bool, const source::SourceId&);
+    friend type access(SubmitTag);
+};
+template struct PrivateAccess<SubmitTag, &source::PineExecutionAdapter::submit_or_replace>;
 
 struct Fold {
     std::uint64_t h = 1469598103934665603ULL;
@@ -241,6 +249,98 @@ private:
     int last_signal_ = -1;
 };
 
+// A delayed/recreated command preserves its immutable birth but is submitted
+// on a later bar. Exercise that production boundary directly, with a real
+// native request and cancellation; no model of the retirement predicate.
+class LatePlacementHost final : public source::PineStrategyHost {
+public:
+    LatePlacementHost() {
+        source::PineStrategyConfig config;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.25);
+    }
+
+    int callbacks = 0;
+    const source::PlacementTable& rows() const { return adapter_.*access(PlacementTag{}); }
+
+    void on_source_bar(const Bar&) override {
+        ++callbacks;
+        const int script = pine_bar_index();
+        if (script == 3) {
+            const auto point = current_execution_point();
+            require(point.has_value(), "late placement has no callback point");
+            input_ = point->decision.coordinate.input_interval_index;
+            for (std::size_t i = 0; i < handles_.size(); ++i) {
+                const std::string id = i == 0 ? "late-entry" : "late-order";
+                native_order::Request request;
+                request.label = id;
+                request.intent = native_order::Transact{1.0};
+                request.trigger = native_order::Limit{50.0};
+                source::PlacementSnapshot snapshot;
+                snapshot.family = i == 0 ? source::PineOrderFamily::Entry
+                                         : source::PineOrderFamily::Order;
+                snapshot.source_id = id;
+                snapshot.requested_qty = 1.0;
+                snapshot.exit_levels.limit = 50.0;
+                snapshot.birth = OrderBirth::chart_evaluation(0, kStart);
+                snapshot.sizing.equity = 1000000.0;
+                snapshot.sizing.price = 100.0;
+                snapshot.sizing.mark = 100.0;
+                snapshot.sizing.fx = 1.0;
+                snapshot.sizing.frozen_units = 1.0;
+                const auto accepted = (adapter_.*access(SubmitTag{}))(
+                    std::move(request), std::move(snapshot), true, id);
+                require(accepted.has_value(), "late placement was not accepted");
+                handles_[i] = accepted->incarnation;
+                strategy_cancel(id);
+                const auto& row = rows().at(handles_[i]);
+                require(row.birth.bar() == 0 && row.projection_created_bar == input_,
+                        "late submission changed birth or failed to stamp the input projection");
+            }
+        }
+        if (script == 4) {
+            for (const auto handle : handles_) {
+                require(rows().contains(handle),
+                        "K5 aged a late placement by its older command birth");
+                require(rows().at(handle).birth.bar() == 0
+                            && rows().at(handle).projection_created_bar == input_,
+                        "late placement provenance changed while retained");
+            }
+        }
+        if (script == 5) {
+            for (const auto handle : handles_)
+                require(!rows().contains(handle), "late placement outlived its K5 window");
+        }
+    }
+
+    void hash_host_extension(BrokerStateHashSink& sink) const override {
+        source::PineStrategyHost::hash_host_extension(sink);
+        sink.s("cr150-l19f/late-placement/v1");
+        sink.i(callbacks); sink.i(input_);
+        for (const auto handle : handles_) sink.u(handle);
+    }
+
+private:
+    std::array<std::uint64_t, 2> handles_{};
+    int input_ = -1;
+};
+
+void run_late_case(const Path& path) {
+    const RetentionReference retention(false);
+    const auto bars = make_bars(8, path);
+    LatePlacementHost host;
+    host.run(bars.data(), static_cast<int>(bars.size()), "1", path.split ? "15" : "1",
+             path.magnifier, 4, MagnifierDistribution::ENDPOINTS);
+    require(host.last_error().empty(), std::string(path.name) + ": " + host.last_error());
+    require(host.callbacks == 8 && host.rows().high_water() == 2
+                && host.rows().erased_rows() == 2 && host.rows().size() == 0,
+            "late placement fixture did not complete both retirement boundaries");
+    require(host.trade_count() == 0 && host.native_working_requests().empty(),
+            "late placement fixture filled a cancelled request");
+}
+
 struct Outcome {
     std::vector<std::uint64_t> transcript;
     std::uint64_t final = 0;
@@ -287,6 +387,7 @@ int main() {
                  Path{"magnifier", true, true, false},
                  Path{"sparse-aggregate", true, false, true},
                  Path{"sparse-magnifier", true, true, true}}) {
+            run_late_case(path);
             const auto small = run_case(path, 24, false, false);
             const auto large = run_case(path, 96, false, false);
             const auto retained = run_case(path, 96, true, false);
@@ -301,7 +402,7 @@ int main() {
                         run_case(path, 32, true, true, coof));
             }
         }
-        std::puts("K5 script-bar retirement: boundaries, N/4N and retaining differentials passed");
+        std::puts("K5 script-bar retirement: late placements, boundaries, N/4N and differentials passed");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "K5 script-bar retirement: %s\n", error.what());
