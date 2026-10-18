@@ -3916,10 +3916,12 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
     }
 
 
-def _validate_report_result(out: dict) -> None:
+def _validate_report_result(out: dict, *, validate_summary: bool = True) -> None:
     """Canonical trade and summary doubles have no defined non-finite absence.
     Keep the failure fields as engine-owned literals; metrics, equity and
-    recorded outputs retain their existing _num-to-null convention."""
+    recorded outputs retain their existing _num-to-null convention. The sink
+    pre-pass validates one trade here at a time; its completed summary is
+    checked by the default full validation before the report is serialized."""
     for trade in out["trades"]:
         for key, field in (
             ("entry_price", "trades.entry_price"),
@@ -3931,10 +3933,12 @@ def _validate_report_result(out: dict) -> None:
             ("max_drawdown", "trades.max_drawdown"),
             ("commission", "trades.commission"),
         ):
-            if not math.isfinite(trade[key]):
+            if trade[key] is None or not math.isfinite(trade[key]):
                 raise RunFailure(f"the report result {field} is not finite",
                                  "report_result_invalid",
                                  {"field": field, "reason": "nonfinite"})
+    if not validate_summary:
+        return
     for key, field in (
         ("net_pnl", "summary.net_pnl"),
         ("avg_trade", "summary.avg_trade"),
@@ -4818,7 +4822,7 @@ def _legacy_abbreviations(argv, legacy_long, all_long):
 def _main(argv, binary_inputs) -> int:
     ap = _ArgumentParser(description=__doc__,
                          formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--so",        type=Path, required=True, help="strategy.so path")
+    ap.add_argument("--so",        type=Path, default=None, help="strategy.so path")
     ap.add_argument("--ohlcv", type=Path, default=None, help="OHLCV CSV path")
     ap.add_argument("--inputs",    default="",
                     help='JSON object overriding input.*() values, e.g. \'{"Fast Length": "8"}\'')
@@ -4917,10 +4921,19 @@ def _main(argv, binary_inputs) -> int:
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
     args = ap.parse_args(argv)
 
+    # Validate both required inputs together: chart data may now come from
+    # CSV, binary, or the index. Checking only --so inside argparse would hide
+    # the missing chart and change the empty request's existing error code.
+    missing = []
+    if args.so is None:
+        missing.append("--so")
+    if (not args.capabilities_json and args.ohlcv is None
+            and args.ohlcv_bin is None and args.symbol_feeds is None):
+        missing.append("--ohlcv")
+    if missing:
+        ap.error("the following arguments are required: " + ", ".join(missing))
     if args.capabilities_json:
         return _capabilities_main(args)
-    if args.ohlcv is None and args.ohlcv_bin is None and args.symbol_feeds is None:
-        ap.error("the following arguments are required: --ohlcv")
     if args.ohlcv is not None and args.ohlcv_bin is not None:
         raise _request_invalid("error: --ohlcv and --ohlcv-bin are mutually exclusive", "ohlcv_bin")
     selected = _selected_requested(args)
@@ -5452,12 +5465,7 @@ def _sink_summary(report, sink):
         trade = _sink_trade(record)
         if trade["n"] != n + 1:
             raise _engine_invariant("the report sink trade rows are out of report order")
-        for key in ("entry_price", "exit_price", "qty", "pnl", "pnl_pct", "max_runup",
-                    "max_drawdown", "commission"):
-            if trade[key] is None or not math.isfinite(trade[key]):
-                field = "trades." + key
-                raise RunFailure(f"the report result {field} is not finite", "report_result_invalid",
-                                 {"field": field, "reason": "nonfinite"})
+        _validate_report_result({"trades": (trade,)}, validate_summary=False)
         pnl = trade["pnl"]
         # Preserve Python's original left folds, including ties at +/-0.
         best = max(best, pnl) if n else pnl
