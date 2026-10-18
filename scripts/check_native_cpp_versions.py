@@ -37,11 +37,193 @@ FILES = (
     "include/pineforge/native_order_identity.hpp",
     "include/pineforge/native_fx_curve.hpp",
     "src/native_fx_curve.cpp",
+    'include/pineforge/native_bar_views.hpp',
+    'src/native_bar_views.cpp',
+    'src/source/pine_security_eval.cpp',
+    'src/source/pine_strategy_host.cpp',
+    'src/source/pine_adapter.cpp',
+    'src/source/pine_scheduler_native.cpp',
+    'src/source/magnifier_intrabars.cpp',
 )
 
 NATIVE_FX_CURVE_HEADER = "include/pineforge/native_fx_curve.hpp"
 NATIVE_FX_CURVE_SOURCE = "src/native_fx_curve.cpp"
 NATIVE_FX_CURVE_NAMESPACE = "native_fx_curve_v1"
+
+# CR-150: approved v1 sibling bridges, as narrow as the original v3 digest
+# exception. Every other definition stays owned by its existing epoch.
+NATIVE_BAR_VIEWS_HEADER = 'include/pineforge/native_bar_views.hpp'
+NATIVE_BAR_VIEWS_SOURCE = 'src/native_bar_views.cpp'
+NATIVE_BAR_VIEWS_NAMESPACE = 'native_bar_views_v1'
+SPEC_VIEWS_BRIDGE = """inline namespace native_bar_views_v1 {
+
+NativeRunSpecValidation normalize_native_run_spec(
+        NativeRunSpec& spec, const NativeBarViews& views) noexcept {
+    const auto judged = native_run_spec_v3::validate_run_spec_views(spec, views);
+    if (!judged) return judged;
+    if (spec.fee_value == 0.0) spec.fee_value = 0.0;
+    return {};
+}
+
+NativeRunSpecValidation validate_native_instrument_feeds(
+        const std::vector<NativeInstrumentFeed>& feeds, const NativeBarViews& views) noexcept {
+    try {
+        return native_run_spec_v3::instrument_feed_shapes(feeds, views);
+    } catch (const std::bad_alloc&) {
+        return {NativeRunSpecError::AllocationFailure, NativeRunSpecField::InstrumentFeedTimeframe};
+    } catch (...) {
+        return {NativeRunSpecError::CalendarFailure, NativeRunSpecField::InstrumentFeedTimeframe};
+    }
+}
+
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected,
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
+        const std::vector<NativeInstrumentFeed>& feeds, const NativeBarViews& views) noexcept {
+    return native_run_spec_v3::validate_subscription_views(
+        subscriptions, input_tf, timeframe_undetected, auxiliary_feed, feeds, views);
+}
+
+std::uint64_t native_instrument_feeds_digest(
+        const std::vector<NativeInstrumentFeed>& feeds, const NativeBarViews& views) noexcept {
+    return native_run_spec_v3::digest_instrument_feed_views(feeds, views);
+}
+
+} // inline namespace native_bar_views_v1
+"""
+CONSUMER_VIEWS_BRIDGE = """inline namespace native_bar_views_v1 {
+
+std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarViews& views) {
+    NativeExecutionConsumer::SpecBarDigests digests;
+    digests.intrabar = native_bar_views_v1::native_intrabar_path_digest(spec.intrabar, views.lower_path);
+    if (!spec.subscriptions.empty())
+        digests.subscriptions = native_timeframe_subscriptions_digest(spec.subscriptions);
+    if (spec.auxiliary_feed)
+        digests.auxiliary = native_auxiliary_feed_digest(*spec.auxiliary_feed);
+    if (!spec.instrument_feeds.empty())
+        digests.instruments = native_bar_views_v1::native_instrument_feeds_digest(spec.instrument_feeds, views);
+    Fnv f;
+    f.run_base = spec.identity.run_number;
+    hash_spec(f, spec, &digests);
+    return f.h;
+}
+
+} // inline namespace native_bar_views_v1
+"""
+
+# Every .bars/.close_ms and ->bars/->close_ms access in the named read set.
+# Storage writes are included deliberately. L15b/L16 update their rows when
+# introducing a caller/provider; an unlisted access fails before ABI fixtures.
+BAR_VIEW_READS = {
+    'src/native_bar_views.cpp': (
+        'return {borrowed->bars, borrowed->close_ms, borrowed->bars.size};',
+        'return {{owned.bars.data(), owned.bars.size()},',
+        'owned.close_ms.data(), owned.close_ms.size()};',
+        'if (lower == nullptr || !lower->bars.empty())',
+    ),
+    'src/native_run_spec.cpp': (
+        'const auto bars = data.bars;',
+        'if ((borrowed != nullptr && !feed.bars.empty())',
+        'if ((borrowed != nullptr && !feed.close_ms.empty())',
+        '|| (data.close_count != 0 && data.close_ms == nullptr))',
+        'if (data.close_ms[i] <= bars.data[i].timestamp',
+        '|| (i + 1 < bars.size && data.close_ms[i] > bars.data[i + 1].timestamp)) {',
+        'for (std::size_t i = 0; i < feed->bars.size(); ++i) {',
+        'if (!native_bar_structurally_valid(feed->bars[i])) {',
+        'if (i > 0 && feed->bars[i].timestamp <= feed->bars[i - 1].timestamp) {',
+        '&& (spec.intrabar.lower() == nullptr || !spec.intrabar.lower()->bars.empty()))',
+        'u(lower->bars.size());',
+        'for (const auto& bar : lower->bars) {',
+        'u(feed.bars.size());',
+        'for (const auto& bar : feed.bars) {',
+        'u(data.bars.size);',
+        'for (std::size_t k = 0; k < data.bars.size; ++k) {',
+        'const Bar& bar = data.bars.data[k];',
+        'i(k < data.close_count ? data.close_ms[k] : 0);',
+    ),
+    'src/native_execution_consumer.hpp': (
+    ),
+    'src/native_execution_consumer.cpp': (
+        'begin_bars_ = args.bars;',
+        'descriptor->bars.data = nullptr;',
+        'descriptor->close_ms = nullptr;',
+        'if (feed.seconds == kSecPerDay && !feed.bars.empty()) {',
+        'daily = &feed.bars;',
+        'if (!intrabar_tf_ || lower.bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {',
+        'path_spec, lower.bars.empty() ? nullptr : lower.bars.data(),',
+        'static_cast<int>(lower.bars.size()), NativeInputPolicy::Batch);',
+        'lower->bars.begin(), lower->bars.end(), begin,',
+        'for (; candidate != lower->bars.end() && candidate->timestamp < end; ++candidate) {',
+        'spec && spec->auxiliary_feed ? spec->auxiliary_feed->bars.size() : 0;',
+        'const auto& declared = spec_ptr()->auxiliary_feed->bars;',
+        'const std::size_t total = feed.bars.size;',
+        '? feed.bars.data[at].timestamp <= horizon.open_ms',
+        ': feed.close_ms[at] <= horizon.last_traded_close_ms;',
+        'subscription.latest = feed.bars.data[at];',
+        'context.interval.open_ms = feed.bars.data[at].timestamp;',
+        'context.interval.eligible_open_ms = feed.bars.data[at].timestamp;',
+        'context.interval.last_traded_close_ms = feed.close_ms[at];',
+        'context.interval.next_period_open_ms = feed.close_ms[at];',
+        'at + 1 < total ? feed.bars.data[at + 1].timestamp : feed.close_ms[at];',
+        'if (!invoke_timeframe_callback(engine, feed.bars.data[at], context)) return false;',
+    ),
+    'src/source/pine_security_eval.cpp': (
+        'feed.bars = held.bars;',
+        'feed.close_ms = held.close_ms;',
+        'site.close_ms = 0;',
+        'site.close_ms = close_ms;',
+        'while (static_cast<std::size_t>(site.delivered) < feed.bars.size) {',
+        'const bool visible = site.lookahead ? feed.bars.data[at].timestamp <= chart_bar.timestamp',
+        ': feed.close_ms[at] <= chart_close;',
+        'run_foreign_site_bar(site, feed.bars.data[at], feed.close_ms[at]);',
+        'feed.bars.assign(bars, bars + n);',
+        'feed.close_ms.assign(close_ms, close_ms + n);',
+        'if (n < 0 || static_cast<std::size_t>(n) != data.bars.size || (n > 0 && values == nullptr))',
+        '+ " values for " + std::to_string(data.bars.size) + " bars");',
+        'f.u(native_instrument_feed_view(feed, nullptr).bars.size);',
+    ),
+    'src/source/pine_strategy_host.cpp': (
+        'if (args.n > 0 && args.bars == nullptr) {',
+        'const Bar& bar = args.bars[i];',
+        'const std::int64_t previous = args.bars[i - 1].timestamp;',
+        '&& (!std::isfinite(args.bars[args.n - 1].close)',
+        '|| args.bars[args.n - 1].close <= 0.0)) {',
+        'lent[i].bars.swap(store[i].bars);',
+        'lent[i].close_ms.swap(store[i].close_ms);',
+        'store[i].bars.swap(lent[i].bars);',
+        'store[i].close_ms.swap(lent[i].close_ms);',
+        '{feed.instrument, feed.tf, data.bars.size, feed.columns.size()});',
+        'if (effective_input.empty() && args.n >= 2 && args.bars != nullptr)',
+        'effective_input = detect_timeframe(args.bars, args.n);',
+    ),
+    'src/source/pine_adapter.cpp': (
+        'if (effective_input.empty() && args.n >= 2 && args.bars != nullptr) {',
+        'effective_input = detect_timeframe(args.bars, args.n);',
+        'if (args.bars && args.n > 0) {',
+        'path.bars = tradingview_magnifier_bars(',
+        'args.bars, args.n, spec.input_tf, spec.script_tf, spec.session,',
+        'const bool inactive_sampler_path = inert != nullptr && inert->bars.empty()',
+    ),
+    'src/source/pine_scheduler_native.cpp': (
+        'if (args.bars && args.n > 0) next.bars.assign(args.bars, args.bars + args.n);',
+        'input_script_completes_.assign(retained_.bars.size(), 1U);',
+        'input_script_boundary_completes_.assign(retained_.bars.size(), 0U);',
+        'retained_.bars.data(), retained_.bars.size(), input_script_completes_,',
+        'selected_executed_source_bars(host, state.spec, window, retained_.bars);',
+        'host.scheduler_prepare_script_run(retained_.bars, static_eligible,',
+        'host.scheduler_prepare_security_sequence(retained_.bars);',
+        'lower->bars.begin(), lower->bars.end(), context.sub_bar_open_ms,',
+        'if (found == lower->bars.end() || found->timestamp != context.sub_bar_open_ms)',
+        'const auto& path = spec->intrabar.lower()->bars;',
+        '&& context.input_index + 1 < static_cast<int>(retained_.bars.size())) {',
+        'next_input_ms = retained_.bars[static_cast<std::size_t>(context.input_index + 1)].timestamp;',
+        '&& !retained_.bars.empty() && calendar_period_for(retained_.script_tf) == CalendarPeriod::DAY',
+        'const auto next_stamp = session_period_open_ms(retained_.bars.back().timestamp + 86400000LL,',
+    ),
+    'src/source/magnifier_intrabars.cpp': (
+    ),
+}
 
 DRIVER_FORWARD = (
     "inline namespace native_run_spec_v3 { struct NativeRunSpec; }"
@@ -165,7 +347,10 @@ def consumer_epoch_source(files):
                          "native_run_spec_v3 spec fold, seeded like continuation_hash()")
     if "native_run_spec_digest" not in files["include/pineforge/native_run_spec.hpp"]:
         raise ValueError("native_run_spec_digest must be declared in native_run_spec_v3")
-    epoch = versioned(text.replace(CONSUMER_SPEC_DIGEST, "", 1),
+    if text.count(CONSUMER_VIEWS_BRIDGE) != 1:
+        raise ValueError('context spec digest must preserve its exact v1 bridge')
+    epoch = versioned(text.replace(CONSUMER_SPEC_DIGEST, "", 1)
+                         .replace(CONSUMER_VIEWS_BRIDGE, "", 1),
                       "pineforge", "engine_script_run_v19")
     if "native_run_spec_digest" in epoch:
         raise ValueError("native_run_spec_digest does not belong to engine_script_run_v19")
@@ -325,8 +510,97 @@ def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
     return manifests
 
 
+def check_native_bar_views(files):
+    header = clean(files[NATIVE_BAR_VIEWS_HEADER])
+    value = versioned(header, 'pineforge', NATIVE_BAR_VIEWS_NAMESPACE)
+    same_names(header, value, TYPE_DEF, 'bar-view public type', NATIVE_BAR_VIEWS_NAMESPACE)
+    if namespace_functions(header) != namespace_functions(value):
+        raise ValueError('bar-view functions must belong to native_bar_views_v1')
+    require(value, ('NativeBarView', 'NativeInstrumentFeedView',
+                    'NativeInstrumentFeedReadView', 'NativeBarViews', 'NativeLowerPathSource'),
+            NATIVE_BAR_VIEWS_NAMESPACE, r'\b(?:struct|class)\s+NAME\s*\{')
+    shapes = (
+        ('NativeBarView', 'constBar*data;std::size_tsize;'),
+        ('NativeInstrumentFeedView', 'NativeBarViewbars;conststd::int64_t*close_ms;'),
+        ('NativeInstrumentFeedReadView',
+         'NativeBarViewbars;conststd::int64_t*close_ms;std::size_tclose_count;'),
+        ('NativeBarViews', 'constNativeInstrumentFeedView*const*instrument_feeds=nullptr;'
+         'std::size_tinstrument_feed_count=0;constNativeLowerPathSource*lower_path=nullptr;'
+         'NativeBarViewlower_segment{nullptr,0};'),
+    )
+    for name, expected in shapes:
+        shape = body(value, r'\bstruct\s+' + name + r'\s*\{', name)
+        if re.sub(r'\s+', '', shape) != expected:
+            raise ValueError(name + ' must preserve its frozen v1 fields')
+    functions = ('native_instrument_feed_view', 'normalize_native_run_spec',
+                 'validate_native_instrument_feeds', 'validate_native_timeframe_subscriptions',
+                 'native_instrument_feeds_digest', 'native_run_spec_digest',
+                 'native_intrabar_path_digest')
+    require_namespace_functions(value, functions, NATIVE_BAR_VIEWS_NAMESPACE)
+    accessor = re.search(r'native_instrument_feed_view\s*\([^;]+;', value, re.S)
+    if accessor is None or '=' in accessor.group(0):
+        raise ValueError('bar accessor must require its explicit override argument')
+    for forbidden in ('stage_instrument_feed_views', 'stage_lower_path_source',
+                      'NativeStrategyHost', 'NativeExecutionConsumer'):
+        if forbidden in header:
+            raise ValueError('bar-view staging/query belongs to the private consumer: ' + forbidden)
+    source = versioned(files[NATIVE_BAR_VIEWS_SOURCE], 'pineforge', NATIVE_BAR_VIEWS_NAMESPACE)
+    require_namespace_functions(source, ('native_instrument_feed_view', 'native_intrabar_path_digest'),
+                                NATIVE_BAR_VIEWS_NAMESPACE)
+    for path, expected in BAR_VIEW_READS.items():
+        actual = tuple(line.strip() for line in clean(files[path]).splitlines()
+                       if re.search(r'(?:\.|->)(?:bars|close_ms)\b', line))
+        if actual != expected:
+            added = [line for line in actual if line not in expected]
+            missing = [line for line in expected if line not in actual]
+            raise ValueError(path + ': bar/close access inventory drift; added='
+                             + repr(added) + '; missing=' + repr(missing))
+    routes = {
+        'src/native_execution_consumer.cpp': (
+            'candidate, views', 'bar_views());', 'spec->instrument_feeds[subscription.instrument_feed], slot'),
+        'src/source/pine_security_eval.cpp': (
+            'native_instrument_feed_view(installed_symbol_feed(site.feed), slot)',
+            'native_instrument_feed_view(feed, nullptr)'),
+        'src/source/pine_strategy_host.cpp': (
+            'native_instrument_feed_view(feed, slot)', 'stage_instrument_feed_views(nullptr, 0)'),
+        'src/source/pine_adapter.cpp': ('normalize_projected_spec(spec)',),
+    }
+    for path, tokens in routes.items():
+        for token in tokens:
+            if token not in clean(files[path]):
+                raise ValueError(path + ': missing view route: ' + token)
+
+
+def self_test_bar_views():
+    files = load(ROOT)
+    check_native_bar_views(files)
+    mutations = (
+        (NATIVE_BAR_VIEWS_HEADER, 'inline namespace native_bar_views_v1',
+         'inline namespace native_bar_views_v2'),
+        (NATIVE_BAR_VIEWS_HEADER, 'const NativeInstrumentFeedView* borrowed) noexcept;',
+         'const NativeInstrumentFeedView* borrowed = nullptr) noexcept;'),
+        (NATIVE_BAR_VIEWS_HEADER, 'const NativeLowerPathSource* lower_path',
+         'NativeLowerPathSource* lower_path'),
+        ('src/source/pine_adapter.cpp', 'normalize_projected_spec(spec)',
+         'validate_native_run_spec(spec)'),
+        ('src/source/pine_security_eval.cpp', 'native_instrument_feed_view(feed, nullptr)',
+         'native_instrument_feed_view(feed, nullptr).bars'),
+    )
+    for path, before, after in mutations:
+        if before not in files[path]:
+            raise ValueError('bar-view self-test has a stale mutation: ' + before)
+        changed = dict(files)
+        changed[path] = files[path].replace(before, after, 1)
+        try:
+            check_native_bar_views(changed)
+        except ValueError:
+            continue
+        raise ValueError('bar-view guard accepted mutation: ' + before)
+
+
 def check_texts(files):
     check_native_fx_curve(files)
+    check_native_bar_views(files)
     identity = versioned(files[FILES[11]], "pineforge::native_order", "native_order_v1")
     require(identity, ("RunIdentity", "RequestHandle", "Birth"),
             "native_order_v1", r'\b(?:class|struct)\s+NAME\s*\{')
@@ -557,7 +831,10 @@ def check_texts(files):
                   'LegacyTolerant = FeedTolerant,'):
         if alias not in spec:
             raise ValueError('native_run_spec_v3 dropped a deprecated alias: ' + alias)
-    spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v3")
+    if files[FILES[5]].count(SPEC_VIEWS_BRIDGE) != 1:
+        raise ValueError('context spec validation/digest must preserve their exact v1 bridge')
+    spec_src = versioned(files[FILES[5]].replace(SPEC_VIEWS_BRIDGE, '', 1),
+                         "pineforge", "native_run_spec_v3")
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec",
                    "validate_native_timeframe_subscriptions",
@@ -1163,12 +1440,16 @@ def check(root=ROOT):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ['--self-test-bar-views']:
+        self_test_bar_views()
+        print('bar-view ownership, explicit slots and read inventory mutations ... OK')
+        raise SystemExit(0)
     if sys.argv[1:] == ['--self-test-tempdir']:
         self_test_tempdir()
         print('historical provider extraction stays outside the repository ... OK')
         raise SystemExit(0)
     if len(sys.argv) != 1:
-        raise SystemExit('usage: check_native_cpp_versions.py [--self-test-tempdir]')
+        raise SystemExit('usage: check_native_cpp_versions.py [--self-test-tempdir | --self-test-bar-views]')
     absent = missing_private_fixtures()
     if absent:
         # R2-F4: the text half reads only public sources, so it runs in the
