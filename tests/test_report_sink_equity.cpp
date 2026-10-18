@@ -25,6 +25,20 @@ struct EquitySnapshot {
 #include <string>
 #include <vector>
 
+namespace pineforge::source {
+// A narrow friend seam, defined only in this lane's real strategy fixture.
+// Qualifying the presentation call preserves the base implementation and
+// avoids redispatching to EquityFixture's instrumented override.
+struct ReportSinkEquityTestAccess {
+    static void present(const PineStrategyHost& host, ReportC* report) {
+        host.PineStrategyHost::present_report(report);
+    }
+    static void remark(PineStrategyHost& host, const Bar& terminal) {
+        host.scheduler_record_range_end(terminal);
+    }
+};
+} // namespace pineforge::source
+
 namespace {
 class EquityFixture final : public pineforge::source::PineStrategyHost {
 public:
@@ -46,7 +60,7 @@ public:
     void present_report(pineforge::ReportC* report) const override {
         ++presentations;
         presented_length = report->equity_curve_len;
-        PineStrategyHost::present_report(report);
+        pineforge::source::ReportSinkEquityTestAccess::present(*this, report);
         if (mode == "present" && report->equity_curve_len > 0) {
             auto& last = report->equity_curve[report->equity_curve_len - 1];
             last.time_ms += 60000;
@@ -85,7 +99,7 @@ public:
     void remark(double close) {
         auto terminal = current_bar_;
         terminal.close = close;
-        scheduler_record_range_end(terminal);
+        pineforge::source::ReportSinkEquityTestAccess::remark(*this, terminal);
     }
 };
 EquityFixture* fixture(pf_strategy_t handle) {
