@@ -15,7 +15,7 @@ unconditional. The 18:21 scope ruling assigns the L0 acceptance harnesses to
 integration; this lane does not modify them.
 
 Source anchors below were refreshed for the merge of integration
-`94647174962941ab8b199cc49720c0dfc63b700d`. The historical measurements and
+`69fdd0e0172d89481c724867f1b12a1db7f5a66b`. The historical measurements and
 model basis above are unchanged; no census measurement is inferred from the merge.
 
 ## Allocation-site ownership inventory
@@ -226,7 +226,7 @@ The source read behind the replacement keys is:
 | L19k | `tradingview_multi_day_stamps`, `TimeframeAggregator::set_native_periods` | src/source/pine_strategy_host.cpp:1560; src/timeframe.cpp:1769 |
 | L3/L4 | `PineScheduler::capture_begin`, `native_module::run_batch`; `script_bucket_completions`, `PineScheduler::run_begin` | src/source/pine_scheduler_native.cpp:19 and :176; include/pineforge/native_module.hpp:229; src/native_execution_consumer.cpp:9049 |
 | L15/L16 | `PineStrategyHost::set_symbol_feed`, `tradingview_magnifier_bars` | src/source/pine_security_eval.cpp:1347; src/source/magnifier_intrabars.cpp:73 |
-| L7/L8 | `compute_equity_stats`; `Trade`, `record_close_trade`, `closed_rows_digest`, `set_exit_phase` | src/engine_metrics.cpp:203; src/engine_orders.cpp:217; src/native_execution_consumer.cpp:11921; src/source/pine_adapter.cpp:6446 |
+| L7/L8 | `compute_equity_stats`; `Trade`, `record_close_trade`, `closed_rows_digest`, `set_exit_phase` | src/engine_metrics.cpp:316; src/engine_orders.cpp:217; src/native_execution_consumer.cpp:11921; src/source/pine_adapter.cpp:6446 |
 | L6b | `record_equity_point`; `record_script_report_point`, `scheduler_record_broker_hash`, `output_bar`, `record_output_event`, `trace`, `intern_trace_name`, `fill_trace_section` | include/pineforge/engine.hpp:1381; src/native_execution_consumer.cpp:8972; src/source/pine_strategy_host.cpp:2795; src/engine_report.cpp:436, :489, :30, :20 and :242 |
 | L9/L17 | `fill_metrics_section`, `fill_trades_section`, `capture_presentation` | src/engine_report.cpp:192 and :103; src/native_execution_consumer.cpp:12447 |
 
@@ -278,8 +278,8 @@ both measured Q9 cells remain OPEN for CORE-TOP.
 
 The merge of `refs/heads/pf/cr150-p00-contracts` at
 `23834ffa4cc83cb56fca2581ad2cb91c74a5d7c3` keeps its complete test-registration
-prefix through tests/CMakeLists.txt:7109. After merge round 3, the L0b Python
-row is at tests/CMakeLists.txt:7115 and its guarded native row at :7119, with its existing
+prefix, now ending at tests/CMakeLists.txt:7114. The current L0b Python row
+is at tests/CMakeLists.txt:7124 and its guarded native row at :7128, with its existing
 dynamic-loader link and executable-export settings. The private-fixture
 evidence line at :3267 and its supporting lines 3235, 3263, 3287 and 3293-3294
 were re-read in the merged file and retain their original content.
@@ -297,11 +297,11 @@ merged-head re-proof.
 
 The merge of `refs/heads/pf/cr150-p00-contracts` at
 `94647174962941ab8b199cc49720c0dfc63b700d` preserves the full integration
-registration prefix through tests/CMakeLists.txt:7112, including the incoming
-`test_trade_percent_prefix` registration on that line. The unchanged L0b block
-follows: its Python row is at tests/CMakeLists.txt:7115, source-layer guard at
-:7117 and native registration at :7119. Its loader linkage and executable
-exports remain at :7120 and :7121. The evidence condition at :3267 and supporting
+registration prefix, now through tests/CMakeLists.txt:7117, including the
+`test_trade_percent_prefix` registration on that line. After the later metric
+rows, the unchanged L0b block's current Python row is at tests/CMakeLists.txt:7124,
+source-layer guard at :7126 and native registration at :7128. Its loader linkage
+and executable exports remain at :7129 and :7130. The evidence condition at :3267 and supporting
 lines 3235, 3263, 3287 and 3293-3294 were re-read and are unchanged.
 
 The only resolution edits are the CMake registration ordering and this report's
@@ -313,3 +313,15 @@ fixture data was edited; incoming sources remain exactly integration's tree.
 No build, test, generator or checker script ran here. CORE-TOP re-proves the
 merge HEAD; the prior green at `46ff545ac929ae2b7b02307316fbbcd0f124b780` is not
 a verification verdict for this merge.
+
+## Merge round 4
+
+Merged `refs/heads/pf/cr150-p00-contracts` at
+`69fdd0e0172d89481c724867f1b12a1db7f5a66b`. Its complete registration prefix
+through tests/CMakeLists.txt:7121 is preserved, including the point-source and
+trade-stat accumulator rows. L0b follows at :7124 and :7128 with its original
+guard and linker settings. Pinned line :3267 and all supporting evidence
+lines were re-read unchanged. Only registrations and shifted documentation
+coordinates were resolved; accepted source and test bodies were not edited.
+The equity-metric anchor now names the template body at src/engine_metrics.cpp:316.
+No build, test, generator or checker script ran on this machine.
