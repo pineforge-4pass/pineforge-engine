@@ -38,8 +38,9 @@ env:
 jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
-    # Same trusted-event 16-core policy as CI; forks use the standard runner.
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    # Standard runner for every event (owner cost stop, 2026-10-18), until the
+    # ci-spot pool is live and its labels replace it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
