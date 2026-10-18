@@ -65,8 +65,9 @@ with the section-4 producers and manifest present and value ownership
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`). A build declaring `1.3` pairs only with a
 `complete` receipt; `1.3-parity` remains the parity build's literal, and a
-tuple holding both is invalid (the published 1.6.1 image declared
-`1.3-parity` without that proof).
+tuple holding both is invalid (the published images up to 1.6.0 declared
+`1.3-parity` without that proof, and engine 1.6.1, released without a hub
+image, declares it too).
 `capabilities.selected_window_contract_revisions` is `["1.3"]` when the
 runtime supports selected windows and `[]` otherwise; see the
 [capability table](docker/README.md#selected-window-contract-revision) and
