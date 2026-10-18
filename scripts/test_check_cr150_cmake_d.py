@@ -115,6 +115,14 @@ class LanePropertyControls(unittest.TestCase):
             'set_tests_properties(test_lane_property PROPERTIES LABELS fast;ENVIRONMENT;INPUT=fixture)',
             'ENVIRONMENT')
 
+    def test_bracketed_value_is_one_literal_argument(self) -> None:
+        result = self.run_check('''set_tests_properties(test_lane_property PROPERTIES LABELS [=[
+ENVIRONMENT # literal label text, with a ) and an (
+set_target_properties(literal PROPERTIES FOO bar)
+]=] TIMEOUT 30)''')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
