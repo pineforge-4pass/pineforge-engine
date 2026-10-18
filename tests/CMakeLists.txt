@@ -7115,3 +7115,15 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
     add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
 endif()
+
+# CR-150 L6b-3: append after every pre-existing line-pinned registration.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_report_sink_l6b3)
+    pineforge_add_unit_test(test_report_sink_l6b3)
+    target_compile_definitions(test_report_sink_l6b3 PRIVATE
+        PINEFORGE_L6B3_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L6B3_DOCKER="${PROJECT_SOURCE_DIR}/docker")
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_report_sink_l6b3 PRIVATE PINEFORGE_L6B3_SOURCE=1)
+    endif()
+endif()
