@@ -4,6 +4,7 @@
 // on f00151f22 count_e is still zero after capture, until fill_report runs.
 #include <pineforge/execution_observer.h>
 #include <pineforge/native_host.hpp>
+#include <pineforge/query_refusal.hpp>
 #include <pineforge/report_sink.h>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/run_failure.hpp>
@@ -13,6 +14,7 @@
 #include "../src/sha256.hpp"
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -72,7 +74,10 @@ struct Report {
 // the capture's refusal precedence, without modifying the private consumer.
 struct Host final : NativeStrategyHost {
     std::int64_t enter_at = -1;
+    std::int64_t close_at = -1;
     bool entered = false;
+    bool close_submitted = false;
+    bool close_accepted = false;
     bool record_own = false;
     bool rewrite_first = false;
     double rewritten_equity = kCapital;
@@ -82,11 +87,19 @@ struct Host final : NativeStrategyHost {
     std::vector<pf_equity_point_t> observations;
     std::size_t next = 0;
     mutable int presentations = 0;
+    mutable std::uint64_t broker_hash_at_capture = 0;
+    mutable bool broker_hash_captured = false;
 
+    void on_native_run_begin() override { broker_hash_captured = false; }
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
         if (enter_at >= 0 && !entered && context.script_bar_open_ms >= enter_at) {
             entered = true;
             (void)submit({no::Transact{1.0}, "entry", ""});
+        }
+        if (close_at >= 0 && !close_submitted && context.script_bar_open_ms >= close_at) {
+            close_submitted = true;
+            const auto result = submit({no::Flatten{}, "exit", ""});
+            close_accepted = result.status == no::SubmitStatus::Accepted && result.handle.has_value();
         }
         if (record_own && next < observations.size()) {
             equity_curve_.push_back(observations[next++]);
@@ -104,6 +117,10 @@ struct Host final : NativeStrategyHost {
         }
         if (shrink_presented_curve && report->equity_curve_len > 1)
             report->equity_curve_len = 1;
+        // Capture precedes the selected seal. Query the terminal broker state
+        // here; after run() returns the public hash query must refuse it.
+        broker_hash_at_capture = broker_state_hash();
+        broker_hash_captured = true;
     }
 };
 
@@ -182,8 +199,20 @@ std::string equity_line(const pf_equity_point_t& point) {
         + report_sink::f64(point.equity) + ',' + report_sink::f64(point.open_profit) + ']';
 }
 
+void check_hash_after_seal_is_refused(const Host& host) {
+    bool refused = false;
+    try {
+        (void)host.broker_state_hash();
+    } catch (const SelectedWindowQueryAfterSeal& error) {
+        refused = true;
+        CHECK(std::strcmp(error.what(), "selected_window_query_after_seal") == 0);
+    }
+    CHECK(refused);
+}
+
 void compare_selected(Directory& directory, const char* name, int start, bool trade,
                       bool edit = false, bool shrink = false) {
+    std::printf("selected fixture: %s\n", name);
     Host baseline, streamed;
     baseline.enter_at = streamed.enter_at = trade ? kBase + 2 * kMinute : -1;
     baseline.change_presented_tail = streamed.change_presented_tail = edit;
@@ -209,7 +238,10 @@ void compare_selected(Directory& directory, const char* name, int start, bool tr
     CHECK(before.value.total_trades == after.value.total_trades);
     CHECK(before.value.net_profit == after.value.net_profit);
     CHECK(std::memcmp(&before.value.metrics, &after.value.metrics, sizeof(pf_metrics_t)) == 0);
-    CHECK(baseline.broker_state_hash() == streamed.broker_state_hash());
+    CHECK(baseline.broker_hash_captured && streamed.broker_hash_captured);
+    CHECK(baseline.broker_hash_at_capture == streamed.broker_hash_at_capture);
+    check_hash_after_seal_is_refused(baseline);
+    check_hash_after_seal_is_refused(streamed);
     const auto bytes = read(path);
     const auto lines = equity_lines(bytes);
     CHECK(lines.size() == static_cast<std::size_t>(before.value.equity_curve_len));
@@ -295,12 +327,15 @@ void latch_failures_and_final_values(Directory& directory) {
     count.record_own = true;
     refused(directory, "count.ndjson", count, 2, "observations differ from its script bars");
 
-    // All lower-priority point failures coexist with a real carry-in trade.
+    // HostRecorded synthesizes no range-end row. Close a real trade before T
+    // so its carry-in violation precedes the malformed account/count facts.
     Host carry;
     carry.enter_at = kBase;
+    carry.close_at = kBase + kMinute;
     carry.record_own = true;
     carry.observations = {{kBase, kCapital + 1.0, 0.0}};
     refused(directory, "trade-first.ndjson", carry, 3, "a trade was entered before the window start");
+    CHECK(carry.close_accepted);
     CHECK(carry.presentations == 0);
 
     Host presentation;
