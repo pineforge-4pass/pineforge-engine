@@ -233,3 +233,39 @@ per-id minima are matched before the generic placement-node rule. Unknown and
 unsymbolized sites retain the same refusal behavior. The controls feed
 demangled frames, including inline namespaces, through real Massif parsing and
 growth accounting, rather than inventing member-name frames.
+
+## Fix round 1: corpus chart and feed mapping
+
+Chart selection is armed by the `Strategy.run` wrapper and keyed to that run's
+`bars_csv` argument. Only its matching `_load_bars` call establishes the N/4N
+chart prefix. Planner loads outside the wrapper keep their original count and
+bounds, including a report-only quote loaded before execution. Once the chart
+is selected, its final timestamp still bounds the other run-time feed loads.
+The source seams are scripts/run_strategy.py:4059 for the planner's quote,
+scripts/run_strategy.py:4486 for `strat.run`, and scripts/run_strategy.py:2496
+for the chart load inside `Strategy.run`.
+
+Symbol request feeds bypass `_load_bars`. The worker now wraps
+`_parse_requests_feed` (scripts/run_strategy.py:1755), mapping its returned bar,
+int64 close-time and double column arrays before `_read_probe_requests` stores
+them in the request dictionary at scripts/run_strategy.py:1893. The existing
+`_install_probe_requests` setter loop at scripts/run_strategy.py:2275 receives
+those same mapped arrays. Counts, element types, full validated feed bytes and
+metadata are preserved; an engine-owned copy remains visible to Massif. No
+blanket admission for Python frames was introduced.
+
+Two worker controls exercise these paths without a native library: the quote
+control loads the same path before and inside the run, checks the planner's
+full quote, then the prefixed chart and bounded feed, and reaches the existing
+checkpoint. The symbol-feed control uses the real request parser and installer,
+checks mmap backing both in the request dictionary and at the setters, and
+checks bar values, closes, column width, NaN and negative-zero bytes. Against
+the previous logic the first control sees the quote truncated, and the second
+sees heap-backed symbol-feed arrays. Neither failure is a missing flag or
+missing test seam. These are source-derived fail-before expectations; no
+test was executed on this machine.
+
+The Massif parser, growth admission, Q9 arithmetic, population checks and final
+PASS/RED/OPEN conditions are unchanged by these mapping fixes. New lab controls
+and the real chart/feed probes still need execution. The census itself and
+both measured Q9 cells remain OPEN for CORE-TOP.

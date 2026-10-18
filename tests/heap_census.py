@@ -321,15 +321,19 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
     """Drive the real corpus CLI, preserving all of its per-probe settings.
 
     Wrap its documented on_report callback: after a successful engine call,
-    before report_free/strategy_free. Prefix only the primary chart; other
-    _load_bars feed loads use its final timestamp as their upper bound. This
-    is a retained-heap census, not a peak/load-transient measurement.
+    before report_free/strategy_free. Prefix the chart loaded inside Strategy.run,
+    not a planner's earlier report-only quote. Other _load_bars feed loads use
+    its final timestamp as their upper bound. Probe-request feeds use their
+    separate parser and are mapped before the request dictionary retains them.
+    This is a retained-heap census, not a peak/load-transient measurement.
     """
     sys.path.insert(0, str(ROOT / "scripts"))
     import run_strategy as runner
 
     original_load, original_run, original_init = runner._load_bars, runner.Strategy.run, runner.Strategy.__init__
+    original_parse_feed = runner._parse_requests_feed
     chart = {}
+    active_chart = None
     sink_state = {"sink": False, "streamable_policy": False, "history_declared": None}
     mappings = []
 
@@ -360,31 +364,48 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
 
             lib.run_backtest_full = full
 
+    def map_array(array, count=None):
+        count = len(array) if count is None else count
+        if not 0 <= count <= len(array):
+            raise ValueError("caller tape population exceeds its backing array")
+        if count == 0:
+            return (array._type_ * 0)()
+        # Keep caller-owned data out of the malloc census. This copies the
+        # exact bytes, including NaN payloads and negative zero, for bars,
+        # feed closes and named columns; engine-owned copies remain visible.
+        path = output / f"caller-ohlcv-{len(mappings)}.bin"
+        with path.open("w+b") as tape:
+            tape.write(memoryview(array).cast("B")[:ctypes.sizeof(array._type_) * count])
+            tape.flush()
+            mapping = mmap.mmap(tape.fileno(), 0)
+        mappings.append(mapping)
+        return (array._type_ * count).from_buffer(mapping)
+
+    def parse_feed(*args, **kwargs):
+        bars, closes, count, extras = original_parse_feed(*args, **kwargs)
+        # _read_probe_requests stores these returned arrays. Mapping only at
+        # the setter would leave the original ctypes allocations resident in
+        # its request dictionary and still manufacture L19j growth.
+        return (map_array(bars, count), map_array(closes, count), count,
+                [(name, map_array(values, count)) for name, values in extras])
+
     def load(path, **kwargs):
+        if active_chart is None:
+            return original_load(path, **kwargs)
+        is_chart = not chart and Path(path).resolve() == active_chart
         if chart:
             previous = kwargs.get("ohlcv_end_ms")
             kwargs["ohlcv_end_ms"] = min(previous, chart["end"]) if previous is not None else chart["end"]
         bars, count, identity = original_load(path, **kwargs)
-        if not chart:
+        if is_chart:
             if count < bars_limit:
                 raise ValueError(f"corpus prefix too short: {probe} has {count}, needs {bars_limit}")
             count = bars_limit
             chart.update(bars=count, end=int(bars[count - 1].timestamp))
-        if count == 0:
-            return bars, count, identity
-        # Only caller OHLCV may grow. Put these exact bytes in a mapping so
-        # Massif's malloc census does not mistake a ctypes input tape for an
-        # engine leak. Engine-owned copies remain malloc allocations and fail.
-        # Input-loading/transient RSS stays the L0 acceptance harness's job.
-        path = output / f"caller-ohlcv-{len(mappings)}.bin"
-        with path.open("w+b") as tape:
-            tape.write(memoryview(bars).cast("B")[:ctypes.sizeof(runner.BarC) * count])
-            tape.flush()
-            mapping = mmap.mmap(tape.fileno(), 0)
-        mappings.append(mapping)
-        return (runner.BarC * count).from_buffer(mapping), count, identity
+        return map_array(bars, count), count, identity
 
-    def run(self, *args, **kwargs):
+    def run(self, bars_csv, *args, **kwargs):
+        nonlocal active_chart
         previous = kwargs.get("on_report")
 
         def checkpoint(report):
@@ -399,7 +420,12 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
                 previous(report)
 
         kwargs["on_report"] = checkpoint
-        return original_run(self, *args, **kwargs)
+        chart.clear()
+        active_chart = Path(bars_csv).resolve()
+        try:
+            return original_run(self, bars_csv, *args, **kwargs)
+        finally:
+            active_chart = None
 
     # Derived feeds must be made fresh ONCE by CORE-TOP before starting the
     # census. Refuse a derivation attempt rather than racing its fixed .new.
@@ -410,6 +436,7 @@ def corpus_worker(probe: Path, bars_limit: int, output: Path) -> int:
             raise ValueError("CORE-TOP must prepare derived corpus feeds before census")
 
     runner._load_bars, runner.Strategy.run, runner.ensure_derived = load, run, no_derive
+    runner._parse_requests_feed = parse_feed
     runner.Strategy.__init__ = initialize
     sys.argv = [str(ROOT / "scripts/run_strategy.py"), str(probe),
                 "--output", str(output / "engine_trades.csv"), "--no-trim-output"]
