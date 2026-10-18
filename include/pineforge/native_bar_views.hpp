@@ -29,9 +29,10 @@ struct NativeInstrumentFeedView {
 };
 
 /// Lower-path side-channel type named by 2.2:347-348 and section 5:1214-1239.
-/// Required operations are count(), for_each(visitor), segment(begin,end)
-/// and next_after_segment(). count/for_each re-walk the whole path without
-/// retaining it; segment supplies the current script bar's half-open range.
+/// Operations in DESIGN 2.2:347-348 count and visit the whole path,
+/// select a segment, and return the next bar after it. Counting and visiting
+/// re-walk the path without retaining it; the segment supplies the current
+/// script bar's half-open range.
 /// Its buffer stays fixed for the whole script bar, until the next one.
 /// Look-ahead uses a separate cursor/one-bar buffer and never overwrites
 /// that segment, even across empty chart bars (5:1230-1234).
@@ -42,7 +43,7 @@ struct NativeInstrumentFeedView {
 class NativeLowerPathSource;
 
 // Binding obligations for L15a (2.2:349-375): stage before begin with
-// stage_instrument_feed_views(...) / stage_lower_path_source(...), drop
+// the staging operations specified in DESIGN 2.2:349-350, then drop
 // staged state with the run. Keep NativeRunSpec metadata and empty owning
 // bar vectors for view-backed entries. All reads must use the one accessor
 // that returns the staged view when present, including validation and both

@@ -63,7 +63,8 @@ PF_API uint32_t pf_report_sink_version(void);
  *  Returns 0 accepted; -1 bad struct_size, version, path or handle; -2 a
  *  stream is running or begins; -3 run in progress. Strings are copied.
  *  The sink composes with the execution observer and selected window.
- *  Writes fail the run with report_sink_failed (3.7:878-885).
+ *  Write errors fail the run with the sink I/O code planned for
+ *  docker/run_failure_codes.json (DESIGN 3.7:878-885; 6:1307-1309).
  *
  *  With a sink, pf_report_t contains summary scalars, total_trades and
  *  metrics; trades, equity_curve, broker_state_hash and trace are NULL with

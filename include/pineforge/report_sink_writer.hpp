@@ -58,7 +58,8 @@ std::string escaped_string(std::string_view utf8);
 ///
 /// Lifecycle: header at run begin, records in final order, trailer only on
 /// successful fill/capture. Failure/refusal/abort leaves no valid trailer.
-/// I/O errors fail the run as report_sink_failed. OPEN S2: DESIGN does not
+/// I/O errors fail the run with the catalog code planned in DESIGN 6:1307-1309
+/// (docker/run_failure_codes.json; 3.7:878-885). OPEN S2: DESIGN does not
 /// choose the internal C++ error transport or repeated-finalization policy;
 /// no exception type, retry or idempotence guarantee is declared here.
 /// O/V/K/X/H writer operations are the later L6b-3 extension, not guessed here.
