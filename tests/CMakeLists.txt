@@ -7079,3 +7079,13 @@ set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+
+# CR-150 L2: append after the private-fixture line evidence. The preflight
+# harness glob also discovers docker/run_json_bin_test.py automatically.
+add_test(NAME test_run_json_bin
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+        ${PROJECT_SOURCE_DIR}/docker/run_json_bin_test.py)
+if(TARGET outputs_fixture_strategy)
+    set_tests_properties(test_run_json_bin PROPERTIES
+        ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
