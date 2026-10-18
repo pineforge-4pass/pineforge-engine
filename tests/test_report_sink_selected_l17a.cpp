@@ -6,8 +6,10 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/report_sink.h>
 #include <pineforge/report_sink_writer.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/selected_window.h>
 
+#include "../src/selected_report_view.hpp"
 #include "../src/sha256.hpp"
 
 #include <cstdio>
@@ -334,6 +336,70 @@ void failed_observer_and_reuse(Directory& directory) {
     CHECK(receipt(host).complete == 1 && receipt(host).count_e == 1);
     CHECK(equity_lines(read(path)).size() == 1);
 }
+
+// These rows hold the new O(1) latch boundary itself to the contract; they
+// cannot pass merely because the old array capture did its checks first.
+// Committed separately before the implementation: on the L6b-1 header this
+// half is a compile-red for the missing report::SelectedReportStream.
+void direct_latches(Directory& directory) {
+    const auto selected = window(2, 5);
+    const char* causes[] = {
+        "a trade was entered before the window start",
+        "a position was carried in before the window start",
+        "the account changed before the window start",
+        "the window's equity observations are not one run",
+        "the window's equity observations differ from its script bars"};
+    for (int first = 0; first < 5; ++first) {
+        const std::string name = "latch-" + std::to_string(first) + ".ndjson";
+        const auto path = directory.file(name.c_str());
+        {
+            const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "latches", nullptr};
+            report_sink::LineWriter writer(sink);
+            writer.write_header({false, false, false, 0, 0});
+            report::SelectedReportStream stream(selected.start_ms, selected.end_ms, kCapital);
+            stream.write_point(writer, {kBase, first <= 2 ? kCapital + 1.0 : kCapital, -0.0}, true);
+            stream.write_point(writer, {selected.start_ms, kCapital, 0.0}, true);
+            if (first <= 3) stream.write_point(writer, {selected.end_ms, kCapital, 0.0}, true);
+            stream.write_point(writer, {selected.start_ms + kMinute, kCapital + 1.0, 1.0}, true);
+            // Higher-priority evidence can arrive after the account/point
+            // latches. Capture order decides the refusal, not arrival order.
+            if (first <= 1) stream.note_open_lot(kBase);
+            if (first == 0) stream.note_trade(kBase);
+            bool caught = false;
+            try {
+                stream.finish(writer, 3, true); // the count mismatch is always present
+            } catch (const std::logic_error& error) {
+                caught = true;
+                CHECK(classify_run_failure(error).code == RunFailureCode::engine_invariant);
+                CHECK(std::string(error.what()).find(causes[first]) != std::string::npos);
+            }
+            CHECK(caught);
+        }
+        CHECK(read(path).find("{\"trailer\":") == std::string::npos);
+    }
+    const auto path = directory.file("latch-values.ndjson");
+    {
+        const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "values", nullptr};
+        report_sink::LineWriter writer(sink);
+        writer.write_header({false, false, false, 0, 0});
+        report::SelectedReportStream stream(selected.start_ms, selected.end_ms, kCapital);
+        stream.note_trade(selected.start_ms);
+        stream.note_open_lot(selected.start_ms);
+        stream.write_point(writer, {kBase, kCapital, -0.0}, true);
+        stream.write_point(writer, {selected.start_ms, 1010.0, -0.0}, true);
+        stream.write_point(writer, {selected.end_ms - kMinute, 1004.5, 4.5}, true);
+        stream.write_point(writer, {selected.end_ms, 2000.0, 1000.0}, true);
+        stream.finish(writer, 2, true);
+        CHECK(stream.observations() == 2);
+        CHECK(stream.equity_count() == 3);
+        CHECK(writer.write_trailer().count_e == 3);
+    }
+    const auto lines = equity_lines(read(path));
+    CHECK(lines == (std::vector<std::string>{
+        equity_line({selected.start_ms, kCapital, 0.0}),
+        equity_line({selected.start_ms, 1010.0, -0.0}),
+        equity_line({selected.end_ms - kMinute, 1004.5, 4.5})}));
+}
 }
 
 int main() {
@@ -346,6 +412,7 @@ int main() {
         compare_selected(directory, "shrunk.ndjson", 2, true, false, true);
         latch_failures_and_final_values(directory);
         failed_observer_and_reuse(directory);
+        direct_latches(directory);
     } catch (const std::exception& error) {
         ++failures;
         std::fprintf(stderr, "L17A exception: %s\n", error.what());
