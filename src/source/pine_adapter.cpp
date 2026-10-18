@@ -2994,7 +2994,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // (observe_terminal_receipts), so it keeps only the unread window: the
     // kernel default, which folds nothing into the spec digest.
     spec.event_retention = NativeEventRetention::Window;
-    const auto validation = validate_native_run_spec(spec);
+    const auto validation = host_ != nullptr
+        ? NativeExecutionConsumer::bound(*host_).normalize_projected_spec(spec)
+        : native_bar_views_v1::normalize_native_run_spec(spec, {});
     if (!validation) {
         throw coded<std::logic_error>(run_spec_field_failure(validation.field),
                                       "Pine adapter produced invalid native run spec field "
