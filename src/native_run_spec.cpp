@@ -1,4 +1,5 @@
 #include <pineforge/native_run_spec.hpp>
+#include <pineforge/native_bar_views.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/native_calendar.hpp>
 
@@ -232,7 +233,11 @@ bool valid_instrument_bar(const Bar& bar) noexcept {
 // The installed instrument feeds, judged without a calendar: each key's
 // strings and literal, one feed per key, and each feed's bars, closes and
 // columns. Parsing a literal may allocate; the callers convert that.
-Result instrument_feed_shapes(const std::vector<NativeInstrumentFeed>& feeds) {
+Result instrument_feed_shapes(const std::vector<NativeInstrumentFeed>& feeds,
+                              const NativeBarViews& views) {
+    if (views.instrument_feed_count != 0
+        && (views.instrument_feeds == nullptr || views.instrument_feed_count != feeds.size()))
+        return {Error::InvalidInstrumentFeedBar, Field::InstrumentFeedBars};
     std::vector<native_calendar::Timeframe> keys;
     keys.reserve(feeds.size());
     for (std::size_t f = 0; f < feeds.size(); ++f) {
@@ -251,18 +256,26 @@ Result instrument_feed_shapes(const std::vector<NativeInstrumentFeed>& feeds) {
                 return {Error::DuplicateInstrumentFeed, Field::InstrumentFeedTimeframe};
         }
         keys.push_back(*parsed);
-        const auto& bars = feed.bars;
-        for (std::size_t i = 0; i < bars.size(); ++i) {
-            if (!valid_instrument_bar(bars[i]))
+        const auto* borrowed = views.instrument_feed_count == 0
+            ? nullptr : views.instrument_feeds[f];
+        const auto data = native_instrument_feed_view(feed, borrowed);
+        const auto bars = data.bars;
+        if ((borrowed != nullptr && !feed.bars.empty())
+            || (bars.size != 0 && bars.data == nullptr))
+            return {Error::InvalidInstrumentFeedBar, Field::InstrumentFeedBars};
+        for (std::size_t i = 0; i < bars.size; ++i) {
+            if (!valid_instrument_bar(bars.data[i]))
                 return {Error::InvalidInstrumentFeedBar, Field::InstrumentFeedBars};
-            if (i > 0 && bars[i].timestamp <= bars[i - 1].timestamp)
+            if (i > 0 && bars.data[i].timestamp <= bars.data[i - 1].timestamp)
                 return {Error::UnorderedInstrumentFeedBars, Field::InstrumentFeedBars};
         }
-        if (feed.close_ms.size() != bars.size())
+        if ((borrowed != nullptr && !feed.close_ms.empty())
+            || data.close_count != bars.size
+            || (data.close_count != 0 && data.close_ms == nullptr))
             return {Error::InvalidInstrumentFeedClose, Field::InstrumentFeedClose};
-        for (std::size_t i = 0; i < bars.size(); ++i) {
-            if (feed.close_ms[i] <= bars[i].timestamp
-                || (i + 1 < bars.size() && feed.close_ms[i] > bars[i + 1].timestamp)) {
+        for (std::size_t i = 0; i < bars.size; ++i) {
+            if (data.close_ms[i] <= bars.data[i].timestamp
+                || (i + 1 < bars.size && data.close_ms[i] > bars.data[i + 1].timestamp)) {
                 return {Error::InvalidInstrumentFeedClose, Field::InstrumentFeedClose};
             }
         }
@@ -273,7 +286,7 @@ Result instrument_feed_shapes(const std::vector<NativeInstrumentFeed>& feeds) {
                 !name) {
                 return {Error::InvalidInstrumentFeedColumn, Field::InstrumentFeedColumns};
             }
-            if (column.values.size() != bars.size())
+            if (column.values.size() != bars.size)
                 return {Error::InvalidInstrumentFeedColumn, Field::InstrumentFeedColumns};
             for (std::size_t other = 0; other < c; ++other) {
                 if (feed.columns[other].name == column.name)
@@ -602,7 +615,7 @@ bool valid_legacy_tolerance(NativeFeedTolerance tolerance) noexcept {
     return (bits & ~kKnown) == 0u;
 }
 
-Result validate_values(const NativeRunSpec& spec) noexcept {
+Result validate_values(const NativeRunSpec& spec, const NativeBarViews& views) noexcept {
     const bool require_timeframes = !spec.timeframe_undetected;
     const struct {
         const std::string& value;
@@ -727,7 +740,7 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     }
     Field shapes_field = Field::InstrumentFeedTimeframe;
     try {
-        if (const auto feeds = instrument_feed_shapes(spec.instrument_feeds); !feeds)
+        if (const auto feeds = instrument_feed_shapes(spec.instrument_feeds, views); !feeds)
             return feeds;
         shapes_field = Field::SubscriptionTimeframe;
         if (const auto series =
@@ -741,6 +754,9 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     } catch (...) {
         return {Error::CalendarFailure, shapes_field};
     }
+    if (views.lower_path != nullptr
+        && (spec.intrabar.lower() == nullptr || !spec.intrabar.lower()->bars.empty()))
+        return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
     if (spec.intrabar.value.index() > 2) {
         return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
     }
@@ -782,8 +798,10 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
 
 } // namespace
 
-NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noexcept {
-    const auto values = validate_values(spec);
+namespace {
+NativeRunSpecValidation validate_run_spec_views(const NativeRunSpec& spec,
+                                               const NativeBarViews& views) noexcept {
+    const auto values = validate_values(spec, views);
     if (!values) return values;
 
     Field active_field = Field::InputTimeframe;
@@ -855,6 +873,12 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
     } catch (...) {
         return {Error::CalendarFailure, active_field};
     }
+}
+
+} // namespace
+
+NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noexcept {
+    return validate_run_spec_views(spec, {});
 }
 
 NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept {
@@ -995,7 +1019,7 @@ NativeRunSpecValidation validate_native_timeframe_subscriptions(
 NativeRunSpecValidation validate_native_instrument_feeds(
         const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
     try {
-        return instrument_feed_shapes(instrument_feeds);
+        return instrument_feed_shapes(instrument_feeds, {});
     } catch (const std::bad_alloc&) {
         return {Error::AllocationFailure, Field::InstrumentFeedTimeframe};
     } catch (...) {
@@ -1003,12 +1027,14 @@ NativeRunSpecValidation validate_native_instrument_feeds(
     }
 }
 
-NativeRunSpecValidation validate_native_timeframe_subscriptions(
+namespace {
+NativeRunSpecValidation validate_subscription_views(
         const std::vector<NativeTimeframeSubscription>& subscriptions,
         const std::string& input_tf, bool timeframe_undetected,
         const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
-        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
-    const auto instruments = validate_native_instrument_feeds(instrument_feeds);
+        const std::vector<NativeInstrumentFeed>& instrument_feeds,
+        const NativeBarViews& views) noexcept {
+    const auto instruments = native_bar_views_v1::validate_native_instrument_feeds(instrument_feeds, views);
     if (!instruments) return instruments;
     const auto feed = validate_native_auxiliary_feed(auxiliary_feed, input_tf,
                                                      timeframe_undetected);
@@ -1035,6 +1061,17 @@ NativeRunSpecValidation validate_native_timeframe_subscriptions(
     } catch (...) {
         return {Error::CalendarFailure, Field::SubscriptionTimeframe};
     }
+}
+
+} // namespace
+
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected,
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
+    return validate_subscription_views(subscriptions, input_tf, timeframe_undetected,
+                                       auxiliary_feed, instrument_feeds, {});
 }
 
 NativeRunSpecValidation validate_native_auxiliary_feed(
@@ -1121,8 +1158,10 @@ std::uint64_t native_auxiliary_feed_digest(const NativeAuxiliaryFeed& feed) noex
     return state;
 }
 
-std::uint64_t native_instrument_feeds_digest(
-        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
+namespace {
+std::uint64_t digest_instrument_feed_views(
+        const std::vector<NativeInstrumentFeed>& instrument_feeds,
+        const NativeBarViews& views) noexcept {
     std::uint64_t state = 1469598103934665603ULL;
     const auto bytes = [&state](const void* data, std::size_t count) noexcept {
         const auto* values = static_cast<const unsigned char*>(data);
@@ -1144,15 +1183,19 @@ std::uint64_t native_instrument_feeds_digest(
         bytes(value.data(), value.size());
     };
     u(instrument_feeds.size());
-    for (const auto& feed : instrument_feeds) {
+    for (std::size_t at = 0; at < instrument_feeds.size(); ++at) {
+        const auto& feed = instrument_feeds[at];
+        const auto* borrowed = views.instrument_feed_count == 0
+            ? nullptr : views.instrument_feeds[at];
+        const auto data = native_instrument_feed_view(feed, borrowed);
         s(feed.instrument);
         s(feed.tf);
-        u(feed.bars.size());
-        for (std::size_t k = 0; k < feed.bars.size(); ++k) {
-            const Bar& bar = feed.bars[k];
+        u(data.bars.size);
+        for (std::size_t k = 0; k < data.bars.size; ++k) {
+            const Bar& bar = data.bars.data[k];
             d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume);
             i(bar.timestamp);
-            i(k < feed.close_ms.size() ? feed.close_ms[k] : 0);
+            i(k < data.close_count ? data.close_ms[k] : 0);
         }
         u(feed.columns.size());
         for (const auto& column : feed.columns) {
@@ -1164,5 +1207,49 @@ std::uint64_t native_instrument_feeds_digest(
     return state;
 }
 
+} // namespace
+
+std::uint64_t native_instrument_feeds_digest(
+        const std::vector<NativeInstrumentFeed>& instrument_feeds) noexcept {
+    return digest_instrument_feed_views(instrument_feeds, {});
+}
+
 }  // inline namespace native_run_spec_v3
+
+inline namespace native_bar_views_v1 {
+
+NativeRunSpecValidation normalize_native_run_spec(
+        NativeRunSpec& spec, const NativeBarViews& views) noexcept {
+    const auto judged = native_run_spec_v3::validate_run_spec_views(spec, views);
+    if (!judged) return judged;
+    if (spec.fee_value == 0.0) spec.fee_value = 0.0;
+    return {};
+}
+
+NativeRunSpecValidation validate_native_instrument_feeds(
+        const std::vector<NativeInstrumentFeed>& feeds, const NativeBarViews& views) noexcept {
+    try {
+        return native_run_spec_v3::instrument_feed_shapes(feeds, views);
+    } catch (const std::bad_alloc&) {
+        return {NativeRunSpecError::AllocationFailure, NativeRunSpecField::InstrumentFeedTimeframe};
+    } catch (...) {
+        return {NativeRunSpecError::CalendarFailure, NativeRunSpecField::InstrumentFeedTimeframe};
+    }
+}
+
+NativeRunSpecValidation validate_native_timeframe_subscriptions(
+        const std::vector<NativeTimeframeSubscription>& subscriptions,
+        const std::string& input_tf, bool timeframe_undetected,
+        const std::optional<NativeAuxiliaryFeed>& auxiliary_feed,
+        const std::vector<NativeInstrumentFeed>& feeds, const NativeBarViews& views) noexcept {
+    return native_run_spec_v3::validate_subscription_views(
+        subscriptions, input_tf, timeframe_undetected, auxiliary_feed, feeds, views);
+}
+
+std::uint64_t native_instrument_feeds_digest(
+        const std::vector<NativeInstrumentFeed>& feeds, const NativeBarViews& views) noexcept {
+    return native_run_spec_v3::digest_instrument_feed_views(feeds, views);
+}
+
+} // inline namespace native_bar_views_v1
 } // namespace pineforge

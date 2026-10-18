@@ -111,7 +111,7 @@ public:
     }
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 // A. Percent-of-equity reversal, close(S) != open(S+1).
@@ -285,7 +285,7 @@ public:
         }
     }
     using BacktestEngine::position_side_;
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 void test_oca_default_sibling_cancelled() {
@@ -337,7 +337,7 @@ public:
         }
     }
     using BacktestEngine::position_side_;
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 void test_reversal_bracket_binding_survives_freeze() {

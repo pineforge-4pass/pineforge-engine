@@ -43,7 +43,7 @@ struct Host : NativeStrategyHost {
         --depth;
     }
     const std::vector<PyramidEntry>& lots() const { return pyramid_entries_; }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
     int64_t cycle() const { return position_cycle_seq_; }
     double net() const { return net_profit_sum_; }
     double balance() const { return initial_capital_+net_profit_sum_; }

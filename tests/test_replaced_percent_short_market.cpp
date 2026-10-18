@@ -87,7 +87,7 @@ public:
         seen.push_back({position_side_,position_qty_,
             pyramid_entries_.empty() ? "" : pyramid_entries_.front().entry_id,
             trades_.size()});
-        closed = trades_;
+        closed.assign(trades_.begin(), trades_.end());
     }
 };
 std::vector<Bar> feed(bool touch = false) {

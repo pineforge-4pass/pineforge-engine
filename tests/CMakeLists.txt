@@ -7116,11 +7116,23 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
 endif()
 
+# CR-150 L15a: append after every existing line-pinned registration.
+list(APPEND TEST_SOURCES test_native_bar_views_l15a)
+pineforge_add_unit_test(test_native_bar_views_l15a)
+
+add_test(NAME test_native_bar_views_guard_l15a
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_versions.py
+            --self-test-bar-views)
+
+# CR-150 L8a: keep the existing CMake line pins stable.
+list(APPEND TEST_SOURCES test_trade_ledger)
+pineforge_add_unit_test(test_trade_ledger)
+
 # CR-150 L2: append after the private-fixture line evidence. The preflight
 # harness glob also discovers docker/run_json_bin_test.py automatically.
 add_test(NAME test_run_json_bin
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
-        ${PROJECT_SOURCE_DIR}/docker/run_json_bin_test.py)
+        ${PROJECT_SOURCE_DIR}/tests/test_run_json_bin.py)
 if(TARGET outputs_fixture_strategy)
     set_tests_properties(test_run_json_bin PROPERTIES
         ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
