@@ -142,59 +142,50 @@ class PreflightFailures(unittest.TestCase):
                 changed[index] = changed[index].replace(before, after, 1)
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
 
-    def test_ci_contract_pins_runners_time_limits_and_the_fork_guard(self):
+    def test_ci_contract_pins_standard_runners_time_limits_and_parallelism(self):
         original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(LINUX_RUNNER, 'ubuntu-24.04')
+        self.assertEqual(MATRIX_RUNNER, '${{ matrix.os }}')
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        fork_head = 'github.event.pull_request.head.repo.full_name'
         mutations = (
-            # A heavy job moved back to the slow standard runner.
-            (0, 'preflight', LINUX_RUNNER, 'ubuntu-24.04', 'ci.yml job preflight must run on'),
-            (0, 'sanitizers', LINUX_RUNNER, 'ubuntu-24.04', 'ci.yml job sanitizers must run on'),
-            (0, 'kernel-only', LINUX_RUNNER, 'ubuntu-24.04', 'ci.yml job kernel-only must run on'),
-            (0, 'build', MATRIX_RUNNER, '${{ matrix.os }}', 'ci.yml job build must run on'),
-            (0, 'build', 'larger_runner: macos-26-xlarge', 'larger_runner: macos-26',
-             'ci.yml build must pair each image'),
-            (0, 'build', 'larger_runner: pf-linux-x64-16', 'larger_runner: ubuntu-24.04',
-             'ci.yml build must pair each image'),
-            # A later include entry overrides one leg's larger runner.
-            (0, 'build', '            larger_runner: macos-26-xlarge\n',
-             '            larger_runner: macos-26-xlarge\n          - os: ubuntu-24.04\n'
-             '            build_type: Debug\n            larger_runner: ubuntu-24.04\n',
-             'ci.yml build must pair each image'),
-            (1, 'native-live', LINUX_RUNNER, 'ubuntu-24.04', 'native-live.yml job native-live must run on'),
-            (4, 'corpus-parity', LINUX_RUNNER, 'ubuntu-24.04', 'corpus-parity.yml job corpus-parity must run on'),
-            (4, 'corpus-parity-subset', LINUX_RUNNER, 'ubuntu-24.04',
-             'corpus-parity.yml job corpus-parity-subset must run on'),
-            # A fork's pull request let onto a larger runner, which bills the org.
+            # Every heavy job stays on standard runners, whatever starts it.
             (0, 'preflight', LINUX_RUNNER, 'pf-linux-x64-16', 'ci.yml job preflight must run on'),
-            (0, 'sanitizers', fork_head, 'github.event.pull_request.base.repo.full_name',
-             'ci.yml job sanitizers must run on'),
-            (0, 'kernel-only', f'{fork_head} == github.repository', f"{fork_head} != ''",
-             'ci.yml job kernel-only must run on'),
-            # Only named events no fork can raise are trusted; everything else a
-            # fork can start -- pull_request_target, a comment, a workflow_run --
-            # falls to the standard runner.
-            (0, 'preflight', "github.event_name == 'push' || github.event_name == 'schedule' || "
-             "github.event_name == 'workflow_dispatch'", "github.event_name != 'pull_request'",
+            (0, 'sanitizers', LINUX_RUNNER, 'macos-26-xlarge', 'ci.yml job sanitizers must run on'),
+            (0, 'kernel-only', LINUX_RUNNER, 'ubuntu-latest', 'ci.yml job kernel-only must run on'),
+            (0, 'build', MATRIX_RUNNER, 'macos-26-large', 'ci.yml job build must run on'),
+            (0, 'build', MATRIX_RUNNER, '${{ matrix.larger_runner }}', 'ci.yml job build must run on'),
+            (1, 'native-live', LINUX_RUNNER, 'pf-linux-x64-16', 'native-live.yml job native-live must run on'),
+            (4, 'corpus-parity', LINUX_RUNNER, 'pf-linux-x64-16', 'corpus-parity.yml job corpus-parity must run on'),
+            (4, 'corpus-parity-subset', LINUX_RUNNER, 'pf-linux-x64-16',
+             'corpus-parity.yml job corpus-parity-subset must run on'),
+            # An event-based paid-runner route is forbidden, even for trusted events.
+            (0, 'preflight', LINUX_RUNNER,
+             "${{ github.event_name == 'push' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              'ci.yml job preflight must run on'),
-            (1, 'native-live', "github.event_name == 'workflow_dispatch'",
-             "github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target'",
+            (1, 'native-live', LINUX_RUNNER,
+             "${{ github.event_name == 'workflow_dispatch' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              'native-live.yml job native-live must run on'),
-            # The head test counts only for a pull_request: anyone can review one.
-            (0, 'sanitizers', "(github.event_name == 'pull_request' && "
-             "github.event.pull_request.head.repo.full_name == github.repository)",
-             'github.event.pull_request.head.repo.full_name == github.repository',
+            (4, 'corpus-parity', LINUX_RUNNER,
+             "${{ github.event_name == 'schedule' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
+             'corpus-parity.yml job corpus-parity must run on'),
+            (0, 'sanitizers', LINUX_RUNNER,
+             "${{ github.event.pull_request.head.repo.full_name == github.repository "
+             "&& 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              'ci.yml job sanitizers must run on'),
             (0, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
              'ci.yml job native-live calls a workflow the runner contract cannot see'),
-            (0, 'build', MATRIX_RUNNER, '${{ matrix.larger_runner }}', 'ci.yml job build must run on'),
-            (0, 'build', 'larger_runner: macos-26-xlarge', 'larger_runner: macos-26-large',
-             'ci.yml build must pair each image'),
-            # A leg whose os is a larger runner: the fork's fallback is the larger runner.
-            (0, 'build', '            larger_runner: macos-26-xlarge\n',
-             '            larger_runner: macos-26-xlarge\n          - os: pf-linux-x64-16\n'
-             '            build_type: Release\n', 'ci.yml build must pair each image'),
+            # No paid image or include override, even one using a standard image.
+            (0, 'build', 'os: [ubuntu-24.04, macos-26]', 'os: [ubuntu-24.04, macos-26-large]',
+             'ci.yml build must use exactly the standard images'),
+            (0, 'build', '        build_type: [Release, Debug]\n',
+             '        build_type: [Release, Debug]\n        include:\n'
+             '          - os: ubuntu-24.04\n            build_type: Debug\n',
+             'ci.yml build must use exactly the standard images'),
+            (0, 'build', '        build_type: [Release, Debug]\n',
+             '        build_type: [Release, Debug]\n        include:\n'
+             '          - os: ubuntu-24.04\n            larger_runner: ubuntu-24.04\n',
+             'ci.yml must not define a larger_runner key'),
             # Block forms of runs-on, and job ids the parser must still see.
             (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on:\n      group: pineforge-ci-large\n',
              'docs.yml job build must stay on a standard runner'),
@@ -216,8 +207,6 @@ class PreflightFailures(unittest.TestCase):
              '      - run: "true"\n\n', 'docs.yml job pre_build must stay on a standard runner'),
             (5, None, '\njobs:\n', '\njobs:\n  "pre-build":\n    runs-on: macos-26-xlarge\n    steps:\n'
              '      - run: "true"\n\n', 'docs.yml has jobs lines the runner contract cannot read'),
-            (1, 'native-live', "|| 'ubuntu-24.04'", "|| 'pf-linux-x64-16'",
-             'native-live.yml job native-live must run on'),
             (4, 'corpus-parity-subset', f'runs-on: {LINUX_RUNNER}', 'runs-on:\n      group: pineforge-ci-large',
              'corpus-parity.yml job corpus-parity-subset must run on'),
             (0, 'build-gate', 'runs-on: ubuntu-24.04', 'runs-on: pf-linux-x64-16',
@@ -251,7 +240,7 @@ class PreflightFailures(unittest.TestCase):
              'corpus-parity.yml job corpus-parity must allow 360'),
             (4, 'corpus-parity-subset', 'timeout-minutes: 360', 'timeout-minutes: 10',
              'corpus-parity.yml job corpus-parity-subset must allow 360'),
-            # Four jobs asked of a 16-core runner.
+            # A fixed count cannot follow the runner's available cores.
             (0, 'build', f'--jobs {CORES}', '--jobs 4', 'ci.yml job build must size'),
             (0, 'sanitizers', f'--jobs {CORES}', '--jobs 4', 'ci.yml job sanitizers must size'),
             (0, 'kernel-only', f'--jobs {CORES}', '--jobs "$(nproc)"', 'ci.yml job kernel-only must size'),
@@ -507,7 +496,9 @@ class PreflightFailures(unittest.TestCase):
         edits = (
                 (0, 'kernel-only', '    steps:\n',
                  '    # Was --jobs 4, and JOBS: "4", on the standard runner.\n    steps:\n'),
-                (0, 'build', '        include:\n', '        include:\n\n          # one per image\n'),
+                (0, 'build', '      matrix:\n', '      matrix:\n\n        # standard images only\n'),
+                (0, 'build', '      matrix:\n',
+                 '      matrix:\n        # Was larger_runner: macos-26-xlarge\n'),
                 (0, 'build', "&& '--exclude-label slow' || '' }}\n",
                  "&& '--exclude-label slow' || '' }}  # was --jobs 4\n"),
                 (0, 'kernel-only', verify,
@@ -552,6 +543,27 @@ class PreflightFailures(unittest.TestCase):
         changed[0] = changed[0].replace('\n  kernel-only:\n', '\n  kernel-only-renamed:\n', 1)
         findings = ci_workflow_findings(*changed, others=self.other_sources())
         self.assertEqual(findings.count('ci.yml is missing job kernel-only'), 1, findings)
+
+    def test_paid_labels_and_larger_runner_keys_are_refused_even_in_release(self):
+        original, others = self.ci_sources(), self.other_sources()
+        standard = '    runs-on: ubuntu-24.04\n'
+        workflow = ('name: lint\non: workflow_dispatch\njobs:\n  lint:\n' + standard
+                    + '    steps:\n      - run: "true"\n')
+        mutations = [(f'    runs-on: "{label}"\n', 'must not use larger-runner labels')
+                     for label in ('pf-linux-x64-16', 'macos-26-xlarge', 'macos-26-large',
+                                   'ubuntu-24.04-xlarge', 'windows-2025-large')]
+        mutations += [(f'    strategy:\n      matrix: {{{key}: ubuntu-24.04}}\n' + standard,
+                       'must not define a larger_runner key')
+                      for key in ('larger_runner', '"larger_runner"', "'larger_runner'")]
+        for name in ('lint.yml', 'release.yml'):
+            self.assertEqual(ci_workflow_findings(
+                *original, others=dict(others, **{name: workflow})), [])
+            for replacement, finding in mutations:
+                with self.subTest(name=name, replacement=replacement):
+                    changed = workflow.replace(standard, replacement, 1)
+                    findings = ci_workflow_findings(
+                        *original, others=dict(others, **{name: changed}))
+                    self.assertTrue(any(f'{name} {finding}' in line for line in findings), findings)
 
     def test_every_workflow_a_pull_request_can_start_stays_on_standard_runners(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -627,14 +639,17 @@ class PreflightFailures(unittest.TestCase):
             cwd=tree, capture_output=True, text=True)
         return result.returncode, result.stdout + result.stderr
 
-    def test_the_preflight_stage_fails_a_slow_or_fork_reachable_runner(self):
+    def test_the_preflight_stage_fails_a_paid_runner_or_larger_runner_key(self):
         code, output = self.contract_stage(None)
         self.assertEqual(code, 0, output)
         self.assertIn('runners and time limits OK', output)
         for mutation, finding in (
-                (('sanitizers', LINUX_RUNNER, 'ubuntu-24.04'), 'ci.yml job sanitizers must run on'),
-                (('sanitizers', 'pull_request.head.repo', 'pull_request.base.repo'),
-                 'ci.yml job sanitizers must run on')):
+                (('sanitizers', LINUX_RUNNER, 'pf-linux-x64-16'), 'ci.yml job sanitizers must run on'),
+                (('build', 'os: [ubuntu-24.04, macos-26]', 'os: [ubuntu-24.04, macos-26-xlarge]'),
+                 'ci.yml must not use larger-runner labels'),
+                (('build', '        build_type: [Release, Debug]\n',
+                  '        build_type: [Release, Debug]\n        larger_runner: ubuntu-24.04\n'),
+                 'ci.yml must not define a larger_runner key')):
             with self.subTest(mutation=mutation):
                 code, output = self.contract_stage(mutation)
                 self.assertEqual(code, 1, output)

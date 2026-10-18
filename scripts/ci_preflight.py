@@ -37,33 +37,17 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
-# A larger runner bills the organization even for a public repository, so only
-# an event no fork can raise -- a push, the schedule, a maintainer's dispatch --
-# or a pull_request whose head is a branch of this repository runs the heavy
-# jobs on the organization's 16-core Linux runner or GitHub's M2 runner for the
-# macos-26 image. Any other event -- a fork's pull request, any
-# pull_request_target, a review or review comment (anyone can post one on a
-# public repository's pull request), a comment, a workflow_run -- gets the
-# standard runner. In a workflow_call the github context is the caller's.
-TRUSTED_EVENT = ("github.event_name == 'push' || github.event_name == 'schedule' || "
-                 "github.event_name == 'workflow_dispatch' || "
-                 "(github.event_name == 'pull_request' && "
-                 "github.event.pull_request.head.repo.full_name == github.repository)")
-LINUX_RUNNER = '${{ (' + TRUSTED_EVENT + ") && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"
-MATRIX_RUNNER = '${{ (' + TRUSTED_EVENT + ') && matrix.larger_runner || matrix.os }}'
-# The build job's whole strategy, exactly (comments and blank lines aside): an
-# include entry more -- a leg whose os is a larger runner, or one that
-# overrides a larger_runner -- is a finding.
+# Standard runners only for every event (owner cost stop, 2026-10-18), until
+# the ci-spot pool is live. Larger runners bill even for a public repository.
+LINUX_RUNNER = 'ubuntu-24.04'
+MATRIX_RUNNER = '${{ matrix.os }}'
+# The build job's whole strategy, exactly (comments and blank lines aside):
+# only the two standard images and the two build types, with no include overrides.
 BUILD_STRATEGY = ('    strategy:\n'
                   '      fail-fast: false\n'
                   '      matrix:\n'
                   '        os: [ubuntu-24.04, macos-26]\n'
-                  '        build_type: [Release, Debug]\n'
-                  '        include:\n'
-                  '          - os: ubuntu-24.04\n'
-                  '            larger_runner: pf-linux-x64-16\n'
-                  '          - os: macos-26\n'
-                  '            larger_runner: macos-26-xlarge\n')
+                  '        build_type: [Release, Debug]\n')
 BUILD_NAME = 'build (${{ matrix.os }}, ${{ matrix.build_type }})'
 NATIVE_STRATEGY = '''    strategy:
       fail-fast: false
@@ -107,6 +91,11 @@ JOB_RUNNERS = {
 # schedule, a dispatch; a dispatch alone today); any other workflow file is
 # checked, whatever starts it.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
+# Refuse paid labels and the old matrix key in every workflow, including the
+# otherwise exempt release matrix. Scan code so nested/flow mappings count too.
+_LARGER_RUNNER_LABEL = re.compile(
+    r'(?<![\w.-])(?:pf-linux-x64-16|[\w.-]+-(?:xlarge|large))(?![\w.-])')
+_LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
 TRUSTED_ONLY_WORKFLOWS = ('release.yml',)
 TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
@@ -295,9 +284,14 @@ def _events(workflow: str) -> set[str] | None:
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Pin every CI job's runner, time limit and parallelism; keep forks off larger runners."""
+    """Pin every CI job's runner, time limit and parallelism; refuse paid runners."""
     findings = []
     for name, workflow in workflows.items():
+        code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
+        if _LARGER_RUNNER_LABEL.search(code):
+            findings.append(f'{name} must not use larger-runner labels; standard runners only')
+        if _LARGER_RUNNER_KEY.search(code):
+            findings.append(f'{name} must not define a larger_runner key; standard runners only')
         pinned = JOB_RUNNERS.get(name, {})
         events = _events(workflow)
         if (not pinned and name in TRUSTED_ONLY_WORKFLOWS and events is not None
@@ -327,12 +321,12 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must run on {runner}')
             if _job_values(body, 'timeout-minutes') != [str(minutes)]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
-            # A job on 16 cores that still asks for 4 wastes the runner it pays for.
+            # Keep parallelism tied to the runner's available cores.
             if not _sized(_counted_text(body), command):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
     if _job_block(build, 'strategy') != _code(BUILD_STRATEGY):
-        findings.append('ci.yml build must pair each image with its larger runner, exactly')
+        findings.append('ci.yml build must use exactly the standard images and build types')
     if _job_values(build, 'name') != [BUILD_NAME]:
         findings.append(f'ci.yml build legs must keep their names: {BUILD_NAME}')
     return findings
