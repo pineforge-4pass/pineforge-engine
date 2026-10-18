@@ -32,7 +32,9 @@ STAMP_MAX = 2**53 - 1
 BUFFER_SIZE = 1024 * 1024
 SOURCE_VALUES_PREFIX = b"pineforge:ohlcv:barc-le:v1\0"
 SYMBOL_VALUES_PREFIX = b"pineforge:symbol-feed:barc-close-le:v1\0"
-CHART_REASONS = frozenset({"io", "columns", "value", "empty", "size", "count", "sidecar", "order"})
+CHART_REASONS = frozenset({
+    "io", "columns", "value", "empty", "size", "count", "sidecar", "order", "timeframe_invalid",
+})
 FEED_REASONS = frozenset({
     "feed_columns_missing", "feed_value_not_number", "feed_value_invalid",
     "feed_time_out_of_range", "feed_not_increasing", "feed_close_time_invalid",
@@ -52,19 +54,19 @@ class BarsError(ValueError):
         self.code_args = {"reason": reason}
 
 
-def canonical_timeframe(tf):
-    """Exactly symbol_timeframe's spelling, limits and refusal vocabulary."""
+def canonical_timeframe(tf, *, feed=False):
+    """symbol_timeframe's spelling and limits, with the selected mode's code."""
     if isinstance(tf, str) and tf in ("D", "W", "M", "S"):
         tf = "1" + tf
     if not (isinstance(tf, str) and _TF_RE.fullmatch(tf)):
-        raise BarsError(f"csv2bin: invalid timeframe {tf!r}", "timeframe_invalid", feed=True)
+        raise BarsError(f"csv2bin: invalid timeframe {tf!r}", "timeframe_invalid", feed=feed)
     return tf
 
 
 def conventional_name(symbol, tf, *, feed=False):
     """Human-facing convention only; explicit output paths remain authoritative."""
     token = re.sub(rb"[^A-Za-z0-9._-]", b"_", symbol.encode("utf-8")).decode("ascii")
-    return f"{'feed' if feed else 'chart'}.{token}.{canonical_timeframe(tf)}.bin"
+    return f"{'feed' if feed else 'chart'}.{token}.{canonical_timeframe(tf, feed=feed)}.bin"
 
 
 def sidecar_path(path):
@@ -205,6 +207,8 @@ def _csv_rows(path, tf, feed):
                 except (TypeError, ValueError):
                     raise BarsError(f"{where} line {line}: not a number",
                                     "feed_value_not_number" if feed else "value", feed=feed) from None
+                if not feed and not -(2**63) <= values[5] < 2**63:
+                    raise BarsError(f"{where} line {line}: timestamp is outside int64", "value")
                 if (not all(math.isfinite(x) for x in values[:4])
                         or values[4] < 0 or math.isinf(values[4])):
                     raise BarsError(f"{where} line {line}: prices must be finite and volume nonnegative or NaN",
@@ -300,7 +304,7 @@ def convert_csv(csv_path, output_path, *, symbol, tf, feed=False, fresh_private_
     Temporary names are fixed, per the contract; one writer owns a generation.
     On refusal no sidecar is published. Partial .tmp files are retained.
     """
-    tf = canonical_timeframe(tf)
+    tf = canonical_timeframe(tf, feed=feed)
     csv_path, output_path = Path(csv_path), Path(output_path)
     close_file, sidecar = close_path(output_path), sidecar_path(output_path)
     paths = (output_path, close_file, sidecar)
