@@ -32,10 +32,10 @@
  *     strategy_configure_native_v1, strategy_configure_native_fx_curve_v1,
  *     strategy_configure_native_fx_curve_ext_v1,
  *     pf_execution_observer_version, strategy_set_execution_observer_v1,
- *     strategy_execution_observation_v1, pf_selected_window_version,
- *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1 — the
- *     authoritative list is EXPECTED_RUNTIME in
- *     scripts/check_c_abi_runtime.py, enforced by CI). The other
+ *     strategy_execution_observation_v1, pf_selected_window_version, pf_report_sink_version,
+ *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
+ *     strategy_set_report_sink_v1, strategy_report_sink_receipt_v1 — the
+ *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
  *     codegen, not here.
@@ -1302,3 +1302,24 @@ PF_API int strategy_selected_window_counts_v1(
 }
 
 } /* extern "C" */
+
+// Additive CR-150 report sink ABI. P00 owns the frozen declarations.
+#include <pineforge/report_sink.h>
+
+extern "C" {
+
+PF_API uint32_t pf_report_sink_version(void) { return 1; }
+
+PF_API int strategy_set_report_sink_v1(pf_strategy_t s, const pf_report_sink_v1* sink) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_report_sink_v1(sink);
+    });
+}
+
+PF_API int strategy_report_sink_receipt_v1(pf_strategy_t s, pf_report_sink_receipt_v1* out) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_receipt_v1(out);
+}
+
+} // extern "C"

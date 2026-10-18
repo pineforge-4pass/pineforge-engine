@@ -2841,9 +2841,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // The generation is admitted here: after the reset and the last refusal,
     // before the first host callback of the run.
     admit_selected_generation(engine);
-    // RULING A48: one generic capability, wired once per run. A host that
-    // declares ownership supplies the closing-row magnitudes; the kernel then
-    // keeps no excursion model of its own for this run.
+    engine.begin_report_sink();
+    // RULING A48: the host's closing-row excursion capability is wired once
+    // per run; the kernel then keeps no excursion model of its own.
     if (auto* excursion_owner = native_host(engine)) {
         if (excursion_owner->owns_lot_excursions()) {
             engine.lot_excursion_hook_ =
@@ -10335,8 +10335,8 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
     }
     (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
-
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
@@ -10371,13 +10371,13 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
-
 void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      const Bar* input_bars, int n_input,
                                      const std::string& input_tf,
                                      const std::string& script_tf,
                                      bool bar_magnifier, int magnifier_samples,
                                      MagnifierDistribution magnifier_dist) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
@@ -10425,7 +10425,6 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
-
 void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const Bar* input_bars, int n_input,
                                        const std::string& input_tf, const std::string& script_tf,
@@ -10434,6 +10433,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const void* overrides,
                                        bool bar_magnifier, int magnifier_samples,
                                        MagnifierDistribution magnifier_dist) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
@@ -10476,21 +10476,21 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
-
 bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine, true);
     const EntryExitGuard exit_scope(*this, engine, true);
     if (refuse_dispatch_reentry()) return false;
     const AttemptScope attempt(*this);
-    // The latest attempt is minted before any check below, so a refusal over a
-    // live stream is a later attempt of its own (owner_serial stays the live
-    // generation's).
+    // Sink streams are outside v1; refuse before staging or touching the file.
     if (!mint_attempt(engine, exit_scope.nested())) return false;
-    // Preserve the live stream before asking the provider to stage/configure a
-    // new run.  The legacy route diagnoses this state first; in particular,
-    // no warmup copy, adapter reset, or broker/spec mutation may occur.
+    if (engine.report_sink_state_.enabled) {
+        render(engine, "report sink does not support streaming", RunFailureCode::run_mode_unsupported,
+               {{"feature", "stream_report_sink"}});
+        return false;
+    }
     if (engine.stream_phase_ == BacktestEngine::StreamPhase::REALTIME) {
         render(engine, "stream is already realtime");
         return false;

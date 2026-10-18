@@ -86,6 +86,7 @@ void l6b1_fill_again(pf_strategy_t s, pf_report_t* out) {
 #include <pineforge/version.h>
 #include "../src/sha256.hpp"
 #include <cassert>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -95,6 +96,8 @@ void l6b1_fill_again(pf_strategy_t s, pf_report_t* out) {
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace {
 void* open_module() {
@@ -121,6 +124,7 @@ struct Api {
     decltype(&strategy_get_last_error) error = symbol<decltype(error)>(module, "strategy_get_last_error");
     decltype(&strategy_get_last_error_code) code = symbol<decltype(code)>(module, "strategy_get_last_error_code");
     decltype(&strategy_last_run_status) status = symbol<decltype(status)>(module, "strategy_last_run_status");
+    decltype(&strategy_broker_state_hash) hash = symbol<decltype(hash)>(module, "strategy_broker_state_hash");
     decltype(&strategy_closed_trade_entry_incarnation) incarnation = symbol<decltype(incarnation)>(module, "strategy_closed_trade_entry_incarnation");
     decltype(&strategy_closed_trade_close_cause) cause = symbol<decltype(cause)>(module, "strategy_closed_trade_close_cause");
     decltype(&strategy_closed_trade_entry_id) entry = symbol<decltype(entry)>(module, "strategy_closed_trade_entry_id");
@@ -198,6 +202,50 @@ int observed(void* context, const pf_execution_boundary_v1* boundary, pf_boundar
 }
 int rejected(void*, const pf_execution_boundary_v1*, pf_boundary_receipt_v1*) { return -1; }
 
+void verify_reference_reader(const std::string& path) {
+    // An independent Python parse and hashlib digest over this real module's
+    // bytes. Every prefix ending before the trailer must be refused.
+    static constexpr const char* script = R"PY(
+import hashlib
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[1])
+from pf_sink import SinkReader, SinkFormatError
+path = Path(sys.argv[2])
+data = path.read_bytes()
+lines = data.splitlines(keepends=True)
+trailer = json.loads(lines[-1])
+assert hashlib.sha256(b''.join(lines[:-1])).hexdigest() == trailer['sha256']
+with SinkReader(path) as reader:
+    rows = list(reader)
+    assert reader.complete and reader.trailer == trailer
+    assert reader.counts['E'] > 0
+    assert set(reader.counts) == {'E', 'T'}
+for count in range(len(lines)):
+    cut = path.with_name(path.name + '.cut-' + str(count))
+    cut.write_bytes(b''.join(lines[:count]))
+    try:
+        with SinkReader(cut) as reader:
+            list(reader)
+    except SinkFormatError:
+        pass
+    else:
+        raise AssertionError('reader accepted a sink without its trailer')
+)PY";
+    const auto child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        execl(PINEFORGE_L6B1_PYTHON, PINEFORGE_L6B1_PYTHON, "-B", "-c", script,
+              PINEFORGE_L6B1_DOCKER, path.c_str(), static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    int status = 0;
+    pid_t waited;
+    do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+    assert(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 void equal_run(const Api& api, const std::string& path, bool selected, bool observer, bool empty) {
     const auto baseline = api.create("{}"), streamed = api.create("{}");
     auto bars = feed();
@@ -219,6 +267,7 @@ void equal_run(const Api& api, const std::string& path, bool selected, bool obse
     api.run(streamed, bars.data(), static_cast<int>(bars.size()), &after);
     assert(api.error(baseline)[0] == '\0' && api.error(streamed)[0] == '\0');
     assert(api.status(streamed) == 0 && api.busy(streamed) == -3);
+    assert(api.hash(baseline) == api.hash(streamed));
     assert(before.total_trades == after.total_trades && before.net_profit == after.net_profit);
     assert(std::memcmp(&before.metrics, &after.metrics, sizeof(before.metrics)) == 0);
     assert(after.trades == nullptr && after.trades_len == 0);
@@ -255,6 +304,7 @@ void equal_run(const Api& api, const std::string& path, bool selected, bool obse
         + std::to_string(got.count_e) + ",\"T\":" + std::to_string(got.count_t)
         + "},\"sha256\":\"" + got.sha256_hex + "\"}\n");
     for (const auto byte : got.reserved) assert(byte == 0);
+    verify_reference_reader(path);
     pf_report_t again{};
     api.again(streamed, &again);
     assert(read(path) == bytes && receipt(api, streamed).count_e == got.count_e);
@@ -281,6 +331,10 @@ void refusals(const Api& api, const std::string& directory) {
     const auto valid = bad;
     assert(api.receipt(nullptr, &bad) == -1 && std::memcmp(&bad, &valid, sizeof bad) == 0);
     assert(api.receipt(handle, nullptr) == -1);
+    bad.version = 2;
+    const auto wrong_version = bad;
+    assert(api.receipt(handle, &bad) == -1
+        && std::memcmp(&bad, &wrong_version, sizeof bad) == 0);
     auto initial = receipt(api, handle);
     assert(initial.count_e == 0 && initial.complete == 0 && initial.sha256_hex[0] == '\0');
     pf_report_sink_v1 sink{sizeof sink, 1, "", nullptr, nullptr};
@@ -288,6 +342,8 @@ void refusals(const Api& api, const std::string& directory) {
     sink.path = "."; sink.version = 2;
     assert(api.set(handle, &sink) == -1);
     sink.version = 1; --sink.struct_size;
+    assert(api.set(handle, &sink) == -1);
+    sink = {sizeof sink, 1, nullptr, nullptr, nullptr};
     assert(api.set(handle, &sink) == -1);
     auto bars = feed();
     install(api, handle, directory + "/stream-refused.ndjson");
@@ -298,6 +354,22 @@ void refusals(const Api& api, const std::string& directory) {
     sink = {sizeof sink, 1, "/unused", nullptr, nullptr};
     assert(api.set(handle, &sink) == -2 && api.set(handle, nullptr) == -2);
     assert(api.end(handle, 0) == 0);
+    api.destroy(handle);
+    handle = api.create("{}");
+    const auto default_path = directory + "/default-strings.ndjson";
+    sink = {sizeof sink, 1, default_path.c_str(), nullptr, nullptr};
+    assert(api.set(handle, &sink) == 0);
+    api.mode(handle, "mode", "empty");
+    pf_report_t defaults{};
+    api.run(handle, bars.data(), static_cast<int>(bars.size()), &defaults);
+    const auto completed = receipt(api, handle);
+    assert(completed.complete == 1);
+    assert(read(default_path).find("\"run_id\":\"\"") != std::string::npos);
+    sink.version = 2;
+    assert(api.set(handle, &sink) == -1);
+    const auto unchanged = receipt(api, handle);
+    assert(std::memcmp(&completed, &unchanged, sizeof completed) == 0);
+    api.free(&defaults);
     api.destroy(handle);
     for (const std::string mode : {"throw", "abort", "observer", "selected", "io", "write-io"}) {
         handle = api.create("{}");
