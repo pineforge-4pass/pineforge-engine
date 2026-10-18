@@ -123,6 +123,17 @@ set_target_properties(literal PROPERTIES FOO bar)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
 
+    def test_unquoted_expansion_cannot_inject_property_keys(self) -> None:
+        self.assert_refused(
+            'set_tests_properties(test_lane_property PROPERTIES LABELS ${lane_properties})',
+            'unquoted property expansion')
+
+    def test_quoted_expansion_is_one_property_value(self) -> None:
+        result = self.run_check(
+            'set_tests_properties(test_lane_property PROPERTIES LABELS "${lane_properties}")')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
