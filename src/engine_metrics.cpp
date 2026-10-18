@@ -265,6 +265,17 @@ pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
                                        double initial_capital,
                                        const std::string& chart_tz,
                                        double first_open, double last_close,
+                                       int64_t bars_in_market, double net_profit) {
+    return compute_equity_stats<PointSource>(
+        curve, n, initial_capital, chart_tz, first_open, last_close,
+        bars_in_market, net_profit, n);
+}
+
+template <class PointSource>
+pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
+                                       double initial_capital,
+                                       const std::string& chart_tz,
+                                       double first_open, double last_close,
                                        int64_t bars_in_market, double net_profit,
                                        int64_t observation_count) {
     pf_equity_stats_t e{};
@@ -367,6 +378,10 @@ pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
 // The public point-source contract is intentionally explicit-instantiated for
 // the source owned by this lane.  L6b-4/L7c add the scratch source's matching
 // instantiation once SpillCurve exists; the metric body remains one template.
+template pf_equity_stats_t compute_equity_stats<ArrayCurve>(
+    const ArrayCurve&, int64_t, double, const std::string&, double, double,
+    int64_t, double);
+
 template pf_equity_stats_t compute_equity_stats<ArrayCurve>(
     const ArrayCurve&, int64_t, double, const std::string&, double, double,
     int64_t, double, int64_t);

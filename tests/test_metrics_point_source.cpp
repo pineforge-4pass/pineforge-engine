@@ -69,6 +69,24 @@ void source_copies_exact_points() {
     }
 }
 
+void ordinary_point_source_entry_matches_reference() {
+    const std::vector<pf_equity_point_t> points = {
+        {1704067199000LL, 10000.0, 0.0},
+        {1704067200000LL, 10100.0, 100.0},
+        {1706745600000LL, 9900.0, -100.0},
+        {1709251200000LL, 10050.0, 50.0},
+    };
+    const std::int64_t n = static_cast<std::int64_t>(points.size());
+    ArrayCurve source(points.data(), n);
+    const double last_close = 100.0 + points.back().equity / 100.0;
+    const double net_profit = points.back().equity - 10000.0;
+    const pf_equity_stats_t got = compute_equity_stats<ArrayCurve>(
+        source, n, 10000.0, "UTC", 100.0, last_close, n / 2, net_profit);
+    const pf_equity_stats_t want = equity_stats_reference::compute_equity_stats(
+        points.data(), n, 10000.0, "UTC", 100.0, last_close, n / 2, net_profit);
+    CHECK(same_bytes(got, want));
+}
+
 void matches_reference_for_empty_and_month_boundaries() {
     const std::vector<std::vector<pf_equity_point_t>> cases = {
         {},
@@ -131,6 +149,7 @@ void observation_count_only_changes_exposure_denominator() {
 
 int main() {
     source_copies_exact_points();
+    ordinary_point_source_entry_matches_reference();
     matches_reference_for_empty_and_month_boundaries();
     matches_reference_for_zero_negative_and_zoned_curves();
     observation_count_only_changes_exposure_denominator();
