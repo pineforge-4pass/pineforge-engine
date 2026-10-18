@@ -7088,11 +7088,10 @@ target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c
 set_target_properties(test_cr150_contract_headers PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
-# CR-150 L3: append after every pre-existing line-pinned registration.
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    list(APPEND TEST_SOURCES test_chart_store_once)
-    pineforge_add_unit_test(test_chart_store_once)
-endif()
+# CR-150 L7B: point-source equity metrics.  This registration intentionally
+# follows the P00 line-pinned block above (scope ruling SCOPE-RULING-1818.md).
+list(APPEND TEST_SOURCES test_metrics_point_source)
+pineforge_add_unit_test(test_metrics_point_source)
 
 # CR-150 L15a: append after every existing line-pinned registration.
 list(APPEND TEST_SOURCES test_native_bar_views_l15a)
@@ -7113,3 +7112,12 @@ list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
 list(APPEND TEST_SOURCES test_report_sink_format)
 pineforge_add_unit_test(test_report_sink_format)
+
+list(APPEND TEST_SOURCES test_trade_percent_prefix)
+pineforge_add_unit_test(test_trade_percent_prefix)
+
+# CR-150 L3: append after every pre-existing line-pinned registration.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_chart_store_once)
+    pineforge_add_unit_test(test_chart_store_once)
+endif()
