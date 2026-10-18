@@ -53,7 +53,7 @@ jobs:
           contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     timeout-minutes: 360
@@ -90,7 +90,7 @@ jobs:
           contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     # 360 minutes is GitHub's job maximum and deliberately the only limit:
@@ -174,7 +174,7 @@ jobs:
                   contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
                   (github.event_name != 'pull_request' ||
                    (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-                  fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+                  fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
           - os: macos-26
             runner: macos-26
 
@@ -266,7 +266,7 @@ jobs:
           contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
     # 360 minutes (the platform maximum). No CTest stage bound remains: main's
     # full set ran out of the old 30- and 60-minute stage bounds twice, and
     # the owner rule of 2026-10-12 removed the bounds rather than raising
@@ -337,7 +337,7 @@ jobs:
           contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 22.3 min on the standard runner at 0d76a099; every event runs the whole
@@ -428,7 +428,7 @@ jobs:
           contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     timeout-minutes: 360
