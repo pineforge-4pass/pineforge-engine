@@ -1883,7 +1883,7 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 #endif
 }
 
-static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>&,
+static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger&,
                                                             source::PineExecutionAdapter&);
 
 // sort_same_bar_exit_trades' first test, asked before the call (R5 lane D2-D):
@@ -1892,7 +1892,7 @@ static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>&,
 // the group is one row, the sort moves nothing and the call answers nullopt.
 // A quiet-bar gate (pine_quiet_bar.hpp): the ungated reference calls the sort
 // at every publication.
-static bool same_bar_exit_group_possible(const std::vector<Trade>& trades) noexcept {
+static bool same_bar_exit_group_possible(const TradeLedger& trades) noexcept {
 #if PINEFORGE_PINE_QUIET_BAR_GATES
     if (trades.size() < 2) return false;
     const Trade& last = trades[trades.size() - 1];
@@ -2183,7 +2183,7 @@ void source::PineStrategyHost::order_global_exit_children(
 // returned), so a sort that moves one answers the first row it moved, which
 // the caller hands to the kernel before the next hash read
 // (NativeStrategyHost::native_closed_rows_amended).
-static std::optional<std::size_t> sort_same_bar_exit_trades(std::vector<Trade>& trades,
+static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger& trades,
                                                             source::PineExecutionAdapter& adapter) {
     if (trades.size() < 2) return std::nullopt;
     const std::size_t end = trades.size();

@@ -148,7 +148,7 @@ public:
     using BacktestEngine::position_side_;
     double position_size() const { return signed_position_size(); }
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 // RED-1. Flat explicit all-in (qty = equity/close = 100), zero commission, no
