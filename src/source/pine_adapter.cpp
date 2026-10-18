@@ -27973,8 +27973,11 @@ void OriginRoster::retire_before(std::size_t global) {
 // whose own row has gone. No persistent release bitmap or lookup is added.
 void PineExecutionAdapter::retire_origin_prefixes() {
     if (detail::retain_retired_rows()) return;
-    if (std::all_of(cohorts_by_id_.begin(), cohorts_by_id_.end(), [](const auto& row) {
-            return row.second.origins.members().empty();
+    // The front row alone can pin each retained window. Check before building
+    // named, so a resting bracket/stop pair allocates no retirement scratch.
+    if (std::all_of(cohorts_by_id_.begin(), cohorts_by_id_.end(), [this](const auto& row) {
+            const auto& members = row.second.origins.members();
+            return members.empty() || placement_.contains(members.front().incarnation);
         })) return;
     IExecutionConsumer* consumer = bound_consumer();
     if (!consumer) return;
