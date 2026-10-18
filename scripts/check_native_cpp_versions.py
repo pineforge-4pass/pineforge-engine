@@ -150,7 +150,7 @@ BAR_VIEW_READS = {
         'descriptor->close_ms = nullptr;',
         'if (feed.seconds == kSecPerDay && !feed.bars.empty()) {',
         'daily = &feed.bars;',
-        'if (!intrabar_tf_ || lower.bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {',
+        'const auto count = source ? active_bar_views_.lower_count : lower.bars.size();',
         'path_spec, lower.bars.empty() ? nullptr : lower.bars.data(),',
         'static_cast<int>(lower.bars.size()), NativeInputPolicy::Batch);',
         'lower->bars.begin(), lower->bars.end(), begin,',
@@ -200,7 +200,8 @@ BAR_VIEW_READS = {
     'src/source/pine_adapter.cpp': (
         'if (effective_input.empty() && args.n >= 2 && args.bars != nullptr) {',
         'effective_input = detect_timeframe(args.bars, args.n);',
-        'if (args.bars && args.n > 0) {',
+        'make_magnifier_path_source(args.bars, args.n, spec.input_tf,',
+        '} else if (args.bars && args.n > 0) {',
         'path.bars = tradingview_magnifier_bars(',
         'args.bars, args.n, spec.input_tf, spec.script_tf, spec.session,',
         'const bool inactive_sampler_path = inert != nullptr && inert->bars.empty()',
@@ -557,13 +558,17 @@ def check_native_bar_views(files):
                              + repr(added) + '; missing=' + repr(missing))
     routes = {
         'src/native_execution_consumer.cpp': (
-            'candidate, views', 'bar_views());', 'spec->instrument_feeds[subscription.instrument_feed], slot'),
+            'candidate, views', 'bar_views());', 'spec->instrument_feeds[subscription.instrument_feed], slot',
+            'active_bar_views_.lower_path->segment(begin, end)', 'active_bar_views_.lower_segment = segment'),
         'src/source/pine_security_eval.cpp': (
             'native_instrument_feed_view(installed_symbol_feed(site.feed), slot)',
             'native_instrument_feed_view(feed, nullptr)'),
         'src/source/pine_strategy_host.cpp': (
             'native_instrument_feed_view(feed, slot)', 'stage_instrument_feed_views(nullptr, 0)'),
-        'src/source/pine_adapter.cpp': ('normalize_projected_spec(spec)',),
+        'src/source/pine_adapter.cpp': ('normalize_projected_spec(spec)',
+            'stage_lower_path_source(', 'make_magnifier_path_source(args.bars, args.n, spec.input_tf,'),
+        'src/source/pine_scheduler_native.cpp': ('views.lower_segment',
+            'views.lower_path->next_after_segment()'),
     }
     for path, tokens in routes.items():
         for token in tokens:
