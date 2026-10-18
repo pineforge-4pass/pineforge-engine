@@ -12,6 +12,18 @@ ROOT = Path(__file__).resolve().parent.parent
 CMAKE = ROOT / "tests" / "CMakeLists.txt"
 LANE_DIR = ROOT / "tests" / "cr150.d"
 README = LANE_DIR / "README.md"
+ALLOWED_TEST_PROPERTIES = frozenset({
+    "LABELS", "SKIP_RETURN_CODE", "TIMEOUT", "RUN_SERIAL", "DEPENDS",
+})
+REFUSED_TEST_PROPERTIES = frozenset({
+    "ENVIRONMENT", "WORKING_DIRECTORY", "ENVIRONMENT_MODIFICATION",
+})
+ARGUMENT_LITERAL = (
+    r'"(?:\\.|[^"\\])*"|'
+    r'\[(?P<bracket_level>=*)\[(?P<bracket_value>.*?)\](?P=bracket_level)\]'
+)
+ARGUMENT_RE = re.compile(ARGUMENT_LITERAL, re.DOTALL)
+COMMENT_OR_ARGUMENT_RE = re.compile(ARGUMENT_LITERAL + r'|#[^\n]*', re.DOTALL)
 
 
 class CheckFailure(Exception):
@@ -26,37 +38,20 @@ class Statement:
 
 
 def _without_comments(text: str) -> str:
-    """Mask comments while preserving newlines and quoted arguments."""
-    lines: list[str] = []
-    for raw in text.splitlines(keepends=True):
-        quoted = False
-        escaped = False
-        out: list[str] = []
-        for char in raw:
-            if escaped:
-                escaped = False
-                out.append(char)
-                continue
-            if char == "\\" and quoted:
-                escaped = True
-                out.append(char)
-                continue
-            if char == '"':
-                quoted = not quoted
-                out.append(char)
-                continue
-            if char == "#" and not quoted:
-                out.append("\n" if raw.endswith("\n") else "")
-                break
-            out.append(char)
-        lines.append("".join(out))
-    return "".join(lines)
+    """Remove line comments, preserving quoted/bracketed arguments and lines."""
+    return COMMENT_OR_ARGUMENT_RE.sub(
+        lambda match: "" if match.group(0).startswith("#") else match.group(0), text)
 
 
 def _statements(path: Path, text: str) -> list[Statement]:
     """Read balanced, line-started CMake calls with their source lines."""
     masked = _without_comments(text)
-    starts = list(re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", masked))
+    # Bracket contents are literal argument text, including #, parentheses,
+    # and lines that look like commands. Keep their positions for diagnostics.
+    syntax = ARGUMENT_RE.sub(
+        lambda match: re.sub(r"[^\n]", " ", match.group(0))
+        if match.group(0).startswith("[") else match.group(0), masked)
+    starts = list(re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", syntax))
     statements: list[Statement] = []
     cursor = 0
     for match in starts:
@@ -69,8 +64,8 @@ def _statements(path: Path, text: str) -> list[Statement]:
         quoted = False
         escaped = False
         close_at: int | None = None
-        for index in range(open_at, len(masked)):
-            char = masked[index]
+        for index in range(open_at, len(syntax)):
+            char = syntax[index]
             if escaped:
                 escaped = False
                 continue
@@ -105,6 +100,49 @@ def _statements(path: Path, text: str) -> list[Statement]:
 def _words(body: str) -> list[str]:
     return [token[1:-1] if len(token) >= 2 and token[0] == token[-1] == '"' else token
             for token in re.findall(r'"(?:\\.|[^"\\])*"|[^\s]+', body)]
+
+
+def _property_words(path: Path, statement: Statement) -> list[str]:
+    """Property arguments: quoted/bracketed lists stay single arguments."""
+    body = statement.body
+    words: list[str] = []
+    index = 0
+    while index < len(body):
+        if body[index].isspace():
+            index += 1
+            continue
+        literal = ARGUMENT_RE.match(body, index)
+        if literal:
+            raw = literal.group(0)
+            words.append(raw[1:-1] if raw.startswith('"') else literal.group('bracket_value'))
+            index = literal.end()
+            if index < len(body) and not body[index].isspace():
+                raise CheckFailure(f"{path}:{statement.line}: property arguments need whitespace separation")
+            continue
+        if body[index] == '"' or re.match(r"\[=*\[", body[index:]):
+            raise CheckFailure(f"{path}:{statement.line}: unterminated property argument")
+        # CMake divides unquoted lists into arguments. An unquoted ';' must
+        # not conceal the next property key; escaped semicolons stay literal.
+        word: list[str] = []
+        while index < len(body) and not body[index].isspace():
+            char = body[index]
+            if char == "\\" and index + 1 < len(body):
+                index += 1
+                word.append(body[index])
+            elif char == ";":
+                if word:
+                    words.append("".join(word))
+                    word = []
+            elif char == '"':
+                raise CheckFailure(f"{path}:{statement.line}: unreadable property argument")
+            elif char == "$":
+                raise CheckFailure(f"{path}:{statement.line}: unquoted property expansion is not allowed; quote the argument")
+            else:
+                word.append(char)
+            index += 1
+        if word:
+            words.append("".join(word))
+    return words
 
 
 def _require_source(path: Path, line: int, name: str) -> None:
@@ -159,11 +197,25 @@ def _check_lane(path: Path) -> None:
             if not _is_script_add_test(words):
                 _require_source(path, statement.line, words[1])
             continue
-        if name in {"set_tests_properties", "set_target_properties"}:
+        if name == "set_tests_properties":
+            words = _property_words(path, statement)
             if "PROPERTIES" not in (word.upper() for word in words):
                 raise CheckFailure(f"{path}:{statement.line}: {statement.name}() needs PROPERTIES")
-            if words[0].upper() == "PROPERTIES":
+            properties = next(index for index, word in enumerate(words)
+                              if word.upper() == "PROPERTIES")
+            if properties == 0:
                 raise CheckFailure(f"{path}:{statement.line}: {statement.name}() needs a registered name")
+            pairs = words[properties + 1:]
+            if not pairs:
+                raise CheckFailure(f"{path}:{statement.line}: set_tests_properties() needs at least one key/value pair")
+            if len(pairs) % 2:
+                raise CheckFailure(f"{path}:{statement.line}: set_tests_properties() needs complete key/value pairs")
+            for key in pairs[::2]:
+                canonical = key.upper()
+                if canonical in REFUSED_TEST_PROPERTIES:
+                    raise CheckFailure(f"{path}:{statement.line}: property {canonical} is explicitly forbidden in a lane file")
+                if canonical not in ALLOWED_TEST_PROPERTIES:
+                    raise CheckFailure(f"{path}:{statement.line}: property {canonical!r} is not allowed in a lane file")
             continue
         raise CheckFailure(f"{path}:{statement.line}: statement {statement.name}() is not allowed in a lane file")
     if depth:
