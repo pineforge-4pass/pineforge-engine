@@ -209,10 +209,16 @@ void receipt_window(no::GroupEffect effect, bool direct) {
     const auto second = f.drain(effect, direct);
     CHECK(f.core.group_effect_receipt_count() == 4);
     const auto retained = f.core.group_effect_receipt(second.first);
+    REQUIRE(f.core.retire_history(first.cause.ordinal - 1) > 0);
+    CHECK(f.core.group_effect_receipt_base() == 0);
+    for (const auto& recipient : first.recipients) {
+        CHECK(f.already_applied(first.cause, recipient, direct));
+    }
     // Retire the cause, even though its outcomes are still in the journal.
     REQUIRE(f.core.retire_history(first.cause.ordinal) > 0);
     CHECK(f.core.retired_through() == first.cause.ordinal);
     CHECK(f.core.group_effect_receipt_count() == 4);
+    CHECK(f.core.group_effect_receipt_base() == 2);
     retired_index_is_rejected(f.core, first.first);
     CHECK(same(f.core.group_effect_receipt(second.first), retained));
     for (const auto& recipient : second.recipients) {
@@ -228,25 +234,46 @@ void receipt_window(no::GroupEffect effect, bool direct) {
     CHECK(past_end);
     REQUIRE(f.core.retire_history(f.core.last_ordinal()) > 0);
     CHECK(f.core.group_effect_receipt_count() == 4);
+    CHECK(f.core.group_effect_receipt_base() == 4);
     retired_index_is_rejected(f.core, second.first);
     const auto third = f.drain(effect, direct);
     CHECK(third.first == 4);
     CHECK(f.core.group_effect_receipt_count() == 6);
+    CHECK(f.core.group_effect_receipt_base() == 4);
     CHECK(f.core.group_effect_receipt(4).cause == third.cause);
     CHECK(f.core.group_effect_receipt(5).recipient == third.recipients[1]);
 
     no::WorkingRequestCore moved(std::move(f.core));
     CHECK(moved.group_effect_receipt_count() == 6);
+    CHECK(moved.group_effect_receipt_base() == 4);
     CHECK(moved.group_effect_receipt(4).cause == third.cause);
     CHECK(moved.group_effect_receipt(4).recipient == third.recipients[0]);
     CHECK(f.core.group_effect_receipt_count() == 0);
+    CHECK(f.core.group_effect_receipt_base() == 0);
     no::WorkingRequestCore assigned({"discarded", 1});
     assigned = std::move(moved);
     CHECK(assigned.group_effect_receipt_count() == 6);
+    CHECK(assigned.group_effect_receipt_base() == 4);
     CHECK(assigned.group_effect_receipt(4).cause == third.cause);
     CHECK(moved.group_effect_receipt_count() == 0);
+    CHECK(moved.group_effect_receipt_base() == 0);
     assigned.reset({"l19b", 2});
     CHECK(assigned.group_effect_receipt_count() == 0);
+    CHECK(assigned.group_effect_receipt_base() == 0);
+}
+
+void a_retained_prepared_cause_survives_an_older_retirement() {
+    Fixture f;
+    const auto first = f.drain(no::GroupEffect::Cancel, false);
+    const auto next = f.drain(no::GroupEffect::Cancel, false, false);
+    auto prepared = f.core.prepare_group_effect(next.cause, next.recipients[0], f.ord);
+    REQUIRE(std::holds_alternative<no::PreparedMutation>(prepared));
+    REQUIRE(f.core.retire_history(first.cause.ordinal) > 0);
+    f.install(std::move(prepared));
+    CHECK(f.core.group_effect_receipt_base() == 2);
+    CHECK(f.core.group_effect_receipt_count() == 3);
+    CHECK(f.core.group_effect_receipt(2).cause == next.cause);
+    CHECK(f.already_applied(next.cause, next.recipients[0], false));
 }
 
 void a_prepared_effect_cannot_restore_a_retired_cause() {
@@ -292,6 +319,7 @@ std::vector<double> deferred_chain(bool retire, bool direct) {
         CHECK(f.core.retired_through() == head - 1);
         CHECK(f.core.event_at(no::EventId{f.run, head}) != nullptr);
         CHECK(f.core.group_effect_receipt_count() == 2);
+        CHECK(f.core.group_effect_receipt_base() == 2);
         retired_index_is_rejected(f.core, 0);
     }
     const auto applied = f.fill(parent, 4);
@@ -331,6 +359,7 @@ std::size_t live_heap_after_drains(int drains) {
             REQUIRE(f.core.retire_history(f.core.last_ordinal()) > 0);
         }
         CHECK(f.core.group_effect_receipt_count() == static_cast<std::size_t>(drains) * 2);
+        CHECK(f.core.group_effect_receipt_base() == f.core.group_effect_receipt_count());
         CHECK(f.core.history().empty());
         CHECK(f.core.live().empty());
         bytes = global_allocation::live_bytes;
@@ -343,6 +372,7 @@ std::size_t live_heap_after_drains(int drains) {
 struct ConsumerRun {
     k3_book::Outcome outcome;
     std::size_t receipts = 0;
+    std::size_t base = 0;
 };
 
 ConsumerRun consumer_run(const k3_book::BookConfig& config, bool window,
@@ -360,7 +390,8 @@ ConsumerRun consumer_run(const k3_book::BookConfig& config, bool window,
     host.finish();
     REQUIRE(host.outcome.completed);
     REQUIRE(host.outcome.error.empty());
-    return {host.outcome, consumer.request_core().group_effect_receipt_count()};
+    const auto& core = consumer.request_core();
+    return {host.outcome, core.group_effect_receipt_count(), core.group_effect_receipt_base()};
 }
 
 void consumer_digests_survive_retirement() {
@@ -374,10 +405,12 @@ void consumer_digests_survive_retirement() {
         config.path = path;
         const auto retained = consumer_run(config, false, false, false);
         REQUIRE(retained.receipts > 0);
+        CHECK(retained.base == 0);
         for (bool direct : {false, true}) {
             for (bool stress : {false, true}) {
                 const auto window = consumer_run(config, true, direct, stress);
                 CHECK(window.receipts == retained.receipts);
+                CHECK(window.base > 0 && window.base <= window.receipts);
                 CHECK(window.outcome.trace == retained.outcome.trace);
                 CHECK(window.outcome.continuation == retained.outcome.continuation);
                 CHECK(window.outcome.broker == retained.outcome.broker);
@@ -398,6 +431,7 @@ int main() {
             }
             CHECK(deferred_chain(true, direct) == deferred_chain(false, direct));
         }
+        a_retained_prepared_cause_survives_an_older_retirement();
         const auto small = live_heap_after_drains(64);
         const auto large = live_heap_after_drains(4096);
         CHECK(large <= small + 4096);

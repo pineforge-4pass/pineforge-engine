@@ -477,7 +477,8 @@ inline std::uint64_t core_value(const no::WorkingRequestCore& core) {
     f.u(core.live().size());
     for (const auto& live : core.live()) fold(f, live);
     f.u(core.group_effect_receipt_count());
-    for (std::size_t index = 0; index < core.group_effect_receipt_count(); ++index) {
+    for (std::size_t index = core.group_effect_receipt_base();
+         index < core.group_effect_receipt_count(); ++index) {
         const auto receipt = core.group_effect_receipt(index);
         fold(f, receipt.cause);
         fold(f, receipt.recipient);
@@ -533,7 +534,8 @@ public:
         f.u(core.live().size());
         for (const auto& live : core.live()) fold(f, live);
         f.u(core.group_effect_receipt_count());
-        for (std::size_t index = receipts_; index < core.group_effect_receipt_count(); ++index) {
+        for (std::size_t index = std::max(receipts_, core.group_effect_receipt_base());
+             index < core.group_effect_receipt_count(); ++index) {
             const auto receipt = core.group_effect_receipt(index);
             fold(f, receipt.cause);
             fold(f, receipt.recipient);

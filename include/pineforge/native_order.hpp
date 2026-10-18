@@ -1718,10 +1718,10 @@ public:
     /// Retire the journal prefix whose ordinals are <= through_ordinal. It
     /// stops ahead of the first event a live request still reads -- the head
     /// of a deferred group-adjustment chain (collect_pending_chain) -- and
-    /// moves no live row, counter, receipt or roster: a group-effect receipt
-    /// whose outcome event is retired stands on its own record
-    /// (receipt_lookup), and the cohort lookups read the chain index, never
-    /// the journal. Answers the number of events retired.
+    /// drops group-effect keys whose causes are <= retired_through(). The
+    /// consumer must fold those keys first; queued applied notifications pin
+    /// their causes. Live rows, logical counters and cohort rosters do not
+    /// move. Answers the number of journal events retired.
     std::size_t retire_history(uint64_t through_ordinal);
     /// The ordinal of the newest retired event, 0 while none is.
     uint64_t retired_through() const noexcept { return retired_through_; }
@@ -1734,15 +1734,15 @@ public:
     /// exceed both.
     uint64_t last_ordinal() const noexcept { return last_ordinal_; }
     uint64_t last_incarnation() const noexcept { return last_incarnation_; }
-    /// The group-effect receipts, in commit order: the idempotence keys a later
-    /// drain consults. Read-only; the consumer's state continuation folds each
-    /// once, when it commits. Commit order is cause order, and one cause's
-    /// receipts stand in the order they were applied, whatever the recipients'
-    /// incarnations: the consumer's drain applies them in the queue order
-    /// group_recipients answers, which is not incarnation order once a re-price
-    /// has kept its handle (R5 lane K-OCA-KEEP). A receipt for a cause older
-    /// than the newest one's is refused CoreFailure::InvalidCause.
-    std::size_t group_effect_receipt_count() const noexcept { return receipts_.size(); }
+    /// Group-effect keys in cause/commit order, retaining [base, count).
+    /// Count is the total ever committed; base advances with retire_history.
+    /// A cause's recipients stay in drain/queue order, even after keep_handle
+    /// re-pricing. Older-than-newest causes are InvalidCause unless replayed.
+    /// A retired index asserts in Debug and throws out_of_range otherwise.
+    std::size_t group_effect_receipt_base() const noexcept { return receipts_base_; }
+    std::size_t group_effect_receipt_count() const noexcept {
+        return receipts_base_ + receipts_.size();
+    }
     GroupEffectReceipt group_effect_receipt(std::size_t index) const;
     /// The incarnations this run issued -- every accepted request and every
     /// replace successor -- as disjoint ascending [first, last] ranges: the
@@ -2131,9 +2131,9 @@ private:
                                  GroupEffect effect, uint64_t* outcome) const;
     bool authenticate_receipt_outcome(const CommandEvent& event, const EventId& cause,
                                       const RequestHandle& recipient, GroupEffect effect) const;
-    /// The trailing level for a best and an offset, through the one geometry the
-    /// matcher uses (native_matching::checked_trail_stop): finite, and strictly
-    /// past the best for a positive offset. `ladder_tick` is the run's declared
+    void retire_group_effect_receipts() noexcept;
+    /// A best and offset through native_matching::checked_trail_stop: finite,
+    /// strictly past the best for a positive offset. `ladder_tick` is the run's
     /// price tick (ActivationGrid::ladder_tick); zero keeps the raw subtraction.
     bool trail_level_ok(double best, double offset, bool is_buy, double* stop,
                         double ladder_tick = 0.0) const noexcept;
@@ -2311,9 +2311,9 @@ private:
         GroupEffect effect = GroupEffect::Reduce;
         uint64_t outcome_ordinal = 0;
     };
-    // In commit order: non-decreasing cause ordinal, one cause's in the order
-    // they were applied (receipt_lookup bisects the cause, then walks it).
+    // Readback-only base; total/digest stay in the consumer. Keys are in cause/drain order.
     std::vector<ReceiptKey> receipts_;
+    std::size_t receipts_base_ = 0;
     std::uint64_t next_cohort_handle_ = 1;
     std::vector<CohortRoster> cohorts_;
     std::vector<CohortReceipt> cohort_receipts_;

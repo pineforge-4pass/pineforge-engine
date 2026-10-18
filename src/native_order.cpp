@@ -1,12 +1,12 @@
 #include <pineforge/native_order.hpp>
 
-// The price-grid arithmetic an anchored level snaps with, and the one an
-// activation is re-validated on, is the run's own L8 ladder arithmetic, so a
-// rounded anchor, a reached print and a quantized fill agree tick for tick.
-// The header is value-only geometry; it brings no host into the core.
+// Anchored levels snap with the run's L8 ladder arithmetic, so a rounded
+// anchor, a reached print and a quantized fill agree tick for tick.
+// This value-only geometry brings no host into the core.
 #include "native_matching.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -951,6 +951,7 @@ void WorkingRequestCore::clear_unbound() noexcept {
     successor_roots_.clear();
     repriced_.clear();
     receipts_.clear();
+    receipts_base_ = 0;
     next_cohort_handle_ = 1;
     cohorts_.clear();
     cohort_receipts_.clear();
@@ -958,7 +959,6 @@ void WorkingRequestCore::clear_unbound() noexcept {
     if (instance_) instance_->expired = true;
     instance_.reset();
 }
-
 void WorkingRequestCore::bind_plan(MutationPlan& plan) const {
     plan.instance = instance_;
     plan.generation = instance_ ? instance_->generation : 0;
@@ -1167,8 +1167,7 @@ std::size_t WorkingRequestCore::retire_history(uint64_t through_ordinal) {
         if (*floor == 0) return 0;
         limit = std::min(limit, *floor - 1);
     }
-    // Journal ordinals ascend, so the retired events are a prefix, and the
-    // ordinal index holds one row per event in the same order.
+    // The journal and its ordinal index have the same ascending prefix.
     const auto end = std::upper_bound(
             history_.begin(), history_.end(), limit,
             [](uint64_t ordinal, const CommandEvent& event) {
@@ -1181,6 +1180,7 @@ std::size_t WorkingRequestCore::retire_history(uint64_t through_ordinal) {
     ordinal_index_.erase(ordinal_index_.begin(),
                          ordinal_index_.begin() + static_cast<std::ptrdiff_t>(count));
     history_base_ += count;
+    retire_group_effect_receipts();
     return count;
 }
 
@@ -1401,18 +1401,19 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
 }
 
 GroupEffectReceipt WorkingRequestCore::group_effect_receipt(std::size_t index) const {
-    const ReceiptKey& key = receipts_.at(index);
+    assert(index >= receipts_base_ && "native group receipt index is below the retained base");
+    if (index < receipts_base_) {
+        throw std::out_of_range("native group receipt index is not retained");
+    }
+    const ReceiptKey& key = receipts_.at(index - receipts_base_);
     return GroupEffectReceipt{key.cause, key.recipient, key.effect, key.outcome_ordinal};
 }
 
-// The receipts are in cause order, and one cause's stand in the order they
-// were applied -- the consumer's drain applies them in the queue order
-// group_recipients walks, which is not incarnation order once a re-price has
-// kept its handle (R5 lane K-OCA-KEEP). So the cause is bisected and its
-// receipts are walked: a drain of k recipients makes about k*k/2 comparisons.
+// Bisect by cause, then walk its recipients in drain/queue order (K-OCA-KEEP).
 WorkingRequestCore::ReceiptLookup WorkingRequestCore::receipt_lookup(
         const EventId& cause, const RequestHandle& recipient, GroupEffect effect,
         uint64_t* outcome) const {
+    assert(cause.ordinal > retired_through_ && "native group receipt lookup is below the window");
     auto it = std::lower_bound(receipts_.begin(), receipts_.end(), cause.ordinal,
                                [](const ReceiptKey& key, uint64_t ordinal) {
                                    return key.cause.ordinal < ordinal;
@@ -1425,9 +1426,8 @@ WorkingRequestCore::ReceiptLookup WorkingRequestCore::receipt_lookup(
     if (it->cause != cause || it->recipient != recipient || it->effect != effect) {
         return ReceiptLookup::Absent;
     }
-    // The outcome was authenticated when the receipt committed beside it. An
-    // outcome the journal window has retired stands on that record; one that
-    // is retained is authenticated again.
+    // Outcomes were authenticated at commit; retained ones are checked again.
+    // A retired cause never reaches this lookup or keeps a key.
     if (it->outcome_ordinal > retired_through_) {
         const CommandEvent* event = event_at(EventId{identity_, it->outcome_ordinal});
         if (!event || !authenticate_receipt_outcome(*event, cause, recipient, effect)) {
@@ -1447,6 +1447,7 @@ std::optional<InstallError> WorkingRequestCore::validate_plan(const MutationPlan
     }
     if (plan.epoch != epoch_ || plan.history_size != history_end()
         || plan.last_ordinal != last_ordinal_
+        || (plan.add_receipt && plan.receipt_cause.ordinal <= retired_through_)
         || epoch_ == std::numeric_limits<uint64_t>::max()) {
         return InstallError::StalePreparation;
     }
@@ -1456,8 +1457,7 @@ std::optional<InstallError> WorkingRequestCore::validate_plan(const MutationPlan
 bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
                                         double* stop, double ladder_tick) const noexcept {
     if (!valid_trail_offset(offset) || !std::isfinite(best)) return false;
-    // One definition of a trailing level, shared with the matcher: finite, a
-    // zero offset riding the best, every positive offset landing strictly
+    // Shared with the matcher: finite, zero riding the best, positive strictly
     // beyond it, and a whole tick count from a best on the run's ladder
     // naming that ladder point (R5 lane E16). The core re-validates an
     // activation the matcher reported, so a second spelling here would refuse
@@ -1523,7 +1523,6 @@ WorkingRequestCore::WorkingRequestCore(RunIdentity identity) {
 WorkingRequestCore::WorkingRequestCore(WorkingRequestCore&& other) noexcept {
     *this = std::move(other);
 }
-
 WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) noexcept {
     if (this == &other) return *this;
     identity_ = std::move(other.identity_);
@@ -1539,6 +1538,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     successor_roots_ = std::move(other.successor_roots_);
     repriced_ = std::move(other.repriced_);
     receipts_ = std::move(other.receipts_);
+    receipts_base_ = std::exchange(other.receipts_base_, 0);
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
     cohort_receipts_ = std::move(other.cohort_receipts_);
@@ -5871,6 +5871,20 @@ static_assert(std::is_nothrow_move_constructible_v<PreparedExecution>);
 static_assert(std::variant_size_v<Owner> == 5);
 static_assert(std::variant_size_v<Authority> == 8);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
+
+// The consumer folds at commit and pins every queued cause before retiring the
+// journal. Its actual watermark also respects deferred chains, so only this
+// cause-sorted prefix is no longer askable. The base preserves absolute receipt
+// indices and the already-folded total; RAM holds only the retained keys' capacity.
+void WorkingRequestCore::retire_group_effect_receipts() noexcept {
+    const auto end = std::upper_bound(
+            receipts_.begin(), receipts_.end(), retired_through_,
+            [](uint64_t ordinal, const ReceiptKey& key) {
+                return ordinal < key.cause.ordinal;
+            });
+    receipts_base_ += static_cast<std::size_t>(end - receipts_.begin());
+    receipts_.erase(receipts_.begin(), end);
+}
 
 }  // inline namespace native_order_v7
 }  // namespace pineforge::native_order

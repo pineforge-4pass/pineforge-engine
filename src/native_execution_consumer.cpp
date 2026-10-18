@@ -3258,14 +3258,11 @@ NativeEventRetention NativeExecutionConsumer::retention() const noexcept {
     return spec ? spec->event_retention : NativeEventRetention::Window;
 }
 
-// The journal window closes at every script-bar boundary (and, under the
-// stress switch, at every driver point). A host that acknowledged keeps what
-// it has not read; a host that never did is served by its callbacks, so the
-// window closes on everything. Either way it stops ahead of the oldest
-// applied notification still queued -- the kernel's own reader, including the
-// one being delivered -- and the core stops ahead of any live deferred
-// group-adjustment chain (retire_history). Every event is folded into the
-// event-record digest at its commit, so a retirement never outruns it.
+// Close the window at each script bar (each driver point under stress), up to
+// the host's acknowledgement, or everything for a callback-only host. Queued
+// applied notifications, including the current one, pin their causes; the core
+// also pins live deferred chains. Event and group-receipt folds run at commit,
+// before this retires either journal rows or their group-effect keys.
 void NativeExecutionConsumer::retire_journal() noexcept {
     if (retention() != NativeEventRetention::Window || failed()) return;
     uint64_t through = events_acknowledged_ ? acknowledged_through_
@@ -3275,6 +3272,9 @@ void NativeExecutionConsumer::retire_journal() noexcept {
         through = std::min(through, notification.ordinal - 1);
     }
     requests_.retire_history(through);
+#ifndef NDEBUG
+    if (group_receipts_.count != requests_.group_effect_receipt_count()) std::abort();
+#endif
 }
 
 void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double price) {
@@ -11686,11 +11686,8 @@ void NativeExecutionConsumer::acknowledge_events(uint64_t through_ordinal) noexc
     acknowledged_through_ = std::max(acknowledged_through_, bounded);
 }
 
-// After every install: the terminal-receipt watermark over the events it
-// committed, then the v19 running digests the continuation folds -- each
-// committed event's compact record and each new group-effect receipt, folded
-// once, here, while the rows are the journal's tail. Positions are absolute
-// (EventRange, history_end), so a retired journal prefix moves none of them.
+// At every install, fold the terminal watermark, compact event records and new
+// group receipts once, before retirement. Event and receipt indices are absolute.
 void NativeExecutionConsumer::note_committed_events(
         const native_order::EventRange& events) noexcept {
     const std::size_t end = std::min(requests_.history_end(), events.first_index + events.count);
@@ -11743,6 +11740,9 @@ void NativeExecutionConsumer::note_committed_events(
     event_records_.count = requests_.history_end();
     chain_roots_.h = roots.h;
     chain_roots_.count = root_count;
+#ifndef NDEBUG
+    if (group_receipts_.count < requests_.group_effect_receipt_base()) std::abort();
+#endif
     const std::size_t receipts = requests_.group_effect_receipt_count();
     if (group_receipts_.count < receipts) {
         StateFold f;
