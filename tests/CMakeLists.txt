@@ -7091,3 +7091,7 @@ set_target_properties(test_cr150_contract_headers PROPERTIES
 # CR-150 L8a: keep the existing CMake line pins stable.
 list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
+
+# CR-150 L8d: append after every pre-existing line-pinned registration.
+list(APPEND TEST_SOURCES test_trade_accessors_l8d)
+pineforge_add_unit_test(test_trade_accessors_l8d)
