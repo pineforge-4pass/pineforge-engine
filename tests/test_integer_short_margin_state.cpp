@@ -89,7 +89,7 @@ public:
         }
         if (bar_index_ == 5) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 const std::vector<Bar> bars = {
@@ -271,7 +271,7 @@ public:
     void on_source_bar(const Bar&) override {}
     void checkpoint() { process_short_margin_before_script(current_bar_); }
     void late_margin() { process_margin_call(current_bar_); }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
     double quantity() const { return position_qty_; }
     std::size_t pending() const { return pending_orders_.size(); }
 };

@@ -362,8 +362,8 @@ public:
     // definition for the finality rule. closed_rows_digest_holds re-folds the
     // rows the digest has taken and answers whether they still match: the
     // Debug check a run's end makes, and a witness's probe.
-    uint64_t closed_rows_digest(const std::vector<Trade>& rows) const;
-    bool closed_rows_digest_holds(const std::vector<Trade>& rows) const noexcept;
+    uint64_t closed_rows_digest(const TradeLedger& rows) const;
+    bool closed_rows_digest_holds(const TradeLedger& rows) const noexcept;
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
     void closed_rows_amended(std::size_t first) noexcept { rewind_closed_rows(first); }
@@ -1694,6 +1694,29 @@ private:
     native_calendar::Timeframe script_tf_{};
     std::optional<native_calendar::Timeframe> intrabar_tf_;
     native_calendar::TimeframeCompatibility pairing_{};
+    // Representation-only bindings: continuation identity folds their logical
+    // content through bound_bar_components_, never pointer addresses or tags.
+    struct BarViewBinding {
+        std::vector<std::optional<NativeInstrumentFeedView>> descriptors;
+        std::vector<const NativeInstrumentFeedView*> slots;
+        std::unique_ptr<NativeLowerPathSource> lower_path;
+        NativeBarView lower_segment{nullptr, 0};
+        std::size_t lower_count = 0; // represented by the lower component digest
+        NativeBarViews context() const noexcept {
+            return {slots.empty() ? nullptr : slots.data(), slots.size(),
+                    lower_path.get(), lower_segment};
+        }
+        bool borrowed() const noexcept {
+            if (lower_path) return true;
+            for (const auto* slot : slots) if (slot != nullptr) return true;
+            return false;
+        }
+    };
+    BarViewBinding pending_bar_views_;
+    BarViewBinding active_bar_views_;
+    std::optional<SpecBarDigests> bound_bar_components_;
+    bool detached_bar_views_ = false;
+    void detach_bar_views() noexcept;
     std::optional<NativeFxCurve> staged_fx_curve_;
     bool staged_ingress_fx_ = false;
     bool in_callback_ = false;
@@ -2262,13 +2285,14 @@ private:
     // it is destroyed after the AttemptScope and every pump and callback frame
     // have unwound. The constructor records, before the entry runs anything,
     // whether the handle is tracked, whether this call is nested under an
-    // attempt, a begin, a callback, an input or a dispatch (meaningful for a
-    // tracked handle only), and std::uncaught_exceptions(). `allow_live` lets a
+    // attempt, a begin, a callback, an input or a dispatch, and (for a tracked
+    // handle) std::uncaught_exceptions(). `allow_live` lets a
     // NORMAL return that leaves the run Running keep its generation open: true
     // for stream_begin and the pushes and the time advance, false for the batch
     // runs and stream_end. The destructor is noexcept and renders, dispatches,
-    // allocates and moves a NativeRunSpec never. It does nothing for an untracked
-    // handle or a nested call. Otherwise it closes an epoch that is STILL
+    // allocates and moves a NativeRunSpec never. Its selected-epoch half does
+    // nothing for an untracked handle or nested call; outer run exits always
+    // detach borrowed bar bindings. Otherwise it closes an epoch that is STILL
     // Executing or Capturing (close_open_epoch_at_exit) and leaves a Sealed or
     // Results one alone, so a refused attempt that merely latched NativeFailed
     // before admission never rewrites an earlier generation.
@@ -2286,13 +2310,15 @@ private:
                        bool allow_live) noexcept
             : c_(c), engine_(engine), tracked_(c.selected_epoch_tracked()),
               uncaught_(tracked_ ? std::uncaught_exceptions() : 0),
-              nested_(tracked_ && (c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
-                                   || c.processing_input_ || c.selected_epoch_.dispatching)),
+              nested_(c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
+                         || c.processing_input_ || c.selected_epoch_.dispatching),
               allow_live_(allow_live) {}
         ~EntryExitGuard() {
-            if (!tracked_ || nested_) return;
-            c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
-                                        allow_live_);
+            if (nested_) return;
+            if (tracked_)
+                c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
+                                            allow_live_);
+            if (!allow_live_ || !c_.running()) c_.detach_bar_views();
         }
         EntryExitGuard(const EntryExitGuard&) = delete;
         EntryExitGuard& operator=(const EntryExitGuard&) = delete;
@@ -2398,6 +2424,12 @@ private:
     bool calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const;
 
 public:
+    // Projection judges the host's pending context without publishing it via
+    // bar_views(), which is active-only. No installed host surface changes.
+    NativeRunSpecValidation normalize_projected_spec(NativeRunSpec& spec) const noexcept {
+        return native_bar_views_v1::normalize_native_run_spec(spec, pending_bar_views_.context());
+    }
+
     // CR-150 V1/V2, CORE-TOP rev 6 amendment (10-18 19:24), changes 1-2:
     // staging only replaces pending descriptors/source. It never judges the
     // lifecycle or changes active state; only an applied configure binds and

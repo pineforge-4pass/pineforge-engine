@@ -78,7 +78,7 @@ public:
         if (bar == 4) submit_market({execution::Flatten{}, "x", ""});
     }
     NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 std::vector<Bar> minute_bars(int n) {

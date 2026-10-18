@@ -1706,6 +1706,11 @@ bool NativeExecutionConsumer::admit_public_begin(BacktestEngine& engine, const c
         present_refusal(engine, not_ready_text);
         return false;
     }
+    if (detached_bar_views_) {
+        present_refusal(engine, "native Ready bar binding was detached",
+                        RunFailureCode::engine_invariant);
+        return false;
+    }
     return true;
 }
 
@@ -1759,6 +1764,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
     try {
         host->prepare_native_begin(args);
     } catch (const std::exception& e) {
+        pending_bar_views_ = {};
         preparing_begin_ = false;
         // A provider's begin-time validation is a public-entry refusal.  It
         // has not started a native run or consumed an identity, so preserve a
@@ -1767,6 +1773,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
         render_exception(engine, e);
         return false;
     } catch (...) {
+        pending_bar_views_ = {};
         preparing_begin_ = false;
         render_unclassified(engine, "native pre-begin provider exception");
         return false;
@@ -1893,6 +1900,48 @@ void NativeExecutionConsumer::refuse_source_mutation(const char* operation) {
                              (operation ? operation : ""));
 }
 
+void NativeExecutionConsumer::stage_instrument_feed_views(
+        const NativeInstrumentFeedView* const* views, std::size_t count) {
+    if (count != 0 && views == nullptr)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "nonempty feed view table is null");
+    std::vector<std::optional<NativeInstrumentFeedView>> descriptors(count);
+    std::vector<const NativeInstrumentFeedView*> slots(count, nullptr);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (views[i] == nullptr) continue;
+        descriptors[i] = *views[i];
+        slots[i] = &*descriptors[i];
+    }
+    pending_bar_views_.descriptors.swap(descriptors);
+    pending_bar_views_.slots.swap(slots);
+}
+
+void NativeExecutionConsumer::stage_lower_path_source(
+        std::unique_ptr<NativeLowerPathSource> source) noexcept {
+    pending_bar_views_.lower_path = std::move(source);
+}
+
+NativeBarViews NativeExecutionConsumer::bar_views() const noexcept {
+    if (!std::holds_alternative<NativeReady>(state_) && !running()) return {};
+    return active_bar_views_.context();
+}
+
+void NativeExecutionConsumer::detach_bar_views() noexcept {
+    detached_bar_views_ = detached_bar_views_ || active_bar_views_.borrowed();
+    // Keep only borrowed row counts in the copied descriptors. Their data
+    // pointers and table are inaccessible after detachment; owned counts stay
+    // in the retained spec. Component digests already include these counts.
+    for (auto& descriptor : active_bar_views_.descriptors) {
+        if (!descriptor) continue;
+        descriptor->bars.data = nullptr;
+        descriptor->close_ms = nullptr;
+    }
+    active_bar_views_.slots.clear();
+    active_bar_views_.lower_path.reset();
+    active_bar_views_.lower_segment = {nullptr, 0};
+    pending_bar_views_ = {};
+}
+
 bool NativeExecutionConsumer::stage_account_currency_fx_series(
         const std::vector<std::int64_t>& timestamps, const std::vector<double>& rates) {
     if (timestamps.size() != rates.size()) return false;
@@ -1926,13 +1975,14 @@ bool NativeExecutionConsumer::stage_account_currency_fx_series(
 const NativeExecutionConsumer::SpecBarDigests& NativeExecutionConsumer::spec_bar_digests(
         const NativeRunSpec& spec) const noexcept {
     if (!spec_bar_digests_) {
-        SpecBarDigests digests;
-        digests.intrabar = native_intrabar_path_digest(spec.intrabar);
+        SpecBarDigests digests = bound_bar_components_.value_or(SpecBarDigests{});
+        if (!bound_bar_components_)
+            digests.intrabar = native_intrabar_path_digest(spec.intrabar);
         if (!spec.subscriptions.empty())
             digests.subscriptions = native_timeframe_subscriptions_digest(spec.subscriptions);
         if (spec.auxiliary_feed)
             digests.auxiliary = native_auxiliary_feed_digest(*spec.auxiliary_feed);
-        if (!spec.instrument_feeds.empty())
+        if (!bound_bar_components_ && !spec.instrument_feeds.empty())
             digests.instruments = native_instrument_feeds_digest(spec.instrument_feeds);
         spec_bar_digests_ = digests;
     }
@@ -2647,6 +2697,13 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
 NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine,
                                                           const NativeRunSpec* borrowed,
                                                           NativeRunSpec* owned) {
+    // Every exit consumes pending, including a phase refusal or a digest
+    // exception. The active binding is changed only at the Applied commit.
+    struct DiscardPending {
+        BarViewBinding& pending;
+        ~DiscardPending() { pending = {}; }
+    } discard{pending_bar_views_};
+    const NativeBarViews views = pending_bar_views_.context();
     NativeSetupResult result;
     const NativeRunSpec* prior_spec = nullptr;
     // A refusal for the host's phase judges no field: it is WrongPhase at
@@ -2682,7 +2739,7 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
     }
     std::optional<NativeRunSpec> copied;
     NativeRunSpec& candidate = owned != nullptr ? *owned : copied.emplace(*borrowed);
-    const auto validation = normalize_native_run_spec(candidate);
+    const auto validation = native_bar_views_v1::normalize_native_run_spec(candidate, views);
     result.validation = validation;
     if (!validation) {
         fail(engine, NativeFailure{NativeFailureCode::InvalidSpecification,
@@ -2710,6 +2767,13 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
             return result;
         }
     }
+    SpecBarDigests components;
+    components.intrabar = native_bar_views_v1::native_intrabar_path_digest(
+        candidate.intrabar, views.lower_path);
+    if (!candidate.instrument_feeds.empty())
+        components.instruments = native_bar_views_v1::native_instrument_feeds_digest(
+            candidate.instrument_feeds, views);
+    const std::size_t lower_count = views.lower_path == nullptr ? 0 : views.lower_path->count();
     auto parsed_session = native_calendar::parse_session(candidate.session, candidate.timezone);
     if (!parsed_session) {
         fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
@@ -2751,6 +2815,10 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
     // persists across a completed/aborted handle and is reapplied by the next
     // provider begin, so it must survive that provider's configure call.
     if (!staged_ingress_fx_) staged_fx_curve_.reset();
+    active_bar_views_ = std::move(pending_bar_views_);
+    active_bar_views_.lower_count = lower_count;
+    bound_bar_components_ = components;
+    detached_bar_views_ = false;
     forget_spec_digests();
     leave_running();
     state_ = NativeReady{std::move(candidate)};
@@ -9463,9 +9531,9 @@ NativeSetupResult NativeExecutionConsumer::declare_timeframe_subscriptions(
         result.validation = {NativeRunSpecError::WrongPhase, NativeRunSpecField::None};
         return result;
     }
-    result.validation = validate_native_timeframe_subscriptions(
+    result.validation = native_bar_views_v1::validate_native_timeframe_subscriptions(
         declared, running->spec.input_tf, running->spec.timeframe_undetected,
-        running->spec.auxiliary_feed, running->spec.instrument_feeds);
+        running->spec.auxiliary_feed, running->spec.instrument_feeds, bar_views());
     if (!result.validation) return result;
     running->spec.subscriptions = std::move(declared);
     forget_spec_digests();
@@ -9488,9 +9556,9 @@ NativeSetupResult NativeExecutionConsumer::declare_auxiliary_feed(
         result.validation = {NativeRunSpecError::WrongPhase, NativeRunSpecField::None};
         return result;
     }
-    result.validation = validate_native_timeframe_subscriptions(
+    result.validation = native_bar_views_v1::validate_native_timeframe_subscriptions(
         running->spec.subscriptions, running->spec.input_tf,
-        running->spec.timeframe_undetected, declared, running->spec.instrument_feeds);
+        running->spec.timeframe_undetected, declared, running->spec.instrument_feeds, bar_views());
     if (!result.validation) return result;
     running->spec.auxiliary_feed = std::move(declared);
     forget_spec_digests();
@@ -9932,7 +10000,11 @@ bool NativeExecutionConsumer::pump_instrument_subscription(
         render(engine, "native instrument series lost its feed");
         return false;
     }
-    const NativeInstrumentFeed& feed = spec->instrument_feeds[subscription.instrument_feed];
+    const auto context = bar_views();
+    const auto* slot = context.instrument_feed_count == 0
+        ? nullptr : context.instrument_feeds[subscription.instrument_feed];
+    const auto feed = native_instrument_feed_view(
+        spec->instrument_feeds[subscription.instrument_feed], slot);
     // The input's own calendar interval. A raw label partition presents every
     // input as a zero-length interval (timestamp_partition), which states no
     // close to judge a feed bar against, so the rule reads the interval the
@@ -9946,29 +10018,29 @@ bool NativeExecutionConsumer::pump_instrument_subscription(
             horizon = *resolved;
         }
     }
-    const std::size_t total = feed.bars.size();
+    const std::size_t total = feed.bars.size;
     bool delivered = false;
     while (subscription.instrument_cursor < total) {
         const std::size_t at = subscription.instrument_cursor;
         const bool visible = subscription.lookahead
-            ? feed.bars[at].timestamp <= horizon.open_ms
+            ? feed.bars.data[at].timestamp <= horizon.open_ms
             : feed.close_ms[at] <= horizon.last_traded_close_ms;
         if (!visible) break;
         ++subscription.instrument_cursor;
         delivered = true;
         // The pull accessor answers with this bar for the whole callback.
-        subscription.latest = feed.bars[at];
+        subscription.latest = feed.bars.data[at];
         NativeTimeframeBarContext context;
         context.subscription = subscription.index;
-        context.interval.open_ms = feed.bars[at].timestamp;
-        context.interval.eligible_open_ms = feed.bars[at].timestamp;
+        context.interval.open_ms = feed.bars.data[at].timestamp;
+        context.interval.eligible_open_ms = feed.bars.data[at].timestamp;
         context.interval.last_traded_close_ms = feed.close_ms[at];
         context.interval.next_period_open_ms = feed.close_ms[at];
         context.interval.next_input_open_ms =
-            at + 1 < total ? feed.bars[at + 1].timestamp : feed.close_ms[at];
+            at + 1 < total ? feed.bars.data[at + 1].timestamp : feed.close_ms[at];
         context.completion = NativeCompletionKind::Confirmed;
         context.delivered_at_ms = bar.timestamp;
-        if (!invoke_timeframe_callback(engine, feed.bars[at], context)) return false;
+        if (!invoke_timeframe_callback(engine, feed.bars.data[at], context)) return false;
     }
     // gaps: the subscription contract's rule, on the pull side. An instrument
     // series has no evaluator of the kernel's to clear on the push side; its
@@ -10515,6 +10587,11 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
     args.warmup_n = n_warmup;
     if (!prepare_public_begin(engine, args)) return false;
     if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
+    if (active_bar_views_.lower_path) {
+        present_refusal(engine, "native lower source cannot begin a stream",
+                        RunFailureCode::engine_invariant);
+        return false;
+    }
     clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
@@ -11777,7 +11854,7 @@ void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
 }  // namespace
 
 uint64_t NativeExecutionConsumer::closed_rows_digest(
-        const std::vector<Trade>& rows) const {
+        const TradeLedger& rows) const {
     const std::size_t final_rows = std::min(closed_rows_final_, rows.size());
     if (closed_rows_digested_ > final_rows) rewind_closed_rows(final_rows);
     BrokerStateHashSink f;
@@ -11802,7 +11879,7 @@ void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const noexce
 }
 
 bool NativeExecutionConsumer::closed_rows_digest_holds(
-        const std::vector<Trade>& rows) const noexcept {
+        const TradeLedger& rows) const noexcept {
     if (closed_rows_digested_ > rows.size()) return false;
     BrokerStateHashSink f;
     for (std::size_t index = 0; index < closed_rows_digested_; ++index) {
@@ -12758,4 +12835,23 @@ uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
 }
 
 }  // inline namespace native_run_spec_v3
+
+inline namespace native_bar_views_v1 {
+
+std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarViews& views) {
+    NativeExecutionConsumer::SpecBarDigests digests;
+    digests.intrabar = native_bar_views_v1::native_intrabar_path_digest(spec.intrabar, views.lower_path);
+    if (!spec.subscriptions.empty())
+        digests.subscriptions = native_timeframe_subscriptions_digest(spec.subscriptions);
+    if (spec.auxiliary_feed)
+        digests.auxiliary = native_auxiliary_feed_digest(*spec.auxiliary_feed);
+    if (!spec.instrument_feeds.empty())
+        digests.instruments = native_bar_views_v1::native_instrument_feeds_digest(spec.instrument_feeds, views);
+    Fnv f;
+    f.run_base = spec.identity.run_number;
+    hash_spec(f, spec, &digests);
+    return f.h;
+}
+
+} // inline namespace native_bar_views_v1
 }  // namespace pineforge
