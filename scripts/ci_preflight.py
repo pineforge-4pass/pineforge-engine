@@ -37,18 +37,48 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
-# Standard runners only for every event (owner cost stop, 2026-10-18), until
-# the ci-spot pool is live. Larger runners bill even for a public repository.
-LINUX_RUNNER = 'ubuntu-24.04'
-MATRIX_RUNNER = '${{ matrix.os }}'
+# The pool is live (CR-171, 2026-10-18). Pin the public and engine-x64-16
+# fragments from pf-ci-spot 1fe46216, including Dependabot and event fallback.
+# Values retain their YAML folding marker and job-level indentation so mutation
+# tests replace the whole value, never an earlier matrix name or step string.
+LIGHT_LABELS = '["self-hosted","pf-ci","pf-ci-x64"]'
+LINUX_LABELS = '["self-hosted","pf-ci","pf-ci-x64-16"]'
+LIGHT_RUNNER = '''>-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-latest' }}'''
+LINUX_RUNNER = LIGHT_RUNNER.replace(LIGHT_LABELS, LINUX_LABELS)
+MATRIX_RUNNER = '${{ matrix.runner }}'
+MATRIX_LINUX_RUNNER = LINUX_RUNNER.replace('\n', '\n        ')
 # The build job's whole strategy, exactly (comments and blank lines aside):
-# only the two standard images and the two build types, with no include overrides.
+# the same four legs, with only Linux x64 routed through the engine fragment.
 BUILD_STRATEGY = ('    strategy:\n'
                   '      fail-fast: false\n'
                   '      matrix:\n'
                   '        os: [ubuntu-24.04, macos-26]\n'
-                  '        build_type: [Release, Debug]\n')
+                  '        build_type: [Release, Debug]\n'
+                  '        include:\n'
+                  '          - os: ubuntu-24.04\n'
+                  f'            runner: {MATRIX_LINUX_RUNNER}\n'
+                  '          - os: macos-26\n'
+                  '            runner: macos-26\n')
 BUILD_NAME = 'build (${{ matrix.os }}, ${{ matrix.build_type }})'
+RELEASE_STRATEGY = ('    strategy:\n'
+                    '      fail-fast: false\n'
+                    '      matrix:\n'
+                    '        include:\n'
+                    '          - triple: linux-x86_64\n'
+                    f'            runner: {MATRIX_LINUX_RUNNER}\n'
+                    '            cmake_extra: ""\n'
+                    '          - triple: linux-aarch64\n'
+                    '            runner: ubuntu-22.04-arm\n'
+                    '            cmake_extra: ""\n'
+                    '          - triple: macos-universal\n'
+                    '            runner: macos-latest\n'
+                    '            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"\n')
 NATIVE_STRATEGY = '''    strategy:
       fail-fast: false
       matrix:
@@ -75,29 +105,33 @@ PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # hang catcher left (owner rule, 2026-10-12: no time limit of this repository
 # may fail a run for slowness); docs/ci.md says so.
 JOB_RUNNERS = {
-    'ci.yml': {'changes': ('ubuntu-24.04', 360, None),
-               'preflight': (LINUX_RUNNER, 360, None),
+    'ci.yml': {'changes': (LIGHT_RUNNER, 360, None),
+               'preflight': (LIGHT_RUNNER, 360, None),
                'build': (MATRIX_RUNNER, 360, VERIFY),
                'sanitizers': (LINUX_RUNNER, 360, VERIFY),
                'kernel-only': (LINUX_RUNNER, 360, VERIFY),
-               'build-gate': ('ubuntu-24.04', 360, None)},
+               'build-gate': (LIGHT_RUNNER, 360, None)},
     'native-live.yml': {'native-live': (LINUX_RUNNER, 360, VERIFY),
-                         'native-live-gate': ('ubuntu-24.04', 360, None)},
+                         'native-live-gate': (LIGHT_RUNNER, 360, None)},
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
 }
-# Every other workflow keeps its jobs on these. release.yml is exempt by name,
-# while its on: block names only events no fork can raise (a push, the
-# schedule, a dispatch; a dispatch alone today); any other workflow file is
-# checked, whatever starts it.
+# Other existing workflows pin routing and labels without adding time limits
+# or changing their commands. Release no longer has a runner exemption.
+OTHER_JOB_RUNNERS = {
+    'docs.yml': {'build': LIGHT_RUNNER},
+    'promote-baseline.yml': {'promote': LIGHT_RUNNER},
+    'release.yml': {'release': LIGHT_RUNNER, 'prebuilt': MATRIX_RUNNER,
+                    'notify-hub': LIGHT_RUNNER},
+}
+# New Linux x64 jobs must use the public fragment. Target-only workflows and
+# explicitly Dependabot-only jobs stay hosted; macOS and ARM stay hosted too.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
 # Refuse paid labels and the old matrix key in every workflow, including the
-# otherwise exempt release matrix. Scan code so nested/flow mappings count too.
+# release matrix. Scan code so nested/flow mappings count too.
 _LARGER_RUNNER_LABEL = re.compile(
     r'(?<![\w.-])(?:pf-linux-x64-16|[\w.-]+-(?:xlarge|large))(?![\w.-])')
 _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
-TRUSTED_ONLY_WORKFLOWS = ('release.yml',)
-TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
 # for the changes job alone and skips only when it succeeded and answered
 # docs-only -- exactly the skip the build aggregate accepts -- so a failed or
@@ -284,19 +318,18 @@ def _events(workflow: str) -> set[str] | None:
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Pin every CI job's runner, time limit and parallelism; refuse paid runners."""
+    """Pin ci-spot fragments and labels; retain hosted exceptions and refuse paid labels."""
     findings = []
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
         if _LARGER_RUNNER_LABEL.search(code):
-            findings.append(f'{name} must not use larger-runner labels; standard runners only')
+            findings.append(f'{name} must not use larger-runner labels; use ci-spot or hosted exceptions')
         if _LARGER_RUNNER_KEY.search(code):
-            findings.append(f'{name} must not define a larger_runner key; standard runners only')
-        pinned = JOB_RUNNERS.get(name, {})
+            findings.append(f'{name} must not define a larger_runner key; use ci-spot or hosted exceptions')
+        timed = JOB_RUNNERS.get(name, {})
+        pinned = {job: values[0] for job, values in timed.items()}
+        pinned.update(OTHER_JOB_RUNNERS.get(name, {}))
         events = _events(workflow)
-        if (not pinned and name in TRUSTED_ONLY_WORKFLOWS and events is not None
-                and events <= TRUSTED_ONLY_EVENTS):
-            continue
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
@@ -306,19 +339,42 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
+            runner = pinned.get(job, LIGHT_RUNNER)
             if job not in pinned:
                 if pinned and runs_on:
                     findings.append(f'{name} job {job} needs a pinned runner and time limit')
-                elif not uses and len(runs_on) != 1:
+                    continue
+                if uses and not runs_on:
+                    continue
+                if len(runs_on) != 1:
                     findings.append(f'{name} job {job} has a runs-on the runner contract '
                                     'cannot read')
-                elif any(value not in STANDARD_RUNNERS for value in runs_on):
-                    findings.append(f'{name} job {job} must stay on a standard runner '
-                                    f'({" or ".join(STANDARD_RUNNERS)})')
-                continue
-            runner, minutes, command = pinned[job]
-            if runs_on != [runner]:
+                    continue
+                if (runs_on == ['macos-26'] or re.fullmatch(
+                        r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0])):
+                    continue
+                # No existing job is Dependabot-specific. Keep an explicit
+                # future one hosted; do not broaden the dispatcher's actor list.
+                dependabot = _job_values(body, 'if') in (
+                    ["github.actor == 'dependabot[bot]'"],
+                    ["${{ github.actor == 'dependabot[bot]' }}"])
+                if events == {'pull_request_target'} or dependabot:
+                    if runs_on[0] not in STANDARD_RUNNERS:
+                        findings.append(f'{name} job {job} must stay on a hosted runner')
+                    continue
+            if runs_on != [' '.join(runner.split())]:
                 findings.append(f'{name} job {job} must run on {runner}')
+            labels = LINUX_LABELS if runner in (LINUX_RUNNER, MATRIX_RUNNER) else LIGHT_LABELS
+            env = _job_block(body, 'env')
+            label_values = [_key_value(line, 'PF_CI_LABELS') for line in env[1:]
+                            if _key_value(line, 'PF_CI_LABELS') is not None]
+            if (len(_job_values(body, 'env')) != 1
+                    or _job_values('\n'.join(env[1:]), 'PF_CI_LABELS') != [labels]
+                    or label_values != [f"'{labels}'"]):
+                findings.append(f'{name} job {job} must set job env PF_CI_LABELS to {labels} exactly once')
+            if job not in timed:
+                continue
+            _, minutes, command = timed[job]
             if _job_values(body, 'timeout-minutes') != [str(minutes)]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
             # Keep parallelism tied to the runner's available cores.
@@ -326,9 +382,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
     if _job_block(build, 'strategy') != _code(BUILD_STRATEGY):
-        findings.append('ci.yml build must use exactly the standard images and build types')
+        findings.append('ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types')
     if _job_values(build, 'name') != [BUILD_NAME]:
         findings.append(f'ci.yml build legs must keep their names: {BUILD_NAME}')
+    if 'release.yml' in workflows:
+        prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
+        if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
+            findings.append('release.yml prebuilt must use exactly the ci-spot Linux x64 '
+                            'and unchanged hosted ARM/macOS matrix')
     return findings
 
 
