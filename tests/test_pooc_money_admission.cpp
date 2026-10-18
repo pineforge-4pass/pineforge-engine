@@ -62,7 +62,7 @@ public:
         if (bar_index_>0 && position_side_!=PositionSide::FLAT) strategy_close("L");
     }
     double live_qty() const { return position_qty_; }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 void run_case(const Case& c, int cap, QtyType defaults) {
     Probe p(c,cap,defaults);

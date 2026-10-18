@@ -136,7 +136,7 @@ public:
     std::string exit_comment(int i) const {
         return closed_trade_exit_comment(i);
     }
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 // RED-4. SHORT true-flat, zero commission, gap ABOVE the signal close (open

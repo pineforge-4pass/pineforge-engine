@@ -140,7 +140,7 @@ public:
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
     using BacktestEngine::qty_step_;
-    const std::vector<Trade>& all_trades() const { return trades_; }
+    const TradeLedger& all_trades() const { return trades_; }
 };
 
 // Shared reversal fixture. Long all-in fills at 100 on bar 1 and the opposite

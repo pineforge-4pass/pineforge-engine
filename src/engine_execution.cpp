@@ -68,6 +68,13 @@ void reserve_effects(std::vector<T>& values, size_t extra) {
     values.reserve(std::max(required, grown));
 }
 
+void reserve_effects(TradeLedger& values, size_t extra) {
+    if (extra > std::numeric_limits<size_t>::max() - values.size())
+        throw std::length_error("execution effect capacity exhausted");
+    const size_t resident = values.size() - values.base();
+    values.reserve(resident + extra);
+}
+
 struct CloseScopeInspection {
     execution::Status status = execution::Status::Applied;
     double held = 0.0;
