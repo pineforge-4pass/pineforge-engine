@@ -7098,6 +7098,11 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
+# CR-150 L7B: point-source equity metrics.  This registration intentionally
+# follows the P00 line-pinned block above (scope ruling SCOPE-RULING-1818.md).
+list(APPEND TEST_SOURCES test_metrics_point_source)
+pineforge_add_unit_test(test_metrics_point_source)
+
 # CR-150 L15a: append after every existing line-pinned registration.
 list(APPEND TEST_SOURCES test_native_bar_views_l15a)
 pineforge_add_unit_test(test_native_bar_views_l15a)
@@ -7117,3 +7122,6 @@ list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
 list(APPEND TEST_SOURCES test_report_sink_format)
 pineforge_add_unit_test(test_report_sink_format)
+
+list(APPEND TEST_SOURCES test_trade_percent_prefix)
+pineforge_add_unit_test(test_trade_percent_prefix)
