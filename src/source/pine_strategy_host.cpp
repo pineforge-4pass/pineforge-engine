@@ -3083,7 +3083,11 @@ void source::PineStrategyHost::finish_applied_admission(
         && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
         && !adapter_.admission_journal.has_unfinished_events()) {
         adapter_.finish_admission_bar();
-        capture_script_continuation_hash();
+        // Retire on every completed bar, but keep the ordinary recording-off
+        // snapshot cadence: final batch point or the realtime stream point.
+        if (broker_state_hash_recording_ || scheduler_.terminal_source_bar()
+            || stream_phase_ == StreamPhase::REALTIME)
+            capture_script_continuation_hash();
     }
 }
 
