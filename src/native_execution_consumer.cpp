@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -3218,7 +3219,9 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
     const auto* spec = spec_ptr();
     if (!spec || spec->intrabar.is_none() || spec->intrabar.synthesized_path()) return true;
     const auto& lower = *spec->intrabar.lower();
-    if (!intrabar_tf_ || lower.bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    const auto* source = active_bar_views_.lower_path.get();
+    const auto count = source ? active_bar_views_.lower_count : lower.bars.size();
+    if (!intrabar_tf_ || count > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         present_refusal(engine, "native intrabar path timeframe or bar count is invalid",
                         RunFailureCode::run_options_rejected, {{"option", "intrabar_path"}});
         return false;
@@ -3239,6 +3242,47 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
     }();
     path_spec.input_tf = lower.tf;
     path_spec.script_tf = lower.tf;
+    if (source != nullptr) {
+        // Each batch repeats its predecessor's final row. Every structural,
+        // calendar and adjacent-pair judgement is therefore the vector's.
+        // The noexcept visitor transports exceptions back out of the walk.
+        struct Chunks {
+            const NativeRunSpec& spec;
+            std::array<Bar, 256> buffer{};
+            int used = 0;
+            std::size_t seen = 0, expected;
+            bool valid = true;
+            std::exception_ptr exception;
+            bool judge() noexcept {
+                try {
+                    valid = static_cast<bool>(preflight_native_inputs(
+                        spec, used == 0 ? nullptr : buffer.data(), used, NativeInputPolicy::Batch));
+                } catch (...) { exception = std::current_exception(); return false; }
+                return valid;
+            }
+        } chunks{path_spec, {}, 0, 0, count, true, {}};
+        const bool complete = source->for_each([](void* context, const Bar& bar) noexcept {
+            auto& chunk = *static_cast<Chunks*>(context);
+            if (chunk.seen == chunk.expected) return false;
+            ++chunk.seen;
+            chunk.buffer[static_cast<std::size_t>(chunk.used++)] = bar;
+            if (chunk.used != static_cast<int>(chunk.buffer.size())) return true;
+            if (!chunk.judge()) return false;
+            chunk.buffer[0] = chunk.buffer.back();
+            chunk.used = 1;
+            return true;
+        }, &chunks);
+        if (chunks.exception) std::rethrow_exception(chunks.exception);
+        if (chunks.valid && (!complete || chunks.seen != count))
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "lower source count and preflight walk disagree");
+        if (chunks.valid) (void)chunks.judge();
+        if (chunks.exception) std::rethrow_exception(chunks.exception);
+        if (chunks.valid) return true;
+        present_refusal(engine, "native intrabar path failed validation",
+                        RunFailureCode::run_options_rejected, {{"option", "intrabar_path"}});
+        return false;
+    }
     const auto result = preflight_native_inputs(
         path_spec, lower.bars.empty() ? nullptr : lower.bars.data(),
         static_cast<int>(lower.bars.size()), NativeInputPolicy::Batch);
@@ -8633,11 +8677,30 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         // find the first by binary search and walk to the window's end. A
         // scan of the whole feed for every script bar made the run quadratic
         // in its length.
-        auto candidate = std::lower_bound(
-            lower->bars.begin(), lower->bars.end(), begin,
-            [](const Bar& bar, int64_t time) { return bar.timestamp < time; });
-        for (; candidate != lower->bars.end() && candidate->timestamp < end; ++candidate) {
-            sub_bars.push_back(&*candidate);
+        if (active_bar_views_.lower_path != nullptr) {
+            NativeBarView segment{nullptr, 0};
+            try {
+                segment = active_bar_views_.lower_path->segment(begin, end);
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (...) {
+                throw coded<std::runtime_error>(RunFailureCode::run_options_rejected,
+                                                {{"option", "intrabar_path"}},
+                                                "native lower source segment failed");
+            }
+            if (segment.size > static_cast<std::size_t>(std::numeric_limits<int>::max())
+                || (segment.size != 0 && segment.data == nullptr))
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                              "native lower source returned an invalid segment");
+            active_bar_views_.lower_segment = segment;
+            for (std::size_t i = 0; i < segment.size; ++i) sub_bars.push_back(segment.data + i);
+        } else {
+            auto candidate = std::lower_bound(
+                lower->bars.begin(), lower->bars.end(), begin,
+                [](const Bar& bar, int64_t time) { return bar.timestamp < time; });
+            for (; candidate != lower->bars.end() && candidate->timestamp < end; ++candidate) {
+                sub_bars.push_back(&*candidate);
+            }
         }
         // The generic lower-feed path follows the legacy pump's fallback: a
         // script bar with no assigned lower bars walks its own OHLC path.
