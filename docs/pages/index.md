@@ -171,8 +171,8 @@ The public C surface is **148 `PF_API` declarations** across the six installed h
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
 | Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` / `_result_v1` | `native_c_api.h` |
 
-A newly generated PineForge strategy `.so` includes 126 runtime `PF_API` symbols (83 compiled-strategy
-runtime declarations plus 41 `strategy_native_*` declarations and two
+A newly generated PineForge strategy `.so` includes 83 compiled-strategy runtime
+`PF_API` symbols and 43 native-host symbols (41 `strategy_native_*` declarations and two
 `strategy_configure_native_ext_*` declarations), alongside the per-strategy
 exports described above and the toolchain
 `std::piecewise_construct` symbol; no project-internal C++ symbol is exported — see

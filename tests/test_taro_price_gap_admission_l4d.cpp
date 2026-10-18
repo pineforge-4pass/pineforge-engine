@@ -97,7 +97,7 @@ public:
         }
         if (bar_index_ == cfg_.signal_bar+1) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
     double position() const { return signed_position_size(); }
     bool magnifier() const { return cfg_.magnifier; }
 private:
