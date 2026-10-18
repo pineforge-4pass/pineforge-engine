@@ -67,6 +67,10 @@ void equal_path(const std::vector<Bar>& feed, const std::string& input,
     owned.value = std::move(lower);
     CHECK(pineforge::native_bar_views_v1::native_intrabar_path_digest(lent, source.get())
           == pineforge::native_run_spec_v3::native_intrabar_path_digest(owned));
+    // Invalid fallback input is exercised by whole walks/digests only; the
+    // kernel refuses it before a binary-search segment can be selected.
+    if (!std::is_sorted(vector.begin(), vector.end(),
+            [](const Bar& a, const Bar& b) { return a.timestamp < b.timestamp; })) return;
 
     // Independent searches include repeated, overlapping and empty windows.
     for (std::int64_t begin = feed.empty() ? T : feed.front().timestamp;
@@ -97,7 +101,7 @@ void path_and_window_differential() {
         equal_path(minutes(181), "1", chart);
     equal_path(minutes(180, T, 3), "3", "15"); // grid cannot tile: unchanged
     equal_path({}, "1", "15");
-    equal_path(minutes(1), "1", "15"); // no owned slot: empty path
+    equal_path(minutes(1, T + 14 * 60000), "1", "15"); // no owned slot: empty path
     equal_path(minutes(80, T, 31), "1", "15"); // missing owners / sparse input
     equal_path(minutes(75), "bad", "15");
     auto unordered = minutes(75);
@@ -115,6 +119,11 @@ void path_and_window_differential() {
     // Split-session fallback still returns overlap rows in both windows.
     equal_path(minutes(390, T + 9 * 3600000 + 30 * 60000), "1", "60",
                "0930-1200,1300-1600");
+    auto raw = minutes(75);
+    std::uint64_t nan_bits = UINT64_C(0xfff8000000000042);
+    std::memcpy(&raw[0].volume, &nan_bits, sizeof(nan_bits));
+    raw[1].volume = -0.0;
+    equal_path(raw, "1", "15");
 
     auto source = make_magnifier_path_source(nullptr, 0, "1", "15", "24x7", "UTC");
     CHECK(source->next_after_segment() == nullptr);
@@ -133,13 +142,50 @@ void path_and_window_differential() {
     const auto cached_count = source->count();
     CHECK(source->count() == cached_count);
     global_allocation::refusing = false;
+
+    const auto active = source->segment(T, T + 15 * 60000);
+    const auto* next = source->next_after_segment();
+    bool allocation_failed = false;
+    global_allocation::refusing = true;
+    try { (void)source->segment(T + 15 * 60000, T + 30 * 60000); }
+    catch (const std::bad_alloc&) { allocation_failed = true; }
+    global_allocation::refusing = false;
+    CHECK(allocation_failed);
+    CHECK(source->segment(T, T + 15 * 60000).data == active.data);
+    CHECK(source->next_after_segment() == next);
+    CHECK(source->segment(T + 15 * 60000, T + 30 * 60000).size > 0);
+
+    IntrabarPath path;
+    IntrabarPath::lower_tf lower;
+    lower.tf = "1";
+    path.value = lower;
+    struct Nested {
+        const IntrabarPath& path;
+        const NativeLowerPathSource& source;
+        bool visited = false, success = false;
+    } nested{path, *source};
+    const auto held = source->segment(T + 15 * 60000, T + 30 * 60000);
+    REQUIRE(source->for_each([](void* context, const Bar&) noexcept {
+        auto& state = *static_cast<Nested*>(context);
+        if (!state.visited) {
+            state.visited = true;
+            try {
+                (void)pineforge::native_bar_views_v1::native_intrabar_path_digest(state.path, &state.source);
+                state.success = true;
+            } catch (...) { return false; }
+        }
+        return true;
+    }, &nested));
+    CHECK(nested.visited && nested.success);
+    CHECK(source->segment(T + 15 * 60000, T + 30 * 60000).data == held.data);
 }
 
 template<class Value> void bytes(std::string& out, const Value& value) {
     out.append(reinterpret_cast<const char*>(&value), sizeof(value));
 }
 
-// Exact report value bytes, with no pointer addresses or struct padding.
+// Exact report value bytes (including raw pf_metrics_t), without pointers or
+// TradeC/ReportC padding. This fixture has no trace/security records.
 std::string report_bytes(const BacktestEngine& engine) {
     struct Report {
         ReportC c{};
@@ -158,6 +204,7 @@ std::string report_bytes(const BacktestEngine& engine) {
     FIELD(security_diag_len); FIELD(trace_len); FIELD(trace_names_len);
     FIELD(metrics); FIELD(equity_curve_len); FIELD(broker_state_hash_len);
 #undef FIELD
+    REQUIRE(r.security_diag_len == 0 && r.trace_len == 0 && r.trace_names_len == 0);
     for (int i = 0; i < r.trades_len; ++i) {
         const auto& t = r.trades[i];
 #define FIELD(name) bytes(out, t.name)
@@ -215,6 +262,43 @@ void execution_differential() {
     CHECK(consumer.bar_views().lower_path == nullptr);
 }
 
+void preflight_chunk_boundaries() {
+    const auto input = minutes(600);
+    for (int mode = 0; mode < 4; ++mode) {
+        auto path = input;
+        if (mode == 0) path[256].timestamp = path[255].timestamp;
+        if (mode == 1) path[255].high = path[255].low - 1;
+        if (mode == 2) path[511].volume = -1;
+        if (mode == 3) ++path[256].timestamp; // canonical label just past a batch boundary
+        auto s = spec("l16-preflight");
+        s.script_tf = "15";
+        s.slot_label_policy = mode == 3 ? NativeSlotLabelPolicy::Canonical
+                                       : NativeSlotLabelPolicy::FeedTolerant;
+        s.legacy_tolerance = NativeFeedTolerance::BatchStructuralBars;
+        IntrabarPath::lower_tf lower;
+        lower.tf = "1";
+        auto lent = s;
+        lent.intrabar.value = lower;
+        lower.bars = path;
+        s.intrabar.value = lower;
+        Host vector, provider;
+        // Chart 10 selects unchanged input, so this is the same deliberately
+        // invalid logical path for the provider and owned-vector preflights.
+        NativeExecutionConsumer::bound(provider).stage_lower_path_source(
+            make_magnifier_path_source(path.data(), static_cast<int>(path.size()),
+                                       "1", "10", "24x7", "UTC"));
+        REQUIRE(vector.configure_native(s).status == NativeSetupStatus::Applied);
+        REQUIRE(provider.configure_native(lent).status == NativeSetupStatus::Applied);
+        vector.run(input.data(), static_cast<int>(input.size()), "1", "15", true);
+        provider.run(input.data(), static_cast<int>(input.size()), "1", "15", true);
+        CHECK(!provider.last_error().empty());
+        CHECK(vector.last_error() == provider.last_error());
+        CHECK(vector.native_state().kind == NativeLifecycleKind::Ready);
+        CHECK(provider.native_state().kind == NativeLifecycleKind::Ready);
+        CHECK(vector.calculations == 0 && provider.calculations == 0);
+    }
+}
+
 void source_host_uses_provider() {
     struct Pine final : source::PineStrategyHost {
         int checks = 0;
@@ -268,6 +352,7 @@ void bounded_heap() {
 int main() {
     test("L16 path/window differential", path_and_window_differential);
     test("L16 trades, hashes and report bytes", execution_differential);
+    test("L16 preflight overlap boundaries", preflight_chunk_boundaries);
     test("L16 source projection wiring", source_host_uses_provider);
     test("L16 bounded provider heap", bounded_heap);
     std::printf("test_magnifier_path_source_l16: %d checks, %d failures\n", checks, failures);
