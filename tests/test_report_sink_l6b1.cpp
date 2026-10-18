@@ -9,6 +9,7 @@
 #ifdef PINEFORGE_L6B1_MODULE
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -36,8 +37,52 @@ public:
                            std::numeric_limits<double>::quiet_NaN(), 1.0, "entry");
     }
 };
+// A Pine pre-roll captures strategy_entry as an intent; it cannot create a
+// carry-in. Use the real native host for this refusal, as the selected-report
+// integration fixture does: submit at bar 0, fill at bar 1, window at bar 3.
+class CarryInFixture final : public pineforge::NativeStrategyHost {
+public:
+    void configure_run() {
+        pineforge::NativeRunSpec spec;
+        spec.identity = {"report-sink-carry-in", ++runs_};
+        spec.input_tf = "1";
+        spec.script_tf = "1";
+        spec.ticker = "MOCK";
+        spec.tickerid = "TEST:MOCK";
+        spec.type = "crypto";
+        spec.currency = "USD";
+        spec.timezone = "UTC";
+        spec.session = "24x7";
+        spec.initial_capital = 10000.0;
+        spec.point_value = 1.0;
+        spec.account_fx = 1.0;
+        spec.price_tick = 0.01;
+        spec.fee_kind = pineforge::NativeFeeKind::CashPerExecution;
+        spec.fee_value = 0.0;
+        spec.report_policy = pineforge::NativeReportPolicy::KernelRecorded;
+        // The lot stays open: include its range-end trade row so capture reaches
+        // the trade-before-window check ahead of the separate open-lot check.
+        spec.report_open_position_at_end = true;
+        if (configure_native(spec).status != pineforge::NativeSetupStatus::Applied)
+            throw std::runtime_error("carry-in fixture configuration rejected");
+    }
+    void on_native_run_begin() override { entered_ = false; }
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
+        if (entered_) return;
+        entered_ = true;
+        const auto placed = submit({pineforge::native_order::Transact{1.0}, "carry-in", ""});
+        if (placed.status != pineforge::native_order::SubmitStatus::Accepted || !placed.handle)
+            throw std::runtime_error("carry-in fixture entry rejected");
+    }
+private:
+    std::uint64_t runs_ = 0;
+    bool entered_ = false;
+};
+pineforge::BacktestEngine* engine(pf_strategy_t s) {
+    return static_cast<pineforge::BacktestEngine*>(s);
+}
 SinkFixture* fixture(pf_strategy_t s) {
-    return static_cast<SinkFixture*>(static_cast<pineforge::BacktestEngine*>(s));
+    return static_cast<SinkFixture*>(engine(s));
 }
 std::vector<pineforge::Bar> input(const pf_bar_t* bars, int n) {
     std::vector<pineforge::Bar> result;
@@ -48,8 +93,13 @@ std::vector<pineforge::Bar> input(const pf_bar_t* bars, int n) {
 }
 }
 extern "C" {
-pf_strategy_t strategy_create(const char*) { return new SinkFixture; }
-void strategy_free(pf_strategy_t s) { delete fixture(s); }
+pf_strategy_t strategy_create(const char*) {
+    return static_cast<pineforge::BacktestEngine*>(new SinkFixture);
+}
+pf_strategy_t l6b1_create_carry_in() {
+    return static_cast<pineforge::BacktestEngine*>(new CarryInFixture);
+}
+void strategy_free(pf_strategy_t s) { delete engine(s); }
 void strategy_set_input(pf_strategy_t s, const char*, const char* value) {
     fixture(s)->mode = value ? value : "";
 }
@@ -60,13 +110,14 @@ void run_backtest_full(pf_strategy_t s, pf_bar_t* bars, int n, const char* input
     *out = {};
     try {
         const auto values = input(bars, n);
-        fixture(s)->run(values.data(), n, input_tf, script_tf, magnifier != 0, samples,
-                        static_cast<pineforge::MagnifierDistribution>(distribution));
-        fixture(s)->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
+        if (auto* carry = dynamic_cast<CarryInFixture*>(engine(s))) carry->configure_run();
+        engine(s)->run(values.data(), n, input_tf, script_tf, magnifier != 0, samples,
+                       static_cast<pineforge::MagnifierDistribution>(distribution));
+        engine(s)->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
     } catch (const std::exception& error) {
         pineforge::BacktestEngine::free_report(reinterpret_cast<pineforge::ReportC*>(out));
         *out = {};
-        pineforge::note_run_failure(*fixture(s), "run_backtest_full", error);
+        pineforge::note_run_failure(*engine(s), "run_backtest_full", error);
     }
 }
 void run_backtest(pf_strategy_t s, pf_bar_t* bars, int n, pf_report_t* out) {
@@ -77,7 +128,7 @@ void report_free(pf_report_t* report) {
 }
 int l6b1_busy_result(pf_strategy_t s) { return fixture(s)->busy_result; }
 void l6b1_fill_again(pf_strategy_t s, pf_report_t* out) {
-    fixture(s)->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
+    engine(s)->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
 }
 }
 
@@ -117,6 +168,7 @@ struct Api {
     decltype(&strategy_set_report_sink_v1) set = symbol<decltype(set)>(module, "strategy_set_report_sink_v1");
     decltype(&strategy_report_sink_receipt_v1) receipt = symbol<decltype(receipt)>(module, "strategy_report_sink_receipt_v1");
     decltype(&strategy_create) create = symbol<decltype(create)>(module, "strategy_create");
+    pf_strategy_t (*create_carry)() = symbol<decltype(create_carry)>(module, "l6b1_create_carry_in");
     decltype(&strategy_free) destroy = symbol<decltype(destroy)>(module, "strategy_free");
     decltype(&run_backtest) run = symbol<decltype(run)>(module, "run_backtest");
     decltype(&report_free) free = symbol<decltype(free)>(module, "report_free");
@@ -246,7 +298,8 @@ for count in range(len(lines)):
     assert(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
-void equal_run(const Api& api, const std::string& path, bool selected, bool observer, bool empty) {
+void equal_run(const Api& api, const std::string& path, bool selected, bool observer, bool empty,
+               std::size_t window_from = 0) {
     const auto baseline = api.create("{}"), streamed = api.create("{}");
     auto bars = feed();
     int callbacks = 0;
@@ -254,7 +307,7 @@ void equal_run(const Api& api, const std::string& path, bool selected, bool obse
     for (const auto handle : {baseline, streamed}) {
         if (empty) api.mode(handle, "mode", "empty");
         if (selected) {
-            pf_selected_window_config_v1 window{sizeof window, 1, bars.front().timestamp,
+            pf_selected_window_config_v1 window{sizeof window, 1, bars[window_from].timestamp,
                                                 bars.back().timestamp + 60000};
             assert(api.selected(handle, &window) == 0);
         }
@@ -372,7 +425,7 @@ void refusals(const Api& api, const std::string& directory) {
     api.free(&defaults);
     api.destroy(handle);
     for (const std::string mode : {"throw", "abort", "observer", "selected", "io", "write-io"}) {
-        handle = api.create("{}");
+        handle = mode == "selected" ? api.create_carry() : api.create("{}");
         const std::string path = mode == "io" ? directory + "/missing/failed.ndjson"
             : mode == "write-io" ? "/dev/full" : directory + '/' + mode + ".ndjson";
         if (mode == "write-io") {
@@ -393,8 +446,19 @@ void refusals(const Api& api, const std::string& directory) {
         pf_report_t report{};
         api.run(handle, bars.data(), static_cast<int>(bars.size()), &report);
         const auto got = receipt(api, handle);
+        if (got.complete != 0 || got.sha256_hex[0] != '\0')
+            std::fprintf(stderr, "refusal case=%s complete=%u status=%d code=%s error=%s path=%s\n",
+                mode.c_str(), static_cast<unsigned>(got.complete), api.status(handle), api.code(handle),
+                api.error(handle), path.c_str());
         assert(got.complete == 0 && got.sha256_hex[0] == '\0');
         assert(api.status(handle) != 0 || api.error(handle)[0] != '\0');
+        if (mode == "selected") {
+            std::fprintf(stderr, "selected carry-in refusal: code=%s error=%s\n",
+                api.code(handle), api.error(handle));
+            assert(std::strcmp(api.code(handle), "engine_invariant") == 0);
+            assert(std::strstr(api.error(handle),
+                "native selected report: a trade was entered before the window start") != nullptr);
+        }
         if (mode == "io" || mode == "write-io") assert(std::strcmp(api.code(handle), "report_sink_failed") == 0);
         if (mode != "write-io") assert(read(path).find("{\"trailer\":") == std::string::npos);
         api.free(&report); api.destroy(handle);
@@ -409,6 +473,7 @@ int main() {
         refusals(api, directory);
         equal_run(api, std::string(directory) + "/ordinary.ndjson", false, false, false);
         equal_run(api, std::string(directory) + "/selected.ndjson", true, false, false);
+        equal_run(api, std::string(directory) + "/selected-preroll.ndjson", true, false, false, 3);
         equal_run(api, std::string(directory) + "/observed.ndjson", false, true, false);
         equal_run(api, std::string(directory) + "/selected-observed.ndjson", true, true, false);
         equal_run(api, std::string(directory) + "/empty.ndjson", false, false, true);

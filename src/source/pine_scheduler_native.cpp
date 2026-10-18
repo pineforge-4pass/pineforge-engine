@@ -254,6 +254,16 @@ const Bar* PineScheduler::lower_path_bar_at(
     const NativeRunSpec* spec = detail::run_spec(host);
     const auto* lower = spec ? spec->intrabar.lower() : nullptr;
     if (!lower) return nullptr;
+    const auto views = detail::run_consumer(host).bar_views();
+    if (views.lower_path != nullptr) {
+        const auto segment = views.lower_segment;
+        if (segment.size == 0) return nullptr;
+        const auto found = std::lower_bound(
+            segment.data, segment.data + segment.size, context.sub_bar_open_ms,
+            [](const Bar& bar, std::int64_t time) { return bar.timestamp < time; });
+        return found != segment.data + segment.size && found->timestamp == context.sub_bar_open_ms
+            ? found : nullptr;
+    }
     // preflight_intrabar_path admitted the path only with strictly
     // increasing stamps.
     const auto found = std::lower_bound(
@@ -293,9 +303,17 @@ std::optional<PineScheduler::InputWaypoint> PineScheduler::next_input_waypoint(
     // follows its second extreme (tests/fixtures/magnifier_intrabars/
     // mi-coof-refill*, 72 of 72 cascades; R5 lane MAG-INTRABAR).
     const auto* spec = detail::run_spec(host);
-    const auto& path = spec->intrabar.lower()->bars;
-    const InputWaypoint next_open{found + 1 < path.data() + path.size()
-        ? (found + 1)->open : std::numeric_limits<double>::quiet_NaN(), true};
+    const auto views = detail::run_consumer(host).bar_views();
+    const Bar* successor = nullptr;
+    if (views.lower_path != nullptr) {
+        successor = found + 1 < views.lower_segment.data + views.lower_segment.size
+            ? found + 1 : views.lower_path->next_after_segment();
+    } else {
+        const auto& path = spec->intrabar.lower()->bars;
+        if (found + 1 < path.data() + path.size()) successor = found + 1;
+    }
+    const InputWaypoint next_open{successor ? successor->open
+        : std::numeric_limits<double>::quiet_NaN(), true};
     if (single_print(*found)) return next_open;
     const bool high_first = host.adapter_.source_path_uses_high_first(*found);
     const NativePathPhase phase[] = {
