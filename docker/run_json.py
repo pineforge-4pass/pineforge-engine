@@ -4492,6 +4492,12 @@ def _csv2bin_main(argv) -> int:
         sys.stderr.write(failure_line(str(failure), failure.code, failure.code_args))
         sys.stderr.flush()
         return 2
+    except Exception as error:
+        sys.stderr.write(failure_line(
+            f"harness internal error: {type(error).__name__}: {error}",
+            "harness_internal_error"))
+        sys.stderr.flush()
+        return 1
     return 0
 
 

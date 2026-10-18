@@ -121,6 +121,37 @@ def test_cli_refusal_is_exit_two_one_json_line_on_stderr(tmp_path, feed, reason)
     assert document["error"]
 
 
+@pytest.mark.parametrize("timestamp", [2**63, -2**63 - 1], ids=["above-int64", "below-int64"])
+def test_cli_chart_timestamp_overflow_is_json_internal_error(tmp_path, timestamp):
+    path = source(tmp_path, [(timestamp, 1, 2, .5, 1.5, 3)])
+    result = cli("--chart", "--symbol", "ETHUSDT", "--tf", "1", path, tmp_path / "out.bin")
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert len(result.stderr.splitlines()) == 1
+    document = json.loads(result.stderr)
+    assert document["engine"] == "pineforge"
+    assert document["code"] == "harness_internal_error"
+    assert document["args"] == {}
+    assert document["error"].startswith("harness internal error: ")
+
+
+def test_cli_unexpected_converter_exception_is_one_json_line(pf, tmp_path, monkeypatch, capsys):
+    def broken_converter(*args, **kwargs):
+        raise RuntimeError("injected converter fault\nsecond line")
+    monkeypatch.setattr(pf, "convert_csv", broken_converter)
+    path = source(tmp_path)
+    status = run_json.main(["csv2bin", "--chart", "--symbol", "ETHUSDT", "--tf", "1",
+                            str(path), str(tmp_path / "out.bin")])
+    captured = capsys.readouterr()
+    assert status == 1 and captured.out == ""
+    assert len(captured.err.splitlines()) == 1
+    document = json.loads(captured.err)
+    assert document["code"] == "harness_internal_error"
+    assert document["args"] == {}
+    assert document["error"] == \
+        "harness internal error: RuntimeError: injected converter fault\nsecond line"
+
+
 @pytest.mark.parametrize("arguments", [[], ["--chart", "--feed"], ["--unknown"]])
 def test_cli_usage_refusal_is_also_one_json_line(tmp_path, arguments):
     result = cli(*arguments)
