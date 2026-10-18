@@ -4381,10 +4381,15 @@ def _write_report(text, phases=None) -> int:
         else:
             # A fully prepared, ASCII JSON temporary. No report byte is
             # published until serialization and native cleanup have succeeded.
-            while chunk := text.read(1024 * 1024):
-                written = sys.stdout.write(chunk)
-                if written is not None and written != len(chunk):
-                    raise OSError("short report write")
+            try:
+                while chunk := text.read(1024 * 1024):
+                    written = sys.stdout.write(chunk)
+                    if written is not None and written != len(chunk):
+                        raise OSError("short report write")
+            finally:
+                # Close errors after publication obey the same stderr-only
+                # rule as stdout errors; the outer resource stack is idempotent.
+                text.close()
         sys.stdout.flush()
     except caught as error:
         _discard_stdout()
@@ -5108,10 +5113,11 @@ def _main(argv, binary_inputs) -> int:
             applied_runtime["symbol_feeds"] = symbol_feeds_record(symbol_feeds)
         if sink is not None:
             sink.verify(lib, state, report)
+        output_files = binary_inputs.enter_context(ExitStack()) if sink is not None else None
         outputs_block = None
         if args.outputs:
             outputs_block = (
-                _sink_outputs_block(lib, state, sink, binary_inputs)
+                _sink_outputs_block(lib, state, sink, output_files)
                 if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
             applied_runtime["outputs"] = True
         incarnation_accessor = getattr(
@@ -5182,6 +5188,8 @@ def _main(argv, binary_inputs) -> int:
                                  "report_result_invalid",
                                  {"field": "report.document", "reason": "nonfinite"}) from error
             raise
+        if output_files is not None:
+            output_files.close()  # detect column close errors before any stdout
     except Exception as error:
         # Without --run-phase-fd the writer above types its non-finite refusal;
         # other errors keep their existing classification.
@@ -5360,10 +5368,24 @@ class _JSONColumn:
 
 def _json_temporary(resources, directory):
     try:
-        return resources.enter_context(tempfile.TemporaryFile(
-            mode="w+", encoding="ascii", newline="\n", dir=directory))
+        file = tempfile.TemporaryFile(mode="w+", encoding="ascii", newline="\n", dir=directory)
     except OSError as error:
         raise RunFailure("report sink open failed", "report_sink_failed") from error
+    try:
+        resources.callback(_close_json_temporary, file)
+    except BaseException:
+        file.close()
+        raise
+    return file
+
+
+def _close_json_temporary(file):
+    try:
+        file.close()
+    except OSError as error:
+        # A failed buffered flush can fail again during close. Preserve the
+        # disk-failure code instead of replacing it with an untyped exception.
+        raise RunFailure("report sink write failed", "report_sink_failed") from error
 
 
 def _stream_json(value, destination):

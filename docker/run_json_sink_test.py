@@ -316,6 +316,38 @@ def test_sink_open_failure_has_the_existing_sink_failure_code(tmp_path, monkeypa
     assert library.calls[-1] == "strategy_free"
 
 
+@pytest.mark.parametrize("fault", ["flush-and-close", "column-close"])
+def test_persistent_temporary_io_error_keeps_the_disk_code(tmp_path, monkeypatch, fault):
+    files, real_temporary = [], run_json.tempfile.TemporaryFile
+    class File:
+        def __init__(self, file):
+            self.file = file
+        def __getattr__(self, name):
+            return getattr(self.file, name)
+        def flush(self):
+            if fault == "flush-and-close":
+                raise OSError(28, "injected persistent disk failure")
+            return self.file.flush()
+        def close(self):
+            if not self.file.closed:
+                self.file.close()
+                raise OSError(28, "injected persistent close failure")
+    def temporary(*args, **kwargs):
+        file = real_temporary(*args, **kwargs)
+        if kwargs["mode"] == "w+":
+            file = File(file)
+        files.append(file)
+        return file
+    monkeypatch.setattr(run_json.tempfile, "TemporaryFile", temporary)
+    outputs = fault == "column-close"
+    status, text, stderr, _ = invoke(tmp_path, monkeypatch,
+        library=SinkLibrary(outputs=outputs), extra=["--outputs"] if outputs else [])
+    assert status == 1 and stderr == ""
+    assert json.loads(text)["code"] == "report_sink_failed"
+    assert len(text.splitlines()) == 1
+    assert files and all(file.closed for file in files)
+
+
 def test_prepared_report_is_copied_in_bounded_chunks(tmp_path):
     expected = "x" * (2 * 1024 * 1024 + 17)
     chunks = []
