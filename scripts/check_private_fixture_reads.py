@@ -294,11 +294,20 @@ class Rows:
         self.dynamic_names: list[tuple[int, str]] = []
         self.list_uses: dict[str, int] = {}
         self.unresolved_list_inputs: list[tuple[int, str, str, str]] = []
+        self.sort_sites: set[int] = set()
+        self.applied_sort_sites: set[int] = set()
         self.cr150_lane_files: list[Path] | None = (including.cr150_lane_files
                                                    if including is not None else None)
         self._check_sites_readable()
         self._scan_list_subcommands()
         self._walk(0, len(self.lines), self.vars, conditions)
+        for lineno in sorted(self.sort_sites - self.applied_sort_sites):
+            # A SORT inside an unwalked function template is still unknown;
+            # adding SORT to LIST_MODELLED must not weaken the scan there.
+            raise Unparseable(
+                f'{self.path}:{lineno}: list(SORT) is not a '
+                f'subcommand this sweep models: its effect on the tracked '
+                f'lists would be skipped, and skipped is not clean')
         if including is None and self.cr150_lane_files is not None:
             read_paths = {table.path for table in self.tables}
             for lane in self.cr150_lane_files:
@@ -398,6 +407,8 @@ class Rows:
                     f'subcommand this sweep models: its effect on the tracked '
                     f'lists would be skipped, and skipped is not clean')
             self.list_uses[subcommand] = self.list_uses.get(subcommand, 0) + 1
+            if subcommand == 'SORT':
+                self.sort_sites.add(lineno)
 
     # ---- rows --------------------------------------------------------------
     def _entry(self, row: str, lineno: int, conditions: tuple, table) -> dict:
@@ -677,6 +688,7 @@ class Rows:
                     f'{self.path}:{line_i + 1}: list(SORT) option '
                     f'{" ".join(options)!r} is not modelled')
             env[name] = sorted(values, reverse=bool(options))
+            self.applied_sort_sites.add(line_i + 1)
             return
 
         tokens = rest.split()
