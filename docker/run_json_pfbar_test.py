@@ -28,6 +28,7 @@ T0 = 1735776000000
 LIMIT = 2**53 - 1
 PREFIX = b"pineforge:ohlcv:barc-le:v1\0"
 BAR = struct.Struct("<5dq")
+REQUIRE_PFBAR_CORPUS_ENV = "PINEFORGE_REQUIRE_PFBAR_CORPUS"
 
 
 @pytest.fixture
@@ -680,9 +681,56 @@ def test_streaming_crosses_one_mib_buffer_and_matches_the_csv_identity(pf, tmp_p
     assert digest.hexdigest() == expected
 
 
+def _require_materialized_corpus_csv(path):
+    """Public preflight may lack corpus/LFS; strict lab proof must require it."""
+    unavailable = "file absent"
+    if path.is_file():
+        with path.open("rb") as stream:
+            if not stream.read(64).startswith(b"version https://git-lfs.github.com/spec/v1"):
+                return
+        unavailable = "Git LFS pointer; CSV not materialized"
+    if os.environ.get(REQUIRE_PFBAR_CORPUS_ENV, "") not in ("", "0"):
+        pytest.fail(f"{REQUIRE_PFBAR_CORPUS_ENV} requires the materialized corpus CSV: "
+                    f"{path} ({unavailable})", pytrace=False)
+    pytest.skip(f"SKIP private fixtures not present: {path} ({unavailable}); "
+                f"set {REQUIRE_PFBAR_CORPUS_ENV}=1 to require the corpus")
+
+
+@pytest.mark.parametrize("data", [None, b"version https://git-lfs.github.com/spec/v1\n"
+                                      b"oid sha256:" + b"0" * 64 + b"\nsize 123\n"],
+                         ids=["absent", "lfs-pointer"])
+@pytest.mark.parametrize("required", [None, "", "0", "1", "yes"],
+                         ids=["unset", "empty", "zero", "one", "nonzero-text"])
+def test_corpus_availability_skip_or_required_failure(tmp_path, monkeypatch, data, required):
+    path = tmp_path / "corpus.csv"
+    if data is not None:
+        path.write_bytes(data)
+    if required is None:
+        monkeypatch.delenv(REQUIRE_PFBAR_CORPUS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(REQUIRE_PFBAR_CORPUS_ENV, required)
+    strict = required not in (None, "", "0")
+    with pytest.raises(pytest.fail.Exception if strict else pytest.skip.Exception) as caught:
+        _require_materialized_corpus_csv(path)
+    message = str(caught.value)
+    assert str(path) in message
+    assert ("file absent" if data is None else "Git LFS pointer") in message
+    if strict:
+        assert f"{REQUIRE_PFBAR_CORPUS_ENV} requires" in message
+    else:
+        assert message.startswith("SKIP private fixtures not present: ")
+
+
+def test_corpus_availability_accepts_materialized_csv_in_strict_mode(tmp_path, monkeypatch):
+    path = source(tmp_path)
+    monkeypatch.setenv(REQUIRE_PFBAR_CORPUS_ENV, "1")
+    _require_materialized_corpus_csv(path)
+
+
 def test_converted_corpus_source_values_sha256_matches_load_bars(pf, tmp_path):
     """The L1 acceptance check uses the complete checked-in corpus CSV."""
     path = ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_1m.csv"
+    _require_materialized_corpus_csv(path)
     output = tmp_path / "chart.ETHUSDT.1.bin"
     metadata = pf.convert_csv(path, output, symbol="ETHUSDT", tf="1")
     bars, count, expected = run_json.load_bars(path)
