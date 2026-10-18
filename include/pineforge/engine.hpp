@@ -984,11 +984,11 @@ protected:
         return (n > 0) ? (net_profit_sum_ / (double)n) : 0.0;
     }
     double avg_trade_percent() const {
-        int n = (int)trades_.size();
-        if (n <= 0) return 0.0;
-        double s = 0.0;
-        for (const auto& t : trades_) s += t.pnl_pct;
-        return s / (double)n;
+        double s = trade_percent_prefix_.all_sum;
+        std::size_t n = trade_percent_prefix_.all_count;
+        // Continue the original left fold over the resident rows.
+        for (const auto& t : trades_) { s += t.pnl_pct; ++n; }
+        return n > 0 ? s / static_cast<double>(n) : 0.0;
     }
     double avg_winning_trade() const {
         return (win_trades_count_ > 0) ? (gross_profit_sum_ / (double)win_trades_count_) : 0.0;
@@ -998,8 +998,8 @@ protected:
     }
     double avg_winning_trade_percent() const {
         if (win_trades_count_ <= 0) return 0.0;
-        double s = 0.0;
-        int c = 0;
+        double s = trade_percent_prefix_.win_sum;
+        std::size_t c = trade_percent_prefix_.win_count;
         for (const auto& t : trades_) {
             if (t.pnl > 0.0) { s += t.pnl_pct; ++c; }
         }
@@ -1007,8 +1007,8 @@ protected:
     }
     double avg_losing_trade_percent() const {
         if (loss_trades_count_ <= 0) return 0.0;
-        double s = 0.0;
-        int c = 0;
+        double s = trade_percent_prefix_.loss_sum;
+        std::size_t c = trade_percent_prefix_.loss_count;
         for (const auto& t : trades_) {
             if (t.pnl < 0.0) { s += t.pnl_pct; ++c; }
         }
@@ -2291,6 +2291,29 @@ private:
     // it from the spec at every begin, and the spec digest folds the spec's
     // value. Private, so no host writes it (R5 lane K-ULP4).
     double native_quantity_tolerance_ = 0.0;
+
+protected:
+    // Sealed closed rows only; range-end report rows never enter these sums.
+    // Each accessor continues its own sum one resident row at a time, so a
+    // separately accumulated tail cannot change floating-point grouping.
+    struct TradePercentPrefix {
+        double all_sum = 0.0;
+        double win_sum = 0.0;
+        double loss_sum = 0.0;
+        std::size_t all_count = 0;
+        std::size_t win_count = 0;
+        std::size_t loss_count = 0;
+    };
+    // @broker-state begin
+    TradePercentPrefix trade_percent_prefix_;
+    // @broker-state end
+
+    // The sealing caller folds each final row exactly once, in global row
+    // order, immediately before retiring it from trades_. This operation
+    // does not change storage, logical indices or the win/loss guards.
+    void fold_trade_percent_prefix(const Trade& trade);
+    // The streaming owner clears this prefix with the run's closed rows.
+    void reset_trade_percent_prefix();
 };
 
 } // inline namespace engine_script_run_v19
