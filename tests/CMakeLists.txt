@@ -6,6 +6,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
 endif()
 
 set(TEST_SOURCES
+    test_cr150_contract_headers
     test_value_invalid_relative_risk
     test_value_invalid_relative_risk_source
     # R4-D L4a native-route behavioral twins.  These retain the legacy
@@ -3691,6 +3692,12 @@ list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
+
+# CR-150 P00: the same mandatory row also compiles report_sink.h with the C
+# compiler. Neither TU calls a contract function or constructs opaque state.
+target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c.c)
+set_target_properties(test_cr150_contract_headers PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
 # EN-134: each public C ABI fault run is also addressable for red-before and
 # mutant checks. The aggregate and these rows run in the kernel-only profile.
