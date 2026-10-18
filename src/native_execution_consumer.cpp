@@ -2,7 +2,7 @@
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
-#include "engine_value_invalid.hpp"
+#include "report_sink_writer.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
 
@@ -12717,31 +12717,8 @@ int native_selected_window_counts_v1(const BacktestEngine* engine,
     return NativeExecutionConsumer::selected_window_counts_v1(engine, out);
 }
 
-}  // inline namespace engine_script_run_v19
-
-// The portable run-spec digest lives here, in the one translation unit that
-// owns `hash_spec` (see its definition above, beside the continuation fold),
-// so the digest cannot drift from the fields the continuation identity folds
-// for a spec. It is declared in native_run_spec_v3 and so must be defined
-// there: a sibling inline namespace of pineforge, not a nested scope of the
-// engine epoch. Nothing else belongs in this block.
-inline namespace native_run_spec_v3 {
-
-uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
-    Fnv f;
-    f.run_base = spec.identity.run_number;
-    hash_spec(f, spec);
-    return f.h;
-}
-
-}  // inline namespace native_run_spec_v3
-}  // namespace pineforge
-
-// CR-150 L6b-2: append after the existing source anchors. No new translation
-// unit or feature macro: the native consumer target already owns this code.
-#include "report_sink_writer.hpp"
-
-namespace pineforge {
+// CR-150 L6b-2: report-tail helpers share the consumer's engine epoch.
+// Keep them in this scope so their definitions have the header's ABI owner.
 
 pf_equity_point_t* BacktestEngine::last_equity_point() noexcept {
     return equity_curve_.empty() ? nullptr : &equity_curve_.back();
@@ -12838,4 +12815,22 @@ void BacktestEngine::present_report_equity_tail(ReportC* out) const {
     out->equity_curve_len = count;
 }
 
-} // namespace pineforge
+}  // inline namespace engine_script_run_v19
+
+// The portable run-spec digest lives here, in the one translation unit that
+// owns `hash_spec` (see its definition above, beside the continuation fold),
+// so the digest cannot drift from the fields the continuation identity folds
+// for a spec. It is declared in native_run_spec_v3 and so must be defined
+// there: a sibling inline namespace of pineforge, not a nested scope of the
+// engine epoch. Nothing else belongs in this block.
+inline namespace native_run_spec_v3 {
+
+uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
+    Fnv f;
+    f.run_base = spec.identity.run_number;
+    hash_spec(f, spec);
+    return f.h;
+}
+
+}  // inline namespace native_run_spec_v3
+}  // namespace pineforge
