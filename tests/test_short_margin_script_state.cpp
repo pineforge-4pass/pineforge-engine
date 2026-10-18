@@ -60,7 +60,7 @@ public:
         }
         if (bar_index_ == 3) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 const std::vector<Bar> bars = {
@@ -182,7 +182,7 @@ public:
         }
         if (bar_index_ == 5) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_carried_liquidation_script_state() {
