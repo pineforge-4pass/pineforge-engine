@@ -7115,3 +7115,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
     add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
 endif()
+
+# CR-150 L17A: a kernel-only native host and a real version-1 path sink.
+# Append after the line-pinned private-fixture registrations.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_report_sink_selected_l17a)
+    pineforge_add_unit_test(test_report_sink_selected_l17a)
+endif()
