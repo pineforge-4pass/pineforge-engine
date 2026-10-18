@@ -139,7 +139,7 @@ The counts below include recorded outputs and describe the released 1.5.0 API.
 
 The public C surface is **145 `PF_API` declarations** across the five installed headers that declare any:
 
-- `<pineforge/pineforge.h>` — **94**: 74 of the 80 runtime implementations (the other six are declared in `execution_observer.h` and `selected_window.h`) plus twenty
+- `<pineforge/pineforge.h>` — **95**: 75 of the 81 runtime implementations (the other six are declared in `execution_observer.h` and `selected_window.h`) plus twenty
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`, the three recorded-outputs exports only in a module that records outputs). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
@@ -150,7 +150,7 @@ The public C surface is **145 `PF_API` declarations** across the five installed 
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
 - `<pineforge/execution_observer.h>` and `<pineforge/selected_window.h>` —
-  three each: the six of the 80 runtime implementations that `pineforge.h`
+  three each: the six of the 81 runtime implementations that `pineforge.h`
   does not declare (each header's version reader, the execution observer's
   setter and observation reader, the selected window's setter and counts
   reader).

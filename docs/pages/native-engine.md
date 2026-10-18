@@ -3966,9 +3966,12 @@ hands the runtime a callback table and gets the same kernel back.
 `<pineforge/native_c_api.h>` (included by `pineforge.h`) is that surface —
 43 additive `PF_API` symbols implemented in `src/native_c_host.cpp` by
 `CCallbackHost`, a `final NativeStrategyHost` that forwards each existing
-virtual to the table. No epoch bump or reordering occurs: the borrowed
-symbol-feed setter is an additive compiled-strategy runtime symbol, and
-`scripts/check_c_abi_runtime.py` pins it alongside the established inventory.
+virtual to the table. The established C-host surface carries the statement:
+“No new virtual, no epoch bump, and nothing about the established C ABI moves:
+the compiled-strategy runtime symbols and their counts are untouched.” The
+borrowed symbol-feed setter is an additive compiled-strategy runtime symbol,
+and `scripts/check_c_abi_runtime.py` pins it alongside the established
+inventory.
 
 ```c
 #include <pineforge/pineforge.h>

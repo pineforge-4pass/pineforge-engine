@@ -171,6 +171,7 @@ BAR_VIEW_READS = {
     'src/source/pine_security_eval.cpp': (
         'feed.bars = held.bars;',
         'feed.close_ms = held.close_ms;',
+        '} else if (!held.bars.empty() || !held.close_ms.empty()) {',
         'site.close_ms = 0;',
         'site.close_ms = close_ms;',
         'while (static_cast<std::size_t>(site.delivered) < feed.bars.size) {',
@@ -179,9 +180,10 @@ BAR_VIEW_READS = {
         'run_foreign_site_bar(site, feed.bars.data[at], feed.close_ms[at]);',
         'feed.bars.assign(bars, bars + n);',
         'feed.close_ms.assign(close_ms, close_ms + n);',
-        'if (n < 0 || static_cast<std::size_t>(n) != data.bars.size || (n > 0 && values == nullptr))',
-        '+ " values for " + std::to_string(data.bars.size) + " bars");',
-        'f.u(native_instrument_feed_view(feed, nullptr).bars.size);',
+        'feed.bars.clear();',
+        'feed.close_ms.clear();',
+        '? symbol_feed_views_[static_cast<std::size_t>(found)].size : data.bars.size;',
+        ': data.bars.size;',
     ),
     'src/source/pine_strategy_host.cpp': (
         'if (args.n > 0 && args.bars == nullptr) {',

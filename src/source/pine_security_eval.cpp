@@ -1430,9 +1430,10 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
     if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
         return refuse("restore_failed", why);
     NativeInstrumentFeed& feed = symbol_feeds_[static_cast<std::size_t>(found)];
+    const auto data = native_instrument_feed_view(feed, nullptr);
     const std::size_t feed_count = static_cast<std::size_t>(found) < symbol_feed_views_.size()
         && symbol_feed_views_[static_cast<std::size_t>(found)].present
-        ? symbol_feed_views_[static_cast<std::size_t>(found)].size : feed.bars.size();
+        ? symbol_feed_views_[static_cast<std::size_t>(found)].size : data.bars.size;
     if (n < 0 || static_cast<std::size_t>(n) != feed_count || (n > 0 && values == nullptr))
         return refuse("column_length", "column '" + name + "' has " + std::to_string(n)
                       + " values for " + std::to_string(feed_count) + " bars");
@@ -1555,10 +1556,11 @@ void source::PineStrategyHost::refresh_symbol_data_digest() noexcept {
     for (const auto& feed : symbol_feeds_) {
         f.s(feed.instrument);
         f.s(feed.tf);
+        const auto data = native_instrument_feed_view(feed, nullptr);
         const std::size_t count = (&feed - symbol_feeds_.data()) < symbol_feed_views_.size()
             && symbol_feed_views_[static_cast<std::size_t>(&feed - symbol_feeds_.data())].present
             ? symbol_feed_views_[static_cast<std::size_t>(&feed - symbol_feeds_.data())].size
-            : feed.bars.size();
+            : data.bars.size;
         f.u(count);
         f.u(feed.columns.size());
         for (const auto& column : feed.columns) f.s(column.name);
