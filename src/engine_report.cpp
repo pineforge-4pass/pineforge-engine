@@ -647,6 +647,10 @@ void BacktestEngine::begin_report_sink() {
     sink.receipt = {};
     sink.output_base = 0;
     if (!sink.enabled) return;
+    // reset_run_state cleared these histories; release capacity left by a
+    // previous sink-off run before starting the bounded recording path.
+    std::vector<uint64_t>().swap(broker_state_hashes_);
+    std::vector<TraceEntryC>().swap(trace_buffer_);
     sink.receipt.trades_retained = sink.trade_history_streamable ? 0u : 1u;
     const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1,
         sink.path.c_str(), sink.run_id.c_str(), sink.scratch_dir.c_str()};
@@ -790,6 +794,13 @@ void BacktestEngine::reset_report_sink_outputs() {
         && (sink.receipt.count_o != 0 || sink.receipt.count_v != 0))
         refuse_output("cannot restart output recording after rows were written to the sink");
     sink.output_base = 0;
+    if (sink.writer && !sink.receipt.complete) {
+        // A handle may previously have retained a full sink-off output tape.
+        std::vector<double>().swap(output_series_);
+        std::vector<int64_t>().swap(output_open_ms_);
+        std::vector<int64_t>().swap(output_close_ms_);
+        std::vector<OutputEvent>().swap(output_events_);
+    }
 }
 
 std::int64_t BacktestEngine::report_sink_output_row() const {
