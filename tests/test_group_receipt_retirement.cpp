@@ -51,7 +51,7 @@ struct Fixture {
     std::uint64_t inc = 1;
     std::uint64_t ord = 1;
     std::uint64_t point = 1;
-    std::int64_t group = 0;
+    std::uint64_t group = 0;
     bool nonflat = false;
 
     no::RequestHandle submit(no::Request request) {
@@ -74,7 +74,7 @@ struct Fixture {
             ? no::PositionIdentity{no::PositionNonflat{1, no::Side::Long}}
             : no::PositionIdentity{no::PositionFlat{}};
         no::EvaluationContext evaluation;
-        evaluation.cursor.point.ordinal = ++point;
+        evaluation.cursor.point.ordinal = point = std::max(point, ord) + 1;
         evaluation.cursor.point.effective_time_ms = 1000;
         evaluation.cursor.point.provenance = NativePriceProvenance::ObservedPrint;
         evaluation.driver_class = no::DriverEligibilityClass::ObservedPrint;
@@ -398,12 +398,12 @@ int main() {
             }
             CHECK(deferred_chain(true, direct) == deferred_chain(false, direct));
         }
-        a_prepared_effect_cannot_restore_a_retired_cause();
         const auto small = live_heap_after_drains(64);
         const auto large = live_heap_after_drains(4096);
         CHECK(large <= small + 4096);
         std::printf("L19B receipt heap: 64 -> 4096 drains, %zu -> %zu live bytes\n", small, large);
         consumer_digests_survive_retirement();
+        a_prepared_effect_cannot_restore_a_retired_cause();
     } catch (const std::exception& error) {
         ++failures;
         std::fprintf(stderr, "L19B fixture stopped: %s\n", error.what());
