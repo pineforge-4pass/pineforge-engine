@@ -38,12 +38,30 @@ together, and add `PINEFORGE_HAS_REPORT_SINK_V1` only with runtime support
 (DESIGN 6:1245-1248,1310-1314). There is no transitive include from an existing
 header in P00. O/V/K/X/H operations remain L6b-3's extension.
 
+## TradeLedger
+
+| File / declaration | DESIGN section and lines | Implementing lane |
+|---|---|---|
+| `include/pineforge/trade_ledger.hpp`: `engine_script_run_v19::TradeLedger`, type aliases, lifetime/copy/move declarations, opaque `State` | 3.4:609-617; 6:1321-1324 | L8a |
+| `TradeLedger::size() const`, `base() const` | 3.4:610-615 | L8a |
+| `TradeLedger::operator[](size_type)` (mutable/const), `back()` (mutable/const) | 3.4:610-613,661-667 | L8a/L8d |
+| `TradeLedger::push_back(const Trade&)`, `push_back(Trade&&)` | 3.4:610-613 | L8a |
+| `TradeLedger::resize(size_type)` | 3.4:611,661-662 | L8a |
+| `TradeLedger::begin()/end()` (mutable/const) | 3.4:612 | L8a |
+| `TradeLedger::seal(size_type)` and its caller's five-condition proof / fold-write-spill-before-drop contract | 3.4:619-685 | L8b/L8c/L18 |
+
+The total-count versus resident-window distinction and closedtrades.*
+retention exception are binding doc contracts (3.4:610-617,687-708).
+`set_trade_history_streamable` and its feature probe remain the engine/codegen
+lanes' work; P00 neither advertises them nor changes `trades_`.
+
 ## OPEN items
 
 | ID | Unspecified by DESIGN; no policy inferred | Owner |
 |---|---|---|
 | S1 | Receipt query return codes, required caller initialization, refusal output, and query behavior without a configured sink (6:1279). | CORE-TOP / L6b-1 |
 | S2 | Internal writer error transport, oversized-line/unsafe-integer failure details, and what a repeated fill/capture does after a trailer; DESIGN requires repeatable metric reads but gives no writer reset/idempotence contract (3.3:547-548; 3.7:787,878-885). | CORE-TOP / L6a/L6b-1 |
+| T1 | Ledger reset/capacity API, reference/iterator invalidation, and empty-back/above-end error policy are not specified. Below-base internal access MUST throw engine_invariant; C accessors MUST use existing sentinels (3.4:610-613,661-667). | CORE-TOP / L8a/L8d |
 
 ## Lab handoff
 
