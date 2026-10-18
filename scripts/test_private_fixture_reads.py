@@ -593,6 +593,16 @@ list(SORT e2e_cr150_sort {option})
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
                 self.assertIn('list(SORT)', result.stdout)
 
+    def test_untracked_sort_in_a_function_template_exits_2(self):
+        self.tree.append('tests/CMakeLists.txt', '''
+function(e2e_cr150_template)
+    list(SORT e2e_cr150_never_seen)
+endfunction()
+''')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('list(SORT) is not a subcommand this sweep models', result.stdout)
+
 
 class KernelPythonSweepControls(unittest.TestCase):
     """Controls for check_kernel_python_private_reads.py: its population is a
