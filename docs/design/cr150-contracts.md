@@ -1,9 +1,10 @@
 # CR-150 P00 declaration contracts
 
 Authority: `core-cr150-design/work/DESIGN.md`, revision 6 (2026-10-18).
-All DESIGN line numbers below refer to that revision. Dispatch:
-`PARALLEL-PLAN.md:27-30,63`. C++ declarations spell the operations described
-by DESIGN; OPEN items below preserve its unspecified policies.
+All DESIGN line numbers below refer to that revision. Dispatch: the external
+design lane's `PARALLEL-PLAN.md`, lines 27–30 and 63. C++ declarations spell
+the operations described by DESIGN; OPEN items below preserve its unspecified
+policies.
 
 These are declarations only. No existing file, execution path, feature probe,
 version or caller-visible layout is changed. Definitions and lab proof belong
@@ -91,25 +92,25 @@ change here. The borrowed-feed C export/probe belongs to L15b (6:1295-1306).
 ### L15a read inventory
 
 This is DESIGN's required source-guard read set (2.2:354-368; 5:1198-1205),
-including the indirect count/hash consumers. Source line references are the
-revision-6 design's snapshot; L15a must refresh offsets and mechanically pin
-every current `.bars`/`.close_ms` read when it installs the accessor/guard.
-P00 does not open the measured consumer or source-layer units.
+including the indirect count/hash consumers. Each source range below names
+a symbol in that window. The DESIGN column preserves the revision-6 inventory
+references; L15a must maintain these anchors and mechanically pin every current
+`.bars`/`.close_ms` read when it installs the accessor/guard.
 
-| Reader to route through the view/source | Existing source references from DESIGN | DESIGN lines |
+| Reader to route through the view/source | Source anchors in this tree | DESIGN lines |
 |---|---|---|
-| Kernel instrument-feed pump: current bar, close, next open, count | `src/native_execution_consumer.cpp:9932-9983` | 354-355 |
-| Host feed lookup/delivery and column reads | `src/source/pine_security_eval.cpp:1059-1068,1286-1293,1312-1320` | 356-357 |
-| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `src/native_run_spec.cpp:254-276,730,995-998`; `src/native_execution_consumer.cpp:9470-9471,9494-9495` | 358-360 |
-| Instrument-feed digest and cached/uncached continuation folds | `src/native_run_spec.cpp:1124-1160`; `src/native_execution_consumer.cpp:321-323,1935-1936,12730-12735` | 361-362 |
-| Staged feed counts in host state and its hash | `src/source/pine_strategy_host.cpp:230-234`; `src/source/pine_state_hash.cpp:292-299` | 363-364 |
-| Refresh of symbol-data digest and host hash fold | `src/source/pine_security_eval.cpp:1536-1544`; `src/source/pine_state_hash.cpp:1123-1129` | 364-365 |
-| Restore/store upkeep and column-setter length check | `src/source/pine_security_eval.cpp:1091-1096,1420-1422` | 366-367 |
-| Lower-path preflight/validation | `src/native_execution_consumer.cpp:3148-3181` | 368,1198-1199 |
-| Lower-path digest (count first) and continuation hash | `src/native_run_spec.cpp:867-895`; `src/native_execution_consumer.cpp:288` | 368,1200-1201 |
-| Per-script-bar lower-path binary search/walk | `src/native_execution_consumer.cpp:8562-8576` | 368,1202 |
-| Scheduler sub-bar lookup and one-bar look-ahead | `src/source/pine_scheduler_native.cpp:252-264,296-298` | 368,1203-1204 |
-| Lower-path emptiness test | `src/source/pine_adapter.cpp:3420-3422` | 368,1205 |
+| Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.cpp:9932-9983` | 354-355 |
+| Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1286-1293`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1312-1320` | 356-357 |
+| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:254-276`; `instrument_feed_shapes` `src/native_run_spec.cpp:730`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:995-998`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9468-9471`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9493-9495` | 358-360 |
+| Instrument-feed digest and cached/uncached continuation folds | `native_instrument_feeds_digest` `src/native_run_spec.cpp:1124-1160`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:321-323`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:1935-1936`; `native_run_spec_digest` `src/native_execution_consumer.cpp:12730-12735` | 361-362 |
+| Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:230-234`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:292-299` | 363-364 |
+| Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1536-1544`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1123-1129` | 364-365 |
+| Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1096`; `feed.bars` `src/source/pine_security_eval.cpp:1420-1422` | 366-367 |
+| Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.cpp:3148-3181` | 368,1198-1199 |
+| Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:867-895`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:288` | 368,1200-1201 |
+| Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:8562-8576` | 368,1202 |
+| Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:252-264`; `next_open` `src/source/pine_scheduler_native.cpp:296-298` | 368,1203-1204 |
+| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3420-3422` | 368,1205 |
 
 Every count/digest must fold the same bytes/order for copied and borrowed
 feeds, including cached and uncached paths (2.2:369-372). Views replace storage;
