@@ -224,6 +224,26 @@ void subscriptions_borrow_the_forward_look() {
         if (result.is_complete) expected.push_back(result.bar);
     }
     CHECK(expected.size() == 2);
+
+    // Streams must include Friday's whole declared session before Monday.
+    // Keep the sparse half-day batch above, and complete only the stream's
+    // warmup through 15:45 without changing its calendar or admission policy.
+    constexpr int kStreamWarmupBars = 26;
+    std::vector<Bar> stream_bars(bars.begin(), bars.begin() + 14);
+    for (int i = 14; i < kStreamWarmupBars; ++i) {
+        const double price = 100.0 + i;
+        stream_bars.push_back({price, price, price, price, 1.0,
+            kStart + 4 * 86400000LL + (570 + i * 15) * kMinute});
+    }
+    stream_bars.insert(stream_bars.end(), bars.begin() + 14, bars.end());
+    TimeframeAggregator stream_reference("D", "15", spec.timezone, spec.session);
+    std::vector<Bar> stream_expected;
+    for (const Bar& bar : stream_bars) {
+        const auto result = stream_reference.feed(bar);
+        if (result.is_complete) stream_expected.push_back(result.bar);
+    }
+    CHECK(stream_expected.size() == 2);
+
     for (bool lookahead : {false, true}) {
         spec.subscriptions[0].lookahead = lookahead;
         NativeProbe host;
@@ -238,19 +258,21 @@ void subscriptions_borrow_the_forward_look() {
         CHECK(stream.configure_native(spec).status == NativeSetupStatus::Applied);
         bool began = false;
         {
-            const std::vector<Bar> warmup(bars.begin(), bars.begin() + 14);
+            const std::vector<Bar> warmup(stream_bars.begin(),
+                                          stream_bars.begin() + kStreamWarmupBars);
             began = stream.stream_begin(warmup.data(), static_cast<int>(warmup.size()),
                                         "15", "15");
         } // Caller warmup storage is gone before any live input arrives.
         CHECK(began);
         if (began) {
-            for (std::size_t i = 14; i < bars.size(); ++i)
-                CHECK(stream.stream_push_bar(bars[i]));
+            for (std::size_t i = kStreamWarmupBars; i < stream_bars.size(); ++i)
+                CHECK(stream.stream_push_bar(stream_bars[i]));
             CHECK(stream.stream_end(false));
             CHECK(stream.last_error().empty());
-            CHECK(stream.delivered.size() == expected.size());
-            for (std::size_t i = 0; i < std::min(stream.delivered.size(), expected.size()); ++i)
-                CHECK(same_bar(stream.delivered[i], expected[i]));
+            CHECK(stream.delivered.size() == stream_expected.size());
+            for (std::size_t i = 0;
+                 i < std::min(stream.delivered.size(), stream_expected.size()); ++i)
+                CHECK(same_bar(stream.delivered[i], stream_expected[i]));
         }
     }
     // Isolate the old n * sizeof(int64_t) begin allocation on a non-projected
