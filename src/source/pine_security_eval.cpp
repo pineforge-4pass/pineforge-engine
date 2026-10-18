@@ -1091,8 +1091,13 @@ void source::PineStrategyHost::restore_symbol_feeds() {
     for (std::size_t i = 0; i < symbol_feeds_.size(); ++i) {
         const NativeInstrumentFeed& held = spec->instrument_feeds[i];
         NativeInstrumentFeed& feed = symbol_feeds_[i];
-        feed.bars = held.bars;
-        feed.close_ms = held.close_ms;
+        const auto views = NativeExecutionConsumer::bound(*this).bar_views();
+        const auto* slot = views.instrument_feed_count == 0
+            ? nullptr : views.instrument_feeds[i];
+        if (slot == nullptr) {
+            feed.bars = held.bars;
+            feed.close_ms = held.close_ms;
+        }
         for (std::size_t c = 0; c < feed.columns.size(); ++c)
             feed.columns[c].values = held.columns[c].values;
     }
@@ -1283,13 +1288,16 @@ void source::PineStrategyHost::read_ahead_foreign_security_sites(const Bar& char
                            : is_na(chart_close)) {
             continue;
         }
-        const NativeInstrumentFeed& feed = installed_symbol_feed(site.feed);
-        while (static_cast<std::size_t>(site.delivered) < feed.bars.size()) {
+        const auto views = NativeExecutionConsumer::bound(*this).bar_views();
+        const auto* slot = views.instrument_feed_count == 0
+            ? nullptr : views.instrument_feeds[site.feed];
+        const auto feed = native_instrument_feed_view(installed_symbol_feed(site.feed), slot);
+        while (static_cast<std::size_t>(site.delivered) < feed.bars.size) {
             const auto at = static_cast<std::size_t>(site.delivered);
-            const bool visible = site.lookahead ? feed.bars[at].timestamp <= chart_bar.timestamp
+            const bool visible = site.lookahead ? feed.bars.data[at].timestamp <= chart_bar.timestamp
                                                 : feed.close_ms[at] <= chart_close;
             if (!visible) break;
-            run_foreign_site_bar(site, feed.bars[at], feed.close_ms[at]);
+            run_foreign_site_bar(site, feed.bars.data[at], feed.close_ms[at]);
         }
     }
 }
@@ -1417,9 +1425,10 @@ bool source::PineStrategyHost::set_symbol_feed_column(const std::string& key,
     if (const std::string why = restore_symbol_feeds_reason(); !why.empty())
         return refuse("restore_failed", why);
     NativeInstrumentFeed& feed = symbol_feeds_[static_cast<std::size_t>(found)];
-    if (n < 0 || static_cast<std::size_t>(n) != feed.bars.size() || (n > 0 && values == nullptr))
+    const auto data = native_instrument_feed_view(feed, nullptr);
+    if (n < 0 || static_cast<std::size_t>(n) != data.bars.size || (n > 0 && values == nullptr))
         return refuse("column_length", "column '" + name + "' has " + std::to_string(n)
-                      + " values for " + std::to_string(feed.bars.size()) + " bars");
+                      + " values for " + std::to_string(data.bars.size) + " bars");
     // The kernel's judgement of the name, here rather than at the next begin:
     // a feed of the same key without bars carries it (the count is checked
     // above, and no column value is refused).
@@ -1539,7 +1548,7 @@ void source::PineStrategyHost::refresh_symbol_data_digest() noexcept {
     for (const auto& feed : symbol_feeds_) {
         f.s(feed.instrument);
         f.s(feed.tf);
-        f.u(feed.bars.size());
+        f.u(native_instrument_feed_view(feed, nullptr).bars.size);
         f.u(feed.columns.size());
         for (const auto& column : feed.columns) f.s(column.name);
     }
