@@ -235,6 +235,7 @@ Snapshot native_run(LedgerProbe& host, std::uint64_t run_number) {
     };
     auto config = spec("cr150-l8a");
     config.identity.run_number = run_number;
+    config.report_policy = NativeReportPolicy::KernelRecorded;
     REQUIRE(host.configure_native(config).status == NativeSetupStatus::Applied);
     std::vector<Bar> bars;
     for (int n = 0; n < 600; ++n) {

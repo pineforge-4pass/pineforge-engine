@@ -34,6 +34,7 @@
 #include "timeframe.hpp"
 #include "magnifier.hpp"
 #include "session_time.hpp"
+#include <pineforge/trade_ledger.hpp>
 // Suppress per-strategy function declarations (strategy_create, run_backtest,
 // etc.) whose pf_*_t parameter types conflict with the internal C++ types
 // used in codegen-emitted extern "C" blocks that include this header.
@@ -543,7 +544,7 @@ protected:
     // else today (reset_run_state writes the NaN), so that fold never fires;
     // it stays because it is hashed broker state (engine_state_hash.cpp).
     double fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
-    std::vector<Trade> trades_;
+    TradeLedger trades_;
     // Report-only rows for a position still open when the feed ends, produced
     // by NativeExecutionConsumer::record_open_position_report_rows when the
     // spec asks for them (NativeRunSpec::report_open_position_at_end). They
