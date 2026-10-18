@@ -57,7 +57,7 @@ public:
         if (foreign) strategy_exit("SX", "S", qnan, qnan, 0.001, 0.001);
         if (bar_index_ == 3) strategy_close_all();
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 void test_rounding_slice_precedes_resolved_trail() {
@@ -143,7 +143,7 @@ void test_later_waypoint_cannot_precede_the_trail_fill() {
         engine.run(bars.data(), static_cast<int>(bars.size()));
         CHECK(engine.rows().size() == (no_exit ? 2u : 1u));
         if (engine.rows().empty()) continue;
-        const auto& first = engine.rows().front();
+        const auto& first = *engine.rows().begin();
         CHECK(first.exit_time == 2000);
         if (no_exit) {
             CHECK(first.exit_id == "__margin_call__");
