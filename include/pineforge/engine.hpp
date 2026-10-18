@@ -1360,7 +1360,7 @@ protected:
         if (ru > max_runup_) max_runup_ = ru;
     }
     void update_equity_extremes() {
-        fold_equity_extreme(initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close));
+        fold_report_equity_extreme(initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close));
 
         // --- Update max_contracts_held_* running peaks ---
         double abs_qty = std::abs(position_qty_);
@@ -1378,7 +1378,7 @@ protected:
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
     // make the curve differ between magnifier on/off.
     void record_equity_point(int64_t script_bar_ts) {
-        if (equity_curve_.empty()) first_bar_open_ = current_bar_.open;
+        if (prepare_equity_point()) first_bar_open_ = current_bar_.open;
         pf_equity_point_t p;
         p.time_ms = script_bar_ts;
         p.open_profit = open_profit(current_bar_.close);
@@ -2301,6 +2301,10 @@ private:
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
         pf_report_sink_receipt_v1 receipt{};
+        // Derived report-tail prefix, in max/min/drawdown/runup order. The
+        // resulting extrema already have their broker-state folds; this
+        // reconstructible prefix shares report_sink_state_'s output waiver.
+        double equity_prefix[4]{};
         ReportSinkState() = default;
         ReportSinkState(const ReportSinkState& other)
             : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
@@ -2344,6 +2348,16 @@ public:
     // L6B1 still retains every row; L8c consumes this policy at sealing.
     void set_trade_history_streamable(bool streamable);
     bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
+
+protected:
+    // L6b-2: the last point remains editable until its successor is recorded.
+    // The array remains the metric/capture source until L6b-4/L7c/L17 land.
+    pf_equity_point_t* last_equity_point() noexcept;
+    const pf_equity_point_t* last_equity_point() const noexcept;
+    bool prepare_equity_point(); // release the prior point; true for the first
+    void fold_report_equity_extreme(double equity);
+    void refold_equity_tail();
+    void present_report_equity_tail(ReportC* out) const;
 };
 
 } // inline namespace engine_script_run_v19

@@ -8951,8 +8951,8 @@ void NativeExecutionConsumer::record_open_position_report_rows(BacktestEngine& e
     if (!std::isfinite(engine.current_bar_.close)) return;
     (void)append_open_position_report_rows(
         engine, engine.bar_fill_price(engine.current_bar_.close),
-        engine.equity_curve_.empty() ? engine.current_bar_.timestamp
-                                     : engine.equity_curve_.back().time_ms,
+        engine.last_equity_point() ? engine.last_equity_point()->time_ms
+                                   : engine.current_bar_.timestamp,
         engine.bar_index_, engine.active_account_currency_fx());
 }
 
@@ -12385,7 +12385,7 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                 local.equity_curve = nullptr;
             }
         }
-        engine.present_report(&local);
+        engine.present_report_equity_tail(&local);
     } catch (...) {
         BacktestEngine::free_report(&local);
         throw;
@@ -12736,3 +12736,106 @@ uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
 
 }  // inline namespace native_run_spec_v3
 }  // namespace pineforge
+
+// CR-150 L6b-2: append after the existing source anchors. No new translation
+// unit or feature macro: the native consumer target already owns this code.
+#include "report_sink_writer.hpp"
+
+namespace pineforge {
+
+pf_equity_point_t* BacktestEngine::last_equity_point() noexcept {
+    return equity_curve_.empty() ? nullptr : &equity_curve_.back();
+}
+
+const pf_equity_point_t* BacktestEngine::last_equity_point() const noexcept {
+    return equity_curve_.empty() ? nullptr : &equity_curve_.back();
+}
+
+bool BacktestEngine::prepare_equity_point() {
+    const auto* held = last_equity_point();
+    auto& sink = report_sink_state_;
+    if (!held || !sink.enabled || !sink.writer) return held == nullptr;
+    // L17a owns the selected-window anchor/filter/latches. Until that lane
+    // replaces capture's array walk, its final selected curve is emitted at
+    // fill as in L6b-1. In particular no pre-T point may leak into the sink.
+    pf_selected_window_config_v1 window{};
+    if (NativeExecutionConsumer::selected_window_admitted(*this, &window)) return false;
+    try {
+        sink.writer->write_e(*held);
+        ++sink.receipt.count_e;
+    } catch (const report_sink::WriterError& error) {
+        sink.writer.reset();
+        const auto code = error.reason() == report_sink::WriterFailure::io
+            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
+        throw coded<std::runtime_error>(code, {}, error.what());
+    }
+    return false;
+}
+
+void BacktestEngine::fold_report_equity_extreme(double equity) {
+    if (report_sink_state_.enabled) {
+        auto& prefix = report_sink_state_.equity_prefix;
+        prefix[0] = max_equity_;
+        prefix[1] = min_equity_;
+        prefix[2] = max_drawdown_;
+        prefix[3] = max_runup_;
+    }
+    fold_equity_extreme(equity);
+}
+
+void BacktestEngine::refold_equity_tail() {
+    if (report_sink_state_.enabled && last_equity_point()) {
+        const auto& prefix = report_sink_state_.equity_prefix;
+        max_equity_ = prefix[0];
+        min_equity_ = prefix[1];
+        max_drawdown_ = prefix[2];
+        max_runup_ = prefix[3];
+        fold_equity_extreme(last_equity_point()->equity);
+#ifndef NDEBUG
+        const double incremental[] = {max_equity_, min_equity_, max_drawdown_, max_runup_};
+        // L6b-4 changes this reference walk to the scratch curve. Keep the
+        // existing array as its oracle until that read side is available.
+        max_equity_ = initial_capital_;
+        min_equity_ = initial_capital_;
+        max_drawdown_ = 0.0;
+        max_runup_ = 0.0;
+        for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+        const double reference[] = {max_equity_, min_equity_, max_drawdown_, max_runup_};
+        if (std::memcmp(incremental, reference, sizeof incremental) != 0)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "report sink tail fold differs from full equity walk");
+#endif
+        return;
+    }
+    max_equity_ = initial_capital_;
+    min_equity_ = initial_capital_;
+    max_drawdown_ = 0.0;
+    max_runup_ = 0.0;
+    for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+}
+
+void BacktestEngine::present_report_equity_tail(ReportC* out) const {
+    if (!report_sink_state_.enabled || out->equity_curve_len == 0) {
+        present_report(out);
+        return;
+    }
+    auto* const curve = out->equity_curve;
+    const auto count = out->equity_curve_len;
+    pf_equity_point_t presented = curve[count - 1];
+    out->equity_curve = &presented;
+    out->equity_curve_len = 1;
+    try {
+        present_report(out);
+    } catch (...) {
+        out->equity_curve = curve;
+        out->equity_curve_len = count;
+        throw;
+    }
+    // Only the report's owned copy receives presentation edits. The engine
+    // point, its prefix and its four extrema retain their execution values.
+    curve[count - 1] = presented;
+    out->equity_curve = curve;
+    out->equity_curve_len = count;
+}
+
+} // namespace pineforge
