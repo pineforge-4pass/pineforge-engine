@@ -231,6 +231,25 @@ void subscriptions_borrow_the_forward_look() {
         CHECK(host.delivered.size() == expected.size());
         for (std::size_t i = 0; i < std::min(host.delivered.size(), expected.size()); ++i)
             CHECK(same_bar(host.delivered[i], expected[i]));
+
+        NativeProbe stream;
+        CHECK(stream.configure_native(spec).status == NativeSetupStatus::Applied);
+        bool began = false;
+        {
+            const std::vector<Bar> warmup(bars.begin(), bars.begin() + 14);
+            began = stream.stream_begin(warmup.data(), static_cast<int>(warmup.size()),
+                                        "15", "15");
+        } // Caller warmup storage is gone before any live input arrives.
+        CHECK(began);
+        if (began) {
+            for (std::size_t i = 14; i < bars.size(); ++i)
+                CHECK(stream.stream_push_bar(bars[i]));
+            CHECK(stream.stream_end(false));
+            CHECK(stream.last_error().empty());
+            CHECK(stream.delivered.size() == expected.size());
+            for (std::size_t i = 0; i < std::min(stream.delivered.size(), expected.size()); ++i)
+                CHECK(same_bar(stream.delivered[i], expected[i]));
+        }
     }
     // Isolate the old n * sizeof(int64_t) begin allocation on a non-projected
     // subscription. Inputs and script bars have different counts here.
