@@ -135,11 +135,11 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 ## API at a glance
 
-The counts below include recorded outputs and describe the released 1.5.0 API.
+The counts below describe the current API, including recorded outputs and the report sink.
 
-The public C surface is **145 `PF_API` declarations** across the five installed headers that declare any:
+The public C surface is **148 `PF_API` declarations** across the six installed headers that declare any:
 
-- `<pineforge/pineforge.h>` — **94**: 74 of the 80 runtime implementations (the other six are declared in `execution_observer.h` and `selected_window.h`) plus twenty
+- `<pineforge/pineforge.h>` — **94**: 74 of the 83 runtime implementations (the other nine are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) plus twenty
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`, the three recorded-outputs exports only in a module that records outputs). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
@@ -149,15 +149,15 @@ The public C surface is **145 `PF_API` declarations** across the five installed 
   direction, where the host drives the kernel itself. Submit, replace, cancel,
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
-- `<pineforge/execution_observer.h>` and `<pineforge/selected_window.h>` —
-  three each: the six of the 80 runtime implementations that `pineforge.h`
-  does not declare (each header's version reader, the execution observer's
-  setter and observation reader, the selected window's setter and counts
-  reader).
+- `<pineforge/execution_observer.h>`, `<pineforge/selected_window.h>` and `<pineforge/report_sink.h>` —
+  three each: the nine of the 83 runtime implementations that `pineforge.h`
+  does not declare: each header's version reader and its setter/query pair
+  for execution observation, selected-window counts or the report-sink
+  receipt.
 - `<pineforge/selected_window_plan.h>` — two: the selected-window planner's
   version reader and `pf_plan_selected_primary_v1`.
 
-`scripts/check_c_abi_runtime.py` pins both symbol inventories (80 and 43);
+`scripts/check_c_abi_runtime.py` pins both symbol inventories (83 and 43);
 `scripts/check_native_c_api_surface.py` separately pins the host COVERAGE block.
 
 | Group | Symbols | Reference |
@@ -171,10 +171,10 @@ The public C surface is **145 `PF_API` declarations** across the five installed 
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
 | Native kernel host (C) | `strategy_native_host_create_v1`, `strategy_native_run_v1`, the submit / replace / cancel family, the position, working-book, open-lot, event and state reads, the cohort and subscription calls, and `strategy_configure_native_ext_v1` / `_result_v1` | `native_c_api.h` |
 
-A newly generated PineForge strategy `.so` exports 123 `PF_API` symbols (80 compiled-strategy
-declarations plus 41 `strategy_native_*` declarations and two
-`strategy_configure_native_ext_*` declarations; 124 with
-`strategy_declares_bar_magnifier` in a script that declares the magnifier) and the toolchain
+A newly generated PineForge strategy `.so` includes 126 runtime `PF_API` symbols (83 compiled-strategy
+runtime declarations plus 41 `strategy_native_*` declarations and two
+`strategy_configure_native_ext_*` declarations), alongside the per-strategy
+exports described above and the toolchain
 `std::piecewise_construct` symbol; no project-internal C++ symbol is exported — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
 

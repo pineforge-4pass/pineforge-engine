@@ -264,6 +264,7 @@
       {"code": "report_result_invalid", "class": "engine_fault", "retryable": false, "since": "1.5.0", "appendix": "C-window", "reachability": "no", "route": "producer schema/invariant defect; uninjected source corpus reachability fails acceptance"},
       {"code": "report_shape_request_invalid", "class": "input", "retryable": false, "since": "1.5.0", "appendix": "C-window", "reachability": "no", "route": "caller representation options"},
       {"code": "report_shape_unsupported", "class": "unsupported", "retryable": false, "since": "1.5.0", "appendix": "C-window", "reachability": "no", "route": "caller/deployed report capability"},
+      {"code": "report_sink_failed", "class": "resource", "retryable": false, "since": "1.7.0", "appendix": "catalog-extension", "reachability": "indirect", "route": "caller sink path or valid report volume encounters storage failure; engine resource output, never a strategy value failure"},
       {"code": "request_symbol_invalid", "class": "strategy", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source symbol argument"},
       {"code": "request_timeframe_invalid", "class": "strategy", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source timeframe argument"},
       {"code": "request_timeframe_unsupported", "class": "unsupported", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "direct", "route": "source requests unsupported timeframe"},

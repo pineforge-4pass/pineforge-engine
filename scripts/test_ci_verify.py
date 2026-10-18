@@ -1199,12 +1199,12 @@ class CAbiRuntimeInventory(unittest.TestCase):
             _pf_api_names,
         )
         # The public count is read the way the script reads it: pineforge.h
-        # plus the two additive v1 headers.
+        # plus the three additive v1 headers.
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 100)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 80)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 103)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 83)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
