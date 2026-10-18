@@ -60,8 +60,8 @@ bool exit_family(ps::PineOrderFamily family) {
         || family == ps::PineOrderFamily::ExitTrail;
 }
 
-enum class Pattern { Moving, RecancelMoving, RecancelSame, MarginKeep, MarginCancel,
-                     MarginReprice };
+enum class Pattern { Moving, RecancelMoving, RecancelSame, PartialOriginClose,
+                     MarginKeep, MarginCancel, MarginReprice };
 
 bool margin_pattern(Pattern pattern) {
     return pattern == Pattern::MarginKeep || pattern == Pattern::MarginCancel
@@ -90,7 +90,7 @@ public:
         config.default_qty_type = static_cast<int>(margin_pattern(pattern)
             ? QtyType::PERCENT_OF_EQUITY : QtyType::FIXED);
         config.default_qty_value = margin_pattern(pattern) ? 100.0 : 4.0;
-        config.pyramiding = 1;
+        config.pyramiding = pattern == Pattern::PartialOriginClose ? 2 : 1;
         config.commission_value = 0.0;
         configure_pine_strategy(config);
         set_syminfo_timezone("UTC");
@@ -103,6 +103,17 @@ public:
     void on_source_bar(const Bar&) override {
         observe();
         const int i = pine_bar_index();
+        if (pattern_ == Pattern::PartialOriginClose) {
+            if (i == 0) strategy_entry("L", true, kNa, kNa, 4.0);
+            if (i == 1) strategy_entry("R", true, kNa, kNa, 4.0);
+            if (i == 2) {
+                strategy_exit("X", "L", kNa, 90.0, kNa, kNa, kNa, 100.0, {}, 4.0);
+                ++out.exit_calls;
+                (adapter_.*access(PairHoldTag{}))("L");
+            }
+            if (i == 8) strategy_close("L");
+            return;
+        }
         if (margin_pattern(pattern_)) {
             if (i == 1) strategy_entry("S", false, kNa, kNa, 80.0);
             if (i == 2) {
@@ -269,6 +280,9 @@ void k1_is_bounded_while_the_origin_is_open() {
             const auto small = run(pattern, 48, ratio, magnifier, false, false, false);
             const auto large = run(pattern, 192, ratio, magnifier, false, false, false);
             const auto retained = run(pattern, 192, ratio, magnifier, true, false, false);
+            std::printf("K1 pattern=%d ratio=%d magnifier=%d: origin rows %zu -> %zu, retained %zu\n",
+                        static_cast<int>(pattern), ratio, magnifier ? 1 : 0,
+                        small.peak_origin_rows, large.peak_origin_rows, retained.peak_origin_rows);
             same_public_result(large, retained);
             CHECK(small.error.empty());
             CHECK(large.open == 4.0);
@@ -295,6 +309,18 @@ void the_origin_pin_ends_when_its_lot_closes() {
         CHECK(erased.open == 0.0);
         CHECK(!erased.trades.empty());
         CHECK(erased.final_origin_rows == 0);
+    }
+    // One origin closes while another lot keeps the position cycle alive.
+    for (int ratio : {1, 3}) for (bool magnifier : {false, true}) {
+        const auto erased = run(Pattern::PartialOriginClose, 24, ratio, magnifier,
+                                false, false, false);
+        const auto retained = run(Pattern::PartialOriginClose, 24, ratio, magnifier,
+                                  true, false, false);
+        same_public_result(erased, retained);
+        CHECK(erased.open == 4.0);
+        CHECK(erased.trades.size() == 1);
+        CHECK(erased.final_origin_rows == 0);
+        CHECK(retained.final_origin_rows > 0);
     }
 }
 
