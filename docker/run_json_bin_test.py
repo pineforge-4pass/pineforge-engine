@@ -124,7 +124,10 @@ def invoke(monkeypatch, *args, library=None):
     monkeypatch.setattr(run_json, "load_strategy", lambda path: library)
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        status = run_json.main(["--so", "unused.so", *map(str, args)])
+        try:
+            status = run_json.main(["--so", "unused.so", *map(str, args)])
+        except SystemExit as error:
+            status = error.code
     return status, json.loads(out.getvalue()), err.getvalue(), library
 
 
