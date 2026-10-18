@@ -887,15 +887,39 @@ does not assume a build optimization without evidence.
 
 ## Runners and time limits
 
-The ci-spot pool is live as of 2026-10-18 (bulletin #613, L6, 22:34). Linux
-x64 jobs use the fragments in `pf-ci-spot`'s `workflows/engine-x64-16.yml`
-and `workflows/public.yml` at `pf-ci-spot` commit `1fe46216` (bulletins
-#614/#615), with these exact label arrays:
+The ci-spot pool is live as of 2026-10-18 (bulletin #613, L6, 22:34).
+Credential-free Linux x64 jobs use the fragments in `pf-ci-spot`'s
+`workflows/engine-x64-16.yml` and `workflows/public.yml` at commit
+`b240f6d7` (bulletin #635), with these exact label arrays and an
+`ubuntu-24.04` hosted fallback:
 
 | Jobs | Fragment and labels | Pool machine |
 | --- | --- | --- |
-| Linux `build` legs, `sanitizers`, `kernel-only`, all three `native-live` profiles, both corpus-parity jobs, release `prebuilt` Linux x64 leg | `engine-x64-16.yml`: `["self-hosted","pf-ci","pf-ci-x64-16"]` | e2-standard-16, 16 vCPU, 64 GB, 100 GB disk; engine only |
-| `changes`, `preflight`, both aggregate jobs, docs `build`, release metadata and hub notification, manual baseline promotion | `public.yml`: `["self-hosted","pf-ci","pf-ci-x64"]` | e2-standard-4, 4 vCPU, 16 GB, 30 GB disk |
+| Linux `build` legs, `sanitizers`, `kernel-only`, all three `native-live` profiles, both corpus-parity jobs | `engine-x64-16.yml`: `["self-hosted","pf-ci","pf-ci-x64-16"]` | e2-standard-16, 16 vCPU, 64 GB, 100 GB disk; engine only |
+| `changes`, `preflight`, both aggregate jobs | `public.yml`: `["self-hosted","pf-ci","pf-ci-x64"]` | e2-standard-4, 4 vCPU, 16 GB, 30 GB disk |
+
+L6's standing ruling of 2026-10-19 keeps production credentials on hosted
+runners. A job that references any secret other than `secrets.GITHUB_TOKEN`,
+has `id-token: write` at job or workflow scope, or names an `environment`
+must use a hosted standard runner and carry no `PF_CI_LABELS`. Inherited
+workflow environment secrets count too. A conditional deployment step still
+holds those references in its job.
+
+The existing jobs restore their exact pre-CR-171 hosted routing: docs
+`build` uses `ubuntu-latest` for its Cloudflare secrets; baseline `promote`
+uses `ubuntu-latest` for its GitHub App secrets and workflow OIDC permission.
+Every job in `release.yml` stays hosted under the explicit release ruling,
+including `prebuilt`, which references only `GITHUB_TOKEN`. That workflow is
+byte-identical to the pre-CR-171 `origin/main` copy: `release` and `notify-hub`
+use `ubuntu-latest`, and `prebuilt` selects `ubuntu-22.04`,
+`ubuntu-22.04-arm` and `macos-latest`. New credential-bearing jobs use
+`ubuntu-24.04` or the standard macOS label; the existing hosted aliases above
+are pinned explicitly to preserve their original values.
+
+This follow-up rewords the pool-allocation, release/deploy routing and
+fallback sentences introduced by `28fe3466a` and carried into `f9bee2220`.
+The earlier `1fe46216` fragment revision supplied the Dependabot guard
+(bulletins #614/#615); `b240f6d7` keeps that guard and updates the fallback.
 
 This replaces the temporary standard-runner stopgap recorded by `3484a7c40`
 and squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner
@@ -904,7 +928,7 @@ reworded originated in `d0935605c` (#290), and the documentation-only runner
 sentence in `133f57148` (#308). The platform job limits from `2394ba2fc`
 (#373) remain in force.
 
-Each Linux x64 job uses the fragment's expression verbatim and sets its
+Each pool job uses the fragment's expression verbatim and sets its
 matching array as a job-level **string** `PF_CI_LABELS`, merged into any
 existing job environment. The engine build fragment is:
 
@@ -915,7 +939,7 @@ runs-on: >-
       contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
       (github.event_name != 'pull_request' ||
        (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-      fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
 env:
   PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 ```
@@ -926,18 +950,16 @@ requests whose head repository has `fork == false` take the pool when neither
 `github.actor` nor `github.triggering_actor` is `dependabot[bot]`. Dependabot
 runs and re-runs stay hosted through that guard. Fork pull
 requests, `pull_request_target`, `workflow_run` and every unlisted event fall
-back to `ubuntu-latest`. A reusable workflow sees its caller's `github`
+back to `ubuntu-24.04`. A reusable workflow sees its caller's `github`
 context, so native and corpus jobs keep the same fallback through CI.
 
 The `build` matrix retains its four legs and their `build (<image>, <type>)`
 names. Its routing-only `include` entries carry the engine fragment for
 Linux and `macos-26` for macOS, selected with `runs-on: ${{ matrix.runner }}`.
-The two hosted macOS legs stay on `macos-26` (M1, 3 cores, 7 GB). Release's
-Linux x64 `matrix.runner` carries the same engine fragment; its ARM leg stays
-on `ubuntu-22.04-arm` and its universal macOS leg stays on `macos-latest`.
-The shared matrix jobs set the engine label string once; hosted legs ignore
-it. Promotion has both target and dispatch triggers: the target event stays
-hosted through the public fragment, while a manual dispatch can use the pool.
+The two hosted macOS legs stay on `macos-26` (M1, 3 cores, 7 GB). The shared
+build job sets the engine label string once; hosted macOS legs ignore it.
+Release's separate matrix stays entirely hosted and sets no pool labels.
+Promotion stays hosted for both target and dispatch triggers.
 
 The dispatcher's actor allowlist is `luisleo526`, `pineforge-app[bot]` and
 `github-actions[bot]` (chain triggers only). Dependabot-specific jobs stay
@@ -956,14 +978,16 @@ change starts preflight alone among the verification jobs.
 
 `scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
 limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included. It also pins the fragments and job-level
-`PF_CI_LABELS` in `docs.yml`, `promote-baseline.yml` and `release.yml`, the
-release matrix included. Release has no runner exemption. New Linux x64 jobs
-require the public fragment; target-only workflows and explicit
-Dependabot-only jobs stay hosted, as do macOS and ARM. The contract refuses
+strategy block included. It pins the original hosted labels in `docs.yml`,
+`promote-baseline.yml` and `release.yml`, the release matrix included, and
+checks every job for production secrets, OIDC write permission or an
+environment. Credential-bearing jobs must stay hosted without pool env;
+every other Linux x64 job must use one of the two current fragments and its
+matching job-level `PF_CI_LABELS`. macOS and ARM stay hosted. The contract refuses
 `pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and any `larger_runner`
-key in every workflow. A changed fragment, a missing, duplicate, non-string
-or mismatched `PF_CI_LABELS`, a changed build or release matrix, a call to a
+key in every workflow. A credential-bearing job on the pool, an old
+`ubuntu-latest` fragment fallback, a missing, duplicate, non-string or
+mismatched pool `PF_CI_LABELS`, a changed build or release matrix, a call to a
 workflow outside `.github/workflows/`, a changed time limit, a `ci_verify.py` call without
 exactly one core-count `--jobs` (counted over the whole job, however its
 commands are chained, blocked or carried, with the flag and its value on one
