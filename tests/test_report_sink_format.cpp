@@ -2,6 +2,7 @@
 // This unit uses the frozen P00 declarations, not a strategy/module substitute.
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/version.h>
+#include "../src/sha256.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -62733,6 +62734,34 @@ void test_f64() {
     require(localized == "1234.5", "f64 is independent of locale");
 }
 
+void test_sha256() {
+    const struct { const char* message; const char* hex; } vectors[] = {
+        {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+        {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"},
+        {"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno"
+         "ijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+         "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"},
+    };
+    for (const auto& vector : vectors) {
+        const std::string_view message(vector.message);
+        for (std::size_t split = 0; split <= message.size(); ++split) {
+            sink::Sha256 hash;
+            hash.update(message.substr(0, split));
+            const auto prefix = hash.hex_digest();
+            require(hash.hex_digest() == prefix, "SHA query is repeatable");
+            hash.update(message.substr(split));
+            require(hash.hex_digest() == vector.hex, "NIST SHA-256 vector at every update split");
+        }
+    }
+    sink::Sha256 million;
+    const std::string chunk(1000, 'a');
+    for (int i = 0; i < 1000; ++i) million.update(chunk);
+    require(million.hex_digest() == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+            "NIST million-a SHA-256 vector");
+}
+
 void test_strings() {
     require(sink::escaped_string("\"\\/") == "\"\\\"\\\\/\"", "quote and slash escaping");
     std::string controls;
@@ -62989,6 +63018,7 @@ int main() {
         require(mkdtemp(pattern.data()) != nullptr, "cannot create proof artifact directory");
         std::printf("report sink proof artifacts: %s\n", pattern.c_str());
         test_f64();
+        test_sha256();
         test_strings();
         test_writer(pattern);
         test_reader(pattern);
