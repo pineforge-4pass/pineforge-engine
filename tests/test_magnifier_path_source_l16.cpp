@@ -223,7 +223,7 @@ std::string report_bytes(const BacktestEngine& engine) {
 }
 
 void execution_differential() {
-    const auto feed = minutes(150);
+    auto feed = minutes(150);
     auto s = spec("l16-path");
     s.script_tf = "15";
     s.slot_label_policy = NativeSlotLabelPolicy::FeedTolerant;
@@ -260,6 +260,10 @@ void execution_differential() {
     CHECK(vector.native_continuation_hash() == provider.native_continuation_hash());
     CHECK(report_bytes(vector) == report_bytes(provider));
     CHECK(consumer.bar_views().lower_path == nullptr);
+    const auto after = provider.native_continuation_hash();
+    feed.clear();
+    feed.shrink_to_fit();
+    CHECK(provider.native_continuation_hash() == after);
 }
 
 void preflight_chunk_boundaries() {
