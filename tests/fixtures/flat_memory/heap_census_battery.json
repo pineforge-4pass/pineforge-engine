@@ -1,0 +1,15 @@
+{
+  "schema": "pineforge-heap-census-battery/v1",
+  "native_modes": [
+    "reused_id",
+    "moved_exits",
+    "oca_brackets",
+    "pyramiding",
+    "partial_exits",
+    "split_magnifier",
+    "split_no_magnifier",
+    "routed_security",
+    "nday_security",
+    "foreign_security"
+  ]
+}
