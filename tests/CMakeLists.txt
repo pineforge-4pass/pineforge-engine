@@ -7134,6 +7134,9 @@ endif()
 list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
 
+list(APPEND TEST_SOURCES test_trade_percent_prefix)
+pineforge_add_unit_test(test_trade_percent_prefix)
+
 # CR-150 L2: append after the private-fixture line evidence. The preflight
 # harness glob also discovers docker/run_json_bin_test.py automatically.
 add_test(NAME test_run_json_bin

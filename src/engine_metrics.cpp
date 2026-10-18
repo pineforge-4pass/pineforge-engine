@@ -319,4 +319,21 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
 }
 
 }  // namespace metrics
+
+void BacktestEngine::fold_trade_percent_prefix(const Trade& trade) {
+    trade_percent_prefix_.all_sum += trade.pnl_pct;
+    ++trade_percent_prefix_.all_count;
+    if (trade.pnl > 0.0) {
+        trade_percent_prefix_.win_sum += trade.pnl_pct;
+        ++trade_percent_prefix_.win_count;
+    } else if (trade.pnl < 0.0) {
+        trade_percent_prefix_.loss_sum += trade.pnl_pct;
+        ++trade_percent_prefix_.loss_count;
+    }
+}
+
+void BacktestEngine::reset_trade_percent_prefix() {
+    trade_percent_prefix_ = {};
+}
+
 }  // namespace pineforge
