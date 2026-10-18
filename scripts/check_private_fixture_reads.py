@@ -39,12 +39,13 @@ matched exits 1.
 
 The list() subcommands the two files use are modelled, and the model is
 printed as a table (subcommand, uses, modelled). APPEND and REMOVE_ITEM edit
-the tracked list; LENGTH writes the tracked length into its out-var; GET,
-SUBLIST and POP_FRONT write the element(s) they select, so a value a row gets
-through them is swept like any other. POP_FRONT follows CMake: N out-vars take
-the first N elements (the rest of the list is removed), no out-var removes
-exactly one element, and out-vars with no element left are undefined. A
-subcommand outside the modelled set is a construct the sweep cannot read:
+the tracked list; SORT orders a tracked list (a file(GLOB)-fed list remains
+unknown); LENGTH writes the tracked length into its out-var; GET, SUBLIST and
+POP_FRONT write the element(s) they select, so a value a row gets through them
+is swept like any other. POP_FRONT follows CMake: N out-vars take the first N
+elements (the rest of the list is removed), no out-var removes exactly one
+element, and out-vars with no element left are undefined. A subcommand outside
+the modelled set is a construct the sweep cannot read:
 exit 2, in or out of a function() body, never a silent skip. GET, SUBLIST and
 POP_FRONT read only a list this walk saw built; a list it never saw is exit 2,
 never a guessed value. LENGTH is the one soft case: its result is a count,
@@ -354,7 +355,7 @@ class Rows:
     # list() subcommands this sweep models, and what each does to the tracked
     # variables. Any other subcommand is a construct it cannot read.
     LIST_MODELLED = ('APPEND', 'GET', 'LENGTH', 'POP_FRONT', 'REMOVE_ITEM',
-                     'SUBLIST')
+                     'SORT', 'SUBLIST')
 
     def _scan_list_subcommands(self) -> None:
         """Count every list(<subcommand>) the file has -- in or out of a
@@ -584,6 +585,33 @@ class Rows:
                             values.append(item)
                     elif item in values:
                         values.remove(item)
+            return
+
+        if action == 'SORT':
+            tokens = rest.split()
+            if not tokens or not re.fullmatch(r'\w+', tokens[0]):
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: a list(SORT) whose list name '
+                    f'this sweep cannot read')
+            name = tokens[0]
+            values = env.get(name)
+            if values is None:
+                # Sorting does not create or remove a path-bearing value. A
+                # list populated by file(GLOB), which this sweep does not
+                # model, is therefore safe to leave unknown.
+                return
+            order = 'ASCENDING'
+            position = 1
+            while position < len(tokens):
+                if (tokens[position] == 'ORDER' and position + 1 < len(tokens)
+                        and tokens[position + 1] in ('ASCENDING', 'DESCENDING')):
+                    order = tokens[position + 1]
+                    position += 2
+                    continue
+                raise Unparseable(
+                    f'{self.path}:{line_i + 1}: list(SORT) option '
+                    f'{tokens[position]!r} is not modelled')
+            values.sort(reverse=order == 'DESCENDING')
             return
 
         tokens = rest.split()

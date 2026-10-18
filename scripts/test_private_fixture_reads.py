@@ -449,14 +449,14 @@ add_test(NAME e2e_fb2c_pop_front_flow
         self.assertIn('e2e_fb2c_pop_front_flow', result.stdout)
         self.assertIn(f'{REMOVED_EXAMPLE}/bars.csv', result.stdout)
 
-    # control 9: a list() subcommand outside the modelled set is a construct
-    # the sweep cannot read: exit 2, never a walk that skips its effect
-    def test_unmodelled_list_subcommand_exits_2(self):
+    # control 9: SORT is modelled because the CR-150 lane include block sorts
+    # its glob before including files. A GLOB-fed list has no path effect for
+    # this sweep and is safely left unknown.
+    def test_sort_glob_input_is_ignored(self):
         self.tree.append('tests/CMakeLists.txt',
                          '\nlist(SORT e2e_fb2c_unmodelled)\n')
         result = run_sweep(self.tree.root)
-        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn('list(SORT)', result.stdout + result.stderr)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     # control 10: POP_FRONT reads a list the walk saw built; a list it never
     # saw is exit 2 rather than a guessed (or dropped) popped value
