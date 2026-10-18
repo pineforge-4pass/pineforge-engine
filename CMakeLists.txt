@@ -148,6 +148,8 @@ set(PINEFORGE_KERNEL_SOURCES
     src/timeframe.cpp
     src/timezone.cpp
     src/native_calendar.cpp
+    src/report_sink_writer.cpp
+    src/sha256.cpp
     src/native_run_spec.cpp
     src/native_fx_curve.cpp
     src/selected_report_view.cpp
