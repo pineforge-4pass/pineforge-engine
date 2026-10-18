@@ -68,7 +68,7 @@ public:
         }
         if (bar_index_ == 1) strategy_close("L", "survivor");
     }
-    const std::vector<Trade>& closed() const { return trades_; }
+    const TradeLedger& closed() const { return trades_; }
 private:
     double realized_;
     double quantity_;

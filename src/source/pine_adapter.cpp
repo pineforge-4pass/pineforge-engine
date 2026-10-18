@@ -2927,6 +2927,8 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         margin.liquidation_comment = "Margin call";
         spec.margin = margin;
     }
+    if (host_ != nullptr)
+        NativeExecutionConsumer::bound(*host_).stage_lower_path_source(nullptr);
     if (args.bar_magnifier) {
         // pine_scheduler.cpp:894-899/:1035-1041 supplied the legacy
         // volume-weighted bound.  The native API's generic default remains
@@ -2943,8 +2945,8 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             path.volume_weighted_max_samples = volume_weighted_cap;
             spec.intrabar.value = std::move(path);
         } else {
-            // A18: a genuinely finer supplied feed remains a retained
-            // lower-timeframe path. The generic validator owns duration and
+            // A18: a genuinely finer supplied feed uses a lower-timeframe
+            // path. The generic validator owns duration and
             // divisibility rejection for any non-finer malformed pairing.
             // TradingView's magnifier walks its own intrabars at its table's
             // timeframe, not the feed: on a 15-minute chart 2-minute bars,
@@ -2953,7 +2955,12 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             // tests/fixtures/magnifier_intrabars). The path is built from the
             // feed and stays on its grid, so its literal is the input's.
             IntrabarPath::lower_tf path;
-            if (args.bars && args.n > 0) {
+            if (host_ != nullptr) {
+                NativeExecutionConsumer::bound(*host_).stage_lower_path_source(
+                    make_magnifier_path_source(args.bars, args.n, spec.input_tf,
+                                               spec.script_tf, spec.session, spec.timezone));
+            } else if (args.bars && args.n > 0) {
+                // Standalone projection remains a value-only reference path.
                 path.bars = tradingview_magnifier_bars(
                     args.bars, args.n, spec.input_tf, spec.script_tf, spec.session,
                     spec.timezone);
@@ -2994,7 +3001,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // (observe_terminal_receipts), so it keeps only the unread window: the
     // kernel default, which folds nothing into the spec digest.
     spec.event_retention = NativeEventRetention::Window;
-    const auto validation = validate_native_run_spec(spec);
+    const auto validation = host_ != nullptr
+        ? NativeExecutionConsumer::bound(*host_).normalize_projected_spec(spec)
+        : native_bar_views_v1::normalize_native_run_spec(spec, {});
     if (!validation) {
         throw coded<std::logic_error>(run_spec_field_failure(validation.field),
                                       "Pine adapter produced invalid native run spec field "
@@ -3418,7 +3427,9 @@ bool PineExecutionAdapter::same_point_pair_scope() const {
     }
     const auto state = detail::run_state(require_host());
     const auto* inert = state.spec ? state.spec->intrabar.lower() : nullptr;
+    const auto views = detail::run_consumer(require_host()).bar_views();
     const bool inactive_sampler_path = inert != nullptr && inert->bars.empty()
+        && (views.lower_path == nullptr || views.lower_path->count() == 0)
         && inert->tf == state.spec->input_tf && inert->samples == 4
         && inert->distribution == MagnifierDistribution::ENDPOINTS
         && !inert->volume_weighted && inert->volume_weighted_min_samples == 2
