@@ -2396,6 +2396,16 @@ private:
     };
     std::optional<CalcGroup> calc_group_;
     bool calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const;
+
+    // CR-150 L17A: selected E records have already been emitted at capture.
+    // Output bookkeeping, like presentation_ready_: not hashed and never read
+    // by a broker decision, a continuation fold or the source adapter. Reset
+    // with the presentation; appended so every pre-existing member keeps its
+    // offset. The L6b-1 array remains the metrics source until L17B supplies the
+    // scratch curve; no second per-read equity allocation is needed with a sink.
+    bool presentation_sink_equity_written_ = false;
+    bool capture_selected_sink(BacktestEngine& engine);
+    bool selected_sink_equity_written(const BacktestEngine& engine) const noexcept;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

@@ -1530,7 +1530,7 @@ void NativeExecutionConsumer::terminal_success(BacktestEngine& engine,
         seen.phase = kEpochCapturing;
         {
             const EpochDispatchScope dispatch(epoch);
-            capture_presentation(engine);
+            if (!capture_selected_sink(engine)) capture_presentation(engine);
         }
         // The barrier is released. Abort and first cause first (check_abort
         // answers false for either), then the reentry latch, which is consumed
@@ -12266,7 +12266,7 @@ void NativeExecutionConsumer::drop_presentation() noexcept {
     presentation_ = ReportC{};
     presentation_metric_equity_len_ = 0;
     presentation_metric_observations_ = 0;
-    presentation_ready_ = false;
+    presentation_ready_ = presentation_sink_equity_written_ = false;
     selected_results_open_ = false;
 }
 
@@ -12452,17 +12452,17 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
         return true;
     }
 
-    // The capture's scalars come across by value; every array pointer starts
-    // null, so what a throw frees below is only what this call allocated and
-    // never the capture's own. The two arrays the capture owns are copied; the
-    // others are the suffix's to build, as fill_report builds them after
-    // present_report.
+    // The capture's scalars come across by value; array pointers start null,
+    // so a throw frees only storage this call allocated. A sink's E records
+    // already exist; its metrics read the captured curve without another copy.
+    // Sink-off reads copy both arrays, and the suffix builds the other arrays.
+    // present_report is never called at read.
     const ReportC& captured = consumer->presentation_;
-    // Two equity lengths, as OFF has them: the presented one
-    // (captured.equity_curve_len, whatever present_report left, published as it
-    // stands) and the metrics' own, the engine vector's size from before that
-    // call, kept beside the capture. OFF's buffer holds the second and a reader
-    // may take either, so the copy covers the larger.
+    const bool sink_equity = consumer->selected_sink_equity_written(engine);
+    // The presentation may publish a different length than metrics use.
+    // Sink-off storage covers their maximum; a sink reads the capture's
+    // metric storage directly. The captured lengths keep their preexisting
+    // roles even when a custom presentation shrinks the published curve.
     const int64_t metric_equity_len = consumer->presentation_metric_equity_len_;
     const int64_t equity_storage_len = std::max(captured.equity_curve_len, metric_equity_len);
     ReportC local = captured;
@@ -12477,12 +12477,12 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
             local.trades = new TradeC[captured.trades_len];
             std::copy(captured.trades, captured.trades + captured.trades_len, local.trades);
         }
-        if (captured.equity_curve != nullptr && equity_storage_len > 0) {
+        if (captured.equity_curve != nullptr && equity_storage_len > 0 && !sink_equity) {
             local.equity_curve = new pf_equity_point_t[equity_storage_len];
             std::copy(captured.equity_curve, captured.equity_curve + equity_storage_len,
                       local.equity_curve);
         }
-
+        const auto* metric_curve = sink_equity ? captured.equity_curve : local.equity_curve;
         // The suffix, in fill_report's order. The metrics get the original
         // length, as fill_metrics_section passes its `n`: never the presented
         // length, script_bars_processed, or the engine's vector read now.
@@ -12494,7 +12494,7 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
             // input's close, undefined (NaN) while the window has none. The
             // trade blocks and every other equity formula are the ordinary ones.
             internal::compute_report_metrics(local.metrics, local.trades, local.trades_len,
-                                             local.equity_curve, metric_equity_len,
+                                             metric_curve, metric_equity_len,
                                              local.net_profit, engine.initial_capital_,
                                              engine.chart_timezone_,
                                              consumer->selected_first_open_,
@@ -12510,7 +12510,6 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
         }
         engine.fill_security_diag_section(&local);
         engine.fill_trace_section(&local);
-
         const int64_t hn = (int64_t)engine.broker_state_hashes_.size();
         local.broker_state_hash_len = hn;
         local.broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
@@ -12522,6 +12521,7 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
         BacktestEngine::free_report(&local);
         throw;
     }
+    if (sink_equity) local.equity_curve_len = 0;
     *out = local;
     return true;
 }
@@ -12735,4 +12735,76 @@ uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
 }
 
 }  // inline namespace native_run_spec_v3
+}  // namespace pineforge
+
+// CR-150 L17A: L6b-1 still owns the full recorded curve. Walk its FINAL values
+// at capture through the same O(1) latch/writer boundary that the hold-back
+// release will feed when L6b-2 and L17B are integrated. Nothing below records
+// provisional values or mutates the engine's point through a presentation.
+#include "report_sink_writer.hpp"
+
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+
+bool NativeExecutionConsumer::selected_sink_equity_written(
+        const BacktestEngine& engine) const noexcept {
+    return presentation_sink_equity_written_ && engine.report_sink_state_.enabled
+        && engine.report_sink_state_.writer != nullptr;
+}
+
+bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
+    auto& sink = engine.report_sink_state_;
+    if (!selected_epoch_.admitted_selected || !sink.enabled) return false;
+    if (!sink.writer || sink.receipt.complete)
+        refuse_selected_capture("native selected report: no active report sink at capture");
+    try {
+        // Preserve the existing pre-hook refusal order, the single virtual
+        // presentation, and its independent array ownership. These are the
+        // L6b-1 metrics inputs; L17B replaces them with the scratch point source.
+        capture_presentation(engine);
+        const auto& window = selected_epoch_.admitted_window;
+        report::SelectedReportStream stream(window.start_ms, window.end_ms,
+                                            engine.initial_capital_);
+        for (int i = 0; i < presentation_.trades_len; ++i)
+            stream.note_trade(presentation_.trades[i].entry_time);
+        for (const auto& lot : engine.pyramid_entries_)
+            stream.note_open_lot(lot.time);
+
+        std::int64_t selected_index = 1; // the synthetic anchor is not an observation
+        for (const auto& recorded : engine.equity_curve_) {
+            pf_equity_point_t final_point = recorded;
+            bool publish = false;
+            if (recorded.time_ms >= window.start_ms && recorded.time_ms < window.end_ms) {
+                // The pre-hook count check proved this storage exists, even
+                // when a custom hook leaves its presented length behind.
+                if (selected_index >= presentation_metric_equity_len_)
+                    refuse_selected_capture("native selected report: missing captured observation");
+                final_point = presentation_.equity_curve[selected_index];
+                publish = selected_index < presentation_.equity_curve_len;
+                ++selected_index;
+            }
+            // Every value supplied here is final: range-end edits already ran
+            // on recorded, and present_report edited only the captured copy.
+            stream.write_point(*sink.writer, final_point, publish);
+            sink.receipt.count_e = stream.equity_count();
+        }
+        stream.finish(*sink.writer, selected_epoch_.counts.window_script_bars,
+                      presentation_.equity_curve_len > 0);
+        sink.receipt.count_e = stream.equity_count();
+        presentation_sink_equity_written_ = true;
+        // L6b-1 finishes T and the trailer at the successful report fill. An
+        // observer fault after this capture therefore cannot publish a trailer.
+    } catch (const report_sink::WriterError& error) {
+        sink.writer.reset();
+        const auto code = error.reason() == report_sink::WriterFailure::io
+            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
+        throw coded<std::runtime_error>(code, {}, error.what());
+    } catch (...) {
+        sink.writer.reset();
+        throw;
+    }
+    return true;
+}
+
+}  // inline namespace engine_script_run_v19
 }  // namespace pineforge
