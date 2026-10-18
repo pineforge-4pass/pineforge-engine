@@ -29,7 +29,8 @@ the overlay. The marker a driver tests must resolve to a REMOVED path: present
 exactly when the private fixtures are overlaid.
 
 Every registration is walked, not pattern-matched per form: the two CMakeLists
-are read command by command so that a row registered through add_test (also
+and the tests/cr150.d/*.cmake files are read command by command so that a row
+registered through add_test (also
 multi-line, also inside foreach loops the file expands), pineforge_add_unit_
 test, pineforge_add_twin_test or add_executable is swept, and the count of
 add_test sites walked is compared with the count present (a site this sweep
@@ -265,31 +266,44 @@ def expand_names(raw: str, env: dict, limit: int = 64) -> set[str]:
 
 
 class Rows:
-    """Registered ctest rows and what they name, per CMakeLists."""
+    """One CMake file's walk, sharing scope and rows across lane includes."""
 
-    def __init__(self, path: Path, root: Path):
+    def __init__(self, path: Path, root: Path, *, including: Rows | None = None,
+                 env: dict | None = None, conditions: tuple = ()):
         self.path = path
         self.root = root
-        self.rel_dir = str(path.parent.relative_to(root))
-        self.text = strip_comments(path.read_text())
+        # include() changes the list file, not CMAKE_CURRENT_SOURCE_DIR.
+        self.rel_dir = (including.rel_dir if including is not None
+                        else str(path.parent.relative_to(root)))
+        try:
+            self.text = strip_comments(path.read_text())
+        except (OSError, UnicodeError) as error:
+            raise Unparseable(f'{path}:1: cannot read CMake file: {error}') from error
         self.lines = self.text.split('\n')
         self.line_starts = [0]
         for line in self.lines[:-1]:
             self.line_starts.append(self.line_starts[-1] + len(line) + 1)
-        self.vars: dict[str, list[str]] = {}
-        self.rows: dict[str, dict] = {}
-        self.target_sources: dict[str, set] = {}
+        self.vars: dict[str, list[str]] = env if env is not None else {}
+        self.rows: dict[str, dict] = including.rows if including is not None else {}
+        self.target_sources: dict[str, set] = (including.target_sources
+                                              if including is not None else {})
+        self.tables: list[Rows] = including.tables if including is not None else []
+        self.tables.append(self)
         self.site_lines: set[int] = set()
         self.add_test_sites_skipped = 0
         self.dynamic_names: list[tuple[int, str]] = []
         self.list_uses: dict[str, int] = {}
         self.unresolved_list_inputs: list[tuple[int, str, str, str]] = []
-        self.cr150_lane_files: list[Path] | None = None
+        self.cr150_lane_files: list[Path] | None = (including.cr150_lane_files
+                                                   if including is not None else None)
         self._check_sites_readable()
         self._scan_list_subcommands()
-        top_env: dict[str, list[str]] = {}
-        self._walk(0, len(self.lines), top_env, ())
-        self.vars = top_env
+        self._walk(0, len(self.lines), self.vars, conditions)
+        if including is None and self.cr150_lane_files is not None:
+            read_paths = {table.path for table in self.tables}
+            for lane in self.cr150_lane_files:
+                if lane not in read_paths:
+                    raise Unparseable(f'{lane}:1: globbed lane file was not included by the walk')
 
     @property
     def add_test_sites(self) -> int:
@@ -389,7 +403,7 @@ class Rows:
     def _entry(self, row: str, lineno: int, conditions: tuple, table) -> dict:
         entry = self.rows.get(row)
         if entry is None:
-            entry = {'defines': {}, 'lineno': lineno, 'argvs': [],
+            entry = {'defines': {}, 'lineno': lineno, 'argvs': [], 'argv_sites': [],
                      'conditions': [], 'sites': [], 'table': table}
             self.rows[row] = entry
         elif not entry['lineno']:
@@ -402,7 +416,7 @@ class Rows:
         if conditions and conditions not in entry['conditions']:
             entry['conditions'].append(conditions)
         entry['sites'].append({'lineno': lineno, 'conditions': conditions,
-                               'placeholder': placeholder})
+                               'placeholder': placeholder, 'table': table})
         return entry
 
     def _register(self, raw: str, lineno: int, env: dict, conditions: tuple,
@@ -416,6 +430,7 @@ class Rows:
             entry = self._site(name, lineno + 1, conditions, placeholder, table)
             if argv is not None:
                 entry['argvs'].append([subst(t, env) for t in argv])
+                entry['argv_sites'].append((table, lineno + 1))
             if sources:
                 entry.setdefault('sources', set()).update(sources)
             if twin_target:
@@ -461,7 +476,7 @@ class Rows:
             elif name == 'string':
                 self._do_string(body, i, env)
             elif name == 'include':
-                pass
+                self._do_cr150_include(body, i, env, conditions)
             elif name == 'add_test':
                 self.site_lines.add(i)
                 self._do_add_test(body, i, env, conditions)
@@ -521,6 +536,23 @@ class Rows:
         if not head:
             raise Unparseable(f'{self.path}:{first + 1}: a foreach header this sweep cannot read')
         var, rest = head.group(1), head.group(2).strip()
+        if var == 'cr150_lane_file' and rest == 'IN LISTS CR150_LANE_CMAKE':
+            if self.cr150_lane_files is None or 'CR150_LANE_CMAKE' not in env:
+                raise Unparseable(
+                    f'{self.path}:{first}: CR150_LANE_CMAKE was not bound by the lane glob')
+            # Lane includes run in the including scope; later files and the
+            # statements after the loop must observe their list mutations.
+            previous = env.get(var)
+            try:
+                for item in list(env['CR150_LANE_CMAKE']):
+                    env[var] = [item]
+                    self._walk(first, last, env, conditions)
+            finally:
+                if previous is None:
+                    env.pop(var, None)
+                else:
+                    env[var] = previous
+            return
         m = re.match(r'IN\s+LISTS\s+(.*)$', rest, re.S)
         if m:
             items: list[str | None] = []
@@ -574,6 +606,20 @@ class Rows:
         self.cr150_lane_files = sorted(path for path in paths
                                        if path.name.endswith('.cmake'))
         env['CR150_LANE_CMAKE'] = [str(path) for path in self.cr150_lane_files]
+
+    def _do_cr150_include(self, body: str, line_i: int, env: dict,
+                          conditions: tuple) -> None:
+        if '${cr150_lane_file}' not in body:
+            return                          # existing non-lane include handling
+        if body.strip().strip('"') != '${cr150_lane_file}':
+            raise Unparseable(f'{self.path}:{line_i + 1}: unreadable CR-150 lane include')
+        target = Path(subst('${cr150_lane_file}', env))
+        if self.cr150_lane_files is None or target not in self.cr150_lane_files:
+            raise Unparseable(
+                f'{self.path}:{line_i + 1}: include({target}) is not a globbed CR-150 lane')
+        if any(table.path == target for table in self.tables):
+            raise Unparseable(f'{target}:1: CR-150 lane file included more than once')
+        Rows(target, self.root, including=self, env=env, conditions=conditions)
 
     def _do_list(self, body: str, line_i: int, env: dict) -> None:
         """Model the list() subcommands the two files use. What the walk does
@@ -917,10 +963,18 @@ def sweep(root: Path) -> int:
     dynamic_names: list[tuple[str, int, str]] = []
     list_uses: dict[str, int] = {}
     unresolved_list_inputs: list[tuple[str, int, str, str, str]] = []
+    tables: list[Rows] = []
     for cmake in cmake_files:
         if not cmake.exists():
             raise Unparseable(f'{cmake}: missing')
         table = Rows(cmake, root)
+        tables.extend(table.tables)
+        for name, entry in table.rows.items():
+            entry['cmake'] = entry['table'].path
+            rows.setdefault(name, entry)
+
+    for table in tables:
+        cmake = table.path
         add_test_sites += table.add_test_sites
         add_test_sites_skipped += table.add_test_sites_skipped
         for lineno, raw in table.dynamic_names:
@@ -930,16 +984,12 @@ def sweep(root: Path) -> int:
         for lineno, subcommand, name, out in table.unresolved_list_inputs:
             unresolved_list_inputs.append(
                 (str(cmake.relative_to(root)), lineno, subcommand, name, out))
-        for name, entry in table.rows.items():
-            entry['cmake'] = cmake
-            rows.setdefault(name, entry)
 
     # Every add_test( site the tree has must have been walked (sites inside a
     # function() are templates; their call sites register the rows).
     site_total = 0
-    for cmake in cmake_files:
-        text = strip_comments(cmake.read_text())
-        site_total += len(re.findall(r'add_test\(', text))
+    for table in tables:
+        site_total += len(re.findall(r'add_test\(', table.text))
     walked_total = site_total - add_test_sites_skipped
     if walked_total != add_test_sites:
         raise Unparseable(
@@ -1015,21 +1065,21 @@ def sweep(root: Path) -> int:
         # holds a '/') is a construct this sweep cannot resolve -- exit 2 --
         # while a reference that names no path (a command or a non-path
         # variable, no '/') is counted and printed, never silently dropped.
-        for argv in entry['argvs']:
+        for argv, (argv_table, argv_line) in zip(entry['argvs'], entry['argv_sites']):
             for token in argv:
                 if token.startswith(('tests/', 'fixtures/', '${')):
-                    where = str(table.path.relative_to(root))
-                    for element in split_argument_elements(token, table):
+                    where = str(argv_table.path.relative_to(root))
+                    for element in split_argument_elements(token, argv_table):
                         if '$' in element:
                             if '/' in element:
                                 raise Unparseable(
-                                    f'{where}:{entry["lineno"]}: {row}: an '
+                                    f'{where}:{argv_line}: {row}: an '
                                     f'argument path the sweep never '
                                     f'resolved: {element}')
                             unresolved_argv_tokens.append(
-                                (row, where, entry['lineno'], element))
+                                (row, where, argv_line, element))
                             continue
-                        named.append((where, entry['lineno'], element))
+                        named.append((where, argv_line, element))
 
         # Python driver: the private marker and the skip literal.
         script = table.python_script(row)
@@ -1140,7 +1190,7 @@ def sweep(root: Path) -> int:
             if not site['conditions'] and entry.get('twin_targets'):
                 continue          # the twin call itself: the target's sites,
                 # appended above, carry the guard the call inherits.
-            if not site_guarded(site, table):
+            if not site_guarded(site, site['table']):
                 return None       # a site that registers without the data
             found = found or site['conditions'][-1][0]
         return found
@@ -1188,7 +1238,9 @@ def sweep(root: Path) -> int:
 
     print(f'add_test sites walked: {add_test_sites} '
           f'(+{add_test_sites_skipped} function() templates) of {site_total}')
-    print('list() subcommands (tests/CMakeLists.txt + runner/CMakeLists.txt):')
+    inventory = ' + '.join(str(table.path.relative_to(root)) for table in tables)
+    print(f'CMake files read: {inventory}')
+    print(f'list() subcommands ({inventory}):')
     unmodelled = 0
     for subcommand in sorted(Rows.LIST_MODELLED):
         print(f'  {subcommand:<12} {list_uses.get(subcommand, 0):>4} uses  '
