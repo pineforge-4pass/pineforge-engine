@@ -93,29 +93,43 @@ def parse_massif(text: str) -> Snapshot:
 # Attribution is deliberately symbol-specific. A whole-file match would hide
 # a newly discovered adapter allocation under an already assigned lane.
 # Unknown, ambiguous, stripped and threshold leaves all go to L19j.
+# Tokens name pushing functions or element types, never data members. A tuple
+# is an all-of rule: try_emplace allocates both uint64_t unfolded entries and
+# PlacementSnapshot nodes, and only the former belongs to L19h. The unsigned
+# long spellings below are the demangled forms of that uint64_t element type.
 OWNERS = (
-    ("L19d", ("OriginRoster::push_back", "OriginRoster::positions_")),
-    ("L19h", ("BracketRoster::", "PlacementTable::unfolded_")),
-    ("L19e", ("CommandObservation", "admission::Journal::append", "admission::Journal::reserve")),
-    ("L19c", ("vector<pineforge::native_order_v7::CohortReceipt", "cohort_receipts_")),
-    ("L19b", ("ReceiptKey", "group_effect_receipt", "receipts_")),
-    ("L19a", ("successor_roots_",)),
-    ("L19j", ("PlacementSnapshot", "PlacementTable::place")),
+    ("L19d", ("OriginRoster::push_back",)),
+    ("L19h", ("BracketRoster::",
+              ("PlacementTable::try_emplace", "vector<unsigned long,"),
+              ("PlacementTable::try_emplace", "vector<unsigned long long,"),
+              ("PlacementTable::replace", "vector<unsigned long,"),
+              ("PlacementTable::replace", "vector<unsigned long long,"))),
+    ("L19e", ("CommandObservation", "Journal::append", "Journal::reserve", "Journal::next_sequence")),
+    ("L19c", ("CohortReceipt",)),
+    ("L19b", ("ReceiptKey",)),
+    ("L19a", ("WorkingRequestCore::index_committed",)),
     ("L19l", ("PineExecutionAdapter::cohort_for", "CohortFacts", "CohortRoster",
-              "exit_rank_keys_", "cohorts_by_id_", "cohort_order_", "sequence_index_",
-              "erased_minima_", "consumed_partial_exit_cycles_")),
-    ("L19i (or L3/L4)", ("input_next_ms_",)),
+              "PineExecutionAdapter::note_exit_rank_key", "PlacementTable::fold_sequence",
+              "PlacementTable::SequenceMinima",
+              ("PineExecutionAdapter::on_applied", "basic_string<char", ", long"))),
+    ("L19j", ("PlacementSnapshot", "PlacementTable::place")),
+    ("L19i (or L3/L4)", ("NativeExecutionConsumer::begin_timeframe_subscriptions",)),
     ("L19k", ("tradingview_multi_day_stamps", "TimeframeAggregator::set_native_periods")),
-    ("L3", ("PineScheduler::capture_begin", "RetainedBegin::bars", "native_module::copy_bar")),
-    ("L4", ("script_bucket_completions", "completion_flags", "source_boundaries")),
-    ("L15a/L15b", ("PineStrategyHost::set_symbol_feed", "InstrumentFeed::bars")),
-    ("L16", ("build_tradingview_magnifier", "build_magnifier_intrabar", "magnifier_intrabars")),
-    ("L7b/L17b", ("compute_equity_stats", "monthly_returns", "month_end_values")),
-    ("L8a/L8c/L18", ("vector<pineforge::Trade", "pineforge::Trade::Trade", "closed_row_prefix_",
-                     "trade_exit_phase_", "append_native_close_trade")),
-    ("L6b-1/L6b-2/L17a", ("equity_curve_", "vector<pf_equity_point_t", "vector<pineforge::EquityPoint")),
-    ("L6b-3", ("output_values_", "broker_state_hashes_", "trace_values_")),
-    ("L9a/L9s/L17a", ("fill_equity_section", "fill_trades_section", "capture_presentation")),
+    ("L3", ("PineScheduler::capture_begin", "native_module::run_batch")),
+    ("L4", ("NativeExecutionConsumer::script_bucket_completions", "PineScheduler::run_begin")),
+    ("L15a/L15b", ("PineStrategyHost::set_symbol_feed",)),
+    ("L16", ("tradingview_magnifier_bars",)),
+    ("L7b/L17b", ("compute_equity_stats",)),
+    ("L8a/L8c/L18", ("vector<pineforge::Trade", "pineforge::Trade::Trade",
+                     "BacktestEngine::record_close_trade", "NativeExecutionConsumer::closed_rows_digest",
+                     "PineExecutionAdapter::set_exit_phase")),
+    ("L6b-1/L6b-2/L17a", ("BacktestEngine::record_equity_point", "vector<pf_equity_point_s",
+                         "vector<pf_equity_point_t")),
+    ("L6b-3", ("NativeExecutionConsumer::record_script_report_point", "PineStrategyHost::scheduler_record_broker_hash",
+               "BacktestEngine::output_bar", "BacktestEngine::record_output_event",
+               "BacktestEngine::trace(", "BacktestEngine::intern_trace_name", "BacktestEngine::fill_trace_section")),
+    ("L9a/L9s/L17a", ("BacktestEngine::fill_metrics_section", "BacktestEngine::fill_trades_section",
+                     "NativeExecutionConsumer::capture_presentation")),
 )
 
 
@@ -125,7 +139,8 @@ def owner(site: str) -> tuple[str, bool]:
     if "census_chart_ohlcv(" in site or "census_feed_close_ms(" in site:
         return "caller OHLCV", True
     for lane, symbols in OWNERS:
-        if any(symbol in site for symbol in symbols):
+        if any(all(token in site for token in ((symbol,) if isinstance(symbol, str) else symbol))
+               for symbol in symbols):
             return lane, False
     return "L19j", False
 

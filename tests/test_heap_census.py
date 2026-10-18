@@ -49,9 +49,102 @@ class CensusEvidence(unittest.TestCase):
         self.assertTrue(census.flat(census.growth(low, high, 1, 4)))
         copied = "pineforge::source::PineScheduler::capture_begin()"
         self.assertEqual(census.owner(copied), ("L3", False))
-        self.assertEqual(census.owner("input_next_ms_"), ("L19i (or L3/L4)", False))
+        subscription = (
+            "std::vector<long, std::allocator<long> >::_M_fill_assign(unsigned long, long const&) "
+            "(vector.tcc:278) <- pineforge::engine_script_run_v19::NativeExecutionConsumer::"
+            "begin_timeframe_subscriptions(pineforge::engine_script_run_v19::BacktestEngine&, "
+            "pineforge::native_run_spec_v3::NativeRunSpec const&, pineforge::Bar const*, int, bool) "
+            "(src/native_execution_consumer.cpp:9313)")
+        self.assertEqual(census.owner(subscription), ("L19i (or L3/L4)", False))
         self.assertEqual(census.owner("something_else (pine_adapter.cpp)"),
                          ("L19j", False))
+
+    def test_demangled_push_functions_and_element_types_name_known_lanes(self):
+        frames = (
+            ("L19a", "pineforge::native_order_v7::WorkingRequestCore::index_committed("
+             "std::variant<pineforge::native_order_v7::AcceptedEvent> const&) (src/native_order.cpp:1206)"),
+            ("L19b", "std::vector<pineforge::native_order_v7::WorkingRequestCore::ReceiptKey, "
+             "std::allocator<pineforge::native_order_v7::WorkingRequestCore::ReceiptKey> >::"
+             "_M_realloc_insert<>(__gnu_cxx::__normal_iterator<"
+             "pineforge::native_order_v7::WorkingRequestCore::ReceiptKey*, "
+             "std::vector<pineforge::native_order_v7::WorkingRequestCore::ReceiptKey> >) (vector.tcc:453)"),
+            ("L19c", "std::vector<pineforge::native_order_v7::CohortReceipt, "
+             "std::allocator<pineforge::native_order_v7::CohortReceipt> >::"
+             "_M_default_append(unsigned long) (vector.tcc:627)"),
+            ("L19d", "pineforge::source::OriginRoster::push_back("
+             "pineforge::native_order_v7::RequestHandle const&) (include/pineforge/source/pine_adapter.hpp:945)"),
+            ("L19e", "pineforge::admission::market_admission_v2::Journal::append("
+             "std::variant<pineforge::admission::market_admission_v2::CommandEvent, "
+             "pineforge::admission::market_admission_v2::ReviewEvent, "
+             "pineforge::admission::market_admission_v2::SizingEvent>) (src/source/market_admission.cpp:151)"),
+            ("L19e", "pineforge::admission::market_admission_v2::Journal::reserve() "
+             "(src/source/market_admission.cpp:125)"),
+            ("L19h", "pineforge::source::BracketRoster::put(std::vector<unsigned char>&, "
+             "unsigned long&, unsigned long) (include/pineforge/source/pine_adapter.hpp:1027)"),
+            ("L19l", "pineforge::source::PineExecutionAdapter::note_exit_rank_key("
+             "std::__cxx11::basic_string<char> const&) (src/source/pine_adapter.cpp:6339)"),
+            ("L19l", "pineforge::source::PlacementTable::fold_sequence("
+             "std::unordered_map<std::__cxx11::basic_string<char>, "
+             "pineforge::source::PlacementTable::SequenceMinima>&, "
+             "pineforge::source::PlacementSnapshot const&) (include/pineforge/source/pine_adapter.hpp:864)"),
+            ("L19k", "pineforge::source::tradingview_multi_day_stamps("
+             "pineforge::Bar const*, int, int, std::__cxx11::basic_string<char> const&, "
+             "std::__cxx11::basic_string<char> const&) (src/source/pine_strategy_host.cpp:1601)"),
+            ("L3", "void pineforge::native_module::run_batch<CensusHost>(void*, pf_bar*, int, "
+             "char const*, char const*, bool, pf_report*) (include/pineforge/native_module.hpp:238)"),
+            ("L4", "pineforge::source::PineScheduler::run_begin(pineforge::source::PineStrategyHost&) "
+             "(src/source/pine_scheduler_native.cpp:187)"),
+            ("L15a/L15b", "pineforge::source::PineStrategyHost::set_symbol_feed("
+             "std::__cxx11::basic_string<char> const&, std::__cxx11::basic_string<char> const&, "
+             "pineforge::Bar const*, long const*, int) (src/source/pine_security_eval.cpp:1369)"),
+            ("L16", "pineforge::source::tradingview_magnifier_bars(pineforge::Bar const*, int, "
+             "std::__cxx11::basic_string<char> const&, std::__cxx11::basic_string<char> const&, "
+             "std::__cxx11::basic_string<char> const&, std::__cxx11::basic_string<char> const&) "
+             "(src/source/magnifier_intrabars.cpp:77)"),
+            ("L7b/L17b", "pineforge::metrics::compute_equity_stats(pf_equity_point_s const*, long, "
+             "double, char const*, long, long) (src/engine_metrics.cpp:301)"),
+            ("L8a/L8c/L18", "pineforge::engine_script_run_v19::NativeExecutionConsumer::closed_rows_digest("
+             "std::vector<pineforge::Trade, std::allocator<pineforge::Trade> > const&) const "
+             "(src/native_execution_consumer.cpp:11789)"),
+            ("L8a/L8c/L18", "pineforge::source::PineExecutionAdapter::set_exit_phase(unsigned long, "
+             "unsigned char) (src/source/pine_adapter.cpp:6437)"),
+            ("L6b-1/L6b-2/L17a", "pineforge::engine_script_run_v19::BacktestEngine::record_equity_point(long) "
+             "(include/pineforge/engine.hpp:1386)"),
+            ("L6b-3", "pineforge::engine_script_run_v19::NativeExecutionConsumer::record_script_report_point("
+             "pineforge::engine_script_run_v19::BacktestEngine&, long) const "
+             "(src/native_execution_consumer.cpp:8852)"),
+            ("L6b-3", "pineforge::source::PineStrategyHost::scheduler_record_broker_hash() "
+             "(src/source/pine_strategy_host.cpp:2794)"),
+            ("L6b-3", "pineforge::engine_script_run_v19::BacktestEngine::output_bar(long, long) "
+             "(src/engine_report.cpp:445)"),
+            ("L6b-3", "pineforge::engine_script_run_v19::BacktestEngine::record_output_event(int, double, "
+             "std::__cxx11::basic_string<char> const*) (src/engine_report.cpp:517)"),
+            ("L6b-3", "pineforge::engine_script_run_v19::BacktestEngine::trace("
+             "std::__cxx11::basic_string<char> const&, double) (src/engine_report.cpp:37)"),
+            ("L9a/L9s/L17a", "pineforge::engine_script_run_v19::BacktestEngine::fill_metrics_section("
+             "pineforge::ReportC*) const (src/engine_report.cpp:196)"),
+        )
+        for lane, frame in frames:
+            with self.subTest(frame=frame):
+                low = census.parse_massif(massif(f"n1: 8 (heap allocation functions)\n n0: 8 0x123: {frame}\n", 8))
+                high = census.parse_massif(massif(f"n1: 32 (heap allocation functions)\n n0: 32 0x456: {frame}\n", 32))
+                row, = census.growth(low, high, 1, 4)
+                self.assertEqual(row["lane"], lane)
+                self.assertFalse(row["admitted"])
+                self.assertEqual(row["bytes_per_unit"], 8.0)
+
+    def test_unfolded_vector_is_distinguished_from_placement_nodes_and_id_minima(self):
+        push = ("pineforge::source::PlacementTable::try_emplace<"
+                "pineforge::source::PlacementSnapshot const&>(unsigned long, "
+                "pineforge::source::PlacementSnapshot const&) (include/pineforge/source/pine_adapter.hpp:772)")
+        vector = "std::vector<unsigned long, std::allocator<unsigned long> >::_M_realloc_insert<unsigned long const&>()"
+        node = "std::make_unique<pineforge::source::PlacementSnapshot, pineforge::source::PlacementSnapshot const&>()"
+        self.assertEqual(census.owner(vector + " <- " + push), ("L19h", False))
+        self.assertEqual(census.owner(node + " <- " + push), ("L19j", False))
+        self.assertEqual(census.owner("pineforge::source::PlacementTable::fold_sequence("
+                         "std::unordered_map<std::__cxx11::basic_string<char>, "
+                         "pineforge::source::PlacementTable::SequenceMinima>&, "
+                         "pineforge::source::PlacementSnapshot const&)"), ("L19l", False))
 
     def test_no_stack_or_unexpanded_tree_cannot_pass(self):
         for text in ("", massif("", 40),

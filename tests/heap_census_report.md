@@ -193,3 +193,43 @@ a preprocessor feature branch and validates streamed ids from T records.
   reconciliation with the F3 wording. L19l is not gated on this observation.
 - OPEN FROZEN: none encountered. No frozen file, P00 declaration, measured
   runtime source, source/header ABI list or existing fixture/helper was edited.
+
+## Fix round 1: demangled allocation ownership
+
+The Fable read of PR #421 reports the original Python controls and default
+native fixture green on the lab. It also identifies driver logic defects;
+neither that green result nor this source-only fix is a measured census.
+No code, test or profiler was executed on this machine for this round.
+
+OWNERS now matches pushing functions and allocated element types instead of
+data-member names. Admission matching uses `Journal::append`, `Journal::reserve`
+and `Journal::next_sequence`, which survive the intervening
+`market_admission_v2` inline namespace. Nonexistent completion, magnifier,
+metric and report helper names were removed. Every known owner remains
+non-admitted: correcting an L19j label cannot turn growth into a PASS.
+
+The source read behind the replacement keys is:
+
+| Owner | Demangled function/type keys | Source of allocation |
+|---|---|---|
+| L19a | `WorkingRequestCore::index_committed` | src/native_order.cpp:1189, append at :1206 |
+| L19b/L19c | `ReceiptKey`, `CohortReceipt` | src/native_order.cpp:1505 and :5206; :1284 and :1306 |
+| L19d | `OriginRoster::push_back` | include/pineforge/source/pine_adapter.hpp:941 |
+| L19e | `Journal::append`, `Journal::reserve`, `Journal::next_sequence`, `CommandObservation` | src/source/market_admission.cpp:144, :125, :117 and :177 |
+| L19h | `BracketRoster` methods; `PlacementTable::try_emplace`/`replace` with an unsigned 64-bit vector element | include/pineforge/source/pine_adapter.hpp:772 and :790 |
+| L19l | `cohort_for`, `CohortFacts`, `CohortRoster`, `note_exit_rank_key`, `fold_sequence`, `SequenceMinima`; signed string-map values under `on_applied` | src/source/pine_adapter.cpp:3010, :6331, :24790; include/pineforge/source/pine_adapter.hpp:863 |
+| L19i | `NativeExecutionConsumer::begin_timeframe_subscriptions` | src/native_execution_consumer.cpp:9266, assign at :9313 |
+| L19k | `tradingview_multi_day_stamps`, `TimeframeAggregator::set_native_periods` | src/source/pine_strategy_host.cpp:1555; src/timeframe.cpp:1769 |
+| L3/L4 | `PineScheduler::capture_begin`, `native_module::run_batch`; `script_bucket_completions`, `PineScheduler::run_begin` | src/source/pine_scheduler_native.cpp:19 and :176; include/pineforge/native_module.hpp:229; src/native_execution_consumer.cpp:8918 |
+| L15/L16 | `PineStrategyHost::set_symbol_feed`, `tradingview_magnifier_bars` | src/source/pine_security_eval.cpp:1339; src/source/magnifier_intrabars.cpp:70 |
+| L7/L8 | `compute_equity_stats`; `Trade`, `record_close_trade`, `closed_rows_digest`, `set_exit_phase` | src/engine_metrics.cpp:203; src/engine_orders.cpp:216; src/native_execution_consumer.cpp:11781; src/source/pine_adapter.cpp:6435 |
+| L6b | `record_equity_point`; `record_script_report_point`, `scheduler_record_broker_hash`, `output_bar`, `record_output_event`, `trace`, `intern_trace_name`, `fill_trace_section` | include/pineforge/engine.hpp:1380; src/native_execution_consumer.cpp:8841; src/source/pine_strategy_host.cpp:2790; src/engine_report.cpp:436, :489, :30, :20 and :242 |
+| L9/L17 | `fill_metrics_section`, `fill_trades_section`, `capture_presentation` | src/engine_report.cpp:192 and :103; src/native_execution_consumer.cpp:12307 |
+
+The unfolded-vector rule requires both its pushing method and vector element
+type because the same `try_emplace` also allocates `PlacementSnapshot` nodes.
+Those nodes retain their existing K1/K5 attribution or unresolved L19j status;
+per-id minima are matched before the generic placement-node rule. Unknown and
+unsymbolized sites retain the same refusal behavior. The controls feed
+demangled frames, including inline namespaces, through real Massif parsing and
+growth accounting, rather than inventing member-name frames.
