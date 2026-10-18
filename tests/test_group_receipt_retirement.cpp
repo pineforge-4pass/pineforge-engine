@@ -380,6 +380,25 @@ ConsumerRun consumer_run(const k3_book::BookConfig& config, bool window,
     struct ReceiptBook : k3_book::BookHost {
         using k3_book::BookHost::BookHost;
         using k3_book::BookHost::execution_consumer;
+
+        void on_native_run_begin() override {
+            k3_book::BookHost::on_native_run_begin();
+            // The shared random book leaves every member in cohort 0. Seed
+            // real cross-cohort effects before its first calculation instead.
+            for (const auto effect : {no::GroupEffect::Cancel, no::GroupEffect::Reduce}) {
+                const std::uint64_t group = 0x4c31394200000000ULL
+                    + static_cast<std::uint64_t>(effect);
+                for (std::int64_t cohort : {1, 2}) {
+                    no::Request sibling{no::Transact{10}, "l19b-sibling", ""};
+                    sibling.trigger = no::Limit{1.0};
+                    sibling.group = no::Member{group, cohort, effect};
+                    REQUIRE(submit(sibling).status == no::SubmitStatus::Accepted);
+                }
+                no::Request filler{no::Transact{1}, "l19b-filler", ""};
+                filler.group = no::Member{group, 3, effect};
+                REQUIRE(submit(filler).status == no::SubmitStatus::Accepted);
+            }
+        }
     } host(config);
     auto& consumer = as_native_consumer(host.execution_consumer());
     consumer.set_retention_override(window ? NativeEventRetention::Window
