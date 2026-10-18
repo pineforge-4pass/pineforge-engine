@@ -44,7 +44,7 @@ public:
                 strategy_exit("X", "L", 101.0, std::numeric_limits<double>::quiet_NaN());
         }
     }
-    const std::vector<Trade>& rows() const { return trades_; }
+    const TradeLedger& rows() const { return trades_; }
 };
 
 std::vector<Bar> session_bars(int64_t day, int reset_hour) {
