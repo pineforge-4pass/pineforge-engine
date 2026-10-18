@@ -3,7 +3,7 @@
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
-
+#include <pineforge/native_bar_views.hpp>
 #include "native_calendar_memo.hpp"
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
@@ -2396,6 +2396,30 @@ private:
     };
     std::optional<CalcGroup> calc_group_;
     bool calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const;
+
+public:
+    // CR-150 V1/V2, CORE-TOP rev 6 amendment (10-18 19:24), changes 1-2:
+    // staging only replaces pending descriptors/source. It never judges the
+    // lifecycle or changes active state; only an applied configure binds and
+    // judges pending data against candidate metadata. Refused configure or
+    // unwound begin preparation discards it. No Ready restaging; all existing
+    // lifecycle outcomes remain configure's responsibility.
+    // Copy nullable descriptors/table, never bar/close arrays. Descriptor
+    // allocation throws std::bad_alloc with the prior pending slot preserved.
+    // Nonzero count with a null table throws coded engine_invariant.
+    void stage_instrument_feed_views(const NativeInstrumentFeedView* const* views,
+                                     std::size_t count);
+    // Transfer exclusive ownership to the pending slot; null clears it and
+    // replacement destroys its old pending source, without touching active
+    // bindings. Binding checks source metadata through the normalizer. A
+    // lower-path source bound at stream_begin is engine_invariant.
+    void stage_lower_path_source(std::unique_ptr<NativeLowerPathSource> source) noexcept;
+    // Allocation-free query of the active binding in Ready/Running: bound
+    // descriptors/source and the kernel's current segment. Empty when nothing
+    // is bound and after detachment; the pending slot is never visible.
+    // Borrowed pointers expire on replacement/detachment/destruction. A Ready
+    // binding already detached is engine_invariant at admit_public_begin.
+    NativeBarViews bar_views() const noexcept;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
