@@ -301,7 +301,7 @@ def test_serialization_fault_discards_all_prepared_bytes_and_closes_files(tmp_pa
     monkeypatch.setattr(run_json, "_stream_json", fail_after_trades)
     status, text, _, library = invoke(tmp_path, monkeypatch)
     assert status == 1 and library.installed
-    assert json.loads(text)["code"] == "harness_internal_error"
+    assert json.loads(text)["code"] == "report_sink_failed"
     assert len(text.splitlines()) == 1 and "[partial" not in text
     assert files and all(file.closed for file in files)
 

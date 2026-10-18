@@ -5349,15 +5349,21 @@ class _JSONColumn:
         self.empty = True
 
     def append(self, value):
-        if not self.empty:
-            self.file.write(",")
-        self.file.write(json.dumps(value, separators=(",", ":"), allow_nan=False))
+        try:
+            if not self.empty:
+                self.file.write(",")
+            self.file.write(json.dumps(value, separators=(",", ":"), allow_nan=False))
+        except OSError as error:
+            raise RunFailure("report sink write failed", "report_sink_failed") from error
         self.empty = False
 
 
 def _json_temporary(resources, directory):
-    return resources.enter_context(tempfile.TemporaryFile(
-        mode="w+", encoding="ascii", newline="\n", dir=directory))
+    try:
+        return resources.enter_context(tempfile.TemporaryFile(
+            mode="w+", encoding="ascii", newline="\n", dir=directory))
+    except OSError as error:
+        raise RunFailure("report sink open failed", "report_sink_failed") from error
 
 
 def _stream_json(value, destination):
@@ -5400,10 +5406,13 @@ def _stream_json(value, destination):
 
 def _prepare_stream_report(document, resources, directory):
     file = _json_temporary(resources, directory)
-    _stream_json(document, file)
-    file.write("\n")
-    file.flush()  # disk errors must precede the first stdout byte
-    file.seek(0)
+    try:
+        _stream_json(document, file)
+        file.write("\n")
+        file.flush()  # disk errors must precede the first stdout byte
+        file.seek(0)
+    except OSError as error:
+        raise RunFailure("report sink write failed", "report_sink_failed") from error
     return file
 
 
