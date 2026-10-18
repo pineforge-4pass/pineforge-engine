@@ -65,7 +65,12 @@
       "io",
       "columns",
       "value",
-      "empty"
+      "empty",
+      "size",
+      "count",
+      "sidecar",
+      "order",
+      "timeframe_invalid"
      ]
     }
    },
@@ -1149,7 +1154,9 @@
       "transpiled",
       "chart_tz",
       "magnifier_volume_weighted",
-      "bench"
+      "bench",
+      "ohlcv_bin",
+      "verify_bin"
      ]
     }
    },
@@ -1539,7 +1546,13 @@
       "unknown_field",
       "invalid_arrays",
       "times_not_increasing",
-      "restore_failed"
+      "restore_failed",
+      "size",
+      "count",
+      "sidecar",
+      "close_file",
+      "empty",
+      "io"
      ]
     },
     "script_tf": {

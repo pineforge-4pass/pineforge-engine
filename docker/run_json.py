@@ -158,13 +158,16 @@ import hashlib
 import io
 import json
 import math
+import mmap
 import os
 import re
+import stat
 import struct
 import sys
 import time
 import traceback
 import types
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -2537,6 +2540,166 @@ def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
     return bars, n, feed_hasher.hexdigest()
 
 
+class _MappedBars(dict):
+    """Own the maps and their only durable ctypes views, released in that order.
+
+    The mapping itself is the chart/feed record so exception tracebacks cannot
+    retain a second array reference in a loader's local variables. Callers must
+    not retain a borrowed array beyond close(); main owns these with ExitStack.
+    """
+
+    def __init__(self):
+        super().__init__(bars=None, close_ms=None)
+        self.maps = []
+
+    def close(self):
+        self["bars"] = self["close_ms"] = None
+        for mm in reversed(self.maps):
+            mm.close()
+        self.maps.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def _map_bar_file(path, owner, *, feed=False, close_count=None):
+    """Check fstat before mmap; the read-only descriptor never permits file writes."""
+    import pf_bars
+
+    reason = "close_file" if close_count is not None else "feed_unreadable" if feed else "io"
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise pf_bars.BarsError(f"binary bars: {path}: not a regular file", reason, feed=feed)
+        if close_count is None:
+            count = pf_bars.bar_count(info.st_size, feed=feed)
+        else:
+            pf_bars.check_close_size(info.st_size, close_count)
+            count = close_count
+        mm = mmap.mmap(fd, 0, access=mmap.ACCESS_COPY)
+        owner.maps.append(mm)
+        if hasattr(mm, "madvise") and hasattr(mmap, "MADV_SEQUENTIAL"):
+            try:
+                mm.madvise(mmap.MADV_SEQUENTIAL)
+            except OSError:
+                pass  # an advisory hint, never a prerequisite to read the file
+        return mm, count
+    except (OSError, ValueError) as error:
+        if isinstance(error, pf_bars.BarsError):
+            raise
+        raise pf_bars.BarsError(f"binary bars: {path}: {error}", reason, feed=feed) from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _scan_bar_maps(mm, close_map, *, feed, verify_bin):
+    """One bounded pass: canonical identity, optional digests, row checks/order.
+
+    memoryview slices go straight to hashlib; no bytes/list/ctypes copy of the
+    tape is made. The bar-aligned chunks stay below 1 MiB. Feed identity
+    interleaves the exact bar and close bytes, including volume NaN signs.
+    """
+    import pf_bars
+
+    source = hashlib.sha256(pf_bars.SYMBOL_VALUES_PREFIX if feed else pf_bars.SOURCE_VALUES_PREFIX)
+    plain = hashlib.sha256() if verify_bin == "full" else None
+    close_hash = hashlib.sha256() if feed and verify_bin == "full" else None
+    previous = previous_close = None
+    # Feeds retain CSV precedence: every first-pass value/range check precedes
+    # the first order/close defect, without retaining rows or rescanning them.
+    pending = None
+    chunk_size = pf_bars.BUFFER_SIZE // pf_bars.BAR_RECORD.size * pf_bars.BAR_RECORD.size
+    with memoryview(mm) as view, ExitStack() as views:
+        closes = views.enter_context(memoryview(close_map)) if feed else None
+        for start in range(0, len(view), chunk_size):
+            end = min(start + chunk_size, len(view))
+            with view[start:end] as chunk:
+                if plain is not None:
+                    plain.update(chunk)
+                if not feed:
+                    source.update(chunk)
+                elif close_hash is not None:
+                    with closes[start // 48 * 8:end // 48 * 8] as close_chunk:
+                        close_hash.update(close_chunk)
+                for offset in range(start, end, pf_bars.BAR_RECORD.size):
+                    o, h, l, c, volume, timestamp = pf_bars.BAR_RECORD.unpack_from(view, offset)
+                    if (not all(math.isfinite(x) for x in (o, h, l, c))
+                            or volume < 0 or math.isinf(volume)):
+                        raise pf_bars.BarsError("binary bars: prices must be finite and volume nonnegative or NaN",
+                                                "feed_value_invalid" if feed else "value", feed=feed)
+                    if not feed:
+                        pf_bars.check_order(previous, timestamp)
+                    else:
+                        close_offset = offset // 48 * 8
+                        close = pf_bars.CLOSE_RECORD.unpack_from(closes, close_offset)[0]
+                        if abs(timestamp) > pf_bars.STAMP_MAX or abs(close) > pf_bars.STAMP_MAX:
+                            raise pf_bars.BarsError("binary bars: time outside the safe integer range",
+                                                    "feed_time_out_of_range", feed=True)
+                        if previous is not None and pending is None:
+                            if timestamp <= previous:
+                                pending = "feed_not_increasing"
+                            elif previous_close <= previous or previous_close > timestamp:
+                                pending = "feed_close_time_invalid"
+                        previous_close = close
+                        with view[offset:offset + 48] as bar_bytes, closes[close_offset:close_offset + 8] as close_bytes:
+                            source.update(bar_bytes)
+                            source.update(close_bytes)
+                    previous = timestamp
+    if feed:
+        if pending is not None:
+            raise pf_bars.BarsError("binary bars: invalid timestamp/close order", pending, feed=True)
+        if previous_close <= previous:
+            raise pf_bars.BarsError("binary bars: close must be after open", "feed_close_time_invalid", feed=True)
+    return source.hexdigest(), plain.hexdigest() if plain else None, close_hash.hexdigest() if close_hash else None
+
+
+def load_bars_bin(path: Path, *, verify_bin="full", feed=False):
+    """Map a committed pf_bar_t/v1 generation; use as a context manager.
+
+    full checks both digests; sidecar checks metadata only. Both modes scan
+    values/order and compute the existing provenance identity in O(1) heap.
+    A malformed zero-byte binary is refused empty; a legitimate zero-bar feed
+    remains a header-only CSV (QC1a), never a zero-record mapping.
+    """
+    import pf_bars
+
+    if verify_bin not in ("full", "sidecar"):
+        raise _request_invalid("--verify-bin must be full or sidecar", "verify_bin")
+    owner = _MappedBars()
+    try:
+        if sys.byteorder != "little" or ctypes.sizeof(BarC) != pf_bars.BAR_RECORD.size:
+            raise pf_bars.BarsError("binary bars require a little-endian pf_bar_t/v1 host",
+                                    "feed_value_invalid" if feed else "value", feed=feed)
+        mm, count = _map_bar_file(path, owner, feed=feed)
+        metadata = pf_bars.read_sidecar(pf_bars.sidecar_path(path), feed=feed)
+        first_ts = pf_bars.CLOSE_RECORD.unpack_from(mm, 40)[0]
+        last_ts = pf_bars.CLOSE_RECORD.unpack_from(mm, 48 * (count - 1) + 40)[0]
+        pf_bars.check_sidecar(metadata, count=count, first_ts=first_ts, last_ts=last_ts, feed=feed)
+        close_map = _map_bar_file(pf_bars.close_path(path), owner, feed=True, close_count=count)[0] if feed else None
+        source, digest, close_digest = _scan_bar_maps(mm, close_map, feed=feed, verify_bin=verify_bin)
+        pf_bars.check_sidecar(metadata, count=count, first_ts=first_ts, last_ts=last_ts,
+                              sha256=digest, close_sha256=close_digest, feed=feed)
+        owner.update(n=count, source_values_sha256=source,
+                     record={"bars": count, "source_values_sha256": source,
+                             "first_ts": first_ts, "last_ts": last_ts})
+        # Only construct exported buffers after every refusal check has passed.
+        owner["bars"] = (BarC * count).from_buffer(mm)
+        if feed:
+            owner["close_ms"] = (ctypes.c_int64 * count).from_buffer(close_map)
+        return owner
+    except BaseException as error:
+        owner.close()
+        if isinstance(error, pf_bars.BarsError):
+            raise (SymbolFeedsError if feed else ChartBarsError)(str(error), error.code_args["reason"]) from None
+        raise
+
+
 # The exports every run calls; a library without one is
 # strategy_library_incompatible{reason: symbol_missing, missing: <name>}.
 _REQUIRED_EXPORTS = ("strategy_create", "strategy_set_input", "strategy_set_override",
@@ -2622,11 +2785,13 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     # Other symbols' data for request.security (engine 1.0.0+, see
     # load_symbol_feeds). hasattr-guarded: install_symbol_feeds fails by name
     # on a library without them.
-    if hasattr(lib, "strategy_set_symbol_feed"):
-        lib.strategy_set_symbol_feed.argtypes = [
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
-            ctypes.POINTER(BarC), ctypes.POINTER(ctypes.c_int64), ctypes.c_int]
-        lib.strategy_set_symbol_feed.restype = ctypes.c_int
+    for name in ("strategy_set_symbol_feed", "strategy_set_symbol_feed_borrowed_v1"):
+        if hasattr(lib, name):
+            setter = getattr(lib, name)
+            setter.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
+                ctypes.POINTER(BarC), ctypes.POINTER(ctypes.c_int64), ctypes.c_int]
+            setter.restype = ctypes.c_int
     if hasattr(lib, "strategy_set_symbol_facts"):
         lib.strategy_set_symbol_facts.argtypes = [
             ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
@@ -3165,14 +3330,8 @@ def _symbol_facts(doc, symbol: str) -> list:
     return facts
 
 
-def load_symbol_feeds(index_path: Path) -> list:
-    """Read and check the --symbol-feeds index and every feed it names before
-    any strategy state exists. Each symbol key is the exact string a script's
-    request.security passes (prefix and suffix included: "BINANCE:ETHUSDT",
-    "ETHUSDT" and "BINANCE:ETHUSDT.P" are three symbols). An entry holds "feeds"
-    ({timeframe: CSV path, relative to the index}) and optionally "syminfo".
-    Returns one entry per symbol: {"symbol", "facts", "feeds"}. Any problem is a
-    SymbolFeedsError naming it."""
+def _read_symbol_index(index_path):
+    """One parser for chart selection and feeds; duplicate keys remain refusals."""
     def unique(pairs):
         out = {}
         for k, v in pairs:
@@ -3195,6 +3354,66 @@ def load_symbol_feeds(index_path: Path) -> list:
     if not isinstance(symbols, dict):
         raise SymbolFeedsError('--symbol-feeds: the index must be {"symbols": {...}}',
                                "index_shape")
+    return doc
+
+
+def _index_chart_path(doc, index_path):
+    if "chart" not in doc:
+        return None
+    chart = doc["chart"]
+    if (not isinstance(chart, dict) or set(chart) != {"symbol", "tf", "file"}
+            or not isinstance(chart["symbol"], str)
+            or not isinstance(chart["file"], str) or not chart["file"]
+            or not _file_name_ok(chart["file"]) or not chart["file"].endswith(".bin")):
+        raise SymbolFeedsError('--symbol-feeds: chart must be {"symbol": STR, "tf": TF, "file": BIN}',
+                               "index_shape")
+    import pf_bars
+    try:
+        pf_bars.canonical_timeframe(chart["tf"])
+    except pf_bars.BarsError as error:
+        raise ChartBarsError(str(error), error.code_args["reason"]) from None
+    return index_path.parent / chart["file"]
+
+
+def _resolve_chart_source(args):
+    """Exactly one chart; an index and explicit binary may name the same file."""
+    chart = (_index_chart_path(_read_symbol_index(args.symbol_feeds), args.symbol_feeds)
+             if args.symbol_feeds else None)
+    if args.ohlcv is not None and (args.ohlcv_bin is not None or chart is not None):
+        raise _request_invalid("error: --ohlcv requires exactly one chart source", "ohlcv")
+    if args.ohlcv_bin is not None and chart is not None:
+        same = args.ohlcv_bin.resolve() == chart.resolve()
+        if not same:
+            try:
+                same = os.path.samefile(args.ohlcv_bin, chart)
+            except OSError:
+                pass
+        if not same:
+            raise _request_invalid("error: --ohlcv-bin and the index chart must name the same file", "ohlcv_bin")
+    binary = args.ohlcv_bin if args.ohlcv_bin is not None else chart
+    if args.ohlcv is None and binary is None:
+        raise _request_invalid("error: one of --ohlcv, --ohlcv-bin or the index chart is required", "ohlcv")
+    if binary is not None:
+        args.ohlcv_bin = binary
+        args.ohlcv = binary  # the effective input path used by the report
+
+
+def load_symbol_feeds(index_path: Path, *, verify_bin="full") -> list:
+    """Read all CSV/binary feeds before state construction, relative to the index.
+
+    Each exact symbol key holds facts and feeds as before. Binary feed records
+    own their views; standalone callers close_symbol_feeds after strategy_free.
+    A partially read index closes every map before propagating its refusal.
+    """
+    doc = _read_symbol_index(index_path)
+    _index_chart_path(doc, index_path)
+    with ExitStack() as pending:
+        result = _load_index_feeds(index_path, doc["symbols"], verify_bin, pending)
+        pending.pop_all()  # success transfers ownership to the returned records
+        return result
+
+
+def _load_index_feeds(index_path, symbols, verify_bin, pending):
     if len(symbols) > _SYMBOL_FEEDS_MAX:
         raise SymbolFeedsError(f"--symbol-feeds: more than {_SYMBOL_FEEDS_MAX} symbols",
                                "too_many_symbols")
@@ -3226,20 +3445,54 @@ def load_symbol_feeds(index_path: Path) -> list:
                     "feed_path_invalid")
             named[canonical] = index_path.parent / file
         facts = _symbol_facts(entry.get("syminfo"), symbol)
-        out.append({"symbol": symbol, "facts": facts,
-                    "feeds": [_load_symbol_feed(path, symbol, tf)
-                              for tf, path in named.items()]})
+        loaded = []
+        for tf, path in named.items():
+            if path.suffix == ".bin":
+                feed = pending.enter_context(load_bars_bin(path, verify_bin=verify_bin, feed=True))
+                feed["timeframe"] = tf
+            else:
+                feed = _load_symbol_feed(path, symbol, tf)
+            loaded.append(feed)
+        out.append({"symbol": symbol, "facts": facts, "feeds": loaded})
     return out
+
+
+def close_symbol_feeds(symbols):
+    """Release ctypes views before their maps, after every installed state is freed."""
+    for sym in symbols or ():
+        for feed in sym["feeds"]:
+            if isinstance(feed, _MappedBars):
+                feed.close()
+
+
+def _run_symbol_feeds(args, binary_inputs):
+    if not args.symbol_feeds:
+        return None
+    # Keep the legacy call shape on the default path, including host test seams.
+    symbols = (load_symbol_feeds(args.symbol_feeds) if args.verify_bin == "full"
+               else load_symbol_feeds(args.symbol_feeds, verify_bin=args.verify_bin))
+    binary_inputs.callback(close_symbol_feeds, symbols)
+    return symbols
+
+
+def _release_copied_feeds(symbols):
+    for sym in symbols or ():
+        for feed in sym["feeds"]:
+            if not isinstance(feed, _MappedBars):
+                feed["bars"] = feed["close_ms"] = None
 
 
 def install_symbol_feeds(lib, strat, symbols) -> None:
     """Install what load_symbol_feeds read: each symbol's facts, then its feeds.
-    The engine copies the arrays, so one load serves every state of a run.
+    CSV arrays are copied. Binary views are borrowed through strategy_free.
     A setter's refusal keeps run_json's text, with the engine's code and
     arguments for it when the library reports one (the engine names why it
     refused: a specific symbol_feeds_refused reason, out_of_memory, an engine
     fault), else symbol_feeds_refused{reason: engine_refused}."""
     missing = [n for n in _SYMBOL_FEED_SETTERS if not hasattr(lib, n)]
+    if (any(isinstance(feed, _MappedBars) for sym in symbols for feed in sym["feeds"])
+            and not hasattr(lib, "strategy_set_symbol_feed_borrowed_v1")):
+        missing.append("strategy_set_symbol_feed_borrowed_v1")
     if missing:
         raise SymbolFeedsError(
             f"--symbol-feeds: the strategy library has no {', '.join(missing)}, so "
@@ -3265,8 +3518,10 @@ def install_symbol_feeds(lib, strat, symbols) -> None:
             if lib.strategy_set_symbol_facts(strat, key, field.encode(), text.encode()) != 0:
                 refused(f"the {field} of {sym['symbol']}")
         for feed in sym["feeds"]:
-            if lib.strategy_set_symbol_feed(strat, key, feed["timeframe"].encode(),
-                                            feed["bars"], feed["close_ms"], feed["n"]) != 0:
+            setter = (lib.strategy_set_symbol_feed_borrowed_v1 if isinstance(feed, _MappedBars)
+                      else lib.strategy_set_symbol_feed)
+            if setter(strat, key, feed["timeframe"].encode(),
+                      feed["bars"], feed["close_ms"], feed["n"]) != 0:
                 refused(f"the feed {sym['symbol']}@{feed['timeframe']}")
 
 
@@ -3837,7 +4092,7 @@ _RUN_REQUEST_OPTIONS = frozenset({
     "so", "ohlcv", "inputs", "overrides", "input_tf", "script_tf", "bar_magnifier",
     "magnifier_samples", "magnifier_dist", "generated_cpp", "transpiled", "syminfo",
     "trade_start_ms", "chart_tz", "magnifier_volume_weighted", "bench", "warmup",
-    "repeats", "symbol_feeds",
+    "repeats", "symbol_feeds", "ohlcv_bin", "verify_bin",
 })
 
 
@@ -4193,11 +4448,16 @@ def _capabilities_main(args) -> int:
     import selected_window_report as swr
     lib = load_strategy(args.so)
     document = swr.capabilities_record(_runtime_supports_selected_window(lib))
+    # The harness now implements the full file contract; the borrowed runtime
+    # export is the remaining library requirement (QC7a). Old builds omit it.
+    if (sys.byteorder == "little" and ctypes.sizeof(BarC) == 48
+            and all(hasattr(lib, name) for name in (*_SYMBOL_FEED_SETTERS, "strategy_set_symbol_feed_borrowed_v1"))):
+        document["capabilities"]["bars_bin_version"] = 1
     return _write_report(json.dumps(document, separators=(",", ":"), allow_nan=False) + "\n")
 
 
 def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
-                  magnifier_samples, magnifier_dist) -> int:
+                  magnifier_samples, magnifier_dist, binary_inputs) -> int:
     import request_feed_inventory
     import selected_window_report as swr
 
@@ -4223,6 +4483,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             swr.support_policy())
     except request_feed_inventory.InventoryAdmissionError as error:
         raise RunFailure(error.message, error.code, error.detail) from None
+
+    # Keep admission ahead of all index/feed I/O. Selected chart identity is
+    # still CSV-only in 1.7.0 (QC6a); its symbol feeds may be borrowed binaries.
+    _resolve_chart_source(args)
+    if args.ohlcv_bin is not None:
+        raise _request_invalid("error: selected-window mode requires a CSV chart", "ohlcv_bin")
 
     # 4. Preflight: the primary feed is read once and planned by the native planner.
     _advance(phases, "preflight")
@@ -4268,7 +4534,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         return _write_report(json.dumps(
             {"engine": "pineforge", "validation_only": True, "report_window": window},
             separators=(",", ":"), allow_nan=False) + "\n")
-    symbol_feeds = load_symbol_feeds(args.symbol_feeds) if args.symbol_feeds else None
+    symbol_feeds = _run_symbol_feeds(args, binary_inputs)
 
     # 5. Execution begins before the strategy library loads.
     _advance(phases, "execution")
@@ -4304,9 +4570,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         return st
 
     state = _make_state()
-    for sym in symbol_feeds or ():
-        for feed_record in sym["feeds"]:
-            feed_record["bars"] = feed_record["close_ms"] = None
+    _release_copied_feeds(symbol_feeds)
     report = ReportC()
     binding = None
     started = time.time()
@@ -4514,7 +4778,8 @@ def main(argv=None) -> int:
     if tokens and tokens[0] == "csv2bin":
         return _csv2bin_main(tokens[1:])
     try:
-        return _main(argv)
+        with ExitStack() as binary_inputs:
+            return _main(argv, binary_inputs)
     except RunFailure as failure:
         write_failure(str(failure), failure.code, failure.code_args)
         return failure.exit_status
@@ -4557,11 +4822,11 @@ def _legacy_abbreviations(argv, legacy_long, all_long):
     return out
 
 
-def _main(argv=None) -> int:
+def _main(argv, binary_inputs) -> int:
     ap = _ArgumentParser(description=__doc__,
                          formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--so",        type=Path, required=True, help="strategy.so path")
-    ohlcv_option = ap.add_argument("--ohlcv", type=Path, required=True, help="OHLCV CSV path")
+    ap.add_argument("--ohlcv", type=Path, default=None, help="OHLCV CSV path")
     ap.add_argument("--inputs",    default="",
                     help='JSON object overriding input.*() values, e.g. \'{"Fast Length": "8"}\'')
     ap.add_argument("--overrides", default="",
@@ -4619,6 +4884,10 @@ def _main(argv=None) -> int:
     # The long options of the command line BEFORE the selected-window flags below; see
     # _legacy_abbreviations (the option strings of the parser, captured here and not typed out).
     legacy_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    ap.add_argument("--ohlcv-bin", type=Path, default=None,
+                    help="pf_bar_t/v1 binary chart (or the symbol index chart); alternative to --ohlcv.")
+    ap.add_argument("--verify-bin", choices=("full", "sidecar"), default="full",
+                    help="Binary verification: full checks SHA-256; sidecar checks metadata. Both check order.")
     # Selected-window mode (selected-window/v1; see the section above main). All of these are
     # absent from an ordinary command line, which then behaves exactly as before.
     ap.add_argument("--report-policy", default=None,
@@ -4653,17 +4922,17 @@ def _main(argv=None) -> int:
                     help="Refused: this build offers no results digest.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
-    # --capabilities-json is a probe of the runtime: it needs --so and no OHLCV. Every other
-    # command line keeps --ohlcv required, exactly as before.
-    probe = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    probe.add_argument("--capabilities-json", action="store_true")
-    if probe.parse_known_args(argv)[0].capabilities_json:
-        ohlcv_option.required = False
     args = ap.parse_args(argv)
 
     if args.capabilities_json:
         return _capabilities_main(args)
+    if args.ohlcv is None and args.ohlcv_bin is None and args.symbol_feeds is None:
+        ap.error("the following arguments are required: --ohlcv")
+    if args.ohlcv is not None and args.ohlcv_bin is not None:
+        raise _request_invalid("error: --ohlcv and --ohlcv-bin are mutually exclusive", "ohlcv_bin")
     selected = _selected_requested(args)
+    if selected and args.ohlcv_bin is not None:
+        raise _request_invalid("error: selected-window mode requires a CSV chart", "ohlcv_bin")
     if (selected or args.report_shape is not None or args.curve_point_budget is not None
             or args.results_digest is not None):
         import selected_window_report
@@ -4682,17 +4951,24 @@ def _main(argv=None) -> int:
 
     if selected:
         return _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
-                             magnifier_samples, magnifier_dist)
+                             magnifier_samples, magnifier_dist, binary_inputs)
+
+    _resolve_chart_source(args)
 
     # Ordinary mode. --run-phase-fd alone adds the run's phase records (preflight, execution,
     # result_assembly through the engine's observer, serialization, completed after the
     # flush); the report and every other output are unchanged. None without the flag.
     phases = _open_phases(args.run_phase_fd, always=False)
     _advance(phases, "preflight")
-    bars, n, source_feed_sha256 = load_bars(args.ohlcv)
+    if args.ohlcv_bin is not None:
+        chart = binary_inputs.enter_context(load_bars_bin(args.ohlcv_bin, verify_bin=args.verify_bin))
+        n, source_feed_sha256 = chart["n"], chart["source_values_sha256"]
+    else:
+        csv_bars, n, source_feed_sha256 = load_bars(args.ohlcv)
+        chart = {"bars": csv_bars}
     if n == 0:
         raise _bars_unreadable(f"--ohlcv: {args.ohlcv}: no bars", "empty")
-    first_ts, last_ts = bars[0].timestamp, bars[n - 1].timestamp
+    first_ts, last_ts = chart["bars"][0].timestamp, chart["bars"][n - 1].timestamp
 
     _advance(phases, "execution")
     lib = load_strategy(args.so)
@@ -4741,7 +5017,7 @@ def _main(argv=None) -> int:
 
     def _run(st, rep):
         lib.run_backtest_full(
-            st, bars, n,
+            st, chart["bars"], n,
             input_tf, script_tf,
             bar_magnifier, magnifier_samples, magnifier_dist,
             ctypes.byref(rep),
@@ -4755,7 +5031,7 @@ def _main(argv=None) -> int:
     # stdout; main() prints it.
     timing = None
     if args.symbol_feeds:
-        symbol_feeds = load_symbol_feeds(args.symbol_feeds)
+        symbol_feeds = _run_symbol_feeds(args, binary_inputs)
     if args.bench:
         warmup = max(0, int(args.warmup))
         repeats = max(1, int(args.repeats))
@@ -4781,11 +5057,9 @@ def _main(argv=None) -> int:
 
     # --- Body run: one configured run for trades / metrics / diagnostics. ---
     state = _make_state()
-    # The body state is the last one installed and the engine copied the
-    # feeds' arrays: release them before the run (the records stay).
-    for sym in symbol_feeds or ():
-        for feed in sym["feeds"]:
-            feed["bars"] = feed["close_ms"] = None
+    # The last state owns CSV copies. Borrowed binary views stay alive until
+    # report_free + strategy_free and the outer input stack's cleanup.
+    _release_copied_feeds(symbol_feeds)
     report = ReportC()
     binding = None
     started = time.time()
