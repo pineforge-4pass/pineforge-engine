@@ -7148,7 +7148,7 @@ endif()
 # Preflight also discovers this file through docker/run_json_*_test.py.
 add_test(NAME test_run_json_sink_l9a
     COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
-        ${PROJECT_SOURCE_DIR}/docker/run_json_sink_test.py)
+        ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink.py)
 if(TARGET report_sink_l6b1_strategy AND NOT PINEFORGE_ENABLE_SANITIZERS
    AND NOT PINEFORGE_ENABLE_COVERAGE)
     set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
