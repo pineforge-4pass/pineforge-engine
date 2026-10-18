@@ -232,6 +232,38 @@ def test_sidecar_mode_omits_both_digest_comparisons(tmp_path, feed):
         assert mapped["source_values_sha256"] == expected.hexdigest()
 
 
+@pytest.mark.parametrize("feed", [False, True])
+def test_hash_scan_crosses_the_chunk_boundary(tmp_path, feed):
+    source = csv_file(tmp_path, count=23000)
+    binary = tmp_path / "large.bin"
+    pf_bars.convert_csv(source, binary, symbol="LAKE", tf="1", feed=feed)
+    expected = (run_json._load_symbol_feed(source, "OTHER", "1")["record"]["source_values_sha256"]
+                if feed else run_json.load_bars(source)[2])
+    with run_json.load_bars_bin(binary, feed=feed) as mapped:
+        assert mapped["n"] == 23000
+        assert mapped["source_values_sha256"] == expected
+
+
+@pytest.mark.parametrize("feed", [False, True])
+@pytest.mark.parametrize("field,bad", [(0, float("nan")), (3, float("inf")),
+                                      (4, -1.0), (4, float("inf"))])
+def test_binary_value_checks_are_not_bypassed_in_sidecar_mode(tmp_path, feed, field, bad):
+    row = [1, 2, .5, 1.5, 3, T0]
+    row[field] = bad
+    path, _ = binary_file(tmp_path, feed=feed, values=[row])
+    with pytest.raises(run_json.RunFailure) as caught:
+        run_json.load_bars_bin(path, verify_bin="sidecar", feed=feed)
+    assert caught.value.code_args == {"reason": "feed_value_invalid" if feed else "value"}
+
+
+@pytest.mark.parametrize("feed", [False, True])
+def test_unreadable_binary_uses_the_mode_code(tmp_path, feed):
+    with pytest.raises(run_json.RunFailure) as caught:
+        run_json.load_bars_bin(tmp_path / "missing.bin", feed=feed)
+    assert caught.value.code == ("symbol_feeds_refused" if feed else "chart_bars_unreadable")
+    assert caught.value.code_args == {"reason": "feed_unreadable" if feed else "io"}
+
+
 @pytest.mark.parametrize("fault,reason", [
     ("absent", "close_file"), ("size", "close_file"), ("hash", "sidecar"),
     ("before", "feed_close_time_invalid"), ("overlap", "feed_close_time_invalid"),
@@ -284,6 +316,48 @@ def test_binary_feed_identity_equals_csv_and_requires_borrowed_export(tmp_path):
         assert BORROWED in str(caught.value)
     finally:
         run_json.close_symbol_feeds(symbols)
+
+
+def test_zero_bar_feed_stays_a_header_only_csv_in_a_binary_index(tmp_path, monkeypatch):
+    path, _ = binary_file(tmp_path)
+    source = csv_file(tmp_path, "empty.csv", count=0)
+    index = index_file(tmp_path, chart=path.name, feeds={"1": source.name})
+    status, report, _, library = invoke(monkeypatch, "--symbol-feeds", index)
+    assert status == 0, report
+    assert library.feeds == [("copy", b"EXCHANGE:OTHER", b"1", b"", b"")]
+    record = report["applied_runtime"]["symbol_feeds"]["symbols"]["EXCHANGE:OTHER"]["feeds"]["1"]
+    assert record == {"bars": 0, "source_values_sha256": hashlib.sha256(FEED_PREFIX).hexdigest()}
+
+
+@pytest.mark.parametrize("feed", [False, True])
+def test_verify_flag_reaches_chart_and_feed_readers(tmp_path, monkeypatch, feed):
+    source = csv_file(tmp_path)
+    path, metadata = binary_file(tmp_path, feed=feed)
+    metadata["sha256"] = "0" * 64
+    write_sidecar(path, metadata)
+    args = (["--ohlcv", source, "--symbol-feeds", index_file(tmp_path, feeds={"1": path.name})]
+            if feed else ["--ohlcv-bin", path])
+    full = invoke(monkeypatch, *args)
+    assert full[0] == 1
+    assert (full[1]["code"], full[1]["args"]) == (
+        "symbol_feeds_refused" if feed else "chart_bars_unreadable", {"reason": "sidecar"})
+    sidecar = invoke(monkeypatch, *args, "--verify-bin", "sidecar")
+    assert sidecar[0] == 0, sidecar[1]
+
+
+def test_partial_feed_load_closes_already_mapped_inputs(tmp_path, monkeypatch):
+    path, _ = binary_file(tmp_path, feed=True)
+    index = index_file(tmp_path, feeds={"1": path.name, "2": "missing.bin"})
+    maps, real_mmap = [], mmap.mmap
+    def track(*args, **kwargs):
+        result = real_mmap(*args, **kwargs)
+        maps.append(result)
+        return result
+    monkeypatch.setattr(run_json.mmap, "mmap", track)
+    with pytest.raises(run_json.SymbolFeedsError) as caught:
+        run_json.load_symbol_feeds(index)
+    assert caught.value.code_args == {"reason": "feed_unreadable"}
+    assert len(maps) == 2 and all(mm.closed for mm in maps)
 
 
 def test_chart_index_resolves_relative_paths_and_matching_explicit_source(tmp_path, monkeypatch):
@@ -363,6 +437,15 @@ def test_borrowed_ctypes_signature(tmp_path, monkeypatch):
         ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
         ctypes.POINTER(run_json.BarC), ctypes.POINTER(ctypes.c_int64), ctypes.c_int]
     assert getattr(loaded, BORROWED).restype is ctypes.c_int
+
+
+@pytest.mark.parametrize("borrowed", [False, True])
+def test_binary_capability_requires_the_borrowed_runtime(monkeypatch, borrowed):
+    status, document, _, library = invoke(monkeypatch, "--capabilities-json",
+                                         library=Library(borrowed=borrowed))
+    assert status == 0
+    assert document["capabilities"].get("bars_bin_version") == (1 if borrowed else None)
+    assert not library.calls  # load_strategy is the stand-in; no construction/run
 
 
 def test_native_csv_binary_report_bytes(tmp_path):
