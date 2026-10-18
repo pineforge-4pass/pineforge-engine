@@ -1,6 +1,6 @@
 # CR-150 L7B handoff
 
-HEAD: `e29f8c4ad0c8c746d593ed0a452e1a7542ed68a5`
+Implementation HEAD (before handoff artifacts): `e29f8c4ad0c8c746d593ed0a452e1a7542ed68a5`
 Base: `ee3083d4a23fdae23d2cfa6ac254a8066de1b780`
 
 Commits:
@@ -8,7 +8,7 @@ Commits:
 - `bd0191de8` — red point-source equity metrics witness.
 - `e29f8c4ad` — array point-source implementation and citation refresh.
 
-`git diff --stat ee3083d4a23fdae23d2cfa6ac254a8066de1b780..HEAD`:
+`git diff --stat ee3083d4a23fdae23d2cfa6ac254a8066de1b780..e29f8c4ad`:
 
 ```text
  docs/adr/0001-kernel-adapter-boundary.md |   4 +-
@@ -20,6 +20,8 @@ Commits:
  tests/test_metrics_point_source.cpp      | 139 +++++++++++++++++++++++++
  7 files changed, 276 insertions(+), 49 deletions(-)
 ```
+
+The final handoff commit adds this report and the empty `DONE` marker.
 
 ## What changed
 
