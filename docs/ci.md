@@ -826,9 +826,9 @@ that creates the branch, is forced or carries more than one commit, a merge
 that is not the pull request head's, a commit git cannot read, an empty change,
 and a `changes` job that fails or never answers.
 
-Each proof job waits for `changes` alone, a few seconds once a standard runner
-takes it, and skips only when `changes` succeeded and answered
-documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
+Each proof job waits for `changes` alone, a few seconds once the light ci-spot
+class or its hosted fallback takes it, and skips only when `changes` succeeded
+and answered documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
 needs.changes.outputs.docs_only != 'true')`. `preflight` waits for nothing.
 The advisory `build` aggregate passes a proof job that succeeded, or one that
 was skipped under that same answer. A proof job skipped for any other reason
@@ -887,41 +887,84 @@ does not assume a build optimization without evidence.
 
 ## Runners and time limits
 
-Every job in `ci.yml`, `native-live.yml` and `corpus-parity.yml` uses the free
-standard runners for every event, including pushes, schedules, manual
-dispatches and pull requests from this repository or a fork. Linux jobs use
-`ubuntu-24.04` (4 vCPU, 16 GB); the macOS `build` legs use `macos-26` (M1,
-3 cores, 7 GB). Larger runners bill even for a public repository, and their
-cost exceeded US$3,000: the owner's 2026-10-18 cost stop puts every job on
-standard runners. This is a stopgap until the ci-spot pool is live; its labels
-will replace the standard runner labels when that pool is ready.
+The ci-spot pool is live as of 2026-10-18 (bulletin #613, L6, 22:34). Linux
+x64 jobs use the fragments in `pf-ci-spot`'s `workflows/engine-x64-16.yml`
+and `workflows/public.yml` at `pf-ci-spot` commit `1fe46216` (bulletins
+#614/#615), with these exact label arrays:
+
+| Jobs | Fragment and labels | Pool machine |
+| --- | --- | --- |
+| Linux `build` legs, `sanitizers`, `kernel-only`, all three `native-live` profiles, both corpus-parity jobs, release `prebuilt` Linux x64 leg | `engine-x64-16.yml`: `["self-hosted","pf-ci","pf-ci-x64-16"]` | e2-standard-16, 16 vCPU, 64 GB, 100 GB disk; engine only |
+| `changes`, `preflight`, both aggregate jobs, docs `build`, release metadata and hub notification, manual baseline promotion | `public.yml`: `["self-hosted","pf-ci","pf-ci-x64"]` | e2-standard-4, 4 vCPU, 16 GB, 30 GB disk |
+
+This replaces the temporary standard-runner stopgap recorded by `3484a7c40`
+and squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner
+costs exceeded US$3,000. The runner-selection and timing sentences being
+reworded originated in `d0935605c` (#290), and the documentation-only runner
+sentence in `133f57148` (#308). The platform job limits from `2394ba2fc`
+(#373) remain in force.
+
+Each Linux x64 job uses the fragment's expression verbatim and sets its
+matching array as a job-level **string** `PF_CI_LABELS`, merged into any
+existing job environment. The engine build fragment is:
 
 ```yaml
-runs-on: ubuntu-24.04
+runs-on: >-
+  ${{ github.event_name != 'pull_request_target' &&
+      github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+      contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+      fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-latest' }}
+env:
+  PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 ```
 
-The `build` matrix selects its standard image with `runs-on: ${{ matrix.os }}`
-and names its four legs explicitly, so they stay `build (<image>, <type>)`.
-`native-live.yml` and `corpus-parity.yml` use `ubuntu-24.04` directly, whether
-called through CI or started independently. The advisory `build` aggregate
-and the `changes` job also use `ubuntu-24.04` for every event.
+The public fragment has the same expression with `pf-ci-x64` in both places.
+Pushes, manual dispatches, schedules, releases and same-repository pull
+requests whose head repository has `fork == false` take the pool when neither
+`github.actor` nor `github.triggering_actor` is `dependabot[bot]`. Dependabot
+runs and re-runs stay hosted through that guard. Fork pull
+requests, `pull_request_target`, `workflow_run` and every unlisted event fall
+back to `ubuntu-latest`. A reusable workflow sees its caller's `github`
+context, so native and corpus jobs keep the same fallback through CI.
+
+The `build` matrix retains its four legs and their `build (<image>, <type>)`
+names. Its routing-only `include` entries carry the engine fragment for
+Linux and `macos-26` for macOS, selected with `runs-on: ${{ matrix.runner }}`.
+The two hosted macOS legs stay on `macos-26` (M1, 3 cores, 7 GB). Release's
+Linux x64 `matrix.runner` carries the same engine fragment; its ARM leg stays
+on `ubuntu-22.04-arm` and its universal macOS leg stays on `macos-latest`.
+The shared matrix jobs set the engine label string once; hosted legs ignore
+it. Promotion has both target and dispatch triggers: the target event stays
+hosted through the public fragment, while a manual dispatch can use the pool.
+
+The dispatcher's actor allowlist is `luisleo526`, `pineforge-app[bot]` and
+`github-actions[bot]` (chain triggers only). Dependabot-specific jobs stay
+hosted; this repository currently has no Dependabot configuration or such job.
+The fragments do not extend that actor allowlist. The dispatcher accepts
+`pf-ci` plus exactly one class, with optional `self-hosted`, `linux` and that
+class's architecture and no duplicate labels. The pre-job hook also requires
+the matching `PF_CI_LABELS` string. ARM pool dispatch is disabled, so ARM stays
+hosted.
 
 Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
 `check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
-parallelism follow the runner: 4 on Ubuntu and 3 on macOS. A documentation-only
+parallelism follow the runner: 16 on the build pool class and the available
+core count on hosted fallbacks (3 on the CI macOS image). A documentation-only
 change starts preflight alone among the verification jobs.
 
 `scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
 limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included, and keeps every other workflow -- `docs.yml`,
-`promote-baseline.yml` and any new one -- on standard runners. `release.yml`
-keeps its existing standard-runner matrix and is exempt from the fixed runner
-allowlist, by name and while its `on:` block names only events no fork can
-raise (a push, the schedule, a dispatch; a dispatch alone today). The contract
-refuses `pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and any
-`larger_runner` key in every workflow, including `release.yml`. An event-based
-runner selection, a changed build matrix, a call to a workflow outside
-`.github/workflows/`, a changed time limit, a `ci_verify.py` call without
+strategy block included. It also pins the fragments and job-level
+`PF_CI_LABELS` in `docs.yml`, `promote-baseline.yml` and `release.yml`, the
+release matrix included. Release has no runner exemption. New Linux x64 jobs
+require the public fragment; target-only workflows and explicit
+Dependabot-only jobs stay hosted, as do macOS and ARM. The contract refuses
+`pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and any `larger_runner`
+key in every workflow. A changed fragment, a missing, duplicate, non-string
+or mismatched `PF_CI_LABELS`, a changed build or release matrix, a call to a
+workflow outside `.github/workflows/`, a changed time limit, a `ci_verify.py` call without
 exactly one core-count `--jobs` (counted over the whole job, however its
 commands are chained, blocked or carried, with the flag and its value on one
 line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
@@ -972,7 +1015,9 @@ The standard-runner times are the eight CI runs from
 main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
 and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. The
 maintainers' x86-64 verification-host timings at 8 to 12 jobs remain separate
-measurements; the standard-runner timings describe the current runner policy.
+measurements; the standard-runner timings describe the former hosted policy
+and provide historical context for the ci-spot fallback. Pool timings await
+measurements on the new runners.
 
 | Job | Limit (min) | Measured basis |
 | --- | --- | --- |
