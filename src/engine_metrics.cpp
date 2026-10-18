@@ -4,21 +4,32 @@
  * bases, annualization) are pinned in the per-field doxygen of
  * <pineforge/pineforge.h>; docs/pages/report-schema.md summarizes them.
  */
-#include <pineforge/metrics.hpp>
+#include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_calendar.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <limits>
-#include <vector>
 
 #include "metrics_month_memo.hpp"
 #include "timezone.hpp"
 
 namespace pineforge {
 namespace metrics {
+
+ArrayCurve::ArrayCurve(const pf_equity_point_t* data, std::int64_t point_count)
+    : data_(data), point_count_(point_count) {}
+
+std::int64_t ArrayCurve::size() const {
+    return point_count_;
+}
+
+pf_equity_point_t ArrayCurve::operator[](std::int64_t index) const {
+    return data_[index];
+}
 
 namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
@@ -38,29 +49,78 @@ inline int month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimezone
     return (tb.tm_year + 1900) * 12 + tb.tm_mon;
 }
 
-// Sharpe/Sortino over a simple-returns series. rf_period = risk-free per
-// period; ann = sqrt(periods/year). Sample stddev (N-1) for Sharpe;
-// population downside deviation vs rf for Sortino (arbitration item — see
-// spec; corpus probe pins it).
-inline void sharpe_sortino(const std::vector<double>& r, double rf_period,
-                           double ann, double* sharpe, double* sortino) {
+// Sharpe/Sortino over a generated simple-returns series. The generator is
+// called twice: once for the plain left-fold mean/count, then again for the
+// variance/downside fold. This preserves the old vector walk's operation order
+// without retaining either the month-end values or the returns.
+template <class Generate>
+void sharpe_sortino_generated(Generate generate, double rf_period, double ann,
+                              double* sharpe, double* sortino) {
     *sharpe = kNaN;
     *sortino = kNaN;
-    const size_t n = r.size();
+    std::size_t n = 0;
+    double sum = 0.0;
+    generate([&](double value) {
+        sum += value;
+        ++n;
+    });
     if (n < 2) return;
-    double mean = 0.0;
-    for (double x : r) mean += x;
-    mean /= (double)n;
+    const double mean = sum / (double)n;
     double var = 0.0, down = 0.0;
-    for (double x : r) {
-        var += (x - mean) * (x - mean);
-        const double d = std::min(0.0, x - rf_period);
+    generate([&](double value) {
+        var += (value - mean) * (value - mean);
+        const double d = std::min(0.0, value - rf_period);
         down += d * d;
-    }
+    });
     const double sd = std::sqrt(var / (double)(n - 1));
     const double dd = std::sqrt(down / (double)n);
     if (sd > 0.0) *sharpe = (mean - rf_period) / sd * ann;
     if (dd > 0.0) *sortino = (mean - rf_period) / dd * ann;
+}
+
+// Emit the exact return sequence produced by the former month_end vector:
+// close each civil bucket, compare it with the preceding closed bucket, and
+// skip a return whose preceding equity is not positive. The first bucket only
+// seeds the preceding value, so a one-bucket curve emits no return.
+template <class PointSource, class KeyFn, class Emit>
+void for_each_month_return(const PointSource& curve, std::int64_t n,
+                           KeyFn key_fn, Emit emit) {
+    if (n <= 0) return;
+
+    const pf_equity_point_t first = curve[0];
+    int current_key = key_fn(first.time_ms);
+    double current_month_end = first.equity;
+    double previous_month_end = 0.0;
+    bool have_previous_month = false;
+
+    for (std::int64_t i = 1; i < n; ++i) {
+        const pf_equity_point_t point = curve[i];
+        const int key = key_fn(point.time_ms);
+        if (key != current_key) {
+            if (have_previous_month && previous_month_end > 0.0)
+                emit(current_month_end / previous_month_end - 1.0);
+            previous_month_end = current_month_end;
+            have_previous_month = true;
+            current_key = key;
+        }
+        current_month_end = point.equity;
+    }
+
+    if (have_previous_month && previous_month_end > 0.0)
+        emit(current_month_end / previous_month_end - 1.0);
+}
+
+// Emit the exact per-bar return sequence from the former temporary vector.
+template <class PointSource, class Emit>
+void for_each_bar_return(const PointSource& curve, std::int64_t n, Emit emit) {
+    if (n <= 1) return;
+    double previous_equity = curve[0].equity;
+    for (std::int64_t i = 1; i < n; ++i) {
+        const pf_equity_point_t point = curve[i];
+        if (previous_equity > 0.0)
+            emit(point.equity / previous_equity - 1.0);
+        previous_equity = point.equity;
+    }
 }
 
 }  // namespace
@@ -200,7 +260,19 @@ pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
     return s;
 }
 
-pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n,
+template <class PointSource>
+pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
+                                       double initial_capital,
+                                       const std::string& chart_tz,
+                                       double first_open, double last_close,
+                                       int64_t bars_in_market, double net_profit) {
+    return compute_equity_stats<PointSource>(
+        curve, n, initial_capital, chart_tz, first_open, last_close,
+        bars_in_market, net_profit, n);
+}
+
+template <class PointSource>
+pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
                                        double initial_capital,
                                        const std::string& chart_tz,
                                        double first_open, double last_close,
@@ -216,7 +288,7 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
         e.buy_hold_return_pct = (last_close / first_open - 1.0) * 100.0;
         e.buy_hold_return = initial_capital * (last_close / first_open - 1.0);
     }
-    if (n <= 0 || curve == nullptr) return e;
+    if (n <= 0) return e;
 
     e.open_pl = curve[n - 1].open_profit;
     // Exposure is over observations, not curve points: a selected-window curve
@@ -268,29 +340,25 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
     // its month's seconds, detail::month_key_utc); a chart timezone still
     // calls localtime_r per point under the one guard.
     {
-        std::vector<double> month_end;
         const bool utc = chart_tz.empty() || chart_tz == "UTC" || chart_tz == "Etc/UTC";
-        auto walk = [&](auto key_fn) {
-            int cur = key_fn(curve[0].time_ms);
-            double last_eq = curve[0].equity;
-            for (int64_t i = 1; i < n; ++i) {
-                const int k = key_fn(curve[i].time_ms);
-                if (k != cur) { month_end.push_back(last_eq); cur = k; }
-                last_eq = curve[i].equity;
-            }
-            month_end.push_back(last_eq);
-        };
         if (utc) {
-            detail::UtcMonthMemo memo;
-            walk([&memo](int64_t ts_ms) { return detail::month_key_utc(memo, ts_ms); });
+            const auto month_returns = [&](auto emit) {
+                detail::UtcMonthMemo memo;
+                for_each_month_return(
+                    curve, n,
+                    [&memo](int64_t ts_ms) { return detail::month_key_utc(memo, ts_ms); },
+                    emit);
+            };
+            sharpe_sortino_generated(month_returns, 0.02 / 12.0, std::sqrt(12.0),
+                                     &e.sharpe_monthly, &e.sortino_monthly);
         } else {
-            tz_util::ScopedTimezone guard(chart_tz);   // ONE guard for the whole walk
-            walk(month_key_local);
+            tz_util::ScopedTimezone guard(chart_tz);   // ONE guard for both generated passes
+            const auto month_returns = [&](auto emit) {
+                for_each_month_return(curve, n, month_key_local, emit);
+            };
+            sharpe_sortino_generated(month_returns, 0.02 / 12.0, std::sqrt(12.0),
+                                     &e.sharpe_monthly, &e.sortino_monthly);
         }
-        std::vector<double> r;
-        for (size_t i = 1; i < month_end.size(); ++i)
-            if (month_end[i - 1] > 0.0) r.push_back(month_end[i] / month_end[i - 1] - 1.0);
-        sharpe_sortino(r, 0.02 / 12.0, std::sqrt(12.0), &e.sharpe_monthly, &e.sortino_monthly);
     }
 
     // --- Per-bar variant: density-annualized (observed bars/year, NOT the
@@ -298,14 +366,44 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
     // sessions; see spec).
     if (n >= 3 && span_years > 0.0) {
         const double bars_per_year = (double)(n - 1) / span_years;
-        std::vector<double> r;
-        r.reserve((size_t)(n - 1));
-        for (int64_t i = 1; i < n; ++i)
-            if (curve[i - 1].equity > 0.0) r.push_back(curve[i].equity / curve[i - 1].equity - 1.0);
-        sharpe_sortino(r, 0.02 / bars_per_year, std::sqrt(bars_per_year),
-                       &e.sharpe_bar, &e.sortino_bar);
+        const auto bar_returns = [&](auto emit) {
+            for_each_bar_return(curve, n, emit);
+        };
+        sharpe_sortino_generated(bar_returns, 0.02 / bars_per_year, std::sqrt(bars_per_year),
+                                 &e.sharpe_bar, &e.sortino_bar);
     }
     return e;
+}
+
+// The public point-source contract is intentionally explicit-instantiated for
+// the source owned by this lane.  L6b-4/L7c add the scratch source's matching
+// instantiation once SpillCurve exists; the metric body remains one template.
+template pf_equity_stats_t compute_equity_stats<ArrayCurve>(
+    const ArrayCurve&, int64_t, double, const std::string&, double, double,
+    int64_t, double);
+
+template pf_equity_stats_t compute_equity_stats<ArrayCurve>(
+    const ArrayCurve&, int64_t, double, const std::string&, double, double,
+    int64_t, double, int64_t);
+
+pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n,
+                                       double initial_capital,
+                                       const std::string& chart_tz,
+                                       double first_open, double last_close,
+                                       int64_t bars_in_market, double net_profit,
+                                       int64_t observation_count) {
+    // Preserve the old pointer overload's early return for a null curve with
+    // a positive count.  PointSource itself has a valid-range precondition.
+    if (curve == nullptr && n > 0) {
+        const ArrayCurve empty(nullptr, 0);
+        return compute_equity_stats<ArrayCurve>(
+            empty, 0, initial_capital, chart_tz, first_open, last_close,
+            bars_in_market, net_profit, observation_count);
+    }
+    const ArrayCurve source(curve, n);
+    return compute_equity_stats<ArrayCurve>(
+        source, n, initial_capital, chart_tz, first_open, last_close,
+        bars_in_market, net_profit, observation_count);
 }
 
 // The ordinary entry: every point of the curve is an observation.
