@@ -4,6 +4,10 @@ Written before heap_census.py. The lab also runs the real battery on the base:
 its red result must be retained engine allocations, not a missing sink flag.
 These controls test the evidence reader, not the engine's memory contract.
 """
+import hashlib
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 import heap_census as census
@@ -82,6 +86,38 @@ class CensusEvidence(unittest.TestCase):
         self.assertEqual(result["sites"][0]["lane"], "L19j")
         with self.assertRaises(ValueError):
             census.id_cost(reused_low, unique_low, reused_high, unique_high, 10, 10)
+
+    def test_q9_keeps_negative_sites_and_does_not_sum_only_the_positive_costs(self):
+        empty = census.Snapshot(0, {})
+        old = census.Snapshot(100, {"reuse_capacity": 100})
+        new = census.Snapshot(160, {"ids": 160})
+        result = census.id_cost(empty, empty, old, new, 10, 20)
+        self.assertEqual(result["bytes_per_additional_id"], 6.0)
+        self.assertEqual(sorted(row["bytes_per_additional_id"] for row in result["sites"]), [-10.0, 16.0])
+
+    def test_streamed_q9_checks_identity_even_when_the_digest_is_valid(self):
+        def sink(second):
+            documents = [
+                {"schema": "pf-report-sink", "version": 1, "records": [
+                    {"type": "T", "fields": ["n", "entry_id", "qty", "open_at_end"]}]},
+                ["T", 1, "E00000000000000", 1.0, False],
+                ["T", 2, second, 1.0, False],
+            ]
+            raw = b"".join((json.dumps(item, separators=(",", ":")) + "\n").encode() for item in documents)
+            trailer = dict(trailer="pf-report-sink", counts={"T": 2}, sha256=hashlib.sha256(raw).hexdigest())
+            return raw + (json.dumps(trailer) + "\n").encode()
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sink.jsonl"
+            path.write_bytes(sink("E00000000000001"))
+            census.validate_sink_ids(path, 2, 0, False)
+            path.write_bytes(sink("E00000000000000"))
+            with self.assertRaisesRegex(ValueError, "identity"):
+                census.validate_sink_ids(path, 2, 0, False)
+
+    def test_nonincreasing_populations_are_not_a_flat_verdict(self):
+        with self.assertRaises(ValueError):
+            census.growth(census.Snapshot(100, {}), census.Snapshot(100, {}), 10, 10)
 
 
 if __name__ == "__main__":
