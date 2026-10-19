@@ -7,6 +7,10 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Ownership manifest controls run in four CTest shards (CR-196).** The same
+  loader-discovered cases keep every assertion and the 180-second timeout per
+  row; a cheap guard checks complete, disjoint assignment for shard counts
+  1 through 8. Preflight continues to run the complete unsharded suite.
 - **EN-115 selected-window completeness proof completed.** From 1.6.2 the image
   declares selected-window contract revision `1.3` again: the section-4
   producers and manifest are present, `value_ownership` is `complete`, and a

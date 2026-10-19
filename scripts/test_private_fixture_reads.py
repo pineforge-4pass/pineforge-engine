@@ -252,7 +252,8 @@ class TamperTree:
             shutil.copy(REPO / 'tests' / name, self.root / 'tests')
         for driver in sorted((REPO / 'tests').glob('*.py')):
             shutil.copy(driver, self.root / 'tests')
-        # Both ownership registrations name this nested driver.
+        # The four ownership control shards and the D4 row share this nested
+        # driver; one copy lets the sweep inspect every registration.
         (self.root / 'tests' / 'ownership').mkdir()
         shutil.copy(REPO / 'tests' / 'ownership' / 'test_manifest_checker.py',
                     self.root / 'tests' / 'ownership')
