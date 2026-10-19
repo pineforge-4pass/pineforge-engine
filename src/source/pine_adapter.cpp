@@ -21,6 +21,8 @@
 #include "pine_run_failure.hpp"
 #include "pine_checked_arith.hpp"
 #include "pine_value_admission.hpp"
+#include "pine_position_tail.hpp"
+#include "pine_position_tail_binding.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -2396,6 +2398,7 @@ void PineExecutionAdapter::revive_brackets_after_margin(
 }
 
 void PineExecutionAdapter::reset_for_run() {
+    position_tail_spill_.reset();
     pine_view_host_ = nullptr;
     // Incarnations start over with the run.
     retired_row_scratch_.unsuperseded.clear();
@@ -11624,20 +11627,41 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         && requested_qty_percent < 100.0 && physical.signed_units != 0.0
         && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()) {
         const auto& host = require_host();
-        for (int index = host.trade_count() - 1; index >= 0; --index) {
-            const Trade& trade = host.get_trade(index);
-            if (trade.exit_time < position_open_script_bar_) break;
-            if (trade.is_long != (physical.signed_units > 0.0)) continue;
-            const bool include_completed = ancestry_sized_target
+        const auto* pine = pine_view_of(host_);
+        const std::size_t base = pine ? pine->trades_.base() : 0;
+        const auto include_completed = [&](bool is_long, std::uint64_t incarnation,
+                                            bool margin_call, const auto& named_entry_matches) {
+            if (is_long != (physical.signed_units > 0.0)) return false;
+            return ancestry_sized_target
                 ? std::any_of(cohorts_by_id_.begin(), cohorts_by_id_.end(),
                     [&](const auto& cohort) {
                         return (!fifo_named_entry || cohort.first == from_entry)
                             && cohort.second.live_units_by_origin.count(
-                                trade.entry_incarnation) != 0;
+                                incarnation) != 0;
                     })
-                : trade.exit_id == kMarginCallLabel
-                    && (!fifo_named_entry || trade.entry_id == from_entry);
-            if (include_completed) completed_entry_units += trade.qty;
+                : margin_call && (!fifo_named_entry || named_entry_matches());
+        };
+        bool reached_spill = true;
+        for (std::size_t index = host.closed_trade_count(); index > base;) {
+            const Trade& trade = host.get_trade(static_cast<int>(--index));
+            if (trade.exit_time < position_open_script_bar_) {
+                reached_spill = false;
+                break;
+            }
+            if (include_completed(trade.is_long, trade.entry_incarnation,
+                                  trade.exit_id == kMarginCallLabel,
+                                  [&] { return trade.entry_id == from_entry; }))
+                completed_entry_units += trade.qty;
+        }
+        if (reached_spill && position_tail_spill_) {
+            auto cursor = position_tail_spill_->size_bytes();
+            detail::PositionTailSpill::Row trade;
+            while (position_tail_spill_->previous(cursor, trade)) {
+                if (trade.exit_time < position_open_script_bar_) break;
+                if (include_completed(trade.is_long, trade.entry_incarnation, trade.margin_call,
+                        [&] { return position_tail_spill_->entry_id_equals(trade, from_entry); }))
+                    completed_entry_units += trade.qty;
+            }
         }
     }
     const double book_basis = (fifo_named_entry
@@ -24783,6 +24807,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (next_sign != 0 && (current_position_sign_ == 0 || current_position_sign_ != next_sign)) {
         ++current_position_cycle_;
+        position_tail_spill_.reset();
         position_open_script_bar_ = context.script_bar_open_ms;
         position_open_epoch_ = broker_open_epoch_;
         position_open_bar_index_ = context.coordinate.interval_index;
@@ -25698,6 +25723,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         retire_in_position_exits_at_flat(/*preserve_pending_parents=*/true,
                                          /*dormant_rows_only=*/true,
                                          /*paired_close=*/nullptr);
+        position_tail_spill_.reset();
         position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
         position_open_bar_index_ = -1;
         position_open_phase_ = NativePathPhase::None;
@@ -27958,6 +27984,20 @@ void PineExecutionAdapter::order_same_point_entries() {
                             live_handles_.end());
         live_handles_.push_back(handle);
     }
+}
+
+// L18 dependency adapter. L8c supplies the approved global prefix end and
+// L6b-4 supplies the bound scratch directory. No sink text/curve API is
+// involved: DESIGN 3.8 permits a second private unlinked scratch file.
+void PineExecutionAdapter::preserve_position_tail_before_seal(
+        std::size_t global_end, const std::string& scratch_directory) {
+    auto* pine = pine_view_of(host_);
+    if (!pine || global_end < pine->trades_.base() || global_end > pine->trades_.size()) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "invalid Pine position-tail seal prefix");
+    }
+    detail::PositionTailBinding::preserve(position_tail_spill_, pine->trades_, global_end,
+                                         position_open_script_bar_, scratch_directory);
 }
 
 } // namespace pineforge::source
