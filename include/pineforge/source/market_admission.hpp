@@ -6,6 +6,7 @@
 // translation unit consumed it). It is hashed through the source host's
 // extension fold (src/source/pine_state_hash.cpp), never by the kernel.
 #include <pineforge/order_birth.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -187,6 +188,14 @@ void reflect(const Event& value, const std::string& path, const FieldVisitor& vi
 class Allocation;
 class Journal {
 public:
+    // The retired window's v4 fold, not a second event history. The rejection
+    // bar is an index into the same folded observations, for the command gate.
+    struct Prefix {
+        std::size_t count = 0;
+        uint64_t digest = 1469598103934665603ULL;
+        uint64_t last_sequence = 0;
+        int last_rejected_command_bar = -1;
+    };
     Journal() = default;
     Journal(const Journal& other);
     Journal& operator=(const Journal& other);
@@ -204,6 +213,19 @@ public:
     // Keep actual causes still referenced by history, instructions or settlement.
     void retain(const std::vector<uint64_t>& sequences);
     void reflect(const std::string& path, const FieldVisitor& visit) const;
+    const Prefix& retired_prefix() const { return retired_prefix_; }
+    std::size_t event_count() const { return retired_prefix_.count + events_.size(); }
+    bool has_unfinished_events() const {
+        return active_allocations_ != 0 || !outstanding_sequences_.empty();
+    }
+    // Explicit diagnostic projection, like the native Full event observer.
+    // Install before a run; keeps original reflection paths for tools which
+    // deliberately inspect every event. Execution and v4 hash bytes are equal
+    // under both storage policies. Ordinary hosts always use the window.
+    void retain_full_observation_history();
+    // Called only at a completed script-bar boundary, after every retained
+    // event has entered the v4 fold and no producer can insert before it.
+    void retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence);
 private:
     friend class Allocation;
     void release_allocation(uint64_t sequence) noexcept;
@@ -211,6 +233,10 @@ private:
     uint64_t active_allocations_ = 0;
     std::vector<uint64_t> outstanding_sequences_;
     std::vector<Event> events_;
+    Prefix retired_prefix_;
+    // Observation-only configuration, persistent across reset like recording;
+    // not independent broker state and deliberately absent from the v4 fold.
+    bool retain_full_observation_history_ = false;
 };
 // Ephemeral ownership of an unfinished event. Completed/reclaimed IDs cannot
 // be re-created by keeping this handle: append consumes the journal allocation.

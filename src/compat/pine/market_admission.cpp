@@ -148,7 +148,7 @@ int last_rejected_command_bar(const admission::Journal& journal) {
             default:break;
             }
         }
-    return -1;
+    return journal.retired_prefix().last_rejected_command_bar;
 }
 History admission_history(const admission::Journal& journal){return fold_admission_history(journal.events());}
 } // namespace pineforge::compat::pine
