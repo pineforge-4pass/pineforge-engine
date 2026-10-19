@@ -457,6 +457,16 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
                                 bars_in_market, net_profit, n);
 }
 
+// L7c: emit both scratch-source entry points from the SAME metric body and
+// floating-point operation order as ArrayCurve.
+template pf_equity_stats_t compute_equity_stats<SpillCurve>(
+    const SpillCurve&, int64_t, double, const std::string&, double, double,
+    int64_t, double);
+
+template pf_equity_stats_t compute_equity_stats<SpillCurve>(
+    const SpillCurve&, int64_t, double, const std::string&, double, double,
+    int64_t, double, int64_t);
+
 }  // namespace metrics
 
 void BacktestEngine::fold_trade_percent_prefix(const Trade& trade) {
