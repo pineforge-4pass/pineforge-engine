@@ -7226,3 +7226,46 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_dependencies(test_report_sink_equity report_sink_equity_strategy)
 endif()
 # --- CR-150 core-cr150-l6b2 end ---
+
+# CR-150 sm-cr150-flatrss: port L0's real-process RSS acceptance row.
+# Append after the existing registrations to preserve source line pins.
+# The additional fixture modules are codegen outputs, supplied in the module
+# directory as in L0; a missing module remains a harness setup error.
+option(PINEFORGE_BUILD_FLAT_MEMORY_TESTS
+    "Register the CR-150 L0 red acceptance tests (pending 1.7.0 lanes)" OFF)
+if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
+    if(NOT PINEFORGE_BUILD_SOURCE_LAYER)
+        message(FATAL_ERROR
+            "PINEFORGE_BUILD_FLAT_MEMORY_TESTS needs PINEFORGE_BUILD_SOURCE_LAYER=ON "
+            "(the fixture module binds pineforge/source)")
+    endif()
+    set(PINEFORGE_FLAT_MEMORY_MODULE_DIR "${CMAKE_BINARY_DIR}/flat_memory_modules"
+        CACHE PATH "Where the CR-150 fixture strategy modules live")
+    file(MAKE_DIRECTORY "${PINEFORGE_FLAT_MEMORY_MODULE_DIR}")
+
+    add_library(flat_memory_macd MODULE
+        ${PROJECT_SOURCE_DIR}/tutorial/macd/generated.cpp)
+    target_link_libraries(flat_memory_macd PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(flat_memory_macd PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(flat_memory_macd PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(flat_memory_macd PRIVATE -O0 -ffp-contract=off
+        -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter
+        -Wno-unused-function -Wno-sign-compare)
+    set_target_properties(flat_memory_macd PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${PINEFORGE_FLAT_MEMORY_MODULE_DIR}"
+        OUTPUT_NAME "macd" PREFIX "" SUFFIX ".so")
+    add_custom_target(flat_memory_modules DEPENDS flat_memory_macd)
+
+    add_test(NAME test_flat_memory_rss_e2e
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/flat_memory_rss_e2e.py
+            --run-json ${PROJECT_SOURCE_DIR}/docker/run_json.py
+            --module-dir ${PINEFORGE_FLAT_MEMORY_MODULE_DIR})
+    set_tests_properties(test_flat_memory_rss_e2e PROPERTIES
+        LABELS "mem;slow;l4-pending")
+endif()

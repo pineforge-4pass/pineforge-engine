@@ -1,0 +1,30 @@
+//@version=6
+//
+// CR-150 lane L0 fixture (acceptance (f)): one request.security on another
+// symbol. The feed is installed by run_json --symbol-feeds under the exact key
+// below, timeframe 240. The test runs it at 1k, 100k and 1M feed bars and
+// requires the process rest (peak RSS minus every mapped OHLCV byte) to stay
+// flat within 1 MiB.
+//
+// The returned close also drives the entries, so an engine that silently reads
+// an empty or released feed cannot pass by producing no trades.
+//
+strategy("Flat memory: one foreign feed",
+     overlay            = false,
+     initial_capital    = 100000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+otherClose = request.security("FEED:XS", "240", close)
+otherHigh  = request.security("FEED:XS", "240", high)
+
+if otherClose > otherHigh[1]
+    strategy.entry("Long", strategy.long)
+if otherClose < otherHigh[1]
+    strategy.entry("Short", strategy.short)

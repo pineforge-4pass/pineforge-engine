@@ -1,0 +1,22 @@
+//@version=6
+//
+// CR-150 lane L0 fixture F13 (2), acceptance (d), selected-window run: enter
+// once near the start of the feed and never exit, so the position is open at
+// the range end. The selected-window test picks a window whose end leaves M = 0
+// window points to exercise the range-end rewrite and the anchor-only curve
+// (DESIGN.md 3.2, 3.6, lane L17b).
+//
+strategy("Flat memory: open position at the range end",
+     overlay            = false,
+     initial_capital    = 100000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+if bar_index == 1
+    strategy.entry("Long", strategy.long)
