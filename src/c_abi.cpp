@@ -710,14 +710,14 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
                 input_tf ? std::string(input_tf) : std::string(),
                 script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
         }
-        std::vector<pineforge::Bar> bars;
-        bars.reserve(static_cast<std::size_t>(n_warmup));
-        for (int i = 0; i < n_warmup; ++i) {
-            const auto& b = warmup_bars[i];
-            bars.push_back({b.open, b.high, b.low, b.close, b.volume, b.timestamp});
-        }
+        // pf_bar_t and Bar have identical size and field offsets (pinned
+        // above). Pass the warmup straight through: a Pine scheduler makes
+        // the one owning stream copy before returning from its begin hook.
+        // A temporary vector here used to keep two whole warmup arrays live.
+        // The caller's span is needed only for this synchronous begin call;
+        // realtime callbacks read the scheduler's owned warmup afterwards.
         return engine->stream_begin(
-            bars.data(), n_warmup,
+            reinterpret_cast<const pineforge::Bar*>(warmup_bars), n_warmup,
             input_tf ? std::string(input_tf) : std::string(),
             script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
     });
