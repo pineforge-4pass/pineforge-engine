@@ -1,5 +1,5 @@
-// CR-150 L19G / F2, G1, G2: preserve the retained engine's closed-origin leg
-// revival through a sibling, global binding, or exposure returning in one cycle.
+// CR-150 L19G / F2, G1: preserve the retained engine's closed-origin leg
+// revival through a sibling or exposure returning in one cycle.
 // Compare public results with every placement row retained. Keep the path
 // controls: a missing fill, suspension, cohort pin or margin call is a failure.
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -79,7 +79,7 @@ struct Outcome {
     double equity = 0.0;
 };
 
-enum class Scenario { Sibling, Global, Returning };
+enum class Scenario { Sibling, Returning };
 
 template<Scenario scenario>
 class Host final : public ps::PineStrategyHost {
@@ -103,27 +103,6 @@ public:
     void on_source_bar(const Bar&) override {
         observe();
         const int i = pine_bar_index();
-        if constexpr (scenario == Scenario::Global) {
-            // Empty entry IDs are admitted source IDs. R first opens the
-            // cycle; global X is armed while held, on a DIFFERENT signal bar
-            // from the later empty-ID entry. Its Applied callback binds the
-            // live explicit leg to that parent without a same-bar re-arm.
-            if (i == 0) strategy_entry("R", false, kNa, kNa, 40.0);
-            if (i == 1)
-                strategy_exit("X", "", kNa, 105.0, kNa, kNa, kNa, 100.0, {}, 40.0);
-            if (i == 2) strategy_entry("", false, kNa, kNa, 40.0);
-            if (i == 3) {
-                // Remove the older R lot at this real callback's 100 print,
-                // before S is admitted, so global X later closes its parent.
-                strategy_close("R", "Release anchor", 40.0, kNa, true);
-                strategy_entry("S", false, kNa, kNa, 40.0);
-            }
-            if (i == 7) {
-                strategy_entry("L", true);
-                strategy_close("S", "Reverse to Long");
-            }
-            return;
-        }
         if constexpr (scenario == Scenario::Returning) {
             if (i == 0) strategy_entry("L", false, kNa, kNa, 40.0);
             if (i == 1) {
@@ -180,8 +159,7 @@ public:
         }
         out_.observations.push_back(f.h);
         out_.positions.push_back(live_position_size());
-        const char* const from_entry = scenario == Scenario::Global ? ""
-            : scenario == Scenario::Returning ? "L" : "S";
+        const char* const from_entry = scenario == Scenario::Returning ? "L" : "S";
         out_.exposure.push_back(adapter_.source_unclosed_qty_for(from_entry));
         out_.cycles.push_back(adapter_.*access(CycleTag{}));
         Leg leg;
@@ -400,33 +378,12 @@ std::vector<Bar> returning_tape() {
     return bars;
 }
 
-std::vector<Bar> global_tape() {
-    std::vector<Bar> bars;
-    const auto add = [&](double o, double h, double l, double c) {
-        bars.push_back({o, h, l, c, 1.0,
-            kStart + static_cast<std::int64_t>(bars.size()) * 86400000LL});
-    };
-    add(100.0, 100.2, 99.8, 100.0); // submit R
-    add(100.0, 100.2, 99.8, 100.0); // R fills at 100; arm origin-free global X
-    add(100.0, 100.2, 99.8, 100.0); // submit the empty-ID parent on a later bar
-    add(100.0, 100.2, 99.8, 100.0); // parent fills at 100, binds X; close R, submit S
-    add(100.0, 100.2, 99.8, 100.0); // S fills at 100; parent and S hold 80 units
-    add(100.0, 105.2, 99.8, 105.0); // global X closes its 40-unit parent at 105
-    add(105.0, 105.2, 104.8, 105.0); // sweep with empty-ID exposure zero, S open
-    add(105.0, 105.2, 104.8, 105.0); // place the all-in reversal / close pair
-    add(160.0, 160.2, 159.8, 160.0); // decline the reversal; suspend global X
-    add(160.0, 160.2, 159.8, 160.0); // inspect the original dormant global leg
-    add(160.0, 175.0, 159.8, 175.0); // chart margin checkpoint revives X
-    add(175.0, 175.0, 175.0, 175.0); // sampled path's first 175 checkpoint
-    add(175.0, 175.0, 175.0, 175.0);
-    return bars;
-}
-
 template<Scenario scenario>
 Outcome run_cycle_case(bool retain, bool magnifier, bool recording) {
+    static_assert(scenario == Scenario::Returning, "G2 is a separate base-first unit");
     RetentionSwitch switch_for_run(retain);
     Host<scenario> host(recording);
-    const auto bars = scenario == Scenario::Returning ? returning_tape() : global_tape();
+    const auto bars = returning_tape();
     host.run(bars.data(), static_cast<int>(bars.size()), "1D", "",
              magnifier, 4, MagnifierDistribution::ENDPOINTS);
     return host.finish();
@@ -452,8 +409,6 @@ void cycle_revival_matches_retained_execution() {
         CHECK(retained.positions.size() == count);
         CHECK(erased.positions.size() == count);
         if (retained.positions.size() != count || erased.positions.size() != count) continue;
-        // G2: its empty-ID parent entered on bar 3, S on bar 4, and X closed
-        // only the parent on bar 5. R was already closed at 100 on bar 3.
         // G1 retains L1/R's existing bar-2 and closed-origin bar-4 controls.
         CHECK(retained.positions[two_open] == -80.0);
         CHECK(retained.positions[closed_origin] == -40.0);
@@ -479,27 +434,6 @@ void cycle_revival_matches_retained_execution() {
             // One same-stop successor coexists, without consuming old X.
             CHECK(retained.extra_legs[7] == 1 && erased.extra_legs[7] == 1);
             CHECK(retained.legs[7].dormant && erased.legs[7].dormant);
-        } else {
-            // X starts global and origin-free under R; the empty-ID opening
-            // binds it on bar 3. Its cohort later has no units, while S's
-            // different ID still holds 40 and keeps this position cycle open.
-            CHECK(retained.legs[2].present && retained.legs[2].origin == 0);
-            CHECK(erased.legs[2].present && erased.legs[2].origin == 0);
-            CHECK(retained.exposure[4] == 40.0 && erased.exposure[4] == 40.0);
-            CHECK(retained.exposure[6] == 0.0 && erased.exposure[6] == 0.0);
-            CHECK(retained.legs[4].present && erased.legs[4].present);
-            CHECK(retained.legs[4].origin == retained.legs[6].origin);
-            CHECK(erased.legs[4].origin == erased.legs[6].origin);
-            CHECK(retained.cycles[2] == retained.cycles[6]);
-            CHECK(erased.cycles[2] == erased.cycles[6]);
-            std::printf("G2 retained trace magnifier=%d recording=%d: bound origin %llu/%llu, "
-                        "after-close present=%d dormant=%d, after-decline dormant=%d, "
-                        "original restored=%d\n",
-                        magnifier ? 1 : 0, recording ? 1 : 0,
-                        static_cast<unsigned long long>(retained.legs[4].origin),
-                        static_cast<unsigned long long>(retained.legs[6].origin),
-                        retained.legs[6].present ? 1 : 0, retained.legs[6].dormant ? 1 : 0,
-                        retained.legs[9].dormant ? 1 : 0, retained.legs.back().restored ? 1 : 0);
         }
 
         int through_x = 0;
@@ -520,8 +454,6 @@ void cycle_revival_matches_retained_execution() {
                 CHECK(trade.entry_price == 100.0);
                 if constexpr (returning) CHECK(trade.exit_comment == "original X");
                 if (through_x == 1) {
-                    // Retained G2: the empty-ID parent opens at 100 on bar 3;
-                    // global X closes exactly that parent, 40 at 105 on bar 5.
                     CHECK(trade.entry_id == (returning ? "L" : ""));
                     CHECK(trade.entry_incarnation == retained.legs[closed_origin].origin);
                     CHECK(trade.entry_bar_index == (returning ? 1 : 3));
@@ -531,8 +463,6 @@ void cycle_revival_matches_retained_execution() {
                 } else {
                     CHECK(trade.entry_incarnation != retained.legs[closed_origin].origin);
                     CHECK(trade.entry_id == entry);
-                    // G2's S opens at 100 on bar 4. At 175 the 32/7 margin
-                    // slice leaves 248/7 for the original global leg to close.
                     CHECK(trade.entry_bar_index == (returning ? 6 : 4));
                     CHECK(trade.exit_bar_index == expected_margin_bar);
                     CHECK(trade.exit_price == 175.0);
@@ -541,8 +471,6 @@ void cycle_revival_matches_retained_execution() {
             } else {
                 ++r_closes;
                 CHECK(trade.entry_id == "R");
-                // Retained G2's anchor is closed immediately at bar 3's
-                // 100 print; G1 keeps its original bar-2/bar-7 R round trip.
                 CHECK(trade.entry_bar_index == (returning ? 2 : 1));
                 CHECK(trade.exit_bar_index == (returning ? 7 : 3));
                 CHECK(trade.qty == 40.0);
@@ -567,7 +495,7 @@ void cycle_revival_matches_retained_execution() {
         CHECK(erased.equity == retained.equity);
         std::printf("%s magnifier=%d recording=%d: trades %zu/%zu, open %.17g/%.17g, "
                     "equity %.17g/%.17g, original restored=%d/%d\n",
-                    returning ? "G1 returning exposure" : "G2 global parent leg",
+                    "G1 returning exposure",
                     magnifier ? 1 : 0, recording ? 1 : 0,
                     erased.trades.size(), retained.trades.size(), erased.open, retained.open,
                     erased.equity, retained.equity,
@@ -578,7 +506,6 @@ void cycle_revival_matches_retained_execution() {
 
 int main() {
     closed_origin_revival_matches_retained_execution();
-    cycle_revival_matches_retained_execution<Scenario::Global>();
     cycle_revival_matches_retained_execution<Scenario::Returning>();
     std::printf("test_k1_closed_origin_margin_revival: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
