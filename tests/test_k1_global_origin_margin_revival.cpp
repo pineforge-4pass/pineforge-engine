@@ -1,7 +1,8 @@
 // CR-150 L19G G2: standalone base-first witness of global-leg revival.
-// The script, tape and exact controls are fix10's G2 case. This file needs
-// only APIs/hooks already present on integration 366489c64, including its
-// existing internal retention switch; no L19G source/header overlay is needed.
+// Fix12 uses an ordinary next-open close of R, whose Applied trade removes
+// its opened-origin slot before S's next callback (as measured in G1). The
+// reversal/margin suffix is the measured F2 path shifted by three bars. Only
+// base abe989918 APIs/hooks are used; no L19G source/header overlay is needed.
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include "../src/source/pine_placement_retention.hpp"
@@ -98,12 +99,16 @@ public:
             strategy_exit("X", "", kNa, 105.0, kNa, kNa, kNa, 100.0, {}, 40.0);
         if (i == 2) strategy_entry("", false, kNa, kNa, 40.0);
         if (i == 3) {
-            // R is FIFO's older lot: remove its 40 at this callback's 100
-            // print so X later closes its bound parent while S holds the side.
-            strategy_close("R", "Release anchor", 40.0, kNa, true);
-            strategy_entry("S", false, kNa, kNa, 40.0);
+            // R is FIFO's older lot. The ordinary close fills at bar 4's
+            // 100 open; consume_closed_trade_rows removes R's opened slot.
+            strategy_close("R", "Release anchor", 40.0);
         }
-        if (i == 7) {
+        // The measured immediate-close version consumed R's units but kept
+        // its opened slot, so S hit the cap of two. Continuous quantities do
+        // not enable the ledger-count override. With the ordinary close's
+        // normal trade drain, only the parent is counted here; S fills on 5.
+        if (i == 4) strategy_entry("S", false, kNa, kNa, 40.0);
+        if (i == 8) {
             strategy_entry("L", true);
             strategy_close("S", "Reverse to Long");
         }
@@ -182,16 +187,17 @@ std::vector<Bar> tape() {
     add(100.0, 100.2, 99.8, 100.0); // 0: submit R
     add(100.0, 100.2, 99.8, 100.0); // 1: R fills; arm origin-free global X
     add(100.0, 100.2, 99.8, 100.0); // 2: submit the later empty-ID parent
-    add(100.0, 100.2, 99.8, 100.0); // 3: parent fills, binds X; close R, submit S
-    add(100.0, 100.2, 99.8, 100.0); // 4: S fills; both lots hold 80 units
-    add(100.0, 105.2, 99.8, 105.0); // 5: X closes its 40-unit parent at 105
-    add(105.0, 105.2, 104.8, 105.0); // 6: sweep with empty-ID exposure zero
-    add(105.0, 105.2, 104.8, 105.0); // 7: place all-in reversal / close pair
-    add(160.0, 160.2, 159.8, 160.0); // 8: decline; suspend original global X
-    add(160.0, 160.2, 159.8, 160.0); // 9: inspect the dormant original
-    add(160.0, 175.0, 159.8, 175.0); // 10: chart margin checkpoint
-    add(175.0, 175.0, 175.0, 175.0); // 11: sampled path's first 175 checkpoint
-    add(175.0, 175.0, 175.0, 175.0); // 12: inspect original restoration
+    add(100.0, 100.2, 99.8, 100.0); // 3: parent fills, binds X; close R only
+    add(100.0, 100.2, 99.8, 100.0); // 4: R closes; its slot drains; submit S
+    add(100.0, 100.2, 99.8, 100.0); // 5: S fills; observe both lots before X
+    add(100.0, 105.2, 99.8, 105.0); // 6: X closes its 40-unit parent at 105
+    add(105.0, 105.2, 104.8, 105.0); // 7: sweep with empty-ID exposure zero
+    add(105.0, 105.2, 104.8, 105.0); // 8: place all-in reversal / close pair
+    add(160.0, 160.2, 159.8, 160.0); // 9: decline; suspend original global X
+    add(160.0, 160.2, 159.8, 160.0); // 10: inspect the dormant original
+    add(160.0, 175.0, 159.8, 175.0); // 11: chart margin checkpoint
+    add(175.0, 175.0, 175.0, 175.0); // 12: sampled path's first 175 checkpoint
+    add(175.0, 175.0, 175.0, 175.0); // 13: inspect original restoration
     return bars;
 }
 
@@ -221,35 +227,48 @@ std::uint64_t trade_digest(const std::vector<Trade>& trades) {
 
 void check_path(const Outcome& out, int margin_bar) {
     CHECK(out.error.empty());
-    CHECK(out.positions.size() == 13);
-    CHECK(out.exposure.size() == 13);
-    CHECK(out.cycles.size() == 13);
-    CHECK(out.legs.size() == 13);
-    if (out.positions.size() != 13 || out.exposure.size() != 13
-        || out.cycles.size() != 13 || out.legs.size() != 13) return;
+    CHECK(out.observations.size() == 14);
+    CHECK(out.positions.size() == 14);
+    CHECK(out.exposure.size() == 14);
+    CHECK(out.cycles.size() == 14);
+    CHECK(out.legs.size() == 14);
+    if (out.positions.size() != 14 || out.exposure.size() != 14
+        || out.cycles.size() != 14 || out.legs.size() != 14) return;
 
-    // R's open cycle exists before X; the later empty-ID opening binds X.
+    // Measured base binding: R opens on 1; X is origin-free on 2; the empty
+    // parent fills on 3. The ordinary close now removes R at bar 4's open.
+    CHECK(out.positions[0] == 0.0 && out.positions[1] == -40.0);
+    CHECK(out.positions[2] == -40.0 && out.exposure[2] == 0.0);
     CHECK(out.legs[2].present && out.legs[2].target != 0 && out.legs[2].origin == 0);
-    CHECK(out.positions[4] == -80.0 && out.exposure[4] == 40.0);
-    CHECK(out.legs[4].present && out.legs[4].origin != 0);
-    // Parent closed on bar 5; S still holds 40 in the SAME cycle at the sweep.
-    CHECK(out.positions[6] == -40.0 && out.exposure[6] == 0.0);
-    CHECK(out.cycles[2] == out.cycles[6]);
-    CHECK(out.legs[6].present && !out.legs[6].dormant && !out.legs[6].withdrawn);
-    CHECK(out.legs[6].qty == 40.0 && out.legs[6].stop == 105.0);
-    CHECK(out.legs[6].predecessor == 0);
-    CHECK(out.legs[4].origin == out.legs[6].origin);
-    // The real reversal declines at 160 on bar 8, before any margin slice.
-    CHECK(out.positions[9] == -40.0);
-    CHECK(out.legs[9].present && out.legs[9].dormant);
-    CHECK(!out.legs[9].withdrawn && !out.legs[9].restored);
+    CHECK(out.positions[3] == -80.0 && out.exposure[3] == 40.0);
+    CHECK(out.legs[3].present && out.legs[3].origin != 0);
+    CHECK(out.positions[4] == -40.0 && out.exposure[4] == 40.0);
+    // After the normal trade drain, S is admitted on 4 and fills at 100 on 5.
+    // This quiet bar MUST show two lots before X closes its FIFO parent on 6.
+    CHECK(out.positions[5] == -80.0 && out.exposure[5] == 40.0);
+    CHECK(out.legs[5].present && out.legs[5].origin == out.legs[3].origin);
+    // S holds 40 in the SAME cycle at bar 7's post-parent-close sweep.
+    CHECK(out.positions[7] == -40.0 && out.exposure[7] == 0.0);
+    CHECK(out.cycles[2] != 0 && out.cycles[2] == out.cycles[5]);
+    CHECK(out.cycles[5] == out.cycles[7]);
+    CHECK(out.legs[7].present && !out.legs[7].dormant && !out.legs[7].withdrawn);
+    CHECK(out.legs[7].qty == 40.0 && out.legs[7].stop == 105.0);
+    CHECK(out.legs[7].predecessor == 0);
+    CHECK(out.legs[3].origin == out.legs[7].origin);
+    // Measured F2 suffix shifted +3: reversal on 8, gap decline on 9,
+    // dormant original on 10, chart margin on 11 / sampled margin on 12.
+    CHECK(out.positions[10] == -40.0);
+    CHECK(out.cycles[7] == out.cycles[10]);
+    CHECK(out.legs[10].present && out.legs[10].dormant);
+    CHECK(!out.legs[10].withdrawn && !out.legs[10].restored);
     // The base run MUST revive original X; equal totals alone cannot pass.
-    CHECK(out.legs[12].present && out.legs[12].restored);
-    CHECK(out.legs[2].target == out.legs[4].target);
-    CHECK(out.legs[4].target == out.legs[6].target);
-    CHECK(out.legs[6].target == out.legs[9].target);
-    CHECK(out.legs[9].target == out.legs[12].target);
-    CHECK(out.legs[6].origin == out.legs[12].origin);
+    CHECK(out.legs[13].present && out.legs[13].restored);
+    CHECK(out.legs[2].target == out.legs[3].target);
+    CHECK(out.legs[3].target == out.legs[5].target);
+    CHECK(out.legs[5].target == out.legs[7].target);
+    CHECK(out.legs[7].target == out.legs[10].target);
+    CHECK(out.legs[10].target == out.legs[13].target);
+    CHECK(out.legs[7].origin == out.legs[13].origin);
 
     int through_x = 0;
     int margins = 0;
@@ -259,30 +278,30 @@ void check_path(const Outcome& out, int margin_bar) {
             ++margins;
             // At 175: equity 9800 - 40*75 = 6800; maintenance 7000.
             // The retained engine's 4x shortfall slice is 4*200/175 = 32/7.
-            CHECK(trade.entry_id == "S" && trade.entry_bar_index == 4);
+            CHECK(trade.entry_id == "S" && trade.entry_bar_index == 5);
             CHECK(trade.exit_bar_index == margin_bar && trade.exit_price == 175.0);
             CHECK(trade.qty == 32.0 / 7.0);
         } else if (trade.exit_id == "X") {
             ++through_x;
             CHECK(trade.entry_price == 100.0);
             if (through_x == 1) {
-                // Bound parent opens on bar 3 and X closes it at 105 on bar 5.
+                // Bound parent opens on bar 3 and X closes it at 105 on bar 6.
                 CHECK(trade.entry_id.empty() && trade.entry_bar_index == 3);
-                CHECK(trade.entry_incarnation == out.legs[6].origin);
-                CHECK(trade.exit_bar_index == 5 && trade.exit_price == 105.0);
+                CHECK(trade.entry_incarnation == out.legs[7].origin);
+                CHECK(trade.exit_bar_index == 6 && trade.exit_price == 105.0);
                 CHECK(trade.qty == 40.0);
             } else {
                 // Original X then flattens S's post-margin remainder at 175.
-                CHECK(trade.entry_id == "S" && trade.entry_bar_index == 4);
-                CHECK(trade.entry_incarnation != out.legs[6].origin);
+                CHECK(trade.entry_id == "S" && trade.entry_bar_index == 5);
+                CHECK(trade.entry_incarnation != out.legs[7].origin);
                 CHECK(trade.exit_bar_index == margin_bar && trade.exit_price == 175.0);
                 CHECK(trade.qty == 248.0 / 7.0);
             }
         } else {
             ++anchor_closes;
-            // R opened on bar 1; its immediate close uses bar 3's 100 print.
+            // R opened on bar 1; the ordinary close uses bar 4's 100 open.
             CHECK(trade.entry_id == "R" && trade.entry_bar_index == 1);
-            CHECK(trade.exit_bar_index == 3 && trade.qty == 40.0);
+            CHECK(trade.exit_bar_index == 4 && trade.qty == 40.0);
             CHECK(trade.entry_price == 100.0 && trade.exit_price == 100.0);
             CHECK(trade.pnl == 0.0);
         }
@@ -296,9 +315,9 @@ void check_path(const Outcome& out, int margin_bar) {
 
 void global_original_revives_on_the_base_and_lane() {
     for (bool magnifier : {false, true}) for (bool recording : {false, true}) {
-        // Chart margin sees bar 10's high; the sampled path first sees a
-        // margin checkpoint at 175 on bar 11. Recording changes no decision.
-        const int margin_bar = magnifier ? 11 : 10;
+        // Same suffix as measured F2, shifted +3: its chart bar 8 becomes
+        // 11; its first sampled 175 checkpoint (bar 9) becomes 12.
+        const int margin_bar = magnifier ? 12 : 11;
         const auto retained = run(true, magnifier, recording);
         const auto erased = run(false, magnifier, recording);
         check_path(retained, margin_bar);
