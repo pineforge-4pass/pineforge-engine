@@ -324,7 +324,7 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
         for (size_t i = 1; i < month_end.size(); ++i)
             if (month_end[i - 1] > 0.0) r.push_back(month_end[i] / month_end[i - 1] - 1.0);
         sharpe_sortino(r, 0.02 / 12.0, std::sqrt(12.0), &e.sharpe_monthly, &e.sortino_monthly,
-                       "metrics.equity.sharpe_tv", "metrics.equity.sortino_tv");
+                       "metrics.equity.sharpe_monthly", "metrics.equity.sortino_monthly");
     }
 
     // --- Per-bar variant: density-annualized (observed bars/year, NOT the

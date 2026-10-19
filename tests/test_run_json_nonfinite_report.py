@@ -81,8 +81,16 @@ class ReportLib(selected.FakeLib):
     """Only the execution stand-in: owns the backing arrays until cleanup."""
 
     def __init__(self, plan, events, *, trade_field=None, bad_value=None,
-                 net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None):
-        super().__init__(plan, events)
+                 net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None,
+                 failure_field=None):
+        engine_failure = None
+        if failure_field is not None:
+            engine_failure = (
+                RESULT_INVALID, "The report producer generated an invalid canonical result.")
+        super().__init__(plan, events, engine_failure=engine_failure)
+        if failure_field is not None:
+            self.strategy_get_last_error_args = lambda state: json.dumps(
+                {"field": failure_field, "reason": NONFINITE_REASON}).encode()
         self.trade_field = trade_field
         self.bad_value = bad_value
         self.net_profit = net_profit
@@ -375,6 +383,41 @@ def test_metric_overflow_is_typed(harness, mode, block, name, key, bad):
     result = harness.run(mode, metric=(block, name), bad_value=bad)
     assert_failure(result, RESULT_INVALID,
                    {"field": f"metrics.{block}.{key}", "reason": NONFINITE_REASON}, mode=mode)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("phase_fd", (True, False), ids=("phase-fd", "no-phase-fd"))
+@pytest.mark.parametrize("field,key", (
+    ("sharpe_monthly", "sharpe_tv"),
+    ("sortino_monthly", "sortino_tv"),
+    ("sharpe_tv", "sharpe_tv"),
+    ("sortino_tv", "sortino_tv"),
+), ids=("native-sharpe", "native-sortino", "public-sharpe", "public-sortino"))
+def test_engine_monthly_overflow_field_uses_public_wire_key(harness, mode, phase_fd, field, key):
+    # Model the typed kernel failure through the real getters and main()
+    # forwarding path, rather than poisoning a returned report metric.
+    result = harness.run(mode, phase_fd=phase_fd, failure_field=f"metrics.equity.{field}")
+    assert result.built == []
+    assert_failure(result, RESULT_INVALID,
+                   {"field": f"metrics.equity.{key}", "reason": NONFINITE_REASON},
+                   mode=mode, phase_fd=phase_fd)
+    assert strict_line(result.stdout)["error"] == (
+        "The report producer generated an invalid canonical result.")
+
+
+@pytest.mark.parametrize("code,field", (
+    (RESULT_INVALID, "metrics.equity.sharpe_bar"),
+    (RESULT_INVALID, "metrics.equity.buy_hold_return"),
+    (RESULT_INVALID, "metrics.all.sharpe_monthly"),
+    (RESULT_INVALID, "metrics.equity.sharpe_monthly.extra"),
+    (RESULT_INVALID, "sharpe_monthly"),
+    ("engine_command_value_invalid", "metrics.equity.sharpe_monthly"),
+))
+def test_failure_line_preserves_fields_outside_monthly_report_aliases(code, field):
+    args = {"field": field, "reason": NONFINITE_REASON}
+    document = strict_line(run_json.failure_line("engine fault", code, args))
+    assert document == {"engine": "pineforge", "error": "engine fault",
+                        "code": code, "args": args}
 
 
 @pytest.mark.parametrize("mode", MODES)

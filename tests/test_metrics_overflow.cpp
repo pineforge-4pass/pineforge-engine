@@ -245,16 +245,16 @@ void equity_arithmetic() {
     nonfinite("calmar_ratio", "metrics.equity.calmar", [] {
         (void)equity({1, 1 - 1e-15, 1e306}, 1, kYear / 2);
     });
-    nonfinite("monthly_variance", "metrics.equity.sharpe_tv", [] {
+    nonfinite("monthly_variance", "metrics.equity.sharpe_monthly", [] {
         (void)equity({1, 1e200, 1}, 1, kYear);
     });
-    nonfinite("monthly_return_ratio", "metrics.equity.sharpe_tv", [] {
+    nonfinite("monthly_return_ratio", "metrics.equity.sharpe_monthly", [] {
         (void)equity({1e-308, 1e308, 1e-308}, 1e-308, kYear);
     });
-    nonfinite("monthly_return_sum", "metrics.equity.sharpe_tv", [] {
+    nonfinite("monthly_return_sum", "metrics.equity.sharpe_monthly", [] {
         (void)equity({1, 1e308, 1, 1e308, 1}, 1, kYear);
     });
-    nonfinite("monthly_downside_square", "metrics.equity.sortino_tv", [] {
+    nonfinite("monthly_downside_square", "metrics.equity.sortino_monthly", [] {
         // The two admitted returns are identical: variance is zero, but the
         // population downside square overflows. Negative-base steps are
         // skipped by the existing return definition.

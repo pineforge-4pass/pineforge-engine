@@ -2211,6 +2211,13 @@ def failure_line(text, code=None, code_args=None) -> str:
             (_cut_utf8(_no_surrogates(value), ERROR_ARG_TEXT_MAX)
              if isinstance(value, str) else value)
             for name, value in (code_args or {}).items()}
+        if code == "report_result_invalid":
+            # Translate native metric fields at the public wire boundary.
+            field = doc["args"].get("field")
+            if isinstance(field, str):
+                prefix, separator, name = field.rpartition(".")
+                if prefix == "metrics.equity":
+                    doc["args"]["field"] = prefix + separator + EQUITY_REPORT_KEYS.get(name, name)
     line = _dump_line(doc)
     if len(line) > ERROR_LINE_MAX:
         if code is not None and len(_dump_line({**doc, "error": ""})) > ERROR_LINE_MAX:
