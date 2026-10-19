@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_group_receipt_retirement)
+pineforge_add_unit_test(test_group_receipt_retirement)

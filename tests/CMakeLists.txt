@@ -7110,8 +7110,6 @@ endif()
 # CR-150 L8a: keep the existing CMake line pins stable.
 list(APPEND TEST_SOURCES test_trade_ledger)
 pineforge_add_unit_test(test_trade_ledger)
-list(APPEND TEST_SOURCES test_report_sink_format)
-pineforge_add_unit_test(test_report_sink_format)
 
 list(APPEND TEST_SOURCES test_trade_percent_prefix)
 pineforge_add_unit_test(test_trade_percent_prefix)
@@ -7130,8 +7128,105 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
-# CR-150 L19F: append after the existing line-pinned registrations.
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    list(APPEND TEST_SOURCES test_k5_script_bar_retirement)
-    pineforge_add_unit_test(test_k5_script_bar_retirement)
+add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
+
+# CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
+file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
+list(SORT CR150_LANE_CMAKE)
+foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
+    include("${cr150_lane_file}")
+endforeach()
+
+# --- CR-150 core-cr150-l6b1 begin ---
+# CR-150 L6B1: appended after every pre-existing line pin. A real source
+# strategy module, with the same whole-archive link as release modules.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(report_sink_l6b1_strategy MODULE test_report_sink_l6b1.cpp)
+    target_compile_definitions(report_sink_l6b1_strategy PRIVATE PINEFORGE_L6B1_MODULE=1)
+    target_link_libraries(report_sink_l6b1_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(report_sink_l6b1_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(report_sink_l6b1_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(report_sink_l6b1_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(report_sink_l6b1_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/report_sink_l6b1")
+    list(APPEND TEST_SOURCES test_report_sink_l6b1)
+    pineforge_add_unit_test(test_report_sink_l6b1)
+    target_link_libraries(test_report_sink_l6b1 PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_report_sink_l6b1 PRIVATE
+        PINEFORGE_L6B1_MODULE_PATH="$<TARGET_FILE:report_sink_l6b1_strategy>"
+        PINEFORGE_L6B1_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
+    add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
 endif()
+# --- CR-150 core-cr150-l6b1 end ---
+
+# --- CR-150 core-cr150-l17a begin ---
+# CR-150 L17A: a kernel-only native host and a real version-1 path sink.
+# The UNIX-only plain registration is in cr150.d/core-cr150-l17a.cmake.
+# No additional target or test settings are required here.
+# --- CR-150 core-cr150-l17a end ---
+
+# --- CR-150 core-cr150-l9a begin ---
+# CR-150 L9A: full JSON through the temporary sink; after every line pin.
+# Preflight also discovers this file through docker/run_json_*_test.py.
+add_test(NAME test_run_json_sink_l9a
+    COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+        ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink.py)
+if(TARGET report_sink_l6b1_strategy AND NOT PINEFORGE_ENABLE_SANITIZERS
+   AND NOT PINEFORGE_ENABLE_COVERAGE)
+    set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9A_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>")
+endif()
+if(TARGET outputs_fixture_strategy)
+    set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9A_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
+# --- CR-150 core-cr150-l9a end ---
+
+# --- CR-150 core-cr150-l19b begin ---
+# CR-150 L19B: match the library Debug-mode precedent for
+# test_native_runtime_ambient_lifo at tests/CMakeLists.txt:4129-4130.
+target_compile_definitions(test_group_receipt_retirement PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
+# --- CR-150 core-cr150-l19b end ---
+
+# --- CR-150 core-cr150-l6b3 begin ---
+if(UNIX)
+    target_compile_definitions(test_report_sink_l6b3 PRIVATE
+        PINEFORGE_L6B3_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L6B3_DOCKER="${PROJECT_SOURCE_DIR}/docker")
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_report_sink_l6b3 PRIVATE PINEFORGE_L6B3_SOURCE=1)
+    endif()
+endif()
+# --- CR-150 core-cr150-l6b3 end ---
+
+# --- CR-150 core-cr150-l6b2 begin ---
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(report_sink_equity_strategy MODULE test_report_sink_equity.cpp)
+    target_compile_definitions(report_sink_equity_strategy PRIVATE PINEFORGE_L6B2_MODULE=1)
+    target_link_libraries(report_sink_equity_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(report_sink_equity_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(report_sink_equity_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(report_sink_equity_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(report_sink_equity_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/report_sink_equity")
+    target_link_libraries(test_report_sink_equity PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_report_sink_equity PRIVATE
+        PINEFORGE_L6B2_MODULE_PATH="$<TARGET_FILE:report_sink_equity_strategy>")
+    add_dependencies(test_report_sink_equity report_sink_equity_strategy)
+endif()
+# --- CR-150 core-cr150-l6b2 end ---
+
+# --- CR-150 core-cr150-l19f begin ---
+# CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
+# --- CR-150 core-cr150-l19f end ---

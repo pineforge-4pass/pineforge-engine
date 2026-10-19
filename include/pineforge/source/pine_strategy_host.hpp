@@ -444,7 +444,7 @@ public:
     // The request-data doors (pineforge.h strategy_set_symbol_feed and its
     // siblings); see BacktestEngine for the contract (lane XSYM-D).
     bool set_symbol_feed(const std::string& key, const std::string& timeframe,
-                         const Bar* bars, const int64_t* close_ms, int n) override;
+                         const Bar* bars, const int64_t* close_ms, int n) override; bool set_symbol_feed_borrowed(const std::string& key, const std::string& timeframe, const Bar* bars, const int64_t* close_ms, int n) override;
     bool set_symbol_feed_column(const std::string& key, const std::string& timeframe,
                                 const std::string& name, const double* values,
                                 int n) override;
@@ -855,7 +855,7 @@ protected:
 private:
     friend class PineScheduler;
     friend class PineExecutionAdapter;
-
+    friend struct ReportSinkEquityTestAccess;
     // One request.security site of ANOTHER symbol (register_security_eval with a
     // symbol key). Its payload runs in the requested context: on every bar of the
     // symbol's feed, in order, as the kernel hands the bars over through the
@@ -901,12 +901,12 @@ private:
     std::uint64_t adapter_broker_fill_event_sequence() const noexcept {
         return broker_fill_event_seq_;
     }
-    void scheduler_prepare_script_run(const std::vector<Bar>&,
+    void scheduler_prepare_script_run(PineScheduler::InputView,
                                       bool static_eligible, int expected_script_bars,
                                       bool script_bar_geometry);
     void scheduler_configure_security_evaluators();
     bool scheduler_uses_aux_security_feed() const noexcept;
-    void scheduler_prepare_security_sequence(const std::vector<Bar>&);
+    void scheduler_prepare_security_sequence(PineScheduler::InputView);
     // R5 lane R3b: the plain request.security sites of a batch run whose
     // input and script timeframes coincide are declared to the kernel as
     // NativeTimeframeSubscription series instances at the L6c begin-time hook
@@ -947,7 +947,7 @@ private:
     // this host's store, or the kernel's run spec while they are lent to it.
     const NativeInstrumentFeed& installed_symbol_feed(std::size_t i) const;
     // Copies lent bytes back from the kernel's spec, which keeps its own.
-    void restore_symbol_feeds();
+    void restore_symbol_feeds(); void stage_symbol_feed_views();
     // The same for a request-data door: the reason it failed, or empty.
     std::string restore_symbol_feeds_reason();
     // True while the running spec names this host's sites: the kernel steps
@@ -1152,7 +1152,7 @@ protected:
     // The foreign site whose payload is being evaluated: its requested
     // context answers pine_bar_index(), time_close() and syminfo_ for the
     // length of the dispatch, and nothing outside one. Never durable.
-    const ForeignSecuritySite* foreign_context_ = nullptr;
+    struct BorrowedFeedSlot { const Bar* bars = nullptr; const std::int64_t* close_ms = nullptr; std::size_t size = 0; bool present = false; }; std::vector<BorrowedFeedSlot> symbol_feed_views_; const ForeignSecuritySite* foreign_context_ = nullptr;
 
     // Provider configuration, not book state: it is staged before a run and
     // projected into the adapter at begin, so it is waived from the durable
@@ -1298,6 +1298,8 @@ protected:
     // hold_script_average_price() wrote position_entry_price_ on the flat
     // book this pass; release_script_average_price() clears it.
     bool script_average_held_ = false;
+    void finish_applied_admission(const native_order::ExecutionAppliedEvent&,
+                                  const NativeDecisionContext&);
 };
 
 using PineNativeHost = PineStrategyHost;

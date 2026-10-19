@@ -1,36 +1,36 @@
-// R5 lane V19-D witness: a bracket family's roster parks the erased members
-// behind a retained one, and stays the same roster.
+// CR-150 L19h witness: a bracket family's roster parks erased members behind
+// a retained one, and the settled prefix keeps only its fold state.
 //
 // source::BracketRoster keeps every leg a strategy.exit family placed, in
-// order (the bracket cancel cancels each of them, and a leg that no longer
-// works leaves a NotWorking receipt whose ordinal is observable). V19-E kept
-// the members whose placement rows were erased as a settled prefix of
-// incarnations and every member from the first retained one onward as a
-// handle, which the v4 fold reads in full: a family whose first leg a pin
-// keeps (a leg of the current position cycle) held every later member as a
-// handle, and a recording run paid a fold over all of them per bar (INT21's
-// straddle: 0.15 / 1.67 / 23.5 s at 1k / 4k / 16k bars). V19-D parks every
-// erased member behind a retained one in a run between the two handles it
-// sits between.
+// order. V19-E kept the members whose placement rows were erased as a
+// settled prefix of incarnations and every member from the first retained
+// one onward as a handle, which the v4 fold reads in full: a family whose
+// first leg a pin keeps (a leg of the current position cycle) held every
+// later member as a handle, and a recording run paid a fold over all of them
+// per bar (INT21's straddle: 0.15 / 1.67 / 23.5 s at 1k / 4k / 16k bars).
+// V19-D parks every erased member behind a retained one in a run between the
+// two handles it sits between. L19h drops the settled prefix's varint bytes;
+// its count, last incarnation and digest remain, while walks begin after
+// that prefix. Interior parked runs remain visible until they are absorbed.
 //
 // Randomized operation streams -- legs appended, rows erased (a member's row
 // only ever goes), settles, and live legs removed (the bracket cancel of a
 // part of the family) -- are played on a roster and on a plain model: the
 // members in order, each marked erased or not. After every operation the
-// roster must list the model's members in order (members(), iteration,
-// size()); after every settle its working tail must be exactly the members
-// whose rows are retained, count() and holds() must answer for them, and
-// its fold words (settled_count(), settled_digest()) must be the model's:
+// roster must list the model's visible members in order (members(),
+// iteration; size() still includes the settled prefix); after every settle
+// its working tail must be exactly the members whose rows are retained,
+// count() and holds() must answer for them, and its fold words
+// (settled_count(), settled_digest()) must be the model's:
 // the maximal erased prefix's count and running digest, then each run of
 // erased members between retained ones as (handles before it, count, digest).
 // A second roster that settles only at the end reaches the same words.
 //
-// Fail-before, this TU against the lane's base 6c081f5d (spark aarch64,
-// GCC 13, Release): it builds, and fails 282,041 of 2,237,468 checks, first
-// roster.working_tail() == words.tail, roster.settled_digest() ==
-// words.digest and roster.holds(member.handle) == held -- the working tail
-// kept every member from the first retained one onward, erased ones
-// included.
+// Fail-before on d61e68b9 (the L0b base): the earlier V19-D implementation
+// still materializes the settled prefix, so the first settle after a leading
+// erased run returns those handles from members()/iteration instead of
+// starting after the settled part. This is the feature-missing red reason;
+// the existing V19-D checks remain in the same witness.
 #include <pineforge/source/pine_adapter.hpp>
 
 #include <algorithm>
@@ -119,15 +119,16 @@ Words expected(const std::vector<Member>& model) {
 
 bool same_members(const source::BracketRoster& roster, const std::vector<Member>& model) {
     const auto members = roster.members();
-    if (members.size() != model.size() || roster.size() != model.size()) return false;
-    std::size_t index = 0;
+    const std::size_t settled = std::min(roster.settled_count(), model.size());
+    if (members.size() + settled != model.size() || roster.size() != model.size()) return false;
+    std::size_t index = settled;
     for (const auto& handle : roster) {
         if (index >= model.size() || !(handle == model[index].handle)) return false;
         ++index;
     }
-    for (std::size_t at = 0; at < model.size(); ++at)
-        if (!(members[at] == model[at].handle)) return false;
-    return index == model.size();
+    for (std::size_t at = 0; at < members.size(); ++at)
+        if (!(members[at] == model[settled + at].handle)) return false;
+    return index == model.size() && members.size() + settled == roster.size();
 }
 
 int streams = 0;
