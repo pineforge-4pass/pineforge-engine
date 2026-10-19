@@ -266,3 +266,33 @@ a watchdog, native observer acceptance test, deadline/billing classification
 or a full canonical phase-schema audit. Stage timeouts remain driver errors.
 The broader corpus, manifest, parity sweep, ABI gates and exact-tree maintainer
 verification remain separate acceptance work.
+
+## Manifest checker controls
+
+Run the complete source-only manifest controls with Python 3.10+:
+
+```bash
+python3 -I -B tests/ownership/test_manifest_checker.py
+```
+
+CTest distributes the same `ManifestCheckerTests` cases across four rows,
+`test_selected_window_ownership_manifest_controls_shard_1of4`,
+`test_selected_window_ownership_manifest_controls_shard_2of4`,
+`test_selected_window_ownership_manifest_controls_shard_3of4`, and
+`test_selected_window_ownership_manifest_controls_shard_4of4`. Each keeps its
+180-second timeout. Run all four in parallel, or one shard directly:
+
+```bash
+ctest --test-dir build --output-on-failure --parallel 4 \
+  -R '^test_selected_window_ownership_manifest_controls_shard_[1-4]of4$'
+python3 -I -B tests/ownership/test_manifest_checker.py --shard 1/4
+```
+
+`--shard I/N` requires integers with `1 <= I <= N` and selects
+`sorted(loader case ids)[I-1::N]`. The separate cheap
+`test_shards_partition_every_case_exactly_once` guard runs in every shard:
+for each shard count from 1 through 8 it independently discovers at least 30
+cases and checks the exact assignments, disjointness and full coverage.
+Preflight continues to run the complete unsharded suite. The positive
+`test_selected_window_ownership_manifest` and independent
+`test_selected_window_ownership_d4` CTest rows keep their existing commands.

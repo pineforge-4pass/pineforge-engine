@@ -3772,13 +3772,25 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-add_test(NAME test_selected_window_ownership_manifest_controls
-    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py)
+# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
+# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
+# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget:
+# 126/4 = 31.5 s, or 132.3/4 = 33.1 s using the slowest passing measurement.
+# 180/33.1 = 5.4x estimated headroom before overhead (60 s/shard allows 3x).
+# Cases have unequal costs; the supervisor verifies each shard's loaded time.
+set(_pf_ownership_control_shards)
+foreach(_pf_ownership_shard 1 2 3 4)
+    add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
+            --shard ${_pf_ownership_shard}/4)
+    list(APPEND _pf_ownership_control_shards
+        test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4)
+endforeach()
 add_test(NAME test_selected_window_ownership_d4
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
         ManifestCheckerTests.test_d4_independent_reconstruction_matches_manifest)
 set_tests_properties(test_selected_window_ownership_manifest
-    test_selected_window_ownership_manifest_controls test_selected_window_ownership_d4
+    ${_pf_ownership_control_shards} test_selected_window_ownership_d4
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)
 
 # The C bridge test also links the shared window-plan helper, whose bridge

@@ -5,9 +5,14 @@ Run with Python 3.10+ (including -I). Mutations touch temporary copies only.
 The positive tree check deliberately requires the integrated producers, rather
 than accepting a recorded count or treating existing integration findings as a
 successful check. The supervisor runs this suite on the completed tree.
+
+Use --shard I/N (1-based) to run sorted loader-discovered ManifestCheckerTests
+ids at positions [I-1::N], plus the cheap partition guard in every shard.
+Without --shard, the usual unittest discovery and CLI selectors apply.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import copy
 import ctypes
@@ -466,5 +471,58 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertIn("ownership[input]: duplicate JSON key format", result.stdout.splitlines())
 
 
+def shard_case_ids(index: int, count: int) -> list[str]:
+    ids = sorted(test.id() for test in
+                 unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
+    return ids[index - 1::count]
+
+
+class ManifestCheckerShardingTests(unittest.TestCase):
+    def test_shards_partition_every_case_exactly_once(self):
+        # Discover the expectation independently of shard_case_ids, and use
+        # index residues rather than reproducing its slicing implementation.
+        ids = sorted(test.id() for test in
+                     unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
+        self.assertGreaterEqual(len(ids), 30)
+        for count in range(1, 9):
+            with self.subTest(shards=count):
+                seen = set()
+                total = 0
+                for index in range(1, count + 1):
+                    shard = shard_case_ids(index, count)
+                    expected = [test_id for position, test_id in enumerate(ids)
+                                if position % count == index - 1]
+                    self.assertEqual(shard, expected)
+                    self.assertEqual(len(shard), len(set(shard)))
+                    self.assertTrue(seen.isdisjoint(shard))
+                    seen.update(shard)
+                    total += len(shard)
+                self.assertEqual(seen, set(ids))
+                self.assertEqual(total, len(ids))
+
+
+def parse_shard(value: str) -> tuple[int, int]:
+    message = "--shard must be I/N with integers satisfying 1 <= I <= N"
+    if re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", value) is None:
+        raise argparse.ArgumentTypeError(message)
+    index, count = map(int, value.split("/"))
+    if index > count:
+        raise argparse.ArgumentTypeError(message)
+    return index, count
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if any(arg == "--shard" or arg.startswith("--shard=") for arg in sys.argv[1:]):
+        parser = argparse.ArgumentParser(allow_abbrev=False)
+        parser.add_argument("--shard", type=parse_shard, metavar="I/N",
+                            required=True, action="append")
+        args = parser.parse_args()
+        if len(args.shard) != 1:
+            parser.error("specify --shard exactly once")
+        index, count = args.shard[0]
+        guards = [test.id() for test in unittest.TestLoader().loadTestsFromTestCase(
+            ManifestCheckerShardingTests)]
+        unittest.main(module=None, defaultTest=shard_case_ids(index, count) + guards,
+                      argv=[sys.argv[0]])
+    else:
+        unittest.main()
