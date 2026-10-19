@@ -258,7 +258,10 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
         }
         if (observed) {
             const pf_execution_observer_v1 observer{sizeof observer, 1, nullptr,
-                [](void*, const pf_execution_boundary_v1*, pf_boundary_receipt_v1*) -> int { return 0; }};
+                [](void*, const pf_execution_boundary_v1*, pf_boundary_receipt_v1* receipt) -> int {
+                    receipt->frame_bytes = 0;
+                    return 0;
+                }};
             require(api.observer(handle, &observer) == 0, "observer install failed");
         }
         require(run_with_diagnostics(api, handle, bars.data(), n, magnifier ? 1 : 0) == 0,
