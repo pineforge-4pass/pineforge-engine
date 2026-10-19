@@ -95,7 +95,7 @@ jobs:
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
-          owner: pineforge-4pass
+          owner: ${{ github.repository_owner }}
           repositories: pineforge-engine
 
       - name: Checkout (full history)
@@ -476,7 +476,7 @@ jobs:
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
-          owner: pineforge-4pass
+          owner: ${{ github.repository_owner }}
           repositories: pineforge-release
 
       # client_payload = {version: vX.Y.Z[-rc.N], prerelease: true|false,
