@@ -67,6 +67,8 @@ public:
             last.equity -= 0.75;
             last.open_profit = -0.0;
         }
+        if (mode == "shrink" && report->equity_curve_len > 1)
+            report->equity_curve_len = 1;
     }
     EquitySnapshot snapshot() const {
         EquitySnapshot result;
@@ -298,8 +300,12 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
             "F7: presentation mutated the engine's held point");
     require(std::memcmp(before.extremes, after.extremes, sizeof before.extremes) == 0,
             "presentation mutated engine extrema");
-    require(after.presented_length == (expected.equity_curve_len > 0 ? 1 : 0),
-            "sink presentation must receive a one-point copy");
+    // The ordinary path, including observer-only capture, presents one tail.
+    // L17a's selected tests exercise the full-curve presentation contract.
+    if (!selected) {
+        require(after.presented_length == (expected.equity_curve_len > 0 ? 1 : 0),
+                "sink presentation must receive a one-point copy");
+    }
     require(std::memcmp(&expected.metrics, &actual.metrics, sizeof expected.metrics) == 0,
             "sink-on/off metrics differ");
     require(expected.net_profit == actual.net_profit && expected.total_trades == actual.total_trades,
@@ -320,13 +326,89 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
     const auto repeated = snapshot(api, streamed);
     require(std::memcmp(&before.last, &repeated.last, sizeof before.last) == 0,
             "repeated presentation mutated held point");
-    // Reuse resets the streamed prefix; one point stays held until fill.
+    // Ordinary reuse resets the prefix; one point stays held until fill.
+    // Selected-to-selected reuse is covered by the unchanged L17a test.
+    if (selected)
+        require(api.selected(streamed, nullptr) == 0, "window clear before ordinary reuse failed");
     const auto single = feed(1);
     require(run_with_diagnostics(api, streamed, single.data(), 1, 0) == 0, "reused run failed");
     require(receipt(api, streamed).count_e == 0 && receipt(api, streamed).complete == 0,
             "reused run retained the old E prefix");
     api.free(&again); api.free(&actual); api.free(&expected);
     api.destroy(streamed); api.destroy(baseline);
+}
+void ordinary_shrunk_capture(const Api& api, const std::string& path) {
+    std::printf("L6b-2 ordinary shrink: observed capture without a selected window\n");
+    constexpr int n = 17;
+    const auto bars = feed(n);
+    const auto reference = api.create("{}"), shortened = api.create("{}"), streamed = api.create("{}");
+    const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "ordinary-shrunk", nullptr};
+    require(api.set(streamed, &sink) == 0, "ordinary shrink sink install failed");
+    api.mode(reference, "mode", "open");
+    api.mode(shortened, "mode", "shrink");
+    api.mode(streamed, "mode", "shrink");
+    // No window is installed. The observer takes the ordinary capture entry.
+    const pf_execution_observer_v1 observer{sizeof observer, 1, nullptr,
+        [](void*, const pf_execution_boundary_v1*, pf_boundary_receipt_v1* receipt) -> int {
+            receipt->frame_bytes = 0;
+            return 0;
+        }};
+    for (const auto handle : {reference, shortened, streamed}) {
+        require(api.observer(handle, &observer) == 0, "ordinary shrink observer install failed");
+        require(run_with_diagnostics(api, handle, bars.data(), n, 0) == 0,
+                "ordinary shrink fixture run failed");
+    }
+    const auto full_before = snapshot(api, reference), short_before = snapshot(api, shortened);
+    const auto before = snapshot(api, streamed);
+    require(full_before.count == n && short_before.count == n && before.count == n,
+            "ordinary shrink changed the recorded point count");
+    require(full_before.presentations == 1 && short_before.presentations == 1
+            && before.presentations == 1, "ordinary shrink must present once at capture");
+    require(full_before.presented_length == n && short_before.presented_length == n
+            && before.presented_length == 1, "ordinary shrink hook received the wrong curve");
+    const auto pending = receipt(api, streamed);
+    require(pending.count_e == n - 1 && pending.complete == 0,
+            "ordinary shrink must hold exactly the final E record before fill");
+    require(api.hash(reference) == api.hash(shortened) && api.hash(reference) == api.hash(streamed),
+            "ordinary shrink changed broker execution");
+    pf_report_t expected{}, cropped{}, actual{}, again{};
+    api.fill(reference, &expected);
+    api.fill(shortened, &cropped);
+    api.fill(streamed, &actual);
+    // The ordinary sink preserves N records: its one-point callback does not
+    // satisfy the shrink hook's >1 condition. Sink-off publishes one point.
+    // Derive the E values from the unmodified ordinary report, with no anchor.
+    require(expected.equity_curve_len == n && cropped.equity_curve_len == 1,
+            "ordinary shrink must distinguish full storage from the published curve");
+    require(std::memcmp(expected.equity_curve, cropped.equity_curve,
+                        sizeof(pf_equity_point_t)) == 0,
+            "ordinary shrink changed the first published point");
+    require(std::memcmp(&expected.metrics, &cropped.metrics, sizeof expected.metrics) == 0
+            && std::memcmp(&expected.metrics, &actual.metrics, sizeof expected.metrics) == 0,
+            "ordinary shrink changed metrics computed from the full storage");
+    require(expected.net_profit == actual.net_profit && expected.total_trades == actual.total_trades,
+            "ordinary shrink changed report scalars");
+    std::string points;
+    for (std::int64_t i = 0; i < expected.equity_curve_len; ++i) points += equity(expected.equity_curve[i]);
+    const auto bytes = read(path);
+    require(equity_lines(bytes) == points, "ordinary shrink lost or rewrote an E value");
+    const auto completed = receipt(api, streamed);
+    require(completed.complete == 1 && completed.count_e == n,
+            "ordinary shrink completed with the wrong E count");
+    require(actual.equity_curve == nullptr && actual.equity_curve_len == 0,
+            "ordinary shrink sink report must expose summary only");
+    const auto after = snapshot(api, streamed);
+    require(std::memcmp(&before.last, &after.last, sizeof before.last) == 0
+            && std::memcmp(before.extremes, after.extremes, sizeof before.extremes) == 0,
+            "ordinary shrink mutated held execution state");
+    require(after.presentations == 1, "ordinary shrink fill repeated presentation");
+    api.fill(streamed, &again);
+    require(read(path) == bytes && snapshot(api, streamed).presentations == 1,
+            "ordinary shrink repeated fill changed records or presentation count");
+    require(std::memcmp(&actual.metrics, &again.metrics, sizeof actual.metrics) == 0,
+            "ordinary shrink repeated fill changed metrics");
+    api.free(&again); api.free(&actual); api.free(&cropped); api.free(&expected);
+    api.destroy(streamed); api.destroy(shortened); api.destroy(reference);
 }
 void failed_run(const Api& api, const std::string& path) {
     const auto bars = feed(8);
@@ -359,6 +441,7 @@ int main() {
         compare(api, root + "/magnifier.ndjson", "open", 61, false, false, true);
         compare(api, root + "/quote.ndjson", "quote", 61, false, false, true);
         compare(api, root + "/anchor.ndjson", "flat", 8, false, true);
+        ordinary_shrunk_capture(api, root + "/ordinary-shrunk.ndjson");
         failed_run(api, root + "/failed.ndjson");
         std::printf("L6b-2 hold-back, exact tail fold, presentation copy: passed (%s)\n", directory);
         return 0;
