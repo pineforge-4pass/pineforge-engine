@@ -337,6 +337,20 @@ struct LineWriter::State {
         return {{trailer.count_e, trailer.count_t, trailer.count_o, trailer.count_v,
                  trailer.count_k, trailer.count_x, trailer.count_h}};
     }
+
+    template<class Build>
+    void record(char tag, std::int64_t& count, Build build) {
+        try {
+            require_writing();
+            if (!enabled(tag, records)) invalid("report sink record is absent from the header");
+            if (count == safe_integer) invalid("report sink record count exceeds its bound");
+            line(build());
+            ++count;
+        } catch (...) {
+            fail();
+            throw;
+        }
+    }
 };
 
 LineWriter::LineWriter(const pf_report_sink_v1& sink) : state_(std::make_unique<State>(sink)) {}
@@ -440,6 +454,83 @@ Trailer LineWriter::write_trailer() {
         state.fail();
         throw;
     }
+}
+
+namespace {
+std::string nullable_time(std::int64_t time) {
+    return time == INT64_MIN ? "null" : integer(time);
+}
+
+std::string hash64(std::uint64_t value) {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string result = "\"0000000000000000\"";
+    for (int i = 16; i > 0; --i) {
+        result[static_cast<std::size_t>(i)] = digits[value & 15];
+        value >>= 4;
+    }
+    return result;
+}
+
+void append_values(std::string& line, const double* values, std::int64_t count,
+                   std::int64_t expected) {
+    if (count != expected || count < 0 || (count > 0 && !values))
+        invalid("report sink values differ from the header field count");
+    for (std::int64_t i = 0; i < count; ++i) {
+        line += ',' + f64(values[i]);
+        check_line(line);
+    }
+    line += ']';
+}
+} // namespace
+
+void LineWriter::write_o(std::int64_t row, std::int64_t open_ms, std::int64_t close_ms,
+                         const double* values, std::int64_t count) {
+    auto& state = *state_;
+    state.record('O', state.trailer.count_o, [&] {
+        if (row != state.trailer.count_o)
+            invalid("report sink output rows must start at zero and be contiguous");
+        std::string line = "[\"O\"," + integer(row) + ',' + nullable_time(open_ms)
+            + ',' + nullable_time(close_ms);
+        append_values(line, values, count, state.records.series_slots);
+        return line;
+    });
+}
+
+void LineWriter::write_v(const pf_output_event_v1_t& event, std::string_view message) {
+    auto& state = *state_;
+    state.record('V', state.trailer.count_v, [&] {
+        std::string line = "[\"V\"," + unsigned_integer(event.sequence)
+            + ',' + integer(event.output_index) + ',' + integer(event.bar_index)
+            + ',' + nullable_time(event.bar_open_ms) + ',' + nullable_time(event.bar_close_ms)
+            + ',' + integer(event.ordinal_in_bar) + ',' + integer(event.phase)
+            + ',' + integer(event.confirmed) + ',' + f64(event.value)
+            + ',' + hash64(event.message_hash64) + ',';
+        line += event.message ? wire_string(message) : "null";
+        return line + ']';
+    });
+}
+
+void LineWriter::write_k(const double* values, std::int64_t count) {
+    auto& state = *state_;
+    state.record('K', state.trailer.count_k, [&] {
+        if (state.trailer.count_k != 0) invalid("report sink constants were already written");
+        std::string line = "[\"K\"";
+        append_values(line, values, count, state.records.constant_count);
+        return line;
+    });
+}
+
+void LineWriter::write_x(const pf_trace_entry_t& entry, std::string_view name) {
+    auto& state = *state_;
+    state.record('X', state.trailer.count_x, [&] {
+        return "[\"X\"," + integer(entry.timestamp) + ',' + integer(entry.bar_index)
+            + ',' + wire_string(name) + ',' + f64(entry.value) + ']';
+    });
+}
+
+void LineWriter::write_h(std::uint64_t hash) {
+    auto& state = *state_;
+    state.record('H', state.trailer.count_h, [&] { return "[\"H\"," + hash64(hash) + ']'; });
 }
 
 } // namespace report_sink
