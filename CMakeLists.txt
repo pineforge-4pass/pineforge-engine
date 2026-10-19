@@ -156,9 +156,9 @@ set(PINEFORGE_KERNEL_SOURCES
     src/native_bar_views.cpp
     src/selected_report_view.cpp
     src/selected_window_plan.cpp
+    src/report_scratch.cpp
 )
-# The kernel-only archive. Same objects, same flags as the kernel half of
-# libpineforge.a — a consumer that never speaks Pine links this one.
+# The kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine.
 add_library(pineforge_kernel STATIC ${PINEFORGE_KERNEL_SOURCES})
 add_library(PineForge::kernel ALIAS pineforge_kernel)
 # So a find_package(PineForge) consumer spells it the same way an in-tree one
