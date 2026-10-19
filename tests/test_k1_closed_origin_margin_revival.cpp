@@ -104,14 +104,21 @@ public:
         observe();
         const int i = pine_bar_index();
         if constexpr (scenario == Scenario::Global) {
-            if (i == 0) {
-                strategy_entry("S", false, kNa, kNa, 40.0);
-                // No position yet, but S is pending: this global leg binds
-                // to that parent when it fills, rather than being voided.
+            // Empty entry IDs are admitted source IDs. R first opens the
+            // cycle; global X is armed while held, on a DIFFERENT signal bar
+            // from the later empty-ID entry. Its Applied callback binds the
+            // live explicit leg to that parent without a same-bar re-arm.
+            if (i == 0) strategy_entry("R", false, kNa, kNa, 40.0);
+            if (i == 1)
                 strategy_exit("X", "", kNa, 105.0, kNa, kNa, kNa, 100.0, {}, 40.0);
+            if (i == 2) strategy_entry("", false, kNa, kNa, 40.0);
+            if (i == 3) {
+                // Remove the older R lot at this real callback's 100 print,
+                // before S is admitted, so global X later closes its parent.
+                strategy_close("R", "Release anchor", 40.0, kNa, true);
+                strategy_entry("S", false, kNa, kNa, 40.0);
             }
-            if (i == 1) strategy_entry("S", false, kNa, kNa, 40.0);
-            if (i == 5) {
+            if (i == 7) {
                 strategy_entry("L", true);
                 strategy_close("S", "Reverse to Long");
             }
@@ -393,11 +400,33 @@ std::vector<Bar> returning_tape() {
     return bars;
 }
 
+std::vector<Bar> global_tape() {
+    std::vector<Bar> bars;
+    const auto add = [&](double o, double h, double l, double c) {
+        bars.push_back({o, h, l, c, 1.0,
+            kStart + static_cast<std::int64_t>(bars.size()) * 86400000LL});
+    };
+    add(100.0, 100.2, 99.8, 100.0); // submit R
+    add(100.0, 100.2, 99.8, 100.0); // R fills at 100; arm origin-free global X
+    add(100.0, 100.2, 99.8, 100.0); // submit the empty-ID parent on a later bar
+    add(100.0, 100.2, 99.8, 100.0); // parent fills at 100, binds X; close R, submit S
+    add(100.0, 100.2, 99.8, 100.0); // S fills at 100; parent and S hold 80 units
+    add(100.0, 105.2, 99.8, 105.0); // global X closes its 40-unit parent at 105
+    add(105.0, 105.2, 104.8, 105.0); // sweep with empty-ID exposure zero, S open
+    add(105.0, 105.2, 104.8, 105.0); // place the all-in reversal / close pair
+    add(160.0, 160.2, 159.8, 160.0); // decline the reversal; suspend global X
+    add(160.0, 160.2, 159.8, 160.0); // inspect the original dormant global leg
+    add(160.0, 175.0, 159.8, 175.0); // chart margin checkpoint revives X
+    add(175.0, 175.0, 175.0, 175.0); // sampled path's first 175 checkpoint
+    add(175.0, 175.0, 175.0, 175.0);
+    return bars;
+}
+
 template<Scenario scenario>
 Outcome run_cycle_case(bool retain, bool magnifier, bool recording) {
     RetentionSwitch switch_for_run(retain);
     Host<scenario> host(recording);
-    const auto bars = scenario == Scenario::Returning ? returning_tape() : tape();
+    const auto bars = scenario == Scenario::Returning ? returning_tape() : global_tape();
     host.run(bars.data(), static_cast<int>(bars.size()), "1D", "",
              magnifier, 4, MagnifierDistribution::ENDPOINTS);
     return host.finish();
@@ -406,10 +435,14 @@ Outcome run_cycle_case(bool retain, bool magnifier, bool recording) {
 template<Scenario scenario>
 void cycle_revival_matches_retained_execution() {
     constexpr bool returning = scenario == Scenario::Returning;
-    constexpr std::size_t count = returning ? 13 : 11;
+    constexpr std::size_t count = 13;
+    constexpr std::size_t two_open = returning ? 2 : 4;
+    constexpr std::size_t closed_origin = returning ? 4 : 6;
     const char* const entry = returning ? "L" : "S";
     for (bool magnifier : {false, true}) for (bool recording : {false, true}) {
-        const int expected_margin_bar = (returning ? 10 : 8) + (magnifier ? 1 : 0);
+        // Both retained traces reach 175 on bar 10; distribution samples
+        // arm margin only at the first 175 print of bar 11.
+        const int expected_margin_bar = 10 + (magnifier ? 1 : 0);
         // Expected trading controls below describe the RETAINED path. The
         // erasing run is compared with it, never used to derive an expectation.
         const auto retained = run_cycle_case<scenario>(true, magnifier, recording);
@@ -419,14 +452,18 @@ void cycle_revival_matches_retained_execution() {
         CHECK(retained.positions.size() == count);
         CHECK(erased.positions.size() == count);
         if (retained.positions.size() != count || erased.positions.size() != count) continue;
-        CHECK(retained.positions[2] == -80.0);
-        CHECK(retained.positions[4] == -40.0);
-        CHECK(retained.legs[4].present && !retained.legs[4].dormant);
-        CHECK(erased.legs[4].present && !erased.legs[4].dormant);
-        CHECK(retained.legs[4].origin != 0);
-        CHECK(retained.legs[4].qty == 40.0 && retained.legs[4].stop == 105.0);
-        CHECK(retained.legs[4].predecessor == 0);
-        const std::size_t suspended = returning ? 9 : 7;
+        // G2: its empty-ID parent entered on bar 3, S on bar 4, and X closed
+        // only the parent on bar 5. R was already closed at 100 on bar 3.
+        // G1 retains L1/R's existing bar-2 and closed-origin bar-4 controls.
+        CHECK(retained.positions[two_open] == -80.0);
+        CHECK(retained.positions[closed_origin] == -40.0);
+        CHECK(retained.legs[closed_origin].present && !retained.legs[closed_origin].dormant);
+        CHECK(erased.legs[closed_origin].present && !erased.legs[closed_origin].dormant);
+        CHECK(retained.legs[closed_origin].origin != 0);
+        CHECK(retained.legs[closed_origin].qty == 40.0
+            && retained.legs[closed_origin].stop == 105.0);
+        CHECK(retained.legs[closed_origin].predecessor == 0);
+        constexpr std::size_t suspended = 9;
         CHECK(retained.positions[suspended] == -40.0);
         CHECK(erased.positions[suspended] == -40.0);
         CHECK(retained.legs[suspended].present && retained.legs[suspended].dormant);
@@ -443,9 +480,26 @@ void cycle_revival_matches_retained_execution() {
             CHECK(retained.extra_legs[7] == 1 && erased.extra_legs[7] == 1);
             CHECK(retained.legs[7].dormant && erased.legs[7].dormant);
         } else {
-            // A global leg has no cohort under the empty name, even though
-            // its bound parent's sibling still holds the position open.
-            CHECK(retained.exposure[4] == 0.0 && erased.exposure[4] == 0.0);
+            // X starts global and origin-free under R; the empty-ID opening
+            // binds it on bar 3. Its cohort later has no units, while S's
+            // different ID still holds 40 and keeps this position cycle open.
+            CHECK(retained.legs[2].present && retained.legs[2].origin == 0);
+            CHECK(erased.legs[2].present && erased.legs[2].origin == 0);
+            CHECK(retained.exposure[4] == 40.0 && erased.exposure[4] == 40.0);
+            CHECK(retained.exposure[6] == 0.0 && erased.exposure[6] == 0.0);
+            CHECK(retained.legs[4].present && erased.legs[4].present);
+            CHECK(retained.legs[4].origin == retained.legs[6].origin);
+            CHECK(erased.legs[4].origin == erased.legs[6].origin);
+            CHECK(retained.cycles[2] == retained.cycles[6]);
+            CHECK(erased.cycles[2] == erased.cycles[6]);
+            std::printf("G2 retained trace magnifier=%d recording=%d: bound origin %llu/%llu, "
+                        "after-close present=%d dormant=%d, after-decline dormant=%d, "
+                        "original restored=%d\n",
+                        magnifier ? 1 : 0, recording ? 1 : 0,
+                        static_cast<unsigned long long>(retained.legs[4].origin),
+                        static_cast<unsigned long long>(retained.legs[6].origin),
+                        retained.legs[6].present ? 1 : 0, retained.legs[6].dormant ? 1 : 0,
+                        retained.legs[9].dormant ? 1 : 0, retained.legs.back().restored ? 1 : 0);
         }
 
         int through_x = 0;
@@ -455,32 +509,42 @@ void cycle_revival_matches_retained_execution() {
             if (trade.exit_id == "__margin_call__") {
                 ++margin_calls;
                 CHECK(trade.entry_id == entry);
-                CHECK(trade.entry_bar_index == (returning ? 6 : 2));
+                CHECK(trade.entry_bar_index == (returning ? 6 : 4));
                 CHECK(trade.exit_bar_index == expected_margin_bar);
+                // Retained path at 175: equity 9800 - 40*75 = 6800,
+                // maintenance 7000; the 4x shortfall slice is 4*200/175.
                 CHECK(trade.exit_price == 175.0);
                 CHECK(trade.qty == 32.0 / 7.0);
             } else if (trade.exit_id == "X") {
                 ++through_x;
-                CHECK(trade.entry_id == entry);
+                CHECK(trade.entry_price == 100.0);
                 if constexpr (returning) CHECK(trade.exit_comment == "original X");
                 if (through_x == 1) {
-                    CHECK(trade.entry_incarnation == retained.legs[4].origin);
-                    CHECK(trade.entry_bar_index == 1);
-                    CHECK(trade.exit_bar_index == 3);
+                    // Retained G2: the empty-ID parent opens at 100 on bar 3;
+                    // global X closes exactly that parent, 40 at 105 on bar 5.
+                    CHECK(trade.entry_id == (returning ? "L" : ""));
+                    CHECK(trade.entry_incarnation == retained.legs[closed_origin].origin);
+                    CHECK(trade.entry_bar_index == (returning ? 1 : 3));
+                    CHECK(trade.exit_bar_index == (returning ? 3 : 5));
                     CHECK(trade.exit_price == 105.0);
                     CHECK(trade.qty == 40.0);
                 } else {
-                    CHECK(trade.entry_incarnation != retained.legs[4].origin);
-                    CHECK(trade.entry_bar_index == (returning ? 6 : 2));
+                    CHECK(trade.entry_incarnation != retained.legs[closed_origin].origin);
+                    CHECK(trade.entry_id == entry);
+                    // G2's S opens at 100 on bar 4. At 175 the 32/7 margin
+                    // slice leaves 248/7 for the original global leg to close.
+                    CHECK(trade.entry_bar_index == (returning ? 6 : 4));
                     CHECK(trade.exit_bar_index == expected_margin_bar);
                     CHECK(trade.exit_price == 175.0);
                     CHECK(trade.qty == 248.0 / 7.0);
                 }
-            } else if constexpr (returning) {
+            } else {
                 ++r_closes;
                 CHECK(trade.entry_id == "R");
-                CHECK(trade.entry_bar_index == 2);
-                CHECK(trade.exit_bar_index == 7);
+                // Retained G2's anchor is closed immediately at bar 3's
+                // 100 print; G1 keeps its original bar-2/bar-7 R round trip.
+                CHECK(trade.entry_bar_index == (returning ? 2 : 1));
+                CHECK(trade.exit_bar_index == (returning ? 7 : 3));
                 CHECK(trade.qty == 40.0);
                 CHECK(trade.entry_price == 100.0 && trade.exit_price == 100.0);
                 CHECK(trade.pnl == 0.0);
@@ -488,12 +552,14 @@ void cycle_revival_matches_retained_execution() {
         }
         CHECK(through_x == 2);
         CHECK(margin_calls == 1);
-        CHECK(r_closes == (returning ? 1 : 0));
-        CHECK(retained.trades.size() == (returning ? 4 : 3));
+        CHECK(r_closes == 1);
+        // Each retained trace has R's zero-PnL close, original X, one margin
+        // slice and revived X, with no fifth trade.
+        CHECK(retained.trades.size() == 4);
         CHECK(retained.legs.back().restored && erased.legs.back().restored);
         CHECK(retained.open == 0.0);
-        // Retained path: L1/S1 loses 200; L2/S2 loses 3000 at 175.
-        // The returning case's R round trip contributes exactly zero.
+        // Retained path: the original X loses 40*5 = 200; the remaining
+        // lot loses 40*75 = 3000. Each case's R round trip contributes zero.
         CHECK(retained.equity == 6800.0);
         CHECK(erased.observations == retained.observations);
         CHECK(trade_digest(erased.trades) == trade_digest(retained.trades));
