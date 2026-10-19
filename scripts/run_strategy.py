@@ -29,7 +29,7 @@ Usage examples
 
     # Read trades from a verified v1 report sink; keep the same CSV bytes.
     # Every probe prints one machine-greppable canary line,
-    #   sink_canary: probe=<id> bytes=<n> records=<n> trades=<n> ok
+    #   sink_canary: probe=<id> bytes=<n> records=<n> trades=<n> equity=<n> ok
     # (probe id = the strategy directory's basename); a sink that is absent,
     # empty or short prints the same fields with "FAIL <reason>" and fails
     # the probe.
@@ -2007,6 +2007,18 @@ def _new_harness_report_sink(lib, state):
     return run_json._TemporaryReportSink(lib, state)
 
 
+def _harness_sink_equity_count(lib, state) -> int:
+    """Save the engine's E count while its handle is live, not from the sink."""
+    from run_json import ReportSinkReceiptC
+
+    receipt = ReportSinkReceiptC()
+    receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
+    if (lib.strategy_report_sink_receipt_v1(state, ctypes.byref(receipt)) != 0
+            or receipt.complete != 1 or receipt.count_e < 0):
+        raise RuntimeError("the engine's report sink equity receipt is incomplete")
+    return int(receipt.count_e)
+
+
 def _harness_sink_trade(record) -> dict:
     trade = record.as_dict()
     del trade["n"]
@@ -2051,9 +2063,10 @@ class _SinkRows:
 class _SinkReport(dict):
     """A report whose row views remain valid until close(), or context exit."""
 
-    def __init__(self, values, sink):
+    def __init__(self, values, sink, receipt_count_e: int):
         super().__init__(values)
         self.sink = sink
+        self.receipt_count_e = receipt_count_e
 
     def close(self):
         self.sink.close()
@@ -2083,14 +2096,14 @@ class _SinkTraceNames:
                     yield name
 
 
-def _report_from_sink(report, sink) -> dict:
+def _report_from_sink(report, sink, receipt_count_e: int) -> dict:
     if any((report.trades, report.trades_len,
             report.equity_curve, report.equity_curve_len,
             report.trace, report.trace_len,
             report.broker_state_hash, report.broker_state_hash_len)):
         raise RuntimeError("a report with a sink must contain summary scalars only")
     # This reads scalars and any remaining native trace-name table only.
-    result = _SinkReport(_report_to_dict(report), sink)
+    result = _SinkReport(_report_to_dict(report), sink, receipt_count_e)
     count = 0
     for record in sink.records("T"):
         count += 1
@@ -2140,20 +2153,25 @@ def _keep_report_sink(probe: str, environ=None) -> bool:
 def _sink_canary(probe: str, report: _SinkReport) -> None:
     """Prove this probe read a real, non-empty, complete sink, in one line.
 
-    Prints ``sink_canary: probe=<id> bytes=<n> records=<n> trades=<n> ok`` on
-    stdout, where the per-probe status lines go. ``bytes`` is the size of the
-    sink file on disk now, ``records`` the T rows a fresh strict reader
-    (own offset, whole-file SHA-256 check) decodes from it now, and
-    ``trades`` the engine's own count for the run (ReportC.total_trades, not
-    read from the sink). A sink that is missing, not a regular file, empty,
-    unreadable or short of rows prints the same fields with ``FAIL
-    <reason>`` and raises RuntimeError, which fails the probe the way the
-    other sink invariants of this harness do. A run that never installed a
-    sink prints no canary at all, so a sweep must find exactly one line per
-    probe. Call it while the sink is still open: close() unlinks the file.
+    Prints ``sink_canary: probe=<id> bytes=<n> records=<n> trades=<n>
+    equity=<n> ok`` on stdout. ``bytes`` is the sink's size now; ``records``
+    and ``equity`` are the T and E rows a fresh strict reader (own offset,
+    whole-file SHA-256 check) decodes now. T must equal ReportC.total_trades;
+    E must equal receipt.count_e saved from the live engine, independently
+    of the sink. Summary-only ReportC.equity_curve_len is zero with a sink.
+    No E == script_bars_processed relation is asserted.
+
+    This is Strategy.run's ordinary/observed sink path. Native selected
+    windows have an anchor and separate E publication rules; Strategy.run
+    does not admit them, and their E-to-bars relation is deliberately
+    skipped here. CSV emit-window filtering leaves the full sink intact.
+    A missing, non-regular, empty, unreadable or short sink prints these
+    same fields with ``FAIL <reason>`` and raises RuntimeError. A run that
+    never installed a sink prints no canary, so the sweep must match exactly
+    one successful line to each probe it ran. Call before close() unlinks.
     """
     sink, trades = report.sink, int(report["total_trades"])
-    size = records = 0
+    size = records = equity = 0
     reason = None
     try:
         size = os.stat(sink.path).st_size
@@ -2162,14 +2180,22 @@ def _sink_canary(probe: str, report: _SinkReport) -> None:
         elif size <= 0:
             reason = "the sink file is empty"
         else:
-            records = sum(1 for _ in sink.records("T"))
+            counts = {"T": 0, "E": 0}
+            for record in sink.records():
+                if record.tag in counts:
+                    counts[record.tag] += 1
+            # Publish counts only after the strict pass checked its trailer.
+            records, equity = counts["T"], counts["E"]
             if records != trades:
                 reason = f"{records} T records decoded for {trades} trades"
+            elif equity != report.receipt_count_e:
+                reason = (f"{equity} E records decoded for "
+                          f"{report.receipt_count_e} engine equity points")
     except Exception as error:
         reason = f"the sink cannot be read back: {error}"
     verdict = "ok" if reason is None else "FAIL " + " ".join(str(reason).split())
     print(f"sink_canary: probe={probe} bytes={size} records={records} "
-          f"trades={trades} {verdict}")
+          f"trades={trades} equity={equity} {verdict}")
     if sink.keep:
         print(f"sink_kept: probe={probe} path={sink.path}")
     if reason is not None:
@@ -2966,7 +2992,8 @@ class Strategy:
                 on_report(report)
             if sink is not None:
                 sink.verify(self.lib, state, report)
-                result = _report_from_sink(report, sink)
+                result = _report_from_sink(
+                    report, sink, _harness_sink_equity_count(self.lib, state))
             else:
                 result = _report_to_dict(report)
             incarnation_accessor = getattr(

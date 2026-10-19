@@ -2,12 +2,10 @@
 
 Only native calls are replaced. Strategy.run, L9a's sink owner/receipt checks,
 pf_sink's strict reader, report-window filtering and the CSV writers are real.
-No build, test or repository script was run by the edit-only executor.
 
-Fix round 1 (no platform branch anywhere in this file): the sink is a named
-owner-only file handed to the engine by its real path and unlinked at close,
-so every reader owns its offset on Linux and Darwin alike; sink mode prints
-one `sink_canary:` line per probe and a test-only switch keeps chosen files.
+The named owner-only sink gives every reader its own offset. Canaries compare
+decoded T/E rows with engine counts; sweep logs retain passing/failing canaries
+and kept paths, and coverage is checked against the probes actually run.
 """
 from __future__ import annotations
 
@@ -17,7 +15,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "docker"))
 
 import run_strategy as rs
+import check_sink_canary_log as canary_log
 import run_json
 import pf_sink
 import test_run_json_bin as bars
@@ -109,8 +110,16 @@ class HarnessLibrary(SinkLibrary):
             self.sizes.append(os.path.getsize(self.path))
         super().free(state)
 
+    def receipt(self, state, pointer):
+        result = super().receipt(state, pointer)
+        # Independent engine-side expectation from the fixture feed, not a
+        # number obtained by parsing the sink or its rewritten trailer.
+        pointer._obj.count_e = self.equity_points
+        return result
+
     def run(self, state, feed, count, *args):
         bars.Library.run(self, state, feed, count, *args)
+        self.equity_points = count
         report = args[-1]._obj
         native_trades = (rs.TradeC * len(self.trades))()
         rows = []
@@ -189,6 +198,7 @@ def strategy(library):
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
     for name in ("PINEFORGE_REPORT_SINK", rs.KEEP_REPORT_SINK_ENV,
+                 "PINEFORGE_CANARY_LOG",
                  "PINEFORGE_REQUESTS_ROOT",
                  rs.MAGNIFIER_FEED_ENV, rs.LANE_QTY_STEP_ENV,
                  rs.SESSION_CALENDAR_ENV):
@@ -229,7 +239,8 @@ def test_fixture_sink_csv_equals_array_bytes(tmp_path, monkeypatch, empty, windo
     library = HarnessLibrary(trades)
     report = strategy(library).run(source)
     assert len(library.installed) == 1, "sink-on must install the native sink"
-    assert library.queried == 1, "sink-on must verify the engine receipt"
+    assert library.queried == 2, "verify the receipt and save its independent E count"
+    assert report.receipt_count_e == len(array["equity_curve_time_ms"])
     with report:
         assert not isinstance(report["trades"], list)
         assert list(report["trades"]) == array["trades"]
@@ -314,7 +325,7 @@ def invoke_main(tmp_path, monkeypatch, library, output, *, extra=()):
 # The canary's one machine-greppable line, exactly as the sweep will grep it.
 CANARY = re.compile(
     r"sink_canary: probe=(?P<probe>\S+) bytes=(?P<bytes>\d+) records=(?P<records>\d+) "
-    r"trades=(?P<trades>\d+) (?P<verdict>ok|FAIL \S.*)")
+    r"trades=(?P<trades>\d+) equity=(?P<equity>\d+) (?P<verdict>ok|FAIL \S.*)")
 
 
 def canary_lines(text):
@@ -397,7 +408,7 @@ def test_report_order_is_checked_even_with_a_valid_receipt(tmp_path, monkeypatch
     library = HarnessLibrary(trade_fixture(), bad_order=True)
     with pytest.raises(RuntimeError, match="out of report order"):
         strategy(library).run(bars.csv_file(tmp_path))
-    assert library.installed and library.queried == 1
+    assert library.installed and library.queried == 2
 
 
 def test_csv_rechecks_the_sink_before_replacing_existing_output(tmp_path, monkeypatch):
@@ -631,6 +642,8 @@ def test_cli_prints_one_canary_line_with_the_fixtures_own_counts(
     assert found and found["verdict"] == "ok"
     assert found["probe"] == "probe"  # the strategy directory's basename
     assert int(found["trades"]) == int(found["records"]) == len(trades)
+    with (tmp_path / "chart.csv").open() as source:
+        assert int(found["equity"]) == sum(1 for _ in csv.DictReader(source))
     # The size the engine's sink had when the engine was freed, read from the
     # file by the stand-in library, not taken from the harness's own output.
     assert int(found["bytes"]) == library.sizes[0] > 0
@@ -639,13 +652,102 @@ def test_cli_prints_one_canary_line_with_the_fixtures_own_counts(
 def test_canary_accepts_a_real_sink_that_holds_no_trades(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
     library = HarnessLibrary([])
-    with strategy(library).run(bars.csv_file(tmp_path, count=8)) as report:
+    source = bars.csv_file(tmp_path, count=8)
+    with strategy(library).run(source) as report:
         rs._sink_canary("fixture", report)
     (line,) = canary_lines(capsys.readouterr().out)
     found = CANARY.fullmatch(line)
     assert found and found["verdict"] == "ok" and found["probe"] == "fixture"
     assert int(found["records"]) == int(found["trades"]) == 0
+    with source.open() as feed:
+        assert int(found["equity"]) == sum(1 for _ in csv.DictReader(feed))
     assert int(found["bytes"]) == library.sizes[0] > 0
+
+
+def test_canary_checks_equity_against_the_saved_engine_receipt(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    source = bars.csv_file(tmp_path)
+    with source.open() as feed:
+        expected = sum(1 for _ in csv.DictReader(feed))
+    library = HarnessLibrary(trade_fixture())
+    with strategy(library).run(source) as report:
+        assert report.receipt_count_e == expected
+        # Neither summary script-bar counts nor cached reader counts are the
+        # canary's E oracle. The independent receipt still matches the file.
+        report["script_bars_processed"] += 1
+        report.sink.counts["E"] += 1
+        rs._sink_canary("fixture", report)
+    (line,) = canary_lines(capsys.readouterr().out)
+    found = CANARY.fullmatch(line)
+    assert found and found["verdict"] == "ok"
+    assert int(found["equity"]) == expected
+
+
+@pytest.mark.parametrize("fault", ["refused", "incomplete", "negative"])
+def test_a_missing_engine_equity_receipt_fails_without_leaving_a_sink(
+        tmp_path, monkeypatch, sink_directory, fault):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    library = HarnessLibrary(trade_fixture())
+    query = library.strategy_report_sink_receipt_v1
+
+    def fail_the_second_query(state, pointer):
+        result = query(state, pointer)
+        if library.queried == 2:
+            if fault == "refused":
+                return -1
+            if fault == "incomplete":
+                pointer._obj.complete = 0
+            else:
+                pointer._obj.count_e = -1
+        return result
+
+    monkeypatch.setattr(library, "strategy_report_sink_receipt_v1", fail_the_second_query)
+    with pytest.raises(RuntimeError, match="equity receipt is incomplete"):
+        strategy(library).run(bars.csv_file(tmp_path))
+    assert library.queried == 2
+    assert "report_free" in library.calls and "strategy_free" in library.calls
+    assert not list(sink_directory.iterdir())
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "short"])
+def test_canary_fails_for_damaged_equity_even_when_every_trade_is_intact(
+        tmp_path, monkeypatch, capsys, damage):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    source = bars.csv_file(tmp_path)
+    with source.open() as feed:
+        expected = sum(1 for _ in csv.DictReader(feed))
+    trades = trade_fixture()
+    library = HarnessLibrary(trades)
+    with strategy(library).run(source) as report:
+        rows = [[record.tag, *record.values] for record in report.sink.records()]
+        original_trades = [row for row in rows if row[0] == "T"]
+        last_equity = max(index for index, row in enumerate(rows) if row[0] == "E")
+        if damage == "corrupt":
+            rows[last_equity][1] = True  # bool is invalid in E's i64 time field
+        else:
+            del rows[last_equity]
+        counts, sha = write_diagnostic_sink(report.sink.path, rows)
+        # Deliberately let the strict reader accept a newly sealed, short E
+        # sequence: only the independently saved engine count can reject it.
+        # Invalid E types must still fail strict decoding, with T untouched.
+        report.sink.sha256, report.sink.counts = sha, counts
+        assert report.receipt_count_e == expected
+        written = [json.loads(line) for line in Path(report.sink.path).read_text().splitlines()]
+        assert [row for row in written if isinstance(row, list) and row[0] == "T"] == original_trades
+        if damage == "short":
+            assert sum(1 for _ in report.sink.records("T")) == len(trades)
+        with pytest.raises(RuntimeError, match="sink canary failed"):
+            rs._sink_canary("fixture", report)
+    (line,) = canary_lines(capsys.readouterr().out)
+    found = CANARY.fullmatch(line)
+    assert found and found["verdict"].startswith("FAIL ")
+    if damage == "short":
+        assert int(found["records"]) == int(found["trades"]) == len(trades)
+        assert int(found["equity"]) == expected - 1
+        assert f"{expected} engine equity points" in found["verdict"]
+    else:
+        assert "the sink cannot be read back" in found["verdict"]
 
 
 @pytest.mark.parametrize("damage, reason", [
@@ -755,3 +857,241 @@ def test_probe_id_is_the_directory_basename_without_whitespace():
     assert rs._probe_id(Path("/corpus/basic/greedy")) == "greedy"
     assert rs._probe_id(Path("/corpus/my probe")) == "my_probe"
     assert rs._probe_id(Path("/")) == "-"
+
+
+# --- sweep logging: use actual fixture canaries, never hand-written counts -----
+
+CANARY_TOOL = ROOT / "scripts" / "check_sink_canary_log.py"
+
+
+@pytest.fixture
+def sweep_probe_outputs(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    source = bars.csv_file(tmp_path)
+    outputs = {}
+    for probe in ("alpha", "beta", "broken"):
+        library = HarnessLibrary(trade_fixture())
+        with strategy(library).run(source) as report:
+            # Exercise real sink_kept output too, then let context exit remove
+            # the fixture file; these tests need only the captured output.
+            report.sink.keep = True
+            try:
+                if probe == "broken":
+                    report["total_trades"] += 1
+                    with pytest.raises(RuntimeError, match="sink canary failed"):
+                        rs._sink_canary(probe, report)
+                else:
+                    rs._sink_canary(probe, report)
+            finally:
+                report.sink.keep = False
+        outputs[probe] = capsys.readouterr().out
+        (line,) = canary_lines(outputs[probe])
+        found = CANARY.fullmatch(line)
+        assert found and found["probe"] == probe
+        assert (found["verdict"] == "ok") == (probe != "broken")
+    return outputs
+
+
+def run_canary_tool(*args, input=None):
+    return subprocess.run(
+        [sys.executable, "-I", str(CANARY_TOOL), *map(str, args)],
+        input=input, capture_output=True, text=True, check=False,
+    )
+
+
+@pytest.mark.parametrize("from_files", [False, True])
+def test_canary_log_writer_appends_passing_and_failing_lines_only(
+        tmp_path, sweep_probe_outputs, from_files):
+    log = tmp_path / "canaries.log"
+    expected = ""
+    for probe in ("alpha", "broken"):
+        output = sweep_probe_outputs[probe]
+        mixed = ("ordinary runner output\n sink_canary: indented noise\n"
+                 "sink_canary_extra: noise\n" + output + "net_profit=ignored\n")
+        if from_files:
+            path = tmp_path / f"{probe}.log"
+            path.write_text(mixed, encoding="utf-8")
+            result = run_canary_tool("append", log, path)
+        else:
+            result = run_canary_tool("append", log, input=mixed)
+        assert result.returncode == 0, result.stderr
+        expected += output
+        assert log.read_text(encoding="utf-8") == expected
+    assert "FAIL " in expected and " ok\n" in expected and "sink_kept:" in expected
+
+
+@pytest.mark.parametrize("probe_source", ["arguments", "file"])
+def test_canary_log_checker_accepts_exact_probe_coverage(
+        tmp_path, sweep_probe_outputs, probe_source):
+    probes = ["alpha", "beta"]
+    log = tmp_path / "canaries.log"
+    for probe in probes:
+        canary_log.append_lines(log, sweep_probe_outputs[probe].splitlines(True))
+    if probe_source == "file":
+        path = tmp_path / "ran-probes.txt"
+        path.write_text("# the sweep's actual selection\n" + "".join(
+            f"corpus/validation/{probe}/ # ran this probe\n" for probe in probes),
+            encoding="utf-8")
+        result = run_canary_tool("check", log, "--probes-file", path)
+    else:
+        result = run_canary_tool(
+            "check", log, "--probes", *(f"corpus/validation/{probe}" for probe in probes))
+    assert result.returncode == 0, result.stderr
+    assert f"ok probes={len(probes)}" in result.stdout
+
+
+@pytest.mark.parametrize("damage, offenders", [
+    ("missing", ("beta",)),
+    ("duplicate", ("alpha",)),
+    ("wrong-names-same-count", ("alpha", "beta")),
+    ("failed", ("broken",)),
+    ("unexpected", ("beta",)),
+    ("malformed", ("beta",)),
+    ("missing-equity-field", ("beta",)),
+    ("duplicate-expectation", ("alpha",)),
+])
+def test_canary_log_checker_names_every_offending_probe(
+        tmp_path, sweep_probe_outputs, damage, offenders):
+    probes = ["alpha", "beta"]
+    outputs = [sweep_probe_outputs[probe] for probe in probes]
+    if damage == "missing":
+        outputs.pop()
+    elif damage == "duplicate":
+        outputs.append(outputs[0])
+    elif damage == "wrong-names-same-count":
+        outputs[1] = outputs[0]
+    elif damage == "failed":
+        probes.append("broken")
+        outputs.append(sweep_probe_outputs["broken"])
+    elif damage == "unexpected":
+        probes.pop()
+    elif damage == "malformed":
+        outputs[1] = outputs[1].replace(" ok\n", " unrecognized\n")
+    elif damage == "missing-equity-field":
+        outputs[1] = re.sub(r" equity=\d+", "", outputs[1])
+    else:
+        probes.append(probes[0])
+    log = tmp_path / "canaries.log"
+    canary_log.append_lines(log, "".join(outputs).splitlines(True))
+    result = run_canary_tool("check", log, "--probes", *probes)
+    assert result.returncode == 1, result.stdout + result.stderr
+    for probe in offenders:
+        assert f"probe={probe}:" in result.stderr
+
+
+def corpus_driver_fixture(tmp_path, outputs):
+    """Run the real shell driver with native runs replaying fixture output.
+
+    No build, feed derivation, report generation or parity script executes.
+    Only the new canary collector/checker runs as a real Python child.
+    """
+    root = tmp_path / "sweep"
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "run_corpus.sh", scripts / "run_corpus.sh")
+    shutil.copy2(CANARY_TOOL, scripts / CANARY_TOOL.name)
+    corpus = root / "corpus"
+    corpus.mkdir()
+    (corpus / "CMakeLists.txt").write_text("# fixture\n")
+    output_dir = root / "outputs"
+    output_dir.mkdir()
+    for probe, output in outputs.items():
+        directory = corpus / "validation" / probe
+        directory.mkdir(parents=True)
+        (directory / "generated.cpp").write_text("// fixture\n")
+        (directory / "strategy.so").write_bytes(b"fixture")
+        (output_dir / f"{probe}.log").write_text(
+            "runner output before the canary\n" + output + "runner output after it\n",
+            encoding="utf-8")
+    runner = scripts / "fixture-python"
+    runner.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ \"$1\" == -I ]]; then\n"
+        "    exec \"$PF_CANARY_TEST_PYTHON\" \"$@\"\n"
+        "fi\n"
+        "case \"$1\" in\n"
+        "    scripts/run_strategy.py)\n"
+        "        probe=\"${2##*/}\"\n"
+        "        cat \"$PF_CANARY_TEST_OUTPUTS/$probe.log\"\n"
+        "        [[ \"$probe\" != broken ]]\n"
+        "        ;;\n"
+        "    scripts/derive_corpus_feeds.py|scripts/verify_corpus.py|"
+        "scripts/regen_validation_report.py|scripts/validation_report_self_test.py)\n"
+        "        ;;\n"
+        "    *) exit 99 ;;\n"
+        "esac\n",
+        encoding="utf-8")
+    runner.chmod(0o755)
+    env = os.environ.copy()
+    for name in ("PINEFORGE_CANARY_LOG", "ONLY", "RUNNER", "REGEN",
+                 "SKIP_RUN", "SKIP_BUILD", "SKIP_VERIFY"):
+        env.pop(name, None)
+    env.update({
+        "PYTHON": str(runner), "SKIP_BUILD": "1", "SKIP_VERIFY": "1",
+        "PF_CANARY_TEST_PYTHON": sys.executable,
+        "PF_CANARY_TEST_OUTPUTS": str(output_dir),
+    })
+    return root, env
+
+
+def run_corpus_driver(root, env):
+    return subprocess.run(
+        ["bash", str(root / "scripts" / "run_corpus.sh")], cwd=root, env=env,
+        capture_output=True, text=True, check=False,
+    )
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_full_sweep_truncates_once_and_keeps_passing_and_failing_canaries(
+        tmp_path, sweep_probe_outputs, failed):
+    probes = ["alpha", "beta"] + (["broken"] if failed else [])
+    outputs = {probe: sweep_probe_outputs[probe] for probe in probes}
+    root, env = corpus_driver_fixture(tmp_path, outputs)
+    log = root / "canaries.log"
+    log.write_text("stale run must be removed\n", encoding="utf-8")
+    env["PINEFORGE_CANARY_LOG"] = str(log)
+    result = run_corpus_driver(root, env)
+    assert result.returncode == int(failed), result.stdout + result.stderr
+    expected = "".join(outputs[probe] for probe in sorted(probes))
+    assert log.read_text(encoding="utf-8") == expected
+    checked = run_canary_tool("check", log, "--probes", *probes)
+    assert checked.returncode == int(failed)
+    if failed:
+        assert "probe=broken:" in checked.stderr
+        assert "refusing to verify stale engine_trades.csv" in result.stderr
+    else:
+        assert f"ok probes={len(probes)}" in result.stdout
+
+
+def test_full_sweep_checks_the_filtered_selection_and_rejects_missing_canaries(
+        tmp_path, sweep_probe_outputs):
+    outputs = {probe: sweep_probe_outputs[probe] for probe in ("alpha", "beta")}
+    root, env = corpus_driver_fixture(tmp_path, outputs)
+    log = root / "canaries.log"
+    env.update({"PINEFORGE_CANARY_LOG": str(log), "ONLY": "beta"})
+    result = run_corpus_driver(root, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8") == outputs["beta"]
+    # A runner silently taking its array path must fail coverage even though
+    # it reports success. Start another sweep with no real canary output.
+    (root / "outputs" / "beta.log").write_text("net_profit=ignored\n")
+    result = run_corpus_driver(root, env)
+    assert result.returncode == 1
+    assert log.read_text(encoding="utf-8") == ""
+    assert "probe=beta:" in result.stderr
+
+
+def test_full_sweep_without_a_canary_log_keeps_existing_output_behavior(
+        tmp_path, sweep_probe_outputs):
+    outputs = {"alpha": sweep_probe_outputs["alpha"]}
+    root, env = corpus_driver_fixture(tmp_path, outputs)
+    untouched = root / "canaries.log"
+    previous = b"an unrelated file\n"
+    untouched.write_bytes(previous)
+    result = run_corpus_driver(root, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert untouched.read_bytes() == previous
+    assert "sink_canary:" not in result.stdout
+    assert "sink_kept:" not in result.stdout
+    assert "sink_canary_log:" not in result.stdout + result.stderr
