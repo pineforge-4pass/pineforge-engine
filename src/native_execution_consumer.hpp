@@ -2112,6 +2112,9 @@ public:
     // pointer in place and never creates a consumer: a copied value, which lost
     // its consumer, reads empty.
     static bool fill_selected_report(const BacktestEngine& engine, ReportC* out);
+    // Removing an ordinary sink restores the current run's array storage,
+    // including an observer capture, before its scratch owner is destroyed.
+    static void restore_report_sink_equity_curve(BacktestEngine& engine);
 
     // The private bridges behind the four C accessors of
     // pineforge/execution_observer.h and pineforge/selected_window.h. The free
@@ -2207,7 +2210,7 @@ private:
     // The capture. Its arrays are the ones BacktestEngine::free_report deletes
     // (new TradeC[] / new pf_equity_point_t[]), and it is freed only through it.
     ReportC presentation_{};
-    // The equity length the metrics read: the engine's equity vector size taken
+    // The equity length the metrics read: the engine's recorded point count taken
     // before present_report ran (fill_metrics_section's `n`), which a
     // presentation may leave behind in presentation_.equity_curve_len, the length
     // a report reader sees. Published with the capture, only once the capture

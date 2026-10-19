@@ -51,9 +51,9 @@
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
 namespace pineforge {
-
+namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
-
+namespace report_sink { class ScratchCurveWriter; }
 // One physical emulator lot entry/exit, in actual execution order. A reversal
 // may produce several exits followed by an entry. No range-end report rows.
 struct StreamOrderAction {
@@ -1384,7 +1384,7 @@ protected:
         p.time_ms = script_bar_ts;
         p.open_profit = open_profit(current_bar_.close);
         p.equity = initial_capital_ + net_profit_sum_ + p.open_profit;
-        equity_curve_.push_back(p);
+        store_equity_point(p);
         if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
@@ -2301,6 +2301,9 @@ private:
         std::uint32_t active_calls = 0;
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
+        // Ordinary runs only; selected capture retains its full vector.
+        std::unique_ptr<report_sink::ScratchCurveWriter> equity_scratch;
+        bool equity_tail_stored = false; // scratch includes the held tail
         pf_report_sink_receipt_v1 receipt{};
         // Derived report-tail prefix, in max/min/drawdown/runup order. The
         // resulting extrema already have their broker-state folds; this
@@ -2309,16 +2312,12 @@ private:
         // Report cursor only, covered by report_sink_state_'s existing
         // broker-hash waiver. No execution decision reads it; copies reset it.
         std::int64_t output_base = 0;
-        ReportSinkState() = default;
-        ReportSinkState(const ReportSinkState& other)
-            : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
-              path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
-        ReportSinkState& operator=(const ReportSinkState& other) {
-            if (this != &other) *this = ReportSinkState(other);
-            return *this;
-        }
-        ReportSinkState(ReportSinkState&&) noexcept = default;
-        ReportSinkState& operator=(ReportSinkState&&) noexcept = default;
+        ReportSinkState();
+        ~ReportSinkState();
+        ReportSinkState(const ReportSinkState& other);
+        ReportSinkState& operator=(const ReportSinkState& other);
+        ReportSinkState(ReportSinkState&&) noexcept;
+        ReportSinkState& operator=(ReportSinkState&&) noexcept;
     };
     // @broker-state begin
     mutable ReportSinkState report_sink_state_;
@@ -2343,6 +2342,9 @@ private:
     int report_sink_setter_status() const;
     void begin_report_sink();
     void finish_report_sink(ReportC* out) const;
+    void stage_report_sink_equity_tail(const ReportC* out) const;
+    void compute_report_sink_metrics(ReportC* out, std::int64_t equity_count) const;
+    void fill_report_sink_metrics_section(ReportC* out) const;
     template<class Write> void report_sink_record(Write write) const;
     bool stream_report_sink_trace(const TraceEntryC& entry);
     void reset_report_sink_outputs();
@@ -2363,10 +2365,14 @@ public:
     bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
 
 protected:
-    // L6b-2: the last point remains editable until its successor is recorded.
-    // The array remains the metric/capture source until L6b-4/L7c/L17 land.
+    // The last point stays editable until its successor is recorded. Ordinary
+    // sinks keep only this tail; selected and sink-off runs keep the array.
     pf_equity_point_t* last_equity_point() noexcept;
     const pf_equity_point_t* last_equity_point() const noexcept;
+    // Ordinary sink execution prefix, excluding the editable held point.
+    // The returned descriptor is borrowed; observing flushes pending writes.
+    metrics::ScratchCurveRegion report_sink_equity_scratch_region() const;
+    void store_equity_point(const pf_equity_point_t& point);
     bool prepare_equity_point(); // release the prior point; true for the first
     void fold_report_equity_extreme(double equity);
     void refold_equity_tail();
