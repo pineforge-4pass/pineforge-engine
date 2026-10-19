@@ -3548,7 +3548,8 @@ bool carry_reissue_bindings() noexcept {
 std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memory_order_relaxed); }
 } // namespace detail
 
-// Audit mirror of K1's cycle, exposed-cohort and oldest dormant-representative pins.
+// Audit mirror of K1's cycle and oldest dormant-representative pins.
+// A named id's momentary exposure does not shorten the cycle pin.
 bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) const noexcept {
     if (row.legs.target().incarnation == 0) return false;
     const std::uint64_t origin = row.bracket_origin.incarnation;
@@ -3556,8 +3557,7 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
     for (const auto& handle : live_handles_) if (handle.incarnation == origin) askable = true;
     for (const auto& cohort : cohorts_by_id_)
         for (const auto& opening : cohort.second.opened) if (opening.incarnation == origin) askable = true;
-    if ((row.placement_cycle >= current_position_cycle_ && !withdrawn(row.legs)
-         && ((current_position_sign_ == 0 && !row.legs.dormant()) || origin == 0 || askable || cohort_exposure_for(row.from_entry) > 0.0))
+    if ((row.placement_cycle >= current_position_cycle_ && !withdrawn(row.legs))
         || (askable && !row.legs.dormant())) return true;
     if (!askable || !row.legs.dormant() || (row.family != PineOrderFamily::ExitLimit
         && row.family != PineOrderFamily::ExitStop && row.family != PineOrderFamily::ExitTrail)) return false;
