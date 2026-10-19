@@ -192,6 +192,16 @@ TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
 kernel floors are the table's own numbers above (603 and 306 rows absent, 910
 and 337 with the overlay present); full runs do not exclude a label.
 
+CR-196 splits the ownership manifest controls into four CTest shards,
+`test_selected_window_ownership_manifest_controls_shard_1of4` through
+`test_selected_window_ownership_manifest_controls_shard_4of4`, each with the
+existing 180-second timeout. This adds three public registered/run rows to
+every engine profile in both fixture worlds; it only raises the counts above
+the pinned minimum floors listed above. The private-fixture and receipt row
+populations stay the same. Preflight still runs the complete unsharded driver;
+see [the controls commands](../tests/ownership/README.md#manifest-checker-controls)
+for parallel CTest and individual shard invocations.
+
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
 against the checked-in `DETACHED_LINE_CEILING`, which is 0: R5 lane B-DOCS

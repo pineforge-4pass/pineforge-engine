@@ -3772,13 +3772,28 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-add_test(NAME test_selected_window_ownership_manifest_controls
-    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py)
+# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
+# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
+# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
+# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
+# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
+# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
+# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
+# the four shard rows is the measurement; each shard also fails closed when it
+# runs a number of tests different from the number it selected.
+set(_pf_ownership_control_shards)
+foreach(_pf_ownership_shard 1 2 3 4)
+    add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
+            --shard ${_pf_ownership_shard}/4)
+    list(APPEND _pf_ownership_control_shards
+        test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4)
+endforeach()
 add_test(NAME test_selected_window_ownership_d4
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
         ManifestCheckerTests.test_d4_independent_reconstruction_matches_manifest)
 set_tests_properties(test_selected_window_ownership_manifest
-    test_selected_window_ownership_manifest_controls test_selected_window_ownership_d4
+    ${_pf_ownership_control_shards} test_selected_window_ownership_d4
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)
 
 # The C bridge test also links the shared window-plan helper, whose bridge
