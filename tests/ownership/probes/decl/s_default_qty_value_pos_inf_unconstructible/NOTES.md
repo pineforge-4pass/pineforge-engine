@@ -14,7 +14,7 @@ The paired native row is `decl_default_qty_value_pos_inf` in
 `tests/test_value_admission_decl.cpp`. It supplies +Infinity directly to
 `PineStrategyHost::configure_pine_strategy` and pins
 `strategy_value_invalid {field: "strategy.default_qty_value", reason: "nonfinite"}`
-from D3. That boundary row is red on main because configure copies unchecked.
+from D3. The host admits the declaration before copying it (`src/source/pine_strategy_host.cpp:854-856`).
 `math.pow(10, 400)` is not an alternative infinity construction here: the
 strategy-argument literal extractor returns None and emission omits it.
 See `.lane-out/MAP.md` section 1 for every numeric declaration member.
