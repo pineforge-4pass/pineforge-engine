@@ -3774,10 +3774,13 @@ add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
 # CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
 # Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
-# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget:
-# 126/4 = 31.5 s, or 132.3/4 = 33.1 s using the slowest passing measurement.
-# 180/33.1 = 5.4x estimated headroom before overhead (60 s/shard allows 3x).
-# Cases have unequal costs; the supervisor verifies each shard's loaded time.
+# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
+# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
+# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
+# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
+# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
+# the four shard rows is the measurement; each shard also fails closed when it
+# runs a number of tests different from the number it selected.
 set(_pf_ownership_control_shards)
 foreach(_pf_ownership_shard 1 2 3 4)
     add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4

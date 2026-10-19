@@ -289,10 +289,13 @@ python3 -I -B tests/ownership/test_manifest_checker.py --shard 1/4
 ```
 
 `--shard I/N` requires integers with `1 <= I <= N` and selects
-`sorted(loader case ids)[I-1::N]`. The separate cheap
-`test_shards_partition_every_case_exactly_once` guard runs in every shard:
-for each shard count from 1 through 8 it independently discovers at least 30
-cases and checks the exact assignments, disjointness and full coverage.
+`sorted(loader case ids)[I-1::N]`, passes those ids to unittest by name and
+exits non-zero unless it ran exactly the number of tests it selected (9, 9, 9
+and 8 for shards 1 to 4 of 4: 8, 8, 8 and 7 cases plus the guard). The separate cheap `test_shards_partition_every_case_exactly_once`
+guard runs in every shard: for each shard count from 1 through 8 it rebuilds
+the assignment from the loader's ids with index residues (the same loader
+expression, a different assignment rule) and checks the exact assignments,
+disjointness and full coverage, with at least 30 cases discovered.
 Preflight continues to run the complete unsharded suite. The positive
 `test_selected_window_ownership_manifest` and independent
 `test_selected_window_ownership_d4` CTest rows keep their existing commands.

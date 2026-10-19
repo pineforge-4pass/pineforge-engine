@@ -522,7 +522,18 @@ if __name__ == "__main__":
         index, count = args.shard[0]
         guards = [test.id() for test in unittest.TestLoader().loadTestsFromTestCase(
             ManifestCheckerShardingTests)]
-        unittest.main(module=None, defaultTest=shard_case_ids(index, count) + guards,
-                      argv=[sys.argv[0]])
+        selected = shard_case_ids(index, count) + guards
+        if len(selected) == len(guards):
+            parser.error("shard %d/%d selects no case" % (index, count))
+        # The ids go in argv: with module=None unittest ignores defaultTest and
+        # would fall back to discovery (zero tests, exit 0 before Python 3.12).
+        program = unittest.main(module=None, argv=[sys.argv[0], *selected], exit=False)
+        # A shard that ran a different number of tests than it selected fails,
+        # whatever unittest's own exit status says.
+        if program.result.testsRun != len(selected) or not program.result.wasSuccessful():
+            print("shard %d/%d: ran %d tests, selected %d" % (
+                index, count, program.result.testsRun, len(selected)), file=sys.stderr)
+            sys.exit(1)
+        print("shard %d/%d: ran %d tests as selected" % (index, count, len(selected)))
     else:
         unittest.main()
