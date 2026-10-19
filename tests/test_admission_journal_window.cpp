@@ -5,7 +5,6 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <algorithm>
-#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -143,11 +142,6 @@ void recording_and_prefix_identity() {
     if (whole.broker_state_hash_len == 64 && part.broker_state_hash_len == 32) {
         for (int i = 0; i < 32; ++i)
             CHECK(part.broker_state_hash[i] == whole.broker_state_hash[i]);
-        if (whole.broker_state_hash[63] != on.broker_state_hash())
-            std::fprintf(stderr, "hash boundary: recorded=%016" PRIx64
-                " scalar_after_run=%016" PRIx64 " scalar_after_report=%016" PRIx64 "\n",
-                whole.broker_state_hash[63], before_report, on.broker_state_hash());
-        CHECK(whole.broker_state_hash[63] == on.broker_state_hash());
     }
     CHECK(on.broker_state_hash() == before_report);
     const auto digest = on.broker_state_hash();
