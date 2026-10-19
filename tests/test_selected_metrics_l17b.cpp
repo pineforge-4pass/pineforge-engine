@@ -945,6 +945,9 @@ int main() {
         compare_selected_run(directory, "hidden.ndjson", 2, true, true, false, false, true);
         compare_selected_run(directory, "gap.ndjson", 2, false, false, false, true);
         compare_selected_run(directory, "one-observation.ndjson", 4, false);
+        // M = 1: the window is both points, so the penultimate edit hits the anchor.
+        compare_selected_run(directory, "one-observation-anchor.ndjson", 4, false, false,
+                             false, false, false, 0, true);
         compare_selected_run(directory, "one-observation-cut.ndjson", 4, false,
                              true, false, false, false, 0, false, 1);
         compare_selected_run(directory, "empty-hidden.ndjson", 5, false,
