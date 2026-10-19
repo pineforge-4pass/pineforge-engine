@@ -2009,7 +2009,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     // committed event, group-effect receipt and cohort receipt is folded.
     if (event_records_.count != requests_.history_end()
         || group_receipts_.count != requests_.group_effect_receipt_count()
-        || cohort_receipts_.count != requests_.cohort_receipts().size()) {
+        || cohort_receipts_.count != requests_.cohort_receipt_count()) {
         std::abort();
     }
 #endif
@@ -11966,18 +11966,24 @@ void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) c
 #endif
 }
 
-// After every roster command: the cohort receipt it appended, folded once.
+// After every roster command: fold its receipt once, then retire its row
+// under Window retention. Full/Commands keep their explicit history readback.
 void NativeExecutionConsumer::note_cohort_receipts() noexcept {
     const auto& receipts = requests_.cohort_receipts();
-    if (cohort_receipts_.count >= receipts.size()) return;
+    const std::size_t base = requests_.cohort_receipt_base();
+    const std::size_t total = requests_.cohort_receipt_count();
+#ifndef NDEBUG
+    if (cohort_receipts_.count < base || cohort_receipts_.count > total) std::abort();
+#endif
     StateFold f;
     f.run_base = requests_.identity().run_number;
     f.h = cohort_receipts_.h;
-    for (std::size_t index = cohort_receipts_.count; index < receipts.size(); ++index) {
-        hash_cohort_receipt(f, receipts[index]);
+    for (std::size_t index = cohort_receipts_.count; index < total; ++index) {
+        hash_cohort_receipt(f, receipts[index - base]);
     }
     cohort_receipts_.h = f.h;
-    cohort_receipts_.count = receipts.size();
+    cohort_receipts_.count = total;
+    if (retention() == NativeEventRetention::Window) requests_.retire_cohort_receipts(total);
 }
 
 void NativeExecutionConsumer::reject_inherited_on_bar(BacktestEngine& engine) {

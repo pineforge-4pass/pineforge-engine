@@ -1693,7 +1693,7 @@ public:
     /// Self move-assignment preserves the current run.
     WorkingRequestCore(WorkingRequestCore&& other) noexcept;
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
-
+    void set_successor_roots_directory(const std::string& directory); // After reset, before the first spill; empty uses TMPDIR or /tmp.
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }
@@ -1726,9 +1726,22 @@ public:
     /// The ordinal of the newest retired event, 0 while none is.
     uint64_t retired_through() const noexcept { return retired_through_; }
     const std::vector<CohortRoster>& cohorts() const noexcept { return cohorts_; }
+    /// The retained cohort-receipt window, in command order. Its absolute
+    /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
+    /// standalone core retains all rows until its reader retires them; the
+    /// Window consumer retires each row after folding it into its digest.
     const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
         return cohort_receipts_;
     }
+    std::size_t cohort_receipt_base() const noexcept { return cohort_receipts_base_; }
+    /// Every cohort receipt this run committed, retained or not.
+    std::size_t cohort_receipt_count() const noexcept {
+        return cohort_receipts_base_ + cohort_receipts_.size();
+    }
+    /// Drop the prefix strictly below the absolute position through, clamped
+    /// to the window. The reader must have folded these rows first. Does not
+    /// change rosters, command counters, prepared-command validity or totals.
+    std::size_t retire_cohort_receipts(std::size_t through) noexcept;
     /// The core's two durable counters: the ordinal of the last committed
     /// event and the last incarnation a command consumed. A later command must
     /// exceed both.
@@ -2289,14 +2302,14 @@ private:
     // the ordinal of the newest of them.
     std::size_t history_base_ = 0;
     uint64_t retired_through_ = 0;
-    // The chain index -- the only facts the cohort lookups need about a
-    // request that is no longer working, kept instead of its definition: the
-    // incarnations this run issued, as disjoint ascending [first, last]
-    // ranges (one range for a consumer, which issues them densely), and the
-    // chain root of every replace successor, ascending by successor
-    // incarnation. Sixteen bytes per replace; nothing else grows with the run.
+    // Issued ranges are dense for a consumer. Successor roots spill in order;
+    // the consumer's event fold hashes their logical rows, once each.
+    struct SuccessorRootIndex;
+    void reserve_successor_root();
+    void append_successor_root(uint64_t incarnation, uint64_t root) noexcept;
+    std::optional<uint64_t> successor_root(uint64_t incarnation) const;
     std::vector<std::pair<uint64_t, uint64_t>> issued_;
-    std::vector<std::pair<uint64_t, uint64_t>> successor_roots_;
+    std::shared_ptr<SuccessorRootIndex> successor_roots_;
     // The requests a keep_handle re-price moved in the queue, ascending by
     // incarnation: (incarnation, priority). The book is held by priority, so
     // a handle lookup reads its priority here; a handle absent here is at its
@@ -2317,6 +2330,9 @@ private:
     std::uint64_t next_cohort_handle_ = 1;
     std::vector<CohortRoster> cohorts_;
     std::vector<CohortReceipt> cohort_receipts_;
+    // Storage cursor only: the consumer hashes the lifetime count and every
+    // receipt, independently of how many of their rows have been retired.
+    std::size_t cohort_receipts_base_ = 0;
 };
 
 class PreparedSubmit {
