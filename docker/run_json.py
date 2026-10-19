@@ -4885,6 +4885,13 @@ def _main(argv, binary_inputs) -> int:
                     help="pf_bar_t/v1 binary chart (or the symbol index chart); alternative to --ohlcv.")
     ap.add_argument("--verify-bin", choices=("full", "sidecar"), default="full",
                     help="Binary verification: full checks SHA-256; sidecar checks metadata. Both check order.")
+    ap.add_argument("--report-sink", type=Path, default=None, metavar="PATH",
+                    help="Write the body run's pf-report-sink/v1 file to PATH and emit summary JSON.")
+    ap.add_argument("--run-id", default="",
+                    help="Caller run identifier copied into the report sink header (default empty).")
+    ap.add_argument("--spill-dir", type=Path, default=None, metavar="DIR",
+                    help="Writable directory for engine scratch and unlinked report temporaries; "
+                         "defaults to the system temporary directory.")
     # Selected-window mode (selected-window/v1; see the section above main). All of these are
     # absent from an ordinary command line, which then behaves exactly as before.
     ap.add_argument("--report-policy", default=None,
@@ -4940,9 +4947,15 @@ def _main(argv, binary_inputs) -> int:
         return _capabilities_main(args)
     if args.ohlcv is not None and args.ohlcv_bin is not None:
         raise _request_invalid("error: --ohlcv and --ohlcv-bin are mutually exclusive", "ohlcv_bin")
+    _validate_sink_options(args)
     selected = _selected_requested(args)
     if selected and args.ohlcv_bin is not None:
         raise _request_invalid("error: selected-window mode requires a CSV chart", "ohlcv_bin")
+    if selected and (args.report_sink is not None or args.run_id or args.spill_dir is not None):
+        # L9S owns selected-window sink assembly. Never accept a named sink
+        # request here and silently return the selected array report instead.
+        raise _request_invalid(
+            "error: selected-window mode does not yet support report sink options", "arguments")
     if (selected or args.report_shape is not None or args.curve_point_budget is not None
             or args.results_digest is not None):
         import selected_window_report
@@ -4996,7 +5009,7 @@ def _main(argv, binary_inputs) -> int:
     # --symbol-feeds).
     symbol_feeds = None
 
-    def _make_state():
+    def _make_state(*, body=False):
         """Create + fully configure a fresh strategy state — everything EXCEPT the
         timed run_backtest_full call. Mirrors scripts/run_strategy.py's setup so the
         engine behaves identically to the ctypes validation harness. The handle is
@@ -5021,7 +5034,7 @@ def _main(argv, binary_inputs) -> int:
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
-            sink = _new_report_sink(lib, st, args)
+            sink = _new_report_sink(lib, st, args, body=body)
         except BaseException:
             try:
                 lib.strategy_free(st)
@@ -5078,7 +5091,7 @@ def _main(argv, binary_inputs) -> int:
     # --- Body run: one configured run for trades / metrics / diagnostics. ---
     report = ReportC()
     binding = None
-    state, sink = _make_state()
+    state, sink = _make_state(body=True)
     try:
         # The last state owns CSV copies. Borrowed binary views stay alive
         # through native cleanup and the outer input stack's cleanup.
@@ -5134,7 +5147,7 @@ def _main(argv, binary_inputs) -> int:
         outputs_block = None
         if args.outputs:
             outputs_block = (
-                _sink_outputs_block(lib, state, sink, output_files)
+                _sink_outputs_block(lib, state, sink, output_files, summary_only=sink.named)
                 if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
             applied_runtime["outputs"] = True
         incarnation_accessor = getattr(
@@ -5236,7 +5249,7 @@ def _main(argv, binary_inputs) -> int:
     return 0
 
 
-# --- CR-150 L9A: full JSON from the fixed v1 report sink -----------------------
+# --- CR-150 L9A/L9B: full and summary JSON from the fixed v1 report sink -------
 
 class ReportSinkC(ctypes.Structure):
     """Exact pf_report_sink_v1; the setter copies all three strings."""
@@ -5267,45 +5280,71 @@ def _bind_report_sink(lib) -> None:
             function.restype, function.argtypes = restype, argtypes
 
 
-def _new_report_sink(lib, state, args):
+def _validate_sink_options(args):
+    # These additive flags use the catalog's existing generic option value.
+    # Reject C-string truncation and non-UTF-8 argv before loading a library.
+    for name in ("report_sink", "run_id", "spill_dir"):
+        value = getattr(args, name)
+        if value is None:
+            continue
+        text = os.fspath(value)
+        label = "--" + name.replace("_", "-")
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            raise _request_invalid(f"error: {label} must hold UTF-8 text", "arguments") from None
+        if "\0" in text:
+            raise _request_invalid(f"error: {label} must not contain NUL", "arguments")
+
+
+def _new_report_sink(lib, state, args, *, body=True):
     names = ("pf_report_sink_version", "strategy_set_report_sink_v1",
              "strategy_report_sink_receipt_v1")
     present = [hasattr(lib, name) for name in names]
     if not any(present):
+        if getattr(args, "report_sink", None) is not None:
+            raise StrategyLibraryError("the strategy library has no report sink API",
+                                       {"reason": "symbol_missing"})
         return None  # old modules keep their existing report ABI
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
-    # The named-sink CLI is L9B. These attributes also give L9B/L9S one
-    # directory for the engine's scratch and every Python temporary.
-    return _TemporaryReportSink(lib, state, directory=getattr(args, "spill_dir", None),
-                                run_id=getattr(args, "run_id", ""))
+    # Only the body run may create/truncate the caller's sink. Bench states
+    # retain the existing unlinked-file lifetime.
+    return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
+                       run_id=getattr(args, "run_id", ""),
+                       path=getattr(args, "report_sink", None) if body else None)
 
 
-class _TemporaryReportSink:
-    """An unlinked file, addressed by a private path for the engine's path ABI.
+class _ReportSink:
+    """A caller-owned path or an unlinked file for the engine's path ABI.
 
     TemporaryFile uses O_TMPFILE or unlinks immediately. The descriptor path
-    lets the engine open that file with its existing path-only API; no named
-    sink, new wire format or public fd API is introduced. Keep the owner open
-    until both report_free and strategy_free have returned.
+    lets the engine open that file with its existing path-only API. Keep the
+    temporary owner open until report_free and strategy_free have returned.
+    A named file is created/truncated by the engine and persists for its caller.
     """
 
-    def __init__(self, lib, state, *, directory=None, run_id=""):
+    def __init__(self, lib, state, *, directory=None, run_id="", path=None):
         self.directory = os.fspath(directory) if directory is not None else tempfile.gettempdir()
         self.header, self.counts, self.sha256 = {}, {}, ""
-        try:
-            self.file = tempfile.TemporaryFile(mode="w+b", dir=self.directory)
-        except OSError as error:
-            raise RunFailure("report sink open failed", "report_sink_failed") from error
-        try:
+        self.named, self.run_id = path is not None, run_id
+        self.file = None
+        if self.named:
+            self.path = os.fspath(path)
+        else:
+            try:
+                self.file = tempfile.TemporaryFile(mode="w+b", dir=self.directory)
+            except OSError as error:
+                raise RunFailure("report sink open failed", "report_sink_failed") from error
             directory_path = "/proc/self/fd" if sys.platform.startswith("linux") else "/dev/fd"
             self.path = f"{directory_path}/{self.file.fileno()}"
+        try:
             descriptor = ReportSinkC(ctypes.sizeof(ReportSinkC), 1, os.fsencode(self.path),
                                      run_id.encode("utf-8"), os.fsencode(self.directory))
             if lib.strategy_set_report_sink_v1(state, ctypes.byref(descriptor)) != 0:
-                raise _engine_invariant("the fresh strategy refused its temporary report sink")
+                raise _engine_invariant("the fresh strategy refused its report sink")
         except BaseException:
-            self.file.close()
+            self.close()
             raise
 
     def verify(self, lib, state, report):
@@ -5317,6 +5356,8 @@ class _TemporaryReportSink:
                 self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
         except SinkFormatError as error:
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+        if self.header["run_id"] != self.run_id:
+            raise _engine_invariant("the report sink run id differs from the request")
         receipt = ReportSinkReceiptC()
         receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
         if lib.strategy_report_sink_receipt_v1(state, ctypes.byref(receipt)) != 0 or receipt.complete != 1:
@@ -5340,7 +5381,8 @@ class _TemporaryReportSink:
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
 
     def close(self):
-        self.file.close()
+        if self.file is not None:
+            self.file.close()
 
 
 def _free_sink_run(lib, state, report, sink):
@@ -5504,6 +5546,22 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                             applied_inputs, applied_overrides, applied_runtime)
     out["summary"] = _sink_summary(report, sink)
     _validate_report_result(out)  # trades are still []; the pre-pass checked every T
+    if sink.named:
+        reference = {
+            "path": sink.path,
+            "schema": sink.header["schema"],
+            "version": sink.header["version"],
+            "run_id": sink.header["run_id"],
+            "counts": sink.counts,
+            "sha256": sink.sha256,
+        }
+        # Insert the reference at the old trades position; all other small
+        # keys retain the frozen producer's order and values.
+        return {
+            ("report_sink" if key == "trades" else key):
+                (reference if key == "trades" else value)
+            for key, value in out.items() if key != "equity_curve"
+        }
     out["trades"] = _JSONRecordArray(lambda: (_sink_trade(row) for row in sink.records("T")))
     out["equity_curve"] = _JSONRecordArray(lambda: (row.as_dict() for row in sink.records("E")))
     return out
@@ -5589,11 +5647,13 @@ def _legacy_streamed_outputs_block(lib, state):
     return block
 
 
-def _sink_outputs_block(lib, state, sink, resources):
+def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
     # L6b-1 declares O/V/K but L6b-3 writes them. Until that dependency lands,
     # its existing output readers are authoritative. Once K is emitted even
     # an empty output run takes the streamed path below.
     if not any(sink.counts.get(tag, 0) for tag in "OVK"):
+        if summary_only:
+            raise _engine_invariant("the report sink is missing its output records")
         return _legacy_streamed_outputs_block(lib, state)
     if sink.counts.get("K") != 1:
         raise _engine_invariant("the report sink must contain one output constants record")
@@ -5603,6 +5663,9 @@ def _sink_outputs_block(lib, state, sink, resources):
         constants = tuple(float("nan") if value is None else value for value in record.values)
     raw_manifest = _outputs_manifest(lib, state)
     block = _outputs_metadata(raw_manifest, slots, constants)
+    if summary_only:
+        return {key: block[key] for key in (
+            "schema_version", "message_format", "manifest_sha256", "manifest", "constants", "hlines")}
     entries = sorted(_manifest_entries(block["manifest"], "series", ("slot", "output")),
                      key=lambda entry: entry["slot"])
     outputs = {entry["index"]: entry for entry in
