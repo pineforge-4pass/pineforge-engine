@@ -643,7 +643,20 @@ ADR_RULED_TEXTS_MIN = 59
 # counted the same way; 773/773/782 with lane FIX-E1E2's two rows of
 # RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 876, 'sanitizers': 867, 'native': 963}
+EXCLUDED_REGISTERED_MIN = {
+    'debug': 876, 'sanitizers': 867, 'native': 963,
+    # D1: tests-pineforge-engine-ci-pull_request.tsv, run 39221717231 (same
+    # base for every row). The TSV counts the ctest rows a job SELECTED. The
+    # Debug and sanitizers PR legs already exclude the 29 `slow` rows, so
+    # their registered count is selected + 29: Debug 909 + 29 = 938 and
+    # sanitizers 900 + 29 = 929; offset to their keys 938 - 876 = 62 and
+    # 929 - 867 = 62. The Release and kernel-only jobs ran their full
+    # population in that run, so selected = registered: 957 and 371.
+    # Same registered-count offset: Release 957 - 62 = 895, kernel 371 - 62 = 309.
+    # Public ctest -N confirmation is still required in the lab; these are
+    # registration floors, not reduced run floors.
+    'release': 895, 'kernel': 309,
+}
 # test_native_live_websocket exits 77 wherever the linked libcurl has no
 # WebSocket support (a system libcurl); main's kernel floor counted that skip
 # as a run -- its number sat exactly one below the registered count for this

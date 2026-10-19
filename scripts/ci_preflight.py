@@ -23,6 +23,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -32,6 +33,7 @@ import time
 
 from ci_verify import (ROOT, PRIVATE_FIXTURE_SKIP_LITERAL, private_fixtures_overlay,
                        source_guard_commands)
+from ci_verifier_classes import verifier_class_tier
 
 ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
@@ -157,6 +159,20 @@ CLASSIFY_STEP = """      - name: Classify the change
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
 """
+VERIFIER_CLASSIFY_STEP = """      - name: Classify verifier self-tests
+        id: verifier
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git show HEAD^1:scripts/ci_verifier_paths.py > "$RUNNER_TEMP/ci_verifier_paths.py"; then
+            python3 "$RUNNER_TEMP/ci_verifier_paths.py" --root . --github-output "$GITHUB_OUTPUT"
+          else
+            echo "verifier SLOW: the base holds no scripts/ci_verifier_paths.py"
+            echo "verifier_slow=true" >> "$GITHUB_OUTPUT"
+          fi
+"""
+PREFLIGHT_VERIFIER_SLOW = ("${{ needs.changes.result == 'success' && "
+                          "needs.changes.outputs.verifier_slow || 'true' }}")
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kernel-only, '
               'corpus-parity-subset]')
@@ -576,11 +592,21 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     for job in ('changes', 'preflight', *PROOF_JOBS, 'build-gate'):
         if job not in jobs:
             findings.append(f'ci.yml is missing job {job}')
-    # Preflight holds the documentation guards: it runs on every change, and
-    # neither it nor the classification waits for anything.
-    for job in ('changes', 'preflight'):
-        if _job_values(jobs.get(job, ''), 'needs') or _job_values(jobs.get(job, ''), 'if'):
-            findings.append(f'{job} must start at once on every run')
+    # Preflight runs on every change, including a failed classification. It
+    # waits only for the shared diff decision, alongside all proof jobs.
+    if _job_values(jobs.get('changes', ''), 'needs') or _job_values(jobs.get('changes', ''), 'if'):
+        findings.append('changes must start at once on every run')
+    preflight = jobs.get('preflight', '')
+    if (_job_values(preflight, 'needs') not in (['changes'], ['[changes]'])
+            or _job_values(preflight, 'if') != ['${{ !cancelled() }}']):
+        findings.append('preflight must follow changes alone and run even if classification fails')
+    if (f'      PINEFORGE_VERIFIER_SLOW: {PREFLIGHT_VERIFIER_SLOW}\n' not in preflight
+            or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):
+        findings.append('preflight must consume verifier_slow and default to all classes')
+    verifier_step = _step_named(_steps(preflight), '      - name: Verify workflow wiring and source guards')
+    if _step_values(verifier_step, 'run') != [
+            'python3 scripts/ci_preflight.py --output-dir build-ci-preflight']:
+        findings.append('preflight must invoke its unfiltered event-aware stage plan')
     for job in PROOF_JOBS:
         if (_job_values(jobs.get(job, ''), 'needs') not in (['changes'], ['[changes]'])
                 or _job_values(jobs.get(job, ''), 'if') != [DOCS_ONLY_SKIP]):
@@ -590,6 +616,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
             or CLASSIFY_STEP not in changes + '\n'):
         findings.append("changes must publish the base's scripts/ci_docs_only.py answer, exactly")
+    if ('      verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}\n' not in changes
+            or VERIFIER_CLASSIFY_STEP not in changes + '\n'):
+        findings.append("changes must publish the base's scripts/ci_verifier_paths.py answer, exactly")
     # A job or step that continues on error reports success to the aggregate
     # however it ended.
     for name, workflow in (('ci.yml', ci), ('native-live.yml', native),
@@ -612,12 +641,22 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     for job, variable in PROOF_JOBS.items():
         if f'passed "${variable}"' not in gate:
             findings.append(f'build-gate must require {job} success or a docs-only skip')
-    debug_flag = "${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow' || '' }}"
     pr_flag = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
-    if debug_flag not in jobs.get('build', '') or jobs.get('build', '').count('--exclude-label slow') != 1:
-        findings.append('only PR Debug matrix jobs may exclude slow rows')
-    if pr_flag not in jobs.get('sanitizers', '') or jobs.get('sanitizers', '').count('--exclude-label slow') != 1:
-        findings.append('only PR sanitizers may exclude slow rows')
+    # D1 reverses the full-on-PR Release/kernel rule. Each allowed job has
+    # exactly one PR-only flag; every other event keeps the full population.
+    for job in ('build', 'kernel-only', 'sanitizers'):
+        original = jobs.get(job, '')
+        body = '\n'.join(_code(original))
+        verify_steps = [step for step in _steps(original)
+                        if _VERIFY_CALL.search(_counted_text(step))]
+        if (body.count(pr_flag) != 1 or body.count('--exclude-label') != 1
+                or len(verify_steps) != 1 or pr_flag not in _counted_text(verify_steps[0])):
+            findings.append(f'{job} must exclude exactly slow on PRs only, once')
+    for job, body in jobs.items():
+        if job not in ('build', 'kernel-only', 'sanitizers') and '--exclude-label' in body:
+            findings.append(f'{job} must keep its full population')
+    if ci.count('--exclude-label') != 3:
+        findings.append('CI must carry exactly three PR-only slow exclusion flags')
     if ('exclude_slow: ${{ github.event_name == \'pull_request\' }}' not in jobs.get('native-live', '')
             or _job_values(jobs.get('native-live', ''), 'uses') != ['./.github/workflows/native-live.yml']):
         findings.append('native-live must receive the PR-only exclusion input')
@@ -625,9 +664,6 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or '      cold_native_cache:\n' not in events
             or '        type: boolean\n        default: false' not in events):
         findings.append('CI manual native cold-cache proof must be explicit and default off')
-    for job in ('kernel-only', 'corpus-parity-subset'):
-        if '--exclude-label' in jobs.get(job, ''):
-            findings.append(f'{job} must keep its full population')
     if ('  workflow_call:\n    inputs:\n      exclude_slow:' not in native
             or '        type: boolean\n        default: false' not in native
             or '  workflow_dispatch:' not in native
@@ -732,8 +768,12 @@ def run_json_harness_command(source: Path) -> list[str]:
             '--rootdir', str(source), *(tests or [str(source / 'docker' / RUN_JSON_TESTS)])]
 
 
-def check_commands(source: Path, output: Path | None = None) -> list[tuple]:
+def check_commands(source: Path, output: Path | None = None,
+                   *, env: dict[str, str] | None = None) -> list[tuple]:
     output_dir = (source / 'build-ci-preflight') if output is None else output
+    class_args = (['--class-tier', 'fast']
+                  if verifier_class_tier(os.environ if env is None else env) == 'fast'
+                  else [])
     return [
         ('shellcheck-version', ['shellcheck', '--version']),
         ('workflow-lint', ['actionlint', '-color',
@@ -765,10 +805,12 @@ def check_commands(source: Path, output: Path | None = None) -> list[tuple]:
         ('verifier-tests',
          [sys.executable, str(source / 'scripts/run_unittest_shards.py'),
           str(source / 'scripts/test_ci_verify.py'),
-          '--log-dir', str(output_dir / 'verifier-tests-shards')]),
+          '--log-dir', str(output_dir / 'verifier-tests-shards'), *class_args]),
         ('preflight-tests', [sys.executable, str(source / 'scripts/test_ci_preflight.py')]),
         ('unittest-shards-tests',
          [sys.executable, str(source / 'scripts/test_run_unittest_shards.py')]),
+        ('verifier-paths-tests',
+         [sys.executable, str(source / 'scripts/test_ci_verifier_paths.py')]),
         ('native-c-surface-tests',
          [sys.executable, str(source / 'scripts/test_check_native_c_api_surface.py')]),
         ('kernel-residuals-tests',
