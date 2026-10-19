@@ -29,6 +29,7 @@
 
 #include "../src/selected_report_view.hpp"
 #include "equity_stats_reference.hpp"
+#include "report_failure_checks.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -641,6 +642,27 @@ void compare_walk(const Walk& w, double capital, const std::string& tz) {
     const pf_equity_point_t* data = w.points.empty() ? nullptr : w.points.data();
     const pf_equity_stats_t want = ref::compute_equity_stats(
         data, n, capital, tz, w.first_open, w.last_close, w.in_market, w.net_profit);
+
+    if (const char* field = report_failure_checks::annualization_overflow(want)) {
+        // Appendix A:83/93: all three entries must reject the same computed
+        // overflow; only the exposure denominator differs between them.
+        CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
+            (void)metrics::compute_equity_stats(
+                data, n, capital, tz, w.first_open, w.last_close, w.in_market, w.net_profit);
+        }));
+        CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
+            (void)metrics::compute_equity_stats(
+                data, n, capital, tz, w.first_open, w.last_close, w.in_market, w.net_profit, n);
+        }));
+        if (n >= 1) {
+            CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
+                (void)metrics::compute_equity_stats(
+                    data, n, capital, tz, w.first_open, w.last_close,
+                    w.in_market, w.net_profit, n - 1);
+            }));
+        }
+        return;
+    }
 
     // The old entry, and the overload given the count the old entry gives it.
     const pf_equity_stats_t old_entry = metrics::compute_equity_stats(

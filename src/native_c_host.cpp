@@ -3473,7 +3473,32 @@ PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
          * begin. */
         const std::uint64_t high_water = host->native_consumed_high_water();
         host->run(reinterpret_cast<const Bar*>(bars), n);
-        if (out) host->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
+        if (out) {
+            // A failed execution may have a partial curve whose report metrics
+            // overflow. fill_report rethrows that execution's earlier typed
+            // failure, not R. Preserve its run-failed status rather than routing
+            // the rethrow through guarded()'s generic E_STATE exception case.
+            const bool failed = host->native_state().kind == pineforge::NativeLifecycleKind::Failed;
+            const auto earlier = pineforge::run_failure_value_of(*host);
+            try {
+                host->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
+            } catch (const std::exception& error) {
+                const auto carried = pineforge::classify_run_failure(error);
+                if (!failed && carried.code == pineforge::RunFailureCode::report_result_invalid) {
+                    // The C caller must retain the specific result failure too.
+                    pineforge::note_run_failure(*host, error.what(), carried);
+                    return PF_NATIVE_E_STATE;
+                }
+                if (!failed || host->last_error().empty()
+                    || earlier.code == pineforge::RunFailureCode::none
+                    || dynamic_cast<const pineforge::RunFailureInfo*>(&error) == nullptr
+                    || carried.code != earlier.code || carried.args != earlier.args
+                    || host->last_error() != error.what()) {
+                    throw;
+                }
+                return PF_NATIVE_E_RUN_FAILED;
+            }
+        }
         return host->native_state().kind == pineforge::NativeLifecycleKind::Completed
                 && host->native_consumed_high_water() > high_water
             ? PF_NATIVE_OK

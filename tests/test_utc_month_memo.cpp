@@ -22,6 +22,7 @@
 
 #include "../src/metrics_month_memo.hpp"
 #include "equity_stats_reference.hpp"
+#include "report_failure_checks.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -260,9 +261,18 @@ void compare(const Curve& c, double initial_capital, const std::string& tz) {
     ++stat_blocks;
     const auto n = static_cast<std::int64_t>(c.points.size());
     const pf_equity_point_t* data = c.points.empty() ? nullptr : c.points.data();
-    const pf_equity_stats_t got = pineforge::metrics::compute_equity_stats(
-        data, n, initial_capital, tz, c.first_open, c.last_close, c.in_market, c.net_profit);
     const pf_equity_stats_t want = ref::compute_equity_stats(
+        data, n, initial_capital, tz, c.first_open, c.last_close, c.in_market, c.net_profit);
+    if (const char* field = report_failure_checks::annualization_overflow(want)) {
+        // Appendix A:83/93 supersedes the frozen walk's infinity/null result.
+        CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
+            (void)pineforge::metrics::compute_equity_stats(
+                data, n, initial_capital, tz, c.first_open, c.last_close,
+                c.in_market, c.net_profit);
+        }));
+        return;
+    }
+    const pf_equity_stats_t got = pineforge::metrics::compute_equity_stats(
         data, n, initial_capital, tz, c.first_open, c.last_close, c.in_market, c.net_profit);
     const char* differs = ref::first_difference(got, want);
     CHECK(differs == nullptr);

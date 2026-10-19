@@ -251,8 +251,19 @@ void equity_arithmetic() {
     nonfinite("monthly_return_ratio", "metrics.equity.sharpe_monthly", [] {
         (void)equity({1e-308, 1e308, 1e-308}, 1e-308, kYear);
     });
-    nonfinite("monthly_return_sum", "metrics.equity.sharpe_monthly", [] {
+    nonfinite("monthly_return_sum", "metrics.equity.max_equity_runup_pct", [] {
+        // The first rebound (1e308 - 1) / 1 * 100 overflows before resampling.
         (void)equity({1, 1e308, 1, 1e308, 1}, 1, kYear);
+    });
+    nonfinite("monthly_return_sum_isolated", "metrics.equity.sharpe_monthly", [] {
+        // Each runup percent is 1e308 (finite), but 200 returns of 1e306
+        // overflow their shared sum before either deviation is evaluated.
+        std::vector<double> values{1};
+        for (int i = 0; i < 200; ++i) {
+            values.push_back(1e306);
+            values.push_back(1);
+        }
+        (void)equity(values, 1, kYear);
     });
     nonfinite("monthly_downside_square", "metrics.equity.sortino_monthly", [] {
         // The two admitted returns are identical: variance is zero, but the
@@ -266,8 +277,17 @@ void equity_arithmetic() {
     nonfinite("bar_return_ratio", "metrics.equity.sharpe_bar", [] {
         (void)equity({1e-308, 1e308, 1e-308}, 1e-308, kDay);
     });
-    nonfinite("bar_return_sum", "metrics.equity.sharpe_bar", [] {
+    nonfinite("bar_return_sum", "metrics.equity.max_equity_runup_pct", [] {
         (void)equity({1, 1e308, 1, 1e308, 1}, 1, kDay);
+    });
+    nonfinite("bar_return_sum_isolated", "metrics.equity.sharpe_bar", [] {
+        std::vector<double> values{1};
+        for (int i = 0; i < 200; ++i) {
+            values.push_back(1e306);
+            values.push_back(1);
+        }
+        // All 401 points are in January: the monthly helper has no returns.
+        (void)equity(values, 1, 1);
     });
     nonfinite("bar_downside_square", "metrics.equity.sortino_bar", [] {
         (void)equity({1, -1e200, 1, -1e200}, 1, kDay);
@@ -312,6 +332,10 @@ void defined_absences_and_finite_values() {
         &anchor, 1, 1, "UTC", kNaN, kNaN, 0, 0, 0);
     CHECK(std::isnan(empty_window.time_in_market_pct) && std::isnan(empty_window.cagr));
     CHECK(empty_window.open_pl == 0 && empty_window.max_equity_drawdown == 0);
+    const pf_equity_point_t unobserved{kTime, kNaN, kNaN};
+    const auto no_marks = metrics::compute_equity_stats(
+        &unobserved, 0, 1, "UTC", kNaN, kNaN, 0, 0);
+    CHECK(no_marks.open_pl == 0 && std::isnan(no_marks.cagr));
 
     row = "finite_operation_order";
     const auto finite = equity({100, 90, 110}, 100, kYear / 2, 10, 1, 1.25);

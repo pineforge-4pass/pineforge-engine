@@ -59,6 +59,8 @@
 // allocator. `allocations` below reads its count; `count_allocations` says
 // whether a bar records it.
 #include "global_allocation_replacement.hpp"
+#include "equity_stats_reference.hpp"
+#include "report_failure_checks.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -230,6 +232,7 @@ public:
     }
 
     const std::vector<Trade>& rows() const { return trades_; }
+    const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
     std::vector<std::uint64_t> boundary;
     std::vector<std::size_t> quiet_allocations;
 
@@ -787,9 +790,38 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
     out.error = host.last_error();
     out.boundary = host.boundary;
     ReportC report{};
-    host.fill_report(&report);
-    for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
-        out.rows.push_back(report.broker_state_hash[i]);
+    const auto expected_failure = [&]() {
+        const auto reference = equity_stats_reference::compute_equity_stats(
+            report.equity_curve, report.equity_curve_len, s.setup.config.initial_capital,
+            "UTC", kNa, kNa, 0, report.net_profit);
+        return report_failure_checks::annualization_overflow(reference);
+    };
+    bool rejected = false;
+    try {
+        host.fill_report(&report);
+        CHECK(expected_failure() == nullptr);
+    } catch (const std::exception& error) {
+        // Appendix A:83/93 changes only the overflowing report, not these
+        // execution/hash fixtures. The frozen walk must independently prove
+        // the exact field before the typed failure can satisfy this check.
+        const char* field = expected_failure();
+        if (!field || !report_failure_checks::is_nonfinite(error, field)) {
+            BacktestEngine::free_report(&report);
+            throw;
+        }
+        CHECK(report_failure_checks::is_nonfinite(error, field));
+        rejected = true;
+    }
+    if (rejected) {
+        // Metric assembly precedes the report's hash-array copy. Read the
+        // recorded execution rows directly after checking the report failure;
+        // all original digest words, counts and continuation checks remain.
+        out.rows = host.recorded_hashes();
+    } else {
+        for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
+            out.rows.push_back(report.broker_state_hash[i]);
+        CHECK(out.rows == host.recorded_hashes());
+    }
     BacktestEngine::free_report(&report);
     out.final_hash = host.broker_state_hash();
     if (!portable) out.continuation = host.continuation();

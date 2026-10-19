@@ -39,6 +39,8 @@
 using namespace r4_test;
 namespace tk = pineforge::native_toolkit;
 
+#include "report_failure_checks.hpp"
+
 namespace {
 
 // ── Portable pins (harvested on engine main 3f6fd57, see the header) ────
@@ -114,7 +116,20 @@ struct Fnv1a {
 
 struct Report {
     ReportC c{};
-    explicit Report(const BacktestEngine& engine) { engine.fill_report(&c); }
+    explicit Report(const BacktestEngine& engine, const char* invalid_field = nullptr) {
+        try {
+            if (invalid_field) {
+                REQUIRE(report_failure_checks::rejects_nonfinite(invalid_field, [&] {
+                    engine.fill_report(&c);
+                }));
+            } else {
+                engine.fill_report(&c);
+            }
+        } catch (...) {
+            BacktestEngine::free_report(&c);
+            throw;
+        }
+    }
     ~Report() { BacktestEngine::free_report(&c); }
     Report(const Report&) = delete;
     Report& operator=(const Report&) = delete;
@@ -1206,6 +1221,8 @@ std::vector<Bar> rejection_tape() {
 
 class TwinHost final : public NativeStrategyHost {
 public:
+    double recorded_drawdown() const { return max_drawdown_; }
+    double recorded_runup() const { return max_runup_; }
     explicit TwinHost(TwinShape shape) : shape_(shape) {}
     std::string first_error;
 
@@ -1411,7 +1428,10 @@ TwinObserved twin_observe(TwinShape shape) {
     host.run(bars.data(), static_cast<int>(bars.size()));
     out.error = host.last_error();
     if (out.error.empty() && !host.first_error.empty()) out.error = host.first_error;
-    const Report report(host);
+    // Appendix A:83/93: the original 8% / seven-minute fixture has an
+    // overflowing CAGR. Keep its settlement/account pins and require R.
+    const bool invalid_cagr = shape == TwinShape::ParentRejection;
+    const Report report(host, invalid_cagr ? "metrics.equity.cagr" : nullptr);
     for (int i = 0; i < report.c.trades_len; ++i) {
         const TradeC& t = report.c.trades[i];
         out.rows.push_back({static_cast<int>((t.entry_time - kT) / 60000),
@@ -1420,8 +1440,10 @@ TwinObserved twin_observe(TwinShape shape) {
     }
     out.final_equity = report.c.equity_curve_len > 0
         ? report.c.equity_curve[report.c.equity_curve_len - 1].equity : 0.0;
-    out.max_drawdown = report.c.metrics.equity.max_equity_drawdown;
-    out.max_runup = report.c.metrics.equity.max_equity_runup;
+    out.max_drawdown = invalid_cagr
+        ? host.recorded_drawdown() : report.c.metrics.equity.max_equity_drawdown;
+    out.max_runup = invalid_cagr
+        ? host.recorded_runup() : report.c.metrics.equity.max_equity_runup;
     out.position_units = host.physical_position().signed_units;
     return out;
 }
