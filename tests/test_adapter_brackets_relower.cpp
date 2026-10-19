@@ -62,8 +62,9 @@
 #include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
-#include "report_failure_checks.hpp"
+#if !defined(PINEFORGE_R4_HARVEST) && !defined(PINEFORGE_R4D_HARVEST)
 #include "report_capture_fixture.hpp"
+#endif
 
 using namespace pineforge;
 
@@ -269,6 +270,10 @@ Observed observe(Shape shape) {
     CHECK(probe.last_error().empty());
 
     ReportC report{};
+#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
+    // The historical header closure has no typed report-failure API.
+    probe.fill_report(&report);
+#else
     if (shape == Shape::ParentRejection) {
         // 10800 / 10000 over seven minutes overflows CAGR. Appendix A:83/93
         // requires the typed failure. The execution rows and account pins
@@ -279,6 +284,7 @@ Observed observe(Shape shape) {
     } else {
         probe.fill_report(&report);
     }
+#endif
     for (int i = 0; i < report.trades_len; ++i) {
         const TradeC& t = report.trades[i];
         out.rows.push_back({t.entry_time, t.exit_time, t.entry_price, t.exit_price,
@@ -286,10 +292,15 @@ Observed observe(Shape shape) {
     }
     out.final_equity = report.equity_curve_len > 0
         ? report.equity_curve[report.equity_curve_len - 1].equity : 0.0;
+#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
+    out.max_drawdown = report.metrics.equity.max_equity_drawdown;
+    out.max_runup = report.metrics.equity.max_equity_runup;
+#else
     out.max_drawdown = shape == Shape::ParentRejection
         ? probe.recorded_drawdown() : report.metrics.equity.max_equity_drawdown;
     out.max_runup = shape == Shape::ParentRejection
         ? probe.recorded_runup() : report.metrics.equity.max_equity_runup;
+#endif
     BacktestEngine::free_report(&report);
     out.position_units = probe.signed_units();
     return out;
@@ -542,7 +553,6 @@ enum class Mode { Plain, Magnifier, CalcOnOrderFills, ProcessOnClose };
 
 class Probe final : public pineforge::source::PineStrategyHost {
 public:
-    mutable ReportCaptureFixture presented;
     Probe(Shape shape, Mode mode) : shape_(shape) {
         pineforge::source::PineStrategyConfig config;
         config.calc_on_order_fills = mode == Mode::CalcOnOrderFills;
@@ -571,11 +581,7 @@ public:
     }
     double recorded_drawdown() const { return max_drawdown_; }
     double recorded_runup() const { return max_runup_; }
-    void present_report(ReportC* out) const override {
-        pineforge::source::PineStrategyHost::present_report(out);
-        presented.save(*out);
-    }
-#ifndef PINEFORGE_R4D_HARVEST
+#if !defined(PINEFORGE_R4_HARVEST) && !defined(PINEFORGE_R4D_HARVEST)
     // The lane's own witness (absent from the 577315a headers, which is this
     // unit's fail-before diagnostic): how many relative legs ran on the
     // kernel's anchored bracket legs.
@@ -993,7 +999,7 @@ Observed observe(Shape shape, Mode mode) {
     } else {
         probe.run(bars.data(), static_cast<int>(bars.size()));
     }
-#ifndef PINEFORGE_R4D_HARVEST
+#if !defined(PINEFORGE_R4_HARVEST) && !defined(PINEFORGE_R4D_HARVEST)
     out.anchored = probe.anchored().anchored;
     out.adopted = probe.anchored().adopted;
     out.withdrawn = probe.anchored().withdrawn;
@@ -1001,11 +1007,16 @@ Observed observe(Shape shape, Mode mode) {
     CHECK(probe.last_error().empty());
     if (!probe.last_error().empty()) std::printf("  run error: %s\n", probe.last_error().c_str());
     ReportC report{};
+#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
+    probe.fill_report(&report);
+#else
     // Appendix A:83/93 also applies to the relative-grid scenarios, including
     // the full-equity decline fixtures. The frozen walk predicts the exact
-    // overflowing field; all harvested execution/book/leg pins below remain.
+    // overflowing field from the engine's own partially assembled report;
+    // all harvested execution/book/leg pins below remain.
     const bool published = read_report_with_annualization_check(
-        probe, &report, probe.presented, 10000.0);
+        probe, &report, 10000.0);
+#endif
     for (int i = 0; i < report.trades_len; ++i) {
         const TradeC& t = report.trades[i];
         out.rows.push_back({t.entry_time, t.exit_time, t.entry_price, t.exit_price,
@@ -1013,10 +1024,15 @@ Observed observe(Shape shape, Mode mode) {
     }
     out.final_equity = report.equity_curve_len > 0
         ? report.equity_curve[report.equity_curve_len - 1].equity : 0.0;
+#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
+    out.max_drawdown = report.metrics.equity.max_equity_drawdown;
+    out.max_runup = report.metrics.equity.max_equity_runup;
+#else
     out.max_drawdown = published
         ? report.metrics.equity.max_equity_drawdown : probe.recorded_drawdown();
     out.max_runup = published
         ? report.metrics.equity.max_equity_runup : probe.recorded_runup();
+#endif
     BacktestEngine::free_report(&report);
     out.position_units = probe.signed_units();
     out.book = probe.book_digest();

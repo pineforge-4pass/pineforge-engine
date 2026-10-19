@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pineforge/pineforge.h>
 #include <pineforge/run_failure.hpp>
 
 #include <cmath>
@@ -32,7 +33,7 @@ inline bool is_nonfinite(const std::exception& error, const std::string& field) 
 // Returning successfully fails the expectation. An unrelated exception still
 // escapes to the test's own failure handler; it cannot satisfy this check.
 template<class Compute>
-bool rejects_nonfinite(const char* field, Compute&& compute) {
+inline bool rejects_nonfinite(const char* field, Compute&& compute) {
     try {
         compute();
     } catch (const std::exception& error) {

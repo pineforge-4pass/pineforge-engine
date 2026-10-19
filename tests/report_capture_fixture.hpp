@@ -43,16 +43,16 @@ struct ReportCaptureFixture {
 // Read through the real public entry, with the original presentation as an
 // independent input to the frozen reference walk. Only the specifically
 // predicted annualization overflow (or its earlier latched execution failure)
-// is an expected rejection. Callers inspect `capture` as execution evidence
+// is an expected rejection. Callers inspect `presentation` as execution evidence
 // on false, and the actual published report on true.
 inline bool read_report_with_annualization_check(
     const pineforge::BacktestEngine& host, pineforge::ReportC* out,
-    const ReportCaptureFixture& capture, double capital) {
+    const pineforge::ReportC& presentation, double capital) {
     const auto expected_field = [&]() {
         const double absent = std::numeric_limits<double>::quiet_NaN();
         const auto reference = equity_stats_reference::compute_equity_stats(
-            capture.raw.equity_curve, capture.raw.equity_curve_len, capital,
-            "UTC", absent, absent, 0, capture.raw.net_profit);
+            presentation.equity_curve, presentation.equity_curve_len, capital,
+            "UTC", absent, absent, 0, presentation.net_profit);
         return report_failure_checks::annualization_overflow(reference);
     };
     try {
@@ -77,4 +77,20 @@ inline bool read_report_with_annualization_check(
     if (out->equity_curve_len > 0 && expected_field())
         throw std::logic_error("report fixture: an annualization overflow was published");
     return true;
+}
+
+inline bool read_report_with_annualization_check(
+    const pineforge::BacktestEngine& host, pineforge::ReportC* out,
+    const ReportCaptureFixture& capture, double capital) {
+    return read_report_with_annualization_check(host, out, capture.raw, capital);
+}
+
+// The ordinary (no window/observer) fill_report leaves its engine-produced
+// trades, presented curve and net_profit on `out` if metric assembly throws.
+// Observe that very object after the call, without replacing the host's
+// presentation hook. Selected reports instead need the capture overload:
+// their local result is discarded on failure and `out` remains untouched.
+inline bool read_report_with_annualization_check(
+    const pineforge::BacktestEngine& host, pineforge::ReportC* out, double capital) {
+    return read_report_with_annualization_check(host, out, *out, capital);
 }

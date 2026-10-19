@@ -39,7 +39,9 @@
 using namespace r4_test;
 namespace tk = pineforge::native_toolkit;
 
+#ifndef PINEFORGE_L7B_HARVEST
 #include "report_failure_checks.hpp"
+#endif
 
 namespace {
 
@@ -116,6 +118,10 @@ struct Fnv1a {
 
 struct Report {
     ReportC c{};
+#ifdef PINEFORGE_L7B_HARVEST
+    // The frozen harvest headers predate the typed report-failure API.
+    explicit Report(const BacktestEngine& engine) { engine.fill_report(&c); }
+#else
     explicit Report(const BacktestEngine& engine, const char* invalid_field = nullptr) {
         try {
             if (invalid_field) {
@@ -130,6 +136,7 @@ struct Report {
             throw;
         }
     }
+#endif
     ~Report() { BacktestEngine::free_report(&c); }
     Report(const Report&) = delete;
     Report& operator=(const Report&) = delete;

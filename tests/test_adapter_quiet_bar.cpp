@@ -59,8 +59,10 @@
 // allocator. `allocations` below reads its count; `count_allocations` says
 // whether a bar records it.
 #include "global_allocation_replacement.hpp"
+#ifndef PINEFORGE_QUIET_BAR_HARVEST
 #include "equity_stats_reference.hpp"
 #include "report_failure_checks.hpp"
+#endif
 
 #include <algorithm>
 #include <cinttypes>
@@ -790,6 +792,12 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
     out.error = host.last_error();
     out.boundary = host.boundary;
     ReportC report{};
+#ifdef PINEFORGE_QUIET_BAR_HARVEST
+    // The frozen harvest headers predate the typed report-failure API.
+    host.fill_report(&report);
+    for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
+        out.rows.push_back(report.broker_state_hash[i]);
+#else
     const auto expected_failure = [&]() {
         const auto reference = equity_stats_reference::compute_equity_stats(
             report.equity_curve, report.equity_curve_len, s.setup.config.initial_capital,
@@ -822,6 +830,7 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
             out.rows.push_back(report.broker_state_hash[i]);
         CHECK(out.rows == host.recorded_hashes());
     }
+#endif
     BacktestEngine::free_report(&report);
     out.final_hash = host.broker_state_hash();
     if (!portable) out.continuation = host.continuation();

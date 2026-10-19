@@ -710,7 +710,6 @@ void run_terminal_quote_row(const char* name, QuoteCase which, bool emit_snapsho
 
 class AmendedTradeHost final : public pineforge::source::PineStrategyHost {
 public:
-    mutable ReportCaptureFixture presented;
     explicit AmendedTradeHost(bool overflow) {
         pineforge::source::PineStrategyConfig config;
         config.initial_capital = overflow ? 1e303 : 10000.0;
@@ -737,9 +736,26 @@ public:
     }
     double scale = 1.0;
     bool exit_submitted = false;
-    void present_report(pineforge::ReportC* out) const override {
-        pineforge::source::PineStrategyHost::present_report(out);
-        presented.save(*out);
+
+    // Selected result assembly discards its local report on a metric failure.
+    // For settlement evidence, ask the engine's ordinary section helpers to
+    // populate a separate, owned report. fill_metrics_section dispatches the
+    // real Pine presentation itself before computing metrics; this test
+    // neither overrides nor calls PineStrategyHost's private hook.
+    // This observes the ordinary curve, not the selected window's anchor.
+    void observe_report_sections(ReportCaptureFixture& capture) const {
+        struct OwnedReport {
+            pineforge::ReportC raw{};
+            ~OwnedReport() { pineforge::BacktestEngine::free_report(&raw); }
+        } report;
+        fill_trades_section(&report.raw);
+        try {
+            fill_metrics_section(&report.raw);
+        } catch (...) {
+            capture.save(report.raw);
+            throw;
+        }
+        capture.save(report.raw);
     }
 };
 
@@ -764,6 +780,7 @@ void run_amended_trade_row(const char* name, bool overflow, bool emit_snapshot) 
     select_source_window(host, kStart + 5 * 60000LL);
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     pineforge::ReportC report{};
+    ReportCaptureFixture execution;
     if (overflow) {
         host.fill_report(&report);
     } else {
@@ -774,6 +791,9 @@ void run_amended_trade_row(const char* name, bool overflow, bool emit_snapshot) 
             host.fill_report(&report);
         }));
         CHECK(report.trades == nullptr && report.equity_curve == nullptr);
+        CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
+            host.observe_report_sections(execution);
+        }));
     }
     CHECK(host.exit_submitted);
     if (overflow) {
@@ -790,7 +810,7 @@ void run_amended_trade_row(const char* name, bool overflow, bool emit_snapshot) 
             CHECK(host.get_trade(1).entry_id == "A" && host.get_trade(1).qty == 7.0 * scale);
         }
     } else {
-        const auto& presentation = host.presented.raw;
+        const auto& presentation = execution.raw;
         CHECK(host.last_run_status() == 0 && host.last_error().empty());
         CHECK(host.native_state().kind == pineforge::NativeLifecycleKind::Completed);
         CHECK(host.trade_count() == 3 && presentation.trades_len == 3 && presentation.trades != nullptr);
@@ -814,6 +834,12 @@ void run_amended_trade_row(const char* name, bool overflow, bool emit_snapshot) 
             if (emit_snapshot)
                 std::printf("%s: report_result_invalid field=metrics.equity.cagr reason=nonfinite\n",
                             name);
+        }
+        CHECK(presentation.equity_curve != nullptr && presentation.equity_curve_len == 5);
+        if (presentation.equity_curve && presentation.equity_curve_len == 5) {
+            CHECK(presentation.equity_curve[0].time_ms == kStart);
+            CHECK(presentation.equity_curve[4].time_ms == kStart + 4 * 60000LL);
+            CHECK(presentation.equity_curve[4].equity == 10095.0);
         }
     }
     pineforge::BacktestEngine::free_report(&report);
