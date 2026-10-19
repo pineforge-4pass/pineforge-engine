@@ -794,7 +794,7 @@ std::uint64_t source::PineExecutionAdapter::fold_exit_phase(std::uint64_t digest
     return f.h;
 }
 
-void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
+void source::PineScheduler::fold_consumed_digests() const noexcept {
     // ab9714be test_live_state_hash_recording: a shorter run is a hash prefix
     // of the same longer feed.  Retained future input is provider transport,
     // not broker continuation state, so fold only the consumed source prefix.
@@ -802,8 +802,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     // folded once, the first time a read passes it; a prefix run still reads
     // like the full run up to its last bar.
     const std::size_t consumed = std::min(
-        retained_.bars.size(), static_cast<std::size_t>(std::max(source_bar_count_, 0)));
-    f.s("pineforge-pine-scheduler/v3");
+        retained_n_, static_cast<std::size_t>(std::max(source_bar_count_, 0)));
     const auto extend = [](std::size_t& folded, std::uint64_t& digest, std::size_t upto,
                            const auto& element) {
         if (folded > upto) {
@@ -819,10 +818,29 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     };
     extend(consumed_bars_folded_, consumed_bars_digest_, consumed,
         [&](BrokerStateHashSink& g, std::size_t index) {
-            const auto& bar = retained_.bars[index];
+            // owned is just the stream's backing for bars, not an additional
+            // broker fact: either storage folds the same bar bytes once.
+            const auto& bar = retained_.is_stream ? retained_.owned[index] : retained_.bars[index];
             g.d(bar.open); g.d(bar.high); g.d(bar.low); g.d(bar.close); g.d(bar.volume);
             g.i(bar.timestamp);
         });
+    const std::size_t completion_prefix = std::min(input_script_completes_.size(), consumed);
+    extend(consumed_completes_folded_, consumed_completes_digest_, completion_prefix,
+        [&](BrokerStateHashSink& g, std::size_t index) { g.u(input_script_completes_[index]); });
+    const std::size_t boundary_prefix = std::min(input_script_boundary_completes_.size(), consumed);
+    extend(consumed_boundaries_folded_, consumed_boundaries_digest_, boundary_prefix,
+        [&](BrokerStateHashSink& g, std::size_t index) {
+            g.u(input_script_boundary_completes_[index]);
+        });
+}
+
+void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
+    fold_consumed_digests();
+    // retained_n_ survives detachment. Using the now-empty span's size here
+    // would rewind all three digests and change every post-run hash (F8).
+    const std::size_t consumed = std::min(
+        retained_n_, static_cast<std::size_t>(std::max(source_bar_count_, 0)));
+    f.s("pineforge-pine-scheduler/v3");
     f.u(consumed); f.u(consumed_bars_digest_);
     f.s(retained_.input_tf); f.s(retained_.script_tf); f.b(retained_.bar_magnifier);
     f.i(retained_.magnifier_samples); f.i(static_cast<std::int64_t>(retained_.distribution));
@@ -860,14 +878,8 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(awaiting_legacy_script_open_ms_);
     f.i(last_stream_input_open_ms_);
     const std::size_t completion_prefix = std::min(input_script_completes_.size(), consumed);
-    extend(consumed_completes_folded_, consumed_completes_digest_, completion_prefix,
-        [&](BrokerStateHashSink& g, std::size_t index) { g.u(input_script_completes_[index]); });
     f.u(completion_prefix); f.u(consumed_completes_digest_);
     const std::size_t boundary_prefix = std::min(input_script_boundary_completes_.size(), consumed);
-    extend(consumed_boundaries_folded_, consumed_boundaries_digest_, boundary_prefix,
-        [&](BrokerStateHashSink& g, std::size_t index) {
-            g.u(input_script_boundary_completes_[index]);
-        });
     f.u(boundary_prefix); f.u(consumed_boundaries_digest_);
     f.b(uses_aux_security_feed_);
     if (retained_.is_stream) f.b(input_is_observed_ticks_);
