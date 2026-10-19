@@ -62,10 +62,6 @@
 #include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
-#if !defined(PINEFORGE_R4_HARVEST) && !defined(PINEFORGE_R4D_HARVEST)
-#include "report_capture_fixture.hpp"
-#endif
-
 using namespace pineforge;
 
 namespace {
@@ -135,8 +131,6 @@ public:
         return position_qty_
             * (position_side_ == PositionSide::SHORT ? -1.0 : 1.0);
     }
-    double recorded_drawdown() const { return max_drawdown_; }
-    double recorded_runup() const { return max_runup_; }
 
     void on_source_bar(const Bar&) override {
         const int bar = bar_index_;
@@ -270,21 +264,7 @@ Observed observe(Shape shape) {
     CHECK(probe.last_error().empty());
 
     ReportC report{};
-#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
-    // The historical header closure has no typed report-failure API.
     probe.fill_report(&report);
-#else
-    if (shape == Shape::ParentRejection) {
-        // 10800 / 10000 over seven minutes overflows CAGR. Appendix A:83/93
-        // requires the typed failure. The execution rows and account pins
-        // below still run, on exactly the original tape and quantities.
-        CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-            probe.fill_report(&report);
-        }));
-    } else {
-        probe.fill_report(&report);
-    }
-#endif
     for (int i = 0; i < report.trades_len; ++i) {
         const TradeC& t = report.trades[i];
         out.rows.push_back({t.entry_time, t.exit_time, t.entry_price, t.exit_price,
@@ -292,15 +272,8 @@ Observed observe(Shape shape) {
     }
     out.final_equity = report.equity_curve_len > 0
         ? report.equity_curve[report.equity_curve_len - 1].equity : 0.0;
-#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
     out.max_drawdown = report.metrics.equity.max_equity_drawdown;
     out.max_runup = report.metrics.equity.max_equity_runup;
-#else
-    out.max_drawdown = shape == Shape::ParentRejection
-        ? probe.recorded_drawdown() : report.metrics.equity.max_equity_drawdown;
-    out.max_runup = shape == Shape::ParentRejection
-        ? probe.recorded_runup() : report.metrics.equity.max_equity_runup;
-#endif
     BacktestEngine::free_report(&report);
     out.position_units = probe.signed_units();
     return out;
@@ -579,8 +552,6 @@ public:
     double signed_units() const noexcept {
         return position_qty_ * (position_side_ == PositionSide::SHORT ? -1.0 : 1.0);
     }
-    double recorded_drawdown() const { return max_drawdown_; }
-    double recorded_runup() const { return max_runup_; }
 #if !defined(PINEFORGE_R4_HARVEST) && !defined(PINEFORGE_R4D_HARVEST)
     // The lane's own witness (absent from the 577315a headers, which is this
     // unit's fail-before diagnostic): how many relative legs ran on the
@@ -1007,16 +978,7 @@ Observed observe(Shape shape, Mode mode) {
     CHECK(probe.last_error().empty());
     if (!probe.last_error().empty()) std::printf("  run error: %s\n", probe.last_error().c_str());
     ReportC report{};
-#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
     probe.fill_report(&report);
-#else
-    // Appendix A:83/93 also applies to the relative-grid scenarios, including
-    // the full-equity decline fixtures. The frozen walk predicts the exact
-    // overflowing field from the engine's own partially assembled report;
-    // all harvested execution/book/leg pins below remain.
-    const bool published = read_report_with_annualization_check(
-        probe, &report, 10000.0);
-#endif
     for (int i = 0; i < report.trades_len; ++i) {
         const TradeC& t = report.trades[i];
         out.rows.push_back({t.entry_time, t.exit_time, t.entry_price, t.exit_price,
@@ -1024,15 +986,8 @@ Observed observe(Shape shape, Mode mode) {
     }
     out.final_equity = report.equity_curve_len > 0
         ? report.equity_curve[report.equity_curve_len - 1].equity : 0.0;
-#if defined(PINEFORGE_R4_HARVEST) || defined(PINEFORGE_R4D_HARVEST)
     out.max_drawdown = report.metrics.equity.max_equity_drawdown;
     out.max_runup = report.metrics.equity.max_equity_runup;
-#else
-    out.max_drawdown = published
-        ? report.metrics.equity.max_equity_drawdown : probe.recorded_drawdown();
-    out.max_runup = published
-        ? report.metrics.equity.max_equity_runup : probe.recorded_runup();
-#endif
     BacktestEngine::free_report(&report);
     out.position_units = probe.signed_units();
     out.book = probe.book_digest();

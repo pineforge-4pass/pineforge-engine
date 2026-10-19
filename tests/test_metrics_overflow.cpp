@@ -1,4 +1,4 @@
-// CR-202: report arithmetic must fail as R(nonfinite), never become absence.
+// Report overflow is R(nonfinite), except revision 3.1's sub-day CAGR/Calmar.
 // Expectations authored before the guards. Run the same TU against the base
 // archive for the red receipt; this lane does not compile or execute tests.
 #include <pineforge/metrics.hpp>
@@ -6,11 +6,14 @@
 #include <pineforge/run_failure.hpp>
 
 #include "../runner/report.hpp"
+#include "equity_stats_reference.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <string>
@@ -213,7 +216,7 @@ void equity_arithmetic() {
     nonfinite("c18_3_buy_hold_return", "metrics.equity.buy_hold_return", [] {
         // The executed account can stay finite: qty .5 * PV 1e300 *
         // (2.5e8 - 1) + capital 1e301 < DBL_MAX. Buy/hold uses all capital.
-        (void)equity({}, 1e301, kYear, 0, 1, 2.5e8);
+        (void)equity({1e301, 1e301}, 1e301, 7 * 60'000, 0, 1, 2.5e8);
     });
     nonfinite("buy_hold_ratio", "metrics.equity.buy_hold_return_pct", [] {
         (void)equity({}, 1, kYear, 0, 1e-308, 1e308);
@@ -222,7 +225,7 @@ void equity_arithmetic() {
         (void)equity({}, 1, kYear, 0, 1, 1e307);
     });
     nonfinite("cagr_pow", "metrics.equity.cagr", [] {
-        (void)equity({1, 2}, 1, 1);
+        (void)equity({1, 1e300}, 1, kDay);
     });
     nonfinite("cagr_ratio", "metrics.equity.cagr", [] {
         (void)equity({1e-308, 1e308}, 1e-308, 100 * kYear);
@@ -274,6 +277,9 @@ void equity_arithmetic() {
     nonfinite("bar_variance", "metrics.equity.sharpe_bar", [] {
         (void)equity({1, 1e200, 1}, 1, kDay);
     });
+    nonfinite("sub_day_bar_variance", "metrics.equity.sharpe_bar", [] {
+        (void)equity({1, 1e200, 1}, 1, 60'000);
+    });
     nonfinite("bar_return_ratio", "metrics.equity.sharpe_bar", [] {
         (void)equity({1e-308, 1e308, 1e-308}, 1e-308, kDay);
     });
@@ -292,6 +298,115 @@ void equity_arithmetic() {
     nonfinite("bar_downside_square", "metrics.equity.sortino_bar", [] {
         (void)equity({1, -1e200, 1, -1e200}, 1, kDay);
     });
+    nonfinite("sub_day_bar_downside_square", "metrics.equity.sortino_bar", [] {
+        (void)equity({1, -1e200, 1, -1e200}, 1, 60'000);
+    });
+}
+
+void annualization_span_rule() {
+    row = "seven_minutes_eight_percent";
+    const pf_equity_point_t curve[] = {
+        {kTime, 10000, 0}, {kTime + 60'000, 9900, 0},
+        {kTime + 7 * 60'000, 10800, 0},
+    };
+    // The frozen walk supplies all thirteen unchanged fields. Only the two
+    // ruled fields have a different domain; the reference itself stays frozen.
+    auto want = equity_stats_reference::compute_equity_stats(
+        curve, 3, 10000, "UTC", 100, 108, 1, 800);
+    CHECK(std::isinf(want.cagr) && std::isinf(want.calmar));
+    want.cagr = kNaN;
+    want.calmar = kNaN;
+    try {
+        const auto got = metrics::compute_equity_stats(
+            curve, 3, 10000, "UTC", 100, 108, 1, 800);
+        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
+        CHECK(equity_stats_reference::first_difference(got, want) == nullptr);
+        CHECK(std::isfinite(got.sharpe_bar) && std::isfinite(got.sortino_bar));
+    } catch (const std::exception&) {
+        CHECK(false);  // Red on the strict tree: the sub-day pow throws.
+    }
+    // Monthly ratios remain their existing defined absence (one month).
+    CHECK(std::isnan(want.sharpe_monthly) && std::isnan(want.sortino_monthly));
+
+    for (const std::int64_t span : {kDay, 3 * kDay}) {
+        nonfinite("one_or_several_days_pow", "metrics.equity.cagr", [span] {
+            (void)equity({1, 1e300}, 1, span);
+        });
+    }
+    row = "just_under_one_day";
+    try {
+        const auto got = equity({1, 1e300}, 1, kDay - 1);
+        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
+        CHECK(std::isfinite(got.buy_hold_return));
+    } catch (const std::exception&) {
+        CHECK(false);
+    }
+    row = "exactly_one_day_ordinary_gain";
+    const pf_equity_point_t daily[] = {{kTime, 10000, 0}, {kTime + kDay, 10800, 0}};
+    const auto daily_want = equity_stats_reference::compute_equity_stats(
+        daily, 2, 10000, "UTC", 1, 1, 0, 800);
+    const auto daily_got = metrics::compute_equity_stats(
+        daily, 2, 10000, "UTC", 1, 1, 0, 800);
+    CHECK(std::isfinite(daily_got.cagr));
+    CHECK(equity_stats_reference::first_difference(daily_got, daily_want) == nullptr);
+
+    // A finite sub-day CAGR used to be published too: the rule is about its
+    // domain, not whether this particular pow would overflow.
+    row = "sub_day_flat_curve";
+    const auto flat = equity({10000, 10000}, 10000, 7 * 60'000);
+    CHECK(std::isnan(flat.cagr) && std::isnan(flat.calmar));
+}
+
+class ShortSpanReportHost final : public NativeStrategyHost {
+public:
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        if (!entered_) {
+            entered_ = true;
+            (void)submit({native_order::Transact{1.0}, "entry", ""});
+        }
+    }
+private:
+    bool entered_ = false;
+};
+
+void short_span_real_report() {
+    row = "seven_minutes_real_report";
+    ShortSpanReportHost host;
+    NativeRunSpec spec;
+    spec.identity = {"metrics-short-span", 1};
+    spec.input_tf = "1"; spec.script_tf = "1";
+    spec.tickerid = "TEST:METRICS";
+    spec.timezone = "UTC"; spec.session = "24x7";
+    spec.initial_capital = 10000;
+    spec.point_value = 1; spec.account_fx = 1; spec.price_tick = 1;
+    spec.report_policy = NativeReportPolicy::KernelRecorded;
+    spec.report_open_position_at_end = true;
+    CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+    std::vector<Bar> bars;
+    for (int i = 0; i < 8; ++i)
+        bars.push_back({100, i == 7 ? 900.0 : 100.0, 100,
+                        i == 7 ? 900.0 : 100.0, 1, kTime + i * 60'000});
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    CHECK(host.last_error().empty());
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    ReportC report{};
+    try {
+        host.fill_report(&report);
+        CHECK(report.equity_curve_len == 8 && report.trades_len == 1);
+        if (report.equity_curve && report.equity_curve_len == 8) {
+            CHECK(report.equity_curve[0].equity == 10000);
+            CHECK(report.equity_curve[7].equity == 10800);
+            CHECK(report.equity_curve[7].time_ms - report.equity_curve[0].time_ms == 7 * 60'000);
+        }
+        CHECK(report.net_profit == 800);
+        CHECK(std::isnan(report.metrics.equity.cagr) && std::isnan(report.metrics.equity.calmar));
+        const auto wire = live::native_report_json(report);
+        CHECK(wire.at("metrics").at("equity").at("cagr").kind == live::Json::Kind::Null);
+        CHECK(wire.at("metrics").at("equity").at("calmar").kind == live::Json::Kind::Null);
+    } catch (const std::exception&) {
+        CHECK(false);
+    }
+    BacktestEngine::free_report(&report);
 }
 
 void defined_absences_and_finite_values() {
@@ -486,6 +601,8 @@ int main() {
     earlier_failure_keeps_its_code();
     trade_arithmetic();
     equity_arithmetic();
+    annualization_span_rule();
+    short_span_real_report();
     defined_absences_and_finite_values();
     producer_boundaries();
     std::printf("metrics overflow: %d failure(s)\n", failures);

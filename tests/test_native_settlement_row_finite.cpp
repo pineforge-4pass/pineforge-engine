@@ -21,9 +21,6 @@
 #ifdef PINEFORGE_SETTLEMENT_SOURCE_HEADER
 #include PINEFORGE_SETTLEMENT_SOURCE_HEADER
 #include <pineforge/selected_window.h>
-#include <pineforge/metrics.hpp>
-#include "report_capture_fixture.hpp"
-#include "report_failure_checks.hpp"
 #endif
 
 #include <array>
@@ -736,27 +733,6 @@ public:
     }
     double scale = 1.0;
     bool exit_submitted = false;
-
-    // Selected result assembly discards its local report on a metric failure.
-    // For settlement evidence, ask the engine's ordinary section helpers to
-    // populate a separate, owned report. fill_metrics_section dispatches the
-    // real Pine presentation itself before computing metrics; this test
-    // neither overrides nor calls PineStrategyHost's private hook.
-    // This observes the ordinary curve, not the selected window's anchor.
-    void observe_report_sections(ReportCaptureFixture& capture) const {
-        struct OwnedReport {
-            pineforge::ReportC raw{};
-            ~OwnedReport() { pineforge::BacktestEngine::free_report(&raw); }
-        } report;
-        fill_trades_section(&report.raw);
-        try {
-            fill_metrics_section(&report.raw);
-        } catch (...) {
-            capture.save(report.raw);
-            throw;
-        }
-        capture.save(report.raw);
-    }
 };
 
 void run_amended_trade_row(const char* name, bool overflow, bool emit_snapshot) {
@@ -780,21 +756,7 @@ void run_amended_trade_row(const char* name, bool overflow, bool emit_snapshot) 
     select_source_window(host, kStart + 5 * 60000LL);
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     pineforge::ReportC report{};
-    ReportCaptureFixture execution;
-    if (overflow) {
-        host.fill_report(&report);
-    } else {
-        // Appendix A:83/93: the finite settlement makes 95 / 10000 in four
-        // minutes, whose CAGR overflows. Observe its pre-metric presentation
-        // to retain every settlement assertion; the result itself must fail.
-        CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-            host.fill_report(&report);
-        }));
-        CHECK(report.trades == nullptr && report.equity_curve == nullptr);
-        CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-            host.observe_report_sections(execution);
-        }));
-    }
+    host.fill_report(&report);
     CHECK(host.exit_submitted);
     if (overflow) {
         check_source_failure(host, "non-finite amended trade row", report);
@@ -810,36 +772,24 @@ void run_amended_trade_row(const char* name, bool overflow, bool emit_snapshot) 
             CHECK(host.get_trade(1).entry_id == "A" && host.get_trade(1).qty == 7.0 * scale);
         }
     } else {
-        const auto& presentation = execution.raw;
         CHECK(host.last_run_status() == 0 && host.last_error().empty());
         CHECK(host.native_state().kind == pineforge::NativeLifecycleKind::Completed);
-        CHECK(host.trade_count() == 3 && presentation.trades_len == 3 && presentation.trades != nullptr);
+        CHECK(host.trade_count() == 3 && report.trades_len == 3 && report.trades != nullptr);
         constexpr double quantities[] = {3.0, 4.0, 3.0};
         constexpr double commissions[] = {1.5, 2.0, 1.5};
         constexpr double profits[] = {28.5, 38.0, 28.5};
         for (int index = 0; index < host.trade_count(); ++index)
             check_finite_source_trade(host.get_trade(index));
-        if (presentation.trades && presentation.trades_len == 3) {
+        if (report.trades && report.trades_len == 3) {
             for (int index = 0; index < 3; ++index) {
-                const auto& row = presentation.trades[index];
+                const auto& row = report.trades[index];
                 CHECK(row.entry_price == 100.0 && row.exit_price == 110.0);
                 CHECK(row.qty == quantities[index] && row.commission == commissions[index]);
                 CHECK(row.pnl == profits[index] && row.pnl_pct == 9.5);
                 CHECK(row.open_at_end == 0 && row.is_long == 1);
             }
-            const auto stats = pineforge::metrics::compute_trade_stats(
-                presentation.trades, presentation.trades_len,
-                pineforge::metrics::TradeFilter::ALL, 10000.0);
-            CHECK(presentation.net_profit == 95.0 && stats.net_profit == 95.0);
-            if (emit_snapshot)
-                std::printf("%s: report_result_invalid field=metrics.equity.cagr reason=nonfinite\n",
-                            name);
-        }
-        CHECK(presentation.equity_curve != nullptr && presentation.equity_curve_len == 5);
-        if (presentation.equity_curve && presentation.equity_curve_len == 5) {
-            CHECK(presentation.equity_curve[0].time_ms == kStart);
-            CHECK(presentation.equity_curve[4].time_ms == kStart + 4 * 60000LL);
-            CHECK(presentation.equity_curve[4].equity == 10095.0);
+            CHECK(report.net_profit == 95.0 && report.metrics.all.net_profit == 95.0);
+            if (emit_snapshot) print_source_snapshot(name, report);
         }
     }
     pineforge::BacktestEngine::free_report(&report);

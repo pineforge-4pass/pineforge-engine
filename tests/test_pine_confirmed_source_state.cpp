@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "oracle_fixture_config_shim.hpp"
-#include "report_failure_checks.hpp"
 
 using namespace pineforge;
 
@@ -191,12 +190,7 @@ void stale_flat_curve_marks() {
     batch.clear_provider();
     batch.seed_flat_mark(0.0);
     ReportC expected{};
-    // Appendix A:83/93: 1004355.54 / 1000000 over two minutes has an
-    // overflowing CAGR. Keep checking the presented marks and immutability
-    // on the partial extraction; there is no successful canonical report.
-    CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-        batch.fill_report(&expected);
-    }));
+    batch.fill_report(&expected);
     for (const int split : {1, 2}) {
         CloseReport stream(true);
         CHECK(stream.stream_begin(bars.data(), split, "1", "1"));
@@ -208,9 +202,7 @@ void stale_flat_curve_marks() {
         stream.seed_flat_mark(-9.1599999999998545);
         const auto before = stream.stream_state_hash();
         ReportC actual{};
-        CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-            stream.fill_report(&actual);
-        }));
+        stream.fill_report(&actual);
         CHECK(actual.equity_curve_len == expected.equity_curve_len);
         const auto& last = actual.equity_curve[actual.equity_curve_len - 1];
         const auto& expected_last = expected.equity_curve[expected.equity_curve_len - 1];

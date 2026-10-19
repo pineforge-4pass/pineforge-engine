@@ -263,10 +263,24 @@ monthly returns or zero deviation, `calmar` with zero drawdown. A `0.0`
 in the report is always a real computed zero. See the per-field doxygen
 in `<pineforge/pineforge.h>` for the exact rule on every field.
 
-Report arithmetic that produces a nonfinite value, including overflow, fails
-with `report_result_invalid` and reason `nonfinite`. The engine checks computed
-values before they can become a metric absence. A defined absence remains
-null; an executed trade or equity mark must be finite.
+For `cagr` and `calmar`, a measured span under one day is a defined absence:
+both serialize as null, with `span_too_short_to_annualize` under
+`diagnostics.annualization.cagr` and `diagnostics.annualization.calmar`.
+The span is the last equity-curve point's `time_ms` minus the first point's,
+on the UTC epoch-millisecond bar clock, using an unsigned difference before
+conversion to double. The threshold is strictly less than 86,400,000 ms;
+exactly one day annualizes. Empty curves, nonpositive spans, nonpositive
+capital and nonpositive final equity keep their existing absences without
+this reason. The reason object is present only when the short-span rule
+applies and is outside the canonical result digest.
+
+`sharpe_bar` / `sortino_bar` retain their observed-density construction on
+every span, and `sharpe_tv` / `sortino_tv` retain calendar-month resampling
+with sqrt(12). Their overflow, any other metric overflow, and CAGR/Calmar
+overflow on spans of at least one day fail with `report_result_invalid` and
+reason `nonfinite`, naming the exact field. An executed trade or equity mark
+must be finite. See the [revision 3.1 clarification](../design/selected-window-wire-v1.3-revision-3.1.md)
+for the field set and wire placement.
 
 ## Equity curve (ABI v2)
 

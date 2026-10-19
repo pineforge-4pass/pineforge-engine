@@ -234,6 +234,16 @@ public:
     }
 
     const std::vector<Trade>& rows() const { return trades_; }
+#ifndef PINEFORGE_QUIET_BAR_HARVEST
+    pf_equity_stats_t reference_equity(const ReportC& report) const {
+        auto reference = equity_stats_reference::compute_equity_stats(
+            report.equity_curve, report.equity_curve_len, initial_capital_, chart_timezone_,
+            first_bar_open_, current_bar_.close, bars_in_market_, report.net_profit);
+        report_failure_checks::apply_short_span_absence(
+            reference, report.equity_curve, report.equity_curve_len);
+        return reference;
+    }
+#endif
     const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
     std::vector<std::uint64_t> boundary;
     std::vector<std::size_t> quiet_allocations;
@@ -799,19 +809,15 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
         out.rows.push_back(report.broker_state_hash[i]);
 #else
     const auto expected_failure = [&]() {
-        const auto reference = equity_stats_reference::compute_equity_stats(
-            report.equity_curve, report.equity_curve_len, s.setup.config.initial_capital,
-            "UTC", kNa, kNa, 0, report.net_profit);
-        return report_failure_checks::annualization_overflow(reference);
+        return report_failure_checks::annualization_overflow(host.reference_equity(report));
     };
     bool rejected = false;
     try {
         host.fill_report(&report);
         CHECK(expected_failure() == nullptr);
     } catch (const std::exception& error) {
-        // Appendix A:83/93 changes only the overflowing report, not these
-        // execution/hash fixtures. The frozen walk must independently prove
-        // the exact field before the typed failure can satisfy this check.
+        // Revision 3.1 keeps overflow strict at >= one day. The input-derived
+        // frozen walk must independently prove the exact failing field.
         const char* field = expected_failure();
         if (!field || !report_failure_checks::is_nonfinite(error, field)) {
             BacktestEngine::free_report(&report);
@@ -826,6 +832,8 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
         // all original digest words, counts and continuation checks remain.
         out.rows = host.recorded_hashes();
     } else {
+        CHECK(equity_stats_reference::first_difference(
+            report.metrics.equity, host.reference_equity(report)) == nullptr);
         for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
             out.rows.push_back(report.broker_state_hash[i]);
         CHECK(out.rows == host.recorded_hashes());

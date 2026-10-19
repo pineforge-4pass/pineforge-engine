@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "metrics_month_memo.hpp"
+#include "metrics_annualization.hpp"
 #include "report_value_invalid.hpp"
 #include "timezone.hpp"
 
@@ -45,31 +46,37 @@ inline int month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimezone
 // spec; corpus probe pins it).
 inline void sharpe_sortino(const std::vector<double>& r, double rf_period,
                            double ann, double* sharpe, double* sortino,
-                           const char* sharpe_field, const char* sortino_field) {
+                           const char* sharpe_field, const char* sortino_field,
+                           bool omit_sharpe = false, bool omit_sortino = false) {
     *sharpe = kNaN;
     *sortino = kNaN;
     const size_t n = r.size();
-    if (n < 2) return;
-    report::finite_value(rf_period, sharpe_field);
-    report::finite_value(ann, sharpe_field);
+    if (n < 2 || (omit_sharpe && omit_sortino)) return;
+    const char* shared_field = omit_sharpe ? sortino_field : sharpe_field;
+    report::finite_value(rf_period, shared_field);
+    report::finite_value(ann, shared_field);
     double mean = 0.0;
     for (double x : r) {
-        report::finite_value(x, sharpe_field);
-        mean = report::finite_value(mean + x, sharpe_field);
+        report::finite_value(x, shared_field);
+        mean = report::finite_value(mean + x, shared_field);
     }
-    mean = report::finite_value(mean / (double)n, sharpe_field);
+    mean = report::finite_value(mean / (double)n, shared_field);
     double var = 0.0, down = 0.0;
     for (double x : r) {
-        const double delta = report::finite_value(x - mean, sharpe_field);
-        var = report::finite_value(var + delta * delta, sharpe_field);
-        const double d = std::min(0.0, report::finite_value(x - rf_period, sortino_field));
-        down = report::finite_value(down + d * d, sortino_field);
+        if (!omit_sharpe) {
+            const double delta = report::finite_value(x - mean, sharpe_field);
+            var = report::finite_value(var + delta * delta, sharpe_field);
+        }
+        if (!omit_sortino) {
+            const double d = std::min(0.0, report::finite_value(x - rf_period, sortino_field));
+            down = report::finite_value(down + d * d, sortino_field);
+        }
     }
     const double sd = report::finite_value(std::sqrt(var / (double)(n - 1)), sharpe_field);
     const double dd = report::finite_value(std::sqrt(down / (double)n), sortino_field);
-    if (sd > 0.0)
+    if (!omit_sharpe && sd > 0.0)
         *sharpe = report::finite_value((mean - rf_period) / sd * ann, sharpe_field);
-    if (dd > 0.0)
+    if (!omit_sortino && dd > 0.0)
         *sortino = report::finite_value((mean - rf_period) / dd * ann, sortino_field);
 }
 
@@ -274,7 +281,7 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
         }
     }
 
-    // --- Calendar span (ms -> years) ---
+    // --- Measured curve span on the UTC epoch-ms bar clock (ms -> years) ---
     // Unsigned differences avoid signed overflow even for the full int64
     // timestamp domain. For a representable old difference the conversion
     // and the floating-point operation order are unchanged.
@@ -284,13 +291,20 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
         : -(double)(static_cast<uint64_t>(first_time) - static_cast<uint64_t>(last_time));
     const double span_years = check(span_ms / (365.25 * 86400.0 * 1000.0), "cagr");
 
-    if (span_years > 0.0 && initial_capital > 0.0 && curve[n - 1].equity > 0.0) {
+    const auto absent = [span_ms](double pf_equity_stats_t::*field) {
+        return detail::short_span_absence(span_ms, field);
+    };
+    // Revision 3.1: decide the metric domain BEFORE either the ratio or pow.
+    // Existing nonpositive-span/capital/final-equity absences stay unchanged.
+    if (span_years > 0.0 && initial_capital > 0.0 && curve[n - 1].equity > 0.0
+        && !absent(&pf_equity_stats_t::cagr)) {
         const double ratio = check(curve[n - 1].equity / initial_capital, "cagr");
         e.cagr = check((std::pow(ratio, 1.0 / span_years) - 1.0) * 100.0, "cagr");
     }
     if (e.max_equity_drawdown > 0.0) {
         e.recovery_factor = check(net_profit / e.max_equity_drawdown, "recovery_factor");
-        if (!std::isnan(e.cagr) && e.max_equity_drawdown_pct > 0.0)
+        if (!std::isnan(e.cagr) && e.max_equity_drawdown_pct > 0.0
+            && !absent(&pf_equity_stats_t::calmar))
             e.calmar = check(e.cagr / e.max_equity_drawdown_pct, "calmar");
     }
 
@@ -330,7 +344,9 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
     // --- Per-bar variant: density-annualized (observed bars/year, NOT the
     // calendar tf formula — that inflates Sharpe ~sqrt(5) on non-24/7
     // sessions; see spec).
-    if (n >= 3 && span_years > 0.0) {
+    const bool omit_sharpe_bar = absent(&pf_equity_stats_t::sharpe_bar);
+    const bool omit_sortino_bar = absent(&pf_equity_stats_t::sortino_bar);
+    if (n >= 3 && span_years > 0.0 && !(omit_sharpe_bar && omit_sortino_bar)) {
         const double bars_per_year = check((double)(n - 1) / span_years, "sharpe_bar");
         std::vector<double> r;
         r.reserve((size_t)(n - 1));
@@ -338,7 +354,8 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
             if (curve[i - 1].equity > 0.0) r.push_back(curve[i].equity / curve[i - 1].equity - 1.0);
         sharpe_sortino(r, 0.02 / bars_per_year, std::sqrt(bars_per_year),
                        &e.sharpe_bar, &e.sortino_bar,
-                       "metrics.equity.sharpe_bar", "metrics.equity.sortino_bar");
+                       "metrics.equity.sharpe_bar", "metrics.equity.sortino_bar",
+                       omit_sharpe_bar, omit_sortino_bar);
     }
     return e;
 }

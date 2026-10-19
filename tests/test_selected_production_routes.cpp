@@ -66,14 +66,11 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/selected_window.h>
 
-#include "report_capture_fixture.hpp"
-
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <exception>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -486,7 +483,6 @@ class RouteHost : public NativeStrategyHost {
 public:
     int enter_bar = -1;
     int exit_bar = -1;
-    mutable ReportCaptureFixture presented;
 
     void on_native_run_begin() override { g_log.note("host.run_begin"); }
     void on_native_input(const Bar&, const NativeInputContext&) override {
@@ -504,10 +500,7 @@ public:
     void on_native_applied(const no::ExecutionAppliedEvent&, const NativeDecisionContext&) override {
         g_log.note("host.applied");
     }
-    void present_report(ReportC* out) const override {
-        g_log.note("host.present_report");
-        presented.save(*out);
-    }
+    void present_report(ReportC*) const override { g_log.note("host.present_report"); }
 
 private:
     int bars_seen_ = 0;
@@ -543,11 +536,6 @@ struct Observed {
     bool completed = false;
     int run_status = -99;
     std::string error;
-    RunFailureValue failure;
-    ReportCaptureFixture execution;
-    bool published = false;
-    bool module_route = false;
-    int report_rc = -99;
     Probe probe;
     pf_execution_observation_v1 opened{};
     int opened_rc = -99;
@@ -571,7 +559,6 @@ void collect(pf_strategy_t handle, const NativeStrategyHost& native, bool select
     seen.run_status = strategy_last_run_status(handle);
     const char* error = strategy_get_last_error(handle);
     seen.error = error != nullptr ? error : "";
-    seen.failure = run_failure_value_of(native);
     seen.opened = blank_observation();
     seen.opened_rc = strategy_execution_observation_v1(handle, &seen.opened);
     seen.counts = selected ? blank_counts() : sentinel_counts();
@@ -594,8 +581,7 @@ void arm_selection(pf_strategy_t handle, const RouteTape& tape, bool selected, O
 // The native module route: the macro's own strategy_create, then run_backtest (simple) or
 // run_backtest_full (the timeframe overload), which run the engine and publish the report
 // through native_module::publish_report; the report is freed through the macro's report_free.
-void drive_module(const RouteTape& tape, bool full, bool selected, Observed& seen,
-                  double capital = kCapital) {
+void drive_module(const RouteTape& tape, bool full, bool selected, Observed& seen) {
     g_log.clear();
     const pf_strategy_t handle = strategy_create(nullptr);
     CHECK(handle != nullptr);
@@ -609,8 +595,7 @@ void drive_module(const RouteTape& tape, bool full, bool selected, Observed& see
     if (host == nullptr || native == nullptr) return;
     host->enter_bar = tape.enter_bar;
     host->exit_bar = tape.exit_bar;
-    NativeRunSpec spec = spec_of("wspr-module", tape.input_tf.c_str(), tape.script_tf.c_str());
-    spec.initial_capital = capital;
+    const NativeRunSpec spec = spec_of("wspr-module", tape.input_tf.c_str(), tape.script_tf.c_str());
     CHECK(native->configure_native(spec).status == NativeSetupStatus::Applied);
     arm_selection(handle, tape, selected, seen);
 
@@ -625,9 +610,6 @@ void drive_module(const RouteTape& tape, bool full, bool selected, Observed& see
     }
     seen.ran = true;
     collect(handle, *native, selected, seen);
-    seen.module_route = true;
-    seen.published = seen.error.empty();
-    seen.execution.save(host->presented.raw);
 }
 
 // A stream call that must answer 0; a refusal prints the engine's own text.
@@ -642,14 +624,12 @@ void stream_ok(int rc, const char* what, pf_strategy_t handle) {
 // The C ABI stream route: the exported strategy_stream_begin / strategy_stream_push_bar /
 // strategy_stream_end / strategy_stream_fill_report on a handle; the report is the stream
 // snapshot after the end and is freed through strategy_native_report_free_v1.
-void drive_stream(const RouteTape& tape, bool selected, Observed& seen,
-                  double capital = kCapital) {
+void drive_stream(const RouteTape& tape, bool selected, Observed& seen) {
     g_log.clear();
     RouteHost host;
     host.enter_bar = tape.enter_bar;
     host.exit_bar = tape.exit_bar;
-    NativeRunSpec spec = spec_of("wspr-stream", tape.input_tf.c_str(), tape.script_tf.c_str());
-    spec.initial_capital = capital;
+    const NativeRunSpec spec = spec_of("wspr-stream", tape.input_tf.c_str(), tape.script_tf.c_str());
     CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
     BacktestEngine& engine = host;
     const pf_strategy_t handle = handle_of(engine);
@@ -664,11 +644,10 @@ void drive_stream(const RouteTape& tape, bool selected, Observed& seen,
         stream_ok(strategy_stream_push_bar(handle, &bars[i]), "strategy_stream_push_bar", handle);
     }
     stream_ok(strategy_stream_end(handle, 0), "strategy_stream_end", handle);
-    seen.report_rc = strategy_stream_fill_report(handle, &seen.report);
+    stream_ok(strategy_stream_fill_report(handle, &seen.report), "strategy_stream_fill_report",
+              handle);
     seen.ran = true;
     collect(handle, host, selected, seen);
-    seen.published = seen.report_rc == 0;
-    seen.execution.save(host.presented.raw);
 }
 
 // ---- OFF versus selected --------------------------------------------------------------
@@ -743,43 +722,16 @@ void compare_metrics(const R& off, const R& sel) {
 }
 
 // One production route: the OFF flow and the selected flow of the same tape.
-void check_single_read(const RouteTape& tape, const Observed& off, const Observed& sel,
-                       double capital = kCapital) {
-    // Execution completed on both flows, including the result-overflow rows.
+void check_single_read(const RouteTape& tape, const Observed& off, const Observed& sel) {
+    // Both flows reached their real entry, completed and left no error.
     CHECK(off.ran);
     CHECK(sel.ran);
     CHECK(off.completed);
     CHECK(sel.completed);
     CHECK(off.run_status == 0);
     CHECK(sel.run_status == 0);
-    for (const Observed* seen : {&off, &sel}) {
-        const auto& execution = seen->execution.raw;
-        const double absent = std::numeric_limits<double>::quiet_NaN();
-        const auto reference = equity_stats_reference::compute_equity_stats(
-            execution.equity_curve, execution.equity_curve_len, capital,
-            "UTC", absent, absent, 0, execution.net_profit);
-        const char* field = report_failure_checks::annualization_overflow(reference);
-        if (field) {
-            // Appendix A:83/93: specific typed failure after execution, with
-            // no successful canonical result. The field comes from the
-            // independent frozen walk, never from the observed error.
-            CHECK(!seen->published);
-            CHECK(seen->failure.code == RunFailureCode::report_result_invalid);
-            CHECK(seen->failure.args && *seen->failure.args ==
-                std::string("{\"field\":\"") + field + "\",\"reason\":\"nonfinite\"}");
-            CHECK(seen->error == "The report producer generated an invalid canonical result.");
-            if (seen->module_route) {
-                CHECK(seen->report.trades == nullptr && seen->report.equity_curve == nullptr);
-            } else {
-                CHECK(seen->report_rc == -1);
-            }
-        } else {
-            CHECK(seen->published);
-            CHECK(seen->error.empty());
-            if (!seen->module_route) CHECK(seen->report_rc == 0);
-        }
-    }
-    if (capital == 10000.0) CHECK(off.published && sel.published);
+    CHECK(off.error.empty());
+    CHECK(sel.error.empty());
 
     // OFF: no counts, caller storage untouched, no observer, one presentation (its one read).
     CHECK(off.counts_rc == -2);
@@ -827,28 +779,18 @@ void check_single_read(const RouteTape& tape, const Observed& off, const Observe
 
     // The real published reports, by hand from the tape: the OFF curve holds one point per
     // script bar and the selected curve the anchor plus the same M.
-    // The pre-metric presentation keeps the same execution assertions when
-    // canonical publication is refused; it never supplies invented metrics.
-    const auto check_rows = [&](const auto& off_rows, const auto& sel_rows) {
-        CHECK(static_cast<std::uint64_t>(off_rows.input_bars_processed) == tape.input_bars);
-        CHECK(static_cast<std::uint64_t>(off_rows.script_bars_processed) == tape.script_bars);
-        CHECK(static_cast<std::uint64_t>(sel_rows.input_bars_processed) == tape.input_bars);
-        CHECK(static_cast<std::uint64_t>(sel_rows.script_bars_processed) == tape.script_bars);
-        CHECK(static_cast<std::uint64_t>(off_rows.equity_curve_len) == tape.script_bars);
-        CHECK(static_cast<std::uint64_t>(sel_rows.equity_curve_len) == tape.script_bars + 1);
-        if (tape.exact_trades) {
-            CHECK(off_rows.trades_len == 1);
-            CHECK(sel_rows.trades_len == 1);
-        }
-        compare_off_selected(off_rows, sel_rows, tape.rows.front().timestamp, capital);
-    };
-    CHECK(off.published == sel.published);
-    if (off.published && sel.published) {
-        check_rows(off.report, sel.report);
-        compare_metrics(off.report, sel.report);
-    } else {
-        check_rows(off.execution.raw, sel.execution.raw);
+    CHECK(static_cast<std::uint64_t>(off.report.input_bars_processed) == tape.input_bars);
+    CHECK(static_cast<std::uint64_t>(off.report.script_bars_processed) == tape.script_bars);
+    CHECK(static_cast<std::uint64_t>(sel.report.input_bars_processed) == tape.input_bars);
+    CHECK(static_cast<std::uint64_t>(sel.report.script_bars_processed) == tape.script_bars);
+    CHECK(static_cast<std::uint64_t>(off.report.equity_curve_len) == tape.script_bars);
+    CHECK(static_cast<std::uint64_t>(sel.report.equity_curve_len) == tape.script_bars + 1);
+    if (tape.exact_trades) {
+        CHECK(off.report.trades_len == 1);
+        CHECK(sel.report.trades_len == 1);
     }
+    compare_off_selected(off.report, sel.report, tape.rows.front().timestamp, kCapital);
+    compare_metrics(off.report, sel.report);
 }
 
 // ---- synthetic checker controls (they run before any real row) --------------------------
@@ -1077,37 +1019,31 @@ void row_compare_teeth() {
 // The native module entry, simple route: the macro's run_backtest.
 void row_module_publish_simple() {
     const RouteTape tape = simple_tape(false);
-    for (const double capital : {kCapital, 10000.0}) {
-        Observed off;
-        drive_module(tape, false, false, off, capital);
-        Observed sel;
-        drive_module(tape, false, true, sel, capital);
-        check_single_read(tape, off, sel, capital);
-    }
+    Observed off;
+    drive_module(tape, false, false, off);
+    Observed sel;
+    drive_module(tape, false, true, sel);
+    check_single_read(tape, off, sel);
 }
 
 // The native module entry, timeframe route: the macro's run_backtest_full with 1m -> 5m.
 void row_module_publish_full() {
     const RouteTape tape = full_tape();
-    for (const double capital : {kCapital, 10000.0}) {
-        Observed off;
-        drive_module(tape, true, false, off, capital);
-        Observed sel;
-        drive_module(tape, true, true, sel, capital);
-        check_single_read(tape, off, sel, capital);
-    }
+    Observed off;
+    drive_module(tape, true, false, off);
+    Observed sel;
+    drive_module(tape, true, true, sel);
+    check_single_read(tape, off, sel);
 }
 
 // The C ABI stream family: the exported strategy_stream_* functions end to end.
 void row_c_abi_stream() {
     const RouteTape tape = simple_tape(true);
-    for (const double capital : {kCapital, 10000.0}) {
-        Observed off;
-        drive_stream(tape, false, off, capital);
-        Observed sel;
-        drive_stream(tape, true, sel, capital);
-        check_single_read(tape, off, sel, capital);
-    }
+    Observed off;
+    drive_stream(tape, false, off);
+    Observed sel;
+    drive_stream(tape, true, sel);
+    check_single_read(tape, off, sel);
 }
 
 }  // namespace

@@ -1,0 +1,5 @@
+// Revision 3.1 policy, shared by the kernel and the public report writer.
+// Ship beside run_json.py, like its other companion resources.
+PF_ANNUALIZATION_SPAN_MS(86400000)
+PF_SHORT_SPAN_ANNUALIZED_FIELD(cagr)
+PF_SHORT_SPAN_ANNUALIZED_FIELD(calmar)

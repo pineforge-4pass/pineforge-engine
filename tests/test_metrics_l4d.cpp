@@ -35,8 +35,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/metrics.hpp>
 
-#include "report_failure_checks.hpp"
-
 using namespace pineforge;
 
 static int tests_passed = 0;
@@ -310,15 +308,6 @@ static void test_equity_stats_drawdown_walk() {
     std::printf("equity stats: dd/runup walk mirrors update_equity_extremes\n");
     // 1000 -> 1200 -> 900 -> 1100 (same month is fine; dd walk is tz-free)
     pf_equity_point_t c[4] = { pt(1,1000), pt(2,1200), pt(3,900), pt(4,1100) };
-    // Appendix A:83/93 requires R for the actual 3 ms CAGR overflow.
-    CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-        (void)pineforge::metrics::compute_equity_stats(
-            c, 4, 1000.0, "", 100.0, 110.0, 0, 100.0);
-    }));
-    // Also retain every drawdown/runup assertion on a finite-span control
-    // with the same equity values. Its three-millisecond spacing is replaced
-    // by one day only for this additional metric-domain control.
-    for (int i = 0; i < 4; ++i) c[i].time_ms = 1 + static_cast<int64_t>(i) * 86'400'000;
     pf_equity_stats_t e = pineforge::metrics::compute_equity_stats(
         c, 4, 1000.0, "", 100.0, 110.0, 0, 100.0);
     // peak 1200 -> trough 900: dd 300, pct vs peak 25%.
@@ -329,7 +318,8 @@ static void test_equity_stats_drawdown_walk() {
     CHECK(std::fabs(e.max_equity_runup - 200.0) < 1e-12);
     CHECK(std::fabs(e.max_equity_runup_pct - 200.0 / 9.0) < 1e-9);
     CHECK(std::fabs(e.recovery_factor - 100.0 / 300.0) < 1e-12);
-    CHECK(!std::isnan(e.cagr));
+    CHECK(std::isnan(e.cagr));             // revision 3.1: three milliseconds
+    CHECK(std::isnan(e.calmar));
     CHECK(std::isnan(e.sharpe_monthly));   // single month bucket -> <2 returns
 }
 

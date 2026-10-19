@@ -30,9 +30,6 @@
 #include <pineforge/native_toolkit.hpp>
 #include <pineforge/selected_window.h>
 
-#include "report_capture_fixture.hpp"
-#include "report_failure_checks.hpp"
-
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -96,7 +93,6 @@ struct ReportHost final : NativeStrategyHost {
     bool throw_in_present = false;
     bool shrink_presented_curve = false;
     mutable int present_calls = 0;
-    mutable ReportCaptureFixture presented;
 
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
         if (enter_from_ms >= 0 && !entered && context.script_bar_open_ms >= enter_from_ms) {
@@ -108,7 +104,6 @@ struct ReportHost final : NativeStrategyHost {
         ++present_calls;
         if (throw_in_present) throw std::runtime_error("report fixture: presentation refused");
         if (shrink_presented_curve && report->equity_curve_len > 1) report->equity_curve_len = 1;
-        presented.save(*report);
     }
 };
 
@@ -143,11 +138,8 @@ const Bar kTape[5] = {
 };
 
 // The first `count` rows of the tape.
-std::vector<Bar> tape(std::size_t count, std::int64_t step = kMinute) {
-    std::vector<Bar> rows(kTape, kTape + count);
-    for (std::size_t i = 0; i < count; ++i)
-        rows[i].timestamp = kT0 + static_cast<std::int64_t>(i) * step;
-    return rows;
+std::vector<Bar> tape(std::size_t count) {
+    return std::vector<Bar>(kTape, kTape + count);
 }
 
 // Rows at the given minutes, all at one flat price.
@@ -160,12 +152,12 @@ std::vector<Bar> flat_rows(const std::vector<int>& minutes, double price) {
 }
 
 // The window [kT0 + start_minute, kT0 + 1000 minutes): T is start_minute.
-pf_selected_window_config_v1 window_at(int start_minute, std::int64_t step = kMinute) {
+pf_selected_window_config_v1 window_at(int start_minute) {
     pf_selected_window_config_v1 window{};
     window.struct_size = static_cast<std::uint32_t>(sizeof window);
     window.version = 1;
-    window.start_ms = kT0 + start_minute * step;
-    window.end_ms = kT0 + 1000 * step;
+    window.start_ms = kT0 + start_minute * kMinute;
+    window.end_ms = kT0 + 1000 * kMinute;
     return window;
 }
 
@@ -342,14 +334,14 @@ void no_window_preroll_only_is_the_anchor_alone() {
 //   of M = 3: 2 / 3 = 66.67 % (anchor-counted: 2 / 4 = 50 %). Drawdown from the peak
 //   1010 to 1004.5 is 5.5, 5.5 / 1010 = 0.5446 %, and no run-up. Buy-and-hold:
 //   104.5 / 100 - 1 = 4.5 %, 4.5 % of 1000 is 45.
-void one_two_three_observations_by_hand(std::int64_t step, bool overflow) {
+void one_two_three_observations_by_hand() {
     std::printf("one_two_three_observations_by_hand\n");
-    const std::int64_t t = kT0 + 2 * step;
+    const std::int64_t t = kT0 + 2 * kMinute;
     {
         ReportHost host;
         host.enter_from_ms = t;
-        const pf_selected_window_config_v1 window = window_at(2, step);
-        run_host(host, spec_of("wsr-m1"), tape(3, step), &window);
+        const pf_selected_window_config_v1 window = window_at(2);
+        run_host(host, spec_of("wsr-m1"), tape(3), &window);
         CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
         pf_selected_window_counts_v1 counts = blank_counts();
         CHECK(native_selected_window_counts_v1(&host, &counts) == 0);
@@ -366,100 +358,65 @@ void one_two_three_observations_by_hand(std::int64_t step, bool overflow) {
     {
         ReportHost host;
         host.enter_from_ms = t;
-        const pf_selected_window_config_v1 window = window_at(2, step);
-        run_host(host, spec_of("wsr-m2"), tape(4, step), &window);
+        const pf_selected_window_config_v1 window = window_at(2);
+        run_host(host, spec_of("wsr-m2"), tape(4), &window);
         CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
         pf_selected_window_counts_v1 counts = blank_counts();
         CHECK(native_selected_window_counts_v1(&host, &counts) == 0);
         CHECK(counts.window_script_bars == 2);
         Report report;
-        if (overflow) {
-            // Appendix A:83/93: 1.01^(525960) is an overflow, not absence.
-            CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-                host.fill_report(&report.raw);
-            }));
-        } else {
-            host.fill_report(&report.raw);
-        }
-        check_curve(overflow ? host.presented.raw : report.raw, {{t, kCapital, 0.0},
+        host.fill_report(&report.raw);
+        check_curve(report.raw, {{t, kCapital, 0.0},
                                  {t, kCapital, 0.0},
-                                 {kT0 + 3 * step, 1010.0, 10.0}});
-        if (!overflow) {
-            const pf_equity_stats_t& e = report.raw.metrics.equity;
-            CHECK(near(e.time_in_market_pct, 50.0, 1e-9));
-            CHECK(near(e.open_pl, 10.0, 1e-9));
-            CHECK(near(e.max_equity_drawdown, 0.0, 1e-12));
-            CHECK(near(e.max_equity_runup, 0.0, 1e-12));
-            CHECK(near(e.buy_hold_return_pct, 10.0, 1e-9));
-            CHECK(near(e.buy_hold_return, 100.0, 1e-9));
-        }
+                                 {kT0 + 3 * kMinute, 1010.0, 10.0}});
+        const pf_equity_stats_t& e = report.raw.metrics.equity;
+        CHECK(near(e.time_in_market_pct, 50.0, 1e-9));
+        CHECK(near(e.open_pl, 10.0, 1e-9));
+        CHECK(near(e.max_equity_drawdown, 0.0, 1e-12));
+        CHECK(near(e.max_equity_runup, 0.0, 1e-12));
+        CHECK(near(e.buy_hold_return_pct, 10.0, 1e-9));
+        CHECK(near(e.buy_hold_return, 100.0, 1e-9));
     }
     {
         ReportHost host;
         host.enter_from_ms = t;
-        const pf_selected_window_config_v1 window = window_at(2, step);
-        run_host(host, spec_of("wsr-m3"), tape(5, step), &window);
+        const pf_selected_window_config_v1 window = window_at(2);
+        run_host(host, spec_of("wsr-m3"), tape(5), &window);
         CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
         pf_selected_window_counts_v1 counts = blank_counts();
         CHECK(native_selected_window_counts_v1(&host, &counts) == 0);
         CHECK(counts.window_script_bars == 3);
         Report report;
-        if (overflow) {
-            CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-                host.fill_report(&report.raw);
-            }));
-        } else {
-            host.fill_report(&report.raw);
-        }
-        check_curve(overflow ? host.presented.raw : report.raw, {{t, kCapital, 0.0},
+        host.fill_report(&report.raw);
+        check_curve(report.raw, {{t, kCapital, 0.0},
                                  {t, kCapital, 0.0},
-                                 {kT0 + 3 * step, 1010.0, 10.0},
-                                 {kT0 + 4 * step, 1004.5, 4.5}});
-        if (!overflow) {
-            const pf_equity_stats_t& e = report.raw.metrics.equity;
-            CHECK(near(e.time_in_market_pct, 200.0 / 3.0, 1e-9));
-            CHECK(near(e.open_pl, 4.5, 1e-9));
-            CHECK(near(e.max_equity_drawdown, 5.5, 1e-9));
-            CHECK(near(e.max_equity_drawdown_pct, 5.5 / 1010.0 * 100.0, 1e-9));
-            CHECK(near(e.max_equity_runup, 0.0, 1e-12));
-            CHECK(near(e.buy_hold_return_pct, 4.5, 1e-9));
-            CHECK(near(e.buy_hold_return, 45.0, 1e-9));
-        }
+                                 {kT0 + 3 * kMinute, 1010.0, 10.0},
+                                 {kT0 + 4 * kMinute, 1004.5, 4.5}});
+        const pf_equity_stats_t& e = report.raw.metrics.equity;
+        CHECK(near(e.time_in_market_pct, 200.0 / 3.0, 1e-9));
+        CHECK(near(e.open_pl, 4.5, 1e-9));
+        CHECK(near(e.max_equity_drawdown, 5.5, 1e-9));
+        CHECK(near(e.max_equity_drawdown_pct, 5.5 / 1010.0 * 100.0, 1e-9));
+        CHECK(near(e.max_equity_runup, 0.0, 1e-12));
+        CHECK(near(e.buy_hold_return_pct, 4.5, 1e-9));
+        CHECK(near(e.buy_hold_return, 45.0, 1e-9));
     }
 }
 
 // Reading the report again never presents again: the host's hook ran once, in the
 // capture, and every read is its own independently owned copy of that capture.
-void repeated_reads_run_one_presentation(std::int64_t step, bool overflow) {
+void repeated_reads_run_one_presentation() {
     std::printf("repeated_reads_run_one_presentation\n");
     ReportHost host;
-    host.enter_from_ms = kT0 + 2 * step;
-    const pf_selected_window_config_v1 window = window_at(2, step);
-    run_host(host, spec_of("wsr-reads"), tape(5, step), &window);
+    host.enter_from_ms = kT0 + 2 * kMinute;
+    const pf_selected_window_config_v1 window = window_at(2);
+    run_host(host, spec_of("wsr-reads"), tape(5), &window);
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(host.present_calls == 1);
 
     Report first;
     Report second;
     Report third;
-    if (overflow) {
-        // Appendix A:83/93: each read fails without re-presenting or publishing.
-        for (Report* report : {&first, &second, &third}) {
-            CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-                host.fill_report(&report->raw);
-            }));
-            check_empty_report(report->raw);
-        }
-        CHECK(host.present_calls == 1);
-        check_curve(host.presented.raw, {{kT0 + 2 * step, kCapital, 0.0},
-                                         {kT0 + 2 * step, kCapital, 0.0},
-                                         {kT0 + 3 * step, 1010.0, 10.0},
-                                         {kT0 + 4 * step, 1004.5, 4.5}});
-        pf_selected_window_counts_v1 counts = blank_counts();
-        CHECK(native_selected_window_counts_v1(&host, &counts) == 0);
-        CHECK(counts.window_script_bars == 3);
-        return;
-    }
     host.fill_report(&first.raw);
     host.fill_report(&second.raw);
     host.fill_report(&third.raw);
@@ -467,10 +424,10 @@ void repeated_reads_run_one_presentation(std::int64_t step, bool overflow) {
     CHECK(first.raw.equity_curve != nullptr);
     CHECK(first.raw.equity_curve != second.raw.equity_curve);
     CHECK(second.raw.equity_curve != third.raw.equity_curve);
-    const std::vector<Point> expected = {{kT0 + 2 * step, kCapital, 0.0},
-                                         {kT0 + 2 * step, kCapital, 0.0},
-                                         {kT0 + 3 * step, 1010.0, 10.0},
-                                         {kT0 + 4 * step, 1004.5, 4.5}};
+    const std::vector<Point> expected = {{kT0 + 2 * kMinute, kCapital, 0.0},
+                                         {kT0 + 2 * kMinute, kCapital, 0.0},
+                                         {kT0 + 3 * kMinute, 1010.0, 10.0},
+                                         {kT0 + 4 * kMinute, 1004.5, 4.5}};
     check_curve(first.raw, expected);
     check_curve(second.raw, expected);
     check_curve(third.raw, expected);
@@ -486,26 +443,15 @@ void repeated_reads_run_one_presentation(std::int64_t step, bool overflow) {
 // the curve to one point): the length the reader sees is what it left, but the
 // metrics keep the capture's own M + 1 points and M observations, so they are the
 // ones of the unedited run (the M = 3 values above).
-void presented_curve_edit_does_not_move_metrics(std::int64_t step, bool overflow) {
+void presented_curve_edit_does_not_move_metrics() {
     std::printf("presented_curve_edit_does_not_move_metrics\n");
     ReportHost host;
-    host.enter_from_ms = kT0 + 2 * step;
+    host.enter_from_ms = kT0 + 2 * kMinute;
     host.shrink_presented_curve = true;
-    const pf_selected_window_config_v1 window = window_at(2, step);
-    run_host(host, spec_of("wsr-edit"), tape(5, step), &window);
+    const pf_selected_window_config_v1 window = window_at(2);
+    run_host(host, spec_of("wsr-edit"), tape(5), &window);
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     Report report;
-    if (overflow) {
-        // The metrics still walk M+1 original points: shrinking the presented
-        // length cannot hide the Appendix A:83/93 CAGR overflow.
-        CHECK(report_failure_checks::rejects_nonfinite("metrics.equity.cagr", [&] {
-            host.fill_report(&report.raw);
-        }));
-        CHECK(host.present_calls == 1);
-        CHECK(host.presented.raw.equity_curve_len == 1);
-        check_empty_report(report.raw);
-        return;
-    }
     host.fill_report(&report.raw);
     CHECK(host.present_calls == 1);
     CHECK(report.raw.equity_curve_len == 1);
@@ -724,15 +670,9 @@ int main() {
         preroll_and_window_has_no_pre_t_equity();
         anchor_at_t_with_the_first_bar_later();
         no_window_preroll_only_is_the_anchor_alone();
-        // Preserve the original minute tapes as typed-failure witnesses.
-        // Additional hour-spaced tapes retain every successful metric and
-        // array-ownership assertion, with the same prices, capital and sizes.
-        one_two_three_observations_by_hand(kMinute, true);
-        one_two_three_observations_by_hand(60 * kMinute, false);
-        repeated_reads_run_one_presentation(kMinute, true);
-        repeated_reads_run_one_presentation(60 * kMinute, false);
-        presented_curve_edit_does_not_move_metrics(kMinute, true);
-        presented_curve_edit_does_not_move_metrics(60 * kMinute, false);
+        one_two_three_observations_by_hand();
+        repeated_reads_run_one_presentation();
+        presented_curve_edit_does_not_move_metrics();
         capture_failures_own_the_attempt();
         observer_failure_and_counts_during_observer();
         off_and_observer_only_off_are_unchanged();

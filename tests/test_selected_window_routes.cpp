@@ -78,8 +78,6 @@
 #include <pineforge/selected_window_plan.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
-#include "report_capture_fixture.hpp"
-
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -613,8 +611,6 @@ struct PresentHost final : NativeStrategyHost {
     std::int64_t throw_label = -1;
     std::int64_t abort_label = -1;
     int bars_seen = 0;
-    double report_capital = kCapital;
-    mutable ReportCaptureFixture presented;
 
     void on_native_run_begin() override { g_log.note("host.run_begin"); }
     void on_native_input(const Bar&, const NativeInputContext&) override {
@@ -636,13 +632,7 @@ struct PresentHost final : NativeStrategyHost {
     void on_native_applied(const no::ExecutionAppliedEvent&, const NativeDecisionContext&) override {
         g_log.note("host.applied");
     }
-    void present_report(ReportC* out) const override {
-        g_log.note("host.present_report");
-        presented.save(*out);
-    }
-    bool read_report(ReportC* out) const {
-        return read_report_with_annualization_check(*this, out, presented, report_capital);
-    }
+    void present_report(ReportC*) const override { g_log.note("host.present_report"); }
 };
 
 enum class Route { Simple, Tf, Rich, Stream };
@@ -690,13 +680,10 @@ RouteTape tape_for(Route route) {
 // Configures `host`, registers the observer (when `probe` is given), sets or clears the
 // window (null = OFF) and makes the public entry of `route`. It reads nothing.
 void drive(Route route, PresentHost& host, const RouteTape& tape,
-           const pf_selected_window_config_v1* window, Probe* probe,
-           double capital = kCapital) {
+           const pf_selected_window_config_v1* window, Probe* probe) {
     host.enter_bar = tape.enter_bar;
     host.exit_bar = tape.exit_bar;
-    NativeRunSpec spec = spec_of("wsrt-route", tape.input_tf.c_str(), tape.script_tf.c_str());
-    spec.initial_capital = capital;
-    host.report_capital = capital;
+    const NativeRunSpec spec = spec_of("wsrt-route", tape.input_tf.c_str(), tape.script_tf.c_str());
     CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
     pf_execution_observer_v1 observer{};
     if (probe != nullptr) {
@@ -803,27 +790,27 @@ void compare_metrics(const ReportC& off, const ReportC& sel) {
 }
 
 // One C++ route: OFF and selected side by side.
-void check_cpp_route_one(Route route, double capital) {
+void check_cpp_route(Route route) {
     const RouteTape tape = tape_for(route);
     const std::int64_t first_row = tape.rows.front().timestamp;
 
     g_log.clear();
     PresentHost off;
-    drive(route, off, tape, nullptr, nullptr, capital);
+    drive(route, off, tape, nullptr, nullptr);
     CHECK(off.native_state().kind == NativeLifecycleKind::Completed);
     pf_selected_window_counts_v1 off_counts = sentinel_counts();
     const pf_selected_window_counts_v1 off_counts_before = off_counts;
     CHECK(strategy_selected_window_counts_v1(handle_of(off), &off_counts) == -2);
     CHECK(same_counts(off_counts, off_counts_before));
     Report off_report;
-    const bool off_published = off.read_report(&off_report.raw);
+    off.fill_report(&off_report.raw);
     const std::vector<std::string> off_log = g_log.events;
 
     g_log.clear();
     PresentHost sel;
     Probe probe;
     const pf_selected_window_config_v1 window = window_from(first_row);
-    drive(route, sel, tape, &window, &probe, capital);
+    drive(route, sel, tape, &window, &probe);
     CHECK(sel.native_state().kind == NativeLifecycleKind::Completed);
     check_observer_inside(probe);
     const pf_execution_observation_v1 opened = observation_of(handle_of(sel));
@@ -845,7 +832,7 @@ void check_cpp_route_one(Route route, double capital) {
     CHECK(counts.preroll_script_bars == 0);
     CHECK(counts.window_script_bars == tape.script_bars);
     Report sel_report;
-    const bool sel_published = sel.read_report(&sel_report.raw);
+    sel.fill_report(&sel_report.raw);
     const std::vector<std::string> sel_log = g_log.events;
 
     // The observer fired once, after the last permitted host work (the capture's
@@ -864,21 +851,10 @@ void check_cpp_route_one(Route route, double capital) {
     CHECK(count_of(sel_log, "host.bar") == count_of(off_log, "host.bar"));
     CHECK(count_of(sel_log, "host.applied") == count_of(off_log, "host.applied"));
     CHECK(count_of(sel_log, "host.bar") == static_cast<int>(tape.script_bars));
-    const ReportC& off_rows = off_published ? off_report.raw : off.presented.raw;
-    const ReportC& sel_rows = sel_published ? sel_report.raw : sel.presented.raw;
-    if (route != Route::Stream) CHECK(off_rows.trades_len == 1);
-    compare_off_selected(off_rows, sel_rows, first_row, capital);
-    CHECK(off_published == sel_published);
-    if (off_published && sel_published)
-        compare_metrics(off_report.raw, sel_report.raw);
-    // Appendix A:83/93: an overflowing result has no published metrics.
-    // The 10000-capital control below retains every successful metric check.
-    if (capital == 10000.0) CHECK(off_published && sel_published);
-}
+    if (route != Route::Stream) CHECK(off_report.raw.trades_len == 1);
 
-void check_cpp_route(Route route) {
-    check_cpp_route_one(route, kCapital);  // original prices, times, sizes and capital
-    check_cpp_route_one(route, 10000.0);   // additional finite-report control
+    compare_off_selected(off_report.raw, sel_report.raw, first_row, kCapital);
+    compare_metrics(off_report.raw, sel_report.raw);
 }
 
 // ---- the native C host ------------------------------------------------------------------
@@ -930,7 +906,7 @@ int c_on_lot_excursion(void* user, const pf_native_lot_excursion_v1*, double* fa
 }
 
 // Creates and configures (KernelRecorded through the spec extension) a native C host.
-bool c_host_ready(CState& state, double capital = kCapital) {
+bool c_host_ready(CState& state) {
     pf_native_callbacks_v1 table;
     std::memset(&table, 0, sizeof table);
     table.struct_size = static_cast<std::uint32_t>(sizeof table);
@@ -960,7 +936,7 @@ bool c_host_ready(CState& state, double capital = kCapital) {
     spec.timezone = "UTC";
     spec.session = "24x7";
     spec.chart_timezone = "";
-    spec.initial_capital = capital;
+    spec.initial_capital = kCapital;
     spec.point_value = 1.0;
     spec.account_fx = 1.0;
     spec.price_tick = 0.01;
@@ -985,28 +961,9 @@ void check_c_host_route() {
     const pf_bar_t* bars = reinterpret_cast<const pf_bar_t*>(rows.data());
     const int n = static_cast<int>(rows.size());
 
-    // Keep the original account as a typed report-overflow witness. Appendix
-    // A:83/93 forbids publishing its 5% / four-minute CAGR as null.
-    for (const bool selected : {false, true}) {
-        CState fault;
-        if (!c_host_ready(fault)) return;
-        if (selected) {
-            const auto window = window_from(rows.front().timestamp);
-            CHECK(strategy_set_selected_window_v1(fault.handle, &window) == 0);
-        }
-        CReport rejected;
-        CHECK(strategy_native_run_v1(fault.handle, bars, n, &rejected.raw) == PF_NATIVE_E_STATE);
-        const char* code = strategy_get_last_error_code(fault.handle);
-        const char* args = strategy_get_last_error_args(fault.handle);
-        CHECK(code && std::strcmp(code, "report_result_invalid") == 0);
-        CHECK(args && std::strcmp(args,
-            "{\"field\":\"metrics.equity.cagr\",\"reason\":\"nonfinite\"}") == 0);
-        strategy_native_host_free(fault.handle);
-    }
-
     g_log.clear();
     CState off_state;
-    if (!c_host_ready(off_state, 10000.0)) return;
+    if (!c_host_ready(off_state)) return;
     CReport off_report;
     CHECK(strategy_native_run_v1(off_state.handle, bars, n, &off_report.raw) == PF_NATIVE_OK);
     pf_selected_window_counts_v1 off_counts = sentinel_counts();
@@ -1017,7 +974,7 @@ void check_c_host_route() {
 
     g_log.clear();
     CState sel_state;
-    if (!c_host_ready(sel_state, 10000.0)) {
+    if (!c_host_ready(sel_state)) {
         strategy_native_host_free(off_state.handle);
         return;
     }
@@ -1061,7 +1018,7 @@ void check_c_host_route() {
         CHECK(sel_report.raw.trades[0].max_runup == kHookFavorable);
         CHECK(sel_report.raw.trades[0].max_drawdown == kHookAdverse);
     }
-    compare_off_selected(off_report.raw, sel_report.raw, rows.front().timestamp, 10000.0);
+    compare_off_selected(off_report.raw, sel_report.raw, rows.front().timestamp, kCapital);
 
     strategy_native_host_free(sel_state.handle);
     strategy_native_host_free(off_state.handle);
@@ -1490,7 +1447,7 @@ void row_run_failed() {
     CHECK(strategy_selected_window_counts_v1(handle_of(off), &off_counts) == -2);
     CHECK(same_counts(off_counts, off_before));
     Report off_report;
-    off.read_report(&off_report.raw);
+    off.fill_report(&off_report.raw);
     CHECK(off_report.raw.equity_curve_len > 0);
     CHECK(off.last_error() == first_cause);
 }
@@ -1626,8 +1583,8 @@ void row_preadmission_refused() {
     drive(Route::Simple, off, tape, nullptr, nullptr);
     CHECK(off.native_state().kind == NativeLifecycleKind::Completed);
     Report first;
-    const bool published = off.read_report(&first.raw);
-    CHECK((published ? first.raw : off.presented.raw).trades_len == 1);
+    off.fill_report(&first.raw);
+    CHECK(first.raw.trades_len == 1);
     const int off_presented = g_log.count("host.present_report");
     CHECK(off_presented == 1);
     off.run(tape.rows.data(), n);
@@ -1653,7 +1610,7 @@ void row_single_read_callcounts() {
         PresentHost off;
         drive(route, off, tape, nullptr, nullptr);
         Report off_report;
-        off.read_report(&off_report.raw);
+        off.fill_report(&off_report.raw);
         const std::vector<std::string> off_log = g_log.events;
 
         g_log.clear();
@@ -1662,7 +1619,7 @@ void row_single_read_callcounts() {
         const pf_selected_window_config_v1 window = window_from(tape.rows.front().timestamp);
         drive(route, sel, tape, &window, &probe);
         Report sel_report;
-        sel.read_report(&sel_report.raw);
+        sel.fill_report(&sel_report.raw);
         const std::vector<std::string> sel_log = g_log.events;
 
         CHECK(count_of(off_log, "host.present_report") == 1);
@@ -1681,16 +1638,14 @@ void row_single_read_callcounts() {
     const int n = static_cast<int>(rows.size());
     g_log.clear();
     CState off_state;
-    // The original overflowing C-host account is checked in check_c_host_route;
-    // keep this single-read success control in the finite-report domain too.
-    if (!c_host_ready(off_state, 10000.0)) return;
+    if (!c_host_ready(off_state)) return;
     CReport off_report;
     CHECK(strategy_native_run_v1(off_state.handle, bars, n, &off_report.raw) == PF_NATIVE_OK);
     const std::vector<std::string> off_log = g_log.events;
 
     g_log.clear();
     CState sel_state;
-    if (!c_host_ready(sel_state, 10000.0)) {
+    if (!c_host_ready(sel_state)) {
         strategy_native_host_free(off_state.handle);
         return;
     }

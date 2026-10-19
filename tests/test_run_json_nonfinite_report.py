@@ -82,7 +82,7 @@ class ReportLib(selected.FakeLib):
 
     def __init__(self, plan, events, *, trade_field=None, bad_value=None,
                  net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None,
-                 failure_field=None):
+                 failure_field=None, short_span_metrics=False):
         engine_failure = None
         if failure_field is not None:
             engine_failure = (
@@ -97,6 +97,7 @@ class ReportLib(selected.FakeLib):
         self.pnls = pnls
         self.metric = metric
         self.curve_value = curve_value
+        self.short_span_metrics = short_span_metrics
         self._trades = None
 
     def _run(self, *args):
@@ -126,6 +127,8 @@ class ReportLib(selected.FakeLib):
         report.net_profit = self.net_profit
         report.metrics.all.profit_factor = 2.0
         report.metrics.equity.sharpe_monthly = 0.5
+        if self.short_span_metrics:
+            report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
         if self.metric is not None:
             block, name = self.metric
             setattr(getattr(report.metrics, block), name, self.bad_value)
@@ -418,6 +421,101 @@ def test_failure_line_preserves_fields_outside_monthly_report_aliases(code, fiel
     document = strict_line(run_json.failure_line("engine fault", code, args))
     assert document == {"engine": "pineforge", "error": "engine fault",
                         "code": code, "args": args}
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_sub_day_annualization_completes_in_report_routes(harness, mode):
+    result = harness.run(mode, short_span_metrics=True)
+    document = strict_line(result.stdout)
+    assert (result.status, result.stderr) == (0, "")
+    assert document["metrics"]["equity"]["cagr"] is None
+    assert document["metrics"]["equity"]["calmar"] is None
+    assert document["diagnostics"]["annualization"] == {
+        "cagr": "span_too_short_to_annualize",
+        "calmar": "span_too_short_to_annualize",
+    }
+    assert result.records[-1]["phase"] == "completed"
+
+
+@pytest.mark.parametrize("first_mark_is_capital", (True, False))
+@pytest.mark.parametrize("span_ms,capital,final_equity,has_reason", (
+    (7 * 60_000, 10_000.0, 10_800.0, True),
+    (86_399_999, 1.0, 1e300, True),
+    (86_400_000, 10_000.0, 10_800.0, False),
+    (7 * 60_000, 0.0, 10_800.0, False),
+    (7 * 60_000, -1.0, 10_800.0, False),
+    (7 * 60_000, 10_000.0, 0.0, False),
+    (0, 10_000.0, 10_800.0, False),
+    (-1, 10_000.0, 10_800.0, False),
+))
+def test_annualization_reason_on_wire(span_ms, capital, final_equity, has_reason,
+                                     first_mark_is_capital):
+    # Native NaN absence is supplied by the producer stand-in, as in the other
+    # wire tests. The C++ rows separately prove the real metric computation.
+    report = run_json.ReportC()
+    curve = (run_json.EquityPointC * 2)(
+        run_json.EquityPointC(selected.T, capital if first_mark_is_capital else 100.0, 0),
+        run_json.EquityPointC(selected.T + span_ms, final_equity, 0))
+    report.equity_curve = curve
+    report.equity_curve_len = 2
+    report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
+    # compute_trade_stats' existing domain: null iff initial_capital <= 0,
+    # even for an empty trade list. Do not infer capital from the first mark.
+    report.metrics.all.net_profit_pct = 0.0 if capital > 0 else float("nan")
+    trades = (run_json.TradeC * 1)()
+    report.trades = trades
+    report.trades_len = report.total_trades = 1
+    document = run_json.build_report_dict(
+        report, Path("annualization.csv"), 2, selected.T, selected.T + span_ms,
+        0.0, {}, {}, {"chart_tz": "America/New_York"})
+    run_json._validate_report_result(document)
+    wire = json.loads(json.dumps(document, allow_nan=False))
+    assert wire["metrics"]["equity"]["cagr"] is None
+    assert wire["metrics"]["equity"]["calmar"] is None
+    if has_reason:
+        assert wire["diagnostics"]["annualization"] == {
+            "cagr": "span_too_short_to_annualize",
+            "calmar": "span_too_short_to_annualize",
+        }
+    else:
+        assert "annualization" not in wire["diagnostics"]
+    # Appendix A's scalar leaf expansion stays exactly 135. This tests the
+    # metric/summary names independently of the producer's descriptors.
+    trade_keys = {
+        "num_trades", "num_wins", "num_losses", "num_even", "percent_profitable",
+        "net_profit", "net_profit_pct", "gross_profit", "gross_profit_pct",
+        "gross_loss", "gross_loss_pct", "profit_factor", "avg_trade", "avg_trade_pct",
+        "avg_win", "avg_win_pct", "avg_loss", "avg_loss_pct", "ratio_avg_win_avg_loss",
+        "largest_win", "largest_win_pct", "largest_loss", "largest_loss_pct",
+        "commission_paid", "max_consecutive_wins", "max_consecutive_losses",
+        "expectancy", "avg_bars_in_trade", "avg_bars_in_wins", "avg_bars_in_losses",
+    }
+    equity_keys = {
+        "max_equity_drawdown", "max_equity_drawdown_pct", "max_equity_runup",
+        "max_equity_runup_pct", "buy_hold_return", "buy_hold_return_pct",
+        "sharpe_tv", "sortino_tv", "sharpe_bar", "sortino_bar", "cagr", "calmar",
+        "recovery_factor", "time_in_market_pct", "open_pl",
+    }
+    summary_keys = {
+        "total_trades", "wins", "losses", "bars_processed", "win_rate_pct",
+        "net_pnl", "avg_trade", "best_trade", "worst_trade", "max_drawdown",
+    }
+    assert set(wire["metrics"]) == {"all", "longs", "shorts", "equity"}
+    for side in ("all", "longs", "shorts"):
+        assert set(wire["metrics"][side]) == trade_keys
+    assert set(wire["metrics"]["equity"]) == equity_keys
+    assert set(wire["summary"]) == summary_keys
+    trade_row_keys = {
+        "n", "side", "entry_time", "exit_time", "entry_price", "exit_price",
+        "qty", "pnl", "pnl_pct", "max_runup", "max_drawdown", "commission",
+        "entry_bar_index", "exit_bar_index", "open_at_end", "entry_incarnation",
+    }
+    assert set(wire["trades"][0]) == trade_row_keys
+    assert all(set(point) == {"time_ms", "equity", "open_profit"}
+               for point in wire["equity_curve"])
+    # version + summary + 3 trade blocks + equity + trade-row fields + curve:
+    assert (1 + len(summary_keys) + 3 * len(trade_keys) + len(equity_keys)
+            + len(trade_row_keys) + 3) == 135
 
 
 @pytest.mark.parametrize("mode", MODES)

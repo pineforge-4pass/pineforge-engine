@@ -640,12 +640,13 @@ void compare_walk(const Walk& w, double capital, const std::string& tz) {
     ++walks_compared;
     const std::int64_t n = static_cast<std::int64_t>(w.points.size());
     const pf_equity_point_t* data = w.points.empty() ? nullptr : w.points.data();
-    const pf_equity_stats_t want = ref::compute_equity_stats(
+    pf_equity_stats_t want = ref::compute_equity_stats(
         data, n, capital, tz, w.first_open, w.last_close, w.in_market, w.net_profit);
+    report_failure_checks::apply_short_span_absence(want, data, n);
 
     if (const char* field = report_failure_checks::annualization_overflow(want)) {
-        // Appendix A:83/93: all three entries must reject the same computed
-        // overflow; only the exposure denominator differs between them.
+        // Revision 3.1 leaves >= one-day overflow strict on all three entries;
+        // only the exposure denominator differs between them.
         CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
             (void)metrics::compute_equity_stats(
                 data, n, capital, tz, w.first_open, w.last_close, w.in_market, w.net_profit);

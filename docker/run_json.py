@@ -3568,6 +3568,54 @@ def _num(x, *, report_metric=False):
 EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino_tv"}
 
 
+def _read_annualization_policy():
+    """The same closed policy list the C++ metric walk includes."""
+    minimum = None
+    fields = []
+    for raw in Path(__file__).with_name("report_annualization.def").read_text(
+            encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//"):
+            continue
+        span = re.fullmatch(r"PF_ANNUALIZATION_SPAN_MS\(([0-9]+)\)", line)
+        field = re.fullmatch(r"PF_SHORT_SPAN_ANNUALIZED_FIELD\(([a-z_]+)\)", line)
+        if span and minimum is None:
+            minimum = int(span[1])
+        elif field and field[1] not in fields:
+            fields.append(field[1])
+        else:
+            raise ValueError("invalid report annualization policy")
+    if minimum is None or minimum <= 0 or not fields:
+        raise ValueError("incomplete report annualization policy")
+    return minimum, tuple(fields)
+
+
+MIN_ANNUALIZATION_SPAN_MS, SHORT_SPAN_ANNUALIZED_FIELDS = _read_annualization_policy()
+
+
+def _annualization_diagnostics(curve, metrics):
+    """Explain only the revision 3.1 absence, from native report observations.
+
+    net_profit_pct's existing domain witnesses positive initial capital even
+    when the first equity mark differs from it or provenance is unresolved.
+    Python's integer subtraction is exact across the full int64 timestamp
+    domain; convert the difference to double just as the kernel does.
+    """
+    if (not curve or metrics["all"]["net_profit_pct"] is None
+            or not math.isfinite(metrics["all"]["net_profit_pct"])
+            or not math.isfinite(curve[-1]["equity"]) or curve[-1]["equity"] <= 0):
+        return {}
+    first, last = curve[0]["time_ms"], curve[-1]["time_ms"]
+    span_ms = float(last - first) if last >= first else -float(first - last)
+    if not 0 < span_ms < MIN_ANNUALIZATION_SPAN_MS:
+        return {}
+    return {
+        EQUITY_REPORT_KEYS.get(field, field): "span_too_short_to_annualize"
+        for field in SHORT_SPAN_ANNUALIZED_FIELDS
+        if metrics["equity"][EQUITY_REPORT_KEYS.get(field, field)] is None
+    }
+
+
 def _stats_dict(s) -> dict:
     """Serialize a pf_trade_stats_t / pf_equity_stats_t ctypes struct to a dict,
     keying off each field's ctype: integer counters stay ints, every double is
@@ -3660,7 +3708,7 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                 "open_profit": float(p.open_profit),
             })
 
-    return {
+    out = {
         "engine": "pineforge",
         "input": {
             "ohlcv":      str(ohlcv_path),
@@ -3699,6 +3747,10 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
         "metrics": metrics,
         "equity_curve": equity_curve,
     }
+    annualization = _annualization_diagnostics(equity_curve, metrics)
+    if annualization:
+        out["diagnostics"]["annualization"] = annualization
+    return out
 
 
 def _validate_report_result(out: dict) -> None:

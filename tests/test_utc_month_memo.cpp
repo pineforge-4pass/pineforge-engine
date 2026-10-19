@@ -261,10 +261,11 @@ void compare(const Curve& c, double initial_capital, const std::string& tz) {
     ++stat_blocks;
     const auto n = static_cast<std::int64_t>(c.points.size());
     const pf_equity_point_t* data = c.points.empty() ? nullptr : c.points.data();
-    const pf_equity_stats_t want = ref::compute_equity_stats(
+    pf_equity_stats_t want = ref::compute_equity_stats(
         data, n, initial_capital, tz, c.first_open, c.last_close, c.in_market, c.net_profit);
+    report_failure_checks::apply_short_span_absence(want, data, n);
     if (const char* field = report_failure_checks::annualization_overflow(want)) {
-        // Appendix A:83/93 supersedes the frozen walk's infinity/null result.
+        // Revision 3.1 keeps >= one-day overflow a typed, exact-field fault.
         CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
             (void)pineforge::metrics::compute_equity_stats(
                 data, n, initial_capital, tz, c.first_open, c.last_close,
