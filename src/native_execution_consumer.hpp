@@ -1754,12 +1754,12 @@ private:
     // Declared higher-timeframe series: empty for every spec that declares
     // none, which is the whole source-projected population.
     std::vector<TimeframeSubscription> subscriptions_{};
-    // Owned copy of the historical input's forward look, input_next_ms_[i]
-    // being input bar i+1's timestamp (0 for the last, and for every live
-    // stream input, whose successor nobody has yet). The calendar aggregators
-    // need it to complete a D/W/M bucket on the period's actual last bar;
-    // allocated only for a run that declares a subscription.
-    std::vector<std::int64_t> input_next_ms_{};
+    // Borrowed during subscription setup and pumping; cleared at each exit.
+    // Transport, never continuation state. Live inputs have no successor.
+    const Bar* subscription_input_bars_ = nullptr;
+    int subscription_input_n_ = 0;
+    std::int64_t subscription_next_input_ms(int index) const noexcept;
+
     // How many of the inputs the declared series were resolved over at begin
     // are warmup, i.e. where a stream's historical phase ends and its live
     // phase starts. -1 for a batch run, whose every input is historical.
@@ -1791,7 +1791,7 @@ private:
     bool begin_is_stream_ = false;
     // The input array pump_batch is consuming, borrowed for that call alone:
     // the bars a script bar's session-day facts read before and after it
-    // (present_session_day). Input, not state -- like input_next_ms_ below.
+    // (present_session_day). Input, not state, like the subscription view.
     const Bar* pump_bars_ = nullptr;
     int pump_n_ = 0;
     // The last script bar present_session_day read off the pumped array: its
@@ -2477,6 +2477,32 @@ inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer)
 inline const NativeExecutionConsumer& as_native_consumer(const IExecutionConsumer& consumer) {
     return static_cast<const NativeExecutionConsumer&>(consumer);
 }
+
+// A forward walk of the kernel's script-bucket preview. Independent cursors
+// let a scheduler consume inputs while a state hash follows a shorter prefix.
+// The configuration and current aggregator are O(1); no input flags are held.
+class ScriptBucketCursor {
+public:
+    struct Flags {
+        unsigned char complete = 1U;
+        unsigned char boundary = 0U;
+    };
+
+    explicit ScriptBucketCursor(const NativeRunSpec&);
+    Flags next(const Bar&);
+    void reset();
+    std::size_t position() const noexcept { return position_; }
+    Flags last() const noexcept { return last_; }
+
+private:
+    std::string script_tf_;
+    std::string input_tf_;
+    std::string timezone_;
+    std::string session_;
+    TimeframeAggregator aggregator_;
+    std::size_t position_ = 0;
+    Flags last_{};
+};
 
 }  // inline namespace engine_script_run_v19
 }  // namespace pineforge

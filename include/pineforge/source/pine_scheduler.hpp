@@ -7,9 +7,14 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace pineforge {
+inline namespace engine_script_run_v19 { class ScriptBucketCursor; }
+}
 
 namespace pineforge::source {
 
@@ -20,6 +25,9 @@ class PineStrategyHost;
 // data and the Pine calc-on-order-fills callback cadence.
 class PineScheduler {
 public:
+    PineScheduler();
+    ~PineScheduler();
+
     // C++17 read-only span. Empty iterators use one sentinel so standard
     // pointer-range algorithms never subtract two null pointers; data()
     // still exposes the released span as exactly {nullptr, 0}.
@@ -281,6 +289,11 @@ private:
     // scripts/check_broker_state_hash_coverage.py::SCHEDULER_CACHE_WAIVERS.
     mutable std::size_t broker_bar_cursor = 0;
 
+    // Derived completion lookup over retained_.bars. Repeated or backward
+    // input indices are answered by the cursor's last result or a rescan.
+    // Waived as a cache; the independent consumed-prefix cursor folds below.
+    mutable std::unique_ptr<ScriptBucketCursor> input_script_cursor;
+
     // @source-state begin
     PineLanguageState language_;
     RetainedBegin retained_;
@@ -301,8 +314,9 @@ private:
     std::int64_t prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t last_stream_input_open_ms_ = std::numeric_limits<std::int64_t>::min();
-    std::vector<unsigned char> input_script_completes_;
-    std::vector<unsigned char> input_script_boundary_completes_;
+    // The run-begin preview's extent, including unconsumed transport. Only
+    // its consumed prefix is hashed, just as for the former flag vectors.
+    std::size_t input_script_size_ = 0;
     bool uses_aux_security_feed_ = false;
     bool input_is_observed_ticks_ = false;
     std::array<Bar, 8> confirmed_input_bars_{};
@@ -322,6 +336,7 @@ private:
     mutable std::uint64_t consumed_completes_digest_ = 1469598103934665603ULL;
     mutable std::size_t consumed_boundaries_folded_ = 0;
     mutable std::uint64_t consumed_boundaries_digest_ = 1469598103934665603ULL;
+    mutable std::unique_ptr<ScriptBucketCursor> consumed_script_cursor_;
     // @source-state end
 };
 
