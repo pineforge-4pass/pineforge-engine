@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_trade_accessors_l8d)
+pineforge_add_unit_test(test_trade_accessors_l8d)

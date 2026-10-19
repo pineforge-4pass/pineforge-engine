@@ -2009,7 +2009,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     // committed event, group-effect receipt and cohort receipt is folded.
     if (event_records_.count != requests_.history_end()
         || group_receipts_.count != requests_.group_effect_receipt_count()
-        || cohort_receipts_.count != requests_.cohort_receipts().size()) {
+        || cohort_receipts_.count != requests_.cohort_receipt_count()) {
         std::abort();
     }
 #endif
@@ -9053,14 +9053,11 @@ bool NativeExecutionConsumer::script_bucket_completions(
     if (!spec) return false;
     completes.assign(n, 0U);
     boundary_completes.assign(n, 0U);
-    TimeframeAggregator aggregator(spec->script_tf, spec->input_tf, spec->timezone,
-                                   spec->session);
+    ScriptBucketCursor cursor(*spec);
     for (std::size_t i = 0; i < n; ++i) {
-        const AggregatedBar aggregate = aggregator.feed(bars[i]);
-        completes[i] = aggregate.is_complete ? 1U : 0U;
-        boundary_completes[i] = aggregate.is_complete
-            && tf_change(aggregate.bar.timestamp, bars[i].timestamp, spec->script_tf,
-                         spec->timezone, spec->session) ? 1U : 0U;
+        const auto flags = cursor.next(bars[i]);
+        completes[i] = flags.complete;
+        boundary_completes[i] = flags.boundary;
     }
     return true;
 }
@@ -9389,7 +9386,8 @@ void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engi
     }
     subscription_states_base_ = 0;
     subscriptions_.clear();
-    input_next_ms_.clear();
+    subscription_input_bars_ = nullptr;
+    subscription_input_n_ = 0;
     engine.security_input_tf_.clear();
     engine.security_next_input_ms_ = 0;
 }
@@ -9403,8 +9401,10 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
     // this scope.
     struct WiringScope {
         bool& flag;
-        ~WiringScope() { flag = false; }
-    } wiring{wiring_subscriptions_};
+        const Bar*& bars;
+        int& n;
+        ~WiringScope() { flag = false; bars = nullptr; n = 0; }
+    } wiring{wiring_subscriptions_, subscription_input_bars_, subscription_input_n_};
     wiring_subscriptions_ = true;
     clear_timeframe_subscriptions(engine);
     if (spec.auxiliary_feed) {
@@ -9432,6 +9432,8 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         return false;
     }
     if (input_bars == nullptr || n_input < 0) n_input = 0;
+    subscription_input_bars_ = input_bars;
+    subscription_input_n_ = n_input;
     // A stream resolves its series over the warmup input exactly as a batch of
     // those same bars does -- including the last one, whose successor a batch
     // does not know either -- and then continues the same aggregators live.
@@ -9441,10 +9443,6 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
     // historical-resolution mode; the realtime bar has nothing to look into).
     subscription_warmup_inputs_ = is_stream ? n_input : -1;
     try {
-        input_next_ms_.assign(static_cast<std::size_t>(n_input), 0);
-        for (int i = 0; i + 1 < n_input; ++i) {
-            input_next_ms_[static_cast<std::size_t>(i)] = input_bars[i + 1].timestamp;
-        }
         engine.security_input_tf_ = spec.input_tf;
         engine.security_next_input_ms_ = 0;
         // Evaluator states the host registered for itself keep their sec_ids:
@@ -9834,8 +9832,7 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
             first_index = i;
             first_ms = input_bars[i].timestamp;
         }
-        engine.security_next_input_ms_ =
-            input_next_ms_[static_cast<std::size_t>(i)];
+        engine.security_next_input_ms_ = subscription_next_input_ms(i);
         const std::int64_t before = state.eval_complete_count;
         engine.feed_security_eval_state(state, input_bars[i]);
         if (state.eval_complete_count <= before) continue;
@@ -9939,10 +9936,7 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
             subscription.bucket_first_index = index;
             subscription.bucket_first_ms = bar.timestamp;
         }
-        engine.security_next_input_ms_ =
-            (index >= 0 && static_cast<std::size_t>(index) < input_next_ms_.size())
-                ? input_next_ms_[static_cast<std::size_t>(index)]
-                : 0;
+        engine.security_next_input_ms_ = subscription_next_input_ms(index);
         const std::int64_t before = state.eval_complete_count;
         engine.feed_security_eval_state(state, bar);
         engine.security_next_input_ms_ = 0;
@@ -10338,11 +10332,15 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             consumer.pump_bars_ = input;
             consumer.pump_n_ = count;
             consumer.pumped_last_index_ = -1;
+            consumer.subscription_input_bars_ = input;
+            consumer.subscription_input_n_ = count;
         }
         ~PumpView() {
             consumer.pump_bars_ = nullptr;
             consumer.pump_n_ = 0;
             consumer.pumped_last_index_ = -1;
+            consumer.subscription_input_bars_ = nullptr;
+            consumer.subscription_input_n_ = 0;
         }
     } view(*this, bars, n);
     // A batch knows its length, so the two logs it appends to -- the driver
@@ -11968,18 +11966,24 @@ void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) c
 #endif
 }
 
-// After every roster command: the cohort receipt it appended, folded once.
+// After every roster command: fold its receipt once, then retire its row
+// under Window retention. Full/Commands keep their explicit history readback.
 void NativeExecutionConsumer::note_cohort_receipts() noexcept {
     const auto& receipts = requests_.cohort_receipts();
-    if (cohort_receipts_.count >= receipts.size()) return;
+    const std::size_t base = requests_.cohort_receipt_base();
+    const std::size_t total = requests_.cohort_receipt_count();
+#ifndef NDEBUG
+    if (cohort_receipts_.count < base || cohort_receipts_.count > total) std::abort();
+#endif
     StateFold f;
     f.run_base = requests_.identity().run_number;
     f.h = cohort_receipts_.h;
-    for (std::size_t index = cohort_receipts_.count; index < receipts.size(); ++index) {
-        hash_cohort_receipt(f, receipts[index]);
+    for (std::size_t index = cohort_receipts_.count; index < total; ++index) {
+        hash_cohort_receipt(f, receipts[index - base]);
     }
     cohort_receipts_.h = f.h;
-    cohort_receipts_.count = receipts.size();
+    cohort_receipts_.count = total;
+    if (retention() == NativeEventRetention::Window) requests_.retire_cohort_receipts(total);
 }
 
 void NativeExecutionConsumer::reject_inherited_on_bar(BacktestEngine& engine) {
@@ -12855,6 +12859,31 @@ int native_set_selected_window_v1(BacktestEngine* engine,
 int native_selected_window_counts_v1(const BacktestEngine* engine,
                                      pf_selected_window_counts_v1* out) noexcept {
     return NativeExecutionConsumer::selected_window_counts_v1(engine, out);
+}
+
+ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec)
+    : script_tf_(spec.script_tf), input_tf_(spec.input_tf), timezone_(spec.timezone),
+      session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_) {}
+
+ScriptBucketCursor::Flags ScriptBucketCursor::next(const Bar& bar) {
+    const AggregatedBar aggregate = aggregator_.feed(bar);
+    last_.complete = aggregate.is_complete ? 1U : 0U;
+    last_.boundary = aggregate.is_complete
+        && tf_change(aggregate.bar.timestamp, bar.timestamp, script_tf_, timezone_, session_)
+            ? 1U : 0U;
+    ++position_;
+    return last_;
+}
+
+void ScriptBucketCursor::reset() {
+    aggregator_ = TimeframeAggregator(script_tf_, input_tf_, timezone_, session_);
+    position_ = 0;
+    last_ = Flags{};
+}
+
+std::int64_t NativeExecutionConsumer::subscription_next_input_ms(int index) const noexcept {
+    return subscription_input_bars_ && index >= 0 && index < subscription_input_n_ - 1
+        ? subscription_input_bars_[index + 1].timestamp : 0;
 }
 
 }  // inline namespace engine_script_run_v19
