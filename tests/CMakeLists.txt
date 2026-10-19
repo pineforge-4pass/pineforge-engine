@@ -3688,6 +3688,9 @@ endif()
 
 list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 
+# CR-202: source-free; keep new registrations below the evidence-pinned lines.
+list(APPEND TEST_SOURCES test_metrics_overflow)
+
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()

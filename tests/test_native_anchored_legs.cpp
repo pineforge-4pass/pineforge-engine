@@ -44,7 +44,9 @@ namespace {
 // ── Portable pins (harvested on engine main 3f6fd57, see the header) ────
 // expectation corrected: 16941677776193786888 -> 4011217037958131497, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
 constexpr std::uint64_t kNeutralSpecDigest = 4011217037958131497ULL;
-constexpr std::uint64_t kNeutralReportDigest = 7202933235328973332ULL;
+// expectation corrected: 7202933235328973332 -> 17583267501122239024, because revision 3.1 makes cagr and calmar of this seven-minute fixture a defined absence (span under one day), so report.metrics bytes move by that rule only; trades and hashes are unchanged.
+// authority: CORE-TOP fixture authority 10-20 05:48, value from lab job rj-20261019t210726-6fa3f7 (release step log, "neutral report digest").
+constexpr std::uint64_t kNeutralReportDigest = 17583267501122239024ULL;
 constexpr std::size_t kNeutralEventCount = 72;
 
 // A canonical one-minute slot label. The R4 harness's tape starts at

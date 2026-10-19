@@ -49,6 +49,14 @@ an empty set. Passing one probe directory as `--probes` is also supported.
 
 No CTest registration is added: the public no-fixture profile has no installed-codegen prerequisite; the supervisor runs this script on a box.
 
+Report probes are also registered by relative `id` in the manifest's `probes`
+array. Each entry pins the SHA256 of all six files: `probe.pine`, `bars.csv`,
+`syminfo.json`, `run.json`, `expect.json`, and `NOTES.md`. The manifest checker
+discovers `probes/report/*/probe.pine` independently and rejects unregistered,
+stale or duplicate ids, missing pins/files and changed bytes. Earlier groups
+predate this registry. The driver continues to discover every group normally;
+the registry adds a source guard and does not imply a runtime verdict.
+
 Each directory has `probe.pine`, `bars.csv`, `expect.json`, and `NOTES.md`.
 The CSV header is `timestamp,open,high,low,close,volume`, with timestamps in
 Unix milliseconds. Use 40..200 synthetic bars and document their hand-written
@@ -290,9 +298,9 @@ python3 -I -B tests/ownership/test_manifest_checker.py --shard 1/4
 
 `--shard I/N` requires integers with `1 <= I <= N` and selects
 `sorted(loader case ids)[I-1::N]`, passes those ids to unittest by name and
-exits non-zero unless it ran exactly the number of tests it selected (9, 9, 9
-and 8 for shards 1 to 4 of 4: 8, 8, 8 and 7 cases plus the guard). The separate cheap `test_shards_partition_every_case_exactly_once`
-guard runs in every shard: for each shard count from 1 through 8 it rebuilds
+exits non-zero unless it ran exactly the number of tests it selected. Each
+shard also runs the cheap `test_shards_partition_every_case_exactly_once`
+guard: for each shard count from 1 through 8 it rebuilds
 the assignment from the loader's ids with index residues (the same loader
 expression, a different assignment rule) and checks the exact assignments,
 disjointness and full coverage, with at least 30 cases discovered.
