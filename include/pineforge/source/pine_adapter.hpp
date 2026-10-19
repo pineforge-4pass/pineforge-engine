@@ -936,11 +936,11 @@ private:
     std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
 };
 
-// Append-only roster of the opening requests a source id ever accepted, in
-// acceptance order. Over a long run it holds every historical entry, while
-// the pending-origin and live-exposure queries only concern the few handles
-// still live; the per-incarnation position index lets those queries visit
-// just their positions, in roster order, instead of the whole history.
+// Acceptance-ordered opening roster. size()/digest() describe all accepted
+// members; members()/iteration expose the retained window [base(), size()).
+// The adapter retires a released prefix once no live placement names it.
+// Global positions never change. Indexing outside the retained window is
+// an engine_invariant, including historical positions below base().
 class OriginRoster {
 public:
     using const_iterator = std::vector<native_order::RequestHandle>::const_iterator;
@@ -949,7 +949,7 @@ public:
 
     void push_back(const native_order::RequestHandle& handle) {
         auto& positions = positions_[handle.incarnation];
-        positions.push_back(items_.size());
+        positions.push_back(size());
         try {
             items_.push_back(handle);
         } catch (...) {
@@ -962,23 +962,23 @@ public:
     // R5 lane V19-E: a running digest of the members' incarnations, each
     // folded once, when it was appended (the v4 extension fold's view).
     std::uint64_t digest() const noexcept { return digest_; }
-    const native_order::RequestHandle& operator[](std::size_t index) const { return items_[index]; }
-    const native_order::RequestHandle& back() const { return items_.back(); }
-    bool empty() const noexcept { return items_.empty(); }
-    std::size_t size() const noexcept { return items_.size(); }
+    const native_order::RequestHandle& operator[](std::size_t global) const;
+    const native_order::RequestHandle& back() const { return (*this)[size() - 1]; }
+    bool empty() const noexcept { return size() == 0; }
+    std::size_t size() const noexcept { return base_ + items_.size(); }
     const_iterator begin() const noexcept { return items_.begin(); }
     const_iterator end() const noexcept { return items_.end(); }
     const_reverse_iterator rbegin() const noexcept { return items_.rbegin(); }
     const_reverse_iterator rend() const noexcept { return items_.rend(); }
-
-    // Ascending roster positions of the entries equal to `handle`.
+    std::size_t base() const noexcept { return base_; }
+    // Ascending global positions of retained entries equal to `handle`.
     void append_positions_of(const native_order::RequestHandle& handle,
-                             std::vector<std::size_t>& out) const {
-        const auto found = positions_.find(handle.incarnation);
-        if (found == positions_.end()) return;
-        for (const auto position : found->second)
-            if (items_[position] == handle) out.push_back(position);
-    }
+                             std::vector<std::size_t>& out) const;
+    // Retire [base(), global); the adapter proves release and reachability.
+    void retire_before(std::size_t global);
+    // size()/digest() survive retirement; references and iterators may move.
+    // empty() describes the logical history, members().empty() the window.
+
     // Ascending roster positions of the entries carrying `incarnation`, or
     // null when none does. Allocation-free.
     const std::vector<std::size_t>* positions_of(std::uint64_t incarnation) const noexcept {
@@ -988,7 +988,7 @@ public:
 
 private:
     std::vector<native_order::RequestHandle> items_;
-    // Derived lookup over items_ (never next-decision state).
+    std::size_t base_ = 0; // Storage offset; size() already hashes the total.
     std::unordered_map<std::uint64_t, std::vector<std::size_t>> positions_;
     std::uint64_t digest_ = 1469598103934665603ULL;
 };
@@ -2023,8 +2023,8 @@ private:
     // (pine_adapter.cpp explains the rule); run at every bar open.
     void erase_retired_rows(const NativeDecisionContext&);
     // R5 lane V19-FIX: takes out of the kernel's cohort rosters every origin
-    // that can no longer be bound (pine_adapter.cpp explains the rule); run
-    // at every bar open.
+    // that can no longer be bound, before retiring the adapter's prefix.
+    void retire_origin_prefixes();
     void release_closed_cohort_origins();
     bool lifecycle_readable(const PlacementSnapshot&) const noexcept;
     // Writes one trade's exit phase, refolding when the write lands below the

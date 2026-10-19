@@ -1791,8 +1791,8 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
         auto& sides = index->cohort_sides[&cohort];
         const auto& roster = cohort.origins;
         if (roster.size() < sides.folded) sides = {};
-        for (; sides.folded < roster.size(); ++sides.folded) {
-            // An origin whose row was erased is in `erased`.
+        for (sides.folded = std::max(sides.folded, roster.base());
+             sides.folded < roster.size(); ++sides.folded) {
             if (!placement_.contains(roster[sides.folded].incarnation)) continue;
             const auto opening = placement_.find(roster[sides.folded].incarnation);
             if (opening == placement_.end() || !opening->second.opening) continue;
@@ -4083,8 +4083,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
 // again -- nothing opens a lot under a request that stopped working -- so at
 // every bar open, after observe_terminal_receipts, each such origin leaves
 // its kernel roster (cohort_remove). The adapter's own roster
-// (CohortFacts::origins) keeps it: its questions are about every origin the
-// id ever had. The roster then costs what is live.
+// (CohortFacts::origins) can then retire its unreachable front prefix while
+// keeping the count/digest and erased sides. The kernel roster costs what is live.
 //
 // A roster holds chain roots; a working request names its root in its
 // definition, and a lot names the request that filled it, which is the root
@@ -11425,7 +11425,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     if (std::isnan(qty) && qty_percent == 100.0) {
         const auto cohort = cohorts_by_id_.find(from_entry);
-        if (cohort != cohorts_by_id_.end() && !cohort->second.origins.empty()) {
+        if (cohort != cohorts_by_id_.end() && !cohort->second.origins.members().empty()) {
             const auto origin = cohort->second.origins.back();
             // An erased origin's flag is read by nobody: a sequential group's
             // entries are kept while the group has a live or queued member,
@@ -12424,8 +12424,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // them prevents the empty-origins origin-zero fallback a first
             // cycle uses while the new parent is still in
             // pending_same_bar_commands_ (probe9 A v0 / bprakaash).
-            // The roster keeps every origin the id ever had, so collect the
-            // qualifying positions from its index and keep roster order.
+            // Retired origins cannot be pending or opened; collect global
+            // positions from the retained index and keep roster order.
             const auto& roster = found->second.origins;
             std::vector<std::size_t> positions;
             if (const auto* zero = roster.positions_of(0))
@@ -22287,11 +22287,11 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     observe_terminal_receipts();
     erase_retired_rows(context);
     release_closed_cohort_origins();
+    retire_origin_prefixes();
     restore_carried_trail_retunes();
     trail_state_at_open_.clear();
     unrepeated_margin_calls_.clear();
-    // An opening checkpoint owed after the exits of an open is due at that
-    // open only (on_applied).
+    // An opening checkpoint after an open's exits is due only there (on_applied).
     if (PF_RARE(open_exit_first_bar_ != std::numeric_limits<std::int64_t>::min())) {
         open_exit_first_bar_ = std::numeric_limits<std::int64_t>::min();
         open_exit_first_origin_ = 0;
@@ -27933,6 +27933,155 @@ void PineExecutionAdapter::order_same_point_entries() {
         live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
                             live_handles_.end());
         live_handles_.push_back(handle);
+    }
+}
+
+} // namespace pineforge::source
+
+namespace pineforge::source {
+
+// CR-150 L19D. These definitions are appended so existing source citations
+// keep their line numbers. Only the retained window is addressable; the
+// original count and append digest remain the source hash's logical words.
+const native_order::RequestHandle& OriginRoster::operator[](std::size_t global) const {
+    if (global < base_ || global >= size()) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "origin roster read outside retained window");
+    }
+    return items_[global - base_];
+}
+
+void OriginRoster::append_positions_of(const native_order::RequestHandle& handle,
+                                       std::vector<std::size_t>& out) const {
+    const auto found = positions_.find(handle.incarnation);
+    if (found == positions_.end()) return;
+    for (const auto position : found->second)
+        if ((*this)[position] == handle) out.push_back(position);
+}
+
+void OriginRoster::retire_before(std::size_t global) {
+    if (global < base_ || global > size()) {
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "origin roster retirement outside retained window");
+    }
+    if (global == base_) return;
+    // Commit the non-allocating edits first. A compaction allocation failure
+    // may abort the run, but cannot leave the index using the previous base.
+    for (auto at = positions_.begin(); at != positions_.end();) {
+        auto& positions = at->second;
+        const auto kept = std::lower_bound(positions.begin(), positions.end(), global);
+        positions.erase(positions.begin(), kept);
+        if (positions.empty()) at = positions_.erase(at);
+        else ++at;
+    }
+    items_.erase(items_.begin(), items_.begin() + static_cast<std::ptrdiff_t>(global - base_));
+    base_ = global;
+    if (items_.empty()) {
+        decltype(items_){}.swap(items_);
+        decltype(positions_){}.swap(positions_);
+        return;
+    }
+    // An old peak must not leave a historical vector, inner vector or bucket
+    // allocation resident. Slack is bounded by the current retained window.
+    if (items_.capacity() / 4 > items_.size())
+        decltype(items_)(items_).swap(items_);
+    for (auto& row : positions_) {
+        auto& positions = row.second;
+        if (positions.capacity() / 4 > positions.size())
+            std::vector<std::size_t>(positions).swap(positions);
+    }
+    if (positions_.bucket_count() / 4 > positions_.size())
+        positions_.rehash(positions_.size());
+}
+
+// Called at an outermost bar open, after terminal receipts, placement-row
+// erasure and cohort_remove. Keeping an origin's own retained row is more
+// conservative than keeping only live placements, and preserves every old
+// row reader. Explicit names in live/queued placements also pin an origin
+// whose own row has gone. No persistent release bitmap or lookup is added.
+void PineExecutionAdapter::retire_origin_prefixes() {
+    if (detail::retain_retired_rows()) return;
+    // The front row alone can pin each retained window. Check before building
+    // named, so a resting bracket/stop pair allocates no retirement scratch.
+    if (std::all_of(cohorts_by_id_.begin(), cohorts_by_id_.end(), [this](const auto& row) {
+            const auto& members = row.second.origins.members();
+            return members.empty() || placement_.contains(members.front().incarnation);
+        })) return;
+    IExecutionConsumer* consumer = bound_consumer();
+    if (!consumer) return;
+    const auto& core = as_native_consumer(*consumer).request_core();
+    std::vector<std::uint64_t> named;
+    const auto name = [&](std::uint64_t incarnation) {
+        if (incarnation != 0) named.push_back(incarnation);
+    };
+    const auto snapshot_names = [&](const PlacementSnapshot& row) {
+        name(row.bracket_origin.incarnation);
+        name(row.paired_reversal_parent.incarnation);
+        name(row.preserved_by_close_all.incarnation);
+        name(row.projection_predecessor);
+        name(row.legs.target().incarnation);
+        name(row.reservation_growth_owner_incarnation);
+    };
+    const auto request_names = [&](const native_order::Request& request) {
+        if (const auto* wait = std::get_if<native_order::WaitForApplied>(&request.owner)) {
+            name(wait->parent.incarnation);
+        } else if (const auto* opening = std::get_if<native_order::BindOpening>(&request.owner)) {
+            name(opening->opening.incarnation);
+        } else if (const auto* openings = std::get_if<native_order::BindOpenings>(&request.owner)) {
+            for (const auto& opening : openings->openings) name(opening.incarnation);
+        }
+    };
+    const auto live_names = [&](const native_order::RequestHandle& handle) {
+        name(handle.incarnation);
+        const auto at = placement_.find(handle.incarnation);
+        if (at != placement_.end()) snapshot_names(at->second);
+    };
+    for (const auto& handle : live_handles_) live_names(handle);
+    for (const auto& live : core.live()) {
+        live_names(live.handle());
+        request_names(live.definition->request);
+        if (live.definition->root) name(live.definition->root->incarnation);
+    }
+    for (const auto& leg : pending_bracket_legs_) {
+        snapshot_names(leg.snapshot); request_names(leg.request);
+    }
+    for (const auto& entry : pending_entries_) {
+        snapshot_names(entry.snapshot); request_names(entry.request);
+    }
+    for (const auto& order : delayed_market_orders_) {
+        snapshot_names(order.snapshot); request_names(order.request);
+    }
+    for (const auto& sell : deferred_open_marketable_sells_) snapshot_names(sell.snapshot);
+    for (const auto& row : throttled_reopen_rearm_) snapshot_names(row);
+    for (const auto& command : pending_same_bar_commands_) {
+        snapshot_names(command.snapshot); request_names(command.request);
+    }
+    for (const auto& shadow : source_shadow_pending_) snapshot_names(shadow.snapshot);
+    for (const auto& pending : pending_coof_requests_) {
+        snapshot_names(pending.snapshot); request_names(pending.request);
+    }
+    for (const auto& revival : pending_margin_revivals_) snapshot_names(revival.snapshot);
+    for (const auto& leg : anchored_relative_legs_) {
+        name(leg.handle.incarnation); name(leg.parent.incarnation); request_names(leg.request);
+    }
+    std::sort(named.begin(), named.end());
+    named.erase(std::unique(named.begin(), named.end()), named.end());
+    for (auto& row : cohorts_by_id_) {
+        auto& facts = row.second;
+        auto& origins = facts.origins;
+        std::size_t through = origins.base();
+        for (const auto& origin : origins) {
+            if (placement_.contains(origin.incarnation)
+                || std::binary_search(named.begin(), named.end(), origin.incarnation)
+                || facts.live_units_by_origin.find(origin.incarnation)
+                    != facts.live_units_by_origin.end()
+                || std::find(facts.opened.begin(), facts.opened.end(), origin) != facts.opened.end()
+                || core.cohort_contains(facts.handle, origin)) {
+                break;
+            }
+            ++through;
+        }
+        origins.retire_before(through);
     }
 }
 
