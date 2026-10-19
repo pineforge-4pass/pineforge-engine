@@ -44,10 +44,10 @@
 #define PINEFORGE_NO_STRATEGY_DECLS
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
-
-// Generated modules using the full script lifecycle reset must be rebuilt
-// against a runtime providing this hook. This is an internal C++ capability;
-// it does not change any public C POD or exported C function signature.
+#include <pineforge/report_sink_writer.hpp>
+// Generated script lifecycle users must be rebuilt against this runtime.
+// These internal C++ capabilities change no public C POD or C signature.
+#define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
 namespace pineforge {
@@ -984,11 +984,11 @@ protected:
         return (n > 0) ? (net_profit_sum_ / (double)n) : 0.0;
     }
     double avg_trade_percent() const {
-        int n = (int)trades_.size();
-        if (n <= 0) return 0.0;
-        double s = 0.0;
-        for (const auto& t : trades_) s += t.pnl_pct;
-        return s / (double)n;
+        double s = trade_percent_prefix_.all_sum;
+        std::size_t n = trade_percent_prefix_.all_count;
+        // Continue the original left fold over the resident rows.
+        for (const auto& t : trades_) { s += t.pnl_pct; ++n; }
+        return n > 0 ? s / static_cast<double>(n) : 0.0;
     }
     double avg_winning_trade() const {
         return (win_trades_count_ > 0) ? (gross_profit_sum_ / (double)win_trades_count_) : 0.0;
@@ -998,8 +998,8 @@ protected:
     }
     double avg_winning_trade_percent() const {
         if (win_trades_count_ <= 0) return 0.0;
-        double s = 0.0;
-        int c = 0;
+        double s = trade_percent_prefix_.win_sum;
+        std::size_t c = trade_percent_prefix_.win_count;
         for (const auto& t : trades_) {
             if (t.pnl > 0.0) { s += t.pnl_pct; ++c; }
         }
@@ -1007,8 +1007,8 @@ protected:
     }
     double avg_losing_trade_percent() const {
         if (loss_trades_count_ <= 0) return 0.0;
-        double s = 0.0;
-        int c = 0;
+        double s = trade_percent_prefix_.loss_sum;
+        std::size_t c = trade_percent_prefix_.loss_count;
         for (const auto& t : trades_) {
             if (t.pnl < 0.0) { s += t.pnl_pct; ++c; }
         }
@@ -1361,7 +1361,7 @@ protected:
         if (ru > max_runup_) max_runup_ = ru;
     }
     void update_equity_extremes() {
-        fold_equity_extreme(initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close));
+        fold_report_equity_extreme(initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close));
 
         // --- Update max_contracts_held_* running peaks ---
         double abs_qty = std::abs(position_qty_);
@@ -1379,7 +1379,7 @@ protected:
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
     // make the curve differ between magnifier on/off.
     void record_equity_point(int64_t script_bar_ts) {
-        if (equity_curve_.empty()) first_bar_open_ = current_bar_.open;
+        if (prepare_equity_point()) first_bar_open_ = current_bar_.open;
         pf_equity_point_t p;
         p.time_ms = script_bar_ts;
         p.open_profit = open_profit(current_bar_.close);
@@ -2088,7 +2088,7 @@ public:
     virtual int observe_pending_effective_levels(int index, double* stop,
                                                  double* limit,
                                                  double* trail_activation) const;
-    virtual double observe_trail_best_price_v1() const;
+    virtual double observe_trail_best_price_v1() const; virtual bool set_symbol_feed_borrowed(const std::string&, const std::string&, const Bar*, const int64_t*, int) { guard_native_mutation("set_symbol_feed_borrowed"); return false; }
     double live_current_equity() const { return current_equity(); }
     // ABI v4 live-runtime surface (task 9): total SCRIPT bars dispatched by
     // the most recent run() (mirrors pf_report_t::script_bars_processed,
@@ -2291,6 +2291,107 @@ private:
     // it from the spec at every begin, and the spec digest folds the spec's
     // value. Private, so no host writes it (R5 lane K-ULP4).
     double native_quantity_tolerance_ = 0.0;
+
+    // Reporting configuration and run-local output ownership. Copies retain
+    // configuration, never a writer, receipt, or an active-call barrier.
+    struct ReportSinkState {
+        bool enabled = false;
+        bool trade_history_streamable = false;
+        std::string path, run_id, scratch_dir;
+        std::uint32_t active_calls = 0;
+        std::uint32_t stream_calls = 0;
+        std::unique_ptr<report_sink::LineWriter> writer;
+        pf_report_sink_receipt_v1 receipt{};
+        // Derived report-tail prefix, in max/min/drawdown/runup order. The
+        // resulting extrema already have their broker-state folds; this
+        // reconstructible prefix shares report_sink_state_'s output waiver.
+        double equity_prefix[4]{};
+        // Report cursor only, covered by report_sink_state_'s existing
+        // broker-hash waiver. No execution decision reads it; copies reset it.
+        std::int64_t output_base = 0;
+        ReportSinkState() = default;
+        ReportSinkState(const ReportSinkState& other)
+            : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
+              path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
+        ReportSinkState& operator=(const ReportSinkState& other) {
+            if (this != &other) *this = ReportSinkState(other);
+            return *this;
+        }
+        ReportSinkState(ReportSinkState&&) noexcept = default;
+        ReportSinkState& operator=(ReportSinkState&&) noexcept = default;
+    };
+    // @broker-state begin
+    mutable ReportSinkState report_sink_state_;
+    // @broker-state end
+
+    class ReportSinkCallScope {
+        ReportSinkState& state;
+        bool stream;
+    public:
+        explicit ReportSinkCallScope(const BacktestEngine& engine, bool is_stream = false)
+            : state(engine.report_sink_state_), stream(is_stream) {
+            ++state.active_calls;
+            if (stream) ++state.stream_calls;
+        }
+        ~ReportSinkCallScope() {
+            if (stream) --state.stream_calls;
+            --state.active_calls;
+        }
+        ReportSinkCallScope(const ReportSinkCallScope&) = delete;
+        ReportSinkCallScope& operator=(const ReportSinkCallScope&) = delete;
+    };
+    int report_sink_setter_status() const;
+    void begin_report_sink();
+    void finish_report_sink(ReportC* out) const;
+    template<class Write> void report_sink_record(Write write) const;
+    bool stream_report_sink_trace(const TraceEntryC& entry);
+    void reset_report_sink_outputs();
+    std::int64_t report_sink_output_row() const;
+    void write_report_sink_output_row() const;
+    void write_report_sink_events() const;
+    void retire_report_sink_output_row();
+    void write_report_sink_hashes() const;
+    void retire_report_sink_hashes();
+
+public:
+    // The additive C ABI delegates here; receipt queries never bind a consumer.
+    int set_report_sink_v1(const pf_report_sink_v1* sink);
+    int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
+    // Codegen opts in only for modules that do not read closedtrades.*.
+    // L6B1 still retains every row; L8c consumes this policy at sealing.
+    void set_trade_history_streamable(bool streamable);
+    bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
+
+protected:
+    // L6b-2: the last point remains editable until its successor is recorded.
+    // The array remains the metric/capture source until L6b-4/L7c/L17 land.
+    pf_equity_point_t* last_equity_point() noexcept;
+    const pf_equity_point_t* last_equity_point() const noexcept;
+    bool prepare_equity_point(); // release the prior point; true for the first
+    void fold_report_equity_extreme(double equity);
+    void refold_equity_tail();
+    void present_report_equity_tail(ReportC* out) const;
+    // Sealed closed rows only; range-end report rows never enter these sums.
+    // Each accessor continues its own sum one resident row at a time, so a
+    // separately accumulated tail cannot change floating-point grouping.
+    struct TradePercentPrefix {
+        double all_sum = 0.0;
+        double win_sum = 0.0;
+        double loss_sum = 0.0;
+        std::size_t all_count = 0;
+        std::size_t win_count = 0;
+        std::size_t loss_count = 0;
+    };
+    // @broker-state begin
+    TradePercentPrefix trade_percent_prefix_;
+    // @broker-state end
+
+    // The sealing caller folds each final row exactly once, in global row
+    // order, immediately before retiring it from trades_. This operation
+    // does not change storage, logical indices or the win/loss guards.
+    void fold_trade_percent_prefix(const Trade& trade);
+    // The streaming owner clears this prefix with the run's closed rows.
+    void reset_trade_percent_prefix();
 };
 
 } // inline namespace engine_script_run_v19

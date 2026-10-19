@@ -87,6 +87,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_configure_native_fx_curve_v1",
     "strategy_configure_native_fx_curve_ext_v1",
     "strategy_set_symbol_feed",
+    "strategy_set_symbol_feed_borrowed_v1",
     "strategy_set_symbol_feed_column",
     "strategy_set_symbol_facts",
     "strategy_set_recorded_series",
@@ -113,6 +114,9 @@ EXPECTED_RUNTIME = frozenset({
     "pf_selected_window_version",
     "strategy_set_selected_window_v1",
     "strategy_selected_window_counts_v1",
+    "pf_report_sink_version",
+    "strategy_set_report_sink_v1",
+    "strategy_report_sink_receipt_v1",
 })
 
 # The headers under include/pineforge/ whose PF_API declarations are read as one
@@ -123,20 +127,22 @@ RUNTIME_HEADERS = (
     "pineforge.h",
     "execution_observer.h",
     "selected_window.h",
+    "report_sink.h",
 )
 
-EXPECTED_PUBLIC_DECLARATIONS = 100
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 80
+EXPECTED_PUBLIC_DECLARATIONS = 104
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 84
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its
-# lane, and lane XSYM-D's four symbol-data setters). Each declaration's own
+# lane, and lane XSYM-D's five symbol-data setters). Each declaration's own
 # doc comment in pineforge.h must say so, so the contract cannot drop out of
 # the header while the refusal stays in the host (or the other way round
 # unnoticed): the phrase is pinned below.
 HISTORICAL_ONLY_RUNTIME = frozenset({
     "strategy_set_native_security_feed",
     "strategy_set_symbol_feed",
+    "strategy_set_symbol_feed_borrowed_v1",
     "strategy_set_symbol_feed_column",
     "strategy_set_symbol_facts",
     "strategy_set_recorded_series",

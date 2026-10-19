@@ -142,13 +142,14 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `report_result_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 4 values) | The report producer generated an invalid canonical result: an engine or harness fault, never a strategy failure. |
 | `report_shape_request_invalid` | `input` | no | `option` (vocab, 2 values), `value` (scalar) | The report-shape request is invalid: the report shape or the curve point budget carries a value the runner refuses. |
 | `report_shape_unsupported` | `unsupported` | no | `shape` (string) | The runner does not support the requested report shape. The first selected-window build supports the full shape only. |
+| `report_sink_failed` | `resource` | no | none | The engine could not create or write the report sink. The run has no completed sink or valid trailer. |
 | `request_symbol_invalid` | `strategy` | no | none | A request.security symbol is not a valid symbol. |
 | `request_timeframe_invalid` | `strategy` | no | `api` (vocab, 2 values) | A request timeframe literal does not parse. |
 | `request_timeframe_unsupported` | `unsupported` | no | `input_tf` (timeframe, optional), `reason` (vocab, 7 values), `script_tf` (timeframe, optional) | A request timeframe cannot be served for this run's chart timeframe. |
 | `request_unsupported` | `unsupported` | no | `line` (integer, optional), `reason` (vocab, 2 values) | A request shape PineForge does not support. |
 | `results_digest_unsupported` | `unsupported` | no | `requested` (string) | The runner does not support the requested results digest. The first selected-window build declares no digest. |
 | `run_aborted` | `engine_fault` | yes | none | The run was aborted on request. |
-| `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 10 values) | A feature the requested run mode does not support. |
+| `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 22 values) | The harness command line or one of its JSON options is invalid. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |

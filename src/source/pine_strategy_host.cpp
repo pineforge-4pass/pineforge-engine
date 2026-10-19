@@ -157,6 +157,10 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       is_last_tick_(scheduler_.language().is_last_tick_) {
     // ab9714be LegacyCompatibilityConsumer::refuse was a no-op on this handle.
     host_mutation_guard_inert_ = true;
+    NativeExecutionConsumer::bound(*this).set_batch_input_release(
+        this, [](void* owner) noexcept {
+            static_cast<PineStrategyHost*>(owner)->scheduler_.release_batch_input();
+        });
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // A fresh host folds its empty feed as one cleared at a run's end does.
     refresh_aux_security_digest();
@@ -234,8 +238,10 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
         const auto* slot = views.instrument_feed_count == 0
             ? nullptr : views.instrument_feeds[i];
         const auto data = native_instrument_feed_view(feed, slot);
+        const std::size_t count = i < symbol_feed_views_.size() && symbol_feed_views_[i].present
+            ? symbol_feed_views_[i].size : data.bars.size;
         staged.instrument_feeds.push_back(
-            {feed.instrument, feed.tf, data.bars.size, feed.columns.size()});
+            {feed.instrument, feed.tf, count, feed.columns.size()});
     }
     return staged;
 }
@@ -246,6 +252,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     // runs before any provider-owned state is changed.
     abort_requested_.store(false, std::memory_order_relaxed);
     validate_source_begin_bars(args);
+    // Admission owns a reentrant begin's refusal. Keep the running caller
+    // span and source state intact until the outer public call unwinds.
+    if (native_state().kind == NativeLifecycleKind::Running) return;
     if (args.syminfo) {
         syminfo_ = *args.syminfo;
         syminfo_mintick_ = syminfo_.mintick;
@@ -346,7 +355,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     std::vector<NativeInstrumentFeed> lent = lend_feed_bytes(symbol_feeds_);
     NativeRunSpec spec = [&] {
         try {
-            NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(nullptr, 0);
+            const bool has_borrowed_feed = std::any_of(
+                symbol_feed_views_.begin(), symbol_feed_views_.end(),
+                [](const BorrowedFeedSlot& slot) { return slot.present; });
+            if (has_borrowed_feed) {
+                stage_symbol_feed_views();
+            } else {
+                NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(nullptr, 0);
+            }
             return adapter_.project(effective, staged, args, path_order, &lent);
         } catch (...) {
             return_feed_bytes(symbol_feeds_, lent);
@@ -794,8 +810,8 @@ void source::PineStrategyHost::on_native_applied(
     // recalculation next, in the same drain iteration and at the same cursor
     // (NativeCalculationTrigger::BarCloseAndFills). The range-end row stays
     // after it, exactly where the adapter's own cascade used to put it.
-    if (!scheduler_.coof_recalculation_due(event, context, *this))
-        record_applied_range_end();
+    // Finish the same range-end mark, then any post-calculation journal tail.
+    finish_applied_admission(event, context);
 }
 
 void source::PineStrategyHost::record_applied_range_end() {
@@ -1481,7 +1497,7 @@ void source::PineStrategyHost::project_short_seed_report_rows(
 }
 
 void source::PineStrategyHost::scheduler_prepare_script_run(
-        const std::vector<Bar>& bars, bool static_eligible,
+        PineScheduler::InputView bars, bool static_eligible,
         int expected_script_bars, bool script_bar_geometry) {
     if (const auto state = native_state(); state.spec) {
         input_tf_ = state.spec->timeframe_undetected ? "" : state.spec->input_tf;
@@ -1634,7 +1650,7 @@ std::vector<std::int64_t> tradingview_multi_day_stamps(
 }  // namespace
 
 void source::PineStrategyHost::scheduler_prepare_security_sequence(
-        const std::vector<Bar>& bars) {
+        PineScheduler::InputView bars) {
     security_input_tf_ = input_tf_;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     if (aux_security_feed_enabled()) security_input_tf_ = aux_security_input_tf_;
@@ -1907,10 +1923,10 @@ static bool same_bar_exit_group_possible(const TradeLedger& trades) noexcept {
 }
 
 bool source::PineStrategyHost::report_terminal_quote_eligible() const {
-    if (equity_curve_.empty() || range_end_trades_.empty() || !native_bound()) return false;
+    if (!last_equity_point() || range_end_trades_.empty() || !native_bound()) return false;
     const auto state = as_native_consumer(execution_consumer()).view();
     const auto interval = static_cast<std::int64_t>(script_tf_seconds_) * 1000;
-    const auto last_time = equity_curve_.back().time_ms;
+    const auto last_time = last_equity_point()->time_ms;
     return state.spec && state.spec->report_policy == NativeReportPolicy::KernelRecordedAtHostMarks
         && state.kind == NativeLifecycleKind::Completed && bar_magnifier_enabled_
         && script_tf_seconds_ > 60 && script_tf_seconds_ < 86400
@@ -1987,7 +2003,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
     if (stream_warmup_mode_ || realtime_tail_
-        || position_side_ == PositionSide::FLAT || equity_curve_.empty()
+        || position_side_ == PositionSide::FLAT || !last_equity_point()
         || !std::isfinite(terminal_bar.close)) return;
     const double fill_price = bar_fill_price(terminal_bar.close);
     // R5 audit lane Q6 (duplicate D5): the row loop itself is the kernel's
@@ -1998,19 +2014,19 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     // dated on the curve's last point and convert at that instant's rate,
     // handed to the producer: the presented clock is never rewritten (R5
     // lane B-ADAPTER; E21's rule -- thread the rate, never the clock).
-    const std::int64_t mark_time = equity_curve_.back().time_ms;
+    const std::int64_t mark_time = last_equity_point()->time_ms;
     const double range_end_pnl = as_native_consumer(execution_consumer())
         .append_open_position_report_rows(*this, fill_price, mark_time, bar_index_,
                                           account_currency_fx_at(mark_time));
     if (stream_phase_ != StreamPhase::REALTIME) {
-        auto& last = equity_curve_.back();
+        auto& last = *last_equity_point();
         last.open_profit = 0.0;
         last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
-        max_equity_ = initial_capital_;
-        min_equity_ = initial_capital_;
-        max_drawdown_ = 0.0;
-        max_runup_ = 0.0;
-        for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+        // Restore the fold before the held point, then fold its replacement.
+        // Debug checks all four resulting doubles against a complete walk.
+        // The sink-off helper keeps the existing walk and initial seed.
+        // Presentation later receives its own copy of this editable tail.
+        refold_equity_tail();
     }
     if (same_bar_exit_group_possible(trades_)) {
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
@@ -2860,7 +2876,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         return na<int64_t>();
     const std::string& sym_tz = syminfo_.timezone;
     const std::string& sym_session = syminfo_.session;
-    const std::vector<Bar>& input = scheduler_.retained_input();
+    const auto input = scheduler_.retained_input();
     const bool input_is_chart = scheduler_.retained_input_is_chart();
     const bool daily_chart = calendar_period_for(script_tf_) != CalendarPeriod::NONE;
     // A chart bar's own open (the input's stamp) and close, as the chart's
@@ -3070,4 +3086,41 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     return close ? tf_close_of(open) : open;
 }
 
+void source::PineStrategyHost::finish_applied_admission(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) {
+    const bool recalculation_due = scheduler_.coof_recalculation_due(event, context, *this);
+    if (!recalculation_due) record_applied_range_end();
+    // A process-on-close fill can append admission events after on_native_bar.
+    // Retire that completed tail without recapturing the broker-state row:
+    // F0a preserves the existing recording and continuation boundaries.
+    // A synchronous fill inside an unfinished command is folded by the
+    // enclosing on_bar_close instead.
+    if (!recalculation_due && context.is_terminal_sub_bar
+        && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+        && !adapter_.admission_journal.has_unfinished_events()) {
+        adapter_.finish_admission_bar();
+    }
+}
+
 } // namespace pineforge
+
+namespace pineforge {
+
+void source::PineStrategyHost::stage_symbol_feed_views() {
+    if (symbol_feed_views_.size() != symbol_feeds_.size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "request data: symbol feed view table is out of sync");
+    std::vector<NativeInstrumentFeedView> descriptors(symbol_feed_views_.size());
+    std::vector<const NativeInstrumentFeedView*> slots(symbol_feed_views_.size(), nullptr);
+    for (std::size_t i = 0; i < symbol_feed_views_.size(); ++i) {
+        const BorrowedFeedSlot& slot = symbol_feed_views_[i];
+        if (!slot.present) continue;
+        descriptors[i] = {{slot.bars, slot.size}, slot.close_ms};
+        slots[i] = &descriptors[i];
+    }
+    NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(
+        slots.empty() ? nullptr : slots.data(), slots.size());
+}
+
+}  // namespace pineforge
