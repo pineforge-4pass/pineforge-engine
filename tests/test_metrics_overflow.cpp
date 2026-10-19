@@ -400,7 +400,12 @@ void short_span_real_report() {
         }
         CHECK(report.net_profit == 800);
         CHECK(std::isnan(report.metrics.equity.cagr) && std::isnan(report.metrics.equity.calmar));
-        const auto wire = live::native_report_json(report);
+        // ReportC mirrors pf_report_t member for member (src/native_c_host.cpp
+        // reinterprets between them at the C boundary); the size check keeps
+        // the cast honest if either side changes.
+        static_assert(sizeof(ReportC) == sizeof(pf_report_t),
+                      "ReportC and pf_report_t must stay layout twins");
+        const auto wire = live::native_report_json(reinterpret_cast<const pf_report_t&>(report));
         CHECK(wire.at("metrics").at("equity").at("cagr").kind == live::Json::Kind::Null);
         CHECK(wire.at("metrics").at("equity").at("calmar").kind == live::Json::Kind::Null);
     } catch (const std::exception&) {
