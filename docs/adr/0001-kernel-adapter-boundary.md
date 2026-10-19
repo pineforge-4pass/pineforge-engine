@@ -423,7 +423,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   (`float_band_eq` `ta_compare_band.hpp:38`), the TV-named fields of the frozen
   `pf_pending_order_v1_t` mirror, and the lot-flag pair above.
 - **The C API trades.** Two disjoint runtime inventories, both pinned.
-  `src/c_abi.cpp` implements the **81** codegen-facing runtime `PF_API` symbols that
+  `src/c_abi.cpp` implements the **84** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
   **43** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
   callback table (`strategy_native_host_create_v1` `native_c_api.h:2682`), runs a batch
