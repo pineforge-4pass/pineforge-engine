@@ -2818,10 +2818,10 @@ private:
         std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> candidates;
         std::vector<std::uint64_t> candidate_names;
         std::vector<std::uint64_t> first_reissues;
+        std::vector<const PlacementSnapshot*> origin_pins; // Rebuilt each sweep; not state.
         std::vector<std::uint64_t> doomed;
-        // R5 lane V19-D: the legs K1's cycle clause alone holds (incarnation,
-        // row, the high water the superseded test has read them through,
-        // whether it answers for them), and those it answers for (sorted).
+        // CR-150 L19G: K1 legs that supersession can release (incarnation,
+        // row, read-through high water, released flag); released incarnations sorted.
         struct HeldLeg {
             std::uint64_t incarnation = 0;
             const PlacementSnapshot* row = nullptr;
@@ -2857,6 +2857,7 @@ private:
             candidates.clear();
             candidate_names.clear();
             first_reissues.clear();
+            origin_pins.clear();
             doomed.clear();
             held.clear();
             released.clear();
