@@ -54,7 +54,7 @@ Schema:
         "longs":  { ...pf_trade_stats_t... },   # long trades only
         "shorts": { ...pf_trade_stats_t... },   # short trades only
         "equity": { ...pf_equity_stats_t... }   # sharpe/sortino/cagr/calmar/...
-      },                               # any NaN statistic -> null (see _num)
+      },                               # defined metric absence -> null (see _num)
       "equity_curve": [                # ABI v2: one point per script bar
         { "time_ms": int, "equity": float, "open_profit": float },
         ...
@@ -129,7 +129,8 @@ pipe, a full disk) ends with exit status 1 and no line after it (see _main).
 
 NaN convention: any metric with an empty/zero denominator is null (JSON has no
 NaN); a real computed 0 stays 0. See the report-schema + metrics reference docs
-for the per-field meaning of every metrics.* key.
+for the per-field meaning of every metrics.* key. Overflow and other computed
+nonfinite report values fail as report_result_invalid, reason nonfinite.
 
 Selected-window mode (selected-window wire v1.3, full/v1 report, no digest). Opt in
 with --report-policy selected-window/v1, --window-start-ms T, --window-end-ms E,
@@ -3543,12 +3544,13 @@ def fmt_utc(ms: int) -> str:
         ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _num(x):
-    """JSON-safe float. The engine's metric NaN convention (empty / zero
-    denominator -> NaN, never 0) cannot survive JSON: json.dump emits a bare
-    `NaN` token that a strict downstream JSON.parse (the MCP layer) rejects.
-    Collapse every non-finite double to null so the report stays valid JSON."""
+def _num(x, *, report_metric=False):
+    """Native metric NaN is the producer's explicit defined-absence sentinel.
+    Preserve infinity until _validate_report_result can raise the typed R.
+    Recorded script outputs have their separate nonfinite-to-null convention."""
     f = float(x)
+    if report_metric:
+        return None if math.isnan(f) else f
     return f if math.isfinite(f) else None
 
 
@@ -3562,13 +3564,15 @@ EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino
 def _stats_dict(s) -> dict:
     """Serialize a pf_trade_stats_t / pf_equity_stats_t ctypes struct to a dict,
     keying off each field's ctype: integer counters stay ints, every double is
-    sanitized through _num. Driven by _fields_ so it tracks the struct verbatim;
+    normalized through _num's metric mode. Computed nonfinite values must
+    already have failed native M checks; infinities also fail the C backstop.
+    Driven by _fields_ so it tracks the struct verbatim;
     an equity struct's two monthly ratios take their EQUITY_REPORT_KEYS."""
     keys = EQUITY_REPORT_KEYS if isinstance(s, EquityStatsC) else {}
     out = {}
     for name, ctype in s._fields_:
         v = getattr(s, name)
-        out[keys.get(name, name)] = _num(v) if ctype is ctypes.c_double else int(v)
+        out[keys.get(name, name)] = _num(v, report_metric=True) if ctype is ctypes.c_double else int(v)
     return out
 
 
@@ -3613,9 +3617,18 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
 
     cum, peak, max_dd = 0.0, 0.0, 0.0
     for p in pnls:
+        if not math.isfinite(p):
+            raise RunFailure("the report result trades.pnl is not finite",
+                             "report_result_invalid",
+                             {"field": "trades.pnl", "reason": "nonfinite"})
         cum += p
         peak = max(peak, cum)
-        max_dd = min(max_dd, cum - peak)
+        drawdown = cum - peak
+        if not math.isfinite(cum) or not math.isfinite(drawdown):
+            raise RunFailure("the report result summary.max_drawdown is not finite",
+                             "report_result_invalid",
+                             {"field": "summary.max_drawdown", "reason": "nonfinite"})
+        max_dd = min(max_dd, drawdown)
 
     # Computed trading metrics (ABI v2): all/longs/shorts trade stats + the
     # equity-curve-derived block (sharpe/sortino/cagr/calmar/...). See the
@@ -3636,8 +3649,8 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             p = report.equity_curve[i]
             equity_curve.append({
                 "time_ms":     int(p.time_ms),
-                "equity":      _num(p.equity),
-                "open_profit": _num(p.open_profit),
+                "equity":      float(p.equity),
+                "open_profit": float(p.open_profit),
             })
 
     return {
@@ -3682,9 +3695,9 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
 
 
 def _validate_report_result(out: dict) -> None:
-    """Canonical trade and summary doubles have no defined non-finite absence.
-    Keep the failure fields as engine-owned literals; metrics, equity and
-    recorded outputs retain their existing _num-to-null convention."""
+    """Required results are finite; only native metric absence is nullable.
+    Metric keys come from the producer's ctypes descriptors and alias map,
+    after native computation has distinguished absence from computed NaN."""
     for trade in out["trades"]:
         for key, field in (
             ("entry_price", "trades.entry_price"),
@@ -3701,6 +3714,7 @@ def _validate_report_result(out: dict) -> None:
                                  "report_result_invalid",
                                  {"field": field, "reason": "nonfinite"})
     for key, field in (
+        ("win_rate_pct", "summary.win_rate_pct"),
         ("net_pnl", "summary.net_pnl"),
         ("avg_trade", "summary.avg_trade"),
         ("best_trade", "summary.best_trade"),
@@ -3711,6 +3725,22 @@ def _validate_report_result(out: dict) -> None:
             raise RunFailure(f"the report result {field} is not finite",
                              "report_result_invalid",
                              {"field": field, "reason": "nonfinite"})
+    for block in ("all", "longs", "shorts", "equity"):
+        for name, value in out["metrics"][block].items():
+            if value is not None and not math.isfinite(value):
+                metric_field = f"metrics.{block}.{name}"
+                raise RunFailure(f"the report result {metric_field} is not finite",
+                                 "report_result_invalid",
+                                 {"field": metric_field, "reason": "nonfinite"})
+    for point in out["equity_curve"]:
+        for key, field in (
+            ("equity", "equity_curve.equity"),
+            ("open_profit", "equity_curve.open_profit"),
+        ):
+            if not math.isfinite(point[key]):
+                raise RunFailure(f"the report result {field} is not finite",
+                                 "report_result_invalid",
+                                 {"field": field, "reason": "nonfinite"})
 
 
 def _request_invalid(text: str, option: str, exit_status: int = 1) -> RunFailure:

@@ -52,7 +52,7 @@ TRADE_FIELDS = (
     "trades.pnl_pct", "trades.max_runup", "trades.max_drawdown", "trades.commission",
 )
 SUMMARY_FIELDS = (
-    "summary.net_pnl", "summary.avg_trade", "summary.best_trade",
+    "summary.win_rate_pct", "summary.net_pnl", "summary.avg_trade", "summary.best_trade",
     "summary.worst_trade", "summary.max_drawdown",
 )
 BAD_VALUES = (
@@ -226,7 +226,9 @@ def assert_failure(result, code, args, *, serialization=False, phase_fd=True, mo
 @pytest.mark.parametrize("bad", BAD_VALUES)
 def test_trade_leaf_nonfinite(harness, mode, field, bad):
     result = harness.run(mode, trade_field=field.split(".")[1], bad_value=bad)
-    assert len(result.built) == 1  # the REAL report builder ran
+    # PnL is consumed during summary assembly and now fails before the real
+    # builder can return. Other leaves fail in canonical-result validation.
+    assert len(result.built) == (0 if field == "trades.pnl" else 1)
     assert_failure(result, RESULT_INVALID, {"field": field, "reason": NONFINITE_REASON}, mode=mode)
 
 
@@ -268,7 +270,7 @@ def test_ordinary_typed_leaf_failure_without_phase_fd(harness, bad):
 @pytest.mark.parametrize("bad", BAD_VALUES)
 def test_writer_backstop(harness, mode, bad):
     def poison(document):
-        document["elapsed_seconds"] = bad  # outside all 13 canonical leaves
+        document["elapsed_seconds"] = bad  # outside the canonical result leaves
 
     result = harness.run(mode, inject=poison)
     assert_failure(result, POST_EXECUTION_FAILED,
@@ -346,23 +348,64 @@ def test_validation_document_writer_backstop(harness, bad):
     (("shorts", "profit_factor"), "profit_factor"),
     (("equity", "sharpe_monthly"), "sharpe_tv"),
 ), ids=("all", "longs", "shorts", "equity"))
-@pytest.mark.parametrize("bad", BAD_VALUES)
-def test_metric_nonfinite_stays_null(harness, mode, metric, key, bad):
-    result = harness.run(mode, metric=metric, bad_value=bad)
+def test_metric_defined_nan_stays_null(harness, mode, metric, key):
+    # Only a native producer's defined absence can reach this representation.
+    # Computed NaN and infinities are rejected by test_metrics_overflow.cpp.
+    result = harness.run(mode, metric=metric, bad_value=float("nan"))
     document = strict_line(result.stdout)
     assert (result.status, result.stderr) == (0, "")
     assert document["metrics"][metric[0]][key] is None
     assert [record["phase"] for record in result.records][-1] == "completed"
 
 
+# Exercise every floating report metric, including both monthly public aliases.
+METRIC_FIELDS = [
+    (block, name, {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino_tv"}.get(name, name))
+    for block, struct in (("all", run_json.TradeStatsC), ("longs", run_json.TradeStatsC),
+                          ("shorts", run_json.TradeStatsC), ("equity", run_json.EquityStatsC))
+    for name, kind in struct._fields_ if kind is ctypes.c_double
+]
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("block,name,key", METRIC_FIELDS)
+@pytest.mark.parametrize("bad", (float("inf"), float("-inf")))
+def test_metric_overflow_is_typed(harness, mode, block, name, key, bad):
+    assert len(METRIC_FIELDS) == 87
+    result = harness.run(mode, metric=(block, name), bad_value=bad)
+    assert_failure(result, RESULT_INVALID,
+                   {"field": f"metrics.{block}.{key}", "reason": NONFINITE_REASON}, mode=mode)
+
+
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("bad", BAD_VALUES)
-def test_equity_nonfinite_stays_null(harness, mode, bad):
+def test_executed_equity_nonfinite_is_typed(harness, mode, bad):
     result = harness.run(mode, curve_value=bad)
-    document = strict_line(result.stdout)
-    assert (result.status, result.stderr) == (0, "")
-    assert document["equity_curve"][-1]["equity"] is None
-    assert document["equity_curve"][-1]["open_profit"] is None
+    assert_failure(result, RESULT_INVALID,
+                   {"field": "equity_curve.equity", "reason": NONFINITE_REASON}, mode=mode)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("pnls,net_profit", (
+    ((1e308, 1e308, -1e308), 1e308),
+    ((1e308, -1e308, -1e308), -1e308),
+), ids=("sum", "peak-difference"))
+def test_cumulative_summary_overflow_cannot_hide_in_min_max(harness, mode, pnls, net_profit):
+    # Every trade and supplied net profit are finite. cum and cum-peak used
+    # to overflow, then min/max silently discarded the resulting NaN.
+    result = harness.run(mode, pnls=pnls, net_profit=net_profit)
+    assert_failure(result, RESULT_INVALID,
+                   {"field": "summary.max_drawdown", "reason": NONFINITE_REASON}, mode=mode)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_open_profit_nonfinite_is_typed(harness, mode):
+    def poison(document):
+        document["equity_curve"][-1]["open_profit"] = float("inf")
+
+    result = harness.run(mode, inject=poison)
+    assert_failure(result, RESULT_INVALID,
+                   {"field": "equity_curve.open_profit", "reason": NONFINITE_REASON}, mode=mode)
 
 
 @pytest.mark.parametrize("token", ("NaN", "Infinity", "-Infinity", "1e9999"))

@@ -784,8 +784,8 @@ class ReportWindowTests(unittest.TestCase):
                     self.refused_curve(bad, bars, capital, fragment)
 
     def test_a_malformed_actual_anchor_is_refused_whatever_the_capital(self):
-        # The anchor the engine produced must be a finite number (the report writes a non-finite
-        # double as null): not null, not a bool, not text, not NaN or an infinity, and not an int
+        # The anchor the engine produced must be a finite number: not null,
+        # not a bool, not text, not NaN or an infinity, and not an int
         # beyond binary64. An unresolved capital never excuses it, and neither does an equal-
         # looking value: True == 1.0 must not pass for a capital of 1.
         malformed = (None, float("nan"), float("inf"), float("-inf"), True, False, "1000000",
@@ -1621,8 +1621,8 @@ class SelectedRunTests(unittest.TestCase):
 
     def test_a_malformed_actual_anchor_is_refused_even_when_the_capital_is_unresolved(self):
         plan = full_plan()
-        # A non-finite native anchor reaches the report as null (build_report_dict writes every
-        # non-finite double that way); it must not be written out as a valid-looking number.
+        # CR-202: the canonical-result guard types a nonfinite anchor as R
+        # before selected-window consistency checks or serialization.
         for anchor in (float("nan"), float("inf"), float("-inf")):
             for unresolved in (False, True):
                 with self.subTest(anchor=anchor, unresolved=unresolved):
@@ -1634,8 +1634,9 @@ class SelectedRunTests(unittest.TestCase):
                     status, out, _ = self.run_selected(lib, plan, patches=patches)
                     self.assertEqual(status, 1)
                     line = last_line(out)
-                    self.assertEqual(line["code"], "engine_invariant")
-                    self.assertIn("not a finite number", line["error"])
+                    self.assertEqual(line["code"], "report_result_invalid")
+                    self.assertEqual(line["args"],
+                                     {"field": "equity_curve.equity", "reason": "nonfinite"})
                     self.assertEqual(len(out.strip().splitlines()), 1)  # no report, no 2nd line
                     self.assertNotIn("report_window", out)
                     self.assertNotIn("advance:serialization", self.events)

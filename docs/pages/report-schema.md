@@ -263,6 +263,11 @@ monthly returns or zero deviation, `calmar` with zero drawdown. A `0.0`
 in the report is always a real computed zero. See the per-field doxygen
 in `<pineforge/pineforge.h>` for the exact rule on every field.
 
+Report arithmetic that produces a nonfinite value, including overflow, fails
+with `report_result_invalid` and reason `nonfinite`. The engine checks computed
+values before they can become a metric absence. A defined absence remains
+null; an executed trade or equity mark must be finite.
+
 ## Equity curve (ABI v2)
 
 One `pf_equity_point_t` per script bar:

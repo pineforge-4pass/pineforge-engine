@@ -181,6 +181,7 @@ class ManifestCheckerTests(unittest.TestCase):
         for directory in ("src", "include", "docker"):
             shutil.copytree(ROOT / directory, self.root / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(ROOT / "tests/ownership/probes", self.root / "tests/ownership/probes")
 
     def reject(self, check, detail, *, copied_tree=False):
         result = self.run_checker(copied_tree=copied_tree)
@@ -196,6 +197,36 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
+
+    def test_report_probe_pin_removed_is_rejected(self):
+        self.doc["probes"] = []
+        self.reject("probe-pins", "unregistered report/buy_hold_return_overflow")
+
+    def test_report_probe_file_hash_changed_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "tests/ownership/probes/report/buy_hold_return_overflow/bars.csv"
+        path.write_bytes(path.read_bytes().replace(b"250000000", b"250000001", 1))
+        self.reject("probe-pins", "report/buy_hold_return_overflow: bars.csv sha256 differs",
+                    copied_tree=True)
+
+    def test_report_probe_file_pin_missing_is_rejected(self):
+        del self.doc["probes"][0]["sha256"]["run.json"]
+        self.reject("probe-pins", "report/buy_hold_return_overflow: pinned file set differs")
+
+    def test_report_probe_duplicate_is_rejected(self):
+        self.doc["probes"].append(copy.deepcopy(self.doc["probes"][0]))
+        self.reject("duplicate-probe", "report/buy_hold_return_overflow")
+
+    def test_report_metric_field_binding_changed_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        original = 'metric_field = f"metrics.{block}.{name}"'
+        self.assertEqual(text.count(original), 1)
+        path.write_text(text.replace(original, 'metric_field = f"metrics.{name}.{block}"'),
+                        encoding="utf-8")
+        self.reject("input", "unrecognized metric result guard; update the independent reconstruction",
+                    copied_tree=True)
 
     def test_kept_branch_anchor_removed_is_rejected(self):
         self.copy_tree()

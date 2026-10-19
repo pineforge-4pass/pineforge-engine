@@ -1816,6 +1816,8 @@ list(APPEND TEST_SOURCES test_outputs_stream_equivalence)
 list(APPEND TEST_SOURCES test_outputs_truncation)
 list(APPEND TEST_SOURCES test_outputs_run_reuse)
 list(APPEND TEST_SOURCES test_outputs_off_identity)
+# CR-202: native report arithmetic and runner serialization; no source layer.
+list(APPEND TEST_SOURCES test_metrics_overflow)
 
 # R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
 # deferred-close oracle as an individually compiled native-route twin.  Keep
