@@ -1,0 +1,9 @@
+{
+  "outcome": "failed",
+  "code": "engine_invariant",
+  "args": {},
+  "min_trades": 0,
+  "label": "control",
+  "pinned_by": "EN-132 D6 row 21 ruled KEEP engine_invariant (ENGINE-TOP 14:09; EN-134 decides this branch)",
+  "native_boundary_control": "tests/test_native_settlement_row_finite.cpp"
+}
