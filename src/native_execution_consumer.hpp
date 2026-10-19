@@ -2434,6 +2434,15 @@ private:
     void* batch_input_owner_ = nullptr;
     void (*batch_input_release_)(void*) noexcept = nullptr;
 
+    // CR-150 L17A: selected E records have already been emitted at capture.
+    // Output bookkeeping, like presentation_ready_: not hashed and never read
+    // by a broker decision, a continuation fold or the source adapter. Reset
+    // with the presentation; appended so every pre-existing member keeps its
+    // offset. The L6b-1 array remains the metrics source until L17B supplies the
+    // scratch curve; no second per-read equity allocation is needed with a sink.
+    bool presentation_sink_equity_written_ = false;
+    bool capture_selected_sink(BacktestEngine& engine);
+    bool selected_sink_equity_written(const BacktestEngine& engine) const noexcept;
 public:
     void set_batch_input_release(void* owner, void (*release)(void*) noexcept) noexcept {
         batch_input_owner_ = owner;
