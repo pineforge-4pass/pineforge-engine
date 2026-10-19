@@ -651,7 +651,8 @@ def check_commands(source: Path, output: Path | None = None) -> list[tuple]:
                            str(source / '.github/workflows/corpus-parity.yml'),
                            str(source / '.github/workflows/docs.yml'),
                            str(source / '.github/workflows/promote-baseline.yml'),
-                           str(source / '.github/workflows/release.yml')]),
+                           str(source / '.github/workflows/release.yml'),
+                           str(source / '.github/workflows/flat-peak.yml')]),
         ('ci-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
                                   '--check-ci-workflow']),
         ('docs-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
@@ -717,6 +718,13 @@ def check_commands(source: Path, output: Path | None = None) -> list[tuple]:
         # change, and scripts/ci_docs_only.py's rule decides which that is.
         ('docs-only-tests',
          [sys.executable, str(source / 'scripts/test_ci_docs_only.py')]),
+        # CR-150 flat-peak memory gate (docs/ci.md): the driver's own rules -- zero
+        # rows, a skipped row, an absent or RED report each fail -- and the static
+        # wiring of ci.yml, release.yml, flat-peak.yml and the mem labels.
+        ('flat-peak-gate-tests',
+         [sys.executable, str(source / 'scripts/test_ci_flat_peak_gate.py')]),
+        ('flat-peak-wiring',
+         [sys.executable, str(source / 'scripts/ci_flat_peak_gate.py'), 'check-wiring']),
         ('design-inventory-tests',
          [sys.executable, str(source / 'scripts/test_check_design_inventory.py')]),
         ('design-inventory',

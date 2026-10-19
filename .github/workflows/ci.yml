@@ -379,6 +379,18 @@ jobs:
     with:
       mode: subset
 
+  # MAIN tier: the CR-150 flat-peak memory gate, `ctest -L mem` and the heap
+  # census (.github/workflows/flat-peak.yml, docs/ci.md "Flat-peak memory
+  # gate"), after a merge and on a manual dispatch, never on a pull request: the
+  # pull-request tier is unchanged. A regression fails this job and so the run.
+  # It stays out of the advisory aggregate below on purpose: that aggregate
+  # accepts only success or a docs-only skip from each lane it names, and this
+  # lane is skipped on every pull request.
+  flat-peak:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    uses: ./.github/workflows/flat-peak.yml
+
   # Advisory aggregate context covering every GitHub Actions lane. The merge
   # ruleset requires pineforge/verify and pineforge/parity, posted by the
   # maintainers, rather than this build context.

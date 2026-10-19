@@ -76,7 +76,21 @@ env:
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 jobs:
+  # RELEASE tier: the CR-150 flat-peak memory gate, `ctest -L mem` and the heap
+  # census (.github/workflows/flat-peak.yml, docs/ci.md "Flat-peak memory gate").
+  # The `release` job needs it, so a memory regression stops the run before the
+  # VERSION bump is committed, before the tag is pushed, and so before the
+  # GitHub release exists, the tarballs are built and the hub is told:
+  # `prebuilt` needs `release`, and `notify-hub` needs both. It checks out the
+  # dispatched commit, the one `release` bumps from, and holds no secret: after a
+  # fix the run is dispatched again from a clean state. A dry run runs it too.
+  flat-peak-gate:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/flat-peak.yml
+
   release:
+    needs: flat-peak-gate
     runs-on: ubuntu-latest
 
     outputs:

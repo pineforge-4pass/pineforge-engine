@@ -885,6 +885,90 @@ target needs a measured sanitizer build improvement; the current job logs do
 not separate compile from link time or report a ccache hit rate, so CI-LITE
 does not assume a build optimization without evidence.
 
+## Flat-peak memory gate
+
+CR-150 makes the engine's resident memory flat: a run's rest -- its peak RSS
+minus every mapped OHLCV byte -- does not grow with bars, trades, symbols or
+the report. The flat-peak gate holds that in CI, so a regression fails a build
+instead of being noticed releases later. It has two arms, one command each,
+both in `scripts/ci_flat_peak_gate.py`:
+
+| Arm | Runs | Passes only when |
+| --- | --- | --- |
+| `mem` | a Release build with `PINEFORGE_BUILD_FLAT_MEMORY_TESTS=ON`, then `ctest -L mem`: the row `test_flat_memory_rss_macd`, the harness `tests/flat_memory_rss_e2e.py` over the cases `a`, `g`, `h` and `borrowed` (the bars, selected-window and magnifier ladders, and the borrowed-feed source check), run through a staged copy of `docker/run_json.py` beside the planner library the build made (`flat_memory_prefix`) | `ctest -N -L mem` lists exactly that row, ctest ran it and printed `ctest ran N rows (floor M)` with N at least M, it was not skipped, and the harness's own `RUN.COMPLETE` and four `case-*.json` say PASS with every ladder's rungs measured |
+| `census` | the heap-census fixture and every corpus strategy module, then `tests/heap_census.py --battery tests/fixtures/flat_memory --corpus corpus` into a new directory | `census.json` says status `PASS` (no growing allocation site outside the two admissions: caller OHLCV and declared closed-trade history), carries no open-proof error, and judged at least the battery's modes plus one comparison per corpus probe |
+
+Each arm prints how many rows or comparisons it judged and exits non-zero on
+zero. Anything that is not a proven pass fails: a skipped or not-run row, a row
+outside the expected set, an absent or incomplete report, a missing tool
+(Valgrind and `vgdb`, the corpus submodule and its Git-LFS feed), or a result
+directory left by an earlier run, which the gate refuses and never deletes.
+
+`run_json.py` loads the selected-window planner from
+`<its directory>/../lib/libpineforge_window_plan.so`, the installed-image
+layout, and case `g` sends a selected-window request, so the row cannot run
+`docker/run_json.py` from the source tree: there the case ends in a setup error
+(`cannot load the selected primary planner library`). The `flat_memory_prefix`
+target stages the layout in the build directory, a copy of `docker/` as `bin/`
+(a symlink would resolve back into the source tree) and the planner library as
+`lib/`, and the gate refuses to run ctest when any staged file is missing.
+
+Both `mem` rows carry `l4-pending`: they are red until the work that makes a
+run's rest flat has landed, so the gate is red on any tree before it, which is
+what it is for.
+
+Where it runs:
+
+- MAIN: the `flat-peak` job of `ci.yml` calls the reusable workflow
+  `.github/workflows/flat-peak.yml` (jobs `flat-peak-mem` and
+  `flat-peak-census`, the standard `ubuntu-24.04` runner, the 360-minute
+  platform maximum) on a push to main and on a manual dispatch. A regression
+  fails the job and so the run. The job stays out of the advisory `build`
+  aggregate: that aggregate accepts only success or a docs-only skip from each
+  lane it names, and this lane is skipped on every pull request.
+- RELEASE: the `flat-peak-gate` job of `release.yml` calls the same workflow,
+  and the `release` job needs it. `prebuilt` needs `release` and `notify-hub`
+  needs both, so a regression stops a dispatch before the `VERSION` bump is
+  committed, before the tag is pushed, and so before the GitHub release exists,
+  the tarballs are built and the hub is told. The gate reads the dispatched
+  commit, the one `release` bumps from, holds no secret and changes nothing: a
+  stopped dispatch leaves nothing to undo, and the next one starts clean. A dry
+  run runs the gate too.
+- Pull request: unchanged. A pull-request variant is wired only if it measures
+  under 60 seconds end to end, and a cold run of the `mem` arm builds the
+  engine in Release before its first row starts; the census profiles every
+  corpus probe twice under Valgrind. Neither arm runs on a pull request.
+
+What a failure means. A red `mem` arm names the case and its ladder: that
+case's rest grew with its axis by more than the harness's slope limit (1 MiB),
+so the flat-memory property regressed. `label mem selects 0 rows` means the
+label, the CMake option or the row is gone, and no rows is never a pass. A
+`census` RED lists every growing allocation site that is not admitted, with its
+comparison, its owner and its bytes per unit; OPEN means the proof is
+incomplete, and it fails too.
+
+Lab only. `test_flat_memory_rss_e2e` keeps every case, so it also runs `b`,
+`f`, `j`, `symbols-1`, `symbols-2` and `symbols-4`, and it moves to the label
+`codegen-fixtures`: those cases load `every_k`, `xsym`, `xsym_2`, `xsym_4` and
+`scale_out`, codegen outputs of `tests/fixtures/flat_memory/*.pine` that a
+plain build directory cannot make, because the pinned codegen is another
+repository reached over the network. The label must not contain `mem`:
+`ctest -L` is a regular-expression search, and `check-wiring` (the preflight
+stage `flat-peak-wiring`, with the unit tests of the stage `flat-peak-gate-tests`)
+fails on such a label, on a pull-request trigger, on a gate step that carries an
+`if`, a pipe or `continue-on-error`, and on a release job that stops needing the
+gate.
+
+On a Linux host with the toolchain, the same two commands run the gate:
+
+```sh
+python3 scripts/ci_flat_peak_gate.py mem --build-dir build-flat-peak --jobs 8
+python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census --jobs 8
+```
+
+The second needs Valgrind with `vgdb`, the checked-out corpus submodule with
+its LFS feed, and a build directory that has not held a census before.
+
 ## Runners and time limits
 
 The heavy jobs -- `preflight`, the four `build` legs, `sanitizers`,

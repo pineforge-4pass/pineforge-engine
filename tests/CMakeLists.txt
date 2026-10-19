@@ -7269,6 +7269,44 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
             --report-sink off
             --work-dir ${CMAKE_BINARY_DIR}/flat_memory_work
             --results-dir ${CMAKE_BINARY_DIR}/flat_memory_results)
-    set_tests_properties(test_flat_memory_rss_e2e PROPERTIES
+    # CR-150 sm-cr150-ci-flatpeak: the rows `ctest -L mem` runs in CI. The cases
+    # a, g, h and borrowed load only macd.so, which this build dir produces
+    # (flat_memory_macd above) and run_json.py (borrowed reads its source); they
+    # are the same case functions test_flat_memory_rss_e2e runs, selected by the
+    # harness's own --cases flag. The other cases load every_k, xsym, xsym_2,
+    # xsym_4 and scale_out, codegen outputs a plain build dir cannot make (the
+    # pinned codegen is a separate repository reached only over the network), so
+    # test_flat_memory_rss_e2e keeps its whole command and moves to the label
+    # `codegen-fixtures`: lab only. The label must not contain the text `mem`:
+    # `ctest -L` is a regular-expression search over the label strings.
+    #
+    # Case g sends a selected-window request, and run_json.py loads the planner
+    # from <its directory>/../lib/libpineforge_window_plan.so (trusted_planner_path,
+    # the installed-image layout). The source tree has no lib/, so there g ends in
+    # a setup error. flat_memory_prefix stages that layout in the build directory:
+    # a COPY of docker/ as bin/ (a symlink would resolve back into the source
+    # tree) and the planner library this tree builds as lib/.
+    set(PINEFORGE_FLAT_MEMORY_PREFIX "${CMAKE_BINARY_DIR}/flat_memory_prefix")
+    add_custom_target(flat_memory_prefix
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${PINEFORGE_FLAT_MEMORY_PREFIX}/lib"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/docker"
+            "${PINEFORGE_FLAT_MEMORY_PREFIX}/bin"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:pineforge_window_plan>"
+            "${PINEFORGE_FLAT_MEMORY_PREFIX}/lib/libpineforge_window_plan.so"
+        COMMENT "Staging run_json.py beside the selected-window planner library")
+    add_dependencies(flat_memory_prefix pineforge_window_plan)
+    add_dependencies(flat_memory_modules flat_memory_prefix)
+    add_test(NAME test_flat_memory_rss_macd
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/flat_memory_rss_e2e.py
+            --run-json ${PINEFORGE_FLAT_MEMORY_PREFIX}/bin/run_json.py
+            --module-dir ${PINEFORGE_FLAT_MEMORY_MODULE_DIR}
+            --report-sink off
+            --cases a,g,h,borrowed
+            --work-dir ${CMAKE_BINARY_DIR}/flat_memory_macd_work
+            --results-dir ${CMAKE_BINARY_DIR}/flat_memory_macd_results)
+    set_tests_properties(test_flat_memory_rss_macd PROPERTIES
         LABELS "mem;slow;l4-pending")
+    set_tests_properties(test_flat_memory_rss_e2e PROPERTIES
+        LABELS "codegen-fixtures;slow;l4-pending")
 endif()

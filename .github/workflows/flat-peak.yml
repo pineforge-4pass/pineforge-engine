@@ -1,0 +1,176 @@
+name: Flat-peak memory gate
+
+# CR-150: the flat-memory property of 1.7.0, held where a regression would
+# otherwise be noticed months later. A reusable workflow of two arms, each ONE
+# command of scripts/ci_flat_peak_gate.py (docs/ci.md, "Flat-peak memory gate"):
+#
+#   flat-peak-mem     `ctest -L mem` over a Release build that registers the
+#                     flat-memory rows, judged from the harness's own result
+#                     files and not from ctest's exit status alone
+#   flat-peak-census  tests/heap_census.py over the battery and the whole
+#                     corpus into a new directory, judged from census.json
+#
+# Callers: ci.yml, on a push to main and a manual dispatch and never on a pull
+# request, and release.yml, whose `release` job needs this gate so a regression
+# publishes nothing. A failing arm fails the job that calls it.
+#
+# The gate steps carry no `if`, no continue-on-error and no `|| true`; the one
+# `always()` step of each job only retains diagnostics after the gate has
+# decided. scripts/ci_flat_peak_gate.py check-wiring (a ci_preflight stage)
+# holds that, and a registered row set that is empty or wrong fails the arm.
+#
+# Both jobs ride the standard Linux runner, as every workflow outside the three
+# a CI run starts must (scripts/ci_preflight.py), and carry the platform's own
+# 360-minute maximum, the only hang catcher (owner rule, 2026-10-12).
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: "1"
+  CCACHE_MAXSIZE: 500M
+
+jobs:
+  flat-peak-mem:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      # The gate configures with PINEFORGE_VERSION_SOURCE=FILE: no tags, no
+      # history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-flat-peak-mem-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-flat-peak-mem-
+
+      # Arm 1. Fails on a regression, on zero or a wrong row set under the label,
+      # on a skipped row and on an absent or incomplete harness verdict.
+      - name: Flat-peak memory rows (ctest -L mem)
+        run: python3 scripts/ci_flat_peak_gate.py mem --build-dir build-flat-peak --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+
+      - name: Retain gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flat-peak-mem-diagnostics
+          path: |
+            build-flat-peak/flat_memory_macd_results/
+            build-flat-peak/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+
+  flat-peak-census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      # Credentials stay persisted, exactly as the corpus parity jobs: the
+      # submodule clone and `git lfs pull` below go out over https and that is
+      # the configuration known to work for them.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # valgrind brings vgdb, which tests/heap_census.py needs; the arm fails
+      # without either, it never skips.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs valgrind
+
+      - name: Resolve the recorded corpus gitlink
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          gitlink="$(git rev-parse HEAD:corpus)"
+          echo "recorded corpus gitlink: $gitlink"
+          echo "gitlink=$gitlink" >> "$GITHUB_OUTPUT"
+
+      # The submodule without smudging Git LFS, so the 1m chart feed is fetched
+      # once per gitlink, from the cache below.
+      - name: Check out the validation corpus at the recorded gitlink
+        shell: bash
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1"
+          GITLINK: ${{ steps.pin.outputs.gitlink }}
+        run: |
+          set -euo pipefail
+          git submodule update --init corpus
+          test "$(git -C corpus rev-parse HEAD)" = "$GITLINK"
+          git -C corpus status --porcelain -- validation
+
+      - name: Restore the corpus chart feed
+        id: feed
+        uses: actions/cache@v4
+        with:
+          path: corpus/data
+          key: corpus-feed-${{ steps.pin.outputs.gitlink }}
+
+      - name: Pull the Git-LFS chart feed
+        if: steps.feed.outputs.cache-hit != 'true'
+        run: git -C corpus lfs pull
+
+      # A restored cache is not evidence: each LFS pointer records its content's
+      # sha256, and the bytes on disk must match it.
+      - name: Verify the chart feed against its Git-LFS pointers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C corpus ls-files -- data | while read -r file; do
+            pointer="$(git -C corpus cat-file -p "HEAD:$file")"
+            case "$pointer" in
+              version*git-lfs*)
+                oid="$(printf '%s\n' "$pointer" | sed -n 's/^oid sha256://p')"
+                echo "$oid  corpus/$file" | sha256sum -c -
+                ;;
+            esac
+          done
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-flat-peak-census-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-flat-peak-census-
+
+      # Arm 2. Fails on a growing allocation site (RED), on an incomplete proof
+      # (OPEN), on an absent report and on a missing tool.
+      - name: Heap census (growth gate)
+        run: python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+
+      - name: Retain gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flat-peak-census-diagnostics
+          path: |
+            build-flat-peak-census/heap-census/census.json
+            build-flat-peak-census/heap-census/CENSUS.md
+          if-no-files-found: warn
