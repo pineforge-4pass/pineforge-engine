@@ -790,6 +790,11 @@ PRIVATE_FIXTURE_PROFILE_FLOORS = {
     'release': (RELEASE_MIN_TESTS, 307),
     'kernel': (KERNEL_MIN_TESTS, 31),
 }
+# CR-196 replaces one public ownership-controls row with four shards (+3
+# registered/run rows in every engine profile, in either fixture world).
+# These pinned minimum floors (absent: release 603, kernel 306) and the PR
+# registration minima remain lower bounds; more rows only raise the count.
+# The receipt/private-fixture populations and runner-only floors are unchanged.
 
 
 def private_fixtures_overlay() -> bool:
