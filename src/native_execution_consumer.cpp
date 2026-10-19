@@ -12436,15 +12436,13 @@ void NativeExecutionConsumer::drop_presentation() noexcept {
 // held in a local the callback cannot reach; it is published beside the capture
 // after the last step that can throw, never read back from the report.
 //
-// A selected generation takes the second form of the equity copy below, and
-// nothing else changes order: the trades, the nine scalars, the curve, then the
-// one hook. The curve is the window's own, built from the engine's recorded
-// observations before the hook and never cut out of what the host presents: the
-// anchor at T with the initial capital, then the observations labelled in
-// [T, E) exactly as they were recorded (report::build_selected_equity_curve),
-// whose one new[] array is handed to the local report by release() and freed
-// the way any report's curve is, by BacktestEngine::free_report. Before the
-// build the engine's own records are held to the window, and a record that
+// A selected generation uses the window's anchor and recorded observations in
+// [T, E). Sink OFF keeps its full owned array. With a sink, the immutable prefix
+// streams to scratch before the one hook; only a bounded independent tail is
+// borrowed by the hook, which sees that window's length. The logical M + 1 and
+// the published count remain capture bookkeeping, outside ReportC's C layout.
+// Scratch retains all metric points, including any suffix hidden by a shrink.
+// Before either build the engine's records are held to the window; a record that
 // contradicts it is refused (refuse_selected_capture), never filtered into an
 // apparent success: a trade or open lot entered before T, a pre-T observation
 // that is not the untouched account, an observation run that is not contiguous,
@@ -12453,6 +12451,10 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
     ReportC local{};
     int64_t metric_equity_len = 0;
     int64_t metric_observations = 0;
+    const bool sink_window = selected_epoch_.admitted_selected
+        && engine.report_sink_state_.enabled;
+    std::array<pf_equity_point_t, kSelectedPresentationWindowPoints> tail{};
+    std::unique_ptr<report_sink::ScratchCurveWriter> metric_curve;
     try {
         engine.fill_trades_section(&local);
 
@@ -12508,15 +12510,40 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
             if (static_cast<uint64_t>(observed) != selected_epoch_.counts.window_script_bars)
                 refuse_selected_capture(
                     "native selected report: the window's equity observations differ from its script bars");
-            report::SelectedEquityCurve curve = report::build_selected_equity_curve(
-                window_start, engine.initial_capital_,
-                observed > 0 ? recorded.data() + first : nullptr, observed);
-            metric_equity_len = curve.count;
             metric_observations = observed;
-            local.equity_curve_len = curve.count;
-            // One transfer, after the last step that can throw: from here the
-            // local report owns the array and a throw below frees it.
-            local.equity_curve = curve.points.release();
+            if (sink_window) {
+                // Match the array builder's count/size refusal before M + 1.
+                const uint64_t countable =
+                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+                const uint64_t sizable = static_cast<uint64_t>(
+                    std::numeric_limits<std::size_t>::max() / sizeof(pf_equity_point_t));
+                if (static_cast<uint64_t>(observed) >= std::min(countable, sizable))
+                    refuse_selected_capture(
+                        "selected report view: the observation count exceeds the largest curve");
+                metric_equity_len = observed + 1;
+                const int64_t window_len =
+                    std::min(metric_equity_len, kSelectedPresentationWindowPoints);
+                const int64_t interior_len = metric_equity_len - window_len;
+                metric_curve = std::make_unique<report_sink::ScratchCurveWriter>(
+                    engine.report_sink_state_.scratch_dir);
+                for (int64_t i = 0; i < metric_equity_len; ++i) {
+                    const pf_equity_point_t point = i == 0
+                        ? pf_equity_point_t{window_start, engine.initial_capital_, 0.0}
+                        : recorded[first + static_cast<std::size_t>(i - 1)];
+                    if (i < interior_len) metric_curve->append(point);
+                    else tail[static_cast<std::size_t>(i - interior_len)] = point;
+                }
+                local.equity_curve = tail.data();
+                local.equity_curve_len = window_len;
+            } else {
+                report::SelectedEquityCurve curve = report::build_selected_equity_curve(
+                    window_start, engine.initial_capital_,
+                    observed > 0 ? recorded.data() + first : nullptr, observed);
+                metric_equity_len = curve.count;
+                local.equity_curve_len = curve.count;
+                // The local report owns this sink-off array from here.
+                local.equity_curve = curve.points.release();
+            }
         } else {
             const int64_t n = (int64_t)engine.equity_curve_.size();
             metric_equity_len = n;
@@ -12530,12 +12557,32 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                 local.equity_curve = nullptr;
             }
         }
-        if (selected_epoch_.admitted_selected) {
+        if (sink_window) {
+            const int64_t window_len = local.equity_curve_len;
+            engine.present_report(&local);
+#ifndef NDEBUG
+            // The hook borrows this bounded window: it may edit or shrink it,
+            // but may neither replace its storage nor expose additional points.
+            if (local.equity_curve != tail.data() || local.equity_curve_len < 0
+                || local.equity_curve_len > window_len)
+                refuse_selected_capture(
+                    "native selected report: presentation exceeded its tail window");
+#endif
+            const int64_t cut = window_len - local.equity_curve_len;
+            local.equity_curve = nullptr; // borrowed stack storage is never freed
+            local.equity_curve_len = metric_equity_len - cut;
+            // Metrics keep the full pre-hook count and every edited slot, even
+            // when the hook hides part or all of its window from publication.
+            for (int64_t i = 0; i < window_len; ++i)
+                metric_curve->append(tail[static_cast<std::size_t>(i)]);
+            metric_curve->flush();
+        } else if (selected_epoch_.admitted_selected) {
             engine.present_report(&local);
         } else {
             engine.present_report_equity_tail(&local);
         }
     } catch (...) {
+        if (sink_window) local.equity_curve = nullptr;
         BacktestEngine::free_report(&local);
         throw;
     }
@@ -12543,6 +12590,7 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
     presentation_ = local;
     presentation_metric_equity_len_ = metric_equity_len;
     presentation_metric_observations_ = metric_observations;
+    presentation_metric_curve_ = std::move(metric_curve);
     presentation_ready_ = true;
 }
 
@@ -12982,9 +13030,9 @@ void BacktestEngine::present_report_equity_tail(ReportC* out) const {
 }
 
 // CR-150 L17A/B: walk the FINAL recorded values through the selected latches.
-// Presentation edits the capture's independent array. Once E emission and
-// validation succeed, its metric storage transfers to private scratch and the
-// array is released; the engine's held point is never edited by presentation.
+// Presentation edits only the capture's bounded independent tail; the full
+// metric curve is already in private scratch. E emission reads it in bounded
+// chunks; the engine's held point is never edited by presentation.
 
 bool NativeExecutionConsumer::selected_sink_equity_written(
         const BacktestEngine& engine) const noexcept {
@@ -12998,10 +13046,30 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
     if (!sink.writer || sink.receipt.complete)
         refuse_selected_capture("native selected report: no active report sink at capture");
     try {
-        // Preserve the pre-hook refusal order, the single virtual presentation
-        // and its independent array ownership. Transfer the FINAL metric
-        // points to scratch below; no array survives for later sink reads.
+        // Preserve the pre-hook refusal order and the single virtual
+        // presentation. This streams the prefix, presents only the tail, then
+        // appends that tail to the independent full metric scratch region.
         capture_presentation(engine);
+        if (!presentation_metric_curve_)
+            refuse_selected_capture("native selected report: scratch metric curve is missing");
+        const auto region = presentation_metric_curve_->region();
+        if (region.point_count != presentation_metric_equity_len_)
+            refuse_selected_capture(
+                "native selected report: scratch metric point count differs from capture");
+        // One stack batch, independent of M. Avoid retaining a second heap
+        // cache alongside the scratch writer during the measured capture.
+        std::array<pf_equity_point_t, report_sink::kScratchWindowPoints> batch;
+        int64_t batch_first = 0;
+        int64_t batch_count = 0;
+        const auto point_at = [&](int64_t index) {
+            if (index < batch_first || index - batch_first >= batch_count) {
+                batch_first = index;
+                batch_count = std::min<int64_t>(
+                    region.point_count - index, report_sink::kScratchWindowPoints);
+                report_sink::read_scratch_points(region, batch_first, batch.data(), batch_count);
+            }
+            return batch[static_cast<std::size_t>(index - batch_first)];
+        };
         const auto& window = selected_epoch_.admitted_window;
         report::SelectedReportStream stream(window.start_ms, window.end_ms,
                                             engine.initial_capital_);
@@ -13013,34 +13081,25 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         std::int64_t selected_index = 1; // the synthetic anchor is not an observation
         for (const auto& recorded : engine.equity_curve_) {
             pf_equity_point_t final_point = recorded;
-            bool publish = false;
             if (recorded.time_ms >= window.start_ms && recorded.time_ms < window.end_ms) {
                 // The pre-hook count check proved this storage exists, even
                 // when a custom hook leaves its presented length behind.
                 if (selected_index >= presentation_metric_equity_len_)
                     refuse_selected_capture("native selected report: missing captured observation");
-                final_point = presentation_.equity_curve[selected_index];
-                publish = selected_index < presentation_.equity_curve_len;
+                final_point = point_at(selected_index);
                 ++selected_index;
             }
             // Every value supplied here is final: range-end edits already ran
             // on recorded, and present_report edited only the captured copy.
-            stream.write_point(*sink.writer, final_point, publish);
-            sink.receipt.count_e = stream.equity_count();
+            stream.write_point(*sink.writer, final_point, false);
         }
-        stream.finish(*sink.writer, selected_epoch_.counts.window_script_bars,
-                      presentation_.equity_curve_len > 0);
-        sink.receipt.count_e = stream.equity_count();
-        // Preserve the FINAL metric storage, including a suffix hidden by a
-        // shorter published length. This private snapshot is independent of
-        // the engine's editable held point and of the writer's E record count.
-        auto metric_curve = std::make_unique<report_sink::ScratchCurveWriter>(sink.scratch_dir);
-        for (std::int64_t i = 0; i < presentation_metric_equity_len_; ++i)
-            metric_curve->append(presentation_.equity_curve[i]);
-        metric_curve->flush();
-        presentation_metric_curve_ = std::move(metric_curve);
-        delete[] presentation_.equity_curve;
-        presentation_.equity_curve = nullptr;
+        stream.finish(*sink.writer, selected_epoch_.counts.window_script_bars, false);
+        // Validation uses the final observations; publication uses the exact
+        // presented prefix, including the anchor even for M = 0 or M = 1.
+        for (int64_t i = 0; i < presentation_.equity_curve_len; ++i) {
+            sink.writer->write_e(point_at(i));
+            ++sink.receipt.count_e;
+        }
         presentation_sink_equity_written_ = true;
         // L6b-1 finishes T and the trailer at the successful report fill. An
         // observer fault after this capture therefore cannot publish a trailer.

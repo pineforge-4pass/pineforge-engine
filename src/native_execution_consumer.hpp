@@ -2182,7 +2182,7 @@ private:
     bool selected_open_ = false;
     // The presentation capture of a selected run. A selected success tail calls
     // capture_presentation once, before the seal: it builds a local report with
-    // the trades, the nine diagnostic scalars and the equity copy -- the input
+    // the trades, the nine diagnostic scalars and the independent equity view --
     // BacktestEngine::present_report takes, in the order fill_report gives it --
     // calls that virtual exactly once, frees the local if anything throws, and
     // moves it into presentation_ only on success (replacing, and so freeing, any
@@ -2193,11 +2193,13 @@ private:
     // helper (terminal_success) is its one caller, under the epoch's dispatch
     // barrier.
     //
-    // For a selected generation the equity copy is the window's own curve, built
+    // For a selected generation the equity view is the window's own curve, built
     // here before the one presentation hook: the engine's recorded observations
     // labelled in [T, E), in the order they were recorded, behind the anchor
-    // (report::build_selected_equity_curve), handed to the local report by one
-    // owned-array transfer. Their count M must equal the native window script
+    // (report::build_selected_equity_curve on sink OFF). With a sink, immutable
+    // interior points stream to scratch and only the last min(W, M + 1) points
+    // reach the hook, with that window length; the logical M + 1 stays private.
+    // Their count M must equal the native window script
     // count, and a position, fill or account change before T is a failure, never
     // filtered out; each is a coded engine_invariant thrown before the hook.
     void capture_presentation(BacktestEngine& engine);
@@ -2206,12 +2208,14 @@ private:
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
     // The capture. Its remaining arrays use BacktestEngine::free_report; a
-    // selected sink transfers equity to presentation_metric_curve_ after capture.
+    // selected sink never owns a curve array here, only its private scratch file.
     ReportC presentation_{};
     // The equity length the metrics read: the engine's equity vector size taken
     // before present_report ran (fill_metrics_section's `n`), which a
     // presentation may leave behind in presentation_.equity_curve_len, the length
-    // a report reader sees. Published with the capture, only once the capture
+    // a report reader sees. On the sink path this is also the logical M + 1,
+    // hidden from the hook; the published count subtracts only the window points
+    // the hook cut. Published with the capture, only once the capture
     // succeeded, and zeroed with it; the assembly never reads the engine's vector
     // for it. A selected capture's is M + 1: the window anchor and its M
     // observations. Its observation count, presentation_metric_observations_,
@@ -2483,6 +2487,10 @@ public:
     // binding already detached is engine_invariant at admit_public_begin.
     NativeBarViews bar_views() const noexcept;
 };
+
+// Selected-sink presentation borrows only this many final points. The logical
+// metric length and the published count belong to the capture, never ReportC.
+inline constexpr std::int64_t kSelectedPresentationWindowPoints = 2;
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
     return static_cast<NativeExecutionConsumer&>(consumer);

@@ -7226,3 +7226,12 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_dependencies(test_report_sink_equity report_sink_equity_strategy)
 endif()
 # --- CR-150 core-cr150-l6b2 end ---
+
+# --- CR-150 core-cr150-l17b begin ---
+if(TARGET test_selected_metrics_l17b)
+    target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_L17B_SOURCE=1)
+    endif()
+endif()
+# --- CR-150 core-cr150-l17b end ---
