@@ -1,0 +1,4 @@
+//@version=6
+strategy("EN132 margin_maintenance_full_margin_long_spike", initial_capital=1e301, margin_long=100, margin_short=100, commission_type=strategy.commission.percent, commission_value=0, slippage=0)
+if bar_index == 1
+    strategy.entry("L", strategy.long, qty=2)
