@@ -1,0 +1,24 @@
+//@version=6
+// CR-150 owner symbol-count ladder: the original XS close/high sites plus
+// one close site for each additional foreign symbol. All feeds are positive;
+// the extra predicates consume the new sites without changing the base trades.
+strategy("Flat memory: two foreign feeds",
+     overlay            = false,
+     initial_capital    = 100000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+otherClose = request.security("FEED:XS", "240", close)
+otherHigh  = request.security("FEED:XS", "240", high)
+extra2Close = request.security("FEED:XS2", "240", close)
+
+if otherClose > otherHigh[1] and extra2Close > 0
+    strategy.entry("Long", strategy.long)
+if otherClose < otherHigh[1] and extra2Close > 0
+    strategy.entry("Short", strategy.short)

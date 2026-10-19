@@ -1,0 +1,25 @@
+//@version=6
+// CR-150 owner symbol-count ladder; same base sites and trade predicates as
+// xsym.pine, with one consumed close site per additional foreign symbol.
+strategy("Flat memory: four foreign feeds",
+     overlay            = false,
+     initial_capital    = 100000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+otherClose = request.security("FEED:XS", "240", close)
+otherHigh  = request.security("FEED:XS", "240", high)
+extra2Close = request.security("FEED:XS2", "240", close)
+extra3Close = request.security("FEED:XS3", "240", close)
+extra4Close = request.security("FEED:XS4", "240", close)
+
+if otherClose > otherHigh[1] and extra2Close > 0 and extra3Close > 0 and extra4Close > 0
+    strategy.entry("Long", strategy.long)
+if otherClose < otherHigh[1] and extra2Close > 0 and extra3Close > 0 and extra4Close > 0
+    strategy.entry("Short", strategy.short)

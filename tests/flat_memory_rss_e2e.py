@@ -220,7 +220,8 @@ def write_feed_csv(path: Path, n: int) -> None:
             )
 
 
-def write_feed_bin(bar_path: Path, close_path: Path, n: int) -> tuple[int, int]:
+def write_feed_bin(bar_path: Path, close_path: Path, n: int, *,
+                   symbol: str = "FEED:XS") -> tuple[int, int]:
     bar_digest = hashlib.sha256()
     close_digest = hashlib.sha256()
     first_ts = last_ts = None
@@ -244,7 +245,7 @@ def write_feed_bin(bar_path: Path, close_path: Path, n: int) -> tuple[int, int]:
     sidecar = {
         "format": "pf_bar_t/v1",
         "record_size": 48,
-        "symbol": "FEED:XS",
+        "symbol": symbol,
         "tf": "240",
         "count": n,
         "first_ts": first_ts,
@@ -345,12 +346,13 @@ def parse_help(run_json: Path, cwd: Path, env: dict, log_dir: Path) -> str:
 class Harness:
     def __init__(self, run_json: Path, module_dir: Path, work: Path,
                  modules: dict[str, Path], keep: bool, results: Path,
-                 report_sink: str):
+                 report_sink: str, defer_verdict: bool = False):
         self.run_json = run_json
         self.module_dir = module_dir
         self.work = work
         self.modules = modules
         self.keep = keep
+        self.defer_verdict = defer_verdict
         self.results = results
         self.current_case = "_setup"
         self.input_records: dict[str, int] = {}
@@ -580,9 +582,10 @@ def case_a(harness: Harness) -> None:
                 f"a/{n}/{'sink' if sink_on else 'full'}", args,
                 sink_args if sink_on else [], mapped)
             values.append((str(n), rest_bytes))
-        assert_slope("(a) bars", values)
+        if not harness.defer_verdict:
+            assert_slope("(a) bars", values)
         one_k = next(size for name, size in values if name == "1000")
-        if one_k > bound:
+        if not harness.defer_verdict and one_k > bound:
             raise CaseFailure(
                 f"(a) rest(1k) {one_k / MIB:.1f} MiB > the measured calibration bound "
                 f"{bound / MIB:.0f} MiB")
@@ -592,27 +595,88 @@ def case_b(harness: Harness) -> None:
     """(b) rest flat in trades: about ten vs about ten thousand, same bars."""
     print("(b) rest flat in trades")
     module = harness.module("every_k")
-    bars = 66_000
+    bars = 60_000
     path, mapped = harness.chart_input(f"b{bars}", bars, "chop")
     values: list[tuple[str, int]] = []
     counts: dict[str, int] = {}
-    for k, label in ((6600, "10"), (6, "11k")):
+    for k, label in ((6000, "10"), (6, "10k")):
         args = base_args(module) + harness.input_args(path) + [
-            "--inputs", json.dumps({"k": k, "Bars per trade": k})]
+            "--inputs", json.dumps({"Bars per trade": k})]
         sink_args, _ = harness.sink_args(f"b-{label}")
         rest_bytes, document = harness.rest(
             f"b/{label}-trades", args, sink_args if harness.has_sink else [], mapped)
         values.append((label, rest_bytes))
         counts[label] = int(document.get("summary", {}).get("total_trades", -1))
-    if counts["10"] <= 0 or counts["10"] > 100 or counts["11k"] < 1000:
+    if counts["10"] <= 0 or counts["10"] > 100 or counts["10k"] < 1000:
         raise SetupError(
             f"(b) the k input was not applied: {counts}; the trades axis is not "
-            "exercised (expected about 10 and about 11,000)")
+            "exercised (expected about 10 and about 10,000)")
     spread = abs(values[0][1] - values[1][1])
-    if spread > SLOPE_LIMIT:
+    if not harness.defer_verdict and spread > SLOPE_LIMIT:
         raise CaseFailure(
             f"(b) trades: rest differs by {spread / MIB:.2f} MiB between "
             f"{values[0][0]} and {values[1][0]} trades")
+
+
+def case_symbols(harness: Harness, count: int) -> None:
+    """Same chart/feed record rung, varying foreign symbol count."""
+    module = harness.module("xsym" if count == 1 else f"xsym_{count}")
+    values = []
+    for n in (1000, 100_000, 1_000_000):
+        chart, chart_mapped = harness.chart_input(f"symbols-chart-{n}", n, "sine")
+        symbols = {}
+        feed_mapped = 0
+        for number in range(1, count + 1):
+            symbol = "FEED:XS" if number == 1 else f"FEED:XS{number}"
+            stem = harness.work / f"symbols-{n}-feed-{number}"
+            if harness.has_bin:
+                bars = stem.with_suffix(".bin")
+                closes = stem.with_suffix(".close.bin")
+                if not bars.exists():
+                    write_feed_bin(bars, closes, n, symbol=symbol)
+                feed_path = bars
+                feed_mapped += n * (48 + 8)
+            else:
+                feed_path = stem.with_suffix(".csv")
+                if not feed_path.exists():
+                    write_feed_csv(feed_path, n)
+            symbols[symbol] = {"syminfo": {}, "feeds": {"240": feed_path.name}}
+        index = harness.work / f"symbols-{count}-{n}.json"
+        if not index.exists():
+            write_json(index, {"symbols": symbols})
+        args = base_args(module) + harness.input_args(chart) + ["--symbol-feeds", str(index)]
+        sink_args, _ = harness.sink_args(f"symbols-{count}-{n}")
+        rest, document = harness.rest(f"symbols/{count}/{n}", args, sink_args,
+                                      chart_mapped + feed_mapped)
+        row = harness.measurements[-1]
+        row.update({"foreign_symbols": count, "feed_bars_per_symbol": n,
+                    "chart_mapped_bytes": chart_mapped,
+                    "feed_mapped_bytes": feed_mapped,
+                    "feed_mapped_bytes_per_symbol": feed_mapped // count})
+        # Verify the real child installed every named symbol, not an empty
+        # index. Its complete report remains in the child's stdout artifact.
+        installed = document.get("provenance", {}).get("applied_runtime", {}).get(
+            "symbol_feeds", {}).get("symbols")
+        if installed is None:
+            installed = document.get("applied_runtime", {}).get("symbol_feeds", {}).get("symbols")
+        if not isinstance(installed, dict) or set(installed) != set(symbols):
+            raise SetupError(f"symbol-count axis not installed: expected {sorted(symbols)}, got {installed}")
+        row["installed_symbols"] = sorted(installed)
+        values.append((str(n), rest))
+    if not harness.defer_verdict:
+        assert_slope(f"({count} foreign symbols) bars", values)
+
+
+def case_symbols_1(harness: Harness) -> None:
+    case_symbols(harness, 1)
+
+
+def case_symbols_2(harness: Harness) -> None:
+    case_symbols(harness, 2)
+
+
+def case_symbols_4(harness: Harness) -> None:
+    case_symbols(harness, 4)
 
 
 def case_f(harness: Harness) -> None:
@@ -857,6 +921,9 @@ CASES = {
     "h": case_h,
     "j": case_j,
     "borrowed": case_borrowed,
+    "symbols-1": case_symbols_1,
+    "symbols-2": case_symbols_2,
+    "symbols-4": case_symbols_4,
 }
 
 
@@ -881,6 +948,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="explicit named report-sink mode (default: off)")
     parser.add_argument("--results-dir", type=Path, default=None,
                         help="case JSON and durable child stdout/stderr/own exit codes")
+    parser.add_argument("--defer-verdict", action="store_true",
+                        help="collect a/b/symbol raw measurements, label UNJUDGED; final judge required")
     parser.add_argument("--keep", action="store_true", help="keep the work dir")
     args = parser.parse_args(argv)
 
@@ -919,10 +988,14 @@ def main(argv: list[str] | None = None) -> int:
         write_json(results / "RUN.INCOMPLETE", {"verdict": "SETUP", "reason": reason,
                    "selected": selected, "executed": 0, "returncode": 2})
         return 2
+    if args.defer_verdict and any(name not in {"a", "b", "symbols-1", "symbols-2", "symbols-4"}
+                                  for name in selected):
+        print("SETUP: deferred collection supports only a,b and symbol-count cases", file=sys.stderr)
+        return 2
 
     try:
         harness = Harness(run_json, module_dir, work, modules, args.keep,
-                          results, args.report_sink)
+                          results, args.report_sink, args.defer_verdict)
     except SetupError as error:
         print(f"SETUP: {error}", file=sys.stderr)
         write_json(results / "RUN.INCOMPLETE", {"verdict": "SETUP", "reason": str(error),
@@ -941,12 +1014,13 @@ def main(argv: list[str] | None = None) -> int:
     for name in selected:
         harness.current_case = name
         start_row = len(harness.measurements)
-        verdict, reason = "PASS", "all case assertions passed"
+        verdict = "MEASURED-UNJUDGED" if args.defer_verdict else "PASS"
+        reason = "raw measurements complete; final judge required" if args.defer_verdict else "all case assertions passed"
         try:
             CASES[name](harness)
             if name != "borrowed" and len(harness.measurements) == start_row:
                 raise SetupError("ZERO measured rungs executed")
-            print(f"PASS {name}")
+            print(f"{verdict} {name}")
         except CaseFailure as error:
             failures += 1
             verdict, reason = "RED", str(error)
@@ -967,13 +1041,14 @@ def main(argv: list[str] | None = None) -> int:
             "report_sink": args.report_sink, "measured_rungs": len(rows),
             "measurements": rows, "bounds": harness.bounds.get(name),
             "slope_limit_bytes": SLOPE_LIMIT,
+            "judgement_deferred": args.defer_verdict,
         })
         # A failed result check ends this sequence. Preserve already measured
         # rungs, but never run a later case or label it green.
-        if verdict != "PASS":
+        if verdict not in {"PASS", "MEASURED-UNJUDGED"}:
             break
 
-    passed = len(executed) - failures - setup_errors - errors
+    passed = 0 if args.defer_verdict else len(executed) - failures - setup_errors - errors
     print(f"flat-memory rss e2e: {passed}/{len(selected)} cases passed; "
           f"{failures} red, {setup_errors} setup, {errors} errors")
     # A measured/behavioral red takes precedence in a mixed run. Setup-only
@@ -984,7 +1059,9 @@ def main(argv: list[str] | None = None) -> int:
         "selected": selected, "executed": executed, "passed": passed,
         "red": failures, "setup": setup_errors, "errors": errors,
         "returncode": code, "report_sink": args.report_sink,
-        "verdict": "PASS" if code == 0 and complete else "RED" if failures else "INCOMPLETE",
+        "judgement_deferred": args.defer_verdict,
+        "verdict": ("MEASURED-UNJUDGED" if args.defer_verdict else "PASS")
+                   if code == 0 and complete else "RED" if failures else "INCOMPLETE",
     })
     return code
 
