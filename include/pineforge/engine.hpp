@@ -2302,6 +2302,9 @@ private:
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
         pf_report_sink_receipt_v1 receipt{};
+        // Report cursor only, covered by report_sink_state_'s existing
+        // broker-hash waiver. No execution decision reads it; copies reset it.
+        std::int64_t output_base = 0;
         ReportSinkState() = default;
         ReportSinkState(const ReportSinkState& other)
             : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
@@ -2336,6 +2339,15 @@ private:
     int report_sink_setter_status() const;
     void begin_report_sink();
     void finish_report_sink(ReportC* out) const;
+    template<class Write> void report_sink_record(Write write) const;
+    bool stream_report_sink_trace(const TraceEntryC& entry);
+    void reset_report_sink_outputs();
+    std::int64_t report_sink_output_row() const;
+    void write_report_sink_output_row() const;
+    void write_report_sink_events() const;
+    void retire_report_sink_output_row();
+    void write_report_sink_hashes() const;
+    void retire_report_sink_hashes();
 
 public:
     // The additive C ABI delegates here; receipt queries never bind a consumer.
