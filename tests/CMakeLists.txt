@@ -7130,14 +7130,11 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
-# CR-150 L6b-3: append after every pre-existing line-pinned registration.
-if(UNIX)
-    list(APPEND TEST_SOURCES test_report_sink_l6b3)
-    pineforge_add_unit_test(test_report_sink_l6b3)
-    target_compile_definitions(test_report_sink_l6b3 PRIVATE
-        PINEFORGE_L6B3_PYTHON="${Python3_EXECUTABLE}"
-        PINEFORGE_L6B3_DOCKER="${PROJECT_SOURCE_DIR}/docker")
-    if(PINEFORGE_BUILD_SOURCE_LAYER)
-        target_compile_definitions(test_report_sink_l6b3 PRIVATE PINEFORGE_L6B3_SOURCE=1)
-    endif()
-endif()
+add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
+
+# CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
+file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
+list(SORT CR150_LANE_CMAKE)
+foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
+    include("${cr150_lane_file}")
+endforeach()
