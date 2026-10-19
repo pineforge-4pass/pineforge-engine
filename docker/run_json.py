@@ -168,7 +168,7 @@ import tempfile
 import time
 import traceback
 import types
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -4548,6 +4548,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
         st = create_strategy(lib, checked)
+        sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
             if args.syminfo:
@@ -4561,12 +4562,17 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
+            sink = _new_report_sink(lib, st, args)
         except BaseException:
-            lib.strategy_free(st)
+            try:
+                lib.strategy_free(st)
+            finally:
+                if sink is not None:
+                    sink.close()
             raise
-        return st
+        return st, sink
 
-    state = _make_state()
+    state, sink = _make_state()
     _release_copied_feeds(symbol_feeds)
     report = ReportC()
     binding = None
@@ -4601,9 +4607,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             raise _engine_invariant(
                 f"the engine reports input_tf_seconds {int(report.input_tf_seconds)}, the "
                 f"request's input timeframe is {request.input_tf_seconds} seconds")
-        if int(report.equity_curve_len) != plan["window_script_bars"] + 1:
+        if sink is not None:
+            sink.verify(lib, state, report)
+        equity_points = sink.counts["E"] if sink is not None else int(report.equity_curve_len)
+        if equity_points != plan["window_script_bars"] + 1:
             raise _engine_invariant(
-                f"the engine's selected curve has {int(report.equity_curve_len)} points, the "
+                f"the engine's selected curve has {equity_points} points, the "
                 f"plan says {plan['window_script_bars'] + 1}")
         # The report spells the evaluated first and last bar as UTC dates (fmt_utc).
         for ts in (plan["fed_first_data_ms"], plan["fed_last_data_ms"]):
@@ -4635,9 +4644,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             applied_runtime["syminfo"] = syminfo_applied
         if symbol_feeds:
             applied_runtime["symbol_feeds"] = symbol_feeds_record(symbol_feeds)
+        output_files = binary_inputs.enter_context(ExitStack()) if sink is not None else None
         outputs_block = None
         if args.outputs:
-            outputs_block = build_outputs_block(make_outputs_reader(lib, state))
+            outputs_block = (
+                _sink_outputs_block(lib, state, sink, output_files)
+                if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
             applied_runtime["outputs"] = True
         # ONE R object, placed in all three required places (the third is
         # fingerprint.provenance.runtime, which is applied_runtime itself).
@@ -4645,14 +4657,17 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         incarnation_accessor = getattr(lib, "strategy_closed_trade_entry_incarnation", None)
         trade_entry_incarnations = (
             [int(incarnation_accessor(state, i)) for i in range(report.trades_len)]
-            if incarnation_accessor is not None else None)
-        out = build_report_dict(
+            if sink is None and incarnation_accessor is not None else None)
+        builder = _build_sink_report if sink is not None else build_report_dict
+        out = builder(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
-            elapsed, inputs, overrides, applied_runtime, trade_entry_incarnations)
-        _validate_report_result(out)
+            elapsed, inputs, overrides, applied_runtime,
+            sink if sink is not None else trade_entry_incarnations)
+        if sink is None:
+            _validate_report_result(out)
         out["report_window"] = window
-        out["report_shape"] = swr.report_shape_full(len(out["equity_curve"]),
-                                                    len(out["trades"]))
+        out["report_shape"] = swr.report_shape_full(
+            equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
         if outputs_block is not None:
             out["outputs"] = outputs_block
         # The selected fingerprint MUST exist, as version 2. There is no best-effort null here
@@ -4683,15 +4698,30 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         # R in all three places, the v2 fingerprint over the same bytes, and the anchor of the
         # native curve at the strategy's initial capital: all checked before serialization.
         swr.check_report_placements(out, window)
-        swr.check_selected_curve(out["equity_curve"], request.start_ms,
-                                 plan["window_script_bars"],
-                                 provenance["strategy"].get("initial_capital"))
+        initial_capital = provenance["strategy"].get("initial_capital")
+        if sink is not None:
+            # verify() checked every record and the receipt. The engine's
+            # selected latches own the window observations; only the anchor
+            # and trailer count are needed here, including the M = 0 case.
+            with closing(sink.records("E")) as points:
+                anchor = next(points, None)
+                swr.check_selected_sink_curve(
+                    anchor.as_dict() if anchor is not None else None, equity_points,
+                    request.start_ms, plan["window_script_bars"], initial_capital)
+        else:
+            swr.check_selected_curve(out["equity_curve"], request.start_ms,
+                                     plan["window_script_bars"], initial_capital)
         # 6. Serialization begins; the timing is known now and is outside the provenance.
         _advance(phases, "serialization")
         out["diagnostics"]["phase_timing"] = phases.writer.phase_timing()
-        buffer = io.StringIO()
-        json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
-        buffer.write("\n")
+        if sink is not None:
+            buffer = _prepare_stream_report(out, binary_inputs, sink.directory)
+        else:
+            buffer = io.StringIO()
+            json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
+            buffer.write("\n")
+        if output_files is not None:
+            output_files.close()  # surface column close failures before stdout
     except Exception as error:
         # Once the engine has acknowledged result_assembly (the REAL writer phase), an
         # unclassified failure is report_post_execution_failed{phase, reason}; typed faults,
@@ -4708,11 +4738,10 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             abi.clear(state)
         except Exception:
             pass
-        lib.report_free(ctypes.byref(report))
-        lib.strategy_free(state)
+        _free_sink_run(lib, state, report, sink)
         if detach_error is not None and sys.exc_info()[1] is None:
             raise _typed_failure(detach_error) or detach_error
-    status = _write_report(buffer.getvalue(), phases)
+    status = _write_report(buffer if sink is not None else buffer.getvalue(), phases)
     if status:
         return status
     try:
