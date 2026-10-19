@@ -367,7 +367,7 @@ typedef struct pf_report_s {
     /* Trades */
     int             total_trades;       /**< Closed-trade count (== trades_len), including
                                          *   the range-end close of a position still open
-                                         *   after the final bar (pf_trade_t::open_at_end). */
+                                         *   after the final bar; with a sink trades_len is 0. */
     pf_trade_t*     trades;             /**< Heap array of closed trades; script-driven exits
                                          *   first, then the range-end rows (open_at_end=1). */
     int             trades_len;         /**< Length of #trades. */
@@ -414,7 +414,7 @@ typedef struct pf_report_s {
      * On a completed KernelRecorded run len == script_bars_processed; a
      * Failed or Aborted run can expose a shorter prefix (check
      * strategy_get_last_error), and metrics describe that prefix. NOTE int64_t
-     * length (ctypes: c_int64). */
+     * length (ctypes: c_int64). With a report sink: NULL / 0 length. */
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;
     /* Per-script-bar broker-state hash when recording is on and report
@@ -425,7 +425,7 @@ typedef struct pf_report_s {
      * native hosts alike: each point latches the continuation, and the
      * scalar folds the last latch. A Failed or Aborted run can have a
      * shorter recorded prefix; its last row need not equal the scalar.
-     * ABI v4. */
+     * ABI v4. With a report sink: NULL / 0 length. */
     uint64_t*           broker_state_hash;
     int64_t             broker_state_hash_len;
 } pf_report_t;
@@ -1872,5 +1872,8 @@ PF_API int strategy_signal_safety_receipt(pf_strategy_t s, char* json, size_t ca
  * pinned separately by scripts/check_c_abi_runtime.py, which is why they do
  * not move this header's own declaration count. */
 #include <pineforge/native_c_api.h>
+
+/** Feature probe: include <pineforge/report_sink.h> for the additive sink ABI. */
+#define PINEFORGE_HAS_REPORT_SINK_V1 1
 
 #endif /* PINEFORGE_H */
