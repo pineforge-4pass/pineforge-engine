@@ -373,3 +373,13 @@ def test_native_corpus_subset_frozen_summary_bytes(tmp_path):
         assert Path(case["so"]).is_file(), case
         full.native_compare(tmp_path, case["so"], case["argv"])
         native_summary_compare(tmp_path, case["so"], case["argv"])
+
+
+@pytest.mark.parametrize("flag", ["--report-sink", "--run-id", "--spill-dir"])
+def test_sink_flags_are_catalogued_run_request_options(flag):
+    """Fail-before: the base maps an argparse refusal of these flags to "arguments"."""
+    option = flag[2:].replace("-", "_")
+    assert option in run_json._RUN_REQUEST_OPTIONS
+    assert run_json.argparse_option(f"argument {flag}: expected one argument") == option
+    catalog = json.loads((ROOT / "docker/run_failure_codes.json").read_text(encoding="utf-8"))
+    assert catalog["codes"]["run_request_invalid"]["args"]["option"]["values"].count(option) == 1

@@ -4076,7 +4076,7 @@ _RUN_REQUEST_OPTIONS = frozenset({
     "so", "ohlcv", "inputs", "overrides", "input_tf", "script_tf", "bar_magnifier",
     "magnifier_samples", "magnifier_dist", "generated_cpp", "transpiled", "syminfo",
     "trade_start_ms", "chart_tz", "magnifier_volume_weighted", "bench", "warmup",
-    "repeats", "symbol_feeds", "ohlcv_bin", "verify_bin",
+    "repeats", "symbol_feeds", "ohlcv_bin", "verify_bin", "report_sink", "run_id", "spill_dir",
 })
 
 
@@ -5305,7 +5305,7 @@ def _bind_report_sink(lib) -> None:
 
 
 def _validate_sink_options(args):
-    # These additive flags use the catalog's existing generic option value.
+    # A refused value keeps the generic "arguments" option; an argparse refusal names the flag.
     # Reject C-string truncation and non-UTF-8 argv before loading a library.
     for name in ("report_sink", "run_id", "spill_dir"):
         value = getattr(args, name)
