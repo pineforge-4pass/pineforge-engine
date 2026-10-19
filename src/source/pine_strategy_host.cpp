@@ -1923,10 +1923,10 @@ static bool same_bar_exit_group_possible(const TradeLedger& trades) noexcept {
 }
 
 bool source::PineStrategyHost::report_terminal_quote_eligible() const {
-    if (equity_curve_.empty() || range_end_trades_.empty() || !native_bound()) return false;
+    if (!last_equity_point() || range_end_trades_.empty() || !native_bound()) return false;
     const auto state = as_native_consumer(execution_consumer()).view();
     const auto interval = static_cast<std::int64_t>(script_tf_seconds_) * 1000;
-    const auto last_time = equity_curve_.back().time_ms;
+    const auto last_time = last_equity_point()->time_ms;
     return state.spec && state.spec->report_policy == NativeReportPolicy::KernelRecordedAtHostMarks
         && state.kind == NativeLifecycleKind::Completed && bar_magnifier_enabled_
         && script_tf_seconds_ > 60 && script_tf_seconds_ < 86400
@@ -2003,7 +2003,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
     if (stream_warmup_mode_ || realtime_tail_
-        || position_side_ == PositionSide::FLAT || equity_curve_.empty()
+        || position_side_ == PositionSide::FLAT || !last_equity_point()
         || !std::isfinite(terminal_bar.close)) return;
     const double fill_price = bar_fill_price(terminal_bar.close);
     // R5 audit lane Q6 (duplicate D5): the row loop itself is the kernel's
@@ -2014,19 +2014,19 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     // dated on the curve's last point and convert at that instant's rate,
     // handed to the producer: the presented clock is never rewritten (R5
     // lane B-ADAPTER; E21's rule -- thread the rate, never the clock).
-    const std::int64_t mark_time = equity_curve_.back().time_ms;
+    const std::int64_t mark_time = last_equity_point()->time_ms;
     const double range_end_pnl = as_native_consumer(execution_consumer())
         .append_open_position_report_rows(*this, fill_price, mark_time, bar_index_,
                                           account_currency_fx_at(mark_time));
     if (stream_phase_ != StreamPhase::REALTIME) {
-        auto& last = equity_curve_.back();
+        auto& last = *last_equity_point();
         last.open_profit = 0.0;
         last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
-        max_equity_ = initial_capital_;
-        min_equity_ = initial_capital_;
-        max_drawdown_ = 0.0;
-        max_runup_ = 0.0;
-        for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+        // Restore the fold before the held point, then fold its replacement.
+        // Debug checks all four resulting doubles against a complete walk.
+        // The sink-off helper keeps the existing walk and initial seed.
+        // Presentation later receives its own copy of this editable tail.
+        refold_equity_tail();
     }
     if (same_bar_exit_group_possible(trades_)) {
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
