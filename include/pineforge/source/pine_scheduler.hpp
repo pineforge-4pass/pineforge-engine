@@ -20,7 +20,31 @@ class PineStrategyHost;
 // data and the Pine calc-on-order-fills callback cadence.
 class PineScheduler {
 public:
+    // C++17 read-only span. Empty iterators use one sentinel so standard
+    // pointer-range algorithms never subtract two null pointers; data()
+    // still exposes the released span as exactly {nullptr, 0}.
+    class InputView {
+    public:
+        InputView() noexcept = default;
+        InputView(const Bar* bars, std::size_t n) noexcept : data_(bars), size_(n) {}
+        const Bar* data() const noexcept { return data_; }
+        std::size_t size() const noexcept { return size_; }
+        bool empty() const noexcept { return size_ == 0; }
+        const Bar& operator[](std::size_t i) const noexcept { return data_[i]; }
+        const Bar& front() const noexcept { return data_[0]; }
+        const Bar& back() const noexcept { return data_[size_ - 1]; }
+        const Bar* begin() const noexcept { return data_ ? data_ : &empty_bar_; }
+        const Bar* end() const noexcept { return begin() + size_; }
+    private:
+        const Bar* data_ = nullptr;
+        std::size_t size_ = 0;
+        inline static constexpr Bar empty_bar_{};
+    };
+
     void capture_begin(const NativeBeginArgs&);
+    // Fold the consumed prefix while caller memory is alive, then detach it.
+    // A stream keeps its owned warmup until the next capture/destruction.
+    void release_batch_input() noexcept;
     void run_begin(PineStrategyHost&);
     void input(const Bar&, const NativeInputContext&, PineStrategyHost&);
     void tick(const Bar&, const NativeTickContext&, PineStrategyHost&);
@@ -139,7 +163,7 @@ public:
     // The input the run retains -- a batch's, or a stream's warmup -- in
     // time order, and whether each of its bars is a chart bar (no
     // aggregation to a coarser script timeframe).
-    const std::vector<Bar>& retained_input() const noexcept { return retained_.bars; }
+    InputView retained_input() const noexcept { return retained_.bars; }
     bool retained_input_is_chart() const noexcept {
         return retained_.input_tf.empty() || retained_.script_tf.empty()
             || retained_.input_tf == retained_.script_tf;
@@ -218,7 +242,8 @@ public:
 
 private:
     struct RetainedBegin {
-        std::vector<Bar> bars;
+        InputView bars;
+        std::vector<Bar> owned;
         std::string input_tf;
         std::string script_tf;
         bool bar_magnifier = false;
@@ -237,6 +262,7 @@ private:
     void reset_language();
     // Restarts the consumed-prefix digests below (the retained input changed).
     void reset_consumed_digests() noexcept;
+    void fold_consumed_digests() const noexcept;
     void snapshot_coof_script_state(PineStrategyHost&);
     void restore_coof_script_state(PineStrategyHost&);
     void commit_coof_script_state(PineStrategyHost&);
@@ -258,6 +284,9 @@ private:
     // @source-state begin
     PineLanguageState language_;
     RetainedBegin retained_;
+    // The hash retains its old consumed count after bars becomes {nullptr,0}.
+    // Unconsumed future input remains transport, as in the v3 hash domain.
+    std::size_t retained_n_ = 0;
     std::int64_t current_script_open_ms_ = 0;
     Bar current_script_bar_{};
     bool current_script_bar_valid_ = false;

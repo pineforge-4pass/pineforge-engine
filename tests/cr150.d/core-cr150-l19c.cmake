@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_cohort_receipt_window)
+pineforge_add_unit_test(test_cohort_receipt_window)

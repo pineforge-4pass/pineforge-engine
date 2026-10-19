@@ -67,15 +67,12 @@ int checks = 0;
     }                                                                          \
 } while (0)
 
-// The core's cohort receipts and rosters, as values.
+// The core's receipt total and rosters, as values. Receipt fields, including
+// retired rows, are compared by the existing per-bar/fill continuation trace;
+// the kept chain run still predicts and checks every individual receipt.
 std::uint64_t cohort_digest(const no::WorkingRequestCore& core) {
     std::uint64_t h = 1469598103934665603ull;
-    for (const auto& receipt : core.cohort_receipts()) {
-        h = k3_book::fnv_u64(h, static_cast<std::uint64_t>(receipt.operation));
-        h = k3_book::fnv_u64(h, static_cast<std::uint64_t>(receipt.status));
-        h = k3_book::fnv_u64(h, receipt.cohort.value);
-        h = k3_book::fnv_u64(h, receipt.origin.incarnation);
-    }
+    h = k3_book::fnv_u64(h, core.cohort_receipt_count());
     for (const auto& roster : core.cohorts()) {
         h = k3_book::fnv_u64(h, roster.handle.value);
         for (const auto& origin : roster.origins) h = k3_book::fnv_u64(h, origin.incarnation);
@@ -181,6 +178,7 @@ struct Summary {
     k3_book::Outcome outcome;
     std::uint64_t cohorts = 0;
     std::vector<no::CohortReceipt> receipts;
+    std::size_t receipts_base = 0;
     std::vector<bool> memberships;
     std::uint64_t oracle_answers = 0;
     std::size_t retired = 0;  // journal events the core retired (history_base)
@@ -190,6 +188,7 @@ void collect(const NativeExecutionConsumer& consumer, const Membership& membersh
     const auto& core = consumer.request_core();
     out.cohorts = cohort_digest(core);
     out.receipts = core.cohort_receipts();
+    out.receipts_base = core.cohort_receipt_base();
     out.memberships = membership.answers;
     out.oracle_answers = membership.oracle_answers;
     out.retired = core.history_base();
@@ -454,11 +453,16 @@ Summary run_chains(const ChainConfig& config, bool kept) {
 
 // --- the comparison -----------------------------------------------------------
 
-bool same_receipts(const std::vector<no::CohortReceipt>& a, const std::vector<no::CohortReceipt>& b) {
-    if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        if (a[i].operation != b[i].operation || a[i].status != b[i].status
-            || a[i].cohort != b[i].cohort || a[i].origin != b[i].origin) {
+bool same_receipts(const Summary& a, const Summary& b) {
+    const auto end = a.receipts_base + a.receipts.size();
+    if (end != b.receipts_base + b.receipts.size()) return false;
+    // Compare the retained suffix in absolute receipt positions. Retired
+    // fields remain covered by same()'s continuation and broker comparisons.
+    for (std::size_t i = std::max(a.receipts_base, b.receipts_base); i < end; ++i) {
+        const auto& left = a.receipts[i - a.receipts_base];
+        const auto& right = b.receipts[i - b.receipts_base];
+        if (left.operation != right.operation || left.status != right.status
+            || left.cohort != right.cohort || left.origin != right.origin) {
             return false;
         }
     }
@@ -481,7 +485,7 @@ bool same(const Summary& a, const Summary& b) {
         && a.outcome.error == b.outcome.error
         && a.outcome.completed == b.outcome.completed
         && a.cohorts == b.cohorts
-        && same_receipts(a.receipts, b.receipts)
+        && same_receipts(a, b)
         && a.memberships == b.memberships;
 }
 
@@ -501,6 +505,9 @@ void tally(const Summary& kept, const Summary& windowed, Totals& totals) {
     CHECK(kept.outcome.error.empty());
     // The windowed core answered with its journal retired; the kept one kept it.
     CHECK(windowed.retired > 0);
+    CHECK(windowed.receipts.empty());
+    CHECK(kept.receipts_base == 0);
+    CHECK(windowed.receipts_base == kept.receipts.size());
     ++totals.runs;
     totals.trades += kept.outcome.trades;
     totals.receipts += kept.receipts.size();
