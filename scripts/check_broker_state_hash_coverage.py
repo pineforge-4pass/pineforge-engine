@@ -54,6 +54,12 @@ SCHEDULER_CACHE_WAIVERS: dict[str, str] = {
         "(pine_scheduler.hpp:72-95), so it is never next-decision state "
         "(L10c)."
     ),
+    "input_script_cursor": (
+        "Derived completion lookup over retained_.bars and the run's timeframe "
+        "configuration; input() answers a repeated index from the last flags "
+        "or rebuilds by reset-and-rescan. The independent consumed-prefix "
+        "cursor is folded in hash_state and is not waived (CR-150 L4)."
+    ),
 }
 
 GENERIC_HEADERS = ("include/pineforge/engine.hpp",)
