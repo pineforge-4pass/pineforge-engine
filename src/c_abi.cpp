@@ -10,7 +10,8 @@
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
  *     strategy_get_last_error_code, strategy_get_last_error_args, the
- *     security-feed and symbol-data setters, the strategy_stream_*
+ *     security-feed and symbol-data setters (including the borrowed feed
+ *     export), the strategy_stream_*
  *     lifecycle, the strategy_outputs_* readers, native stream bar
  *     input/action polling/fingerprint/API-version exports, the live-runtime
  *     surface (strategy_request_abort, strategy_last_run_status,
@@ -1299,6 +1300,19 @@ PF_API int strategy_selected_window_counts_v1(
         pf_strategy_t s, pf_selected_window_counts_v1* out) {
     return pineforge::native_selected_window_counts_v1(
         static_cast<const pineforge::BacktestEngine*>(s), out);
+}
+
+PF_API int strategy_set_symbol_feed_borrowed_v1(
+        pf_strategy_t s, const char* key, const char* timeframe,
+        const pf_bar_t* bars, const int64_t* close_ms, int n) {
+    return pf_cabi_int(s, [&] {
+        if (!s || !key || !timeframe || n < 0 || (n > 0 && (!bars || !close_ms))) return -1;
+        const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_symbol_feed_borrowed(std::string(key), std::string(timeframe),
+                                                   native, close_ms, n)
+            ? 0 : -1;
+    });
 }
 
 } /* extern "C" */

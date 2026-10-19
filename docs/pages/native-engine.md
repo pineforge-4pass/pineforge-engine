@@ -1496,7 +1496,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:17841-17874`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:17858-17891`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -3150,7 +3150,7 @@ These are existing refusals, not implied future features:
 - In-session gaps on a realtime stream, and in a `Canonical` stream warmup
 - Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
   rejects an explicit true override, and the Pine host refuses a stream begin
-  with `calc_on_order_fills`, `pine_strategy_host.cpp:302-305`). This is a
+  with `calc_on_order_fills`, `pine_strategy_host.cpp:304-307`). This is a
   **source-route** refusal, not a limit on the native hooks: `on_native_tick`
   and `on_native_applied` are delivered on a stream, and a native host's own
   `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
@@ -3969,7 +3969,9 @@ hands the runtime a callback table and gets the same kernel back.
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the compiled-strategy runtime symbols and their
 counts are untouched, and `scripts/check_c_abi_runtime.py` pins the new set as
-a second, disjoint inventory.
+a second, disjoint inventory (history: 70ddaa3). No epoch bump or reordering occurs: the borrowed
+symbol-feed setter is an additive compiled-strategy runtime symbol, and
+`scripts/check_c_abi_runtime.py` pins it alongside the established inventory (history: 0d8b203).
 
 ```c
 #include <pineforge/pineforge.h>

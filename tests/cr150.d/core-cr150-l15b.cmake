@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_native_bar_views_l15b)
+pineforge_add_unit_test(test_native_bar_views_l15b)
