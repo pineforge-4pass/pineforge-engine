@@ -2193,8 +2193,8 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
     }
     for (auto& cohort : cohorts_by_id_) {
         if (cohort_opened_on_side(cohort.second, prior_long)) {
-            cohort.second.opened.clear();
-            cohort.second.live_units_by_origin.clear();
+            ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
+            ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
         }
     }
 }
@@ -5917,14 +5917,14 @@ void PineExecutionAdapter::consume_cohort_units(
         if (unit->second == 0.0) facts.live_units_by_origin.erase(unit);
         if (!(remaining > 0.0)) break;
     }
+    ::pineforge::detail::release_empty_exposure_capacity(facts.live_units_by_origin);
 }
-
 void PineExecutionAdapter::consume_closed_trade_rows(
         const native_order::ExecutionAppliedEvent& event,
         const PlacementSnapshot* cause) {
     auto& host = require_host();
-    const auto settle_slot = [&](CohortFacts& cohort, const Trade& trade,
-                                 bool drained) {
+    const auto settle_slot = [&](CohortFacts& cohort, const Trade& trade, bool drained) {
+        ::pineforge::detail::release_empty_exposure_capacity(cohort.live_units_by_origin);
         if (!cause) return;
         const bool bracket = cause->family == PineOrderFamily::ExitLimit
             || cause->family == PineOrderFamily::ExitStop
@@ -5951,6 +5951,7 @@ void PineExecutionAdapter::consume_closed_trade_rows(
                     return opening.incarnation == trade.entry_incarnation;
                 }),
             cohort.opened.end());
+        ::pineforge::detail::release_empty_exposure_capacity(cohort.opened);
         bracket_shadowed_openings_.erase(trade.entry_incarnation);
     };
     for (std::size_t row = 0; row < event.closed_trade_count; ++row) {
@@ -5967,8 +5968,7 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             units->second -= consumed;
             remaining -= consumed;
             const bool drained = !(units->second > 1e-10);
-            if (drained)
-                cohort.second.live_units_by_origin.erase(units);
+            if (drained) cohort.second.live_units_by_origin.erase(units);
             settle_slot(cohort.second, trade, drained);
             matched = true;
             break;
@@ -6317,7 +6317,7 @@ std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
     return placement_.command_sequence_for(exit_id, from_entry);
 }
 
-bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const noexcept {
+bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const {
     return trade_index < trade_exit_phase_.size()
         && trade_exit_phase_[trade_index] == static_cast<std::uint8_t>(NativePathPhase::Open);
 }
@@ -6462,7 +6462,7 @@ void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t 
         exit_phase_final_ = 0;
         exit_phase_digest_ = 1469598103934665603ULL;
     }
-    trade_exit_phase_[trade_index] = phase;
+    trade_exit_phase_.set(trade_index, phase);
 }
 
 void PineExecutionAdapter::observe_terminal_receipts() {
@@ -24768,8 +24768,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         for (const auto& id : closed_cohorts)
             cancel_exit_orders_for_full_close(id);
         for (auto& cohort : cohorts_by_id_) {
-            cohort.second.opened.clear();
-            cohort.second.live_units_by_origin.clear();
+            ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
+            ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
         }
         // ab9714be pine_strategy_host.cpp:244 / :261
         // reset_source_open_position_ledgers_before_book clears the close
@@ -25587,7 +25587,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::CloseAll
         && event.closed_units > 0.0) {
-        for (auto& cohort : cohorts_by_id_) cohort.second.live_units_by_origin.clear();
+        for (auto& cohort : cohorts_by_id_) ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
         && event.closed_units > 0.0
@@ -25711,8 +25711,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         pending_margin_revivals_.clear();
         for (auto& cohort : cohorts_by_id_) {
             if (!cohort.second.opened.empty()) ended_sources.push_back(cohort.first);
-            cohort.second.opened.clear();
-            cohort.second.live_units_by_origin.clear();
+            ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
+            ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
         }
         const auto handles = live_handles_;
         for (const auto& handle : handles) {
@@ -28107,6 +28107,20 @@ void PineExecutionAdapter::retire_origin_prefixes() {
         }
         origins.retire_before(through);
     }
+}
+
+} // namespace pineforge::source
+
+// CR-150 L19m extends the merged L19l binding; every adapter-owned scratch
+// table receives the same resolved directory before its first use.
+namespace pineforge::source {
+
+void PineExecutionAdapter::set_id_tables_directory(const std::string& directory) {
+    cohorts_by_id_.set_directory(directory);
+    exit_rank_keys_.set_directory(directory);
+    placement_.set_auxiliary_tables_directory(directory);
+    consumed_partial_exit_cycles_.set_directory(directory);
+    trade_exit_phase_.set_directory(directory);
 }
 
 } // namespace pineforge::source

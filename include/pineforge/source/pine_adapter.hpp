@@ -26,7 +26,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
+#include <pineforge/detail/adapter_exposure_storage.hpp>
 namespace pineforge::source {
 
 // A2: Pine entry ids and from_entry values are source strings, never a
@@ -1514,8 +1514,8 @@ public:
         std::string comment{};
         std::uint64_t queue_sequence = 0;
     };
-    // Keep the legacy host's construction surface valid until L3a. A null
-    // host means this compatibility carrier has no lowering authority.
+    void fixture_use_memory_exit_phases() { trade_exit_phase_.fixture_use_memory_reference(); }
+    std::uint64_t fixture_exit_phase_disk_bytes() const noexcept { return trade_exit_phase_.disk_bytes(); }
     explicit PineExecutionAdapter(
             compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None);
     PineExecutionAdapter(NativeStrategyHost& host,
@@ -1779,7 +1779,7 @@ public:
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const noexcept;
-    bool is_open_phase_exit(std::size_t trade_index) const noexcept;
+    bool is_open_phase_exit(std::size_t trade_index) const;
     // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
     // slot start + i takes the phase of the trade previously at indices[i].
     void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
@@ -2735,7 +2735,7 @@ private:
     std::int64_t last_bar_dual_entry_script_open_ms_ =
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
-    std::vector<std::uint8_t> trade_exit_phase_;
+    ::pineforge::detail::ExitPhaseStore trade_exit_phase_;
     // TradingView's entry-id table (global_exit_child_ranks): every entry id
     // in the order of its first fill, never removed, with a running digest,
     // and the most keys it ever held counting one transient key per live
