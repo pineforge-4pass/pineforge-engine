@@ -1,7 +1,5 @@
 #pragma once
 
-#include <pineforge/detail/exit_phase_store.hpp>
-
 namespace pineforge::detail {
 
 // Exposure values/handles have already been erased by their existing owner.

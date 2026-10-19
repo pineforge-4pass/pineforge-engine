@@ -21,6 +21,7 @@
 #include "pine_run_failure.hpp"
 #include "pine_checked_arith.hpp"
 #include "pine_value_admission.hpp"
+
 #include <cerrno>
 #include <algorithm>
 #include <atomic>
@@ -2404,7 +2405,6 @@ void PineExecutionAdapter::reset_for_run() {
         index->clear();
     admission_journal.reset();
     cohorts_by_id_.clear();
-    // The index owns the cohort lookup and its first-insertion order.
     placement_.clear();
     live_by_source_key_.clear();
     bracket_families_.clear();
@@ -2725,7 +2725,7 @@ RunFailureValue run_spec_field_failure(NativeRunSpecField field) noexcept {
     }
     return make_run_failure(RunFailureCode::engine_invariant, {});
 }
-// instrument_feeds moves into the spec and back to the caller if projection throws.
+
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              const StagedConfiguration& staged,
                                              const NativeBeginArgs& args,
@@ -3029,7 +3029,6 @@ native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) 
     }
     const auto result = facts.handle;
     cohorts_by_id_.emplace(id, std::move(facts));
-    // emplace linked the id into the disk index's first-insertion order.
     return result;
 }
 
@@ -5919,11 +5918,13 @@ void PineExecutionAdapter::consume_cohort_units(
     }
     ::pineforge::detail::release_empty_exposure_capacity(facts.live_units_by_origin);
 }
+
 void PineExecutionAdapter::consume_closed_trade_rows(
         const native_order::ExecutionAppliedEvent& event,
         const PlacementSnapshot* cause) {
     auto& host = require_host();
-    const auto settle_slot = [&](CohortFacts& cohort, const Trade& trade, bool drained) {
+    const auto settle_slot = [&](CohortFacts& cohort, const Trade& trade,
+                                 bool drained) {
         ::pineforge::detail::release_empty_exposure_capacity(cohort.live_units_by_origin);
         if (!cause) return;
         const bool bracket = cause->family == PineOrderFamily::ExitLimit
@@ -5968,7 +5969,8 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             units->second -= consumed;
             remaining -= consumed;
             const bool drained = !(units->second > 1e-10);
-            if (drained) cohort.second.live_units_by_origin.erase(units);
+            if (drained)
+                cohort.second.live_units_by_origin.erase(units);
             settle_slot(cohort.second, trade, drained);
             matched = true;
             break;
@@ -6317,7 +6319,7 @@ std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
     return placement_.command_sequence_for(exit_id, from_entry);
 }
 
-bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const {
+bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const noexcept {
     return trade_index < trade_exit_phase_.size()
         && trade_exit_phase_[trade_index] == static_cast<std::uint8_t>(NativePathPhase::Open);
 }
@@ -6402,7 +6404,9 @@ std::optional<std::vector<std::uint32_t>> PineExecutionAdapter::global_exit_chil
         std::uint32_t hash = 0;
         if (!java_string_hash(key, hash)) { supported = false; return; }
         bucket[age] = (hash ^ (hash >> 16)) & (capacity - 1);
-        // Eight entry ids in a bin would treeify/resize, outside the tapes.
+        // A bin of eight would make java.util.HashMap treeify or resize. The
+        // count is of entry ids only: a transient close key landing in a bin
+        // of seven would do the same, which no tape reaches.
         if (++load[bucket[age]] >= 8) supported = false;
     });
     if (!supported) return std::nullopt;
@@ -6462,7 +6466,7 @@ void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t 
         exit_phase_final_ = 0;
         exit_phase_digest_ = 1469598103934665603ULL;
     }
-    trade_exit_phase_.set(trade_index, phase);
+    trade_exit_phase_[trade_index] = phase;
 }
 
 void PineExecutionAdapter::observe_terminal_receipts() {
@@ -24928,7 +24932,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             live_by_source_key_[key_for(replacement(event.handle().incarnation))] = handle;
         }
         {
-            const auto cohort = require_cohort(placement_snapshot->source_id); auto& facts = cohort->second;
+            const auto cohort = require_cohort(placement_snapshot->source_id);
+            auto& facts = cohort->second;
             facts.cycle = event.cycle_after;
             if (std::find(facts.opened.begin(), facts.opened.end(), event.handle()) == facts.opened.end())
                 facts.opened.push_back(event.handle());
@@ -28141,7 +28146,9 @@ PineExecutionAdapter::CohortFacts::restore_record(const Record& row) {
     if (row.handle == 0 || static_cast<std::uint64_t>(
             static_cast<std::size_t>(row.origin_count)) != row.origin_count
         || row.erased_sides > 3) {
-        throw ::pineforge::detail::ScratchIoError(EIO, "scratch cohort invalid record");
+        throw coded<std::runtime_error>(
+            RunFailureCode::report_sink_failed, {},
+            ::pineforge::detail::ScratchIoError(EIO, "scratch cohort invalid record").what());
     }
     CohortFacts facts;
     facts.handle.value = row.handle;
@@ -28164,14 +28171,12 @@ bool PineExecutionAdapter::CohortFacts::spillable() const noexcept {
 // calling both public names (this and set_auxiliary_tables_directory) with
 // one directory is harmless. A different directory once a table's file is
 // open throws std::logic_error from that table: bind after reset_for_run and
-// before the first id, as the declaration says. CR-150 L19m adds the exit-phase
-// store to the same binding.
+// before the first id, as the declaration says.
 void PineExecutionAdapter::set_id_tables_directory(const std::string& directory) {
     cohorts_by_id_.set_directory(directory);
     exit_rank_keys_.set_directory(directory);
     placement_.set_auxiliary_tables_directory(directory);
     consumed_partial_exit_cycles_.set_directory(directory);
-    trade_exit_phase_.set_directory(directory);
 }
 
 PineExecutionAdapter::CohortTable::iterator
@@ -28198,7 +28203,9 @@ void PlacementTable::set_auxiliary_tables_directory(const std::string& directory
 
 void PlacementTable::fixture_use_memory_auxiliary_tables() {
     if (high_water_ != 0)
-        throw std::logic_error("placement auxiliary fixture backend changed after use");
+        throw coded<std::logic_error>(
+            RunFailureCode::engine_invariant, {},
+            "placement auxiliary fixture backend changed after use");
     sequence_index_.fixture_use_memory_reference();
     erased_minima_.fixture_use_memory_reference();
 }

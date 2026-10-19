@@ -1,4 +1,5 @@
 #pragma once
+
 // Pine-only lowering facts. This header deliberately sits above the generic
 // native-host surface: no native kernel type learns a Pine source identifier,
 // sizing convention, or lifecycle vocabulary from it.
@@ -12,6 +13,8 @@
 #include <pineforge/source/market_admission.hpp>
 #include <pineforge/detail/disk_resident_id_table.hpp>
 #include <pineforge/detail/id_pair_store.hpp>
+#include <pineforge/detail/adapter_exposure_storage.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +29,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include <pineforge/detail/adapter_exposure_storage.hpp>
+
 namespace pineforge::source {
 
 // A2: Pine entry ids and from_entry values are source strings, never a
@@ -642,11 +645,14 @@ public:
     std::uint64_t auxiliary_disk_bytes() const noexcept;
     std::size_t size() const noexcept { return size_; }
     std::size_t max_size() const noexcept { return window_.max_size(); }
-    // Largest incarnation ever inserted, erased rows included.
+    // Largest incarnation ever inserted, erased rows included. Incarnations
+    // are monotone, so a handle above this mark at an observation time was
+    // unknown to every adapter collection populated before that observation.
     std::uint64_t high_water() const noexcept { return high_water_; }
     // Rows erased over the run (a statistic; nothing reads it back).
     std::uint64_t erased_rows() const noexcept { return erased_rows_; }
-    // Reserve only the rows kept live at once: the table stays O(live).
+    // The window is reserved for the rows a run keeps live at once, not for
+    // every incarnation it will allocate: the table stays O(live).
     void reserve(std::size_t count) {
         window_.reserve(std::min<std::size_t>(count, kWindowReserve));
     }
@@ -959,7 +965,8 @@ public:
         digest_ = (digest_ ^ handle.incarnation) * 1099511628211ULL;
     }
     const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
-    // R5 lane V19-E: incarnations fold once at append (the v4 fold's view).
+    // R5 lane V19-E: a running digest of the members' incarnations, each
+    // folded once, when it was appended (the v4 extension fold's view).
     std::uint64_t digest() const noexcept { return digest_; }
     static OriginRoster from_retired(std::size_t count, std::uint64_t digest);
     const native_order::RequestHandle& operator[](std::size_t global) const;
@@ -1514,8 +1521,8 @@ public:
         std::string comment{};
         std::uint64_t queue_sequence = 0;
     };
-    void fixture_use_memory_exit_phases() { trade_exit_phase_.fixture_use_memory_reference(); }
-    std::uint64_t fixture_exit_phase_disk_bytes() const noexcept { return trade_exit_phase_.disk_bytes(); }
+    // Keep the legacy host's construction surface valid until L3a. A null
+    // host means this compatibility carrier has no lowering authority.
     explicit PineExecutionAdapter(
             compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None);
     PineExecutionAdapter(NativeStrategyHost& host,
@@ -1535,10 +1542,14 @@ public:
     void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
     void fixture_use_memory_auxiliary_tables();
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
+
+    // `instrument_feeds`, when given, is moved into the spec's instrument
+    // feeds (and back into it if the projection throws).
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
                           const NativeBeginArgs&,
                           NativePathOrder path_order = NativePathOrder::Auto,
                           std::vector<NativeInstrumentFeed>* instrument_feeds = nullptr) const;
+
     void entry(const SourceId& id, bool is_long,
                double limit_price = std::numeric_limits<double>::quiet_NaN(),
                double stop_price = std::numeric_limits<double>::quiet_NaN(),
@@ -1779,7 +1790,7 @@ public:
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const;
-    bool is_open_phase_exit(std::size_t trade_index) const;
+    bool is_open_phase_exit(std::size_t trade_index) const noexcept;
     // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
     // slot start + i takes the phase of the trade previously at indices[i].
     void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
@@ -1815,16 +1826,23 @@ private:
         native_order::CohortHandle handle{};
         OriginRoster origins;
         std::vector<native_order::RequestHandle> opened;
-        // Only live provenance stays resident; retired summaries stay exact.
         struct Record {
             std::uint64_t handle; std::int64_t cycle;
             std::uint64_t origin_count, origin_digest, erased_sides;
         };
+        // Live source exposure by opening provenance.  This is source-layer
+        // bookkeeping only: the generic core still resolves cohort authority
+        // at every candidate.  It lets a command snapshot an existing id's
+        // percentage basis before later requests in the same script pass
+        // reduce that cohort.
         std::unordered_map<std::uint64_t, double> live_units_by_origin;
         std::int64_t cycle = 0;
         Record retired_record() const noexcept;
         static CohortFacts restore_record(const Record&);
         bool spillable() const noexcept;
+        // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
+        // in `origins` whose placement rows were erased, so a question about
+        // every origin the cohort ever accepted still covers them.
         std::uint8_t erased_opening_sides = 0;
     };
     using CohortTable = ::pineforge::detail::DiskResidentIdTable<CohortFacts>;
@@ -2735,7 +2753,7 @@ private:
     std::int64_t last_bar_dual_entry_script_open_ms_ =
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
-    ::pineforge::detail::ExitPhaseStore trade_exit_phase_;
+    std::vector<std::uint8_t> trade_exit_phase_;
     // TradingView's entry-id table (global_exit_child_ranks): every entry id
     // in the order of its first fill, never removed, with a running digest,
     // and the most keys it ever held counting one transient key per live

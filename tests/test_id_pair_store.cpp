@@ -1,6 +1,5 @@
 // CR-150 L19l-C. Reference maps, real anonymous files, and a retained-byte
 // witness. Fail-before against b3c39238e: id_pair_store.hpp is absent.
-// No compilation or test execution is authorized in this edit-only lane.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
@@ -13,7 +12,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <dirent.h>
 #include <fcntl.h>
 #include <limits>
 #include <map>
@@ -214,28 +212,19 @@ void heap_flat_in_distinct_pairs() {
 }
 
 int data_descriptor(off_t size, std::uint64_t value) {
-    DIR* descriptors = ::opendir("/dev/fd");
-    require(descriptors != nullptr, "open descriptor directory");
-    int result = -1;
-    while (const auto* entry = ::readdir(descriptors)) {
-        char* end = nullptr;
-        const long number = std::strtol(entry->d_name, &end, 10);
-        if (end == entry->d_name || *end != '\0' || number < 0
-            || number > std::numeric_limits<int>::max()) continue;
-        const int fd = static_cast<int>(number);
+    const long limit = ::sysconf(_SC_OPEN_MAX);
+    const long end = limit > 0 ? std::min(limit, 65536L) : 1024;
+    for (int fd = 3; fd < end; ++fd) {
         struct stat status{};
         std::array<std::uint64_t, 5> header{};
         if (::fstat(fd, &status) == 0 && S_ISREG(status.st_mode) && status.st_nlink == 0
             && status.st_size == size
             && ::pread(fd, header.data(), sizeof(header), 0) == static_cast<ssize_t>(sizeof(header))
             && header[3] == value) {
-            result = fd;
-            break;
+            return fd;
         }
     }
-    ::closedir(descriptors);
-    require(result >= 0, "find this table's anonymous data file");
-    return result;
+    throw std::runtime_error("find this table's anonymous data file");
 }
 
 template<class Operation>

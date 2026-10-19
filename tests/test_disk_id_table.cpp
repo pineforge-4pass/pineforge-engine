@@ -10,13 +10,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <dirent.h>
+#include <csignal>
 #include <fcntl.h>
 #include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <system_error>
 #include <unistd.h>
 #include <vector>
@@ -118,26 +119,38 @@ void flat_heap() {
 
 // Find this test's unlinked table by its exact length. No production fd seam.
 int descriptor(std::uint64_t bytes) {
-    DIR* dir = ::opendir("/dev/fd");
-    require(dir != nullptr, "open descriptor directory");
-    int found = -1;
-    while (const auto* entry = ::readdir(dir)) {
-        char* end = nullptr;
-        const long number = std::strtol(entry->d_name, &end, 10);
-        if (end == entry->d_name || *end != '\0' || number < 0
-            || number > std::numeric_limits<int>::max()) continue;
-        const int fd = static_cast<int>(number);
+    const long limit = ::sysconf(_SC_OPEN_MAX);
+    const long end = limit > 0 ? std::min(limit, 65536L) : 1024;
+    for (int fd = 3; fd < end; ++fd) {
         struct stat status{};
         if (::fstat(fd, &status) == 0 && S_ISREG(status.st_mode) && status.st_nlink == 0
             && status.st_size >= 0 && static_cast<std::uint64_t>(status.st_size) == bytes) {
-            found = fd;
-            break;
+            return fd;
         }
     }
-    ::closedir(dir);
-    require(found >= 0, "find anonymous table descriptor");
-    return found;
+    throw std::runtime_error("find anonymous table descriptor");
 }
+
+struct FileLimit {
+    struct rlimit previous{};
+    using Handler = void (*)(int);
+    Handler handler = SIG_ERR;
+    FileLimit() {
+        require(::getrlimit(RLIMIT_FSIZE, &previous) == 0, "read file-size limit");
+        handler = ::signal(SIGXFSZ, SIG_IGN);
+        require(handler != SIG_ERR, "ignore file-limit signal");
+        auto limit = previous;
+        limit.rlim_cur = 0;
+        if (::setrlimit(RLIMIT_FSIZE, &limit) != 0) {
+            ::signal(SIGXFSZ, handler);
+            throw std::runtime_error("set file-size limit");
+        }
+    }
+    ~FileLimit() {
+        ::setrlimit(RLIMIT_FSIZE, &previous);
+        ::signal(SIGXFSZ, handler);
+    }
+};
 
 template<class F> void io_failure(F action) {
     bool failed = false;
@@ -162,15 +175,13 @@ void file_ownership_and_failures() {
     require(::lseek(fd, 3, SEEK_SET) == 3, "set unrelated shared cursor");
     require(table.get(at) == 1 && table.find("first") == at, "read exact row");
     require(::lseek(fd, 0, SEEK_CUR) == 3, "reads use pread");
-    // Replace the fd with a read-only descriptor to force pwrite to fail,
-    // without causing the table's eventual close to close an unrelated fd.
-    const std::string fd_path = "/dev/fd/" + std::to_string(fd);
-    const int read_only = ::open(fd_path.c_str(), O_RDONLY);
-    require(read_only >= 0 && ::dup2(read_only, fd) == fd, "make table read only");
-    ::close(read_only);
-    io_failure([&] { table.set(at, 2); });
+    // A zero file-size limit rejects pwrite on Linux and Darwin, including
+    // overwrites in an existing file. Reads remain available for rollback.
+    {
+        FileLimit limit;
+        io_failure([&] { table.set(at, 2); });
+    }
     require(table.get(at) == 1, "failed write did not silently alter the value");
-    require(::ftruncate(fd, 0) != 0, "read-only fd cannot truncate");
     table.clear();
     table.set_directory(directory.path);
     const auto other = table.insert("other", 9).first;

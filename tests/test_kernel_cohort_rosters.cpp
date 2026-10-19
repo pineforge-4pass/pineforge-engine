@@ -5,8 +5,6 @@
 #include "global_allocation_replacement.hpp"
 #include "native_order_full_fold.hpp"
 
-#include <pineforge/native_host.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -250,7 +248,7 @@ void many_distinct_and_recurring_handles() {
     require(driver.core.cohorts().empty(), "moved-from roster view is empty");
     no::WorkingRequestCore assigned({"discard", 1});
     assigned = std::move(moved);
-    require(roster_fold(assigned.cohorts()) == expected, "move assignment transfers roster store");
+    require(roster_fold(assigned.cohorts()) == expected, "move assignment transfers nonempty rosters");
     assigned.reset({"kernel-rosters", 2});
     require(assigned.cohorts().empty(), "reset discards old roster identities");
     require(!assigned.cohort_contains(no::CohortHandle{1}, roots[0]), "old-run membership is absent");
@@ -287,7 +285,7 @@ void distinct_id_heap_is_flat() {
     require(high <= low + 4096, "empty rosters or member capacity grow per distinct id");
     require(core.cohort_contains(keeper, origin), "live roster survives empty-roster eviction");
     core.cohort_add(no::CohortHandle{2}, origin);
-    require(core.cohort_contains(no::CohortHandle{2}, origin), "old empty disk handle recurs");
+    require(core.cohort_contains(no::CohortHandle{2}, origin), "old empty handle recurs");
     core.cohort_remove(no::CohortHandle{2}, origin);
     core.retire_cohort_receipts(core.cohort_receipt_count());
 
@@ -310,7 +308,7 @@ void distinct_id_heap_is_flat() {
     std::printf("kernel cohort rosters: 10=%zu 10000=%zu retained bytes\n", low, high);
 }
 
-void empty_disk_roster_is_a_valid_owner() {
+void empty_roster_is_a_valid_owner() {
     no::WorkingRequestCore core{{"roster-owner", 1}};
     const auto first = core.cohort_open();
     for (int i = 0; i < 128; ++i) (void)core.cohort_open();
@@ -319,7 +317,7 @@ void empty_disk_roster_is_a_valid_owner() {
     std::uint64_t incarnation = 1;
     std::uint64_t ordinal = 1;
     require(core.submit(close, 0, incarnation, ordinal).status == no::SubmitStatus::Accepted,
-            "an empty disk-backed cohort is still a valid owner");
+            "an allocated empty cohort is still a valid owner");
     close.owner = no::BindCohort{no::CohortHandle{130}};
     const auto rejected = core.submit(close, 0, incarnation, ordinal);
     require(rejected.status == no::SubmitStatus::Rejected
@@ -327,53 +325,24 @@ void empty_disk_roster_is_a_valid_owner() {
             "an unallocated cohort remains an invalid owner");
 }
 
-class FailingHost final : public pineforge::NativeStrategyHost {
-public:
-    std::size_t opened = 0;
-    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {
-        for (int i = 0; i < 65; ++i) {
-            (void)cohort_open();
-            ++opened;
-        }
-    }
-};
-
-void disk_error_becomes_typed_run_failure() {
-    FailingHost host;
-    pineforge::NativeRunSpec spec;
-    spec.identity = {"roster-io-failure", 1};
-    spec.input_tf = spec.script_tf = "1";
-    spec.tickerid = "TEST:ROSTER";
-    spec.timezone = "UTC";
-    spec.session = "24x7";
-    spec.initial_capital = 100000.0;
-    spec.point_value = spec.account_fx = 1.0;
-    spec.price_tick = 0.25;
-    require(host.configure_native(spec).status == pineforge::NativeSetupStatus::Applied, "failure host configured");
-    const std::array<pineforge::Bar, 2> bars{{
-        {100.0, 101.0, 99.0, 100.0, 1.0, 1736121600000LL},
-        {100.0, 101.0, 99.0, 100.0, 1.0, 1736121660000LL}
-    }};
-    const char* temporary = std::getenv("TMPDIR");
-    const bool had_temporary = temporary != nullptr;
-    const std::string previous = temporary ? temporary : "";
-    require(::setenv("TMPDIR", "/dev/null/pineforge-roster-test", 1) == 0, "bad scratch path installed");
+void empty_handles_need_no_allocation() {
+    Reference reference;
+    for (int i = 0; i < 10000; ++i) (void)reference.open();
+    no::WorkingRequestCore core{reference.run};
+    // The old vector must allocate as handles are issued. The current core
+    // represents empty rosters by its dense sequence alone; the population
+    // comes from the independent vector, without a private spill threshold.
+    global_allocation::refusing = true;
     try {
-        host.run(bars.data(), static_cast<int>(bars.size()));
+        for (const auto& row : reference.rosters)
+            require(core.cohort_open() == row.handle, "empty handles preserve vector numbering");
     } catch (...) {
-        if (had_temporary) ::setenv("TMPDIR", previous.c_str(), 1);
-        else ::unsetenv("TMPDIR");
+        global_allocation::refusing = false;
         throw;
     }
-    if (had_temporary) ::setenv("TMPDIR", previous.c_str(), 1);
-    else ::unsetenv("TMPDIR");
-    const auto state = host.native_state();
-    require(host.opened == 64, "failure occurred at the kernel roster spill boundary");
-    require(state.kind == pineforge::NativeLifecycleKind::Failed
-            && state.failure.code == pineforge::NativeFailureCode::Allocation
-            && state.failure.operation == pineforge::NativeFailureOperation::Command,
-            "scratch create error maps through the existing typed command failure");
-    require(!host.last_error().empty(), "scratch error has a diagnostic");
+    global_allocation::refusing = false;
+    require(roster_fold(core.cohorts()) == roster_fold(reference.rosters),
+            "allocation-free empty rosters retain the independent vector fold");
 }
 
 } // namespace
@@ -382,8 +351,8 @@ int main() {
     try {
         many_distinct_and_recurring_handles();
         distinct_id_heap_is_flat();
-        empty_disk_roster_is_a_valid_owner();
-        disk_error_becomes_typed_run_failure();
+        empty_roster_is_a_valid_owner();
+        empty_handles_need_no_allocation();
         std::puts("kernel cohort rosters: PASS");
         return 0;
     } catch (const std::exception& error) {

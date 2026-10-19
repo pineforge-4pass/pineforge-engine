@@ -1,57 +1,103 @@
-// CR-150 L19m: independent old containers, real retained-byte measurements,
-// and fault injection into the production scratch store. No hash pins.
+// CR-150 L19m: real settlements with pinned origin rosters, compared with
+// test-local copies of the old retain-capacity operations. No hash pins.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
 #include <pineforge/detail/adapter_exposure_storage.hpp>
-#include <pineforge/native_order_identity.hpp>
-#include <pineforge/run_failure.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
+#include "../src/source/pine_placement_retention.hpp"
 
 #include <algorithm>
-#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <fcntl.h>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
-#include <system_error>
-#include <sys/resource.h>
-#include <sys/stat.h>
-#include <signal.h>
-#include <unistd.h>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-namespace {
-namespace storage = pineforge::detail;
+namespace growth_fixture {
 using Handle = pineforge::native_order::RequestHandle;
 using Units = std::unordered_map<std::uint64_t, double>;
+using Opened = std::vector<Handle>;
+
+struct Probe {
+    bool old_implementation = false;
+    std::vector<Units*> units;
+    std::vector<Opened*> opened;
+};
+inline Probe* active = nullptr;
+
+template<class Container>
+void remember(std::vector<Container*>& rows, Container& container) {
+    if (std::find(rows.begin(), rows.end(), &container) == rows.end())
+        rows.push_back(&container);
+}
+inline void observe(Units& units) {
+    if (active && units.empty() && units.bucket_count() > Units{}.bucket_count())
+        remember(active->units, units);
+}
+inline void observe(Opened& opened) {
+    if (active && opened.empty() && opened.capacity() > Opened{}.capacity())
+        remember(active->opened, opened);
+}
+
+// Before L19m the per-origin erase left the empty map/vector untouched;
+// reversal/flat called clear(), which also kept their allocation. Keep those
+// implementations here, outside the installed headers and shipped library.
+template<class Container>
+void old_release_empty(Container&) {}
+template<class Container>
+void old_clear(Container& container) { container.clear(); }
+} // namespace growth_fixture
+
+namespace pineforge::detail {
+template<class Container>
+void growth_fixture_release_empty(Container& container) {
+    growth_fixture::observe(container);
+    if (growth_fixture::active && growth_fixture::active->old_implementation)
+        growth_fixture::old_release_empty(container);
+    else
+        release_empty_exposure_capacity(container);
+}
+template<class Container>
+void growth_fixture_clear(Container& container) {
+    // Observe the empty container after the old clear, before any release.
+    if (growth_fixture::active && growth_fixture::active->old_implementation) {
+        growth_fixture::old_clear(container);
+        growth_fixture::observe(container);
+    } else {
+        clear_exposure_storage(container);
+    }
+}
+} // namespace pineforge::detail
+
+// Compile the actual adapter call sites into this executable, substituting
+// only the two operations above. Its definitions satisfy the adapter symbols
+// before the static archive is searched, so pine_adapter.cpp.o is not pulled
+// from libpineforge.a. All other source/kernel objects are the normal library.
+// Removing a production release call also removes this test's observation;
+// the live witness then fails. No class, access specifier or state is changed.
+#define release_empty_exposure_capacity growth_fixture_release_empty
+#define clear_exposure_storage growth_fixture_clear
+#include "../src/source/pine_adapter.cpp"
+#undef clear_exposure_storage
+#undef release_empty_exposure_capacity
+
+namespace growth_fixture {
+namespace storage = pineforge::detail;
+using namespace pineforge;
+constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
-struct Directory {
-    std::string path = "/tmp/pineforge-growth-test-XXXXXX";
-    Directory() { require(::mkdtemp(path.data()) != nullptr, "create scratch directory"); }
-    ~Directory() { ::rmdir(path.c_str()); }
-};
-
-struct Recording {
-    Recording() {
-        require(!global_allocation::recording, "allocation windows must not nest");
-        global_allocation::live_bytes = 0;
-        global_allocation::recording = true;
-    }
-    ~Recording() { global_allocation::recording = false; }
-};
-
 struct Exposure {
-    std::vector<Handle> opened;
+    Opened opened;
     Units units;
 };
 
@@ -59,11 +105,6 @@ Handle handle(std::uint64_t incarnation) {
     Handle result;
     result.incarnation = incarnation;
     return result;
-}
-
-void same_exposure(const Exposure& actual, const Exposure& old) {
-    require(actual.opened == old.opened, "opened order and complete handle identities match");
-    require(actual.units == old.units, "all provenance quantities match the old map");
 }
 
 void exposure_lifecycles_match_old_containers() {
@@ -75,18 +116,7 @@ void exposure_lifecycles_match_old_containers() {
             old.opened.push_back(handle(origin));
             actual.units[origin] += static_cast<double>(offset);
             old.units[origin] += static_cast<double>(offset);
-            storage::release_empty_exposure_capacity(actual.opened);
-            storage::release_empty_exposure_capacity(actual.units);
-            same_exposure(actual, old);
         }
-        // A partial reduction cannot retire a handle or an outstanding unit.
-        const auto first = actual.opened.front().incarnation;
-        actual.units.at(first) -= 0.5;
-        old.units.at(first) -= 0.5;
-        storage::release_empty_exposure_capacity(actual.units);
-        same_exposure(actual, old);
-        // Consume in a different order from insertion, including the last
-        // handle. Reusing the objects exercises a reopened source cohort.
         while (!old.opened.empty()) {
             const auto origin = old.opened.back().incarnation;
             actual.units.erase(origin);
@@ -95,31 +125,33 @@ void exposure_lifecycles_match_old_containers() {
             old.opened.pop_back();
             storage::release_empty_exposure_capacity(actual.units);
             storage::release_empty_exposure_capacity(actual.opened);
-            same_exposure(actual, old);
+            require(actual.units == old.units && actual.opened == old.opened,
+                    "release preserves all quantities and complete handle identities");
         }
-        require(actual.opened.capacity() == std::vector<Handle>{}.capacity(),
-                "drained cohort retains no handle allocation");
-        require(actual.units.bucket_count() == Units{}.bucket_count(),
-                "drained cohort retains no historical buckets");
-        // Reversal/flat use the old clear semantics, including on nonempty
-        // state. They must release storage without changing logical values.
-        actual.opened.push_back(handle(first));
-        old.opened.push_back(handle(first));
-        actual.units[first] = old.units[first] = 2.0;
+        require(actual.units.bucket_count() == Units{}.bucket_count()
+                && actual.opened.capacity() == Opened{}.capacity(),
+                "drained exposure has the capacity of fresh containers");
+        actual.opened.push_back(handle(cycle + 1));
+        actual.units[cycle + 1] = 2.0;
         storage::clear_exposure_storage(actual.opened);
         storage::clear_exposure_storage(actual.units);
-        old.opened.clear();
-        old.units.clear();
-        same_exposure(actual, old);
+        require(actual.opened.empty() && actual.units.empty(),
+                "clear preserves the old empty logical state");
     }
 }
 
+struct Recording {
+    Recording() {
+        require(!global_allocation::recording, "allocation windows must not nest");
+        global_allocation::live_bytes = 0;
+        global_allocation::recording = true;
+    }
+    ~Recording() { global_allocation::recording = false; }
+};
+
 std::size_t retained_closed_exposures(std::size_t ids, bool release, bool map) {
-    // Cohort headers belong to L19l. Allocate them outside the measured
-    // window so this witness isolates the two measured child allocations,
-    // even while an origin/placement keeps every parent row resident.
     std::vector<Exposure> cohorts(ids);
-    const Handle opening = handle(1); // SessionKey initialization is outside.
+    const Handle opening = handle(1);
     Recording recording;
     for (auto& cohort : cohorts) {
         if (map) {
@@ -141,200 +173,154 @@ void closed_id_heap_is_flat() {
         const auto old_high = retained_closed_exposures(10000, false, map);
         const auto low = retained_closed_exposures(10, true, map);
         const auto high = retained_closed_exposures(10000, true, map);
-        require(old_high > old_low, "old containers must reproduce historical-id growth");
+        require(old_high > old_low, "old containers reproduce historical-id growth");
         require(high == low && high == 0, "empty exposure children grow with completed ids");
     }
 }
 
-void phases_match_old_vector() {
-    Directory directory;
-    storage::ExitPhaseStore actual, fixture;
-    actual.set_directory(directory.path);
-    fixture.fixture_use_memory_reference();
-    std::vector<std::uint8_t> old;
-    for (std::size_t i = 0; i < 10000; ++i) {
-        const auto index = i * 3; // None-filled gaps are logical/hash inputs.
-        const auto phase = static_cast<std::uint8_t>(i % 6);
-        old.resize(index + 1, 0);
-        actual.resize(index + 1, 0);
-        fixture.resize(index + 1, 0);
-        old[index] = phase;
-        actual.set(index, phase);
-        fixture.set(index, phase);
-    }
-    require(actual.disk_bytes() == old.size() && fixture.disk_bytes() == 0,
-            "production bytes really use disk and the old fixture uses RAM");
-    for (std::size_t i = 0; i < old.size(); ++i)
-        require(actual[i] == old[i] && fixture[i] == old[i], "exact vector byte/gap replay");
-    const auto bytes = actual.disk_bytes();
-    for (std::size_t i = 0; i < 10000; ++i) {
-        const auto index = (i * 7919) % old.size();
-        const auto phase = static_cast<std::uint8_t>((i + 3) % 6);
-        old[index] = phase;
-        actual.set(index, phase); // Old finalized prefix, not just a tail.
-        fixture.set(index, phase);
-        require(actual[index] == old[index], "write invalidates the cached page");
-    }
-    // A same-bar permutation reads every source byte before overwriting any
-    // target. Cross read-page boundaries and then refold the entire prefix.
-    const std::vector<std::size_t> indices{8192, 4095, 0, 4096, 1, 16384};
-    std::vector<std::uint8_t> saved;
-    for (const auto index : indices) saved.push_back(old[index]);
-    for (std::size_t i = 0; i < saved.size(); ++i) {
-        old[i] = saved[i];
-        actual.set(i, saved[i]);
-        fixture.set(i, saved[i]);
-    }
-    require(actual.disk_bytes() == bytes, "rewrites must not append phase history");
-    for (std::size_t i = old.size(); i > 0; --i)
-        require(actual[i - 1] == old[i - 1] && fixture[i - 1] == old[i - 1],
-                "permuted historical replay matches the complete old vector");
-    storage::ExitPhaseStore moved(std::move(actual));
-    require(actual.empty() && actual.disk_bytes() == 0, "move resets source ownership");
-    require(moved.size() == old.size() && moved[0] == old[0], "move keeps historical phases");
-    actual = std::move(moved);
-    require(moved.empty() && actual[8192] == old[8192], "move assignment keeps byte authority");
-    actual.resize(7, 0);
-    old.resize(7);
-    actual.resize(12000, 4);
-    old.resize(12000, 4);
-    for (std::size_t i = 0; i < old.size(); ++i)
-        require(actual[i] == old[i], "shrink/regrow fills like the old vector");
-    actual.clear();
-    fixture.clear();
-    require(actual.empty() && actual.disk_bytes() == 0 && fixture.empty(), "clear resets all phases");
-    actual.resize(1, 5);
-    fixture.resize(1, 5);
-    require(actual[0] == 5 && fixture[0] == 5 && fixture.disk_bytes() == 0,
-            "reset preserves directory/backend and starts a fresh phase sequence");
-}
-
-void phase_heap_is_flat() {
-    Directory directory;
-    storage::ExitPhaseStore phases;
-    phases.set_directory(directory.path);
-    Recording recording;
-    phases.resize(10, 0);
-    phases.set(0, 1);
-    require(phases[0] == 1, "prime real page read before measuring");
-    const auto low = global_allocation::live_bytes;
-    phases.resize(10000, 0);
-    phases.set(9999, 5);
-    for (std::size_t i = 0; i < phases.size(); ++i) (void)phases[i];
-    const auto high = global_allocation::live_bytes;
-    require(high == low, "phase store has no per-trade retained heap");
-}
-
-int descriptor(std::uint64_t bytes) {
-    const long limit = ::sysconf(_SC_OPEN_MAX);
-    const long end = limit > 0 ? std::min(limit, 65536L) : 1024;
-    for (int fd = 3; fd < end; ++fd) {
-        struct stat status{};
-        if (::fstat(fd, &status) == 0 && S_ISREG(status.st_mode)
-            && status.st_nlink == 0 && status.st_size >= 0
-            && static_cast<std::uint64_t>(status.st_size) == bytes) return fd;
-    }
-    throw std::runtime_error("find test-owned anonymous phase file");
-}
-
-template<class F>
-void io_failure(F&& action) {
-    bool failed = false;
-    try { action(); }
-    catch (const std::system_error& error) {
-        failed = pineforge::classify_run_failure(error).code
-            == pineforge::RunFailureCode::report_sink_failed;
-    }
-    require(failed, "scratch error must preserve report_sink_failed");
-}
-
-void scratch_ownership_and_failures() {
-    Directory directory;
-    storage::ExitPhaseStore phases;
-    phases.set_directory(directory.path + "/missing");
-    io_failure([&] { phases.resize(1, 0); });
-    require(phases.empty(), "failed open did not publish a phase");
-    phases.set_directory(directory.path);
-    phases.resize(10003, 3);
-    const int fd = descriptor(phases.disk_bytes());
-    struct stat status{};
-    require(::fstat(fd, &status) == 0 && (status.st_mode & 0777) == 0600,
-            "phase scratch permissions are private");
-    require((::fcntl(fd, F_GETFD) & FD_CLOEXEC) != 0, "phase scratch closes on exec");
-    require(::lseek(fd, 7, SEEK_SET) == 7 && phases[0] == 3, "positional phase read");
-    phases.set(0, 4);
-    require(::lseek(fd, 0, SEEK_CUR) == 7, "phase IO must not share a file cursor");
-    bool locked = false;
-    try { phases.set_directory(directory.path + "/other"); }
-    catch (const std::logic_error&) { locked = true; }
-    require(locked, "directory cannot change after opening");
-    // Truncate beneath an uncached read. EOF is a run failure, never None.
-    require(::ftruncate(fd, 0) == 0, "inject short pread");
-    io_failure([&] { (void)phases[9000]; });
-    phases.clear();
-    require(::fcntl(fd, F_GETFD) == -1 && errno == EBADF, "clear closes phase fd");
-    phases.resize(10007, 2);
-    const int replacement = descriptor(phases.disk_bytes());
-    const std::string path = "/dev/fd/" + std::to_string(replacement);
-    const int read_only = ::open(path.c_str(), O_RDONLY);
-    require(read_only >= 0, "open test phase file read only");
-    const int replaced = ::dup2(read_only, replacement);
-    ::close(read_only);
-    require(replaced == replacement, "inject failing pwrite into owned phase fd");
-    io_failure([&] { phases.set(0, 5); });
-    io_failure([&] { phases.resize(10008, 0); });
-    require(phases.size() == 10007 && phases[0] == 2,
-            "failed extension publishes neither size nor a new historical value");
-}
-
-struct FileLimit {
-    struct rlimit previous{};
-    using Handler = void (*)(int);
-    Handler handler = SIG_ERR;
-    FileLimit() {
-        require(::getrlimit(RLIMIT_FSIZE, &previous) == 0, "read file-size limit");
-        handler = ::signal(SIGXFSZ, SIG_IGN);
-        require(handler != SIG_ERR, "ignore file-limit signal during injection");
-    }
-    ~FileLimit() {
-        ::setrlimit(RLIMIT_FSIZE, &previous);
-        if (handler != SIG_ERR) ::signal(SIGXFSZ, handler);
-    }
-    void set(rlim_t bytes) const {
-        auto limit = previous;
-        limit.rlim_cur = bytes;
-        require(::setrlimit(RLIMIT_FSIZE, &limit) == 0, "set file-size limit");
-    }
+struct PinnedOrigins {
+    bool previous = source::detail::retain_retired_rows();
+    PinnedOrigins() { source::detail::set_retain_retired_rows(true); }
+    ~PinnedOrigins() { source::detail::set_retain_retired_rows(previous); }
 };
 
-void partial_extension_does_not_publish() {
-    Directory directory;
-    storage::ExitPhaseStore phases;
-    phases.set_directory(directory.path);
-    phases.resize(17, 2);
-    {
-        FileLimit limit;
-        limit.set(std::min<rlim_t>(limit.previous.rlim_cur, 4126));
-        io_failure([&] { phases.resize(9000, 5); }); // crosses a complete page
-        require(phases.size() == 17 && phases[16] == 2,
-                "partial extension leaves old logical bytes and count intact");
+class SettlementHost final : public source::PineStrategyHost {
+public:
+    explicit SettlementHost(int cycles) : cycles_(cycles) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 1000000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 2;
+        config.close_entries_rule_any = true;
+        config.process_orders_on_close = true;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(0.25);
+        set_broker_state_hash_recording(true);
     }
-    phases.resize(9000, 4);
-    require(phases[16] == 2 && phases[17] == 4 && phases[8999] == 4,
-            "retry overwrites the entire unpublished extension");
-    io_failure([&] { phases.resize(std::numeric_limits<std::size_t>::max(), 0); });
+    void on_source_bar(const Bar&) override {
+        const int bar = pine_bar_index();
+        if (bar == 0) {
+            strategy_entry("keeper", true, kNa, kNa, 1.0);
+            return;
+        }
+        const int cycle = (bar - 1) / 4;
+        if (cycle >= cycles_) return;
+        const auto id = "settled-" + std::to_string(cycle);
+        if ((bar - 1) % 4 == 0) strategy_entry(id, true, kNa, kNa, 1.0);
+        if ((bar - 1) % 4 == 1)
+            strategy_exit("exit-" + id, id, 100.5, kNa, kNa, kNa, kNa, 100.0);
+    }
+    const std::vector<std::uint64_t>& hashes() const { return broker_state_hashes_; }
+    double keeper_units() const { return adapter_.source_unclosed_qty_for("keeper"); }
+private:
+    int cycles_;
+};
+
+struct RunResult {
+    std::vector<Trade> trades;
+    std::vector<std::uint64_t> hashes;
+    std::uint64_t final_hash = 0;
+    std::vector<std::size_t> unit_buckets, opened_capacity;
+    double keeper_units = 0.0;
+};
+
+RunResult live_run(const std::vector<Bar>& bars, int cycles, bool old) {
+    // Retained placement rows pin every origin, so the cohorts cannot spill.
+    // The keeper also prevents a flat-book clear from masking a missing
+    // per-cohort release. Read the saved container pointers only while both
+    // the host and this existing retention override are still alive.
+    PinnedOrigins pinned;
+    const auto erased_before = source::detail::retired_rows_erased();
+    SettlementHost host(cycles);
+    Probe probe;
+    probe.old_implementation = old;
+    active = &probe;
+    try {
+        host.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    } catch (...) {
+        active = nullptr;
+        throw;
+    }
+    active = nullptr;
+    require(host.last_error().empty(), "live settlement run completes");
+    require(source::detail::retired_rows_erased() == erased_before,
+            "origin placements remain pinned throughout the run");
+    require(host.trade_count() == cycles, "every distinct cohort settles its real trade");
+    require(!probe.units.empty() && !probe.opened.empty(),
+            "real settlement reaches both production release call sites");
+    RunResult result;
+    for (const auto* units : probe.units) {
+        require(units->empty(), "settled cohort retains no live provenance");
+        result.unit_buckets.push_back(units->bucket_count());
+    }
+    for (const auto* opened : probe.opened) {
+        require(opened->empty(), "settled cohort retains no opened handles");
+        result.opened_capacity.push_back(opened->capacity());
+    }
+    for (int i = 0; i < host.trade_count(); ++i) result.trades.push_back(host.get_trade(i));
+    result.hashes = host.hashes();
+    result.final_hash = host.broker_state_hash();
+    result.keeper_units = host.keeper_units();
+    return result;
 }
-} // namespace
+
+bool same_bits(double left, double right) {
+    return std::memcmp(&left, &right, sizeof left) == 0;
+}
+
+void live_settlements_release_pinned_cohort_capacity() {
+    const int cycles = 32;
+    std::vector<Bar> bars;
+    for (int i = 0; i < cycles * 4 + 8; ++i)
+        bars.push_back({100.0, 101.0, 99.0, 100.0, 1000.0, 1736121600000LL + i * 60000LL});
+    const auto reference = live_run(bars, cycles, true);
+    const auto actual = live_run(bars, cycles, false);
+    require(actual.unit_buckets.size() == reference.unit_buckets.size()
+            && actual.opened_capacity.size() == reference.opened_capacity.size(),
+            "identical live runs visit the same settled cohort containers");
+    for (std::size_t i = 0; i < actual.unit_buckets.size(); ++i)
+        require(actual.unit_buckets[i] == Units{}.bucket_count()
+                && actual.unit_buckets[i] < reference.unit_buckets[i],
+                "real settlement releases map buckets retained by the old implementation");
+    for (std::size_t i = 0; i < actual.opened_capacity.size(); ++i)
+        require(actual.opened_capacity[i] == Opened{}.capacity()
+                && actual.opened_capacity[i] < reference.opened_capacity[i],
+                "real settlement releases opened capacity retained by the old implementation");
+    require(!actual.hashes.empty() && actual.hashes == reference.hashes
+            && actual.final_hash == reference.final_hash,
+            "all live broker hashes equal the old implementation");
+    require(actual.keeper_units > 0.0 && same_bits(actual.keeper_units, reference.keeper_units),
+            "the keeper stays live while other cohorts drain");
+    require(actual.trades.size() == reference.trades.size(), "live trade populations match");
+    for (std::size_t i = 0; i < actual.trades.size(); ++i) {
+        const auto& a = actual.trades[i];
+        const auto& b = reference.trades[i];
+        require(a.entry_id == b.entry_id && a.exit_id == b.exit_id
+                && a.entry_comment == b.entry_comment && a.exit_comment == b.exit_comment
+                && a.entry_time == b.entry_time && a.exit_time == b.exit_time
+                && a.entry_bar_index == b.entry_bar_index && a.exit_bar_index == b.exit_bar_index
+                && a.entry_incarnation == b.entry_incarnation && a.is_long == b.is_long
+                && a.open_at_end == b.open_at_end && a.exit_from_bracket == b.exit_from_bracket
+                && a.close_cause == b.close_cause,
+                "live trade identities and metadata match");
+        require(same_bits(a.entry_price, b.entry_price) && same_bits(a.exit_price, b.exit_price)
+                && same_bits(a.qty, b.qty) && same_bits(a.pnl, b.pnl)
+                && same_bits(a.pnl_pct, b.pnl_pct) && same_bits(a.commission, b.commission)
+                && same_bits(a.max_runup, b.max_runup) && same_bits(a.max_drawdown, b.max_drawdown),
+                "live trade doubles match bit for bit");
+    }
+}
+} // namespace growth_fixture
 
 int main() {
     try {
-        exposure_lifecycles_match_old_containers();
-        closed_id_heap_is_flat();
-        phases_match_old_vector();
-        phase_heap_is_flat();
-        scratch_ownership_and_failures();
-        partial_extension_does_not_publish();
-        std::puts("test_adapter_growth_storage: old containers, heap bounds and IO failures agree");
+        growth_fixture::exposure_lifecycles_match_old_containers();
+        growth_fixture::closed_id_heap_is_flat();
+        growth_fixture::live_settlements_release_pinned_cohort_capacity();
+        std::puts("test_adapter_growth_storage: live settlements release old exposure capacity");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "test_adapter_growth_storage: %s\n", error.what());

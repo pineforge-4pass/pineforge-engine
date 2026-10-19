@@ -1,5 +1,4 @@
 #include <pineforge/native_order.hpp>
-#include <pineforge/detail/kernel_roster_store.hpp>
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
@@ -955,7 +954,6 @@ void WorkingRequestCore::clear_unbound() noexcept {
     receipts_base_ = 0;
     next_cohort_handle_ = 1;
     cohorts_.clear();
-    cohort_store_.reset();
     cohort_receipts_.clear();
     cohort_receipts_base_ = 0;
     epoch_ = 0;
@@ -1254,11 +1252,8 @@ WorkingRequestCore::CohortView::const_iterator::operator*() const noexcept {
     return empty_;
 }
 
-bool WorkingRequestCore::cohort_exists(CohortHandle cohort) const {
-    if (cohort.value == 0 || cohort.value >= next_cohort_handle_) return false;
-    if (cohorts_.find(cohort.value) != cohorts_.end()) return true;
-    assert(cohort_store_);
-    return cohort_store_->contains(cohort.value);
+bool WorkingRequestCore::cohort_exists(CohortHandle cohort) const noexcept {
+    return cohort.value > 0 && cohort.value < next_cohort_handle_;
 }
 
 CohortHandle WorkingRequestCore::cohort_open() {
@@ -1268,11 +1263,6 @@ CohortHandle WorkingRequestCore::cohort_open() {
         throw std::overflow_error("native cohort handle exhausted");
     }
     const CohortHandle handle{next_cohort_handle_};
-    if (!cohort_store_) cohort_store_ = std::make_shared<::pineforge::detail::KernelRosterStore>();
-    // Reserve/publish the identity before advancing the semantic counter.
-    // Empty rosters need no retained node, even while their identity is in
-    // the store's bounded tail. A failed spill leaves this handle unused.
-    cohort_store_->append(handle.value);
     ++next_cohort_handle_;
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
     return handle;
@@ -1577,7 +1567,6 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     receipts_base_ = std::exchange(other.receipts_base_, 0);
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
-    cohort_store_ = std::move(other.cohort_store_);
     cohort_receipts_ = std::move(other.cohort_receipts_);
     cohort_receipts_base_ = other.cohort_receipts_base_;
     instance_ = std::move(other.instance_);
@@ -1604,7 +1593,6 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.receipts_.clear();
     other.next_cohort_handle_ = 1;
     other.cohorts_.clear();
-    other.cohort_store_.reset();
     other.cohort_receipts_.clear();
     other.cohort_receipts_base_ = 0;
     other.instance_.reset();
@@ -6051,12 +6039,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
 
 void WorkingRequestCore::set_successor_roots_directory(const std::string& directory) {
     if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
-    if (!cohort_store_) cohort_store_ = std::make_shared<::pineforge::detail::KernelRosterStore>();
-    // Check both locks before changing either directory: a cohort-only run
-    // can spill while the successor table has not opened a file yet.
-    cohort_store_->check_directory(directory);
     successor_roots_->set_directory(directory);
-    cohort_store_->set_directory(directory);
 }
 
 void WorkingRequestCore::reserve_successor_root() {

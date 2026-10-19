@@ -64,16 +64,16 @@ public:
         if (name.back() != '/') name += '/';
         name += "pineforge-id-pairs-XXXXXX";
         const int opened = ::mkstemp(name.data());
-        if (opened < 0) throw IdPairStoreError(errno, "Pine id table create");
+        if (opened < 0) throw IdPairStoreError(errno, "id table create");
         if (::unlink(name.c_str()) != 0) {
             const int error = errno;
             ::close(opened);
-            throw IdPairStoreError(error, "Pine id table unlink");
+            throw IdPairStoreError(error, "id table unlink");
         }
         if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
             const int error = errno;
             ::close(opened);
-            throw IdPairStoreError(error, "Pine id table cloexec");
+            throw IdPairStoreError(error, "id table cloexec");
         }
         fd_ = opened;
     }
@@ -83,7 +83,7 @@ public:
         do {
             result = ::ftruncate(fd_, static_cast<off_t>(bytes));
         } while (result != 0 && errno == EINTR);
-        if (result != 0) throw IdPairStoreError(errno, "Pine id table resize");
+        if (result != 0) throw IdPairStoreError(errno, "id table resize");
     }
     void read(std::uint64_t offset, void* destination, std::size_t length) const {
         check_range(offset, length);
@@ -94,7 +94,7 @@ public:
                 static_cast<off_t>(offset + received));
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0)
-                throw IdPairStoreError(count < 0 ? errno : EIO, "Pine id table read");
+                throw IdPairStoreError(count < 0 ? errno : EIO, "id table read");
             received += static_cast<std::size_t>(count);
         }
     }
@@ -107,7 +107,7 @@ public:
                 static_cast<off_t>(offset + written));
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0)
-                throw IdPairStoreError(count < 0 ? errno : EIO, "Pine id table write");
+                throw IdPairStoreError(count < 0 ? errno : EIO, "id table write");
             written += static_cast<std::size_t>(count);
         }
     }
@@ -116,7 +116,7 @@ private:
     static void check_range(std::uint64_t offset, std::uint64_t length) {
         constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         if (offset > maximum || length > maximum - offset)
-            throw IdPairStoreError(EFBIG, "Pine id table offset exhausted");
+            throw IdPairStoreError(EFBIG, "id table offset exhausted");
     }
     int fd_ = -1;
 };
@@ -251,7 +251,7 @@ public:
 
     void set_directory(const std::string& directory) {
         if ((data_.opened() || index_.opened()) && directory != directory_)
-            throw std::logic_error("Pine id table directory changed during run");
+            throw std::logic_error("id table directory changed during run");
         directory_ = directory;
     }
     void clear() noexcept {
@@ -274,7 +274,7 @@ public:
     // failure. clear() preserves this choice for a second run on the host.
     void fixture_use_memory_reference() {
         if (used_ != 0 || size_ != 0 || data_.opened() || index_.opened())
-            throw std::logic_error("Pine id table fixture backend changed after use");
+            throw std::logic_error("id table fixture backend changed after use");
         memory_ = std::make_unique<MemoryMap>();
     }
 
@@ -284,7 +284,7 @@ public:
     }
     Value at(const std::string& id) const {
         const auto found = lookup(id);
-        if (!found) throw std::out_of_range("Pine id auxiliary key is absent");
+        if (!found) throw std::out_of_range("id auxiliary key is absent");
         return *found;
     }
     bool insert_or_assign(std::string_view id, Value value) {
@@ -342,14 +342,14 @@ private:
     }
     Header read_header(std::uint64_t offset) const {
         if (offset > data_bytes_ || data_bytes_ - offset < sizeof(Header))
-            throw IdPairStoreError(EIO, "Pine id table truncated record");
+            throw IdPairStoreError(EIO, "id table truncated record");
         Header header;
         data_.read(offset, &header, sizeof(header));
         const auto available = data_bytes_ - offset - sizeof(Header);
         if (header.first_size > available || header.second_size > available - header.first_size
             || (header.flags & ~(kLive | kPair)) != 0
             || ((header.flags & kPair) == 0 && header.second_size != 0))
-            throw IdPairStoreError(EIO, "Pine id table invalid record");
+            throw IdPairStoreError(EIO, "id table invalid record");
         return header;
     }
     bool equal_string(std::uint64_t offset, std::uint64_t length, std::string_view key) const {
@@ -376,7 +376,7 @@ private:
                 const auto offset = slot.offset_plus_one - 1;
                 const Header header = read_header(offset);
                 if (header.hash != slot.hash)
-                    throw IdPairStoreError(EIO, "Pine id table mismatched index");
+                    throw IdPairStoreError(EIO, "id table mismatched index");
                 if (((header.flags & kPair) != 0) == second.has_value()
                     && equal_string(offset + sizeof(Header), header.first_size, first)
                     && (!second || equal_string(offset + sizeof(Header) + header.first_size,
@@ -385,7 +385,7 @@ private:
             }
             at = (at + 1) & (slots_ - 1);
         }
-        throw IdPairStoreError(EIO, "Pine id table full index");
+        throw IdPairStoreError(EIO, "id table full index");
     }
     static void place_slot(IdPairScratchFile& index, std::uint64_t slots, const Slot& slot) {
         std::uint64_t at = slot.hash & (slots - 1);
@@ -398,12 +398,12 @@ private:
             }
             at = (at + 1) & (slots - 1);
         }
-        throw IdPairStoreError(EIO, "Pine id table rehash overflow");
+        throw IdPairStoreError(EIO, "id table rehash overflow");
     }
     void grow_index() {
         constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max())
             / sizeof(Slot);
-        if (slots_ > maximum / 2) throw IdPairStoreError(EFBIG, "Pine id table index exhausted");
+        if (slots_ > maximum / 2) throw IdPairStoreError(EFBIG, "id table index exhausted");
         const auto next_slots = slots_ == 0 ? kInitialSlots : slots_ * 2;
         IdPairScratchFile next;
         next.open(directory_);
@@ -456,13 +456,13 @@ private:
             found = locate(first, second, hash);
         }
         if (size_ == std::numeric_limits<std::size_t>::max())
-            throw IdPairStoreError(EFBIG, "Pine id table size exhausted");
+            throw IdPairStoreError(EFBIG, "id table size exhausted");
         const auto second_size = second ? second->size() : 0;
         constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         if (data_bytes_ > maximum - sizeof(Header)
             || first.size() > maximum - data_bytes_ - sizeof(Header)
             || second_size > maximum - data_bytes_ - sizeof(Header) - first.size())
-            throw IdPairStoreError(EFBIG, "Pine id table data exhausted");
+            throw IdPairStoreError(EFBIG, "id table data exhausted");
         Header header{hash, static_cast<std::uint64_t>(first.size()),
                       static_cast<std::uint64_t>(second_size), value, kLive | (second ? kPair : 0)};
         data_.open(directory_);

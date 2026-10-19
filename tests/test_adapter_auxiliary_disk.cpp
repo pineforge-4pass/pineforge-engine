@@ -3,8 +3,10 @@
 // fixture storage seam is absent. CORE-TOP owns executed fail-before proof.
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/id_pair_store.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -146,6 +148,9 @@ class UniqueEntryHost final : public source::PineStrategyHost {
 public:
     UniqueEntryHost(int cycles, int period, bool long_ids, bool memory, const std::string& directory)
         : cycles_(cycles), period_(period), long_ids_(long_ids) {
+        adapter_.reset_for_run();
+        adapter_.set_auxiliary_tables_directory(directory);
+        if (memory) adapter_.fixture_use_memory_auxiliary_tables();
         source::PineStrategyConfig config;
         config.initial_capital = 1000000.0;
         config.default_qty_type = static_cast<int>(QtyType::FIXED);
@@ -157,8 +162,6 @@ public:
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
         set_broker_state_hash_recording(true);
-        adapter_.set_auxiliary_tables_directory(directory);
-        if (memory) adapter_.fixture_use_memory_auxiliary_tables();
     }
 
     void on_source_bar(const Bar&) override {
@@ -187,6 +190,11 @@ public:
         return adapter_.command_sequence_for_exit(id, from);
     }
     void clear_observations() { sequences_.clear(); fallbacks_.clear(); }
+    void reset_to_memory_auxiliary_tables() {
+        adapter_.reset_for_run();
+        adapter_.fixture_use_memory_auxiliary_tables();
+        clear_observations();
+    }
 
 private:
     int cycles_;
@@ -258,11 +266,96 @@ void directory_failure_is_a_typed_run_failure() {
     require(run_failure_value_of(disk).code == RunFailureCode::report_sink_failed,
             "scratch IO failure is report_sink_failed at the public run boundary");
 }
+
+void fixture_backend_requires_reset_after_use() {
+    ScratchDirectory scratch;
+    source::PlacementTable table;
+    table.set_auxiliary_tables_directory(scratch.path);
+    source::PlacementSnapshot row;
+    row.source_id = "fixture-exit";
+    row.from_entry = "fixture-entry";
+    row.command_sequence = 7;
+    table.try_emplace(1, row);
+    require(table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence,
+            "populate the disk auxiliary index before switching backends");
+    require(table.erase(1), "erase the fixture placement while keeping its history");
+    bool refused = false;
+    try {
+        table.fixture_use_memory_auxiliary_tables();
+    } catch (const std::logic_error& error) {
+        refused = classify_run_failure(error).code == RunFailureCode::engine_invariant;
+    }
+    require(refused, "even an empty used placement table requires reset before backend selection");
+    require(table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence
+            && table.auxiliary_disk_bytes() > 0,
+            "refused backend selection preserves the disk minima and erased history");
+    table.clear();
+    table.fixture_use_memory_auxiliary_tables();
+    row.command_sequence = 11;
+    table.try_emplace(1, row);
+    require(table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence
+            && table.auxiliary_disk_bytes() == 0,
+            "clear permits backend selection and removes the previous run's minima");
+}
+
+void host_reset_permits_backend_selection() {
+    ScratchDirectory scratch;
+    UniqueEntryHost reused(8, 0, true, false, scratch.path);
+    UniqueEntryHost reference(8, 0, true, true, scratch.path);
+    const auto bars = tape(8);
+    reused.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(reused.last_error().empty() && reused.trade_count() > 0
+            && reused.auxiliary_disk_bytes() > 0,
+            "use a real host's disk tables before resetting to the memory backend");
+    reused.reset_to_memory_auxiliary_tables();
+    require(reused.auxiliary_disk_bytes() == 0,
+            "reset closes every auxiliary scratch file before fixture backend selection");
+    reused.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    reference.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(reused.last_error().empty() && reference.last_error().empty()
+            && reused.trade_count() > 0 && reused.trade_count() == reference.trade_count(),
+            "reset host and fresh memory host both complete the same trades");
+    for (int i = 0; i < reused.trade_count(); ++i)
+        compare_trade(reused.get_trade(i), reference.get_trade(i));
+    require(!reused.hashes().empty() && reused.hashes() == reference.hashes()
+            && reused.broker_state_hash() == reference.broker_state_hash()
+            && reused.sequences() == reference.sequences()
+            && reused.fallbacks() == reference.fallbacks()
+            && reused.auxiliary_disk_bytes() == 0 && reference.auxiliary_disk_bytes() == 0,
+            "backend selection after reset preserves all trades, hashes and sequence minima");
+}
+
+void placement_directory_failure_is_part_c_error() {
+    ScratchDirectory scratch;
+    source::PlacementTable table;
+    table.set_auxiliary_tables_directory(scratch.path + "/missing");
+    source::PlacementSnapshot row;
+    row.source_id = "part-c-exit";
+    row.from_entry = "part-c-entry";
+    row.command_sequence = 1;
+    table.try_emplace(1, row);
+    bool failed = false;
+    try {
+        (void)table.command_sequence_for(row.source_id, row.from_entry);
+    } catch (const detail::IdPairStoreError& error) {
+        failed = error.code().value() == ENOENT
+            && classify_run_failure(error).code == RunFailureCode::report_sink_failed;
+    }
+    require(failed, "part C's placement minima preserve the typed missing-directory error");
+    require(table.size() == 1 && table.auxiliary_disk_bytes() == 0,
+            "failed auxiliary fold retains its placement and publishes no disk bytes");
+    table.set_auxiliary_tables_directory(scratch.path);
+    require(table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence,
+            "part C's lazy fold retries after the directory is repaired");
+}
 } // namespace
 
 int main() {
     try {
         placement_minima_match_old_nested_reference();
+        placement_directory_failure_is_part_c_error();
+        fixture_backend_requires_reset_after_use();
+        host_reset_permits_backend_selection();
         differential(256, 0, false);
         differential(256, 0, true);
         differential(320, 31, true);

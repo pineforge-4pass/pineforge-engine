@@ -502,7 +502,7 @@ five commands through `strategy_native_submit_v1` / `_replace_v1` /
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
-(`native_order.hpp:25`); identity types stay `native_order_v1`. Label/comment
+(`native_order.hpp:27`); identity types stay `native_order_v1`. Label/comment
 remain inert text. The market default path still constructs from:
 
 - `order_action::Transact{signed_units}` — finite nonzero
@@ -1496,7 +1496,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:17866-17899`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:17870-17903`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2047,11 +2047,11 @@ The kernel never drops an event its own live state still reads. A queued
 applied notification (and the margin receipt it carries) pins the window at
 its execution, a live deferred group-adjustment chain pins it at its head,
 and the rest of what the journal used to answer is state now: a request's
-replace-chain root is `RequestDefinition::root` (`native_order.hpp:736`) and
+replace-chain root is `RequestDefinition::root` (`native_order.hpp:738`) and
 the order core's chain index, which is all a cohort command reads about a
 request that is no longer working; a trail's arm ordinal
 (`NativeTrailState::activation_ordinal`) is its tracking state's
-(`TrailTrack` `native_order.hpp:650`); the FX-roll margin check reads the
+(`TrailTrack` `native_order.hpp:652`); the FX-roll margin check reads the
 last two driver points' instants; and a group-effect receipt whose outcome
 event was dropped stands on its own record. A host that wants the whole run
 after it has ended asks for `Full` (or `Commands`); the Pine adapter declares
@@ -3696,7 +3696,7 @@ The Pine adapter emits `Sized` for the default-quantity entries above and no
 Pine/generated hosts derive from `pineforge::source::PineStrategyHost`, which
 derives from `NativeStrategyHost`; handwritten native hosts also derive from
 `NativeStrategyHost`. The source adapter/scheduler hash domain is
-`kSourceAdapterDomain` `pine_adapter.hpp:43`
+`kSourceAdapterDomain` `pine_adapter.hpp:46`
 (`"pineforge-source-adapter/v4"`), while the public C ABI remains version 4.
 
 The ownership switch is complete: the compatibility loop and the source

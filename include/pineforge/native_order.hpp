@@ -23,8 +23,6 @@
 #include <variant>
 #include <vector>
 
-namespace pineforge::detail { class KernelRosterStore; }
-
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
 
@@ -1698,7 +1696,7 @@ public:
     /// Self move-assignment preserves the current run.
     WorkingRequestCore(WorkingRequestCore&& other) noexcept;
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
-    void set_successor_roots_directory(const std::string& directory); // Roots and cohort identities; after reset, before first spill; empty uses TMPDIR or /tmp.
+    void set_successor_roots_directory(const std::string& directory); // After reset, before the first spill; empty uses TMPDIR or /tmp.
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }
@@ -1731,8 +1729,8 @@ public:
     /// The ordinal of the newest retired event, 0 while none is.
     uint64_t retired_through() const noexcept { return retired_through_; }
     /// Logical roster sequence in allocation order, including empty rosters
-    /// whose identities have spilled. Walking allocates nothing and does no
-    /// I/O; empty rows are synthesized from the dense handle sequence.
+    /// whose members have been removed. Walking allocates nothing and does
+    /// no I/O; empty rows are synthesized from the dense handle sequence.
     CohortView cohorts() const noexcept;
     /// The retained cohort-receipt window, in command order. Its absolute
     /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
@@ -2165,7 +2163,7 @@ private:
     /// read from the live row or, for a request that is no longer working,
     /// from the chain index; nullopt for a handle this run never issued.
     std::optional<RequestHandle> canonical_cohort_origin(const RequestHandle& origin) const;
-    bool cohort_exists(CohortHandle cohort) const;
+    bool cohort_exists(CohortHandle cohort) const noexcept;
     /// Records an accepted request's incarnation and, for a replace
     /// successor, its chain root, in the chain index. Storage is reserved by
     /// reserve_plan, so this cannot throw inside commit.
@@ -2337,9 +2335,9 @@ private:
     std::size_t receipts_base_ = 0;
     std::uint64_t next_cohort_handle_ = 1;
     // Only rosters with members occupy nodes; erasing an empty roster frees
-    // its member capacity as well. The store keeps every allocated handle.
+    // its member capacity as well. next_cohort_handle_ records the complete
+    // dense sequence of allocated handles, including every empty roster.
     std::map<std::uint64_t, CohortRoster> cohorts_;
-    std::shared_ptr<::pineforge::detail::KernelRosterStore> cohort_store_;
     std::vector<CohortReceipt> cohort_receipts_;
     // Storage cursor only: the consumer hashes the lifetime count and every
     // receipt, independently of how many of their rows have been retired.
