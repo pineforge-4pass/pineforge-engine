@@ -99,7 +99,8 @@ def checked_path(path: Path) -> Path:
     return resolved
 
 
-def follow_manifest(command: list[str]) -> None:
+def follow_manifest(command: list[str]) -> list[dict]:
+    mapped = []
     paths = [Path(command[0])]
     if len(command) > 1 and not command[1].startswith("-"):
         paths.append(Path(command[1]))
@@ -115,16 +116,21 @@ def follow_manifest(command: list[str]) -> None:
     if "--symbol-feeds" in command:
         index = checked_path(Path(command[command.index("--symbol-feeds") + 1]))
         document = json.loads(index.read_text(encoding="utf-8"))
-        for symbol in document.get("symbols", {}).values():
+        for symbol_name, symbol in document.get("symbols", {}).items():
             for name in symbol.get("feeds", {}).values():
                 path = checked_path(index.parent / name)
                 print(f"FOLLOW {path}", flush=True)
                 if path.suffix == ".bin":
                     print(f"FOLLOW {checked_path(Path(str(path) + '.json'))}", flush=True)
-                    print(f"FOLLOW {checked_path(path.with_suffix('.close.bin'))}", flush=True)
+                    close = checked_path(path.with_suffix(".close.bin"))
+                    print(f"FOLLOW {close}", flush=True)
+                    mapped.extend([{"path": str(path), "kind": "foreign-bars", "symbol": symbol_name},
+                                   {"path": str(close), "kind": "foreign-close", "symbol": symbol_name}])
     if "--ohlcv-bin" in command:
         path = Path(command[command.index("--ohlcv-bin") + 1])
         print(f"FOLLOW {checked_path(Path(str(path) + '.json'))}", flush=True)
+        mapped.append({"path": str(checked_path(path)), "kind": "chart-bars"})
+    return mapped
 
 
 def write_json(path: Path, document: dict) -> None:
@@ -277,13 +283,14 @@ def write_feed_index(path: Path, feed_name: str) -> None:
 
 class Run:
     def __init__(self, peak_rss_bytes: int, returncode: int, stdout: bytes,
-                 stderr: bytes, wall_seconds: float, artifacts: dict):
+                 stderr: bytes, wall_seconds: float, artifacts: dict, probe: dict | None):
         self.peak_rss_bytes = peak_rss_bytes
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
         self.wall_seconds = wall_seconds
         self.artifacts = artifacts
+        self.probe = probe
 
     def document(self) -> dict:
         try:
@@ -303,7 +310,7 @@ def measured(command: list[str], cwd: Path, env: dict, *,
     """Run one child and read its own peak RSS (Linux KiB, Darwin bytes)."""
     global _run_serial
     _run_serial += 1
-    follow_manifest(command)
+    mapped_files = follow_manifest(command)
     log_dir = checked_path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{_run_serial:04d}-{re.sub(r'[^A-Za-z0-9._-]', '_', label)}"
@@ -311,9 +318,21 @@ def measured(command: list[str], cwd: Path, env: dict, *,
     err_path = log_dir / f"{stem}.stderr.log"
     exit_path = log_dir / f"{stem}.exit"
     result_path = log_dir / f"{stem}.child.json"
+    manifest_path = log_dir / f"{stem}.mapped-inputs.json"
+    probe_path = log_dir / f"{stem}.probe.json"
+    instrument = "--ohlcv" in command or "--ohlcv-bin" in command
+    executed_command = command
+    if instrument:
+        probe_script = checked_path(Path(__file__).with_name("flat_memory_child_probe.py"))
+        write_json(manifest_path, {"mapped_files": mapped_files})
+        for followed in (probe_script, manifest_path, probe_path):
+            print(f"FOLLOW {followed}", flush=True)
+        executed_command = [command[0], str(probe_script), "--output", str(probe_path),
+                            "--manifest", str(manifest_path), "--run-json", command[1],
+                            "--", *command[2:]]
     with out_path.open("x+b") as out, err_path.open("x+b") as err:
         started = time.monotonic()
-        child = subprocess.Popen(command, cwd=str(cwd), env=env, stdout=out, stderr=err)
+        child = subprocess.Popen(executed_command, cwd=str(cwd), env=env, stdout=out, stderr=err)
         pid, status, usage = os.wait4(child.pid, 0)
         wall = time.monotonic() - started
         child.returncode = os.waitstatus_to_exitcode(status)
@@ -325,14 +344,27 @@ def measured(command: list[str], cwd: Path, env: dict, *,
     exit_path.write_text(f"{child.returncode}\n", encoding="ascii")
     artifacts = {"stdout": str(out_path), "stderr": str(err_path),
                  "exit": str(exit_path), "child_result": str(result_path)}
+    probe = None
+    if instrument:
+        artifacts.update({"probe": str(probe_path), "mapped_inputs": str(manifest_path)})
+        if probe_path.is_file():
+            probe = json.loads(probe_path.read_text(encoding="utf-8"))
     write_json(result_path, {
-        "command": command, "pid": pid, "wait_status": status,
+        "command": executed_command, "run_json_command": command,
+        "pid": pid, "wait_status": status,
         "returncode": child.returncode, "ru_maxrss": usage.ru_maxrss,
         "ru_maxrss_units": "bytes" if sys.platform == "darwin" else "KiB",
         "peak_rss_bytes": peak, "peak_source": "child os.wait4 ru_maxrss",
-        "wall_seconds": wall, **artifacts,
+        "parent_observed_wall_seconds": wall,
+        "child_wall_seconds": None if probe is None else probe["child_wall_seconds"],
+        "real_mapped_ohlcv_bytes": None if probe is None else probe["real_mapped_ohlcv_bytes"],
+        **artifacts,
     })
-    return Run(peak, child.returncode, stdout, stderr, wall, artifacts)
+    if instrument and child.returncode == 0:
+        if (probe is None or probe["pid"] != pid or probe["target_returncode"] != 0
+                or not probe["mapping_complete"]):
+            raise SetupError(f"{label}: missing/incomplete live child map/clock probe; see {result_path}")
+    return Run(peak, child.returncode, stdout, stderr, wall, artifacts, probe)
 
 
 def parse_help(run_json: Path, cwd: Path, env: dict, log_dir: Path) -> str:
@@ -346,13 +378,14 @@ def parse_help(run_json: Path, cwd: Path, env: dict, log_dir: Path) -> str:
 class Harness:
     def __init__(self, run_json: Path, module_dir: Path, work: Path,
                  modules: dict[str, Path], keep: bool, results: Path,
-                 report_sink: str, defer_verdict: bool = False):
+                 report_sink: str, defer_verdict: bool = False, large_replicates: int = 1):
         self.run_json = run_json
         self.module_dir = module_dir
         self.work = work
         self.modules = modules
         self.keep = keep
         self.defer_verdict = defer_verdict
+        self.large_replicates = large_replicates
         self.results = results
         self.current_case = "_setup"
         self.input_records: dict[str, int] = {}
@@ -472,28 +505,51 @@ class Harness:
         return args, path
 
     def rest(self, label: str, args: list[str], sink_args: list[str],
-             mapped_bytes: int) -> tuple[int, dict]:
-        result, _ = self.run(args + sink_args, label)
-        rest_bytes = result.peak_rss_bytes - mapped_bytes
-        document = result.document()
+             mapped_bytes: int, *, replicate_count: int | None = None) -> tuple[int, dict]:
         chart_flag = "--ohlcv-bin" if "--ohlcv-bin" in args else "--ohlcv"
         chart_path = args[args.index(chart_flag) + 1]
-        self.measurements.append({
-            "case": self.current_case, "label": label,
-            "bars": self.input_records[chart_path],
-            "total_trades": document.get("summary", {}).get("total_trades"),
-            "peak_rss_bytes": result.peak_rss_bytes,
-            "mapped_ohlcv_bytes": mapped_bytes,
-            "mapped_ohlcv_accounting": "MODEL: generated chart/feed record counts * 48 bytes; feed close counts * 8 bytes; CSV=0. Not /proc measured.",
-            "rest_bytes": rest_bytes, "wall_seconds": result.wall_seconds,
-            "report_sink": "on" if sink_args else "off",
-            "returncode": result.returncode, "chart": chart_path,
-            "child": result.artifacts,
-        })
-        print(f"  {label}: peak {result.peak_rss_bytes / MIB:.1f} MiB, "
-              f"mapped {mapped_bytes / MIB:.1f} MiB, rest {rest_bytes / MIB:.1f} MiB, "
-              f"{result.wall_seconds:.1f} s")
-        return rest_bytes, document
+        bars = self.input_records[chart_path]
+        repetitions = replicate_count or (self.large_replicates if bars >= 1_000_000 else 1)
+        first = None
+        for replicate in range(1, repetitions + 1):
+            result, _ = self.run(args + sink_args, f"{label}/rep-{replicate}")
+            document = result.document()
+            if result.probe is None:
+                raise SetupError(f"{label}: no real mapped-byte/child-clock evidence")
+            probe = result.probe
+            real = probe["real_mapped_ohlcv_bytes"]
+            rest_bytes = result.peak_rss_bytes - real
+            native_elapsed = document.get("elapsed_seconds")
+            if (not isinstance(native_elapsed, (int, float))
+                    or not math.isfinite(native_elapsed) or native_elapsed < 0):
+                raise SetupError(f"{label}: child report has no valid elapsed_seconds")
+            installed = document.get("applied_runtime", {}).get("symbol_feeds", {}).get("symbols")
+            if installed is None:
+                installed = document.get("provenance", {}).get("applied_runtime", {}).get(
+                    "symbol_feeds", {}).get("symbols", {})
+            self.measurements.append({
+                "case": self.current_case, "label": label,
+                "replicate": replicate, "replicates_requested": repetitions,
+                "bars": bars, "total_trades": document.get("summary", {}).get("total_trades"),
+                "peak_rss_bytes": result.peak_rss_bytes,
+                "mapped_ohlcv_bytes": real, "real_mapped_ohlcv_bytes": real,
+                "mapped_ohlcv_model_bytes": mapped_bytes,
+                "mapped_ohlcv_accounting": "REAL live child /proc/PID/maps matching OHLCV-backed VMA lengths; model retained separately",
+                "real_mapped_by_file": probe["selected_live_snapshot"]["files"],
+                "rest_bytes": rest_bytes, "rest_model_bytes": result.peak_rss_bytes - mapped_bytes,
+                "child_wall_seconds": probe["child_wall_seconds"],
+                "run_json_elapsed_seconds": native_elapsed,
+                "parent_observed_wall_seconds": result.wall_seconds,
+                "report_sink": "on" if sink_args else "off",
+                "returncode": result.returncode, "chart": chart_path,
+                "installed_symbols": sorted(installed) if isinstance(installed, dict) else [],
+                "child": result.artifacts})
+            print(f"  {label} rep {replicate}/{repetitions}: peak {result.peak_rss_bytes}, "
+                  f"real mapped {real}, model {mapped_bytes}, rest {rest_bytes}, "
+                  f"child wall {probe['child_wall_seconds']:.6f} s", flush=True)
+            if first is None:
+                first = (rest_bytes, document)
+        return first
 
     def sink_records(self, path: Path | None) -> dict[str, list[list]]:
         if path is None or not path.exists():
@@ -604,7 +660,8 @@ def case_b(harness: Harness) -> None:
             "--inputs", json.dumps({"Bars per trade": k})]
         sink_args, _ = harness.sink_args(f"b-{label}")
         rest_bytes, document = harness.rest(
-            f"b/{label}-trades", args, sink_args if harness.has_sink else [], mapped)
+            f"b/{label}-trades", args, sink_args if harness.has_sink else [], mapped,
+            replicate_count=harness.large_replicates if label == "10k" else 1)
         values.append((label, rest_bytes))
         counts[label] = int(document.get("summary", {}).get("total_trades", -1))
     if counts["10"] <= 0 or counts["10"] > 100 or counts["10k"] < 1000:
@@ -646,13 +703,19 @@ def case_symbols(harness: Harness, count: int) -> None:
             write_json(index, {"symbols": symbols})
         args = base_args(module) + harness.input_args(chart) + ["--symbol-feeds", str(index)]
         sink_args, _ = harness.sink_args(f"symbols-{count}-{n}")
+        first_row = len(harness.measurements)
         rest, document = harness.rest(f"symbols/{count}/{n}", args, sink_args,
                                       chart_mapped + feed_mapped)
-        row = harness.measurements[-1]
-        row.update({"foreign_symbols": count, "feed_bars_per_symbol": n,
-                    "chart_mapped_bytes": chart_mapped,
-                    "feed_mapped_bytes": feed_mapped,
-                    "feed_mapped_bytes_per_symbol": feed_mapped // count})
+        for row in harness.measurements[first_row:]:
+            by_file = row["real_mapped_by_file"]
+            real_chart = by_file.get(str(checked_path(chart)), 0)
+            row.update({"foreign_symbols": count, "feed_bars_per_symbol": n,
+                        "chart_mapped_model_bytes": chart_mapped,
+                        "feed_mapped_model_bytes": feed_mapped,
+                        "chart_real_mapped_bytes": real_chart,
+                        "feed_real_mapped_bytes": row["real_mapped_ohlcv_bytes"] - real_chart})
+            if set(row["installed_symbols"]) != set(symbols):
+                raise SetupError(f"symbol-count axis not installed in replicate {row['replicate']}")
         # Verify the real child installed every named symbol, not an empty
         # index. Its complete report remains in the child's stdout artifact.
         installed = document.get("provenance", {}).get("applied_runtime", {}).get(
@@ -661,7 +724,6 @@ def case_symbols(harness: Harness, count: int) -> None:
             installed = document.get("applied_runtime", {}).get("symbol_feeds", {}).get("symbols")
         if not isinstance(installed, dict) or set(installed) != set(symbols):
             raise SetupError(f"symbol-count axis not installed: expected {sorted(symbols)}, got {installed}")
-        row["installed_symbols"] = sorted(installed)
         values.append((str(n), rest))
     if not harness.defer_verdict:
         assert_slope(f"({count} foreign symbols) bars", values)
@@ -950,8 +1012,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="case JSON and durable child stdout/stderr/own exit codes")
     parser.add_argument("--defer-verdict", action="store_true",
                         help="collect a/b/symbol raw measurements, label UNJUDGED; final judge required")
+    parser.add_argument("--large-replicates", type=int, default=1,
+                        help="within-process large-rung repeats; driver uses four fresh case processes")
     parser.add_argument("--keep", action="store_true", help="keep the work dir")
     args = parser.parse_args(argv)
+    if args.large_replicates < 1:
+        parser.error("--large-replicates must be positive")
 
     repo_root = Path(__file__).resolve().parents[1]
     run_json = checked_path(args.run_json or (repo_root / "docker" / "run_json.py"))
@@ -995,7 +1061,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         harness = Harness(run_json, module_dir, work, modules, args.keep,
-                          results, args.report_sink, args.defer_verdict)
+                          results, args.report_sink, args.defer_verdict, args.large_replicates)
     except SetupError as error:
         print(f"SETUP: {error}", file=sys.stderr)
         write_json(results / "RUN.INCOMPLETE", {"verdict": "SETUP", "reason": str(error),
@@ -1042,6 +1108,8 @@ def main(argv: list[str] | None = None) -> int:
             "measurements": rows, "bounds": harness.bounds.get(name),
             "slope_limit_bytes": SLOPE_LIMIT,
             "judgement_deferred": args.defer_verdict,
+            "large_replicates_requested": args.large_replicates,
+            "sample_count": len(rows),
         })
         # A failed result check ends this sequence. Preserve already measured
         # rungs, but never run a later case or label it green.
