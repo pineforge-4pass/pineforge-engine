@@ -244,3 +244,13 @@ CORE-TOP runs the headers' compile proof, `scripts/check_c_abi_runtime.py`,
 and `scripts/check_native_cpp_versions.py` on the lab queue. P00 supplies no
 local test or guard verdict. Repository-wide unit/corpus and merge-gate proof
 remain required before integration is declared verified.
+
+## Report-sink presentation
+
+An ordinary report sink, including an observed run without an admitted selected
+window, presents a one-point copy of the editable equity tail so a hook cannot
+rewrite prefix records that have already been emitted. A selected sink performs
+one presentation of the full selected curve, preserving the hook's published-length
+changes before the selected writer emits the anchor and final window observations.
+At capture, the existing admitted selected-window flag chooses the presentation
+once; subsequent report reads reuse that capture.
