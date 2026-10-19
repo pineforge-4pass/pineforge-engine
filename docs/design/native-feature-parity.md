@@ -1836,7 +1836,7 @@ std::optional<NativeRiskLimits> risk;    // NativeRunSpec
 
 - Breach: `MatchRejectReason::RiskLimit` for openings (O; F: `RiskHalted`), an optional kernel-issued flatten through A.3's kernel-originated request (`origin = KernelRisk`, F), and a `NativeRiskEvent` in `native_events` (native_host.hpp:1335) (O) or a callback `on_native_risk_event` (S — a virtual, so only inside an epoch batch). The day key uses the existing calendar (`session_day_ordinal` native_calendar.hpp:416), not a chart clock.
 - S's `directions` / `max_units` / `max_position_units` are existing spec fields (MG1-MG3), not duplicated.
-- Interim (F): a C++ host can build all four today from `native_marked_equity` + `on_native_applied`, which is what the adapter does (`update_risk_state` pine_adapter.cpp:17492-17500; `on_applied` pine_adapter.cpp:24394); a toolkit helper is an acceptable stand-in until L9.
+- Interim (F): a C++ host can build all four today from `native_marked_equity` + `on_native_applied`, which is what the adapter does (`update_risk_state` pine_adapter.cpp:17492-17500; `on_applied` pine_adapter.cpp:24410); a toolkit helper is an acceptable stand-in until L9.
 - TUs: `native_run_spec.{hpp,cpp}`, `native_execution_consumer.cpp` (`admit_opening_inspect` native_execution_consumer.cpp:3716 and the per-point walk), `native_order.hpp`, the state hash.
 
 ### A.9 Single-source proposals not adopted
