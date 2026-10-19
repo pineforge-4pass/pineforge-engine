@@ -7087,41 +7087,6 @@ pineforge_add_unit_test(test_cr150_contract_headers)
 target_sources(test_cr150_contract_headers PRIVATE test_cr150_contract_headers_c.c)
 set_target_properties(test_cr150_contract_headers PROPERTIES
     C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
-list(APPEND TEST_SOURCES test_report_sink_format)
-pineforge_add_unit_test(test_report_sink_format)
-
-# CR-150 L6B1: appended after every pre-existing line pin. A real source
-# strategy module, with the same whole-archive link as release modules.
-if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
-    add_library(report_sink_l6b1_strategy MODULE test_report_sink_l6b1.cpp)
-    target_compile_definitions(report_sink_l6b1_strategy PRIVATE PINEFORGE_L6B1_MODULE=1)
-    target_link_libraries(report_sink_l6b1_strategy PRIVATE pineforge)
-    if(APPLE)
-        target_link_options(report_sink_l6b1_strategy PRIVATE
-            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
-    else()
-        target_link_options(report_sink_l6b1_strategy PRIVATE
-            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
-    endif()
-    target_compile_options(report_sink_l6b1_strategy PRIVATE -ffp-contract=off -UNDEBUG)
-    set_target_properties(report_sink_l6b1_strategy PROPERTIES
-        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/report_sink_l6b1")
-    list(APPEND TEST_SOURCES test_report_sink_l6b1)
-    pineforge_add_unit_test(test_report_sink_l6b1)
-    target_link_libraries(test_report_sink_l6b1 PRIVATE ${CMAKE_DL_LIBS})
-    target_compile_definitions(test_report_sink_l6b1 PRIVATE
-        PINEFORGE_L6B1_MODULE_PATH="$<TARGET_FILE:report_sink_l6b1_strategy>"
-        PINEFORGE_L6B1_PYTHON="${Python3_EXECUTABLE}"
-        PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
-    add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
-endif()
-
-# CR-150 L17A: a kernel-only native host and a real version-1 path sink.
-# Append after the line-pinned private-fixture registrations.
-if(UNIX)
-    list(APPEND TEST_SOURCES test_report_sink_selected_l17a)
-    pineforge_add_unit_test(test_report_sink_selected_l17a)
-endif()
 
 # CR-150 L7B: point-source equity metrics.  This registration intentionally
 # follows the P00 line-pinned block above (scope ruling SCOPE-RULING-1818.md).
@@ -7171,3 +7136,40 @@ list(SORT CR150_LANE_CMAKE)
 foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
+
+# --- CR-150 core-cr150-l6b1 begin ---
+# CR-150 L6B1: appended after every pre-existing line pin. A real source
+# strategy module, with the same whole-archive link as release modules.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    add_library(report_sink_l6b1_strategy MODULE test_report_sink_l6b1.cpp)
+    target_compile_definitions(report_sink_l6b1_strategy PRIVATE PINEFORGE_L6B1_MODULE=1)
+    target_link_libraries(report_sink_l6b1_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(report_sink_l6b1_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(report_sink_l6b1_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(report_sink_l6b1_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(report_sink_l6b1_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/report_sink_l6b1")
+    list(APPEND TEST_SOURCES test_report_sink_l6b1)
+    pineforge_add_unit_test(test_report_sink_l6b1)
+    target_link_libraries(test_report_sink_l6b1 PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_definitions(test_report_sink_l6b1 PRIVATE
+        PINEFORGE_L6B1_MODULE_PATH="$<TARGET_FILE:report_sink_l6b1_strategy>"
+        PINEFORGE_L6B1_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L6B1_DOCKER="${PROJECT_SOURCE_DIR}/docker")
+    add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
+endif()
+# --- CR-150 core-cr150-l6b1 end ---
+
+# --- CR-150 l17a begin ---
+# CR-150 L17A: a kernel-only native host and a real version-1 path sink.
+# Append after the line-pinned private-fixture registrations.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_report_sink_selected_l17a)
+    pineforge_add_unit_test(test_report_sink_selected_l17a)
+endif()
+# --- CR-150 l17a end ---
