@@ -826,9 +826,9 @@ that creates the branch, is forced or carries more than one commit, a merge
 that is not the pull request head's, a commit git cannot read, an empty change,
 and a `changes` job that fails or never answers.
 
-Each proof job waits for `changes` alone, a few seconds once a standard runner
-takes it, and skips only when `changes` succeeded and answered
-documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
+Each proof job waits for `changes` alone, a few seconds once the light ci-spot
+class or its hosted fallback takes it, and skips only when `changes` succeeded
+and answered documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
 needs.changes.outputs.docs_only != 'true')`. `preflight` waits for nothing.
 The advisory `build` aggregate passes a proof job that succeeded, or one that
 was skipped under that same answer. A proof job skipped for any other reason
@@ -887,60 +887,108 @@ does not assume a build optimization without evidence.
 
 ## Runners and time limits
 
-The heavy jobs -- `preflight`, the four `build` legs, `sanitizers`,
-`kernel-only`, `native-live` and both corpus-parity jobs -- run on larger
-runners for a push, a manual dispatch, the nightly schedule and a pull request
-from a branch of this repository: the organization's `pf-linux-x64-16` (Ubuntu
-24.04 x64, 16 cores, 64 GB) and GitHub's `macos-26-xlarge` (the `macos-26`
-arm64 image on an M2, 5 cores, 14 GB). A larger runner bills the organization
-even for a public repository, so a pull request from a fork runs the same jobs
-on the free standard runners, `ubuntu-24.04` (4 vCPU, 16 GB) and `macos-26`
-(M1, 3 cores, 7 GB). Every heavy job selects its runner with one test that
-names what it trusts: a push, the schedule, a manual dispatch, or a
-`pull_request` whose head is a branch of this repository. Every other event
-gets the standard runner, whether a fork can raise it (a fork's pull request,
-`pull_request_target`, a review or review comment -- anyone can post one on a
-public repository's pull request -- a comment, a `workflow_run`) or it is
-merely unlisted (`merge_group`).
+The ci-spot pool is live as of 2026-10-18 (bulletin #613, L6, 22:34).
+Credential-free Linux x64 jobs use the fragments in `pf-ci-spot`'s
+`workflows/engine-x64-16.yml` and `workflows/public.yml` at commit
+`b240f6d7` (bulletin #635), with these exact label arrays and an
+`ubuntu-24.04` hosted fallback:
+
+| Jobs | Fragment and labels | Pool machine |
+| --- | --- | --- |
+| Linux `build` legs, `sanitizers`, `kernel-only`, all three `native-live` profiles, both corpus-parity jobs | `engine-x64-16.yml`: `["self-hosted","pf-ci","pf-ci-x64-16"]` | e2-standard-16, 16 vCPU, 64 GB, 100 GB disk; engine only |
+| `changes`, `preflight`, both aggregate jobs | `public.yml`: `["self-hosted","pf-ci","pf-ci-x64"]` | e2-standard-4, 4 vCPU, 16 GB, 30 GB disk |
+
+L6's standing ruling of 2026-10-19 keeps production credentials on hosted
+runners. A job that references any secret other than `secrets.GITHUB_TOKEN`,
+has `id-token: write` at job or workflow scope, or names an `environment`
+must use a hosted standard runner and carry no `PF_CI_LABELS`. Inherited
+workflow environment secrets count too. A conditional deployment step still
+holds those references in its job.
+
+The existing jobs restore their exact pre-CR-171 hosted routing: docs
+`build` uses `ubuntu-latest` for its Cloudflare secrets; baseline `promote`
+uses `ubuntu-latest` for its GitHub App secrets and workflow OIDC permission.
+Every job in `release.yml` stays hosted under the explicit release ruling,
+including `prebuilt`, which references only `GITHUB_TOKEN`. That workflow is
+byte-identical to the pre-CR-171 `origin/main` copy: `release` and `notify-hub`
+use `ubuntu-latest`, and `prebuilt` selects `ubuntu-22.04`,
+`ubuntu-22.04-arm` and `macos-latest`. New credential-bearing jobs use
+`ubuntu-24.04` or the standard macOS label; the existing hosted aliases above
+are pinned explicitly to preserve their original values.
+
+This follow-up rewords the pool-allocation, release/deploy routing and
+fallback sentences introduced by `28fe3466a` and carried into `f9bee2220`.
+The earlier `1fe46216` fragment revision supplied the Dependabot guard
+(bulletins #614/#615); `b240f6d7` keeps that guard and updates the fallback.
+
+This replaces the temporary standard-runner stopgap recorded by `3484a7c40`
+and squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner
+costs exceeded US$3,000. The runner-selection and timing sentences being
+reworded originated in `d0935605c` (#290), and the documentation-only runner
+sentence in `133f57148` (#308). The platform job limits from `2394ba2fc`
+(#373) remain in force.
+
+Each pool job uses the fragment's expression verbatim and sets its
+matching array as a job-level **string** `PF_CI_LABELS`, merged into any
+existing job environment. The engine build fragment is:
 
 ```yaml
-runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+runs-on: >-
+  ${{ github.event_name != 'pull_request_target' &&
+      github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+      contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+      fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
+env:
+  PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 ```
 
-The `build` matrix pairs each image with its `larger_runner` and names its legs
-explicitly, so they stay `build (<image>, <type>)`. `native-live.yml` and
-`corpus-parity.yml` apply the test themselves; in a `workflow_call` the
-`github` context is the caller's, so a fork's pull request through CI gets the
-standard runner there too. The advisory `build` aggregate runs a few seconds of
-shell and stays on the standard runner for every event. So does the `changes`
-job, a two-commit checkout and one `git diff`.
+The public fragment has the same expression with `pf-ci-x64` in both places.
+Pushes, manual dispatches, schedules, releases and same-repository pull
+requests whose head repository has `fork == false` take the pool when neither
+`github.actor` nor `github.triggering_actor` is `dependabot[bot]`. Dependabot
+runs and re-runs stay hosted through that guard. Fork pull
+requests, `pull_request_target`, `workflow_run` and every unlisted event fall
+back to `ubuntu-24.04`. A reusable workflow sees its caller's `github`
+context, so native and corpus jobs keep the same fallback through CI.
+
+The `build` matrix retains its four legs and their `build (<image>, <type>)`
+names. Its routing-only `include` entries carry the engine fragment for
+Linux and `macos-26` for macOS, selected with `runs-on: ${{ matrix.runner }}`.
+The two hosted macOS legs stay on `macos-26` (M1, 3 cores, 7 GB). The shared
+build job sets the engine label string once; hosted macOS legs ignore it.
+Release's separate matrix stays entirely hosted and sets no pool labels.
+Promotion stays hosted for both target and dispatch triggers.
+
+The dispatcher's actor allowlist is `luisleo526`, `pineforge-app[bot]` and
+`github-actions[bot]` (chain triggers only). Dependabot-specific jobs stay
+hosted; this repository currently has no Dependabot configuration or such job.
+The fragments do not extend that actor allowlist. The dispatcher accepts
+`pf-ci` plus exactly one class, with optional `self-hosted`, `linux` and that
+class's architecture and no duplicate labels. The pre-job hook also requires
+the matching `PF_CI_LABELS` string. ARM pool dispatch is disabled, so ARM stays
+hosted.
 
 Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
 `check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
-parallelism follow the runner: 16 on the larger Linux runner, 5 on the M2, 4
-and 3 on the standard runners. The larger Linux runner is configured for at
-most eight jobs at once, and one CI run starts seven there (preflight, the two
-Ubuntu `build` legs, sanitizers, kernel-only, native-live and the parity
-subset); a pull request that touches the corpus pin or the parity tooling also
-starts the whole sweep there, an eighth. A documentation-only change starts
-preflight alone there. A second run that overlaps them waits
-for a runner. Larger runners bill the organization's Actions budget: with no
-payment method or a spending limit of zero, their jobs wait for a runner that
-never comes, since GitHub does not fall back to a standard one. The test keeps
-a fork's pull request that leaves the workflows alone off the larger runners;
-one that edits them runs its own copy, which preflight reports but does not
-stop, so the repository's approval rule for workflow runs from outside
-contributors is what bounds that case.
+parallelism follow the runner: 16 on the build pool class and the available
+core count on hosted fallbacks (3 on the CI macOS image). A documentation-only
+change starts preflight alone among the verification jobs.
 
 `scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
 limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included, and keeps every other workflow -- `docs.yml`,
-`promote-baseline.yml` and any new one -- on standard runners. Only
-`release.yml` is exempt, by name and while its `on:` block names only events no
-fork can raise (a push, the schedule, a dispatch; a dispatch alone today). A
-heavy job moved back to the standard runner, a test or matrix entry that lets a
-fork's pull request onto a larger runner, a call to a workflow outside
-`.github/workflows/`, a changed time limit, a `ci_verify.py` call without
+strategy block included. It pins the original hosted labels in `docs.yml`,
+`promote-baseline.yml` and `release.yml`, the release matrix included, and
+checks every job for production secrets, OIDC write permission or an
+environment. Credential-bearing jobs must stay hosted without pool env;
+every other Linux x64 job must use one of the two current fragments and its
+matching job-level `PF_CI_LABELS`. macOS and ARM stay hosted. The contract refuses
+`pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and any `larger_runner`
+key in every workflow. A credential-bearing job on the pool, an old
+`ubuntu-latest` fragment fallback, a missing, duplicate, non-string or
+mismatched pool `PF_CI_LABELS`, a changed build or release matrix, a call to a
+workflow outside `.github/workflows/`, a changed time limit, a `ci_verify.py` call without
 exactly one core-count `--jobs` (counted over the whole job, however its
 commands are chained, blocked or carried, with the flag and its value on one
 line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
@@ -989,17 +1037,17 @@ that replaced its old limit, so the margin the removal buys stays visible. The
 numbers are measured durations, not a two-times multiplier.
 The standard-runner times are the eight CI runs from
 main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
-and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. Until
-the larger runners' own runs accumulate, the maintainers' x86-64 verification
-hosts at 8 to 12 jobs stand in for the Linux one on parallel work, the
-standard runner's speed stands in for it on serial work, and the 3-core M1
-bounds the M2 from above.
+and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. The
+maintainers' x86-64 verification-host timings at 8 to 12 jobs remain separate
+measurements; the standard-runner timings describe the former hosted policy
+and provide historical context for the ci-spot fallback. Pool timings await
+measurements on the new runners.
 
 | Job | Limit (min) | Measured basis |
 | --- | --- | --- |
 | `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); the native-live aggregate job names a stop at the platform's 360-minute maximum `HANG (re-run)` in its log; the check still fails. |
-| `build` | 360 (was 75) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. On the larger Linux runner a full leg is its build plus the serial `test_ci_verify` row, 976-1288 s: about 30 min. The M1's 37.0 min bounds the M2. 11.1-18.4 min on the verification hosts. |
-| `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), so about 40 min there with a faster build, and 18.2-19.0 min on the verification hosts. |
+| `build` | 360 (was 75) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
+| `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 360 (was 60) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
 | `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
 | `native-live (live-sanitizers)` | 360 (was 45; verification step 35) | The same three main runs spent 15.10–16.33 min in this profile after native. Its old per-row 900 s and stage 1200 s deadlines are gone; the verifier supplies no replacement, and the platform's job maximum catches a hang. |

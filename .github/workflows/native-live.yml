@@ -38,8 +38,14 @@ env:
 jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
-    # Same trusted-event 16-core policy as CI; forks use the standard runner.
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    # The live ci-spot build class, with the public fragment's hosted fallback.
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -59,6 +65,7 @@ jobs:
     # stage, step or row carries a bound of ours any more. Only a hang reaches
     # the platform maximum. No row inventory changes.
     env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       CCACHE_DIR: ${{ github.workspace }}/.ccache/${{ matrix.profile }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -145,7 +152,15 @@ jobs:
   native-live-gate:
     needs: native-live
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     timeout-minutes: 360
     steps:
       - name: Require every native profile to have passed
