@@ -14,8 +14,8 @@ authority is the L0b row of PARALLEL-PLAN section 3, DESIGN sections 2.1, 3.9,
 unconditional. The 18:21 scope ruling assigns the L0 acceptance harnesses to
 integration; this lane does not modify them.
 
-Source anchors below were refreshed for L19E's merge of integration
-`06734b1f4985bc265682f33afc75a7d6e1571e81`. The historical measurements and
+Source anchors below were refreshed for the merge of integration
+`69fdd0e0172d89481c724867f1b12a1db7f5a66b`. The historical measurements and
 model basis above are unchanged; no census measurement is inferred from the merge.
 
 ## Allocation-site ownership inventory
@@ -72,7 +72,7 @@ file or class name.
 Relevant declarations in the merged tree: `trades_` in include/pineforge/engine.hpp:547;
 `equity_curve_` in include/pineforge/engine.hpp:587; `closed_row_prefix_` in
 src/native_execution_consumer.hpp:1937; `events_` in
-include/pineforge/source/market_admission.hpp:235; `OriginRoster` in
+include/pineforge/source/market_admission.hpp:213; `OriginRoster` in
 include/pineforge/source/pine_adapter.hpp:935; the per-id cohort members in
 include/pineforge/source/pine_adapter.hpp:2518 and :2519; `trade_exit_phase_` in
 include/pineforge/source/pine_adapter.hpp:2734; `exit_rank_keys_` in
@@ -219,9 +219,9 @@ The source read behind the replacement keys is:
 | L19a | `WorkingRequestCore::index_committed` | src/native_order.cpp:1189, append at :1206 |
 | L19b/L19c | `ReceiptKey`, `CohortReceipt` | src/native_order.cpp:1505 and :5206; :1284 and :1306 |
 | L19d | `OriginRoster::push_back` | include/pineforge/source/pine_adapter.hpp:941 |
-| L19e | `Journal::append`, `Journal::reserve`, `Journal::next_sequence`, `CommandObservation` | src/source/market_admission.cpp:154, :135, :127 and :226 |
+| L19e | `Journal::append`, `Journal::reserve`, `Journal::next_sequence`, `CommandObservation` | src/source/market_admission.cpp:144, :125, :117 and :177 |
 | L19h | `BracketRoster` methods; `PlacementTable::try_emplace`/`replace` with an unsigned 64-bit vector element | include/pineforge/source/pine_adapter.hpp:772 and :790 |
-| L19l | `cohort_for`, `CohortFacts`, `CohortRoster`, `note_exit_rank_key`, `fold_sequence`, `SequenceMinima`; signed string-map values under `on_applied` | src/source/pine_adapter.cpp:3019, :6342, :24817; include/pineforge/source/pine_adapter.hpp:863 |
+| L19l | `cohort_for`, `CohortFacts`, `CohortRoster`, `note_exit_rank_key`, `fold_sequence`, `SequenceMinima`; signed string-map values under `on_applied` | src/source/pine_adapter.cpp:3019, :6342, :24801; include/pineforge/source/pine_adapter.hpp:863 |
 | L19i | `NativeExecutionConsumer::begin_timeframe_subscriptions` | src/native_execution_consumer.cpp:9397, assign at :9444 |
 | L19k | `tradingview_multi_day_stamps`, `TimeframeAggregator::set_native_periods` | src/source/pine_strategy_host.cpp:1560; src/timeframe.cpp:1769 |
 | L3/L4 | `PineScheduler::capture_begin`, `native_module::run_batch`; `script_bucket_completions`, `PineScheduler::run_begin` | src/source/pine_scheduler_native.cpp:19 and :176; include/pineforge/native_module.hpp:229; src/native_execution_consumer.cpp:9049 |
@@ -325,16 +325,3 @@ lines were re-read unchanged. Only registrations and shifted documentation
 coordinates were resolved; accepted source and test bodies were not edited.
 The equity-metric anchor now names the template body at src/engine_metrics.cpp:316.
 No build, test, generator or checker script ran on this machine.
-
-## Merge into L19E, fix round 4
-
-The merge of integration `06734b1f4985bc265682f33afc75a7d6e1571e81` into
-L19E preserves the integrated L0b driver and Python controls byte for byte.
-Both sides' census registrations coincide at tests/CMakeLists.txt:7124 and
-:7128; L19E's admission-window unit follows at :7135-7136. The condition at
-:3267 and its supporting evidence lines remain unchanged. Only registration
-conflicts and this report's shifted source coordinates were resolved here.
-The admission event declaration and allocation sites, and the partial-exit
-cycle allocation, now point at L19E's merged code. All size models, ownership
-assignments, Q9 OPEN cells and acceptance conditions are unchanged. No build,
-test, generator or checker script ran on this machine.
