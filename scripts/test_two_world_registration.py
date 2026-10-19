@@ -39,6 +39,9 @@ Controls:
  19. a math(EXPR) in a form the sweep cannot read -> 2, named
  20. the ctest row's TMPDIR shape (an untracked build dir inside the source
      tree) is a legal write area; tracked paths stay refused -> no raise / raise
+ 21. a public lane row is evaluated in both worlds from a neutral cwd
+ 22. a pinned private lane row registered in only one world is drift
+ 23. a glob-fed file(STRINGS) reads relative paths against the tree root
 """
 from __future__ import annotations
 
@@ -252,13 +255,13 @@ class TwoWorldControls(unittest.TestCase):
         self.tree = TamperTree(self.root)
         self.addCleanup(self._tmp.cleanup)
 
-    def run_check(self, *args: str, overlay: bool = False):
+    def run_check(self, *args: str, overlay: bool = False, cwd: Path | None = None):
         env = dict(os.environ)
         if overlay:
             env['PINEFORGE_PRIVATE_FIXTURES'] = '1'
         return subprocess.run(
             [PY, '-B', str(CHECK), '--root', str(self.root), *args],
-            capture_output=True, text=True, env=env)
+            capture_output=True, text=True, env=env, cwd=cwd)
 
     # control 1: the drift guard names a recorded row whose record was removed
     @needs_overlay
@@ -605,6 +608,88 @@ math(EXPR _e2e_two_world_math "1 +")
                              'the tampered copy must lose exactly one profile')
             self.assertNotEqual(set(ci_verify.PROFILES), set(module.PROFILES),
                                 'a table an entry short must not compare equal')
+
+    def lane_tree(self, body: str) -> Path:
+        """An isolated include probe over the copied tree and real pin set."""
+        lanes = self.root / 'tests' / 'cr150.d'
+        self.tree._refuse_repo(lanes.parent)
+        self.assertTrue(lanes.is_symlink(), 'the copied lane directory changed shape')
+        lanes.unlink()                       # the scratch-tree link, never its target
+        shutil.copytree(REPO / 'tests' / 'cr150.d', lanes)
+        self.tree.append('tests/cr150.d/e2e-two-world-lane.cmake', body)
+        # Keep the real lane include block, with empty but fully modelled
+        # records around it. Both probes use this same registration fixture.
+        block = (REPO / TREES_DIR).read_text().splitlines(keepends=True)[-5:]
+        self.tree._write_target(TREES_DIR).write_text(
+            'set(_pf_source_bound_private_rows)\n' + ''.join(block))
+        self.tree._write_target(RUNNER).write_text(
+            'set(_pf_refusal_shard_rows)\n'
+            'set(_pf_refusal_shard_first_library)\n'
+            'list(POP_FRONT _pf_refusal_shard_first_library)\n'
+            'set(_pf_confirmed_refusal_requests)\n'
+            'set(_pf_confirmed_refusal_pooc)\n')
+        # Exercise both worlds without requiring the private overlay: only
+        # marker existence is consumed by this fixture, not its file contents.
+        marker = self.root / CHECK_MODULE.OVERLAY_MARKER
+        if not marker.exists():
+            self.tree._refuse_repo(marker.parent)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            self.tree.append(str(CHECK_MODULE.OVERLAY_MARKER), '// registry probe marker\n')
+        cwd = Path(self._tmp.name) / 'outside-tree'
+        cwd.mkdir()
+        self.assertNotEqual(cwd, self.root)
+        return cwd
+
+    def test_lane_public_row_is_read_from_a_different_cwd(self):
+        row = 'e2e_two_world_lane_public'
+        cwd = self.lane_tree(
+            f'add_test(NAME {row} COMMAND ${{CMAKE_COMMAND}} -E echo public)\n')
+        self.assertNotIn(row, CHECK_MODULE.load_pinned_rows(self.root))
+        with mock.patch.dict(os.environ, {'PF_TWO_WORLD_SHOW_ROWS': '1'}):
+            result = self.run_check('--both', '--cmakelists', TREES_DIR,
+                                    '--profile', 'release', cwd=cwd)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for world in ('absent', 'overlay'):
+            self.assertIn(f'{TREES_DIR} [release] {world}-world row: {row}', result.stdout)
+        self.assertIn('absent-only names: 0', result.stdout)
+        self.assertIn('overlay-only names: 0', result.stdout)
+
+    def test_lane_pinned_private_row_is_drift_from_a_different_cwd(self):
+        row = NOT_A_SHARD_ROW
+        self.assertIn(row, CHECK_MODULE.load_pinned_rows(self.root))
+        cwd = self.lane_tree(f'''if(EXISTS "${{PROJECT_SOURCE_DIR}}/{CHECK_MODULE.OVERLAY_MARKER}")
+    add_test(NAME {row} COMMAND ${{CMAKE_COMMAND}} -E echo private)
+endif()
+''')
+        result = self.run_check('--both', '--cmakelists', TREES_DIR,
+                                '--profile', 'release', cwd=cwd)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(f'{TREES_DIR} [release] registers {row} only with the overlay present',
+                      result.stdout)
+        self.assertIn('overlay-only names: 1', result.stdout)
+        self.assertNotIn('FileNotFoundError', result.stdout + result.stderr)
+
+    def test_glob_fed_strings_are_read_from_a_different_cwd(self):
+        row = 'e2e_two_world_glob_strings'
+        cwd = self.lane_tree('')
+        directory = self.root / 'tests' / 'e2e-glob-strings'
+        self.tree._refuse_repo(directory)
+        directory.mkdir()
+        self.tree._write_target('tests/e2e-glob-strings/rows.txt').write_text(row + '\n')
+        self.tree.append(TREES_DIR, '''
+file(GLOB _e2e_strings_files "${CMAKE_CURRENT_SOURCE_DIR}/e2e-glob-strings/*.txt")
+list(GET _e2e_strings_files 0 _e2e_strings_file)
+file(STRINGS ${_e2e_strings_file} _e2e_strings_rows)
+foreach(_e2e_strings_row IN LISTS _e2e_strings_rows)
+    add_test(NAME ${_e2e_strings_row} COMMAND ${CMAKE_COMMAND} -E echo public)
+endforeach()
+''')
+        with mock.patch.dict(os.environ, {'PF_TWO_WORLD_SHOW_ROWS': '1'}):
+            result = self.run_check('--both', '--cmakelists', TREES_DIR,
+                                    '--profile', 'release', cwd=cwd)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for world in ('absent', 'overlay'):
+            self.assertIn(f'{TREES_DIR} [release] {world}-world row: {row}', result.stdout)
 
 
 if __name__ == '__main__':
