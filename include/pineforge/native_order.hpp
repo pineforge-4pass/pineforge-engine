@@ -1726,9 +1726,22 @@ public:
     /// The ordinal of the newest retired event, 0 while none is.
     uint64_t retired_through() const noexcept { return retired_through_; }
     const std::vector<CohortRoster>& cohorts() const noexcept { return cohorts_; }
+    /// The retained cohort-receipt window, in command order. Its absolute
+    /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
+    /// standalone core retains all rows until its reader retires them; the
+    /// Window consumer retires each row after folding it into its digest.
     const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
         return cohort_receipts_;
     }
+    std::size_t cohort_receipt_base() const noexcept { return cohort_receipts_base_; }
+    /// Every cohort receipt this run committed, retained or not.
+    std::size_t cohort_receipt_count() const noexcept {
+        return cohort_receipts_base_ + cohort_receipts_.size();
+    }
+    /// Drop the prefix strictly below the absolute position through, clamped
+    /// to the window. The reader must have folded these rows first. Does not
+    /// change rosters, command counters, prepared-command validity or totals.
+    std::size_t retire_cohort_receipts(std::size_t through) noexcept;
     /// The core's two durable counters: the ordinal of the last committed
     /// event and the last incarnation a command consumed. A later command must
     /// exceed both.
@@ -2317,6 +2330,9 @@ private:
     std::uint64_t next_cohort_handle_ = 1;
     std::vector<CohortRoster> cohorts_;
     std::vector<CohortReceipt> cohort_receipts_;
+    // Storage cursor only: the consumer hashes the lifetime count and every
+    // receipt, independently of how many of their rows have been retired.
+    std::size_t cohort_receipts_base_ = 0;
 };
 
 class PreparedSubmit {

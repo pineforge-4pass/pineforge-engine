@@ -954,6 +954,7 @@ void WorkingRequestCore::clear_unbound() noexcept {
     next_cohort_handle_ = 1;
     cohorts_.clear();
     cohort_receipts_.clear();
+    cohort_receipts_base_ = 0;
     epoch_ = 0;
     if (instance_) instance_->expired = true;
     instance_.reset();
@@ -1317,6 +1318,15 @@ bool WorkingRequestCore::cohort_contains(
     return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
 }
 
+std::size_t WorkingRequestCore::retire_cohort_receipts(std::size_t through) noexcept {
+    if (through <= cohort_receipts_base_) return 0;
+    const std::size_t count = std::min(through - cohort_receipts_base_, cohort_receipts_.size());
+    cohort_receipts_.erase(cohort_receipts_.begin(),
+                           cohort_receipts_.begin() + static_cast<std::ptrdiff_t>(count));
+    cohort_receipts_base_ += count;
+    return count;
+}
+
 bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
                                                       const EventId& cause,
                                                       const RequestHandle& recipient,
@@ -1542,6 +1552,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
     cohort_receipts_ = std::move(other.cohort_receipts_);
+    cohort_receipts_base_ = other.cohort_receipts_base_;
     instance_ = std::move(other.instance_);
     if (instance_) {
         if (instance_->generation != std::numeric_limits<uint64_t>::max()) {
@@ -1567,6 +1578,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.next_cohort_handle_ = 1;
     other.cohorts_.clear();
     other.cohort_receipts_.clear();
+    other.cohort_receipts_base_ = 0;
     other.instance_.reset();
     return *this;
 }
