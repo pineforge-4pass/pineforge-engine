@@ -7227,6 +7227,10 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
 endif()
 # --- CR-150 core-cr150-l6b2 end ---
 
+# --- CR-150 core-cr150-l19f begin ---
+# CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
+# --- CR-150 core-cr150-l19f end ---
+
 # --- CR-150 core-cr150-l2 begin ---
 if(TARGET outputs_fixture_strategy)
     set_tests_properties(test_run_json_bin PROPERTIES
