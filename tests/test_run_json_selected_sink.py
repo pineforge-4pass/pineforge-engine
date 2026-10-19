@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import types
+from unittest import mock
 
 import pytest
 
@@ -31,6 +32,7 @@ import selected_window_plan as planner
 import selected_window_report as swr
 import test_run_json_selected_window as selected
 import test_run_json_sink as sinks
+import test_run_json_sink_summary as summaries
 
 # Reuse the existing immutable producer and its SHA-256 guard.
 frozen = sinks.frozen
@@ -151,6 +153,32 @@ class SelectedSinkLibrary(selected.FakeLib):
         return 0
 
 
+class NamedSinkLibrary(SelectedSinkLibrary):
+    """The selected fixture behind a caller-named sink: the descriptor the harness hands the
+    engine is recorded, and the sink header carries the run id it names, as the engine writes it."""
+
+    def __init__(self, plan, **kwargs):
+        super().__init__(plan, **kwargs)
+        self.run_id, self.descriptors = "", []
+
+    def install(self, state, ref):
+        descriptor = ref._obj
+        assert descriptor.struct_size == ctypes.sizeof(run_json.ReportSinkC)
+        assert descriptor.version == 1
+        self.path = os.fsdecode(descriptor.path)
+        self.run_id = descriptor.run_id.decode("utf-8")
+        self.descriptors.append((self.path, self.run_id, os.fsdecode(descriptor.scratch_dir)))
+        self.installed.append(self.path)
+        self.calls.append(("set_report_sink",))
+        return 0
+
+    def _run(self, *args):
+        header = sinks.header
+        with mock.patch.object(
+                sinks, "header", lambda outputs=False: {**header(outputs), "run_id": self.run_id}):
+            super()._run(*args)
+
+
 def invoke(tmp_path, monkeypatch, *, runner=run_json, library=None, plan=None,
            outputs=False, normalize=None, extra=()):
     plan = selected.full_plan() if plan is None else plan
@@ -239,21 +267,75 @@ def test_selected_unresolved_capital_keeps_the_same_fingerprint(tmp_path, monkey
     assert masked_bytes(after[1]) == masked_bytes(before[1])
 
 
+NAMED_RUN_ID = 'l9s "named"\n漢'
+
+
+@pytest.mark.parametrize("outputs", [False, True])
+def test_selected_named_sink_yields_the_summary_projection(tmp_path, monkeypatch, frozen, outputs):
+    """A selected request that names a sink is no longer run_request_invalid. Its report is the
+    frozen array producer's selected report projected to DESIGN 4.3: trades become report_sink,
+    the curve is dropped, outputs keep their six O(1) members, report_window and report_shape
+    stay. The reference reader checks the file the engine was told to write."""
+    path, spill = tmp_path / "selected report 漢.ndjson", tmp_path / "spill"
+    spill.mkdir()
+    plan = selected.full_plan()
+    before = invoke(tmp_path, monkeypatch, runner=frozen, plan=plan, outputs=outputs,
+                    library=SelectedSinkLibrary(plan, outputs=outputs))
+    library, directories = NamedSinkLibrary(plan, outputs=outputs), []
+    temporary = run_json.tempfile.TemporaryFile
+
+    def track(*args, **kwargs):
+        directories.append(kwargs.get("dir"))
+        return temporary(*args, **kwargs)
+
+    monkeypatch.setattr(run_json.tempfile, "TemporaryFile", track)
+    after = invoke(tmp_path, monkeypatch, plan=plan, outputs=outputs, library=library,
+                   extra=["--report-sink", str(path), "--run-id", NAMED_RUN_ID,
+                          "--spill-dir", str(spill)])
+    assert (before[0], before[2], after[0], after[2]) == (0, "", 0, ""), (before[1], after[1])
+    reference = summaries.read_reference(path)
+    expected = summaries.project_summary(json.loads(masked_bytes(before[1])), reference)
+    assert masked_bytes(after[1]) == json.dumps(expected, separators=(",", ":"), allow_nan=False)
+    document, array = json.loads(after[1]), json.loads(before[1])
+    assert tuple(document["report_sink"]) == summaries.REFERENCE_KEYS
+    assert not {"trades", "equity_curve"} & set(document)
+    assert {"report_window", "report_shape"} <= set(document)
+    if outputs:
+        assert tuple(document["outputs"]) == summaries.OUTPUT_KEYS
+    # The sink is the one the fixture wrote, with the array report's counts and the request's id.
+    assert reference["run_id"] == NAMED_RUN_ID
+    assert reference["counts"] == library.counts and reference["sha256"] == library.sha
+    assert reference["counts"]["E"] == len(array["equity_curve"])
+    assert reference["counts"]["T"] == len(array["trades"])
+    assert library.descriptors == [(str(path), NAMED_RUN_ID, str(spill))]
+    assert library.queried == 1 and library.closed == [str(path)] and path.is_file()
+    assert not library.incarnation_reads and after[4][0].phase == "completed"
+    # One prepared document in the spill directory: no unlinked sink, no output columns.
+    assert directories == [str(spill)]
+
+
 def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkeypatch):
-    original, equity_passes = run_json._TemporaryReportSink.records, []
+    new_sink, equity_passes = run_json._new_report_sink, []
 
-    def records(self, tag=None):
-        yielded = 0
-        with contextlib.closing(original(self, tag)) as source:
-            try:
-                for row in source:
-                    yielded += 1
-                    yield row
-            finally:
-                if tag == "E":
-                    equity_passes.append(yielded)
+    def counting_sink(*args, **kwargs):
+        sink = new_sink(*args, **kwargs)
+        original = sink.records
 
-    monkeypatch.setattr(run_json._TemporaryReportSink, "records", records)
+        def records(tag=None):
+            yielded = 0
+            with contextlib.closing(original(tag)) as source:
+                try:
+                    for row in source:
+                        yielded += 1
+                        yield row
+                finally:
+                    if tag == "E":
+                        equity_passes.append(yielded)
+
+        sink.records = records
+        return sink
+
+    monkeypatch.setattr(run_json, "_new_report_sink", counting_sink)
     status, text, stderr, library, _ = invoke(tmp_path, monkeypatch)
     assert library.installed and status == 0 and stderr == "", text
     # Anchor validation, then the full streaming serialization pass.

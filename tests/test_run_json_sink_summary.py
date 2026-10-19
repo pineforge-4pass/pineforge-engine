@@ -283,16 +283,6 @@ def test_sink_options_reject_invalid_c_strings_before_loading(tmp_path, monkeypa
     assert document["args"] == {"option": "arguments"}
 
 
-def test_selected_mode_never_silently_ignores_named_sink(tmp_path, monkeypatch):
-    source = bars.csv_file(tmp_path)
-    status, document, stderr, library = bars.invoke(
-        monkeypatch, "--ohlcv", str(source), "--report-policy", "selected-window/v1",
-        "--report-sink", str(tmp_path / "report.ndjson"))
-    assert status == 1 and stderr == "" and library.calls == []
-    assert document["code"] == "run_request_invalid"
-    assert document["args"] == {"option": "arguments"}
-
-
 def native_summary_compare(tmp_path, module, argv):
     frozen_path = tmp_path / "frozen_run_json.py"
     frozen_path.write_bytes(full._frozen_source_bytes())

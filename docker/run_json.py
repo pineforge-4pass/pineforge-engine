@@ -4648,7 +4648,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         outputs_block = None
         if args.outputs:
             outputs_block = (
-                _sink_outputs_block(lib, state, sink, output_files)
+                _sink_outputs_block(lib, state, sink, output_files, summary_only=sink.named)
                 if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
             applied_runtime["outputs"] = True
         # ONE R object, placed in all three required places (the third is
@@ -4980,11 +4980,6 @@ def _main(argv, binary_inputs) -> int:
     selected = _selected_requested(args)
     if selected and args.ohlcv_bin is not None:
         raise _request_invalid("error: selected-window mode requires a CSV chart", "ohlcv_bin")
-    if selected and (args.report_sink is not None or args.run_id or args.spill_dir is not None):
-        # L9S owns selected-window sink assembly. Never accept a named sink
-        # request here and silently return the selected array report instead.
-        raise _request_invalid(
-            "error: selected-window mode does not yet support report sink options", "arguments")
     if (selected or args.report_shape is not None or args.curve_point_budget is not None
             or args.results_digest is not None):
         import selected_window_report
