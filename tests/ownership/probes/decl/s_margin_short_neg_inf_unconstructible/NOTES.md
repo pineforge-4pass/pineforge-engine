@@ -3,8 +3,11 @@
 Runtime declaration case: **UNCONSTRUCTIBLE with the inspected codegen**.
 This source requests -1e400 for strategy.margin_short. The parser rejects the
 out-of-range numeric operand before emission (codegen parser.py:1633-1649).
-The schema therefore records compile_refused, an empty runtime code/args,
-and the existing native boundary control file. This is COMPILE COVERAGE only;
+The expectation is `compile_refused` with `code` `PF-E0036` (the first error
+diagnostic's stable code exposed by codegen, `tests/ownership/README.md:92-93`;
+"Numeric literal exceeds the generated C++ range.", args `{}`). Runtime coverage
+of the S nonfinite claim rests on the native control rows named in
+`native_boundary_control`. This is COMPILE COVERAGE only;
 it is not a runtime strategy_value_invalid result or a red runtime producer row.
 
 The paired native row is `decl_margin_short_neg_inf` in

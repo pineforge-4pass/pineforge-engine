@@ -1,13 +1,9 @@
 {
-  "outcome": "failed",
-  "code": "engine_command_value_invalid",
-  "args": {
-    "field": "margin.required",
-    "stage": "margin",
-    "reason": "nonfinite"
-  },
+  "outcome": "completed",
+  "code": null,
+  "args": {},
   "min_trades": 0,
-  "label": "G",
-  "pinned_by": "D6 row 7 explicit placement requirement",
-  "native_boundary_control": "tests/test_value_invalid_sizing_margin.cpp"
+  "label": "control",
+  "pinned_by": "D6 row 7 explicit placement requirement; finite explicit overflow KEEP per L6 10-14 ruling (f2a455b14); tests/test_value_invalid_sizing_margin_source.cpp:196-197,232-262 (keep_finite_explicit_placement_overflow)",
+  "native_boundary_control": "tests/test_value_invalid_sizing_margin_source.cpp"
 }
