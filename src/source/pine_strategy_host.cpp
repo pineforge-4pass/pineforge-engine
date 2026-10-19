@@ -238,8 +238,10 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
         const auto* slot = views.instrument_feed_count == 0
             ? nullptr : views.instrument_feeds[i];
         const auto data = native_instrument_feed_view(feed, slot);
+        const std::size_t count = i < symbol_feed_views_.size() && symbol_feed_views_[i].present
+            ? symbol_feed_views_[i].size : data.bars.size;
         staged.instrument_feeds.push_back(
-            {feed.instrument, feed.tf, data.bars.size, feed.columns.size()});
+            {feed.instrument, feed.tf, count, feed.columns.size()});
     }
     return staged;
 }
@@ -353,7 +355,14 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     std::vector<NativeInstrumentFeed> lent = lend_feed_bytes(symbol_feeds_);
     NativeRunSpec spec = [&] {
         try {
-            NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(nullptr, 0);
+            const bool has_borrowed_feed = std::any_of(
+                symbol_feed_views_.begin(), symbol_feed_views_.end(),
+                [](const BorrowedFeedSlot& slot) { return slot.present; });
+            if (has_borrowed_feed) {
+                stage_symbol_feed_views();
+            } else {
+                NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(nullptr, 0);
+            }
             return adapter_.project(effective, staged, args, path_order, &lent);
         } catch (...) {
             return_feed_bytes(symbol_feeds_, lent);
@@ -801,8 +810,8 @@ void source::PineStrategyHost::on_native_applied(
     // recalculation next, in the same drain iteration and at the same cursor
     // (NativeCalculationTrigger::BarCloseAndFills). The range-end row stays
     // after it, exactly where the adapter's own cascade used to put it.
-    if (!scheduler_.coof_recalculation_due(event, context, *this))
-        record_applied_range_end();
+    // Finish the same range-end mark, then any post-calculation journal tail.
+    finish_applied_admission(event, context);
 }
 
 void source::PineStrategyHost::record_applied_range_end() {
@@ -3077,4 +3086,41 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
     return close ? tf_close_of(open) : open;
 }
 
+void source::PineStrategyHost::finish_applied_admission(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) {
+    const bool recalculation_due = scheduler_.coof_recalculation_due(event, context, *this);
+    if (!recalculation_due) record_applied_range_end();
+    // A process-on-close fill can append admission events after on_native_bar.
+    // Retire that completed tail without recapturing the broker-state row:
+    // F0a preserves the existing recording and continuation boundaries.
+    // A synchronous fill inside an unfinished command is folded by the
+    // enclosing on_bar_close instead.
+    if (!recalculation_due && context.is_terminal_sub_bar
+        && context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+        && !adapter_.admission_journal.has_unfinished_events()) {
+        adapter_.finish_admission_bar();
+    }
+}
+
 } // namespace pineforge
+
+namespace pineforge {
+
+void source::PineStrategyHost::stage_symbol_feed_views() {
+    if (symbol_feed_views_.size() != symbol_feeds_.size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "request data: symbol feed view table is out of sync");
+    std::vector<NativeInstrumentFeedView> descriptors(symbol_feed_views_.size());
+    std::vector<const NativeInstrumentFeedView*> slots(symbol_feed_views_.size(), nullptr);
+    for (std::size_t i = 0; i < symbol_feed_views_.size(); ++i) {
+        const BorrowedFeedSlot& slot = symbol_feed_views_[i];
+        if (!slot.present) continue;
+        descriptors[i] = {{slot.bars, slot.size}, slot.close_ms};
+        slots[i] = &descriptors[i];
+    }
+    NativeExecutionConsumer::bound(*this).stage_instrument_feed_views(
+        slots.empty() ? nullptr : slots.data(), slots.size());
+}
+
+}  // namespace pineforge

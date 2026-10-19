@@ -754,18 +754,38 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     f.u(cap.next_action()); f.b(priority.attached());
     f.b(priority.retained_parent_first());
-    // v4: the journal's events as a running digest, each folded once, and its
-    // next sequence. Its outstanding allocations and active captures live
-    // inside one command and are empty at every hash point.
-    const auto& events = admission_journal.events();
-    if (admission_events_folded_ > events.size()
-        || (admission_events_folded_ != 0
-            && admission::sequence(events[admission_events_folded_ - 1])
+    // The eager boundary fold and this query share the original v4 byte loop.
+    // A retired prefix substitutes for its events, without adding hash bytes.
+    fold_admission_events();
+    f.u(admission_journal.sequence_frontier());
+    f.u(admission_events_folded_); f.u(admission_events_digest_);
+}
+
+void source::PineExecutionAdapter::fold_admission_events() const {
+    const auto& base = admission_journal.retired_prefix();
+    const auto& window = admission_journal.events();
+    // The v4 cursor is global, whereas the vector now begins at base.count.
+    // Retain the original per-event expression and byte loop on this view.
+    struct GlobalEvents {
+        const std::vector<admission::Event>& window;
+        std::size_t base;
+        const admission::Event& operator[](std::size_t index) const {
+            return window[index - base];
+        }
+    };
+    const GlobalEvents events{window, base.count};
+    const auto total = base.count + window.size();
+    if (admission_events_folded_ < base.count || admission_events_folded_ > total
+        || (admission_events_folded_ == base.count
+            ? (admission_events_last_ != base.last_sequence
+               || admission_events_digest_ != base.digest)
+            : admission::sequence(events[admission_events_folded_ - 1])
                 != admission_events_last_)) {
-        admission_events_folded_ = 0;
-        admission_events_digest_ = 1469598103934665603ULL;
+        admission_events_folded_ = base.count;
+        admission_events_digest_ = base.digest;
+        admission_events_last_ = base.last_sequence;
     }
-    for (; admission_events_folded_ < events.size(); ++admission_events_folded_) {
+    for (; admission_events_folded_ < total; ++admission_events_folded_) {
         BrokerStateHashSink event_fold;
         event_fold.h = admission_events_digest_;
         admission::reflect(events[admission_events_folded_], "event",
@@ -773,8 +793,6 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         admission_events_digest_ = event_fold.h;
         admission_events_last_ = admission::sequence(events[admission_events_folded_]);
     }
-    f.u(admission_journal.sequence_frontier());
-    f.u(admission_events_folded_); f.u(admission_events_digest_);
 }
 
 std::uint64_t source::PineExecutionAdapter::fold_dropped_close(
