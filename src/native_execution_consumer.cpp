@@ -8434,25 +8434,25 @@ NativeExecutionConsumer::certify_cycle(int64_t ms) const {
         }
     }
     try {
+        const std::size_t day_span_bound = native_calendar::session_day_span_bound(calendar_);
+        for (CertifiedCycle& slot : certified_cycles_) slot.spans.reserve(day_span_bound);
         auto certificate = native_calendar::cycle_certificate(calendar_, ms, calendar_memo_);
-        CertifiedCycle entry;
-        if (certificate) {
-            entry.certified = true;
-            entry.origin_ms = certificate->origin_ms;
-            entry.next_origin_ms = certificate->next_origin_ms;
-            entry.ordinal = certificate->ordinal;
-            entry.bucket_ms = native_calendar::fixed_bucket_ms(script_tf_);
-            entry.spans = std::move(certificate->spans);
-        } else {
-            constexpr int64_t kDayMs = 86'400'000;
-            entry.origin_ms = ms;
-            entry.next_origin_ms = ms <= std::numeric_limits<int64_t>::max() - kDayMs
-                ? ms + kDayMs : std::numeric_limits<int64_t>::max();
-        }
         CertifiedCycle& kept = certified_cycles_[certified_cycle_next_];
+        kept.certified = false;  // a half-written entry is read the exact way
+        if (certificate) {
+            kept.spans.assign(certificate->spans.begin(), certificate->spans.end());
+            kept.ordinal = certificate->ordinal;
+            kept.bucket_ms = native_calendar::fixed_bucket_ms(script_tf_);
+            kept.origin_ms = certificate->origin_ms;
+            kept.next_origin_ms = certificate->next_origin_ms;
+            kept.certified = true;
+        } else {
+            kept.origin_ms = ms;
+            kept.next_origin_ms = ms <= std::numeric_limits<int64_t>::max() - kMsPerDay
+                ? ms + kMsPerDay : std::numeric_limits<int64_t>::max();
+        }
         certified_cycle_last_ = certified_cycle_next_;
         certified_cycle_next_ = (certified_cycle_next_ + 1) % certified_cycles_.size();
-        kept = std::move(entry);
         return kept.certified ? &kept : nullptr;
     } catch (...) {
         return nullptr;
