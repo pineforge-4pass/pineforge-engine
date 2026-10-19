@@ -7139,7 +7139,7 @@ foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
 
-# --- CR-150 l6b2 begin ---
+# --- CR-150 core-cr150-l6b2 begin ---
 if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_library(report_sink_equity_strategy MODULE test_report_sink_equity.cpp)
     target_compile_definitions(report_sink_equity_strategy PRIVATE PINEFORGE_L6B2_MODULE=1)
@@ -7159,4 +7159,4 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
         PINEFORGE_L6B2_MODULE_PATH="$<TARGET_FILE:report_sink_equity_strategy>")
     add_dependencies(test_report_sink_equity report_sink_equity_strategy)
 endif()
-# --- CR-150 l6b2 end ---
+# --- CR-150 core-cr150-l6b2 end ---
