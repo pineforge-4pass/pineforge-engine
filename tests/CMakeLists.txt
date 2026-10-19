@@ -7265,7 +7265,10 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/flat_memory_rss_e2e.py
             --run-json ${PROJECT_SOURCE_DIR}/docker/run_json.py
-            --module-dir ${PINEFORGE_FLAT_MEMORY_MODULE_DIR})
+            --module-dir ${PINEFORGE_FLAT_MEMORY_MODULE_DIR}
+            --report-sink off
+            --work-dir ${CMAKE_BINARY_DIR}/flat_memory_work
+            --results-dir ${CMAKE_BINARY_DIR}/flat_memory_results)
     set_tests_properties(test_flat_memory_rss_e2e PROPERTIES
         LABELS "mem;slow;l4-pending")
 endif()

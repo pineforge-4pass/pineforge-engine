@@ -50,7 +50,7 @@ import hashlib
 import json
 import math
 import os
-import shutil
+import re
 import struct
 import subprocess
 import sys
@@ -61,19 +61,9 @@ from pathlib import Path
 MIB = 1024 * 1024
 KIB = 1024
 
-# Q4 requires a measured rest(1k) plus 32 MiB, rounded up to 16 MiB.
-# PROVISIONAL ESTIMATE ONLY: 64 MiB for CPython + ctypes + the module + 1k
-# bars. L13 must replace this estimate with the recorded lab/spot measurement
-# and its provenance. No measurement was made in this lane. The provisional
-# bound remains 96 MiB; the 1 MiB slope assertion is the acceptance gate.
-REST_1K_ESTIMATE_BYTES = 64 * MIB
-
-
 def round_up(value: int, unit: int) -> int:
     return (value + unit - 1) // unit * unit
 
-
-REST_1K_BOUND_BYTES = round_up(REST_1K_ESTIMATE_BYTES + 32 * MIB, 16 * MIB)
 
 BASE_TS = 1_699_999_980_000  # divisible by 60000: calendar-aligned 1m opens
 MINUTE_MS = 60_000
@@ -90,6 +80,62 @@ class SetupError(RuntimeError):
 
 class CaseFailure(AssertionError):
     """A measured assertion failed: this is the red."""
+
+
+def checked_path(path: Path) -> Path:
+    """Refuse sensitive names before opening a command's file inputs/outputs."""
+    def refuse(candidate):
+        parts = candidate.parts
+        text = str(candidate)
+        if (candidate.name.endswith(".env")
+                or any(part in {".ssh", ".aws", ".codex"} for part in parts)
+                or "/.config/zsh/keys" in text
+                or "/.config/pineforge" in text):
+            raise SetupError(f"REFUSED sensitive path by name: {candidate}")
+    lexical = Path(os.path.abspath(path))
+    refuse(lexical)
+    resolved = lexical.resolve()
+    refuse(resolved)
+    return resolved
+
+
+def follow_manifest(command: list[str]) -> None:
+    paths = [Path(command[0])]
+    if len(command) > 1 and not command[1].startswith("-"):
+        paths.append(Path(command[1]))
+    file_flags = {"--so", "--ohlcv", "--ohlcv-bin", "--symbol-feeds",
+                  "--request-feed-inventory", "--syminfo", "--cpp"}
+    for index, arg in enumerate(command[:-1]):
+        if arg in file_flags:
+            paths.append(Path(command[index + 1]))
+    for path in paths:
+        print(f"FOLLOW {checked_path(path)}", flush=True)
+    # An index names further files. Announce/refuse it before reading it,
+    # then announce/refuse every feed before run_json follows the index.
+    if "--symbol-feeds" in command:
+        index = checked_path(Path(command[command.index("--symbol-feeds") + 1]))
+        document = json.loads(index.read_text(encoding="utf-8"))
+        for symbol in document.get("symbols", {}).values():
+            for name in symbol.get("feeds", {}).values():
+                path = checked_path(index.parent / name)
+                print(f"FOLLOW {path}", flush=True)
+                if path.suffix == ".bin":
+                    print(f"FOLLOW {checked_path(Path(str(path) + '.json'))}", flush=True)
+                    print(f"FOLLOW {checked_path(path.with_suffix('.close.bin'))}", flush=True)
+    if "--ohlcv-bin" in command:
+        path = Path(command[command.index("--ohlcv-bin") + 1])
+        print(f"FOLLOW {checked_path(Path(str(path) + '.json'))}", flush=True)
+
+
+def write_json(path: Path, document: dict) -> None:
+    path = checked_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(document, handle, indent=2, sort_keys=True, allow_nan=False)
+        handle.write("\n")
+
+
+_run_serial = 0
 
 
 # ── input generation ────────────────────────────────────────────────────
@@ -230,12 +276,13 @@ def write_feed_index(path: Path, feed_name: str) -> None:
 
 class Run:
     def __init__(self, peak_rss_bytes: int, returncode: int, stdout: bytes,
-                 stderr: bytes, wall_seconds: float):
+                 stderr: bytes, wall_seconds: float, artifacts: dict):
         self.peak_rss_bytes = peak_rss_bytes
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
         self.wall_seconds = wall_seconds
+        self.artifacts = artifacts
 
     def document(self) -> dict:
         try:
@@ -250,9 +297,20 @@ class Run:
         return (self.stderr or self.stdout).decode("utf-8", "replace")[-4000:]
 
 
-def measured(command: list[str], cwd: Path, env: dict) -> Run:
+def measured(command: list[str], cwd: Path, env: dict, *,
+             log_dir: Path, label: str) -> Run:
     """Run one child and read its own peak RSS (Linux KiB, Darwin bytes)."""
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+    global _run_serial
+    _run_serial += 1
+    follow_manifest(command)
+    log_dir = checked_path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{_run_serial:04d}-{re.sub(r'[^A-Za-z0-9._-]', '_', label)}"
+    out_path = log_dir / f"{stem}.stdout.json"
+    err_path = log_dir / f"{stem}.stderr.log"
+    exit_path = log_dir / f"{stem}.exit"
+    result_path = log_dir / f"{stem}.child.json"
+    with out_path.open("x+b") as out, err_path.open("x+b") as err:
         started = time.monotonic()
         child = subprocess.Popen(command, cwd=str(cwd), env=env, stdout=out, stderr=err)
         pid, status, usage = os.wait4(child.pid, 0)
@@ -263,45 +321,70 @@ def measured(command: list[str], cwd: Path, env: dict) -> Run:
         stdout = out.read()
         stderr = err.read()
     peak = usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
-    return Run(peak, child.returncode, stdout, stderr, wall)
+    exit_path.write_text(f"{child.returncode}\n", encoding="ascii")
+    artifacts = {"stdout": str(out_path), "stderr": str(err_path),
+                 "exit": str(exit_path), "child_result": str(result_path)}
+    write_json(result_path, {
+        "command": command, "pid": pid, "wait_status": status,
+        "returncode": child.returncode, "ru_maxrss": usage.ru_maxrss,
+        "ru_maxrss_units": "bytes" if sys.platform == "darwin" else "KiB",
+        "peak_rss_bytes": peak, "peak_source": "child os.wait4 ru_maxrss",
+        "wall_seconds": wall, **artifacts,
+    })
+    return Run(peak, child.returncode, stdout, stderr, wall, artifacts)
 
 
-def parse_help(run_json: Path, cwd: Path, env: dict) -> str:
-    result = measured([sys.executable, str(run_json), "--help"], cwd, env)
+def parse_help(run_json: Path, cwd: Path, env: dict, log_dir: Path) -> str:
+    result = measured([sys.executable, str(run_json), "--help"], cwd, env,
+                      log_dir=log_dir, label="help")
+    if result.returncode != 0:
+        raise SetupError(f"run_json --help exited {result.returncode}: {result.failure_text()}")
     return result.stdout.decode("utf-8", "replace")
 
 
 class Harness:
     def __init__(self, run_json: Path, module_dir: Path, work: Path,
-                 modules: dict[str, Path], keep: bool):
+                 modules: dict[str, Path], keep: bool, results: Path,
+                 report_sink: str):
         self.run_json = run_json
         self.module_dir = module_dir
         self.work = work
         self.modules = modules
         self.keep = keep
+        self.results = results
+        self.current_case = "_setup"
+        self.input_records: dict[str, int] = {}
+        self.bounds: dict[str, dict] = {}
         self.env = dict(os.environ)
         self.env.setdefault("PYTHONHASHSEED", "0")
         # A released borrowed array must be visible as a crash or a wrong
         # report, not hidden by a lucky allocator.
         self.env["PYTHONMALLOC"] = "debug"
         self.env["MALLOC_PERTURB_"] = "165"
-        self.help_text = parse_help(run_json, self.run_json.parent.parent, self.env)
+        self.help_text = parse_help(run_json, self.run_json.parent.parent, self.env,
+                                    results / "_setup" / "children")
         self.has_bin = self._probe_bin_support()
-        self.has_sink = "--report-sink" in self.help_text
-        self.measurements: list[tuple[str, float]] = []
+        self.supports_sink = "--report-sink" in self.help_text
+        if report_sink == "on" and not self.supports_sink:
+            raise SetupError("--report-sink on requested but run_json has no named-sink flag")
+        self.has_sink = report_sink == "on"
+        self.measurements: list[dict] = []
 
     # -- capability probe (DESIGN.md 7 (a)) -----------------------------
 
     def _probe_bin_support(self) -> bool:
         module = next(iter(self.modules.values()), None)
         if module is None:
-            candidate = self.module_dir / "macd.so"
+            candidate = checked_path(self.module_dir / "macd.so")
             module = candidate if candidate.is_file() else None
         if module is not None and module.is_file():
             result = measured(
                 [sys.executable, str(self.run_json), "--so", str(module),
                  "--capabilities-json"],
-                self.run_json.parent.parent, self.env)
+                self.run_json.parent.parent, self.env,
+                log_dir=self.results / "_setup" / "children", label="capabilities")
+            if result.returncode != 0:
+                raise SetupError(f"capabilities child exited {result.returncode}: {result.failure_text()}")
             if result.returncode == 0:
                 try:
                     capabilities = result.document().get("capabilities", {})
@@ -319,7 +402,8 @@ class Harness:
 
     def run(self, args: list[str], label: str) -> tuple[Run, int]:
         command = [sys.executable, str(self.run_json), *args]
-        result = measured(command, self.run_json.parent.parent, self.env)
+        result = measured(command, self.run_json.parent.parent, self.env,
+                          log_dir=self.results / self.current_case / "children", label=label)
         if result.returncode != 0:
             raise SetupError(f"{label}: run_json exited {result.returncode}: "
                              f"{result.failure_text()}")
@@ -329,6 +413,7 @@ class Harness:
         path = self.modules.get(name)
         if path is None:
             path = self.module_dir / f"{name}.so"
+        path = checked_path(path)
         if not path.is_file():
             raise SetupError(
                 f"module {name!r} is not present at {path}. Build it with the "
@@ -342,10 +427,12 @@ class Harness:
         """CSV, or .bin when supported and permitted by the case's contract."""
         if self.has_bin and not force_csv:
             path = self.work / f"{tag}.bin"
+            self.input_records[str(path)] = n
             if not path.exists():
                 write_chart_bin(path, n, shape)
             return path, 48 * n
         path = self.work / f"{tag}.csv"
+        self.input_records[str(path)] = n
         if not path.exists():
             write_chart_csv(path, n, shape)
         return path, 0
@@ -386,11 +473,25 @@ class Harness:
              mapped_bytes: int) -> tuple[int, dict]:
         result, _ = self.run(args + sink_args, label)
         rest_bytes = result.peak_rss_bytes - mapped_bytes
-        self.measurements.append((label, rest_bytes))
+        document = result.document()
+        chart_flag = "--ohlcv-bin" if "--ohlcv-bin" in args else "--ohlcv"
+        chart_path = args[args.index(chart_flag) + 1]
+        self.measurements.append({
+            "case": self.current_case, "label": label,
+            "bars": self.input_records[chart_path],
+            "total_trades": document.get("summary", {}).get("total_trades"),
+            "peak_rss_bytes": result.peak_rss_bytes,
+            "mapped_ohlcv_bytes": mapped_bytes,
+            "mapped_ohlcv_accounting": "MODEL: generated chart/feed record counts * 48 bytes; feed close counts * 8 bytes; CSV=0. Not /proc measured.",
+            "rest_bytes": rest_bytes, "wall_seconds": result.wall_seconds,
+            "report_sink": "on" if sink_args else "off",
+            "returncode": result.returncode, "chart": chart_path,
+            "child": result.artifacts,
+        })
         print(f"  {label}: peak {result.peak_rss_bytes / MIB:.1f} MiB, "
               f"mapped {mapped_bytes / MIB:.1f} MiB, rest {rest_bytes / MIB:.1f} MiB, "
               f"{result.wall_seconds:.1f} s")
-        return rest_bytes, result.document()
+        return rest_bytes, document
 
     def sink_records(self, path: Path | None) -> dict[str, list[list]]:
         if path is None or not path.exists():
@@ -459,7 +560,17 @@ def case_a(harness: Harness) -> None:
     """(a) rest flat in bars, with and without --report-sink."""
     print("(a) rest flat in chart bars")
     module = harness.module("macd")
-    for sink_on in ((False, True) if harness.has_sink else (False,)):
+    for sink_on in (harness.has_sink,):
+        # Replace L0's unmeasured 64 MiB estimate with an independent measured
+        # 1k calibration in this run. Keep its raw child and arithmetic.
+        baseline_path, baseline_mapped = harness.chart_input("a-baseline", 1000, "slow")
+        baseline_sink, _ = harness.sink_args("a-baseline")
+        baseline, _ = harness.rest("a/calibration/1000", base_args(module) +
+            harness.input_args(baseline_path), baseline_sink if sink_on else [], baseline_mapped)
+        bound = round_up(baseline + 32 * MIB, 16 * MIB)
+        harness.bounds["a"] = {"calibration_rest_bytes": baseline,
+            "headroom_bytes": 32 * MIB, "rounding_bytes": 16 * MIB,
+            "bound_bytes": bound, "source": "a/calibration/1000 child in this run"}
         values: list[tuple[str, int]] = []
         for n in (1000, 100_000, 1_000_000):
             path, mapped = harness.chart_input(f"a{n}", n, "slow")
@@ -471,10 +582,10 @@ def case_a(harness: Harness) -> None:
             values.append((str(n), rest_bytes))
         assert_slope("(a) bars", values)
         one_k = next(size for name, size in values if name == "1000")
-        if one_k > REST_1K_BOUND_BYTES:
+        if one_k > bound:
             raise CaseFailure(
-                f"(a) rest(1k) {one_k / MIB:.1f} MiB > the estimated Q4 bound "
-                f"{REST_1K_BOUND_BYTES / MIB:.0f} MiB")
+                f"(a) rest(1k) {one_k / MIB:.1f} MiB > the measured calibration bound "
+                f"{bound / MIB:.0f} MiB")
 
 
 def case_b(harness: Harness) -> None:
@@ -493,7 +604,7 @@ def case_b(harness: Harness) -> None:
             f"b/{label}-trades", args, sink_args if harness.has_sink else [], mapped)
         values.append((label, rest_bytes))
         counts[label] = int(document.get("summary", {}).get("total_trades", -1))
-    if counts["10"] > 100 or counts["11k"] < 1000:
+    if counts["10"] <= 0 or counts["10"] > 100 or counts["11k"] < 1000:
         raise SetupError(
             f"(b) the k input was not applied: {counts}; the trades axis is not "
             "exercised (expected about 10 and about 11,000)")
@@ -766,73 +877,116 @@ def main(argv: list[str] | None = None) -> int:
                         help="where the generated bars, feeds and sinks live")
     parser.add_argument("--cases", default=",".join(CASES),
                         help=f"comma-separated subset of {','.join(CASES)}")
+    parser.add_argument("--report-sink", choices=("off", "on"), default="off",
+                        help="explicit named report-sink mode (default: off)")
+    parser.add_argument("--results-dir", type=Path, default=None,
+                        help="case JSON and durable child stdout/stderr/own exit codes")
     parser.add_argument("--keep", action="store_true", help="keep the work dir")
     args = parser.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parents[1]
-    run_json = args.run_json or (repo_root / "docker" / "run_json.py")
+    run_json = checked_path(args.run_json or (repo_root / "docker" / "run_json.py"))
     if not run_json.is_file():
         print(f"SETUP: {run_json} is not present", file=sys.stderr)
         return 2
-    module_dir = args.module_dir or default_module_dir(repo_root)
+    module_dir = checked_path(args.module_dir or default_module_dir(repo_root))
     modules: dict[str, Path] = {}
     for override in args.module:
         if "=" not in override:
             print(f"SETUP: --module wants NAME=PATH, got {override!r}", file=sys.stderr)
             return 2
         name, path = override.split("=", 1)
-        modules[name] = Path(path)
+        modules[name] = checked_path(Path(path))
 
     work = args.work_dir
     if work is None:
-        work = Path(tempfile.mkdtemp(prefix="pf-flat-memory-"))
+        if not os.environ.get("TMPDIR"):
+            print("SETUP: supply --work-dir or a named scratch TMPDIR", file=sys.stderr)
+            return 2
+        work = Path(tempfile.mkdtemp(prefix="pf-flat-memory-",
+                                   dir=checked_path(Path(os.environ["TMPDIR"]))))
     else:
+        work = checked_path(work)
         work.mkdir(parents=True, exist_ok=True)
+    results = checked_path(args.results_dir or (work / "results"))
+    results.mkdir(parents=True, exist_ok=True)
 
     selected = [name.strip() for name in args.cases.split(",") if name.strip()]
     unknown = [name for name in selected if name not in CASES]
-    if unknown:
-        print(f"SETUP: unknown cases {unknown}", file=sys.stderr)
+    if unknown or not selected or len(set(selected)) != len(selected):
+        reason = f"unknown cases {unknown}" if unknown else "zero or duplicate cases selected"
+        print(f"SETUP: {reason}; ZERO cases executed", file=sys.stderr)
+        write_json(results / "RUN.INCOMPLETE", {"verdict": "SETUP", "reason": reason,
+                   "selected": selected, "executed": 0, "returncode": 2})
         return 2
 
     try:
-        harness = Harness(run_json, module_dir, work, modules, args.keep)
+        harness = Harness(run_json, module_dir, work, modules, args.keep,
+                          results, args.report_sink)
     except SetupError as error:
         print(f"SETUP: {error}", file=sys.stderr)
+        write_json(results / "RUN.INCOMPLETE", {"verdict": "SETUP", "reason": str(error),
+                   "selected": selected, "executed": 0, "returncode": 2})
         return 2
     print(f"run_json: {run_json}")
     print(f"modules:  {module_dir} ({', '.join(sorted(modules)) or 'defaults'})")
     print(f"work:     {work}")
     print(f"features: --ohlcv-bin={'yes' if harness.has_bin else 'no'}, "
-          f"--report-sink={'yes' if harness.has_sink else 'no'}")
+          f"--report-sink={args.report_sink} (explicit; default off)")
 
     failures = 0
     setup_errors = 0
     errors = 0
+    executed = []
     for name in selected:
+        harness.current_case = name
+        start_row = len(harness.measurements)
+        verdict, reason = "PASS", "all case assertions passed"
         try:
             CASES[name](harness)
+            if name != "borrowed" and len(harness.measurements) == start_row:
+                raise SetupError("ZERO measured rungs executed")
             print(f"PASS {name}")
         except CaseFailure as error:
             failures += 1
+            verdict, reason = "RED", str(error)
             print(f"FAIL {name}: {error}")
         except SetupError as error:
+            verdict, reason = "SETUP", str(error)
             print(f"SETUP {name}: {error}", file=sys.stderr)
             setup_errors += 1
         except Exception as error:  # noqa: BLE001 - a test driver reports all
             errors += 1
+            verdict, reason = "ERROR", f"{type(error).__name__}: {error}"
             print(f"ERROR {name}: {type(error).__name__}: {error}")
+        executed.append(name)
+        rows = harness.measurements[start_row:]
+        write_json(results / f"case-{name}.json", {
+            "schema": "pineforge-flat-rss-case/v1", "case": name,
+            "verdict": verdict, "reason": reason,
+            "report_sink": args.report_sink, "measured_rungs": len(rows),
+            "measurements": rows, "bounds": harness.bounds.get(name),
+            "slope_limit_bytes": SLOPE_LIMIT,
+        })
+        # A failed result check ends this sequence. Preserve already measured
+        # rungs, but never run a later case or label it green.
+        if verdict != "PASS":
+            break
 
-    if not args.keep and args.work_dir is None:
-        shutil.rmtree(work, ignore_errors=True)
-    passed = len(selected) - failures - setup_errors - errors
+    passed = len(executed) - failures - setup_errors - errors
     print(f"flat-memory rss e2e: {passed}/{len(selected)} cases passed; "
           f"{failures} red, {setup_errors} setup, {errors} errors")
     # A measured/behavioral red takes precedence in a mixed run. Setup-only
     # and unexpected-error runs cannot be admitted as red acceptance evidence.
-    if failures:
-        return 1
-    return 2 if setup_errors or errors else 0
+    code = 1 if failures else 2 if setup_errors or errors or not executed else 0
+    complete = bool(executed) and len(executed) == len(selected)
+    write_json(results / ("RUN.COMPLETE" if complete else "RUN.INCOMPLETE"), {
+        "selected": selected, "executed": executed, "passed": passed,
+        "red": failures, "setup": setup_errors, "errors": errors,
+        "returncode": code, "report_sink": args.report_sink,
+        "verdict": "PASS" if code == 0 and complete else "RED" if failures else "INCOMPLETE",
+    })
+    return code
 
 
 if __name__ == "__main__":
