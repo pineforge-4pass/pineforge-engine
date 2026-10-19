@@ -43,8 +43,8 @@ jobs:
   # Whether the change is documentation only; scripts/ci_docs_only.py holds the
   # rule, and every doubt answers no. On a docs-only pull request or push the
   # proof jobs below skip and the build aggregate accepts exactly that skip.
-  # Preflight, where the documentation guards run, does not wait for it, and
-  # docs.yml builds the site as before. A few seconds of git: the light pool
+  # Preflight consumes its independent verifier-class answer, and docs.yml
+  # builds the site as before. A few seconds of git: the light pool
   # class, with the public fragment's hosted fallback.
   changes:
     runs-on: >-
@@ -59,6 +59,7 @@ jobs:
     timeout-minutes: 360
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}
     steps:
       # The tested commit and its parents: a pull request's merge and the base
       # it merged into, a push's commit and its parent.
@@ -83,7 +84,23 @@ jobs:
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # This helper uses the base ci_docs_only.py staged above to read the
+      # same tested diff. A base without the new rule runs every class.
+      - name: Classify verifier self-tests
+        id: verifier
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git show HEAD^1:scripts/ci_verifier_paths.py > "$RUNNER_TEMP/ci_verifier_paths.py"; then
+            python3 "$RUNNER_TEMP/ci_verifier_paths.py" --root . --github-output "$GITHUB_OUTPUT"
+          else
+            echo "verifier SLOW: the base holds no scripts/ci_verifier_paths.py"
+            echo "verifier_slow=true" >> "$GITHUB_OUTPUT"
+          fi
+
   preflight:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: >-
       ${{ github.event_name != 'pull_request_target' &&
           github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
@@ -93,6 +110,7 @@ jobs:
           fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
+      PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
     # 360 minutes is GitHub's job maximum and deliberately the only limit:
     # its verifier-tests stage runs test_ci_verify.py across parallel unittest
     # shards, and no stage of this preflight carries a timeout of its own any
@@ -237,7 +255,7 @@ jobs:
           # ratio -- for a runner whose CPU accounting is unusable; record the
           # measured reason here and in docs/ci.md before setting it.
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
-        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow' || '' }}
+        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
@@ -340,7 +358,7 @@ jobs:
           fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
-    # 22.3 min on the standard runner at 0d76a099; every event runs the whole
+    # PRs exclude the measured slow rows; push and dispatch run the whole
     # kernel set. 360 minutes is the platform maximum, the only hang catcher
     # (owner rule, 2026-10-12).
     timeout-minutes: 360
@@ -380,7 +398,7 @@ jobs:
         uses: ./.github/actions/setup-live-curl
 
       - name: Verify (kernel)
-        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"
+        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
 
       - name: Stage and summarize diagnostics
         if: always()
