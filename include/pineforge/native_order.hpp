@@ -12,7 +12,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,6 +22,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+namespace pineforge::detail { class KernelRosterStore; }
 
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
@@ -1685,6 +1689,7 @@ struct GroupEffectReceipt {
 
 class WorkingRequestCore {
 public:
+    class CohortView;
     explicit WorkingRequestCore(RunIdentity identity);
     WorkingRequestCore(const WorkingRequestCore&) = delete;
     WorkingRequestCore& operator=(const WorkingRequestCore&) = delete;
@@ -1693,7 +1698,7 @@ public:
     /// Self move-assignment preserves the current run.
     WorkingRequestCore(WorkingRequestCore&& other) noexcept;
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
-    void set_successor_roots_directory(const std::string& directory); // After reset, before the first spill; empty uses TMPDIR or /tmp.
+    void set_successor_roots_directory(const std::string& directory); // Roots and cohort identities; after reset, before first spill; empty uses TMPDIR or /tmp.
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }
@@ -1725,7 +1730,10 @@ public:
     std::size_t retire_history(uint64_t through_ordinal);
     /// The ordinal of the newest retired event, 0 while none is.
     uint64_t retired_through() const noexcept { return retired_through_; }
-    const std::vector<CohortRoster>& cohorts() const noexcept { return cohorts_; }
+    /// Logical roster sequence in allocation order, including empty rosters
+    /// whose identities have spilled. Walking allocates nothing and does no
+    /// I/O; empty rows are synthesized from the dense handle sequence.
+    CohortView cohorts() const noexcept;
     /// The retained cohort-receipt window, in command order. Its absolute
     /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
     /// standalone core retains all rows until its reader retires them; the
@@ -2157,7 +2165,7 @@ private:
     /// read from the live row or, for a request that is no longer working,
     /// from the chain index; nullopt for a handle this run never issued.
     std::optional<RequestHandle> canonical_cohort_origin(const RequestHandle& origin) const;
-    std::size_t cohort_index(CohortHandle cohort) const noexcept;
+    bool cohort_exists(CohortHandle cohort) const;
     /// Records an accepted request's incarnation and, for a replace
     /// successor, its chain root, in the chain index. Storage is reserved by
     /// reserve_plan, so this cannot throw inside commit.
@@ -2328,11 +2336,68 @@ private:
     std::vector<ReceiptKey> receipts_;
     std::size_t receipts_base_ = 0;
     std::uint64_t next_cohort_handle_ = 1;
-    std::vector<CohortRoster> cohorts_;
+    // Only rosters with members occupy nodes; erasing an empty roster frees
+    // its member capacity as well. The store keeps every allocated handle.
+    std::map<std::uint64_t, CohortRoster> cohorts_;
+    std::shared_ptr<::pineforge::detail::KernelRosterStore> cohort_store_;
     std::vector<CohortReceipt> cohort_receipts_;
     // Storage cursor only: the consumer hashes the lifetime count and every
     // receipt, independently of how many of their rows have been retired.
     std::size_t cohort_receipts_base_ = 0;
+};
+
+// A non-owning read view. Iteration preserves CohortRoster references for
+// existing typed predicates and iterator arrow reads. An empty row belongs
+// to its input iterator and is valid until that iterator advances or dies.
+// Indexed reads return a value, so a saved row from a temporary view remains
+// valid. Callers that need no copies use the allocation-free iterator walk.
+class WorkingRequestCore::CohortView {
+public:
+    class const_iterator {
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = CohortRoster;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const CohortRoster*;
+        using reference = const CohortRoster&;
+
+        const_iterator() noexcept = default;
+        reference operator*() const noexcept;
+        pointer operator->() const noexcept { return &**this; }
+        const_iterator& operator++() noexcept { ++index_; return *this; }
+        const_iterator operator++(int) {
+            auto previous = *this;
+            ++*this;
+            return previous;
+        }
+        friend bool operator==(const const_iterator& left, const const_iterator& right) noexcept {
+            return left.core_ == right.core_ && left.index_ == right.index_;
+        }
+        friend bool operator!=(const const_iterator& left, const const_iterator& right) noexcept {
+            return !(left == right);
+        }
+
+    private:
+        friend class CohortView;
+        const_iterator(const WorkingRequestCore* core, std::size_t index) noexcept
+            : core_(core), index_(index) {}
+        const WorkingRequestCore* core_ = nullptr;
+        std::size_t index_ = 0;
+        mutable CohortRoster empty_{};
+    };
+
+    std::size_t size() const noexcept {
+        return static_cast<std::size_t>(core_->next_cohort_handle_ - 1);
+    }
+    bool empty() const noexcept { return size() == 0; }
+    const_iterator begin() const noexcept { return const_iterator(core_, 0); }
+    const_iterator end() const noexcept { return const_iterator(core_, size()); }
+    CohortRoster operator[](std::size_t index) const { return *const_iterator(core_, index); }
+
+private:
+    friend class WorkingRequestCore;
+    explicit CohortView(const WorkingRequestCore* core) noexcept : core_(core) {}
+    const WorkingRequestCore* core_;
 };
 
 class PreparedSubmit {

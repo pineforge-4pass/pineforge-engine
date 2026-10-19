@@ -303,11 +303,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& pair : staged_.inputs) input_keys.push_back(pair.first);
     std::sort(input_keys.begin(), input_keys.end()); f.u(input_keys.size());
     for (const auto& key : input_keys) { f.s(key); f.s(staged_.inputs.at(key)); }
-    std::vector<std::string> cohort_keys;
-    for (const auto& pair : cohorts_by_id_) cohort_keys.push_back(pair.first);
-    std::sort(cohort_keys.begin(), cohort_keys.end()); f.u(cohort_keys.size());
-    for (const auto& key : cohort_keys) {
-        const auto& cohort = cohorts_by_id_.at(key);
+    // Replay every logical cohort in the same lexicographic order as before,
+    // including retired summaries, without materializing an id-sized vector.
+    f.u(cohorts_by_id_.size());
+    for (const auto& row : cohorts_by_id_.all_sorted()) {
+        const auto& key = row.first; const auto& cohort = row.second;
         f.s(key); f.u(cohort.handle.value); f.i(cohort.cycle);
         // v4: the origin roster is append-only; its members fold once each,
         // when appended (OriginRoster::digest).
@@ -323,8 +323,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             f.u(incarnation); f.d(cohort.live_units_by_origin.at(incarnation));
         }
     }
-    f.u(cohort_order_.size());
-    for (const auto& key : cohort_order_) f.s(key);
+    f.u(cohorts_by_id_.size());
+    cohorts_by_id_.for_each_id([&](const auto& key) { f.s(key); });
     // v4: the rows the table still holds, in incarnation order, and what the
     // erased ones left: the high water, how many, and a running digest of
     // their identities (PlacementTable::erased_digest).
