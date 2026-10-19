@@ -11,7 +11,7 @@
 #include <pineforge/compat/pine/order_priority.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
 #include <pineforge/source/market_admission.hpp>
-
+#include <pineforge/detail/id_pair_store.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -637,16 +637,16 @@ public:
     PlacementTable(PlacementTable&&) noexcept = default;
     PlacementTable& operator=(PlacementTable&&) noexcept = default;
 
+    void set_auxiliary_tables_directory(const std::string& directory);
+    void fixture_use_memory_auxiliary_tables();
+    std::uint64_t auxiliary_disk_bytes() const noexcept;
     std::size_t size() const noexcept { return size_; }
     std::size_t max_size() const noexcept { return window_.max_size(); }
-    // Largest incarnation ever inserted, erased rows included. Incarnations
-    // are monotone, so a handle above this mark at an observation time was
-    // unknown to every adapter collection populated before that observation.
+    // Largest incarnation ever inserted, erased rows included.
     std::uint64_t high_water() const noexcept { return high_water_; }
     // Rows erased over the run (a statistic; nothing reads it back).
     std::uint64_t erased_rows() const noexcept { return erased_rows_; }
-    // The window is reserved for the rows a run keeps live at once, not for
-    // every incarnation it will allocate: the table stays O(live).
+    // Reserve only the rows kept live at once: the table stays O(live).
     void reserve(std::size_t count) {
         window_.reserve(std::min<std::size_t>(count, kWindowReserve));
     }
@@ -852,11 +852,11 @@ private:
     static constexpr std::size_t kSpareNodes = 64;
     static constexpr std::uint64_t kFoldBasis = 1469598103934665603ULL;
 
-    struct SequenceMinima {
-        std::uint64_t any = std::numeric_limits<std::uint64_t>::max();
-        std::unordered_map<std::string, std::uint64_t> by_from_entry;
-    };
-    using Minima = std::unordered_map<std::string, SequenceMinima>;
+    // Single keys hold the minimum over any from_entry; pair keys hold the
+    // exact (source_id, from_entry) minimum. Their separate key domains keep
+    // an empty from_entry distinct from the any-entry summary. Neither the
+    // directory nor old keys consume per-id RAM.
+    using Minima = pineforge::detail::IdPairStore<std::uint64_t>;
 
     // A reused node takes its new row in one assignment.
     static void overwrite(PlacementSnapshot& node, PlacementSnapshot&& row) {
@@ -870,11 +870,11 @@ private:
     }
 
     static void fold_sequence(Minima& index, const PlacementSnapshot& row) {
-        auto& minima = index[row.source_id];
-        minima.any = std::min(minima.any, row.command_sequence);
-        const auto inserted = minima.by_from_entry.emplace(row.from_entry, row.command_sequence);
-        if (!inserted.second)
-            inserted.first->second = std::min(inserted.first->second, row.command_sequence);
+        // Keep both original minima, including an explicitly present
+        // UINT64_MAX: command_sequence_for uses the same fallback for it.
+        // Recurring pairs update their old disk records in place.
+        index.min_assign(row.source_id, row.command_sequence);
+        index.min_assign(row.source_id, row.from_entry, row.command_sequence);
     }
 
     PlacementSnapshot* locate(std::uint64_t incarnation) const noexcept {
@@ -1531,9 +1531,9 @@ public:
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
-
-    // `instrument_feeds`, when given, is moved into the spec's instrument
-    // feeds (and back into it if the projection throws).
+    void set_auxiliary_tables_directory(const std::string& directory);
+    void fixture_use_memory_auxiliary_tables();
+    std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
                           const NativeBeginArgs&,
                           NativePathOrder path_order = NativePathOrder::Auto,
@@ -1778,7 +1778,7 @@ public:
         const NativeDecisionContext&) const noexcept;
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
-                                            const SourceId& from_entry = {}) const noexcept;
+                                            const SourceId& from_entry = {}) const;
     bool is_open_phase_exit(std::size_t trade_index) const noexcept;
     // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
     // slot start + i takes the phase of the trade previously at indices[i].
@@ -2559,7 +2559,7 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
-    std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
+    pineforge::detail::IdPairStore<std::int64_t> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
