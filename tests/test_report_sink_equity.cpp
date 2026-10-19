@@ -180,6 +180,8 @@ struct Api {
     decltype(&strategy_set_selected_window_v1) selected = symbol<decltype(selected)>(module, "strategy_set_selected_window_v1");
     decltype(&strategy_set_execution_observer_v1) observer = symbol<decltype(observer)>(module, "strategy_set_execution_observer_v1");
     decltype(&strategy_broker_state_hash) hash = symbol<decltype(hash)>(module, "strategy_broker_state_hash");
+    decltype(&strategy_get_last_error) error = symbol<decltype(error)>(module, "strategy_get_last_error");
+    decltype(&strategy_get_last_error_code) code = symbol<decltype(code)>(module, "strategy_get_last_error_code");
     int (*run)(pf_strategy_t, const pf_bar_t*, int, int) = symbol<decltype(run)>(module, "l6b2_run_only");
     void (*snapshot)(pf_strategy_t, EquitySnapshot*) = symbol<decltype(snapshot)>(module, "l6b2_snapshot");
     int (*rewalk)(pf_strategy_t) = symbol<decltype(rewalk)>(module, "l6b2_rewalk");
@@ -187,6 +189,14 @@ struct Api {
     int (*quote)(pf_strategy_t, std::int64_t, double) = symbol<decltype(quote)>(module, "l6b2_quote");
     void (*fill)(pf_strategy_t, pf_report_t*) = symbol<decltype(fill)>(module, "l6b2_fill");
 };
+int run_with_diagnostics(const Api& api, pf_strategy_t handle, const pf_bar_t* bars,
+                         int n, int magnifier) {
+    const int result = api.run(handle, bars, n, magnifier);
+    if (result != 0)
+        std::fprintf(stderr, "L6b-2 engine run failed (bars=%d, magnifier=%d, code=%s): %s\n",
+                     n, magnifier, api.code(handle), api.error(handle));
+    return result;
+}
 std::string read(const std::string& path) {
     std::ifstream input(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -251,7 +261,8 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
                 [](void*, const pf_execution_boundary_v1*, pf_boundary_receipt_v1*) -> int { return 0; }};
             require(api.observer(handle, &observer) == 0, "observer install failed");
         }
-        require(api.run(handle, bars.data(), n, magnifier ? 1 : 0) == 0, "fixture run failed");
+        require(run_with_diagnostics(api, handle, bars.data(), n, magnifier ? 1 : 0) == 0,
+                "fixture run failed");
     }
     auto before = snapshot(api, streamed);
     if (!selected) {
@@ -308,7 +319,7 @@ void compare(const Api& api, const std::string& path, const char* mode, int n,
             "repeated presentation mutated held point");
     // Reuse resets the streamed prefix; one point stays held until fill.
     const auto single = feed(1);
-    require(api.run(streamed, single.data(), 1, 0) == 0, "reused run failed");
+    require(run_with_diagnostics(api, streamed, single.data(), 1, 0) == 0, "reused run failed");
     require(receipt(api, streamed).count_e == 0 && receipt(api, streamed).complete == 0,
             "reused run retained the old E prefix");
     api.free(&again); api.free(&actual); api.free(&expected);
@@ -320,7 +331,7 @@ void failed_run(const Api& api, const std::string& path) {
     const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), nullptr, nullptr};
     require(api.set(handle, &sink) == 0, "failed-run sink install failed");
     api.mode(handle, "mode", "throw");
-    require(api.run(handle, bars.data(), static_cast<int>(bars.size()), 0) != 0,
+    require(run_with_diagnostics(api, handle, bars.data(), static_cast<int>(bars.size()), 0) != 0,
             "throwing run unexpectedly succeeded");
     pf_report_t report{};
     api.fill(handle, &report);
