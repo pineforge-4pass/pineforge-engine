@@ -5,7 +5,7 @@
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
 
-#include <pineforge/metrics.hpp>
+#include <pineforge/metrics_stream.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -875,3 +875,64 @@ void BacktestEngine::retire_report_sink_hashes() {
 }
 
 } // namespace pineforge
+
+// CR-150 L17B: selected report reads share these folds for the array and
+// scratch sources. Formulae, return generation and floating-point order live
+// in metrics::compute_equity_stats; this boundary supplies the selected facts.
+namespace pineforge::internal {
+namespace {
+
+template<class PointSource>
+void selected_report_metrics(
+        pf_metrics_t& result, const TradeC* trades, int trades_len,
+        const PointSource& curve, std::int64_t equity_len,
+        double net_profit, double initial_capital, const std::string& chart_timezone,
+        double first_window_open, double last_window_close,
+        std::int64_t bars_in_market, std::int64_t observation_count) {
+    // The anchor always exists, including M=0. Presentation may shorten the
+    // published curve, but cannot change either of these captured counts.
+    if (equity_len <= 0 || curve.size() < equity_len
+        || observation_count != equity_len - 1)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "native selected report: invalid metric curve counts");
+    pf_metrics_t computed{};
+    computed.all = metrics::compute_trade_stats(
+        trades, trades_len, metrics::TradeFilter::ALL, initial_capital);
+    computed.longs = metrics::compute_trade_stats(
+        trades, trades_len, metrics::TradeFilter::LONG, initial_capital);
+    computed.shorts = metrics::compute_trade_stats(
+        trades, trades_len, metrics::TradeFilter::SHORT, initial_capital);
+    computed.equity = metrics::compute_equity_stats<PointSource>(
+        curve, equity_len, initial_capital, chart_timezone,
+        first_window_open, last_window_close, bars_in_market, net_profit,
+        observation_count);
+    result = computed;
+}
+
+}  // namespace
+
+void compute_selected_report_metrics(
+        pf_metrics_t& result, const TradeC* trades, int trades_len,
+        const metrics::ArrayCurve& curve, std::int64_t equity_len,
+        double net_profit, double initial_capital, const std::string& chart_timezone,
+        double first_window_open, double last_window_close,
+        std::int64_t bars_in_market, std::int64_t observation_count) {
+    selected_report_metrics(result, trades, trades_len, curve, equity_len,
+                            net_profit, initial_capital, chart_timezone,
+                            first_window_open, last_window_close,
+                            bars_in_market, observation_count);
+}
+
+void compute_selected_report_metrics(
+        pf_metrics_t& result, const TradeC* trades, int trades_len,
+        const metrics::SpillCurve& curve, std::int64_t equity_len,
+        double net_profit, double initial_capital, const std::string& chart_timezone,
+        double first_window_open, double last_window_close,
+        std::int64_t bars_in_market, std::int64_t observation_count) {
+    selected_report_metrics(result, trades, trades_len, curve, equity_len,
+                            net_profit, initial_capital, chart_timezone,
+                            first_window_open, last_window_close,
+                            bars_in_market, observation_count);
+}
+
+}  // namespace pineforge::internal

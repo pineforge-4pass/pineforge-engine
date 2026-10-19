@@ -9,7 +9,7 @@
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/timeframe.hpp>
-
+#include <pineforge/metrics_stream.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12410,6 +12410,7 @@ void NativeExecutionConsumer::drop_presentation() noexcept {
     presentation_ = ReportC{};
     presentation_metric_equity_len_ = 0;
     presentation_metric_observations_ = 0;
+    presentation_metric_curve_.reset();
     presentation_ready_ = presentation_sink_equity_written_ = false;
     selected_results_open_ = false;
 }
@@ -12602,14 +12603,15 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
 
     // The capture's scalars come across by value; array pointers start null,
     // so a throw frees only storage this call allocated. A sink's E records
-    // already exist; its metrics read the captured curve without another copy.
+    // already exist; its metrics read the scratch curve without an array copy.
     // Sink-off reads copy both arrays, and the suffix builds the other arrays.
     // present_report is never called at read.
     const ReportC& captured = consumer->presentation_;
-    const bool sink_equity = consumer->selected_sink_equity_written(engine);
+    const bool scratch_equity = consumer->presentation_sink_equity_written_;
+    const bool sink_equity = scratch_equity && engine.report_sink_state_.enabled;
     // The presentation may publish a different length than metrics use.
-    // Sink-off storage covers their maximum; a sink reads the capture's
-    // metric storage directly. The captured lengths keep their preexisting
+    // Sink-off storage covers their maximum; a sink reads the presented
+    // metric scratch region. The captured lengths keep their preexisting
     // roles even when a custom presentation shrinks the published curve.
     const int64_t metric_equity_len = consumer->presentation_metric_equity_len_;
     const int64_t equity_storage_len = std::max(captured.equity_curve_len, metric_equity_len);
@@ -12630,7 +12632,6 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
             std::copy(captured.equity_curve, captured.equity_curve + equity_storage_len,
                       local.equity_curve);
         }
-        const auto* metric_curve = sink_equity ? captured.equity_curve : local.equity_curve;
         // The suffix, in fill_report's order. The metrics get the original
         // length, as fill_metrics_section passes its `n`: never the presented
         // length, script_bars_processed, or the engine's vector read now.
@@ -12641,14 +12642,31 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
             // runs from the first window input's open to the latest window
             // input's close, undefined (NaN) while the window has none. The
             // trade blocks and every other equity formula are the ordinary ones.
-            internal::compute_report_metrics(local.metrics, local.trades, local.trades_len,
-                                             metric_curve, metric_equity_len,
-                                             local.net_profit, engine.initial_capital_,
-                                             engine.chart_timezone_,
-                                             consumer->selected_first_open_,
-                                             consumer->selected_last_close_,
-                                             engine.bars_in_market_,
-                                             consumer->presentation_metric_observations_);
+            if (scratch_equity) {
+                const auto curve = consumer->make_selected_metric_curve();
+                // A quiescent caller may remove the sink between reads. The
+                // capture still owns its scratch region; restore the ordinary
+                // array result only when that caller explicitly asks without
+                // a sink. Metrics always walk the same immutable source.
+                if (!sink_equity && equity_storage_len > 0) {
+                    if (equity_storage_len > curve.size())
+                        refuse_selected_capture("native selected report: published curve exceeds scratch storage");
+                    local.equity_curve = new pf_equity_point_t[equity_storage_len];
+                    for (std::int64_t i = 0; i < equity_storage_len; ++i)
+                        local.equity_curve[i] = curve[i];
+                }
+                internal::compute_selected_report_metrics(
+                    local.metrics, local.trades, local.trades_len, curve, metric_equity_len,
+                    local.net_profit, engine.initial_capital_, engine.chart_timezone_,
+                    consumer->selected_first_open_, consumer->selected_last_close_,
+                    engine.bars_in_market_, consumer->presentation_metric_observations_);
+            } else {
+                internal::compute_report_metrics(
+                    local.metrics, local.trades, local.trades_len, local.equity_curve, metric_equity_len,
+                    local.net_profit, engine.initial_capital_, engine.chart_timezone_,
+                    consumer->selected_first_open_, consumer->selected_last_close_,
+                    engine.bars_in_market_, consumer->presentation_metric_observations_);
+            }
         } else {
             internal::compute_report_metrics(local.metrics, local.trades, local.trades_len,
                                              local.equity_curve, metric_equity_len,
@@ -12963,10 +12981,10 @@ void BacktestEngine::present_report_equity_tail(ReportC* out) const {
     out->equity_curve_len = count;
 }
 
-// CR-150 L17A: L6b-1 still owns the full recorded curve. Walk its FINAL values
-// at capture through the same O(1) latch/writer boundary that the hold-back
-// release will feed when L6b-2 and L17B are integrated. Nothing below records
-// provisional values or mutates the engine's point through a presentation.
+// CR-150 L17A/B: walk the FINAL recorded values through the selected latches.
+// Presentation edits the capture's independent array. Once E emission and
+// validation succeed, its metric storage transfers to private scratch and the
+// array is released; the engine's held point is never edited by presentation.
 
 bool NativeExecutionConsumer::selected_sink_equity_written(
         const BacktestEngine& engine) const noexcept {
@@ -12980,9 +12998,9 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
     if (!sink.writer || sink.receipt.complete)
         refuse_selected_capture("native selected report: no active report sink at capture");
     try {
-        // Preserve the existing pre-hook refusal order, the single virtual
-        // presentation, and its independent array ownership. These are the
-        // L6b-1 metrics inputs; L17B replaces them with the scratch point source.
+        // Preserve the pre-hook refusal order, the single virtual presentation
+        // and its independent array ownership. Transfer the FINAL metric
+        // points to scratch below; no array survives for later sink reads.
         capture_presentation(engine);
         const auto& window = selected_epoch_.admitted_window;
         report::SelectedReportStream stream(window.start_ms, window.end_ms,
@@ -13013,6 +13031,16 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         stream.finish(*sink.writer, selected_epoch_.counts.window_script_bars,
                       presentation_.equity_curve_len > 0);
         sink.receipt.count_e = stream.equity_count();
+        // Preserve the FINAL metric storage, including a suffix hidden by a
+        // shorter published length. This private snapshot is independent of
+        // the engine's editable held point and of the writer's E record count.
+        auto metric_curve = std::make_unique<report_sink::ScratchCurveWriter>(sink.scratch_dir);
+        for (std::int64_t i = 0; i < presentation_metric_equity_len_; ++i)
+            metric_curve->append(presentation_.equity_curve[i]);
+        metric_curve->flush();
+        presentation_metric_curve_ = std::move(metric_curve);
+        delete[] presentation_.equity_curve;
+        presentation_.equity_curve = nullptr;
         presentation_sink_equity_written_ = true;
         // L6b-1 finishes T and the trailer at the successful report fill. An
         // observer fault after this capture therefore cannot publish a trailer.
@@ -13090,4 +13118,22 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarV
 }
 
 } // inline namespace native_bar_views_v1
+}  // namespace pineforge
+
+// CR-150 L17B: the only source factory over the L6b-4 scratch owner.
+// The region is the FINAL selected metric curve, independent of the sink's
+// published E count. Its descriptor remains live across repeated report reads.
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+
+metrics::SpillCurve NativeExecutionConsumer::make_selected_metric_curve() const {
+    if (!presentation_metric_curve_)
+        refuse_selected_capture("native selected report: scratch metric curve is missing");
+    const auto region = presentation_metric_curve_->region();
+    if (region.point_count != presentation_metric_equity_len_)
+        refuse_selected_capture("native selected report: scratch metric point count differs from capture");
+    return metrics::SpillCurve(region);
+}
+
+}  // inline namespace engine_script_run_v19
 }  // namespace pineforge

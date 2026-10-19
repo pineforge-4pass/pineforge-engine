@@ -18,7 +18,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
+#include "report_scratch.hpp"
 namespace pineforge {
 inline namespace engine_script_run_v19 {
 
@@ -2103,14 +2103,14 @@ public:
     // report (every array NULL, every count zero, never freed) unless the
     // engine's own bound consumer holds a captured presentation whose results are
     // open, which a failed, aborted or observer-faulted generation never does, so
-    // no present_report runs after any boundary. Then the capture is deep-copied
-    // into a local report, only the output-only suffix runs over it (metrics,
-    // security diagnostics, trace, recorded hashes: engine code that is handed
-    // no host pointer and dispatches nothing virtual), and the finished report
-    // is published by one struct assignment, so a throw frees the local and
-    // leaves `*out` alone. Repeated reads reuse the capture. It reads the slot's
-    // pointer in place and never creates a consumer: a copied value, which lost
-    // its consumer, reads empty.
+    // no present_report runs after any boundary. A local report receives the
+    // capture's values; its output-only suffix runs (metrics, diagnostics,
+    // trace and recorded hashes) without dispatching any host callback. A sink
+    // uses scratch equity. The finished report is published by one assignment,
+    // so a throw frees the local and leaves `*out` alone. Repeated reads reuse
+    // the capture. The slot is read in place and no consumer is created; a
+    // copied value, which lost its consumer, reads empty. All array storage
+    // returned without a sink remains independently owned by the caller.
     static bool fill_selected_report(const BacktestEngine& engine, ReportC* out);
 
     // The private bridges behind the four C accessors of
@@ -2204,8 +2204,8 @@ private:
     // flags. The destructor calls it, and the selected lifecycle will at
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
-    // The capture. Its arrays are the ones BacktestEngine::free_report deletes
-    // (new TradeC[] / new pf_equity_point_t[]), and it is freed only through it.
+    // The capture. Its remaining arrays use BacktestEngine::free_report; a
+    // selected sink transfers equity to presentation_metric_curve_ after capture.
     ReportC presentation_{};
     // The equity length the metrics read: the engine's equity vector size taken
     // before present_report ran (fill_metrics_section's `n`), which a
@@ -2438,11 +2438,15 @@ private:
     // Output bookkeeping, like presentation_ready_: not hashed and never read
     // by a broker decision, a continuation fold or the source adapter. Reset
     // with the presentation; appended so every pre-existing member keeps its
-    // offset. The L6b-1 array remains the metrics source until L17B supplies the
-    // scratch curve; no second per-read equity allocation is needed with a sink.
+    // offset. The selected metrics source is the presented scratch region;
+    // no captured equity array or per-read equity allocation is needed.
     bool presentation_sink_equity_written_ = false;
     bool capture_selected_sink(BacktestEngine& engine);
     bool selected_sink_equity_written(const BacktestEngine& engine) const noexcept;
+    // Report-only ownership, like presentation_: never a broker decision or
+    // continuation input. Admission/drop releases the previous run's file.
+    std::unique_ptr<report_sink::ScratchCurveWriter> presentation_metric_curve_;
+    metrics::SpillCurve make_selected_metric_curve() const;
 public:
     void set_batch_input_release(void* owner, void (*release)(void*) noexcept) noexcept {
         batch_input_owner_ = owner;
@@ -2515,3 +2519,26 @@ private:
 
 }  // inline namespace engine_script_run_v19
 }  // namespace pineforge
+
+// CR-150 L17B: runtime-private selected metric entry points. The two sources
+// share the report fold; the source owns/borrows its storage for the whole call.
+// equity_len is the pre-presentation M + 1, observation_count is M, even when
+// the host publishes a shorter curve. No presentation or timezone lock is held
+// by the caller. These overloads allocate no curve and retain no source state.
+namespace pineforge::internal {
+
+void compute_selected_report_metrics(
+    pf_metrics_t& result, const TradeC* trades, int trades_len,
+    const metrics::ArrayCurve& curve, std::int64_t equity_len,
+    double net_profit, double initial_capital, const std::string& chart_timezone,
+    double first_window_open, double last_window_close,
+    std::int64_t bars_in_market, std::int64_t observation_count);
+
+void compute_selected_report_metrics(
+    pf_metrics_t& result, const TradeC* trades, int trades_len,
+    const metrics::SpillCurve& curve, std::int64_t equity_len,
+    double net_profit, double initial_capital, const std::string& chart_timezone,
+    double first_window_open, double last_window_close,
+    std::int64_t bars_in_market, std::int64_t observation_count);
+
+}  // namespace pineforge::internal
