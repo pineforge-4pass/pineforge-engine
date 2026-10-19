@@ -61,7 +61,11 @@ bool exit_family(ps::PineOrderFamily family) {
 }
 
 enum class Pattern { Moving, RecancelMoving, RecancelSame, PartialOriginClose,
-                     MarginKeep, MarginCancel, MarginReprice };
+                     MarginKeep, MarginCancel, MarginReprice, PartialOriginCycleEnd };
+
+bool partial_origin_pattern(Pattern pattern) {
+    return pattern == Pattern::PartialOriginClose || pattern == Pattern::PartialOriginCycleEnd;
+}
 
 bool margin_pattern(Pattern pattern) {
     return pattern == Pattern::MarginKeep || pattern == Pattern::MarginCancel
@@ -70,6 +74,8 @@ bool margin_pattern(Pattern pattern) {
 
 struct Outcome {
     std::vector<std::uint64_t> observations;
+    std::vector<double> positions;
+    std::vector<std::size_t> origin_rows_at_bar;
     std::vector<Trade> trades;
     std::string error;
     double open = 0.0;
@@ -90,7 +96,7 @@ public:
         config.default_qty_type = static_cast<int>(margin_pattern(pattern)
             ? QtyType::PERCENT_OF_EQUITY : QtyType::FIXED);
         config.default_qty_value = margin_pattern(pattern) ? 100.0 : 4.0;
-        config.pyramiding = pattern == Pattern::PartialOriginClose ? 2 : 1;
+        config.pyramiding = partial_origin_pattern(pattern) ? 2 : 1;
         config.commission_value = 0.0;
         configure_pine_strategy(config);
         set_syminfo_timezone("UTC");
@@ -103,7 +109,7 @@ public:
     void on_source_bar(const Bar&) override {
         observe();
         const int i = pine_bar_index();
-        if (pattern_ == Pattern::PartialOriginClose) {
+        if (partial_origin_pattern(pattern_)) {
             if (i == 0) strategy_entry("L", true, kNa, kNa, 4.0);
             if (i == 1) strategy_entry("R", true, kNa, kNa, 4.0);
             if (i == 2) {
@@ -112,6 +118,10 @@ public:
                 (adapter_.*access(PairHoldTag{}))("L");
             }
             if (i == 8) strategy_close("L");
+            if (pattern_ == Pattern::PartialOriginCycleEnd) {
+                if (i == 16) strategy_close("R");
+                if (i == 18) strategy_entry("R", true, kNa, kNa, 4.0);
+            }
             return;
         }
         if (margin_pattern(pattern_)) {
@@ -169,6 +179,8 @@ public:
         // Count the growing site itself, independent of the other L19 terms
         // (admission, unfolded ids, receipts, chart/curve/trade storage).
         const std::size_t rows = origin_rows();
+        out.positions.push_back(live_position_size());
+        out.origin_rows_at_bar.push_back(rows);
         if (live_position_size() != 0.0)
             out.peak_origin_rows = std::max(out.peak_origin_rows, rows);
     }
@@ -325,8 +337,40 @@ void the_origin_pin_ends_when_its_lot_closes() {
         same_public_result(erased, retained);
         CHECK(erased.open == 4.0);
         CHECK(erased.trades.size() == 1);
+        std::printf("K1 PartialOriginClose ratio=%d magnifier=%d: final origin rows %zu, "
+                    "retained %zu, unchanged bound 0, excess %zu\n",
+                    ratio, magnifier ? 1 : 0, erased.final_origin_rows,
+                    retained.final_origin_rows, erased.final_origin_rows);
         CHECK(erased.final_origin_rows == 0);
         CHECK(retained.final_origin_rows > 0);
+    }
+}
+
+void partial_origin_pin_survives_until_the_next_cycle() {
+    // Extend the same L-closes/R-remains precondition through more sweeps,
+    // then a flat boundary and a new opening. Keep the original zero-row
+    // bound above intact for CORE-TOP's ruling; do not special-case the sweep.
+    for (int ratio : {1, 3}) for (bool magnifier : {false, true}) {
+        const auto erased = run(Pattern::PartialOriginCycleEnd, 28, ratio, magnifier,
+                                false, false, false);
+        const auto retained = run(Pattern::PartialOriginCycleEnd, 28, ratio, magnifier,
+                                  true, false, false);
+        same_public_result(erased, retained);
+        CHECK(erased.positions.size() == 28);
+        CHECK(retained.positions.size() == 28);
+        if (erased.positions.size() != 28 || retained.positions.size() != 28) continue;
+        // R holds the old cycle open after L's origin has left opened.
+        CHECK(erased.positions[12] == 4.0 && retained.positions[12] == 4.0);
+        CHECK(erased.origin_rows_at_bar[12] == 1);
+        CHECK(retained.origin_rows_at_bar[12] == 1);
+        // Closing R ends the side; the later opening advances the cycle.
+        CHECK(erased.positions[18] == 0.0 && retained.positions[18] == 0.0);
+        CHECK(erased.positions[22] == 4.0 && retained.positions[22] == 4.0);
+        CHECK(erased.origin_rows_at_bar[22] == 0);
+        CHECK(retained.origin_rows_at_bar[22] == 1);
+        CHECK(erased.final_origin_rows == 0);
+        CHECK(erased.trades.size() == 2);
+        CHECK(erased.open == 4.0);
     }
 }
 
@@ -348,6 +392,7 @@ void margin_revival_keeps_its_decision() {
 int main() {
     k1_is_bounded_while_the_origin_is_open();
     the_origin_pin_ends_when_its_lot_closes();
+    partial_origin_pin_survives_until_the_next_cycle();
     margin_revival_keeps_its_decision();
     std::printf("test_k1_origin_pin_bound: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

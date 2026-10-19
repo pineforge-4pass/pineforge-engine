@@ -1,5 +1,5 @@
-// CR-150 L19G / read F2: preserve the retained engine's closed-origin leg
-// revival through its same-id sibling after a declined reversal and margin call.
+// CR-150 L19G / F2, G1, G2: preserve the retained engine's closed-origin leg
+// revival through a sibling, global binding, or exposure returning in one cycle.
 // Compare public results with every placement row retained. Keep the path
 // controls: a missing fill, suspension, cohort pin or margin call is a failure.
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -29,6 +29,19 @@ struct PlacementTag {
 };
 template struct PrivateAccess<PlacementTag, &ps::PineExecutionAdapter::placement_>;
 
+struct PairHoldTag {
+    using type = void (ps::PineExecutionAdapter::*)(const ps::SourceId&);
+    friend type access(PairHoldTag);
+};
+template struct PrivateAccess<PairHoldTag,
+    &ps::PineExecutionAdapter::hold_reversal_pair_brackets>;
+
+struct CycleTag {
+    using type = std::int64_t ps::PineExecutionAdapter::*;
+    friend type access(CycleTag);
+};
+template struct PrivateAccess<CycleTag, &ps::PineExecutionAdapter::current_position_cycle_>;
+
 int checks = 0;
 int failures = 0;
 #define CHECK(condition) do {                                                  \
@@ -49,18 +62,26 @@ struct Leg {
     bool withdrawn = false;
     std::uint64_t origin = 0;
     double qty = 0.0;
+    double stop = kNa;
+    std::uint64_t predecessor = 0;
 };
 
 struct Outcome {
     std::vector<std::uint64_t> observations;
     std::vector<double> positions;
     std::vector<Leg> legs;
+    std::vector<std::size_t> extra_legs;
+    std::vector<double> exposure;
+    std::vector<std::int64_t> cycles;
     std::vector<Trade> trades;
     std::string error;
     double open = 0.0;
     double equity = 0.0;
 };
 
+enum class Scenario { Sibling, Global, Returning };
+
+template<Scenario scenario>
 class Host final : public ps::PineStrategyHost {
 public:
     explicit Host(bool recording) {
@@ -82,6 +103,45 @@ public:
     void on_source_bar(const Bar&) override {
         observe();
         const int i = pine_bar_index();
+        if constexpr (scenario == Scenario::Global) {
+            if (i == 0) {
+                strategy_entry("S", false, kNa, kNa, 40.0);
+                // No position yet, but S is pending: this global leg binds
+                // to that parent when it fills, rather than being voided.
+                strategy_exit("X", "", kNa, 105.0, kNa, kNa, kNa, 100.0, {}, 40.0);
+            }
+            if (i == 1) strategy_entry("S", false, kNa, kNa, 40.0);
+            if (i == 5) {
+                strategy_entry("L", true);
+                strategy_close("S", "Reverse to Long");
+            }
+            return;
+        }
+        if constexpr (scenario == Scenario::Returning) {
+            if (i == 0) strategy_entry("L", false, kNa, kNa, 40.0);
+            if (i == 1) {
+                strategy_exit("X", "L", kNa, 105.0, kNa, kNa, kNa,
+                              100.0, "original X", 40.0);
+                strategy_entry("R", false, kNa, kNa, 40.0);
+            }
+            if (i == 4) {
+                // Use the real pair-hold policy in its live callback, as in
+                // the bound fixture. This prepares a dormant predecessor for
+                // the same-stop re-issue; no table row or event is invented.
+                (adapter_.*access(PairHoldTag{}))("L");
+            }
+            if (i == 5) {
+                strategy_entry("L", false, kNa, kNa, 40.0);
+                strategy_exit("X", "L", kNa, 105.0, kNa, kNa, kNa,
+                              100.0, "same-stop reissue", 40.0);
+            }
+            if (i == 6) strategy_close("R");
+            if (i == 7) {
+                strategy_entry("B", true);
+                strategy_close("L", "Reverse to Long");
+            }
+            return;
+        }
         if (i == 0) strategy_entry("S", false, kNa, kNa, 40.0);
         if (i == 1) {
             // Bind X only to the first, already-open lot. The second S is
@@ -113,14 +173,27 @@ public:
         }
         out_.observations.push_back(f.h);
         out_.positions.push_back(live_position_size());
+        const char* const from_entry = scenario == Scenario::Global ? ""
+            : scenario == Scenario::Returning ? "L" : "S";
+        out_.exposure.push_back(adapter_.source_unclosed_qty_for(from_entry));
+        out_.cycles.push_back(adapter_.*access(CycleTag{}));
         Leg leg;
+        std::size_t extra = 0;
         for (const auto& row : adapter_.*access(PlacementTag{})) {
             const auto& snapshot = row.second;
             if (snapshot.family != ps::PineOrderFamily::ExitStop
-                || snapshot.source_id != "X" || snapshot.from_entry != "S"
+                || snapshot.source_id != "X" || snapshot.from_entry != from_entry
                 || snapshot.legs.target().incarnation == 0) continue;
             if (original_target_ == 0) original_target_ = snapshot.legs.target().incarnation;
-            if (snapshot.legs.target().incarnation != original_target_) continue;
+            if (snapshot.legs.target().incarnation != original_target_) {
+                ++extra;
+                if constexpr (scenario == Scenario::Returning) {
+                    // A later same-stop issue must not supersede original X.
+                    CHECK(snapshot.exit_levels.stop == 105.0);
+                    CHECK(snapshot.projection_predecessor != original_target_);
+                }
+                continue;
+            }
             CHECK(!leg.present);
             leg.present = true;
             leg.dormant = snapshot.legs.dormant();
@@ -130,8 +203,11 @@ public:
                 && snapshot.legs.retired(exit_legs::Leg::Trail);
             leg.origin = snapshot.bracket_origin.incarnation;
             leg.qty = snapshot.requested_qty;
+            leg.stop = snapshot.exit_levels.stop;
+            leg.predecessor = snapshot.projection_predecessor;
         }
         out_.legs.push_back(leg);
+        out_.extra_legs.push_back(extra);
     }
 
     Outcome finish() {
@@ -178,7 +254,7 @@ std::vector<Bar> tape() {
 
 Outcome run(bool retain, bool magnifier, bool recording) {
     RetentionSwitch switch_for_run(retain);
-    Host host(recording);
+    Host<Scenario::Sibling> host(recording);
     const auto bars = tape();
     host.run(bars.data(), static_cast<int>(bars.size()), "1D", "",
              magnifier, 4, MagnifierDistribution::ENDPOINTS);
@@ -224,6 +300,8 @@ void closed_origin_revival_matches_retained_execution() {
         CHECK(retained.legs[5].qty == 40.0);
         CHECK(retained.legs[7].present && retained.legs[7].dormant);
         CHECK(!retained.legs[7].withdrawn && !retained.legs[7].restored);
+        CHECK(erased.legs[7].present && erased.legs[7].dormant);
+        CHECK(!erased.legs[7].withdrawn && !erased.legs[7].restored);
         CHECK(erased.positions[7] == -40.0);
         CHECK(retained.positions[7] == -40.0);
 
@@ -273,6 +351,18 @@ void closed_origin_revival_matches_retained_execution() {
         CHECK(trade_digest(erased.trades) == trade_digest(retained.trades));
         CHECK(erased.open == retained.open);
         CHECK(erased.equity == retained.equity);
+        // The observer still rejects duplicate original targets. Count the
+        // distinct Flatten lifecycle too: none before margin, one afterwards.
+        for (std::size_t i = 0; i < retained.extra_legs.size(); ++i) {
+            if (static_cast<int>(i) < expected_margin_bar) {
+                CHECK(retained.extra_legs[i] == 0);
+                CHECK(erased.extra_legs[i] == 0);
+            } else if (static_cast<int>(i) > expected_margin_bar) {
+                CHECK(retained.extra_legs[i] == 1);
+                CHECK(erased.extra_legs[i] == 1);
+            }
+        }
+        CHECK(erased.legs[10].restored && retained.legs[10].restored);
         std::printf("F2 magnifier=%d recording=%d: trades %zu/%zu, open %.17g/%.17g, "
                     "equity %.17g/%.17g, retained X restored=%d\n",
                     magnifier ? 1 : 0, recording ? 1 : 0,
@@ -280,10 +370,150 @@ void closed_origin_revival_matches_retained_execution() {
                     erased.equity, retained.equity, retained.legs[9].restored ? 1 : 0);
     }
 }
+
+std::vector<Bar> returning_tape() {
+    std::vector<Bar> bars;
+    const auto add = [&](double o, double h, double l, double c) {
+        bars.push_back({o, h, l, c, 1.0,
+            kStart + static_cast<std::int64_t>(bars.size()) * 86400000LL});
+    };
+    add(100.0, 100.2, 99.8, 100.0);
+    add(100.0, 100.2, 99.8, 100.0);
+    add(100.0, 100.2, 99.8, 100.0); // L1 and R hold the side
+    add(100.0, 105.2, 99.8, 105.0); // original X closes L1 at 105
+    add(105.0, 105.2, 104.8, 105.0); // sweep with L exposure zero, R open
+    add(100.0, 100.2, 99.8, 100.0); // re-enter L and re-issue the same stop
+    add(100.0, 100.2, 99.8, 100.0); // L2 opens at 100; request R's close
+    add(100.0, 100.2, 99.8, 100.0); // R closes at 100; place reversal pair
+    add(160.0, 160.2, 159.8, 160.0); // decline the frozen all-in reversal
+    add(160.0, 160.2, 159.8, 160.0); // original X remains suspended
+    add(160.0, 175.0, 159.8, 175.0); // chart margin checkpoint
+    add(175.0, 175.0, 175.0, 175.0); // distribution-sample margin checkpoint
+    add(175.0, 175.0, 175.0, 175.0);
+    return bars;
+}
+
+template<Scenario scenario>
+Outcome run_cycle_case(bool retain, bool magnifier, bool recording) {
+    RetentionSwitch switch_for_run(retain);
+    Host<scenario> host(recording);
+    const auto bars = scenario == Scenario::Returning ? returning_tape() : tape();
+    host.run(bars.data(), static_cast<int>(bars.size()), "1D", "",
+             magnifier, 4, MagnifierDistribution::ENDPOINTS);
+    return host.finish();
+}
+
+template<Scenario scenario>
+void cycle_revival_matches_retained_execution() {
+    constexpr bool returning = scenario == Scenario::Returning;
+    constexpr std::size_t count = returning ? 13 : 11;
+    const char* const entry = returning ? "L" : "S";
+    for (bool magnifier : {false, true}) for (bool recording : {false, true}) {
+        const int expected_margin_bar = (returning ? 10 : 8) + (magnifier ? 1 : 0);
+        // Expected trading controls below describe the RETAINED path. The
+        // erasing run is compared with it, never used to derive an expectation.
+        const auto retained = run_cycle_case<scenario>(true, magnifier, recording);
+        const auto erased = run_cycle_case<scenario>(false, magnifier, recording);
+        CHECK(retained.error.empty());
+        CHECK(erased.error.empty());
+        CHECK(retained.positions.size() == count);
+        CHECK(erased.positions.size() == count);
+        if (retained.positions.size() != count || erased.positions.size() != count) continue;
+        CHECK(retained.positions[2] == -80.0);
+        CHECK(retained.positions[4] == -40.0);
+        CHECK(retained.legs[4].present && !retained.legs[4].dormant);
+        CHECK(erased.legs[4].present && !erased.legs[4].dormant);
+        CHECK(retained.legs[4].origin != 0);
+        CHECK(retained.legs[4].qty == 40.0 && retained.legs[4].stop == 105.0);
+        CHECK(retained.legs[4].predecessor == 0);
+        const std::size_t suspended = returning ? 9 : 7;
+        CHECK(retained.positions[suspended] == -40.0);
+        CHECK(erased.positions[suspended] == -40.0);
+        CHECK(retained.legs[suspended].present && retained.legs[suspended].dormant);
+        CHECK(erased.legs[suspended].present && erased.legs[suspended].dormant);
+        CHECK(!retained.legs[suspended].withdrawn && !retained.legs[suspended].restored);
+        CHECK(!erased.legs[suspended].withdrawn && !erased.legs[suspended].restored);
+        if constexpr (returning) {
+            CHECK(retained.exposure[4] == 0.0 && erased.exposure[4] == 0.0);
+            CHECK(retained.exposure[6] == 40.0 && erased.exposure[6] == 40.0);
+            CHECK(retained.cycles[2] == retained.cycles[4]);
+            CHECK(retained.cycles[4] == retained.cycles[6]);
+            CHECK(erased.cycles[2] == erased.cycles[6]);
+            // One same-stop successor coexists, without consuming old X.
+            CHECK(retained.extra_legs[7] == 1 && erased.extra_legs[7] == 1);
+            CHECK(retained.legs[7].dormant && erased.legs[7].dormant);
+        } else {
+            // A global leg has no cohort under the empty name, even though
+            // its bound parent's sibling still holds the position open.
+            CHECK(retained.exposure[4] == 0.0 && erased.exposure[4] == 0.0);
+        }
+
+        int through_x = 0;
+        int margin_calls = 0;
+        int r_closes = 0;
+        for (const auto& trade : retained.trades) {
+            if (trade.exit_id == "__margin_call__") {
+                ++margin_calls;
+                CHECK(trade.entry_id == entry);
+                CHECK(trade.entry_bar_index == (returning ? 6 : 2));
+                CHECK(trade.exit_bar_index == expected_margin_bar);
+                CHECK(trade.exit_price == 175.0);
+                CHECK(trade.qty == 32.0 / 7.0);
+            } else if (trade.exit_id == "X") {
+                ++through_x;
+                CHECK(trade.entry_id == entry);
+                if constexpr (returning) CHECK(trade.exit_comment == "original X");
+                if (through_x == 1) {
+                    CHECK(trade.entry_incarnation == retained.legs[4].origin);
+                    CHECK(trade.entry_bar_index == 1);
+                    CHECK(trade.exit_bar_index == 3);
+                    CHECK(trade.exit_price == 105.0);
+                    CHECK(trade.qty == 40.0);
+                } else {
+                    CHECK(trade.entry_incarnation != retained.legs[4].origin);
+                    CHECK(trade.entry_bar_index == (returning ? 6 : 2));
+                    CHECK(trade.exit_bar_index == expected_margin_bar);
+                    CHECK(trade.exit_price == 175.0);
+                    CHECK(trade.qty == 248.0 / 7.0);
+                }
+            } else if constexpr (returning) {
+                ++r_closes;
+                CHECK(trade.entry_id == "R");
+                CHECK(trade.entry_bar_index == 2);
+                CHECK(trade.exit_bar_index == 7);
+                CHECK(trade.qty == 40.0);
+                CHECK(trade.entry_price == 100.0 && trade.exit_price == 100.0);
+                CHECK(trade.pnl == 0.0);
+            }
+        }
+        CHECK(through_x == 2);
+        CHECK(margin_calls == 1);
+        CHECK(r_closes == (returning ? 1 : 0));
+        CHECK(retained.trades.size() == (returning ? 4 : 3));
+        CHECK(retained.legs.back().restored && erased.legs.back().restored);
+        CHECK(retained.open == 0.0);
+        // Retained path: L1/S1 loses 200; L2/S2 loses 3000 at 175.
+        // The returning case's R round trip contributes exactly zero.
+        CHECK(retained.equity == 6800.0);
+        CHECK(erased.observations == retained.observations);
+        CHECK(trade_digest(erased.trades) == trade_digest(retained.trades));
+        CHECK(erased.open == retained.open);
+        CHECK(erased.equity == retained.equity);
+        std::printf("%s magnifier=%d recording=%d: trades %zu/%zu, open %.17g/%.17g, "
+                    "equity %.17g/%.17g, original restored=%d/%d\n",
+                    returning ? "G1 returning exposure" : "G2 global parent leg",
+                    magnifier ? 1 : 0, recording ? 1 : 0,
+                    erased.trades.size(), retained.trades.size(), erased.open, retained.open,
+                    erased.equity, retained.equity,
+                    erased.legs.back().restored ? 1 : 0, retained.legs.back().restored ? 1 : 0);
+    }
+}
 } // namespace
 
 int main() {
     closed_origin_revival_matches_retained_execution();
+    cycle_revival_matches_retained_execution<Scenario::Global>();
+    cycle_revival_matches_retained_execution<Scenario::Returning>();
     std::printf("test_k1_closed_origin_margin_revival: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
