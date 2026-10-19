@@ -328,7 +328,9 @@ void the_origin_pin_ends_when_its_lot_closes() {
         CHECK(!erased.trades.empty());
         CHECK(erased.final_origin_rows == 0);
     }
-    // One origin closes while another lot keeps the position cycle alive.
+    // The base placement_cycle >= cycle && !withdrawn clause keeps L's
+    // named closed-origin leg for the whole open cycle that different-id R
+    // still holds. CORE-TOP accepted the measured exact one-row count.
     for (int ratio : {1, 3}) for (bool magnifier : {false, true}) {
         const auto erased = run(Pattern::PartialOriginClose, 24, ratio, magnifier,
                                 false, false, false);
@@ -338,18 +340,18 @@ void the_origin_pin_ends_when_its_lot_closes() {
         CHECK(erased.open == 4.0);
         CHECK(erased.trades.size() == 1);
         std::printf("K1 PartialOriginClose ratio=%d magnifier=%d: final origin rows %zu, "
-                    "retained %zu, unchanged bound 0, excess %zu\n",
+                    "retained %zu, exact expectation 1 while R holds the cycle\n",
                     ratio, magnifier ? 1 : 0, erased.final_origin_rows,
-                    retained.final_origin_rows, erased.final_origin_rows);
-        CHECK(erased.final_origin_rows == 0);
+                    retained.final_origin_rows);
+        CHECK(erased.final_origin_rows == 1);
         CHECK(retained.final_origin_rows > 0);
     }
 }
 
 void partial_origin_pin_survives_until_the_next_cycle() {
     // Extend the same L-closes/R-remains precondition through more sweeps,
-    // then a flat boundary and a new opening. Keep the original zero-row
-    // bound above intact for CORE-TOP's ruling; do not special-case the sweep.
+    // then a flat boundary and a new opening. The exact one-row cycle pin
+    // above must end: the old leg is released after the cycle boundary.
     for (int ratio : {1, 3}) for (bool magnifier : {false, true}) {
         const auto erased = run(Pattern::PartialOriginCycleEnd, 28, ratio, magnifier,
                                 false, false, false);
