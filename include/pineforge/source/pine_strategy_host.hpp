@@ -444,7 +444,7 @@ public:
     // The request-data doors (pineforge.h strategy_set_symbol_feed and its
     // siblings); see BacktestEngine for the contract (lane XSYM-D).
     bool set_symbol_feed(const std::string& key, const std::string& timeframe,
-                         const Bar* bars, const int64_t* close_ms, int n) override;
+                         const Bar* bars, const int64_t* close_ms, int n) override; bool set_symbol_feed_borrowed(const std::string& key, const std::string& timeframe, const Bar* bars, const int64_t* close_ms, int n) override;
     bool set_symbol_feed_column(const std::string& key, const std::string& timeframe,
                                 const std::string& name, const double* values,
                                 int n) override;
@@ -947,7 +947,7 @@ private:
     // this host's store, or the kernel's run spec while they are lent to it.
     const NativeInstrumentFeed& installed_symbol_feed(std::size_t i) const;
     // Copies lent bytes back from the kernel's spec, which keeps its own.
-    void restore_symbol_feeds();
+    void restore_symbol_feeds(); void stage_symbol_feed_views();
     // The same for a request-data door: the reason it failed, or empty.
     std::string restore_symbol_feeds_reason();
     // True while the running spec names this host's sites: the kernel steps
@@ -1152,7 +1152,7 @@ protected:
     // The foreign site whose payload is being evaluated: its requested
     // context answers pine_bar_index(), time_close() and syminfo_ for the
     // length of the dispatch, and nothing outside one. Never durable.
-    const ForeignSecuritySite* foreign_context_ = nullptr;
+    struct BorrowedFeedSlot { const Bar* bars = nullptr; const std::int64_t* close_ms = nullptr; std::size_t size = 0; bool present = false; }; std::vector<BorrowedFeedSlot> symbol_feed_views_; const ForeignSecuritySite* foreign_context_ = nullptr;
 
     // Provider configuration, not book state: it is staged before a run and
     // projected into the adapter at begin, so it is waived from the durable

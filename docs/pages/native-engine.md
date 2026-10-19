@@ -3150,7 +3150,7 @@ These are existing refusals, not implied future features:
 - In-session gaps on a realtime stream, and in a `Canonical` stream warmup
 - Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
   rejects an explicit true override, and the Pine host refuses a stream begin
-  with `calc_on_order_fills`, `pine_strategy_host.cpp:302-305`). This is a
+  with `calc_on_order_fills`, `pine_strategy_host.cpp:304-307`). This is a
   **source-route** refusal, not a limit on the native hooks: `on_native_tick`
   and `on_native_applied` are delivered on a stream, and a native host's own
   `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
@@ -3969,7 +3969,9 @@ hands the runtime a callback table and gets the same kernel back.
 virtual to the table. No new virtual, no epoch bump, and nothing about the
 established C ABI moves: the compiled-strategy runtime symbols and their
 counts are untouched, and `scripts/check_c_abi_runtime.py` pins the new set as
-a second, disjoint inventory.
+a second, disjoint inventory (history: 70ddaa3). No epoch bump or reordering occurs: the borrowed
+symbol-feed setter is an additive compiled-strategy runtime symbol, and
+`scripts/check_c_abi_runtime.py` pins it alongside the established inventory (history: 0d8b203).
 
 ```c
 #include <pineforge/pineforge.h>
