@@ -29,7 +29,8 @@ import run_json
 import test_run_json_bin as bars
 
 
-BASE_SOURCE = "1eb5ef9f2fb0b40a7f99ec93ae850181d2df1633:docker/run_json.py"
+FROZEN_SOURCE = ROOT / "tests" / "fixtures" / "run_json_frozen_pre_l9a.py"
+FROZEN_SOURCE_SHA256 = "743a1cb79e7d2aa24389ac58dcb2a0fc157e1fd4739addaf8cfbe2604b98dd65"
 TRADE_FIELDS = (
     "n", "side", "entry_time", "exit_time", "entry_price", "exit_price", "qty",
     "pnl", "pnl_pct", "max_runup", "max_drawdown", "commission", "entry_bar_index",
@@ -197,13 +198,19 @@ def outputs_reader():
                                  constants=lambda: [50.], events=lambda: iter([event]))
 
 
+def _frozen_source_bytes():
+    source = FROZEN_SOURCE.read_bytes()
+    assert hashlib.sha256(source).hexdigest() == FROZEN_SOURCE_SHA256, (
+        "frozen pre-L9A producer fixture changed")
+    return source
+
+
 @pytest.fixture(scope="module")
 def frozen():
-    source = subprocess.run(["git", "show", BASE_SOURCE], cwd=ROOT, check=True,
-                            capture_output=True, text=True).stdout
+    source = _frozen_source_bytes()
     module = types.ModuleType("cr150_l9a_frozen")
     module.__file__ = str(ROOT / "docker/run_json.py")
-    exec(compile(source, BASE_SOURCE, "exec"), module.__dict__)
+    exec(compile(source, str(FROZEN_SOURCE), "exec"), module.__dict__)
     # Both producers read the same unchanged C ABI allocations. In particular
     # _stats_dict's isinstance check must recognize the shared equity struct.
     module.ReportC, module.EquityStatsC = run_json.ReportC, run_json.EquityStatsC
@@ -458,8 +465,7 @@ raise SystemExit(runner.main(sys.argv[4:]))
 
 def native_compare(tmp_path, module, argv, *, binary=False, phase_fd=False):
     frozen_path = tmp_path / "frozen_run_json.py"
-    frozen_path.write_bytes(subprocess.run(["git", "show", BASE_SOURCE], cwd=ROOT,
-                                          check=True, capture_output=True).stdout)
+    frozen_path.write_bytes(_frozen_source_bytes())
     results = []
     for mode, producer in (("frozen", frozen_path), ("stream", ROOT / "docker/run_json.py")):
         parent, child = socket.socketpair()
