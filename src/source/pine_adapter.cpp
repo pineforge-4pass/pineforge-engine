@@ -24046,6 +24046,22 @@ void PineExecutionAdapter::on_bar_close_before_script(
 
 void PineExecutionAdapter::on_bar_close(
         const Bar& bar, const NativeDecisionContext& context) {
+    on_bar_close_policy(bar, context);
+    if (context.is_terminal_sub_bar) {
+        // Normal policy returns (quiet bars and margin checkpoints included)
+        // all reach this boundary. Exceptions leave unfinished events intact.
+        finish_admission_bar();
+    }
+}
+
+void PineExecutionAdapter::finish_admission_bar() {
+    fold_admission_events();
+    admission_journal.retire_prefix(admission_events_folded_,
+        admission_events_digest_, admission_events_last_);
+}
+
+void PineExecutionAdapter::on_bar_close_policy(
+        const Bar& bar, const NativeDecisionContext& context) {
     // Quiet-bar gates (pine_quiet_bar.hpp), as at the opening. None fires on
     // an unbound adapter: its hooks still refuse through require_host().
     using detail::QuietHook;

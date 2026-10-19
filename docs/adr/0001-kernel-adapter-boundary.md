@@ -272,7 +272,7 @@ kernel and own these quirks, each at its site:
   margin since F7), while the roll point measures at the remaining path's adverse mark (MG-FX:
   0.4116 @ 97 there against TradingView's 0.3996 @ 100). What has no kernel check point at all
   stays adapter-side: the `process_orders_on_close` chronology exception
-  (`non_pooc_commissioned_short` `pine_adapter.cpp:24176`) and
+  (`non_pooc_commissioned_short` `pine_adapter.cpp:24192`) and
   the 1x-long money call — plus the TV admission scopes
   (`explicit_pair_scope` `src/compat/pine/market_admission.cpp:34-47`) and the review fold they feed
   (`awaits_pair_review` `:68-73`, `fold_admission_history` `:83-140`).
