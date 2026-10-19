@@ -116,7 +116,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | Code | Class | Retryable | Arguments | What it means |
 | --- | --- | --- | --- | --- |
 | `chart_bars_rejected` | `input` | no | `field` (vocab, 6 values, optional), `index` (integer, optional), `reason` (vocab, 12 values) | The run's chart bars (the request's OHLCV) were refused. |
-| `chart_bars_unreadable` | `input` | no | `reason` (vocab, 4 values) | The harness could not read the run's OHLCV file. |
+| `chart_bars_unreadable` | `input` | no | `reason` (vocab, 9 values) | The harness could not read the run's OHLCV file. |
 | `engine_command_value_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 3 values), `stage` (vocab, 7 values) | The engine derived an invalid command value (non-finite, invalid text or an overflowing finite value) from its own book, equity, margin, sizing, fee, slippage or settlement state: an engine fault, never a strategy failure. stage names where it was derived. |
 | `engine_invariant` | `engine_fault` | no | none | An engine invariant failed: a PineForge bug. |
 | `engine_unclassified_error` | `engine_fault` | no | none | An error no coded site reported: a PineForge bug. |
@@ -151,7 +151,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `run_aborted` | `engine_fault` | yes | none | The run was aborted on request. |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
-| `run_request_invalid` | `input` | no | `option` (vocab, 20 values) | The harness command line or one of its JSON options is invalid. |
+| `run_request_invalid` | `input` | no | `option` (vocab, 22 values) | The harness command line or one of its JSON options is invalid. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
@@ -161,7 +161,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `strategy_settings_rejected` | `strategy` | no | `field` (vocab, 30 values) | A strategy() declaration setting (or its override) is not a value the engine accepts. |
 | `strategy_value_invalid` | `strategy` | no | `field` (string), `reason` (vocab, 3 values) | The strategy supplied an invalid actionable value (a non-finite number, invalid text or an overflowing finite value) to a declaration, setting or command that needs a valid one. |
 | `stream_input_rejected` | `input` | no | none | A streaming input (bar, tick or auxiliary bar) was refused. |
-| `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 41 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |
+| `symbol_feeds_refused` | `symbol_feeds` | no | `field` (vocab, 6 values, optional), `input_tf` (timeframe, optional), `reason` (vocab, 47 values), `script_tf` (timeframe, optional) | Other symbols' bars installed for request.security were refused. |
 | `symbol_metadata_rejected` | `symbol_metadata` | yes | `field` (vocab, 14 values) | The symbol's catalog metadata (syminfo) is not a value the engine accepts. |
 | `syminfo_unreadable` | `symbol_metadata` | yes | `reason` (vocab, 4 values) | The harness could not read the run's syminfo file. |
 | `window_boundary_unaligned` | `input` | no | `bound` (vocab, 3 values), `next_boundary_ms` (integer), `previous_boundary_ms` (integer), `value_ms` (integer) | A selected-window boundary (start, end or fed start) is not aligned to the script calendar; the adjacent boundaries are carried. |
