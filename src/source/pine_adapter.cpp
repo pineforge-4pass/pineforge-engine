@@ -912,14 +912,14 @@ std::uint64_t PlacementTable::command_sequence_for(const std::string& source_id,
     std::uint64_t paired = absent;
     const Minima* const indexes[] = {&sequence_index_, &erased_minima_};
     for (const Minima* index : indexes) {
-        const auto minima = index->find(source_id);
-        if (minima == index->end()) continue;
+        const auto minima = index->lookup(source_id);
+        if (!minima) continue;
         known = true;
-        any = std::min(any, minima->second.any);
-        const auto pair = minima->second.by_from_entry.find(from_entry);
-        if (pair == minima->second.by_from_entry.end()) continue;
+        any = std::min(any, *minima);
+        const auto pair = index->lookup(source_id, from_entry);
+        if (!pair) continue;
         paired_known = true;
-        paired = std::min(paired, pair->second);
+        paired = std::min(paired, *pair);
     }
     if (!known) return absent;
     if (paired_known && paired != absent) return paired;
@@ -2725,7 +2725,7 @@ RunFailureValue run_spec_field_failure(NativeRunSpecField field) noexcept {
     }
     return make_run_failure(RunFailureCode::engine_invariant, {});
 }
-
+// instrument_feeds moves into the spec and back to the caller if projection throws.
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              const StagedConfiguration& staged,
                                              const NativeBeginArgs& args,
@@ -6310,7 +6310,7 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
 // UINT64_MAX is returned only when the exit id has no placement row at all.
 // ab9714be pine_fills.cpp:664-670: candidate exit fills tie-break by order creation sequence created_seq
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
-        const SourceId& exit_id, const SourceId& from_entry) const noexcept {
+        const SourceId& exit_id, const SourceId& from_entry) const {
     // The same-bar exit sort asks this on every script bar while its tail
     // group persists; the table answers from its per-id index instead of a
     // scan over every placement ever retained (quadratic over a long run).
@@ -11193,10 +11193,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     if (!std::isnan(qty) && live_exit_units > internal::kQtyEpsilon)
         reissue_percent = std::min(qty, live_exit_units) / live_exit_units * 100.0;
     const bool partial_reissue = reissue_percent < 100.0 - internal::kFullPercentEps;
-    if (const auto consumed = consumed_partial_exit_cycles_.find(partial_exit_key);
-        consumed != consumed_partial_exit_cycles_.end() && partial_reissue
+    if (const auto consumed = consumed_partial_exit_cycles_.lookup(partial_exit_key);
+        consumed && partial_reissue
         && live_exit_units > internal::kQtyEpsilon
-        && consumed->second == current_position_cycle_) {
+        && *consumed == current_position_cycle_) {
         return;
     }
     if (partial_reissue && exit_tombstoned(exit_id, from_entry)) return;
@@ -24839,9 +24839,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                         || family == PineOrderFamily::ExitTrail);
             });
         if (!sibling_leg_still_live) {
-            consumed_partial_exit_cycles_[placement_snapshot->source_id + "\x1f"
-                                         + placement_snapshot->from_entry] =
-                current_position_cycle_;
+            consumed_partial_exit_cycles_.insert_or_assign(
+                placement_snapshot->source_id + "\x1f" + placement_snapshot->from_entry,
+                current_position_cycle_);
         }
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Order
@@ -28156,9 +28156,20 @@ bool PineExecutionAdapter::CohortFacts::spillable() const noexcept {
     return origins.members().empty() && opened.empty() && live_units_by_origin.empty();
 }
 
+// CR-150 L19l merge of parts A and C: the one place that binds the scratch
+// directory of every adapter-owned L19l table -- part A's cohort and
+// entry-rank tables, part C's placement-minima and consumed-cycle tables --
+// the way set_successor_roots_directory binds every table of the kernel core.
+// ScratchFile and IdPairStore accept the directory they already hold, so
+// calling both public names (this and set_auxiliary_tables_directory) with
+// one directory is harmless. A different directory once a table's file is
+// open throws std::logic_error from that table: bind after reset_for_run and
+// before the first id, as the declaration says.
 void PineExecutionAdapter::set_id_tables_directory(const std::string& directory) {
     cohorts_by_id_.set_directory(directory);
     exit_rank_keys_.set_directory(directory);
+    placement_.set_auxiliary_tables_directory(directory);
+    consumed_partial_exit_cycles_.set_directory(directory);
 }
 
 PineExecutionAdapter::CohortTable::iterator
@@ -28169,6 +28180,44 @@ PineExecutionAdapter::require_cohort(const SourceId& id) {
                                       "accepted opening has no source cohort");
     }
     return found;
+}
+
+} // namespace pineforge::source
+
+// CR-150 L19l-C. Keep the new storage wiring together, away from part A's
+// cohort / entry-id changes in this translation unit. These paths and file
+// offsets describe storage of existing state, not additional broker state.
+namespace pineforge::source {
+
+void PlacementTable::set_auxiliary_tables_directory(const std::string& directory) {
+    sequence_index_.set_directory(directory);
+    erased_minima_.set_directory(directory);
+}
+
+void PlacementTable::fixture_use_memory_auxiliary_tables() {
+    if (high_water_ != 0)
+        throw std::logic_error("placement auxiliary fixture backend changed after use");
+    sequence_index_.fixture_use_memory_reference();
+    erased_minima_.fixture_use_memory_reference();
+}
+
+std::uint64_t PlacementTable::auxiliary_disk_bytes() const noexcept {
+    return sequence_index_.disk_bytes() + erased_minima_.disk_bytes();
+}
+
+// Part C's name for the merged binding: set_id_tables_directory above binds
+// the placement minima and consumed-cycle tables together with part A's tables.
+void PineExecutionAdapter::set_auxiliary_tables_directory(const std::string& directory) {
+    set_id_tables_directory(directory);
+}
+
+void PineExecutionAdapter::fixture_use_memory_auxiliary_tables() {
+    placement_.fixture_use_memory_auxiliary_tables();
+    consumed_partial_exit_cycles_.fixture_use_memory_reference();
+}
+
+std::uint64_t PineExecutionAdapter::fixture_auxiliary_disk_bytes() const noexcept {
+    return placement_.auxiliary_disk_bytes() + consumed_partial_exit_cycles_.disk_bytes();
 }
 
 } // namespace pineforge::source

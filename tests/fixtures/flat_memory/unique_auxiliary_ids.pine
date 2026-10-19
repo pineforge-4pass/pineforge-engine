@@ -1,0 +1,19 @@
+//@version=6
+strategy("CR-150 auxiliary id tables", initial_capital=1000000, pyramiding=1, process_orders_on_close=true)
+// The native twin is test_adapter_auxiliary_disk.cpp. New entry and exit
+// keys exercise both placement minima and consumed partial-exit cycles.
+// Set id_period=31 to revisit old ids after other ids have come and gone.
+idPeriod = input.int(0, "id_period", minval=0)
+longIds = input.bool(true, "long_ids")
+limit = input.int(256, "cycles", minval=1)
+cycle = int(math.floor(bar_index / 6))
+ordinal = idPeriod == 0 ? cycle : cycle % idPeriod
+entryId = (longIds ? "long-unique-entry-" : "E") + str.tostring(ordinal)
+exitId = cycle % 3 == 0 ? "shared-exit" : "half-" + entryId
+if cycle < limit
+    if bar_index % 6 == 0
+        strategy.entry(entryId, strategy.long, qty=4)
+    if bar_index % 6 == 1 or bar_index % 6 == 3
+        strategy.exit(exitId, entryId, limit=100.5, stop=99.5, qty_percent=50)
+    if bar_index % 6 == 4 and strategy.position_size > 0
+        strategy.close(entryId)
