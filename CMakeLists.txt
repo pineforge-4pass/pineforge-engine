@@ -155,6 +155,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/native_bar_views.cpp
     src/selected_report_view.cpp
     src/selected_window_plan.cpp
+    src/metrics_spill_curve.cpp
 )
 # The kernel-only archive. Same objects, same flags as the kernel half of
 # libpineforge.a — a consumer that never speaks Pine links this one.
