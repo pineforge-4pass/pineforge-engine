@@ -14513,14 +14513,18 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
         found_family = true;
     }
     if (!found_family) return;
-    // Settled members no longer retain incarnation bytes. They have already
-    // left the working book, so a same-run sentinel is classified as
-    // NotWorking and emits the same compact cancel event while advancing the
-    // command ordinal once per settled member.
+    // Every member the kernel no longer works, including settled members,
+    // uses one same-run incarnation that no request is ever issued under.
+    constexpr std::uint64_t kNeverIssued = std::numeric_limits<std::uint64_t>::max();
     for (std::size_t index = 0; index < settled; ++index)
-        (void)require_host().cancel(native_order::RequestHandle{settled_run, 0});
+        (void)require_host().cancel(native_order::RequestHandle{settled_run, kNeverIssued});
+    IExecutionConsumer* consumer = bound_consumer();
     for (const auto& handle : handles) {
-        const auto result = require_host().cancel(handle);
+        const bool working = consumer == nullptr
+            || as_native_consumer(*consumer).request_core().find_live(handle) != nullptr;
+        const auto target = working ? handle
+            : native_order::RequestHandle{handle.run, kNeverIssued};
+        const auto result = require_host().cancel(target);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
 }
