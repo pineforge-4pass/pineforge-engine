@@ -733,9 +733,9 @@ of native-live run the registered set excluding
 the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`
 ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
-over 30 seconds in either Debug run. Preflight starts at once, and the proof
-jobs start alongside it as soon as the few-second `changes` job has decided
-whether the change is documentation only. The advisory `build`
+over 30 seconds in either Debug run. Preflight and the proof jobs start as soon
+as the few-second `changes` job has decided whether the change is
+documentation only and which verifier classes a pull request needs. The advisory `build`
 aggregate succeeds only if every job succeeds, or was skipped for a
 documentation-only change. INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
 legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
@@ -802,8 +802,10 @@ parity subset are unchanged.
 
 The verifier's own self-test is split by TestCase class. A class is FAST only
 when its measured total in the serial run log is under 5 s and its passing
-runtime is measured; every other class is SLOW, and a class in neither list
-runs. On a pull request the `verifier-tests` stage of `preflight` runs the FAST
+runtime is measured (one exception, by decision: `HistoricalProviderPins` is
+skipped without the private overlay, so it has no passing runtime, and is FAST
+because it is skipped there); every other class is SLOW, and a class in neither
+list runs. On a pull request the `verifier-tests` stage of `preflight` runs the FAST
 classes always. It runs the SLOW classes only when `scripts/ci_verifier_paths.py`,
 the one place the path list lives, reports that the change touches a path the
 verifier reads (`include/pineforge`, `src/c_abi.cpp`, `tests/`, `runner/`, the
@@ -819,11 +821,15 @@ the selection must remove some rows and leave some, and, with the overlay
 absent, the rows that ran plus the pinned skips must equal the selection with
 no other skip (the `--exclude-label` branch of `enforce_test_floor` in
 `scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 876 for `debug`, 867
-for `sanitizers` and 963 for `native`, and with D1 895 for `release` and 309
-for `kernel`. The two new keys are derived, not measured: each is the
-registered count in the sampled public pull-request runs (957 and 371) less the
-62 rows by which the Debug key sits below the Debug registry in the same runs
-(938 less 876), and the lab job's `ctest -N` confirms them or moves them. The
+for `sanitizers` and 963 for `native`, and with D1 895 for `release` and 337
+for `kernel`. The two new keys are derived, not measured. `release` is the
+registered count in the sampled public pull-request runs (957) less the 62 rows
+by which the Debug key sits below the Debug registry in the same runs (938 less
+876); that also equals its own registry at the vintage of the other keys. The
+same offset would give 309 for `kernel`, 17 rows below the kernel registry at
+that vintage (326), so `kernel` takes `KERNEL_MIN_TESTS` (337): 34 below the 371
+registered in every sampled pull-request and push run. The lab job's `ctest -N`
+confirms both or moves them. The
 run floors in the table above (910 and 337 with the overlay present, 603 and
 306 absent) are not read on an excluded run; push, dispatch and every other
 full run still enforce them.
@@ -913,7 +919,8 @@ and a `changes` job that fails or never answers.
 Each proof job waits for `changes` alone, a few seconds once the light ci-spot
 class or its hosted fallback takes it, and skips only when `changes` succeeded
 and answered documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
-needs.changes.outputs.docs_only != 'true')`. `preflight` waits for nothing.
+needs.changes.outputs.docs_only != 'true')`. `preflight` waits for `changes`
+alone, runs even if `changes` fails (`!cancelled()`), and then runs every verifier class.
 The advisory `build` aggregate passes a proof job that succeeded, or one that
 was skipped under that same answer. A proof job skipped for any other reason
 fails it, and so does any `preflight` result but success. A skipped matrix is
@@ -1083,8 +1090,8 @@ exactly one core-count `--jobs` (counted over the whole job, however its
 commands are chained, blocked or carried, with the flag and its value on one
 line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
 line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py` holds
-the mutations. The same stage pins the documentation-only skip: `changes` and
-`preflight` wait for nothing and run on every event, the classification step
+the mutations. The same stage pins the documentation-only skip: `changes` waits for
+nothing and `preflight` waits for `changes` alone and runs on every event, the classification step
 is pinned verbatim, each proof job needs `changes` alone and carries the one
 skip condition, and the `build` aggregate reads every result and the answer. No
 job of `ci.yml`, `native-live.yml` or `corpus-parity.yml`, nor any of their

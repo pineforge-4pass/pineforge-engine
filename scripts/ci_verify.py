@@ -645,17 +645,17 @@ ADR_RULED_TEXTS_MIN = 59
 # An excluded run must still discover at least this many rows before -LE.
 EXCLUDED_REGISTERED_MIN = {
     'debug': 876, 'sanitizers': 867, 'native': 963,
-    # D1: tests-pineforge-engine-ci-pull_request.tsv, run 39221717231 (same
-    # base for every row). The TSV counts the ctest rows a job SELECTED. The
-    # Debug and sanitizers PR legs already exclude the 29 `slow` rows, so
-    # their registered count is selected + 29: Debug 909 + 29 = 938 and
-    # sanitizers 900 + 29 = 929; offset to their keys 938 - 876 = 62 and
-    # 929 - 867 = 62. The Release and kernel-only jobs ran their full
-    # population in that run, so selected = registered: 957 and 371.
-    # Same registered-count offset: Release 957 - 62 = 895, kernel 371 - 62 = 309.
-    # Public ctest -N confirmation is still required in the lab; these are
-    # registration floors, not reduced run floors.
-    'release': 895, 'kernel': 309,
+    # D1, run 39221717231 of the PR TSV, REGISTERED counts (Debug/sanitizers
+    # exclude 29 slow rows, so selected + 29): Debug 938 - 876 = 62 and
+    # sanitizers 929 - 867 = 62 below their registry; Release and kernel-only
+    # ran full there: 957 and 371. Release: 957 - 62 = 895. Kernel: the offset
+    # gives 309, 17 below its registry at that vintage (326), so it takes
+    # KERNEL_MIN_TESTS 337 (34 below the 371 of every sampled run). The lab's
+    # ctest -N confirms both; registration floors, not reduced run floors.
+    # Basis of the offset: the existing keys count rows registered BEFORE -LE,
+    # so a selected count (909, 900) is never compared with a key (876, 867).
+    # See docs/ci.md, "PR tier versus MAIN/RELEASE", and COVERAGE-FLOORS.
+    'release': 895, 'kernel': 337,
 }
 # test_native_live_websocket exits 77 wherever the linked libcurl has no
 # WebSocket support (a system libcurl); main's kernel floor counted that skip

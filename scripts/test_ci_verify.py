@@ -1782,7 +1782,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
                          {'debug': 876, 'sanitizers': 867, 'native': 963,
-                          'release': 895, 'kernel': 309})
+                          'release': 895, 'kernel': 337})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
                 code, summary, scripted, _ = self.run_profile(
@@ -2817,7 +2817,7 @@ class PrivateFixtureFloors(unittest.TestCase):
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
                          {'debug': 876, 'sanitizers': 867, 'native': 963,
-                          'release': 895, 'kernel': 309})
+                          'release': 895, 'kernel': 337})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
         # F9: the flag must MOVE the value. A test that only reads the
@@ -3234,7 +3234,7 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
         # D1 floors are independent policy literals, not read back from the
         # implementation being tested. Exercise the real enforcement branch
         # without repeating an engine configure/build or scripted source guard.
-        for profile, floor in (('release', 895), ('kernel', 309)):
+        for profile, floor in (('release', 895), ('kernel', 337)):
             pinned = self.pinned_probe(1)
             cases = (
                 (floor, floor - 5, floor - 5, pinned, 'passed', ''),
