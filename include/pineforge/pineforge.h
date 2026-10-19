@@ -1861,6 +1861,16 @@ PF_API int strategy_signal_safety_receipt(pf_strategy_t s, char* json, size_t ca
 
 /** @} */ /* end of pf_outputs */
 
+/** Feature probe for the borrowed symbol-feed setter. */
+#define PINEFORGE_HAS_SYMBOL_FEED_BORROWED_V1 1
+/** Install another symbol's bars without copying them. The caller keeps both
+ *  arrays alive until the feed is replaced or cleared, or #strategy_free.
+ *  Validation and return values match #strategy_set_symbol_feed. Historical
+ *  runs only: stream_begin() fails closed while a symbol feed is installed. */
+PF_API int strategy_set_symbol_feed_borrowed_v1(
+    pf_strategy_t s, const char* key, const char* timeframe,
+    const pf_bar_t* bars, const int64_t* close_ms, int n);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

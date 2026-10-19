@@ -1048,7 +1048,7 @@ pineforge.h:642, `strategy_set_override` pineforge.h:652,
 pineforge.h:593, `run_backtest_full` pineforge.h:610 and `report_free`
 pineforge.h:624. It adds **no** new C symbol: every remaining runtime export —
 `strategy_configure_native_v1` pineforge.h:510, the `strategy_stream_*` family
-c_abi.cpp:623-742, `strategy_execution_contract` pineforge.h:460 — already
+c_abi.cpp:699-820, `strategy_execution_contract` pineforge.h:460 — already
 lives in the engine, and the generated `strategy_create` references
 `pf_abi_version()` so a static link keeps that object.
 

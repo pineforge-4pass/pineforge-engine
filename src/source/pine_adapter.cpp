@@ -902,7 +902,9 @@ std::uint64_t PlacementTable::command_sequence_for(const std::string& source_id,
     for (const auto incarnation : unfolded_) {
         if (const PlacementSnapshot* row = locate(incarnation)) fold_sequence(sequence_index_, *row);
     }
-    unfolded_.clear();
+    // The pending ids are folded now; release their storage so an erased
+    // history cannot leave a capacity-sized allocation behind.
+    std::vector<std::uint64_t>().swap(unfolded_);
     constexpr auto absent = std::numeric_limits<std::uint64_t>::max();
     bool known = false;
     std::uint64_t any = absent;
@@ -3651,7 +3653,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         exit_phase_digest_ = fold_exit_phase(exit_phase_digest_,
                                              trade_exit_phase_[exit_phase_final_]);
     }
-    if (detail::retain_retired_rows()) return;
+    const bool retain_rows = detail::retain_retired_rows();
     // Every live handle has a row; nothing beyond them means nothing retired.
     if (placement_.size() <= live_handles_.size()) return;
     const int interval = context.coordinate.interval_index;
@@ -4061,20 +4063,21 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
                 cohort->second.erased_opening_sides |= value.is_long ? 1U : 2U;
             }
         }
-        placement_.erase(incarnation);
-        detail::rows_erased.fetch_add(1, std::memory_order_relaxed);
+        if (!retain_rows) placement_.erase(incarnation);
+        if (!retain_rows) detail::rows_erased.fetch_add(1, std::memory_order_relaxed);
     }
-    // Every family settles the members whose rows are gone, and keeps a
-    // consumed-leg fact only while its origin is live or opened.
+    // Every family settles the members whose rows would be gone (or are gone),
+    // and keeps a consumed-leg fact only while its origin is live or opened.
     for (auto& family : bracket_families_) {
         family.second.settle([&](std::uint64_t incarnation) {
-            return !placement_.contains(incarnation);
+            return retain_rows ? contains(doomed, incarnation)
+                               : !placement_.contains(incarnation);
         });
         family.second.prune_consumed([&](std::uint64_t origin) {
             return contains(askable_origins, origin);
         });
     }
-    placement_.compact();
+    if (!retain_rows) placement_.compact();
 }
 
 // R5 lane V19-FIX: the kernel's cohort rosters hold what can still be bound.
@@ -14507,15 +14510,29 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
     // Cancellation can synchronously change source state. Copy the family
     // roster and release the map iterator before issuing any host operation.
     std::vector<native_order::RequestHandle> handles;
+    std::size_t settled = 0;
+    native_order::RunIdentity settled_run{};
     bool found_family = false;
     if (const auto found = bracket_families_.find(key); found != bracket_families_.end()) {
         handles = found->second.members();
+        settled = found->second.settled_count();
+        settled_run = found->second.run_identity();
         bracket_families_.erase(found);
         found_family = true;
     }
     if (!found_family) return;
+    // Every member the kernel no longer works, including settled members,
+    // uses one same-run incarnation that no request is ever issued under.
+    constexpr std::uint64_t kNeverIssued = std::numeric_limits<std::uint64_t>::max();
+    for (std::size_t index = 0; index < settled; ++index)
+        (void)require_host().cancel(native_order::RequestHandle{settled_run, kNeverIssued});
+    IExecutionConsumer* consumer = bound_consumer();
     for (const auto& handle : handles) {
-        const auto result = require_host().cancel(handle);
+        const bool working = consumer == nullptr
+            || as_native_consumer(*consumer).request_core().find_live(handle) != nullptr;
+        const auto target = working ? handle
+            : native_order::RequestHandle{handle.run, kNeverIssued};
+        const auto result = require_host().cancel(target);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
 }
@@ -24053,6 +24070,22 @@ void PineExecutionAdapter::on_bar_close_before_script(
 }
 
 void PineExecutionAdapter::on_bar_close(
+        const Bar& bar, const NativeDecisionContext& context) {
+    on_bar_close_policy(bar, context);
+    if (context.is_terminal_sub_bar) {
+        // Normal policy returns (quiet bars and margin checkpoints included)
+        // all reach this boundary. Exceptions leave unfinished events intact.
+        finish_admission_bar();
+    }
+}
+
+void PineExecutionAdapter::finish_admission_bar() {
+    fold_admission_events();
+    admission_journal.retire_prefix(admission_events_folded_,
+        admission_events_digest_, admission_events_last_);
+}
+
+void PineExecutionAdapter::on_bar_close_policy(
         const Bar& bar, const NativeDecisionContext& context) {
     // Quiet-bar gates (pine_quiet_bar.hpp), as at the opening. None fires on
     // an unbound adapter: its hooks still refuse through require_host().
