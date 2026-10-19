@@ -3694,13 +3694,13 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         return false;
     });
     const auto pinned_by_itself = [&](const PlacementSnapshot& value) {
-        // K1: the revival can use a closed origin's leg through its entry cohort.
-        // Preserve completed non-dormant rows while flat, until the next cycle.
+        // K1: preserve unwithdrawn lifecycle rows for their entire cycle.
+        // Global legs need no named exposure; an empty named cohort may reopen.
+        // Exposure at this sweep cannot decide what a later margin call reads.
+        // Supersession below still releases legs the revival can no longer use.
         const bool askable = contains(askable_origins, value.bracket_origin.incarnation);
         if (value.legs.target().incarnation != 0
-            && ((value.placement_cycle >= cycle && !withdrawn(value.legs)
-                 && ((current_position_sign_ == 0 && !value.legs.dormant())
-                     || value.bracket_origin.incarnation == 0 || askable || cohort_exposure_for(value.from_entry) > 0.0))
+            && ((value.placement_cycle >= cycle && !withdrawn(value.legs))
                 || (askable && !value.legs.dormant())
                 || std::find(origin_pins.begin(), origin_pins.end(), &value) != origin_pins.end())) return true;
         // K4
