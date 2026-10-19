@@ -931,6 +931,18 @@
    "retryable": false,
    "since": "1.5.0"
   },
+  "report_sink_failed": {
+   "args": {},
+   "class": "resource",
+   "description": "The engine could not create or write the report sink. The run has no completed sink or valid trailer.",
+   "english": [
+    "report sink open failed",
+    "report sink write failed",
+    "report sink write made no progress"
+   ],
+   "retryable": false,
+   "since": "1.7.0"
+  },
   "request_symbol_invalid": {
    "args": {},
    "class": "strategy",
@@ -1057,7 +1069,8 @@
       "stream_monthly_input",
       "stream_fx_curve_input",
       "fx_series_calc_on_order_fills",
-      "fx_series_bar_magnifier"
+      "fx_series_bar_magnifier",
+      "stream_report_sink"
      ]
     }
    },
@@ -1073,7 +1086,8 @@
     "request.security symbol feeds and recorded request series support historical runs only",
     "timestamped account-currency FX does not support calc_on_order_fills",
     "timestamped account-currency FX is not supported by streaming",
-    "timestamped account-currency FX is not supported with bar magnifier"
+    "timestamped account-currency FX is not supported with bar magnifier",
+    "report sink does not support streaming"
    ],
    "retryable": false,
    "since": "1.4.0"

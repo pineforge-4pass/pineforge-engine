@@ -44,10 +44,10 @@
 #define PINEFORGE_NO_STRATEGY_DECLS
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
-
-// Generated modules using the full script lifecycle reset must be rebuilt
-// against a runtime providing this hook. This is an internal C++ capability;
-// it does not change any public C POD or exported C function signature.
+#include <pineforge/report_sink_writer.hpp>
+// Generated script lifecycle users must be rebuilt against this runtime.
+// These internal C++ capabilities change no public C POD or C signature.
+#define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
 namespace pineforge {
@@ -2292,6 +2292,59 @@ private:
     // value. Private, so no host writes it (R5 lane K-ULP4).
     double native_quantity_tolerance_ = 0.0;
 
+    // Reporting configuration and run-local output ownership. Copies retain
+    // configuration, never a writer, receipt, or an active-call barrier.
+    struct ReportSinkState {
+        bool enabled = false;
+        bool trade_history_streamable = false;
+        std::string path, run_id, scratch_dir;
+        std::uint32_t active_calls = 0;
+        std::uint32_t stream_calls = 0;
+        std::unique_ptr<report_sink::LineWriter> writer;
+        pf_report_sink_receipt_v1 receipt{};
+        ReportSinkState() = default;
+        ReportSinkState(const ReportSinkState& other)
+            : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
+              path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
+        ReportSinkState& operator=(const ReportSinkState& other) {
+            if (this != &other) *this = ReportSinkState(other);
+            return *this;
+        }
+        ReportSinkState(ReportSinkState&&) noexcept = default;
+        ReportSinkState& operator=(ReportSinkState&&) noexcept = default;
+    };
+    // @broker-state begin
+    mutable ReportSinkState report_sink_state_;
+    // @broker-state end
+
+    class ReportSinkCallScope {
+        ReportSinkState& state;
+        bool stream;
+    public:
+        explicit ReportSinkCallScope(const BacktestEngine& engine, bool is_stream = false)
+            : state(engine.report_sink_state_), stream(is_stream) {
+            ++state.active_calls;
+            if (stream) ++state.stream_calls;
+        }
+        ~ReportSinkCallScope() {
+            if (stream) --state.stream_calls;
+            --state.active_calls;
+        }
+        ReportSinkCallScope(const ReportSinkCallScope&) = delete;
+        ReportSinkCallScope& operator=(const ReportSinkCallScope&) = delete;
+    };
+    int report_sink_setter_status() const;
+    void begin_report_sink();
+    void finish_report_sink(ReportC* out) const;
+
+public:
+    // The additive C ABI delegates here; receipt queries never bind a consumer.
+    int set_report_sink_v1(const pf_report_sink_v1* sink);
+    int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
+    // Codegen opts in only for modules that do not read closedtrades.*.
+    // L6B1 still retains every row; L8c consumes this policy at sealing.
+    void set_trade_history_streamable(bool streamable);
+    bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
 protected:
     // Sealed closed rows only; range-end report rows never enter these sums.
     // Each accessor continues its own sum one resident row at a time, so a
