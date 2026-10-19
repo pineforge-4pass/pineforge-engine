@@ -198,7 +198,7 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
     } else {
         out->equity_curve = nullptr;
     }
-    present_report(out);
+    present_report_equity_tail(out);
     compute_report_metrics(out->metrics, out->trades, out->trades_len,
                            out->equity_curve, n, out->net_profit,
                            initial_capital_, chart_timezone_,
@@ -682,7 +682,7 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         if (sink.writer && !sink.receipt.complete && last_run_status_ == 0
             && last_error_.empty() && consumer
             && consumer->state_kind() == NativeLifecycleKind::Completed) {
-            for (int64_t i = 0; i < out->equity_curve_len; ++i) {
+            for (int64_t i = sink.receipt.count_e; i < out->equity_curve_len; ++i) {
                 sink.writer->write_e(out->equity_curve[i]);
                 ++sink.receipt.count_e;
             }

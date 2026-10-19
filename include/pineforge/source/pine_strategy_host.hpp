@@ -855,7 +855,7 @@ protected:
 private:
     friend class PineScheduler;
     friend class PineExecutionAdapter;
-
+    friend struct ReportSinkEquityTestAccess;
     // One request.security site of ANOTHER symbol (register_security_eval with a
     // symbol key). Its payload runs in the requested context: on every bar of the
     // symbol's feed, in order, as the kernel hands the bars over through the
