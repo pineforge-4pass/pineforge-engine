@@ -200,7 +200,7 @@ std::uint64_t trade_digest(const std::vector<Trade>& trades) {
     return f.h;
 }
 
-void closed_origin_cannot_revive_on_its_same_id_sibling() {
+void closed_origin_revival_matches_retained_execution() {
     for (bool magnifier : {false, true}) for (bool recording : {false, true}) {
         // Distribution samples check margin at bar 9's first 175 print;
         // the chart path checks the high on bar 8 (retained-engine trace).
@@ -216,7 +216,8 @@ void closed_origin_cannot_revive_on_its_same_id_sibling() {
         CHECK(retained.positions[2] == -80.0);
         CHECK(erased.positions[5] == -40.0);
         CHECK(retained.positions[5] == -40.0);
-        CHECK(!erased.legs[5].present);
+        // Retained trace, bar 5: S2's exposure still pins S1's original X.
+        CHECK(erased.legs[5].present && !erased.legs[5].dormant);
         CHECK(retained.legs[5].present && !retained.legs[5].dormant);
         CHECK(!retained.legs[5].withdrawn);
         CHECK(retained.legs[5].origin != 0);
@@ -238,15 +239,32 @@ void closed_origin_cannot_revive_on_its_same_id_sibling() {
             if (trade.exit_id == "X") {
                 ++through_x;
                 CHECK(trade.entry_id == "S");
-                CHECK(trade.entry_incarnation == retained.legs[5].origin);
-                CHECK(trade.qty == 40.0);
-                CHECK(trade.exit_price == 105.0);
-                CHECK(trade.exit_bar_index == 3);
+                if (through_x == 1) {
+                    // Retained trace, bar 3: the original X closes S1, 40 at 105.
+                    CHECK(trade.entry_incarnation == retained.legs[5].origin);
+                    CHECK(trade.entry_bar_index == 1);
+                    CHECK(trade.qty == 40.0);
+                    CHECK(trade.exit_price == 105.0);
+                    CHECK(trade.exit_bar_index == 3);
+                } else {
+                    // Retained trace, margin: after the 32/7 slice, revived X
+                    // closes S2's remaining 248/7 at 175 on the declared path.
+                    CHECK(trade.entry_incarnation != retained.legs[5].origin);
+                    CHECK(trade.entry_bar_index == 2);
+                    CHECK(trade.qty == 248.0 / 7.0);
+                    CHECK(trade.exit_price == 175.0);
+                    CHECK(trade.exit_bar_index == expected_margin_bar);
+                }
             }
         }
         CHECK(margin_calls > 0);
-        CHECK(through_x == 1);
-        CHECK(erased.open < 0.0 && erased.open > -40.0);
+        // Retained trace: the original X, one margin slice, then revived X.
+        CHECK(through_x == 2);
+        CHECK(erased.trades.size() == 3);
+        // Retained trace, after revival: S2 is flat; realized capital is
+        // 10000 - (40 * 5) - (40 * 75) = 6800, including both S2 slices.
+        CHECK(erased.open == 0.0);
+        CHECK(erased.equity == 6800.0);
         CHECK(erased.equity > 0.0 && erased.equity < 9800.0);
 
         // F2 is closed only if retaining the dead leg changes no public result.
@@ -265,7 +283,7 @@ void closed_origin_cannot_revive_on_its_same_id_sibling() {
 } // namespace
 
 int main() {
-    closed_origin_cannot_revive_on_its_same_id_sibling();
+    closed_origin_revival_matches_retained_execution();
     std::printf("test_k1_closed_origin_margin_revival: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
