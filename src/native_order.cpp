@@ -1,12 +1,12 @@
 #include <pineforge/native_order.hpp>
-
-// Anchored levels snap with the run's L8 ladder arithmetic, so a rounded
-// anchor, a reached print and a quantized fill agree tick for tick.
-// This value-only geometry brings no host into the core.
-#include "native_matching.hpp"
-
-#include <algorithm>
 #include <cassert>
+#include <cerrno>
+#include <cstdlib>
+#include <fcntl.h>
+#include <system_error>
+#include <unistd.h>
+#include "native_matching.hpp" // Price grids share the matcher's value-only geometry.
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -948,13 +948,14 @@ void WorkingRequestCore::clear_unbound() noexcept {
     history_base_ = 0;
     retired_through_ = 0;
     issued_.clear();
-    successor_roots_.clear();
+    successor_roots_.reset();
     repriced_.clear();
     receipts_.clear();
     receipts_base_ = 0;
     next_cohort_handle_ = 1;
     cohorts_.clear();
     cohort_receipts_.clear();
+    cohort_receipts_base_ = 0;
     epoch_ = 0;
     if (instance_) instance_->expired = true;
     instance_.reset();
@@ -1005,7 +1006,7 @@ void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
     // range and names at most one successor root.
     if (plan.consume_incarnation) {
         reserve_n(issued_, 1);
-        reserve_n(successor_roots_, 1);
+        reserve_successor_root();
     }
     // A re-price that kept its handle moves its row in the queue, which
     // repriced_ records (note_repriced).
@@ -1046,7 +1047,7 @@ void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool ad
     if (add_receipt) reserve_n(receipts_, 1);
     if (consume_incarnation) {
         reserve_n(issued_, 1);
-        reserve_n(successor_roots_, 1);
+        reserve_successor_root();
     }
     if (!bump_epoch()) {
         throw std::overflow_error("native working-request epoch exhausted");
@@ -1203,7 +1204,7 @@ void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
     } else {
         issued_.push_back({incarnation, incarnation});
     }
-    if (definition->root) successor_roots_.push_back({incarnation, definition->root->incarnation});
+    if (definition->root) append_successor_root(incarnation, definition->root->incarnation);
 }
 
 bool WorkingRequestCore::issued(const RequestHandle& handle) const noexcept {
@@ -1228,13 +1229,13 @@ std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
         const auto& root = live->definition->root;
         return root ? *root : live->handle();
     }
-    const auto it = std::lower_bound(
-            successor_roots_.begin(), successor_roots_.end(), origin.incarnation,
-            [](const std::pair<uint64_t, uint64_t>& row, uint64_t incarnation) {
-                return row.first < incarnation;
-            });
-    if (it == successor_roots_.end() || it->first != origin.incarnation) return origin;
-    return RequestHandle{identity_, it->second};
+    // Only a terminal origin reaches this read. The bounded tail is tried
+    // before the sorted file's pread search; no caller reads a file cursor.
+    // The consumer hashes roots at commit, independently of their storage.
+    // I/O errors propagate rather than treating a successor as its own root.
+    const auto root = successor_root(origin.incarnation);
+    if (!root) return origin;
+    return RequestHandle{identity_, *root};
 }
 
 std::size_t WorkingRequestCore::cohort_index(CohortHandle cohort) const noexcept {
@@ -1315,6 +1316,15 @@ bool WorkingRequestCore::cohort_contains(
     if (!root) return false;
     const auto& origins = cohorts_[index].origins;
     return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
+}
+
+std::size_t WorkingRequestCore::retire_cohort_receipts(std::size_t through) noexcept {
+    if (through <= cohort_receipts_base_) return 0;
+    const std::size_t count = std::min(through - cohort_receipts_base_, cohort_receipts_.size());
+    cohort_receipts_.erase(cohort_receipts_.begin(),
+                           cohort_receipts_.begin() + static_cast<std::ptrdiff_t>(count));
+    cohort_receipts_base_ += count;
+    return count;
 }
 
 bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
@@ -1542,6 +1552,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
     cohort_receipts_ = std::move(other.cohort_receipts_);
+    cohort_receipts_base_ = other.cohort_receipts_base_;
     instance_ = std::move(other.instance_);
     if (instance_) {
         if (instance_->generation != std::numeric_limits<uint64_t>::max()) {
@@ -1561,12 +1572,13 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.history_base_ = 0;
     other.retired_through_ = 0;
     other.issued_.clear();
-    other.successor_roots_.clear();
+    other.successor_roots_.reset();
     other.repriced_.clear();
     other.receipts_.clear();
     other.next_cohort_handle_ = 1;
     other.cohorts_.clear();
     other.cohort_receipts_.clear();
+    other.cohort_receipts_base_ = 0;
     other.instance_.reset();
     return *this;
 }
@@ -5871,6 +5883,162 @@ static_assert(std::is_nothrow_move_constructible_v<PreparedExecution>);
 static_assert(std::variant_size_v<Owner> == 5);
 static_assert(std::variant_size_v<Authority> == 8);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
+
+// CR-150 L19A. This helper stays in the core's owning epoch and translation
+// unit. Its shared_ptr permits an incomplete private type in the public
+// header; WorkingRequestCore is noncopyable, so the file has one owner.
+// Only physical storage changes: note_committed_events still folds every
+// (successor, root) pair and its total into chain_roots_, in the same order.
+struct WorkingRequestCore::SuccessorRootIndex {
+    struct Row {
+        uint64_t successor = 0;
+        uint64_t root = 0;
+    };
+    static_assert(sizeof(Row) == 16, "successor root scratch rows are 16 bytes");
+    static constexpr std::size_t kTailRows = 64;
+
+    // These are storage metadata, not additional broker state: the file and
+    // tail partition exactly the root sequence already in chain_roots_. The
+    // descriptor, directory and partition boundary do not enter its digest.
+    std::array<Row, kTailRows> tail{};
+    std::size_t tail_size = 0;
+    uint64_t disk_rows = 0;
+    int fd = -1;
+    std::string directory;
+
+    SuccessorRootIndex() = default;
+    SuccessorRootIndex(const SuccessorRootIndex&) = delete;
+    SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
+    ~SuccessorRootIndex() { if (fd >= 0) ::close(fd); }
+
+    void set_directory(const std::string& value) {
+        if (fd >= 0 && directory != value) {
+            throw std::logic_error("native successor roots directory changed after spill");
+        }
+        directory = value;
+    }
+
+    void open_file() {
+        if (fd >= 0) return;
+        const char* temporary = std::getenv("TMPDIR");
+        std::string name = directory.empty()
+                ? (temporary && *temporary ? temporary : "/tmp") : directory;
+        if (name.back() != '/') name += '/';
+        name += "pineforge-roots-XXXXXX";
+        const int opened = ::mkstemp(name.data());
+        if (opened < 0) {
+            throw std::system_error(errno, std::generic_category(), "native successor roots create");
+        }
+        // Unlink before publishing the descriptor: an opened scratch file
+        // has no directory entry. mkstemp creates it with mode 0600.
+        if (::unlink(name.c_str()) != 0) {
+            const int error = errno;
+            ::close(opened);
+            throw std::system_error(error, std::generic_category(), "native successor roots unlink");
+        }
+        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
+            const int error = errno;
+            ::close(opened);
+            throw std::system_error(error, std::generic_category(), "native successor roots cloexec");
+        }
+        fd = opened;
+    }
+
+    void prepare_append() {
+        if (tail_size < tail.size()) return;
+        const auto maximum_rows = static_cast<uint64_t>(std::numeric_limits<off_t>::max()) / sizeof(Row);
+        if (disk_rows > maximum_rows - tail_size) {
+            throw std::overflow_error("native successor roots file offset exhausted");
+        }
+        open_file();
+        const off_t offset = static_cast<off_t>(disk_rows * sizeof(Row));
+        const auto* bytes = reinterpret_cast<const unsigned char*>(tail.data());
+        const std::size_t length = tail_size * sizeof(Row);
+        std::size_t written = 0;
+        while (written < length) {
+            const ssize_t count = ::pwrite(fd, bytes + written, length - written,
+                                           offset + static_cast<off_t>(written));
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) {
+                const int error = count < 0 ? errno : EIO;
+                throw std::system_error(error, std::generic_category(), "native successor roots write");
+            }
+            written += static_cast<std::size_t>(count);
+        }
+        // Publish only a complete batch. A short/error write leaves the
+        // authoritative tail intact; retry overwrites the same file offset.
+        disk_rows += tail_size;
+        tail_size = 0;
+    }
+
+    void append(uint64_t successor, uint64_t root) noexcept {
+        assert(tail_size < tail.size());
+        assert(root != 0 && root < successor);
+        assert(tail_size == 0 || tail[tail_size - 1].successor < successor);
+        tail[tail_size++] = Row{successor, root};
+    }
+
+    Row read(uint64_t index) const {
+        assert(fd >= 0 && index < disk_rows);
+        Row row;
+        auto* bytes = reinterpret_cast<unsigned char*>(&row);
+        const off_t offset = static_cast<off_t>(index * sizeof(Row));
+        std::size_t received = 0;
+        while (received < sizeof(Row)) {
+            const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
+                                          offset + static_cast<off_t>(received));
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) {
+                const int error = count < 0 ? errno : EIO;
+                throw std::system_error(error, std::generic_category(), "native successor roots read");
+            }
+            received += static_cast<std::size_t>(count);
+        }
+        if (row.root == 0 || row.root >= row.successor) {
+            throw std::system_error(EIO, std::generic_category(), "native successor roots invalid row");
+        }
+        return row;
+    }
+
+    std::optional<uint64_t> find(uint64_t successor) const {
+        if (tail_size != 0 && successor >= tail[0].successor) {
+            const auto end = tail.begin() + static_cast<std::ptrdiff_t>(tail_size);
+            const auto where = std::lower_bound(tail.begin(), end, successor,
+                    [](const Row& row, uint64_t key) { return row.successor < key; });
+            return where != end && where->successor == successor
+                    ? std::optional<uint64_t>{where->root} : std::nullopt;
+        }
+        uint64_t first = 0;
+        uint64_t last = disk_rows;
+        while (first < last) {
+            const uint64_t middle = first + (last - first) / 2;
+            const Row row = read(middle);
+            if (row.successor == successor) return row.root;
+            if (row.successor < successor) first = middle + 1;
+            else last = middle;
+        }
+        return std::nullopt;
+    }
+};
+
+void WorkingRequestCore::set_successor_roots_directory(const std::string& directory) {
+    if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
+    successor_roots_->set_directory(directory);
+}
+
+void WorkingRequestCore::reserve_successor_root() {
+    if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
+    successor_roots_->prepare_append();
+}
+
+void WorkingRequestCore::append_successor_root(uint64_t incarnation, uint64_t root) noexcept {
+    assert(successor_roots_);
+    successor_roots_->append(incarnation, root);
+}
+
+std::optional<uint64_t> WorkingRequestCore::successor_root(uint64_t incarnation) const {
+    return successor_roots_ ? successor_roots_->find(incarnation) : std::nullopt;
+}
 
 // The consumer folds at commit and pins every queued cause before retiring the
 // journal. Its actual watermark also respects deferred chains, so only this

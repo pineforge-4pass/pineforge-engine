@@ -495,7 +495,8 @@ inline std::uint64_t core_value(const no::WorkingRequestCore& core) {
         fold(f, roster.handle);
         fold_vector(f, roster.origins);
     }
-    f.u(core.cohort_receipts().size());
+    f.u(core.cohort_receipt_base());
+    f.u(core.cohort_receipt_count());
     for (const auto& receipt : core.cohort_receipts()) {
         f.e(receipt.operation);
         f.e(receipt.status);
@@ -554,14 +555,18 @@ public:
             fold_vector(f, roster.origins);
         }
         const auto& cohort_receipts = core.cohort_receipts();
-        f.u(cohort_receipts.size());
-        for (std::size_t index = cohort_receipts_; index < cohort_receipts.size(); ++index) {
-            f.e(cohort_receipts[index].operation);
-            f.e(cohort_receipts[index].status);
-            fold(f, cohort_receipts[index].cohort);
-            fold(f, cohort_receipts[index].origin);
+        const auto base = core.cohort_receipt_base();
+        f.u(base);
+        f.u(core.cohort_receipt_count());
+        for (std::size_t index = std::max(cohort_receipts_, base);
+             index < core.cohort_receipt_count(); ++index) {
+            const auto& receipt = cohort_receipts[index - base];
+            f.e(receipt.operation);
+            f.e(receipt.status);
+            fold(f, receipt.cohort);
+            fold(f, receipt.origin);
         }
-        cohort_receipts_ = cohort_receipts.size();
+        cohort_receipts_ = core.cohort_receipt_count();
         return f.h;
     }
 

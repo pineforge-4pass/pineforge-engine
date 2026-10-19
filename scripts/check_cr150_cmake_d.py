@@ -24,6 +24,15 @@ ARGUMENT_LITERAL = (
 )
 ARGUMENT_RE = re.compile(ARGUMENT_LITERAL, re.DOTALL)
 COMMENT_OR_ARGUMENT_RE = re.compile(ARGUMENT_LITERAL + r'|#[^\n]*', re.DOTALL)
+FENCE_COMMENT_OR_ARGUMENT_RE = re.compile(
+    r'#\[(?P<comment_level>=*)\[.*?\](?P=comment_level)\]|' +
+    ARGUMENT_LITERAL + r'|#[^\n]*', re.DOTALL)
+LITERAL_NAME_RE = re.compile(r"[A-Za-z0-9_.+-]+")
+TARGET_COMMANDS = frozenset({
+    "target_compile_definitions", "target_compile_options",
+    "target_link_libraries", "target_link_options",
+    "target_include_directories", "target_sources",
+})
 
 
 class CheckFailure(Exception):
@@ -37,27 +46,45 @@ class Statement:
     line: int
 
 
-def _without_comments(text: str) -> str:
-    """Remove line comments, preserving quoted/bracketed arguments and lines."""
-    return COMMENT_OR_ARGUMENT_RE.sub(
-        lambda match: "" if match.group(0).startswith("#") else match.group(0), text)
+@dataclass(frozen=True)
+class FenceMarker:
+    lane: str
+    edge: str
+    start: int
+    end: int
+    line: int
 
 
-def _statements(path: Path, text: str) -> list[Statement]:
+@dataclass(frozen=True)
+class Fence:
+    lane: str
+    statements: list[Statement]
+    line: int
+
+
+def _without_comments(text: str, *, bracket_comments: bool = False) -> str:
+    """Remove comments, preserving quoted/bracketed arguments and lines."""
+    pattern = FENCE_COMMENT_OR_ARGUMENT_RE if bracket_comments else COMMENT_OR_ARGUMENT_RE
+    return pattern.sub(
+        lambda match: re.sub(r"[^\n]", " " if bracket_comments else "", match.group(0))
+        if match.group(0).startswith("#") else match.group(0), text)
+
+
+def _statements(path: Path, text: str, *, mask_quotes: bool = False) -> list[Statement]:
     """Read balanced, line-started CMake calls with their source lines."""
-    masked = _without_comments(text)
+    masked = _without_comments(text, bracket_comments=mask_quotes)
     # Bracket contents are literal argument text, including #, parentheses,
     # and lines that look like commands. Keep their positions for diagnostics.
     syntax = ARGUMENT_RE.sub(
         lambda match: re.sub(r"[^\n]", " ", match.group(0))
-        if match.group(0).startswith("[") else match.group(0), masked)
+        if mask_quotes or match.group(0).startswith("[") else match.group(0), masked)
     starts = list(re.finditer(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", syntax))
     statements: list[Statement] = []
     cursor = 0
     for match in starts:
         between = masked[cursor:match.start()]
         if between.strip():
-            line = masked.count("\n", 0, match.start()) + 1
+            line = masked.count("\n", 0, match.start(1)) + 1
             raise CheckFailure(f"{path}:{line}: text is not a CMake statement")
         open_at = match.end() - 1
         depth = 0
@@ -88,13 +115,82 @@ def _statements(path: Path, text: str) -> list[Statement]:
             line = masked.count("\n", 0, open_at) + 1
             raise CheckFailure(f"{path}:{line}: unterminated {match.group(1)}(...)")
         body = masked[open_at + 1:close_at]
-        line = masked.count("\n", 0, match.start()) + 1
+        line = masked.count("\n", 0, match.start(1)) + 1
         statements.append(Statement(match.group(1), body, line))
         cursor = close_at + 1
     if masked[cursor:].strip():
         line = masked.count("\n", 0, cursor) + 1
         raise CheckFailure(f"{path}:{line}: text is not a CMake statement")
     return statements
+
+
+def _fence_words(statement: Statement, *, limit: int | None = None) -> list[str]:
+    """Parse CMake arguments, including embedded quotes and unquoted lists.
+
+    Write destinations must be checked after argument parsing: a quoted or
+    bracketed name is still a name, and an unquoted ';' adds another argument.
+    This parser is for fenced statements and ownership discovery only; the
+    lane-file command/property policy below remains unchanged.
+    """
+    body = statement.body
+    words: list[str] = []
+    index = 0
+    while index < len(body):
+        if limit is not None and len(words) >= limit:
+            return words[:limit]
+        if body[index].isspace():
+            index += 1
+            continue
+        if body[index] in "()":
+            words.append(body[index])
+            index += 1
+            continue
+        literal = ARGUMENT_RE.match(body, index) if body[index] in '["' else None
+        if literal:
+            raw = literal.group(0)
+            value = raw[1:-1] if raw.startswith('"') else literal.group("bracket_value")
+            # CMake ignores a newline immediately after a bracket opener.
+            if raw.startswith("[") and value.startswith("\n"):
+                value = value[1:]
+            words.append(value)
+            index = literal.end()
+            if (limit is None and index < len(body) and
+                    not (body[index].isspace() or body[index] in "()")):
+                raise CheckFailure(f"{CMAKE}:{statement.line}: fence arguments need whitespace separation")
+            continue
+        if body[index] == '"' or re.match(r"\[=*\[", body[index:]):
+            raise CheckFailure(f"{CMAKE}:{statement.line}: unterminated fence argument")
+        word: list[str] = []
+        quoted = False
+        present = False
+        while index < len(body):
+            char = body[index]
+            if not quoted and (char.isspace() or char in "()"):
+                break
+            if char == "\\" and index + 1 < len(body):
+                index += 1
+                word.append(body[index])
+                present = True
+            elif char == '"':
+                quoted = not quoted
+                # Quotes embedded in an unquoted CMake argument are literal
+                # characters (the legacy -DKEY="value" form).
+                word.append(char)
+                present = True
+            elif char == ";" and not quoted:
+                if present:
+                    words.append("".join(word))
+                word = []
+                present = False
+            else:
+                word.append(char)
+                present = True
+            index += 1
+        if quoted:
+            raise CheckFailure(f"{CMAKE}:{statement.line}: unterminated fence argument")
+        if present:
+            words.append("".join(word))
+    return words if limit is None else words[:limit]
 
 
 def _words(body: str) -> list[str]:
@@ -222,19 +318,82 @@ def _check_lane(path: Path) -> None:
         raise CheckFailure(f"{path}: missing endif() for {depth} if() block(s)")
 
 
-def _check_cmake_tail() -> None:
-    try:
-        text = CMAKE.read_text()
-    except OSError as error:
-        raise CheckFailure(f"{CMAKE}: cannot read: {error}") from error
-    statements = _statements(CMAKE, text)
+def _fence_markers(text: str) -> list[FenceMarker]:
+    markers: list[FenceMarker] = []
+    for match in FENCE_COMMENT_OR_ARGUMENT_RE.finditer(text):
+        marker = re.fullmatch(
+            r"# --- CR-150 (\S+) (begin|end) ---[ \t]*", match.group(0))
+        if marker is None:
+            continue
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        if text[line_start:match.start()].strip():
+            continue
+        markers.append(FenceMarker(
+            marker.group(1), marker.group(2), match.start(), match.end(),
+            text.count("\n", 0, match.start()) + 1))
+    return markers
+
+
+def _no_unfenced_statements(text: str, start: int, end: int) -> None:
+    if _without_comments(text[start:end], bracket_comments=True).strip():
+        line = text.count("\n", 0, start) + 1
+        raise CheckFailure(
+            f"{CMAKE}:{line}: unfenced statement after the CR-150 include block")
+
+
+def _fences(text: str, markers: list[FenceMarker]) -> list[Fence]:
+    fences: list[Fence] = []
+    seen: set[str] = set()
+    active: FenceMarker | None = None
+    previous_end = markers[0].start
+    lane_names = {path.stem for path in LANE_DIR.glob("*.cmake") if path.is_file()}
+    for marker in markers:
+        if marker.edge == "begin":
+            if active is not None:
+                raise CheckFailure(f"{CMAKE}:{marker.line}: nested CR-150 fence")
+            _no_unfenced_statements(text, previous_end, marker.start)
+            if marker.lane in seen:
+                raise CheckFailure(f"{CMAKE}:{marker.line}: duplicate CR-150 fence for {marker.lane}")
+            if marker.lane not in lane_names:
+                raise CheckFailure(
+                    f"{CMAKE}:{marker.line}: fence has no lane file tests/cr150.d/{marker.lane}.cmake")
+            seen.add(marker.lane)
+            active = marker
+        else:
+            if active is None:
+                raise CheckFailure(f"{CMAKE}:{marker.line}: end fence without begin fence")
+            if marker.lane != active.lane:
+                raise CheckFailure(
+                    f"{CMAKE}:{marker.line}: end fence {marker.lane} does not match begin fence {active.lane}")
+            # Pad with newlines so every diagnostic retains its real line in
+            # tests/CMakeLists.txt; markers are never part of a statement.
+            body = "\n" * text.count("\n", 0, active.end) + text[active.end:marker.start]
+            fences.append(Fence(
+                active.lane, _statements(CMAKE, body, mask_quotes=True), active.line))
+            previous_end = marker.end
+            active = None
+    if active is not None:
+        raise CheckFailure(f"{CMAKE}:{active.line}: missing end fence for {active.lane}")
+    _no_unfenced_statements(text, previous_end, len(text))
+    return fences
+
+
+def _check_include_loop(statements: list[Statement], fenced: bool) -> None:
     if len(statements) < 5:
+        if fenced:
+            raise CheckFailure(f"{CMAKE}: fence must follow the CR-150 include block")
         raise CheckFailure(f"{CMAKE}: CR-150 include block is missing")
     tail = statements[-5:]
     expected = ["file", "list", "foreach", "include", "endforeach"]
     if [statement.name.lower() for statement in tail] != expected:
         line = statements[-1].line if statements else 1
-        raise CheckFailure(f"{CMAKE}:{line}: CR-150 include block is not the last statement")
+        if fenced and not any(statement.name.lower() == "file" and
+                              "CR150_LANE_CMAKE" in _words(statement.body)
+                              for statement in statements):
+            raise CheckFailure(f"{CMAKE}:{line}: fence must follow the CR-150 include block")
+        raise CheckFailure(
+            f"{CMAKE}:{line}: CR-150 include block is not the last statement; "
+            "unfenced statement after the CR-150 include block")
     file_body, list_body, foreach_body, include_body, _ = [statement.body for statement in tail]
     file_words = _words(file_body)
     if (len(file_words) != 4 or file_words[:3] != ["GLOB", "CR150_LANE_CMAKE", "CONFIGURE_DEPENDS"] or
@@ -246,6 +405,290 @@ def _check_cmake_tail() -> None:
         raise CheckFailure(f"{CMAKE}:{tail[2].line}: include loop does not use CR150_LANE_CMAKE")
     if _words(include_body) != ["${cr150_lane_file}"]:
         raise CheckFailure(f"{CMAKE}:{tail[3].line}: include loop does not include each lane file")
+
+
+def _declarations(statement: Statement, words: list[str]) -> list[tuple[str, str]]:
+    """Return actual creators, not list inventory entries or property uses."""
+    name = statement.name.lower()
+    if name == "pineforge_add_unit_test" and len(words) == 1:
+        return [("target", words[0]), ("test", words[0])]
+    if name in ("add_library", "add_executable") and words:
+        return [("target", words[0])]
+    if name == "add_test" and len(words) >= 2 and words[0].upper() == "NAME":
+        return [("test", words[1])]
+    return []
+
+
+def _ownership(prefix: list[Statement], fences: list[Fence]) -> dict[str, dict[str, set[str]]]:
+    owners: dict[str, dict[str, set[str]]] = {"target": {}, "test": {}}
+
+    def record(kind: str, value: str, lane: str) -> None:
+        if LITERAL_NAME_RE.fullmatch(value):
+            owners[kind].setdefault(value, set()).add(lane)
+
+    # The existing main-file inventory also creates targets/tests through its
+    # earlier registration loop; do not let a fence re-declare those names.
+    for statement in prefix:
+        words = _words(statement.body)
+        name = statement.name.lower()
+        if name in ("add_library", "add_executable", "pineforge_add_unit_test", "add_test"):
+            limit = 2 if name == "add_test" else 1
+            for kind, value in _declarations(statement, _fence_words(statement, limit=limit)):
+                record(kind, value, "<main CMakeLists.txt>")
+        inventory: list[str] = []
+        if name == "set" and words and words[0] == "TEST_SOURCES":
+            inventory = words[1:]
+        if name == "list" and words[:2] == ["APPEND", "TEST_SOURCES"]:
+            inventory = words[2:]
+        for value in inventory:
+            record("target", value, "<main CMakeLists.txt>")
+            record("test", value, "<main CMakeLists.txt>")
+    for path in sorted(LANE_DIR.glob("*.cmake")):
+        try:
+            statements = _statements(path, path.read_text())
+        except OSError as error:
+            raise CheckFailure(f"{path}: cannot read: {error}") from error
+        for statement in statements:
+            if statement.name.lower() in ("pineforge_add_unit_test", "add_test"):
+                # Discover just NAME/name. Do not impose the fence argument
+                # policy on an existing lane file's command payload.
+                limit = 2 if statement.name.lower() == "add_test" else 1
+                for kind, value in _declarations(statement, _fence_words(statement, limit=limit)):
+                    record(kind, value, path.stem)
+    # Discover every fence before checking writes, so changing fence order
+    # cannot conceal a second lane's declaration.
+    for fence in fences:
+        for statement in fence.statements:
+            for kind, value in _declarations(statement, _fence_words(statement)):
+                if not LITERAL_NAME_RE.fullmatch(value):
+                    raise CheckFailure(
+                        f"{CMAKE}:{statement.line}: {kind} name {value!r} is not a literal")
+                previous = owners[kind].get(value, set())
+                if previous:
+                    raise CheckFailure(
+                        f"{CMAKE}:{statement.line}: {kind} {value!r} is created by "
+                        f"{', '.join(sorted(previous))}; fence {fence.lane} cannot re-declare it")
+                record(kind, value, fence.lane)
+    return owners
+
+
+def _owned(statement: Statement, lane: str, kind: str, value: str,
+           owners: dict[str, dict[str, set[str]]]) -> None:
+    if not LITERAL_NAME_RE.fullmatch(value) or owners[kind].get(value) != {lane}:
+        raise CheckFailure(
+            f"{CMAKE}:{statement.line}: {kind} {value!r} is not owned by fence {lane}")
+
+
+def _check_reads(statement: Statement, lane: str, words: list[str],
+                 owners: dict[str, dict[str, set[str]]], *, condition: bool = False) -> None:
+    external = {value for value, creators in owners["target"].items()
+                if lane not in creators and creators != {"<main CMakeLists.txt>"}}
+
+    def refused_expression() -> None:
+        raise CheckFailure(
+            f"{CMAKE}:{statement.line}: only literal $<TARGET_FILE:...> reads are allowed "
+            "for external targets")
+
+    def mask_expressions(value: str) -> str:
+        """Balance nested generator expressions; erase permitted file reads."""
+        result: list[str] = []
+        cursor = 0
+        while (begin := value.find("$<", cursor)) != -1:
+            result.append(value[cursor:begin])
+            index = begin + 2
+            depth = 1
+            while index < len(value) and depth:
+                if value.startswith("$<", index):
+                    depth += 1
+                    index += 2
+                elif value[index] == ">":
+                    depth -= 1
+                    index += 1
+                else:
+                    index += 1
+            if depth:
+                raise CheckFailure(f"{CMAKE}:{statement.line}: unterminated generator expression")
+            body = value[begin + 2:index - 1]
+            # Find the operator's separator outside any nested expression.
+            # In $<$<CONFIG:Debug>:...>, the first ':' belongs to CONFIG.
+            split_at = 0
+            nested = 0
+            while split_at < len(body):
+                if body.startswith("$<", split_at):
+                    nested += 1
+                    split_at += 2
+                    continue
+                if body[split_at] == ">":
+                    nested -= 1
+                if body[split_at] == ":" and nested == 0:
+                    break
+                split_at += 1
+            operator = body[:split_at]
+            separator = split_at < len(body)
+            arguments = body[split_at + 1:] if separator else ""
+            if any(expansion in operator for expansion in ("${", "$ENV{", "$CACHE{")):
+                refused_expression()
+            if operator == "TARGET_FILE":
+                if not separator or not LITERAL_NAME_RE.fullmatch(arguments):
+                    refused_expression()
+            else:
+                if operator.startswith("TARGET_"):
+                    # A target-property expression with one argument reads a
+                    # property of the current target. All explicit target
+                    # operands in other forms must name this lane's target.
+                    implicit = operator in ("TARGET_PROPERTY", "TARGET_POLICY") and "," not in arguments
+                    target = arguments.split(",", 1)[0]
+                    if ("$" in arguments or not separator or
+                            (not implicit and owners["target"].get(target) != {lane})):
+                        refused_expression()
+                masked_body = mask_expressions(body)
+                if any(part in external for part in re.split(r"[:,;<>]", masked_body)):
+                    raise CheckFailure(
+                        f"{CMAKE}:{statement.line}: external target reads require "
+                        "$<TARGET_FILE:...> or if(TARGET ...)")
+                result.append("$<" + masked_body + ">")
+            cursor = index
+        result.append(value[cursor:])
+        return "".join(result)
+
+    for index, word in enumerate(words):
+        if condition and word.upper() == "TARGET":
+            if index + 1 == len(words) or not LITERAL_NAME_RE.fullmatch(words[index + 1]):
+                raise CheckFailure(f"{CMAKE}:{statement.line}: if(TARGET ...) needs a literal target")
+        masked = mask_expressions(word)
+        if any(part in external for part in masked.split(";")):
+            if condition and index and words[index - 1].upper() == "TARGET":
+                continue
+            raise CheckFailure(
+                f"{CMAKE}:{statement.line}: external target reads require "
+                "$<TARGET_FILE:...> or if(TARGET ...)")
+
+
+def _check_fence(fence: Fence, owners: dict[str, dict[str, set[str]]]) -> None:
+    branches: list[bool] = []  # whether an if() block has already reached else()
+    for statement in fence.statements:
+        name = statement.name.lower()
+        words = _fence_words(statement)
+        reads: list[str] = []
+        if name in ("if", "elseif", "else", "endif"):
+            if name == "if":
+                branches.append(False)
+            else:
+                if not branches:
+                    raise CheckFailure(f"{CMAKE}:{statement.line}: {name}() without if()")
+                if name in ("else", "elseif") and branches[-1]:
+                    raise CheckFailure(f"{CMAKE}:{statement.line}: {name}() after else()")
+                if name == "else":
+                    branches[-1] = True
+                elif name == "endif":
+                    branches.pop()
+            if name in ("if", "elseif"):
+                if not words:
+                    raise CheckFailure(f"{CMAKE}:{statement.line}: {name}() needs a condition")
+                _check_reads(statement, fence.lane, words, owners, condition=True)
+            elif words:
+                raise CheckFailure(f"{CMAKE}:{statement.line}: {name}() must have no arguments in a fence")
+            continue
+        if name == "list":
+            if len(words) < 3 or words[:2] != ["APPEND", "TEST_SOURCES"]:
+                raise CheckFailure(
+                    f"{CMAKE}:{statement.line}: only list(APPEND TEST_SOURCES ...) is allowed in a fence")
+            for value in words[2:]:
+                _require_source(CMAKE, statement.line, value)
+                _owned(statement, fence.lane, "target", value, owners)
+        elif name == "pineforge_add_unit_test":
+            if len(words) != 1:
+                raise CheckFailure(
+                    f"{CMAKE}:{statement.line}: pineforge_add_unit_test() needs one test name")
+            _require_source(CMAKE, statement.line, words[0])
+            _owned(statement, fence.lane, "target", words[0], owners)
+            _owned(statement, fence.lane, "test", words[0], owners)
+        elif name in ("add_library", "add_executable"):
+            if any(word.upper() in ("ALIAS", "IMPORTED") for word in words[1:]):
+                raise CheckFailure(
+                    f"{CMAKE}:{statement.line}: ALIAS and IMPORTED targets are not allowed in a fence")
+            if not words:
+                raise CheckFailure(f"{CMAKE}:{statement.line}: {name}() needs a literal target")
+            flags = ({"STATIC", "SHARED", "MODULE", "OBJECT", "INTERFACE", "EXCLUDE_FROM_ALL"}
+                     if name == "add_library" else {"WIN32", "MACOSX_BUNDLE", "EXCLUDE_FROM_ALL"})
+            for word in words[1:]:
+                # Until the first source, an expansion could turn into ALIAS
+                # or IMPORTED, which does not create a lane-owned target.
+                if any(expansion in word for expansion in ("${", "$ENV{", "$CACHE{")):
+                    raise CheckFailure(
+                        f"{CMAKE}:{statement.line}: target creation options must be literal; "
+                        "expanded sources can be added with target_sources()")
+                if word.upper() not in flags:
+                    break
+            _owned(statement, fence.lane, "target", words[0], owners)
+            reads = words[1:]
+        elif name == "add_test":
+            if len(words) < 4 or words[0].upper() != "NAME" or words[2].upper() != "COMMAND":
+                raise CheckFailure(f"{CMAKE}:{statement.line}: add_test() needs NAME and COMMAND")
+            _owned(statement, fence.lane, "test", words[1], owners)
+            reads = words[3:]
+        elif name in TARGET_COMMANDS:
+            scope = 1
+            flags = {"BEFORE", "AFTER", "SYSTEM"} if name == "target_include_directories" else {"BEFORE"}
+            while scope < len(words) and words[scope].upper() in flags:
+                scope += 1
+            if (len(words) <= scope + 1 or not LITERAL_NAME_RE.fullmatch(words[0]) or
+                    words[scope].upper() not in ("PUBLIC", "PRIVATE", "INTERFACE")):
+                raise CheckFailure(
+                    f"{CMAKE}:{statement.line}: {name}() needs a literal target and a scope")
+            _owned(statement, fence.lane, "target", words[0], owners)
+            reads = words[1:]
+        elif name in ("set_target_properties", "set_tests_properties"):
+            properties = next((index for index, word in enumerate(words)
+                               if word.upper() == "PROPERTIES"), 0)
+            pairs = words[properties + 1:]
+            if not properties or not pairs or len(pairs) % 2:
+                raise CheckFailure(
+                    f"{CMAKE}:{statement.line}: {name}() needs names and PROPERTIES key/value pairs")
+            kind = "target" if name == "set_target_properties" else "test"
+            for value in words[:properties]:
+                _owned(statement, fence.lane, kind, value, owners)
+            reads = pairs[1::2]
+        elif name == "add_dependencies":
+            if len(words) < 2:
+                raise CheckFailure(f"{CMAKE}:{statement.line}: add_dependencies() needs a target and dependencies")
+            _owned(statement, fence.lane, "target", words[0], owners)
+            reads = words[1:]
+        elif name == "set_property":
+            if not words or words[0].upper() != "TEST":
+                raise CheckFailure(
+                    f"{CMAKE}:{statement.line}: only set_property(TEST ...) is allowed in a fence")
+            property_at = next((index for index, word in enumerate(words)
+                                if word.upper() == "PROPERTY"), 0)
+            tests = words[1:property_at]
+            if tests and tests[-1].upper() in ("APPEND", "APPEND_STRING"):
+                tests = tests[:-1]
+            if not tests or property_at + 1 >= len(words):
+                raise CheckFailure(f"{CMAKE}:{statement.line}: set_property(TEST ...) needs tests and PROPERTY")
+            for value in tests:
+                _owned(statement, fence.lane, "test", value, owners)
+            reads = words[property_at + 2:]
+        else:
+            raise CheckFailure(
+                f"{CMAKE}:{statement.line}: statement {statement.name}() is not allowed in a fence")
+        _check_reads(statement, fence.lane, reads, owners)
+    if branches:
+        raise CheckFailure(f"{CMAKE}:{fence.line}: missing endif() inside fence {fence.lane}")
+
+
+def _check_cmake_tail() -> None:
+    try:
+        text = CMAKE.read_text()
+    except OSError as error:
+        raise CheckFailure(f"{CMAKE}: cannot read: {error}") from error
+    markers = _fence_markers(text)
+    prefix = _statements(CMAKE, text[:markers[0].start] if markers else text)
+    _check_include_loop(prefix, bool(markers))
+    if markers:
+        fences = _fences(text, markers)
+        owners = _ownership(prefix[:-5], fences)
+        for fence in fences:
+            _check_fence(fence, owners)
 
 
 def main() -> int:
