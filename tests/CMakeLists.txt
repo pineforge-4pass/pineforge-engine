@@ -7235,3 +7235,6 @@ if(TARGET test_selected_metrics_l17b)
     endif()
 endif()
 # --- CR-150 core-cr150-l17b end ---
+# --- CR-150 core-cr150-l19f begin ---
+# CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
+# --- CR-150 core-cr150-l19f end ---
