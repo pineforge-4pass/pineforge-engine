@@ -7164,8 +7164,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     add_dependencies(test_report_sink_l6b1 report_sink_l6b1_strategy)
 endif()
 # --- CR-150 core-cr150-l6b1 end ---
-# --- CR-150 core-cr150-l19b begin ---
-# CR-150 L19B: match the library Debug-mode precedent for
-# test_native_runtime_ambient_lifo at tests/CMakeLists.txt:4129-4130.
-target_compile_definitions(test_group_receipt_retirement PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
-# --- CR-150 core-cr150-l19b end ---
+
+# --- CR-150 core-cr150-l17a begin ---
+# CR-150 L17A: a kernel-only native host and a real version-1 path sink.
+# The UNIX-only plain registration is in cr150.d/core-cr150-l17a.cmake.
+# No additional target or test settings are required here.
+# --- CR-150 core-cr150-l17a end ---

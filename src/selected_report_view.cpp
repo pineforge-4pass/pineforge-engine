@@ -62,3 +62,71 @@ SelectedEquityCurve build_selected_equity_curve(
 
 }  // namespace report
 }  // namespace pineforge
+
+#include <pineforge/report_sink_writer.hpp>
+
+namespace pineforge {
+namespace report {
+
+SelectedReportStream::SelectedReportStream(std::int64_t start_ms, std::int64_t end_ms,
+                                          double initial_capital) noexcept
+    : start_ms_(start_ms), end_ms_(end_ms), initial_capital_(initial_capital) {}
+
+void SelectedReportStream::note_trade(std::int64_t entry_time) noexcept {
+    trade_before_window_ = trade_before_window_ || entry_time < start_ms_;
+}
+
+void SelectedReportStream::note_open_lot(std::int64_t entry_time) noexcept {
+    lot_before_window_ = lot_before_window_ || entry_time < start_ms_;
+}
+
+void SelectedReportStream::write_anchor(report_sink::LineWriter& writer) {
+    if (anchor_written_) return;
+    writer.write_e({start_ms_, initial_capital_, 0.0});
+    anchor_written_ = true;
+    ++equity_count_;
+}
+
+void SelectedReportStream::write_point(report_sink::LineWriter& writer,
+                                      const pf_equity_point_t& point, bool publish) {
+    if (point.time_ms < start_ms_) {
+        account_changed_ = account_changed_
+            || point.equity != initial_capital_ || point.open_profit != 0.0;
+    }
+    const bool in_window = point.time_ms >= start_ms_ && point.time_ms < end_ms_;
+    if (!in_window) {
+        if (observations_ != 0) gap_after_window_ = true;
+        return;
+    }
+    not_contiguous_ = not_contiguous_ || gap_after_window_;
+    if (observations_ == std::numeric_limits<std::uint64_t>::max())
+        refuse_view("native selected report: the observation count overflowed");
+    ++observations_;
+    if (!publish) return;
+    write_anchor(writer);
+    // The writer already enforces the JSON-safe count bound; guard the C++
+    // counter too, before incrementing a signed value.
+    if (equity_count_ == std::numeric_limits<std::int64_t>::max())
+        refuse_view("native selected report: the equity count overflowed");
+    writer.write_e(point);
+    ++equity_count_;
+}
+
+void SelectedReportStream::finish(report_sink::LineWriter& writer,
+                                 std::uint64_t expected_observations,
+                                 bool publish_anchor) {
+    if (trade_before_window_)
+        refuse_view("native selected report: a trade was entered before the window start");
+    if (lot_before_window_)
+        refuse_view("native selected report: a position was carried in before the window start");
+    if (account_changed_)
+        refuse_view("native selected report: the account changed before the window start");
+    if (not_contiguous_)
+        refuse_view("native selected report: the window's equity observations are not one run");
+    if (observations_ != expected_observations)
+        refuse_view("native selected report: the window's equity observations differ from its script bars");
+    if (publish_anchor) write_anchor(writer);
+}
+
+}  // namespace report
+}  // namespace pineforge
