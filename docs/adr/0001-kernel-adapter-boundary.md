@@ -117,7 +117,7 @@ summary of it.
   drain FIFO after the outer callback returns — and/or poll `native_events(after_ordinal)`
   (`native_host.hpp:1335`). Do *not* implement
   `NativeExecutionConsumer`: it is the kernel's internal matcher, declared `final`
-  (`src/native_execution_consumer.hpp:85`) and bound by the host.
+  (`src/native_execution_consumer.hpp:86`) and bound by the host.
 - **The rest of the host surface**, all on `NativeStrategyHost`:
 
   | What | Surface |

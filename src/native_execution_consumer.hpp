@@ -4,6 +4,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/native_bar_views.hpp>
+#include <pineforge/metrics_stream.hpp>
 #include "native_calendar_memo.hpp"
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"

@@ -55,6 +55,13 @@ bool same_metrics(const pf_metrics_t& a, const pf_metrics_t& b) {
     return std::memcmp(&a, &b, sizeof a) == 0;
 }
 
+// Bit-identical points: equal length and equal bytes, and never an empty pair.
+bool same_points(const std::vector<pf_equity_point_t>& a,
+                 const std::vector<pf_equity_point_t>& b) {
+    return !a.empty() && a.size() == b.size()
+        && std::memcmp(a.data(), b.data(), a.size() * sizeof(pf_equity_point_t)) == 0;
+}
+
 // A file with a nonzero, deliberately unaligned region offset and unrelated
 // bytes after it. Only tests retain the reference array; production reads the
 // engine-owned region through its one factory and SpillCurve's bounded cache.
@@ -188,7 +195,8 @@ void fresh_reads_use_final_scratch_values() {
             before, nullptr, 0, source, 3, 0.0, kCapital, "UTC", 100.0, 104.5, 1, 2);
     }
     // The new read sees the final presentation's copy, including negative zero.
-    // The original execution point remains unchanged.
+    // That the execution input stays untouched is checked on a host, in
+    // compare_selected_run.
     pf_equity_point_t presented = points[2];
     presented.equity = 1023.5;
     presented.open_profit = -0.0;
@@ -204,8 +212,6 @@ void fresh_reads_use_final_scratch_values() {
     CHECK(!same_metrics(before, after));
     CHECK(same_metrics(after, expected));
     CHECK(std::signbit(after.equity.open_pl));
-    CHECK(points[2].equity != presented.equity);
-    CHECK(!std::signbit(points[2].open_profit));
 }
 
 void invalid_selected_counts_refuse() {
@@ -269,7 +275,10 @@ struct Host final : NativeStrategyHost {
     bool entered = false;
     mutable int presentations = 0;
     mutable std::uint64_t hash_at_capture = 0;
+    // The execution input as the presentation hook sees it, before any edit.
+    mutable std::vector<pf_equity_point_t> held_at_presentation;
 
+    std::vector<pf_equity_point_t> held_curve() const { return equity_curve_; }
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
         if (open_position && !entered && context.script_bar_open_ms >= kT + 2 * kMinute) {
             entered = true;
@@ -278,6 +287,7 @@ struct Host final : NativeStrategyHost {
     }
     void present_report(ReportC* out) const override {
         ++presentations;
+        held_at_presentation = equity_curve_;
         if (edit_tail && out->equity_curve_len > 1) {
             out->equity_curve[out->equity_curve_len - 1].equity = 1023.5;
             out->equity_curve[out->equity_curve_len - 1].open_profit = -0.0;
@@ -355,7 +365,14 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     CHECK(counts.window_script_bars == (start == 5 ? 0U : gap ? 2U : 3U));
     Report array, scratch, again;
     baseline.fill_report(&array.value);
+    // Presentation edits only its own copy: the host's held curve is
+    // bit-identical before and after the sink-on read, and to what the
+    // presentation hook saw before it edited.
+    const auto held_before = streamed.held_curve();
     streamed.fill_report(&scratch.value);
+    const auto held_after = streamed.held_curve();
+    CHECK(same_points(held_before, held_after));
+    CHECK(same_points(streamed.held_at_presentation, held_after));
     CHECK(same_metrics(array.value.metrics, scratch.value.metrics));
     CHECK(array.value.net_profit == scratch.value.net_profit);
     CHECK(array.value.total_trades == scratch.value.total_trades);

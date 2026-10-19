@@ -13056,6 +13056,18 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
     return true;
 }
 
+// CR-150 L17B: the only source factory over the L6b-4 scratch owner.
+// The region is the FINAL selected metric curve, independent of the sink's
+// published E count. Its descriptor remains live across repeated report reads.
+metrics::SpillCurve NativeExecutionConsumer::make_selected_metric_curve() const {
+    if (!presentation_metric_curve_)
+        refuse_selected_capture("native selected report: scratch metric curve is missing");
+    const auto region = presentation_metric_curve_->region();
+    if (region.point_count != presentation_metric_equity_len_)
+        refuse_selected_capture("native selected report: scratch metric point count differs from capture");
+    return metrics::SpillCurve(region);
+}
+
 ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec)
     : script_tf_(spec.script_tf), input_tf_(spec.input_tf), timezone_(spec.timezone),
       session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_) {}
@@ -13118,22 +13130,4 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarV
 }
 
 } // inline namespace native_bar_views_v1
-}  // namespace pineforge
-
-// CR-150 L17B: the only source factory over the L6b-4 scratch owner.
-// The region is the FINAL selected metric curve, independent of the sink's
-// published E count. Its descriptor remains live across repeated report reads.
-namespace pineforge {
-inline namespace engine_script_run_v19 {
-
-metrics::SpillCurve NativeExecutionConsumer::make_selected_metric_curve() const {
-    if (!presentation_metric_curve_)
-        refuse_selected_capture("native selected report: scratch metric curve is missing");
-    const auto region = presentation_metric_curve_->region();
-    if (region.point_count != presentation_metric_equity_len_)
-        refuse_selected_capture("native selected report: scratch metric point count differs from capture");
-    return metrics::SpillCurve(region);
-}
-
-}  // inline namespace engine_script_run_v19
 }  // namespace pineforge
