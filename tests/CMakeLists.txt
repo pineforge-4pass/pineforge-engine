@@ -7165,11 +7165,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
 endif()
 # --- CR-150 core-cr150-l6b1 end ---
 
-# --- CR-150 l17a begin ---
+# --- CR-150 core-cr150-l17a begin ---
 # CR-150 L17A: a kernel-only native host and a real version-1 path sink.
-# Append after the line-pinned private-fixture registrations.
-if(UNIX)
-    list(APPEND TEST_SOURCES test_report_sink_selected_l17a)
-    pineforge_add_unit_test(test_report_sink_selected_l17a)
-endif()
-# --- CR-150 l17a end ---
+# The UNIX-only plain registration is in cr150.d/core-cr150-l17a.cmake.
+# No additional target or test settings are required here.
+# --- CR-150 core-cr150-l17a end ---
