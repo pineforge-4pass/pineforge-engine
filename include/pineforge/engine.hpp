@@ -2088,7 +2088,7 @@ public:
     virtual int observe_pending_effective_levels(int index, double* stop,
                                                  double* limit,
                                                  double* trail_activation) const;
-    virtual double observe_trail_best_price_v1() const;
+    virtual double observe_trail_best_price_v1() const; virtual bool set_symbol_feed_borrowed(const std::string&, const std::string&, const Bar*, const int64_t*, int) { guard_native_mutation("set_symbol_feed_borrowed"); return false; }
     double live_current_equity() const { return current_equity(); }
     // ABI v4 live-runtime surface (task 9): total SCRIPT bars dispatched by
     // the most recent run() (mirrors pf_report_t::script_bars_processed,
