@@ -7126,3 +7126,6 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_k1_origin_pin_bound)
     pineforge_add_unit_test(test_k1_origin_pin_bound)
 endif()
+
+# CR-150 L19G: use the lane file before the integration include loop lands.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/core-cr150-l19g.cmake")
