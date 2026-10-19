@@ -2233,11 +2233,11 @@ void PineExecutionAdapter::revive_brackets_after_margin(
                                  domain, exit_legs::Phase::AfterMargin};
     std::optional<PlacementSnapshot> marketable;
     native_order::RequestHandle marketable_handle{};
-    // No erased row is a revival candidate (K1 keeps every lifecycle of the
-    // current cycle the script has not withdrawn, and the revival skips a
-    // withdrawn one), and no candidate's superseded answer rests on an erased
-    // row: K2 keeps every row that names it as its predecessor, K3 the first
-    // re-issue that supersedes it, and one supersessor answers the test.
+    // K1 keeps unwithdrawn lifecycle rows for the whole current cycle,
+    // including global legs and named ids with temporarily zero exposure.
+    // Superseded legs can leave: K2 keeps a row naming their predecessor;
+    // K3 keeps the first different-stop re-issue. One retained supersessor
+    // answers this test; withdrawn and past-cycle legs are never revived.
     PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
         [&](std::uint64_t, const PlacementSnapshot& candidate) {
             return candidate.placement_cycle == current_position_cycle_
@@ -3600,11 +3600,11 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // anchored relative legs and the parent being materialized; the short-seed
 // plans.
 // Pins, one per scan that reads rows of requests that are no longer live:
-//   K1 a lifecycle with askable origin or exposed cohort, an origin-free
-//      current-cycle leg, or a completed non-dormant leg while flat: margin revival
-//      resurrects dormant legs of the current cycle, the reversal suspension
-//      and the pair hold rewrite lifecycles, and exit() asks whether an
-//      opened origin's leg was consumed;
+//   K1 an unwithdrawn lifecycle for the whole current cycle, including global
+//      legs and named ids whose exposure may return; askable origins also keep
+//      non-dormant rows and one dormant representative per family. Margin revival,
+//      reversal suspension and pair hold read lifecycles; exit() asks whether
+//      an opened origin's leg was consumed;
 //   K2 a current-cycle row naming a revival candidate as its predecessor,
 //   K3 the first later-bar current-cycle exit of the same family, source id
 //      and from-entry id with different stop bits: the revival's superseded

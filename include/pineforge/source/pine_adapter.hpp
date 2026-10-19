@@ -2852,7 +2852,8 @@ private:
             source_bars.clear();
             candidates.clear();
             candidate_names.clear();
-            first_reissues.clear(); origin_pins.clear();
+            first_reissues.clear();
+            origin_pins.clear();
             doomed.clear();
             held.clear();
             released.clear();
