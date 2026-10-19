@@ -993,15 +993,15 @@ class AbiAndNativeCountsTests(unittest.TestCase):
                           on["results_digest_platform"]), (1, "selected-window/v1", 2,
                                                            ["full/v1"], None, None, None))
 
-    def test_the_supported_record_declares_the_parity_revision_alone_never_the_full_one(self):
-        # A build with value parity on tested cases and typed codes (without a completeness
-        # proof, EN-115) emits selected_window_contract_revisions == ["1.3-parity"], never ["1.3"].
+    def test_the_supported_record_declares_the_full_revision_alone_never_the_parity_one(self):
+        # A build with the section-4 producers and manifest and the completeness proof
+        # (EN-115) emits selected_window_contract_revisions == ["1.3"], never ["1.3-parity"].
         # The literals are written out here, not read from the module.
         supported = {
             "engine": "pineforge",
             "capabilities": {
                 "selected_window_wire_version": 1,
-                "selected_window_contract_revisions": ["1.3-parity"],
+                "selected_window_contract_revisions": ["1.3"],
                 "report_policy": "selected-window/v1",
                 "fingerprint_version": 2,
                 "report_shapes": ["full/v1"],
@@ -1020,30 +1020,30 @@ class AbiAndNativeCountsTests(unittest.TestCase):
         self.assertEqual(swr.capabilities_record(False), unsupported)
         revisions = (
             swr.capabilities_record(True)["capabilities"]["selected_window_contract_revisions"])
-        self.assertEqual(revisions, ["1.3-parity"])
+        self.assertEqual(revisions, ["1.3"])
         self.assertEqual(len(revisions), 1)               # a singleton ...
-        self.assertNotIn("1.3", revisions)                # ... that is never the full revision
+        self.assertNotIn("1.3-parity", revisions)         # ... that is never the parity revision
         self.assertEqual(
             swr.capabilities_record(False)["capabilities"]["selected_window_contract_revisions"],
             [])                                           # unsupported lists nothing at all
-        self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3-parity",))   # the one constant
+        self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3",))          # the one constant
 
     def test_the_declared_revisions_are_a_fresh_list_of_the_one_constant(self):
         first = swr.capabilities_record(True)["capabilities"]["selected_window_contract_revisions"]
-        first.append("1.3")      # a caller that edits its copy changes neither the constant ...
-        self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3-parity",))
+        first.append("1.3-parity")   # a caller that edits its copy changes neither the constant ...
+        self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3",))
         again = swr.capabilities_record(True)["capabilities"]["selected_window_contract_revisions"]
-        self.assertEqual(again, ["1.3-parity"])           # ... nor the next record
+        self.assertEqual(again, ["1.3"])                  # ... nor the next record
         self.assertIsNot(first, again)
 
-    def test_without_a_completeness_proof_the_probe_declares_1_3_parity_only(self):
-        # Under amendment 6, "1.3" pairs only with value_ownership "complete", and no
+    def test_with_a_completeness_proof_the_probe_declares_1_3_only(self):
+        # Under amendment 6, "1.3" pairs only with value_ownership "complete", and the
         # completeness proof has run (EN-115). Both capabilities_record(True) and the
-        # --capabilities-json probe must declare ["1.3-parity"] alone, never ["1.3"].
-        self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3-parity",))
+        # --capabilities-json probe must declare ["1.3"] alone, never ["1.3-parity"].
+        self.assertEqual(swr.CONTRACT_REVISIONS, ("1.3",))
         record = swr.capabilities_record(True)["capabilities"]
-        self.assertEqual(record["selected_window_contract_revisions"], ["1.3-parity"])
-        self.assertNotIn("1.3", record["selected_window_contract_revisions"])
+        self.assertEqual(record["selected_window_contract_revisions"], ["1.3"])
+        self.assertNotIn("1.3-parity", record["selected_window_contract_revisions"])
         lib = FakeLib(full_plan())
         FakePlanner.reset(None)
         with mock.patch.object(run_json, "load_strategy", lambda p: lib), \
@@ -1051,8 +1051,8 @@ class AbiAndNativeCountsTests(unittest.TestCase):
             status, out, _ = run_main(["--so", "x.so", "--capabilities-json"])
         self.assertEqual(status, 0)
         probed = json.loads(out)["capabilities"]["selected_window_contract_revisions"]
-        self.assertEqual(probed, ["1.3-parity"])
-        self.assertNotIn("1.3", probed)
+        self.assertEqual(probed, ["1.3"])
+        self.assertNotIn("1.3-parity", probed)
 
 
 # --- admission: nothing is touched before it passes --------------------------
@@ -1808,11 +1808,11 @@ class OrdinaryAndCapabilityTests(unittest.TestCase):
             status, out, _ = run_main(["--so", "x.so", "--capabilities-json"])
         self.assertEqual((status, json.loads(out)), (0, swr.capabilities_record(True)))
         self.assertEqual(lib.calls, [])  # nothing was constructed or run
-        # The probe's real stdout carries the parity contract revision alone, not the full revision.
+        # The probe's real stdout carries the full contract revision alone, not the parity revision.
         printed = json.loads(out)["capabilities"]
-        self.assertEqual(printed["selected_window_contract_revisions"], ["1.3-parity"])
-        self.assertIn('"selected_window_contract_revisions":["1.3-parity"]', out)
-        self.assertNotIn('"1.3"', out)
+        self.assertEqual(printed["selected_window_contract_revisions"], ["1.3"])
+        self.assertIn('"selected_window_contract_revisions":["1.3"]', out)
+        self.assertNotIn('"1.3-parity"', out)
         self.assertEqual((printed["selected_window_wire_version"], printed["fingerprint_version"]),
                          (1, 2))
 
@@ -2084,7 +2084,7 @@ class SourceShapeTests(unittest.TestCase):
         self.assertNotIn('"has_unbounded_state": False', source)
 
     def test_the_contract_revision_is_one_constant_with_one_literal_read_in_one_place(self):
-        # The parity declaration ("1.3-parity") has one tuple, one string literal, one reader, and
+        # The full declaration ("1.3") has one tuple, one string literal, one reader, and
         # no revision literal in run_json (so none in a request, report, phase or fingerprint).
         import ast
         report_tree = ast.parse((ROOT / "docker" / "selected_window_report.py").read_text())
@@ -2094,14 +2094,14 @@ class SourceShapeTests(unittest.TestCase):
                     if isinstance(node, ast.Constant) and isinstance(node.value, str)]
 
         strings = string_constants(report_tree)
-        self.assertEqual(strings.count("1.3-parity"), 1)     # written once ...
-        self.assertNotIn("1.3", strings)                     # ... and never the full revision
+        self.assertEqual(strings.count("1.3"), 1)            # written once ...
+        self.assertNotIn("1.3-parity", strings)              # ... and never the parity revision
         assignments = [node for node in report_tree.body if isinstance(node, ast.Assign)
                        and any(isinstance(target, ast.Name) and target.id == "CONTRACT_REVISIONS"
                                for target in node.targets)]
         self.assertEqual(len(assignments), 1)
         self.assertIsInstance(assignments[0].value, ast.Tuple)
-        self.assertEqual(string_constants(assignments[0].value), ["1.3-parity"])
+        self.assertEqual(string_constants(assignments[0].value), ["1.3"])
         readers = [function.name for function in ast.walk(report_tree)
                    if isinstance(function, ast.FunctionDef)
                    and any(isinstance(name, ast.Name) and name.id == "CONTRACT_REVISIONS"
@@ -2111,17 +2111,16 @@ class SourceShapeTests(unittest.TestCase):
             ast.parse((ROOT / "docker" / "run_json.py").read_text())))
         self.assertEqual(run_json_strings & {"1.3", "1.3-parity"}, set())
 
-    def test_the_contract_revision_guard_rejects_the_old_or_a_stray_revision(self):
-        # Exercise the real guard on source mutations. Keeping the parity literal once while
-        # adding a stray revision isolates the exact tuple pin from the literal-count check.
+    def test_the_contract_revision_guard_rejects_the_parity_or_a_paired_revision(self):
+        # Exercise the real guard on source mutations. Keeping the full literal once while
+        # adding the parity revision isolates the exact tuple pin from the literal-count check.
         report_path = ROOT / "docker" / "selected_window_report.py"
         run_json_path = ROOT / "docker" / "run_json.py"
         report_source = report_path.read_text()
         run_json_source = run_json_path.read_text()
-        declaration = 'CONTRACT_REVISIONS = ("1.3-parity",)'
+        declaration = 'CONTRACT_REVISIONS = ("1.3",)'
         self.assertEqual(report_source.count(declaration), 1)
-        cases = (("1.3",), ("1.3-stray",), ("1.3-parity", "1.3"),
-                 ("1.3-parity", "1.3-stray"), ("1.3-parity", "1.3-parity"))
+        cases = (("1.3-parity",), ("1.3", "1.3-parity"), ("1.3-parity", "1.3"))
         for revisions in cases:
             mutant_source = report_source.replace(
                 declaration, f"CONTRACT_REVISIONS = {revisions!r}", 1)
