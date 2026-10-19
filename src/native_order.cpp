@@ -1,4 +1,5 @@
 #include <pineforge/native_order.hpp>
+#include <pineforge/detail/kernel_roster_store.hpp>
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
@@ -954,6 +955,7 @@ void WorkingRequestCore::clear_unbound() noexcept {
     receipts_base_ = 0;
     next_cohort_handle_ = 1;
     cohorts_.clear();
+    cohort_store_.reset();
     cohort_receipts_.clear();
     cohort_receipts_base_ = 0;
     epoch_ = 0;
@@ -1238,13 +1240,25 @@ std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
     return RequestHandle{identity_, *root};
 }
 
-std::size_t WorkingRequestCore::cohort_index(CohortHandle cohort) const noexcept {
-    const auto it = std::lower_bound(
-        cohorts_.begin(), cohorts_.end(), cohort,
-        [](const CohortRoster& roster, CohortHandle value) { return roster.handle < value; });
-    return it != cohorts_.end() && it->handle == cohort
-        ? static_cast<std::size_t>(it - cohorts_.begin())
-        : cohorts_.size();
+WorkingRequestCore::CohortView WorkingRequestCore::cohorts() const noexcept {
+    return CohortView(this);
+}
+
+WorkingRequestCore::CohortView::const_iterator::reference
+WorkingRequestCore::CohortView::const_iterator::operator*() const noexcept {
+    assert(core_ && index_ < core_->next_cohort_handle_ - 1);
+    const auto handle = static_cast<std::uint64_t>(index_) + 1;
+    const auto found = core_->cohorts_.find(handle);
+    if (found != core_->cohorts_.end()) return found->second;
+    empty_.handle = CohortHandle{handle};
+    return empty_;
+}
+
+bool WorkingRequestCore::cohort_exists(CohortHandle cohort) const {
+    if (cohort.value == 0 || cohort.value >= next_cohort_handle_) return false;
+    if (cohorts_.find(cohort.value) != cohorts_.end()) return true;
+    assert(cohort_store_);
+    return cohort_store_->contains(cohort.value);
 }
 
 CohortHandle WorkingRequestCore::cohort_open() {
@@ -1254,7 +1268,11 @@ CohortHandle WorkingRequestCore::cohort_open() {
         throw std::overflow_error("native cohort handle exhausted");
     }
     const CohortHandle handle{next_cohort_handle_};
-    cohorts_.push_back(CohortRoster{handle, {}});
+    if (!cohort_store_) cohort_store_ = std::make_shared<::pineforge::detail::KernelRosterStore>();
+    // Reserve/publish the identity before advancing the semantic counter.
+    // Empty rosters need no retained node, even while their identity is in
+    // the store's bounded tail. A failed spill leaves this handle unused.
+    cohort_store_->append(handle.value);
     ++next_cohort_handle_;
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
     return handle;
@@ -1267,17 +1285,21 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
     receipt.operation = CohortReceiptOperation::Add;
     receipt.cohort = cohort;
     receipt.origin = origin;
-    const std::size_t index = cohort_index(cohort);
-    if (cohort.value == 0 || index == cohorts_.size()) {
+    if (!cohort_exists(cohort)) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
     } else if (!issued(origin)) {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
     } else if (!find_live(origin)) {
         receipt.status = CohortReceiptStatus::TerminalOrigin;
     } else if (const auto canonical = canonical_cohort_origin(origin)) {
-        auto& origins = cohorts_[index].origins;
-        const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
-        if (where == origins.end() || *where != *canonical) origins.insert(where, *canonical);
+        const auto found = cohorts_.find(cohort.value);
+        if (found == cohorts_.end()) {
+            cohorts_.emplace(cohort.value, CohortRoster{cohort, {*canonical}});
+        } else {
+            auto& origins = found->second.origins;
+            const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
+            if (where == origins.end() || *where != *canonical) origins.insert(where, *canonical);
+        }
         receipt.status = CohortReceiptStatus::Applied;
     } else {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
@@ -1293,13 +1315,16 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
     receipt.operation = CohortReceiptOperation::Remove;
     receipt.cohort = cohort;
     receipt.origin = origin;
-    const std::size_t index = cohort_index(cohort);
-    if (cohort.value == 0 || index == cohorts_.size()) {
+    if (!cohort_exists(cohort)) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
     } else if (const auto canonical = canonical_cohort_origin(origin)) {
-        auto& origins = cohorts_[index].origins;
-        const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
-        if (where != origins.end() && *where == *canonical) origins.erase(where);
+        const auto found = cohorts_.find(cohort.value);
+        if (found != cohorts_.end()) {
+            auto& origins = found->second.origins;
+            const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
+            if (where != origins.end() && *where == *canonical) origins.erase(where);
+            if (origins.empty()) cohorts_.erase(found);
+        }
         receipt.status = CohortReceiptStatus::Applied;
     } else {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
@@ -1310,11 +1335,12 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
 
 bool WorkingRequestCore::cohort_contains(
         CohortHandle cohort, const RequestHandle& opening) const {
-    const std::size_t index = cohort_index(cohort);
-    if (cohort.value == 0 || index == cohorts_.size()) return false;
+    if (!cohort_exists(cohort)) return false;
     const auto root = canonical_cohort_origin(opening);
     if (!root) return false;
-    const auto& origins = cohorts_[index].origins;
+    const auto found = cohorts_.find(cohort.value);
+    if (found == cohorts_.end()) return false;
+    const auto& origins = found->second.origins;
     return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
 }
 
@@ -1551,6 +1577,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     receipts_base_ = std::exchange(other.receipts_base_, 0);
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
+    cohort_store_ = std::move(other.cohort_store_);
     cohort_receipts_ = std::move(other.cohort_receipts_);
     cohort_receipts_base_ = other.cohort_receipts_base_;
     instance_ = std::move(other.instance_);
@@ -1577,6 +1604,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.receipts_.clear();
     other.next_cohort_handle_ = 1;
     other.cohorts_.clear();
+    other.cohort_store_.reset();
     other.cohort_receipts_.clear();
     other.cohort_receipts_base_ = 0;
     other.instance_.reset();
@@ -1784,7 +1812,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
             || live_count != cohort.size()) return RequestRejectReason::InvalidOwner;
     } else if (const auto* bind = std::get_if<BindCohort>(&request.owner)) {
         if (!host_sized || host_sized->kind != HostSizedKind::Close
-            || bind->cohort.value == 0 || cohort_index(bind->cohort) == cohorts_.size()) {
+            || !cohort_exists(bind->cohort)) {
             return RequestRejectReason::InvalidOwner;
         }
     } else {
@@ -6023,7 +6051,12 @@ struct WorkingRequestCore::SuccessorRootIndex {
 
 void WorkingRequestCore::set_successor_roots_directory(const std::string& directory) {
     if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
+    if (!cohort_store_) cohort_store_ = std::make_shared<::pineforge::detail::KernelRosterStore>();
+    // Check both locks before changing either directory: a cohort-only run
+    // can spill while the successor table has not opened a file yet.
+    cohort_store_->check_directory(directory);
     successor_roots_->set_directory(directory);
+    cohort_store_->set_directory(directory);
 }
 
 void WorkingRequestCore::reserve_successor_root() {
