@@ -7130,6 +7130,16 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
+add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
+
+# CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
+file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")
+list(SORT CR150_LANE_CMAKE)
+foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
+    include("${cr150_lane_file}")
+endforeach()
+
+# --- CR-150 l9a begin ---
 # CR-150 L9A: full JSON through the temporary sink; after every line pin.
 # Preflight also discovers this file through docker/run_json_*_test.py.
 add_test(NAME test_run_json_sink_l9a
@@ -7144,3 +7154,4 @@ if(TARGET outputs_fixture_strategy)
     set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
         "PINEFORGE_L9A_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
+# --- CR-150 l9a end ---
