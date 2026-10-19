@@ -11,7 +11,7 @@
 #include <pineforge/compat/pine/order_priority.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
 #include <pineforge/source/market_admission.hpp>
-
+#include <pineforge/detail/disk_resident_id_table.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -959,9 +959,9 @@ public:
         digest_ = (digest_ ^ handle.incarnation) * 1099511628211ULL;
     }
     const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
-    // R5 lane V19-E: a running digest of the members' incarnations, each
-    // folded once, when it was appended (the v4 extension fold's view).
+    // R5 lane V19-E: incarnations fold once at append (the v4 fold's view).
     std::uint64_t digest() const noexcept { return digest_; }
+    static OriginRoster from_retired(std::size_t count, std::uint64_t digest);
     const native_order::RequestHandle& operator[](std::size_t global) const;
     const native_order::RequestHandle& back() const { return (*this)[size() - 1]; }
     bool empty() const noexcept { return size() == 0; }
@@ -1532,8 +1532,8 @@ public:
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
 
-    // `instrument_feeds`, when given, is moved into the spec's instrument
-    // feeds (and back into it if the projection throws).
+    void set_id_tables_directory(const std::string& directory); // After reset, before first id.
+    // `instrument_feeds`, when given, is moved into (and back from) the spec.
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
                           const NativeBeginArgs&,
                           NativePathOrder path_order = NativePathOrder::Auto,
@@ -1815,19 +1815,19 @@ private:
         native_order::CohortHandle handle{};
         OriginRoster origins;
         std::vector<native_order::RequestHandle> opened;
-        // Live source exposure by opening provenance.  This is source-layer
-        // bookkeeping only: the generic core still resolves cohort authority
-        // at every candidate.  It lets a command snapshot an existing id's
-        // percentage basis before later requests in the same script pass
-        // reduce that cohort.
+        // Only live provenance stays resident; retired summaries stay exact.
+        struct Record {
+            std::uint64_t handle; std::int64_t cycle;
+            std::uint64_t origin_count, origin_digest, erased_sides;
+        };
         std::unordered_map<std::uint64_t, double> live_units_by_origin;
         std::int64_t cycle = 0;
-        // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
-        // in `origins` whose placement rows were erased, so a question about
-        // every origin the cohort ever accepted still covers them.
+        Record retired_record() const noexcept;
+        static CohortFacts restore_record(const Record&);
+        bool spillable() const noexcept;
         std::uint8_t erased_opening_sides = 0;
     };
-
+    using CohortTable = ::pineforge::detail::DiskResidentIdTable<CohortFacts>;
     struct PendingBracketLeg {
         native_order::Request request;
         PlacementSnapshot snapshot;
@@ -2034,7 +2034,7 @@ private:
     double cohort_exposure_for(const SourceId&) const noexcept;
     // The units an exit's from_entry holds; none when it names no entry.
     std::optional<double> from_entry_units(const SourceId&) const noexcept;
-    bool from_entry_filled_this_cycle(const SourceId&) const noexcept;
+    bool from_entry_filled_this_cycle(const SourceId&) const;
     double percent_commission_live_equity(double) const noexcept;
     // The same equity at an explicit account-currency rate: the rate an
     // execution converts at, which its terms facts carry
@@ -2396,7 +2396,7 @@ private:
     bool follows_same_bar_declined_reversal(
         const PlacementSnapshot&, const NativePrecommitView&) const;
     bool bracket_belongs_to_reversal(
-        const PlacementSnapshot&, const PlacementSnapshot&) const noexcept;
+        const PlacementSnapshot&, const PlacementSnapshot&) const;
     void suspend_brackets_for_reversal(
         const PlacementSnapshot&, const exit_legs::Frame&, double open_price);
     void suspend_declined_reversal_brackets(
@@ -2519,8 +2519,8 @@ private:
     std::uint64_t source_command_sequence_ = 0;
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
-    std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
-    std::vector<SourceId> cohort_order_;
+    CohortTable cohorts_by_id_;
+    CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
@@ -2741,7 +2741,7 @@ private:
     // and the most keys it ever held counting one transient key per live
     // strategy.close / close_all order -- and, for the alternative the tapes
     // leave open, per live strategy.order market order too.
-    std::vector<SourceId> exit_rank_keys_;
+    ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_;
     std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
     std::uint32_t exit_rank_peak_ = 0;
     std::uint32_t exit_rank_alt_peak_ = 0;
