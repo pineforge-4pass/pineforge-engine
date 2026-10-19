@@ -839,6 +839,13 @@ and 1838 s, and a push run on the current pool has not been measured. The
 pull-request wall time under D1 is to be measured on real PR runs, typical and
 tail; it is not claimed as met against the owner's 15-minute target.
 
+**Rule for the deferred rows (L6 condition, 10-20).** Every row and class this
+section excludes from a pull request still runs on the merge commit. A red
+result on `main` in an excluded row or class (the Release and kernel-only
+`slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
+author or the release owner fixes or reverts the change within the hour; the
+red is not carried into a release.
+
 ### Documentation-only changes
 
 A pull request or a push to `main` whose change is documentation only runs

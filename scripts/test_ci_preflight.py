@@ -174,11 +174,16 @@ class PreflightFailures(unittest.TestCase):
                     self.assertIn(f'{job} must exclude exactly slow on PRs only, once',
                                   ci_workflow_findings(*changed))
         # A fourth excluding job, or a parity subset with any exclusion, fails.
-        for job in ('preflight', 'corpus-parity-subset'):
+        # `preflight` is a steps job; `corpus-parity-subset` is a reusable-workflow
+        # call (`uses:` + `with:`, no `steps:`), so the flag goes into its `with:`.
+        for job, before, after in (
+                ('preflight', '    steps:\n',
+                 f'    steps:\n      - run: python3 scripts/ci_verify.py debug {flag}\n'),
+                ('corpus-parity-subset', '      mode: subset\n',
+                 f'      mode: subset\n      note: {flag}\n')):
             with self.subTest(job=job):
                 changed = original.copy()
-                changed[0] = in_job(changed[0], job, '    steps:\n',
-                                    f'    steps:\n      - run: python3 scripts/ci_verify.py debug {flag}\n')
+                changed[0] = in_job(changed[0], job, before, after)
                 findings = ci_workflow_findings(*changed)
                 self.assertIn(f'{job} must keep its full population', findings)
                 self.assertIn('CI must carry exactly three PR-only slow exclusion flags', findings)
