@@ -7139,7 +7139,7 @@ foreach(cr150_lane_file IN LISTS CR150_LANE_CMAKE)
     include("${cr150_lane_file}")
 endforeach()
 
-# --- CR-150 l9a begin ---
+# --- CR-150 core-cr150-l9a begin ---
 # CR-150 L9A: full JSON through the temporary sink; after every line pin.
 # Preflight also discovers this file through docker/run_json_*_test.py.
 add_test(NAME test_run_json_sink_l9a
@@ -7154,4 +7154,4 @@ if(TARGET outputs_fixture_strategy)
     set_property(TEST test_run_json_sink_l9a APPEND PROPERTY ENVIRONMENT
         "PINEFORGE_L9A_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
-# --- CR-150 l9a end ---
+# --- CR-150 core-cr150-l9a end ---
