@@ -157,6 +157,7 @@ double BacktestEngine::open_trade_max_runup_percent(int idx) const {
 //      reversal-driven close -- SCRIPT.
 int BacktestEngine::closed_trade_close_cause(int i) const {
     if (i < 0 || i >= report_trade_count()) return -1;
+    if (static_cast<std::size_t>(i) < trades_.base()) return -1;
     const Trade& t = get_report_trade(i);
     if (t.open_at_end) return static_cast<int>(execution::CloseCause::RangeEnd);
     if (t.close_cause != execution::CloseCause::Unspecified)
