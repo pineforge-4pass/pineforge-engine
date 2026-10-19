@@ -381,6 +381,7 @@ public:
         double pnl = 0.0;
     };
     bool streams_closed_rows(const BacktestEngine& engine) const noexcept;
+    const std::string& report_scratch_directory(const BacktestEngine& engine) const noexcept;
     bool begin_closed_row_seal(std::int64_t script_bar_open) noexcept {
         if (closed_trade_seal_bar_ && *closed_trade_seal_bar_ == script_bar_open) return false;
         closed_trade_seal_bar_ = script_bar_open;

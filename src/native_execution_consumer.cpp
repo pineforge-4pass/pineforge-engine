@@ -13097,6 +13097,14 @@ bool NativeExecutionConsumer::streams_closed_rows(const BacktestEngine& engine) 
         && engine.report_sink_state_.trade_history_streamable;
 }
 
+// CR-150 L18: the scratch directory the sink bound at setup (set_report_sink_v1
+// resolves a null directory to the sink path's parent); the consumer is the
+// friend that may read the private sink state.
+const std::string& NativeExecutionConsumer::report_scratch_directory(
+        const BacktestEngine& engine) const noexcept {
+    return engine.report_sink_state_.scratch_dir;
+}
+
 std::size_t NativeExecutionConsumer::closed_rows_sealable(
         const TradeLedger& rows, std::size_t phase_final, std::uint64_t money_folded,
         std::int64_t script_bar_open, std::optional<std::uint64_t> mutable_entry) const {
