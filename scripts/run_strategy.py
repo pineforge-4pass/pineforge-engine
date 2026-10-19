@@ -27,8 +27,21 @@ Usage examples
     # Don't overwrite engine_trades.csv if it already exists
     python scripts/run_strategy.py corpus/basic/greedy --no-overwrite
 
-    # Read trades from a verified v1 report sink; keep the same CSV bytes
+    # Read trades from a verified v1 report sink; keep the same CSV bytes.
+    # Every probe prints one machine-greppable canary line,
+    #   sink_canary: probe=<id> bytes=<n> records=<n> trades=<n> ok
+    # (probe id = the strategy directory's basename); a sink that is absent,
+    # empty or short prints the same fields with "FAIL <reason>" and fails
+    # the probe.
     PINEFORGE_REPORT_SINK=1 python scripts/run_strategy.py corpus/basic/greedy
+
+    # Test-only: keep the sink file of chosen probes as a sweep artifact.
+    # The value is "all" or comma-separated probe ids; a sweep that wants five
+    # artifacts names the first five probes of its own order. Each kept file
+    # is announced as "sink_kept: probe=<id> path=<file>" and lives in
+    # $TMPDIR; without the variable every sink file is unlinked at close.
+    PINEFORGE_REPORT_SINK=1 PINEFORGE_KEEP_REPORT_SINK=greedy \\
+        python scripts/run_strategy.py corpus/basic/greedy
 
     # All strategies (matches `bash scripts/run_corpus.sh`)
     for d in corpus/*/*/; do python scripts/run_strategy.py "$d"; done
@@ -1971,6 +1984,9 @@ def _with_run_failure_code(error: Exception, lib, state) -> Exception:
 # (strategy_last_run_status 1 alone), as docker/run_json.py spells it.
 RUN_STATUS_FAILED_TEXT = "the run did not complete and the engine reported no error"
 REPORT_SINK_ENV = "PINEFORGE_REPORT_SINK"
+# Test-only artifact switch of sink mode (_keep_report_sink): the sink file is
+# otherwise unlinked at close.
+KEEP_REPORT_SINK_ENV = "PINEFORGE_KEEP_REPORT_SINK"
 
 
 def _new_harness_report_sink(lib, state):
@@ -2096,6 +2112,68 @@ def _report_from_sink(report, sink) -> dict:
     result["equity_curve_time_ms"] = _SinkRows(
         sink, "E", lambda record: record.values[0])
     return result
+
+
+def _probe_id(strategy_dir: Path) -> str:
+    """The name a probe goes by in the sweep's lines: its directory's
+    basename (the slug PINEFORGE_REQUESTS_ROOT uses), without whitespace so
+    the canary line splits on spaces."""
+    return "_".join(strategy_dir.name.split()) or "-"
+
+
+def _keep_report_sink(probe: str, environ=None) -> bool:
+    """Test-only artifact switch: does this probe keep its sink file at close?
+
+    ``PINEFORGE_KEEP_REPORT_SINK=all`` keeps every probe's file; any other
+    non-empty value is a comma-separated list of probe ids (_probe_id) and
+    keeps exactly those probes' files. Probes run as separate processes and
+    nothing is counted across them, so a sweep that wants five artifacts
+    names the first five probes of its own order. Unset or empty: no file is
+    kept, and close() unlinks every sink as it always does.
+    """
+    value = (os.environ if environ is None else environ).get(
+        KEEP_REPORT_SINK_ENV, "").strip()
+    return bool(value) and (
+        value == "all" or probe in {part.strip() for part in value.split(",")})
+
+
+def _sink_canary(probe: str, report: _SinkReport) -> None:
+    """Prove this probe read a real, non-empty, complete sink, in one line.
+
+    Prints ``sink_canary: probe=<id> bytes=<n> records=<n> trades=<n> ok`` on
+    stdout, where the per-probe status lines go. ``bytes`` is the size of the
+    sink file on disk now, ``records`` the T rows a fresh strict reader
+    (own offset, whole-file SHA-256 check) decodes from it now, and
+    ``trades`` the engine's own count for the run (ReportC.total_trades, not
+    read from the sink). A sink that is missing, not a regular file, empty,
+    unreadable or short of rows prints the same fields with ``FAIL
+    <reason>`` and raises RuntimeError, which fails the probe the way the
+    other sink invariants of this harness do. A run that never installed a
+    sink prints no canary at all, so a sweep must find exactly one line per
+    probe. Call it while the sink is still open: close() unlinks the file.
+    """
+    sink, trades = report.sink, int(report["total_trades"])
+    size = records = 0
+    reason = None
+    try:
+        size = os.stat(sink.path).st_size
+        if not os.path.isfile(sink.path):
+            reason = "the sink path is not a regular file"
+        elif size <= 0:
+            reason = "the sink file is empty"
+        else:
+            records = sum(1 for _ in sink.records("T"))
+            if records != trades:
+                reason = f"{records} T records decoded for {trades} trades"
+    except Exception as error:
+        reason = f"the sink cannot be read back: {error}"
+    verdict = "ok" if reason is None else "FAIL " + " ".join(str(reason).split())
+    print(f"sink_canary: probe={probe} bytes={size} records={records} "
+          f"trades={trades} {verdict}")
+    if sink.keep:
+        print(f"sink_kept: probe={probe} path={sink.path}")
+    if reason is not None:
+        raise RuntimeError(f"sink canary failed for probe {probe}: {reason}")
 
 
 def _run_failure_text(lib, state) -> str | None:
@@ -2622,7 +2700,9 @@ class Strategy:
         as report:`` or call ``report.close()`` after consuming these views.
         The CLI closes each report, including a discarded emit-window rerun.
         ``on_report`` still sees the native report, which has summary scalars
-        only in this mode.
+        only in this mode. The sink is a named owner-only temporary file that
+        every view re-opens by its real path (own offset), the same on Linux
+        and macOS; close() unlinks it.
         """
         source_feed_sha256 = None
         if preloaded_bars is not None:
@@ -4724,6 +4804,11 @@ def _main_run(args, resources) -> int:
             trade_start_ms = signal_start_ms
             emit_window = (signal_start_ms, emit_window[1])
             report = run_engine(trade_start_ms)
+    if isinstance(report, _SinkReport):
+        # The final report only: a discarded rerun's sink is always unlinked.
+        # Set before the outputs, so a probe that fails after this point still
+        # leaves its file when the switch names it.
+        report.sink.keep = _keep_report_sink(_probe_id(strategy_dir))
     if run_kwargs.get("report_terminal_quote") is not None:
         quote_result = report.get("report_terminal_quote") or {}
         quote_status = "APPLIED" if quote_result.get("applied") else "INERT"
@@ -4800,6 +4885,9 @@ def _main_run(args, resources) -> int:
             raise RuntimeError("broker-state hashes and equity timestamps differ in length")
         entry_count = len(bsh_values)
         def entries_iter():
+            # With a sink, two readers are live here at once (E and H): each
+            # _SinkRows pass opens its own SinkReader on the sink's real path,
+            # so their offsets are independent on every platform.
             return ({"time_ms": timestamp, "hash": format(value, "016x")}
                     for timestamp, value in zip(bsh_times, bsh_values))
         with bsh_path.open("w", encoding="utf-8") as f:
@@ -4885,6 +4973,12 @@ def _main_run(args, resources) -> int:
             print(f"  fingerprint -> {args.fingerprint_json} ({fp['digest']})")
         except Exception as e:
             print(f"  fingerprint: skipped ({e})", file=sys.stderr)
+    if isinstance(report, _SinkReport):
+        # Every output is written; the sink is still open (the ExitStack
+        # closes it after this function returns), so the canary can still
+        # stat and re-read the file. A failure here fails the probe before
+        # the summary line below can read like a success.
+        _sink_canary(_probe_id(strategy_dir), report)
     elapsed = time.time() - started
 
     try:

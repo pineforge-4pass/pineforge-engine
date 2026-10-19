@@ -313,12 +313,16 @@ def test_serialization_fault_discards_all_prepared_bytes_and_closes_files(tmp_pa
     assert json.loads(text)["code"] == "report_sink_failed"
     assert len(text.splitlines()) == 1 and "[partial" not in text
     assert files and all(file.closed for file in files)
+    # The sink is a named file, not a TemporaryFile in `files` above: its own
+    # closure is that nothing of it survives the failed run.
+    assert not Path(library.installed[0]).exists()
 
 
 def test_sink_open_failure_has_the_existing_sink_failure_code(tmp_path, monkeypatch):
     def refuse(*args, **kwargs):
         raise OSError(28, "injected full sink disk")
-    monkeypatch.setattr(run_json.tempfile, "TemporaryFile", refuse)
+    # The sink is created with mkstemp (a real, named file), not TemporaryFile.
+    monkeypatch.setattr(run_json.tempfile, "mkstemp", refuse)
     status, text, stderr, library = invoke(tmp_path, monkeypatch)
     assert status == 1 and stderr == ""
     assert json.loads(text)["code"] == "report_sink_failed"
@@ -349,12 +353,15 @@ def test_persistent_temporary_io_error_keeps_the_disk_code(tmp_path, monkeypatch
         return file
     monkeypatch.setattr(run_json.tempfile, "TemporaryFile", temporary)
     outputs = fault == "column-close"
+    library = SinkLibrary(outputs=outputs)
     status, text, stderr, _ = invoke(tmp_path, monkeypatch,
-        library=SinkLibrary(outputs=outputs), extra=["--outputs"] if outputs else [])
+        library=library, extra=["--outputs"] if outputs else [])
     assert status == 1 and stderr == ""
     assert json.loads(text)["code"] == "report_sink_failed"
     assert len(text.splitlines()) == 1
     assert files and all(file.closed for file in files)
+    # The named sink file is gone as well (it is not one of `files`).
+    assert library.installed and not Path(library.installed[0]).exists()
 
 
 def test_prepared_report_is_copied_in_bounded_chunks(tmp_path):

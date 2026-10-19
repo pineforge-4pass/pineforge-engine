@@ -3,14 +3,23 @@
 Only native calls are replaced. Strategy.run, L9a's sink owner/receipt checks,
 pf_sink's strict reader, report-window filtering and the CSV writers are real.
 No build, test or repository script was run by the edit-only executor.
+
+Fix round 1 (no platform branch anywhere in this file): the sink is a named
+owner-only file handed to the engine by its real path and unlinked at close,
+so every reader owns its offset on Linux and Darwin alike; sink mode prints
+one `sink_canary:` line per probe and a test-only switch keeps chosen files.
 """
 from __future__ import annotations
 
 import csv
 import ctypes
 import json
+import os
 from pathlib import Path
+import re
+import stat
 import sys
+import tempfile
 
 import pytest
 
@@ -20,6 +29,7 @@ sys.path.insert(0, str(ROOT / "docker"))
 
 import run_strategy as rs
 import run_json
+import pf_sink
 import test_run_json_bin as bars
 from test_run_json_sink import SinkLibrary, TRADE_FIELDS, header, write_sink
 
@@ -64,6 +74,9 @@ class HarnessLibrary(SinkLibrary):
     def __init__(self, trades, *, fault=None, bad_field=None, bad_order=False):
         self.trades = trades
         self.bad_order = bad_order
+        # What the engine was handed, and how big the sink was when the engine
+        # was freed: read from the files themselves, not from harness output.
+        self.engine_view, self.sizes = [], []
         super().__init__(pnls=tuple(trade["pnl"] for trade in trades),
                          fault=fault, bad_field=bad_field)
         for name in ("strategy_set_trace_enabled",
@@ -81,6 +94,20 @@ class HarnessLibrary(SinkLibrary):
             value = self.trades[index][field]
             return value.encode("utf-8") if isinstance(value, str) else value
         return read
+
+    def install(self, state, pointer):
+        status = super().install(state, pointer)
+        info = os.stat(self.path)
+        self.engine_view.append({
+            "path": self.path, "regular": stat.S_ISREG(info.st_mode),
+            "mode": stat.S_IMODE(info.st_mode), "size": info.st_size,
+        })
+        return status
+
+    def free(self, state):
+        if self.path is not None:
+            self.sizes.append(os.path.getsize(self.path))
+        super().free(state)
 
     def run(self, state, feed, count, *args):
         bars.Library.run(self, state, feed, count, *args)
@@ -161,10 +188,24 @@ def strategy(library):
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
-    for name in ("PINEFORGE_REPORT_SINK", "PINEFORGE_REQUESTS_ROOT",
+    for name in ("PINEFORGE_REPORT_SINK", rs.KEEP_REPORT_SINK_ENV,
+                 "PINEFORGE_REQUESTS_ROOT",
                  rs.MAGNIFIER_FEED_ENV, rs.LANE_QTY_STEP_ENV,
                  rs.SESSION_CALENDAR_ENV):
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def sink_directory(tmp_path, monkeypatch):
+    """Every sink file of a test is created in this directory (the temp dir
+    the harness picks). A sink file must not outlive its test unless the
+    keep switch asked for it, and that test removes it itself."""
+    directory = tmp_path / "sinks"
+    directory.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(directory))
+    yield directory
+    assert not list(directory.glob("pineforge-report-sink-*")), (
+        "a sink file was left behind")
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -211,7 +252,7 @@ def test_fixture_sink_csv_equals_array_bytes(tmp_path, monkeypatch, empty, windo
             report, (bars.T0 + 420000, 1.), "15") == (
                 rs._report_terminal_quote_applied(
                     array, (bars.T0 + 420000, 1.), "15"))
-    assert report.sink.file.closed
+    assert report.sink.closed and not Path(report.sink.path).exists()
     assert library.calls.index("report_free") < library.calls.index("strategy_free")
 
 
@@ -270,6 +311,16 @@ def invoke_main(tmp_path, monkeypatch, library, output, *, extra=()):
     return rs.main()
 
 
+# The canary's one machine-greppable line, exactly as the sweep will grep it.
+CANARY = re.compile(
+    r"sink_canary: probe=(?P<probe>\S+) bytes=(?P<bytes>\d+) records=(?P<records>\d+) "
+    r"trades=(?P<trades>\d+) (?P<verdict>ok|FAIL \S.*)")
+
+
+def canary_lines(text):
+    return [line for line in text.splitlines() if line.startswith("sink_canary:")]
+
+
 def test_cli_csv_and_diagnostic_values_equal_array_path(tmp_path, monkeypatch):
     # Retain the class while invoke_main replaces only the CLI constructor.
     real_strategy = rs.Strategy
@@ -301,7 +352,7 @@ def test_cli_csv_and_diagnostic_values_equal_array_path(tmp_path, monkeypatch):
     assert sink_trace.read_bytes() == array_trace.read_bytes()
     assert json.loads(sink_trace.read_text()) == json.loads(array_trace.read_text())
     assert (tmp_path / "broker_state_hash.json").read_bytes() == array_hash_bytes
-    assert owners and all(sink.file.closed for sink in owners)
+    assert owners and all(sink.closed for sink in owners)
 
 
 @pytest.mark.parametrize("fault", ["hash", "truncated", "receipt", "incomplete"])
@@ -323,7 +374,7 @@ def test_bad_sink_never_overwrites_csv_and_releases_resources(
         invoke_main(tmp_path, monkeypatch, library, destination)
     assert library.installed, "the failure must exercise a real fixture sink"
     assert destination.read_bytes() == previous
-    assert owners and all(sink.file.closed for sink in owners)
+    assert owners and all(sink.closed for sink in owners)
     assert "report_free" in library.calls and "strategy_free" in library.calls
 
 
@@ -358,14 +409,13 @@ def test_csv_rechecks_the_sink_before_replacing_existing_output(tmp_path, monkey
     previous = b"previous verified CSV\r\n"
     destination.write_bytes(previous)
     with report:
-        report.sink.file.seek(0)
-        original = report.sink.file.read()
+        # The sink is an ordinary named file: change it the way any other
+        # process could, through its real path.
+        sink_file = Path(report.sink.path)
+        original = sink_file.read_bytes()
         changed = original.replace(b'"long"', b'"short"', 1)
         assert changed != original
-        report.sink.file.seek(0)
-        report.sink.file.write(changed)
-        report.sink.file.truncate()
-        report.sink.file.flush()
+        sink_file.write_bytes(changed)
         with pytest.raises(run_json.RunFailure, match="sink"):
             rs.write_engine_trades_csv(report["trades"], destination)
     assert destination.read_bytes() == previous
@@ -411,11 +461,15 @@ def test_csv_write_failure_still_closes_the_sink(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         invoke_main(tmp_path, monkeypatch, library, destination)
     assert library.installed
-    assert owners and all(sink.file.closed for sink in owners)
+    assert owners and all(sink.closed for sink in owners)
 
 
-def test_cli_rerun_uses_fresh_sinks_and_closes_both(tmp_path, monkeypatch):
+@pytest.mark.parametrize("keep", [False, True])
+def test_cli_rerun_uses_fresh_sinks_and_closes_both(
+        tmp_path, monkeypatch, sink_directory, capsys, keep):
     monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    if keep:
+        monkeypatch.setenv(rs.KEEP_REPORT_SINK_ENV, "all")
     library = HarnessLibrary(trade_fixture())
     owners = []
     make_sink = rs._new_harness_report_sink
@@ -449,10 +503,255 @@ def test_cli_rerun_uses_fresh_sinks_and_closes_both(tmp_path, monkeypatch):
     assert library.calls.count("run_backtest_full") == 2
     assert len(library.installed) == 2
     assert library.installed[0] != library.installed[1]
-    assert len(owners) == 2 and all(sink.file.closed for sink in owners)
+    assert len(owners) == 2 and all(sink.closed for sink in owners)
     reference = tmp_path / "array.csv"
     rs.write_engine_trades_csv(
         rs._filter_trades_to_window(
             trade_fixture(), (bars.T0 + 120000, bars.T0 + 300000)),
         reference)
     assert destination.read_bytes() == reference.read_bytes()
+    # Two sinks, one probe: the canary speaks once, for the final report.
+    assert len(canary_lines(capsys.readouterr().out)) == 1
+    # Only the final report can be a kept artifact: the discarded rerun's
+    # sink is unlinked even when the switch names every probe.
+    leftovers = sorted(sink_directory.glob("pineforge-report-sink-*"))
+    try:
+        assert [path.name for path in leftovers] == (
+            [Path(library.installed[1]).name] if keep else [])
+    finally:
+        for path in leftovers:
+            path.unlink()
+
+
+# --- the portable sink: a named file, one offset per reader --------------------
+
+class PathLibrary:
+    """Accepts any sink the owner installs and remembers the path it was given."""
+
+    def __init__(self, status=0):
+        self.status, self.paths = status, []
+
+    def strategy_set_report_sink_v1(self, state, pointer):
+        self.paths.append(os.fsdecode(pointer._obj.path))
+        return self.status
+
+
+def test_engine_gets_a_named_owner_only_file_and_every_reader_starts_at_zero(
+        tmp_path, monkeypatch, sink_directory):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    library = HarnessLibrary(trade_fixture())
+    report = strategy(library).run(bars.csv_file(tmp_path, count=8))
+    (seen,) = library.engine_view
+    path = Path(seen["path"])
+    # What the engine was handed: a real, absolute, regular, owner-only file in
+    # the temp directory; never a descriptor path (/proc/self/fd, /dev/fd),
+    # whose open file description, and with it the offset, can be shared.
+    assert path.is_absolute() and path.parent == sink_directory
+    assert not seen["path"].startswith(("/proc/", "/dev/"))
+    assert seen["regular"] and seen["size"] == 0
+    assert seen["mode"] & 0o077 == 0
+    with report:
+        sink = report.sink
+        assert Path(sink.path) == path and path.is_file()
+        raw = path.read_bytes()
+        assert raw.endswith(b"\n") and len(raw) == library.sizes[0] > 0
+        # Two live SinkReaders, advanced alternately: each owns its offset and
+        # sees every row from the start.
+        pairs = list(zip(sink.records("E"), sink.records("E")))
+        assert len(pairs) == sink.counts["E"] == 8
+        assert all(left.as_dict() == right.as_dict() for left, right in pairs)
+        # Plain opens of the real path behave the same: a shared offset would
+        # hand the second reader the file's second line.
+        with path.open("rb") as one, path.open("rb") as two:
+            head = one.readline()
+            assert head and head == two.readline()
+            assert one.read() == two.read() == raw[len(head):]
+        # The broker-hash export zips E with H, two readers live at once. The
+        # expected pairs come from the fixture's inputs, not from the output.
+        assert list(zip(report["equity_curve_time_ms"],
+                        report["broker_state_hash"])) == [
+            (bars.T0 + index * 60000, (1 << 63) + index) for index in range(8)]
+    # close() unlinks the file; a closed owner names nothing any more, so a
+    # view read after close fails loudly instead of reading a stranger's file.
+    assert sink.closed and not path.exists()
+    sink.close()
+    with pytest.raises(run_json.RunFailure, match="sink"):
+        list(sink.records("T"))
+
+
+def test_sink_owner_unlinks_once_and_tolerates_a_vanished_file(sink_directory):
+    library = PathLibrary()
+    sink = run_json._TemporaryReportSink(library, 7, directory=sink_directory)
+    path = Path(library.paths[0])
+    assert path == Path(sink.path) and path.is_file() and path.stat().st_size == 0
+    assert sink.directory == str(sink_directory)
+    sink.close()
+    assert sink.closed and not path.exists()
+    sink.close()  # idempotent
+    vanished = run_json._TemporaryReportSink(library, 7, directory=sink_directory)
+    os.unlink(vanished.path)
+    vanished.close()  # FileNotFoundError is tolerated
+    assert vanished.closed
+
+
+def test_sink_owner_keeps_its_file_only_when_asked(sink_directory):
+    sink = run_json._TemporaryReportSink(PathLibrary(), 7, directory=sink_directory)
+    sink.keep = True
+    sink.close()
+    path = Path(sink.path)
+    try:
+        assert sink.closed and path.is_file()
+    finally:
+        path.unlink()
+
+
+def test_sink_owner_leaves_no_file_when_the_engine_refuses_it(sink_directory):
+    with pytest.raises(run_json.RunFailure, match="refused"):
+        run_json._TemporaryReportSink(PathLibrary(status=-1), 7, directory=sink_directory)
+    assert not list(sink_directory.iterdir())
+
+
+def test_sink_owner_without_a_directory_has_the_existing_failure_code(tmp_path):
+    with pytest.raises(run_json.RunFailure) as error:
+        run_json._TemporaryReportSink(PathLibrary(), 7, directory=tmp_path / "missing")
+    assert error.value.code == "report_sink_failed"
+
+
+# --- the canary: every sink-on probe proves it read a real, complete sink -------
+
+def test_cli_prints_one_canary_line_with_the_fixtures_own_counts(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    trades = trade_fixture()
+    library = HarnessLibrary(trades)
+    assert invoke_main(tmp_path, monkeypatch, library, tmp_path / "sink.csv") == 0
+    lines = canary_lines(capsys.readouterr().out)
+    assert len(lines) == 1
+    found = CANARY.fullmatch(lines[0])
+    assert found and found["verdict"] == "ok"
+    assert found["probe"] == "probe"  # the strategy directory's basename
+    assert int(found["trades"]) == int(found["records"]) == len(trades)
+    # The size the engine's sink had when the engine was freed, read from the
+    # file by the stand-in library, not taken from the harness's own output.
+    assert int(found["bytes"]) == library.sizes[0] > 0
+
+
+def test_canary_accepts_a_real_sink_that_holds_no_trades(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    library = HarnessLibrary([])
+    with strategy(library).run(bars.csv_file(tmp_path, count=8)) as report:
+        rs._sink_canary("fixture", report)
+    (line,) = canary_lines(capsys.readouterr().out)
+    found = CANARY.fullmatch(line)
+    assert found and found["verdict"] == "ok" and found["probe"] == "fixture"
+    assert int(found["records"]) == int(found["trades"]) == 0
+    assert int(found["bytes"]) == library.sizes[0] > 0
+
+
+@pytest.mark.parametrize("damage, reason", [
+    ("empty", "the sink file is empty"),
+    ("truncated", "the sink cannot be read back"),
+    ("missing", "the sink cannot be read back"),
+    ("short", "T records decoded for"),
+])
+def test_canary_fails_the_probe_for_an_empty_truncated_missing_or_short_sink(
+        tmp_path, monkeypatch, capsys, damage, reason):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    trades = trade_fixture()
+    library = HarnessLibrary(trades)
+    report = strategy(library).run(bars.csv_file(tmp_path, count=8))
+    path = Path(report.sink.path)
+    with report:
+        if damage == "empty":
+            path.write_bytes(b"")
+        elif damage == "truncated":
+            content = path.read_bytes()
+            path.write_bytes(content[:len(content) // 2])
+        elif damage == "missing":
+            path.unlink()
+        else:
+            # The engine reports one trade more than the sink holds.
+            report["total_trades"] += 1
+        with pytest.raises(RuntimeError, match="sink canary failed"):
+            rs._sink_canary("fixture", report)
+    (line,) = canary_lines(capsys.readouterr().out)
+    found = CANARY.fullmatch(line)
+    assert found and found["verdict"].startswith("FAIL ") and reason in found["verdict"]
+    assert found["probe"] == "fixture"
+    assert int(found["trades"]) == len(trades) + (damage == "short")
+    assert int(found["records"]) == (len(trades) if damage == "short" else 0)
+
+
+def test_cli_fails_the_probe_when_the_sink_is_lost_before_close(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    library = HarnessLibrary(trade_fixture())
+    real_write = rs.write_engine_trades_csv
+
+    def write_then_empty_the_sink(trades, path):
+        real_write(trades, path)
+        Path(trades.sink.path).write_bytes(b"")
+
+    monkeypatch.setattr(rs, "write_engine_trades_csv", write_then_empty_the_sink)
+    with pytest.raises(RuntimeError, match="sink canary failed"):
+        invoke_main(tmp_path, monkeypatch, library, tmp_path / "sink.csv")
+    out = capsys.readouterr().out
+    (line,) = canary_lines(out)
+    found = CANARY.fullmatch(line)
+    assert found and found["verdict"] == "FAIL the sink file is empty"
+    assert (int(found["bytes"]), int(found["records"])) == (0, 0)
+    assert int(found["trades"]) == len(trade_fixture())
+    assert "net_profit=" not in out, "a failed probe must not print its success line"
+
+
+def test_sink_off_run_prints_no_canary(tmp_path, monkeypatch, capsys):
+    library = HarnessLibrary(trade_fixture())
+    assert invoke_main(tmp_path, monkeypatch, library, tmp_path / "array.csv") == 0
+    out = capsys.readouterr().out
+    assert "sink_canary:" not in out and "sink_kept:" not in out
+    assert not library.installed
+
+
+# --- the test-only keep switch --------------------------------------------------
+
+@pytest.mark.parametrize("value, kept", [
+    ("all", True), ("probe", True), ("other, probe", True),
+    ("other", False), ("probe-2", False), ("", False),
+])
+def test_keep_switch_keeps_the_files_of_the_probes_it_names(
+        tmp_path, monkeypatch, capsys, sink_directory, value, kept):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    monkeypatch.setenv(rs.KEEP_REPORT_SINK_ENV, value)
+    trades = trade_fixture()
+    library = HarnessLibrary(trades)
+    assert invoke_main(tmp_path, monkeypatch, library, tmp_path / "sink.csv") == 0
+    out = capsys.readouterr().out
+    leftovers = sorted(sink_directory.glob("pineforge-report-sink-*"))
+    try:
+        if not kept:
+            assert not leftovers and "sink_kept:" not in out
+        else:
+            assert [path.name for path in leftovers] == [Path(library.installed[0]).name]
+            assert f"sink_kept: probe=probe path={leftovers[0]}" in out.splitlines()
+            # The artifact is the complete sink the probe verified: non-empty,
+            # with a trailer, and as many T rows as the fixture has trades.
+            with pf_sink.SinkReader(leftovers[0]) as reader:
+                assert sum(1 for record in reader if record.tag == "T") == len(trades)
+                assert reader.complete and leftovers[0].stat().st_size == library.sizes[0] > 0
+    finally:
+        for path in leftovers:
+            path.unlink()
+
+
+def test_keep_switch_is_off_unless_it_names_the_probe():
+    assert rs._keep_report_sink("greedy", {}) is False
+    assert rs._keep_report_sink("greedy", {rs.KEEP_REPORT_SINK_ENV: "  "}) is False
+    assert rs._keep_report_sink("greedy", {rs.KEEP_REPORT_SINK_ENV: "all"}) is True
+    assert rs._keep_report_sink("greedy", {rs.KEEP_REPORT_SINK_ENV: "a, greedy ,b"}) is True
+    assert rs._keep_report_sink("greedy", {rs.KEEP_REPORT_SINK_ENV: "greedy-2,gree"}) is False
+
+
+def test_probe_id_is_the_directory_basename_without_whitespace():
+    assert rs._probe_id(Path("/corpus/basic/greedy")) == "greedy"
+    assert rs._probe_id(Path("/corpus/my probe")) == "my_probe"
+    assert rs._probe_id(Path("/")) == "-"
