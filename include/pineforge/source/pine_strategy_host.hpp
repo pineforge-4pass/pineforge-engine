@@ -901,12 +901,12 @@ private:
     std::uint64_t adapter_broker_fill_event_sequence() const noexcept {
         return broker_fill_event_seq_;
     }
-    void scheduler_prepare_script_run(const std::vector<Bar>&,
+    void scheduler_prepare_script_run(PineScheduler::InputView,
                                       bool static_eligible, int expected_script_bars,
                                       bool script_bar_geometry);
     void scheduler_configure_security_evaluators();
     bool scheduler_uses_aux_security_feed() const noexcept;
-    void scheduler_prepare_security_sequence(const std::vector<Bar>&);
+    void scheduler_prepare_security_sequence(PineScheduler::InputView);
     // R5 lane R3b: the plain request.security sites of a batch run whose
     // input and script timeframes coincide are declared to the kernel as
     // NativeTimeframeSubscription series instances at the L6c begin-time hook

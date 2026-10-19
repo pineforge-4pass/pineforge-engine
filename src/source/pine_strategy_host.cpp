@@ -157,6 +157,10 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       is_last_tick_(scheduler_.language().is_last_tick_) {
     // ab9714be LegacyCompatibilityConsumer::refuse was a no-op on this handle.
     host_mutation_guard_inert_ = true;
+    NativeExecutionConsumer::bound(*this).set_batch_input_release(
+        this, [](void* owner) noexcept {
+            static_cast<PineStrategyHost*>(owner)->scheduler_.release_batch_input();
+        });
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // A fresh host folds its empty feed as one cleared at a run's end does.
     refresh_aux_security_digest();
@@ -246,6 +250,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     // runs before any provider-owned state is changed.
     abort_requested_.store(false, std::memory_order_relaxed);
     validate_source_begin_bars(args);
+    // Admission owns a reentrant begin's refusal. Keep the running caller
+    // span and source state intact until the outer public call unwinds.
+    if (native_state().kind == NativeLifecycleKind::Running) return;
     if (args.syminfo) {
         syminfo_ = *args.syminfo;
         syminfo_mintick_ = syminfo_.mintick;
@@ -1481,7 +1488,7 @@ void source::PineStrategyHost::project_short_seed_report_rows(
 }
 
 void source::PineStrategyHost::scheduler_prepare_script_run(
-        const std::vector<Bar>& bars, bool static_eligible,
+        PineScheduler::InputView bars, bool static_eligible,
         int expected_script_bars, bool script_bar_geometry) {
     if (const auto state = native_state(); state.spec) {
         input_tf_ = state.spec->timeframe_undetected ? "" : state.spec->input_tf;
@@ -1634,7 +1641,7 @@ std::vector<std::int64_t> tradingview_multi_day_stamps(
 }  // namespace
 
 void source::PineStrategyHost::scheduler_prepare_security_sequence(
-        const std::vector<Bar>& bars) {
+        PineScheduler::InputView bars) {
     security_input_tf_ = input_tf_;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     if (aux_security_feed_enabled()) security_input_tf_ = aux_security_input_tf_;
@@ -2860,7 +2867,7 @@ int64_t source::PineStrategyHost::pine_time_offset(int64_t bar_open_ms, int bars
         return na<int64_t>();
     const std::string& sym_tz = syminfo_.timezone;
     const std::string& sym_session = syminfo_.session;
-    const std::vector<Bar>& input = scheduler_.retained_input();
+    const auto input = scheduler_.retained_input();
     const bool input_is_chart = scheduler_.retained_input_is_chart();
     const bool daily_chart = calendar_period_for(script_tf_) != CalendarPeriod::NONE;
     // A chart bar's own open (the input's stamp) and close, as the chart's
