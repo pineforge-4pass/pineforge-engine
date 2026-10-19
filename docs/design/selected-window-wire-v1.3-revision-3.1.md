@@ -24,9 +24,11 @@ annualized-field inventory of `compute_equity_stats`
 
 Recovery factor, both buy/hold fields, time in market, open profit, all equity
 extrema and all trade metrics are not annualized. They gain no new absence.
-The constant policy list is in `docker/report_annualization.def`, shared by
-the native metric walk and public report writer. Extending the decision to
-both bar ratios requires adding their two field rows there.
+The constant policy list is in `docker/report_annualization.def`, included by
+the native metric walk; the public report writer, which ships as one file,
+keeps a copy of the same two facts, and a test pins the two together.
+Extending the decision to both bar ratios requires adding their two field rows
+in both places.
 
 The measured span is `span_ms` (`src/engine_metrics.cpp:289`): the last
 equity-curve point's time minus the first point's time. These are UTC epoch

@@ -3568,29 +3568,11 @@ def _num(x, *, report_metric=False):
 EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino_tv"}
 
 
-def _read_annualization_policy():
-    """The same closed policy list the C++ metric walk includes."""
-    minimum = None
-    fields = []
-    for raw in Path(__file__).with_name("report_annualization.def").read_text(
-            encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("//"):
-            continue
-        span = re.fullmatch(r"PF_ANNUALIZATION_SPAN_MS\(([0-9]+)\)", line)
-        field = re.fullmatch(r"PF_SHORT_SPAN_ANNUALIZED_FIELD\(([a-z_]+)\)", line)
-        if span and minimum is None:
-            minimum = int(span[1])
-        elif field and field[1] not in fields:
-            fields.append(field[1])
-        else:
-            raise ValueError("invalid report annualization policy")
-    if minimum is None or minimum <= 0 or not fields:
-        raise ValueError("incomplete report annualization policy")
-    return minimum, tuple(fields)
-
-
-MIN_ANNUALIZATION_SPAN_MS, SHORT_SPAN_ANNUALIZED_FIELDS = _read_annualization_policy()
+# Revision 3.1 policy. docker/report_annualization.def holds the same two
+# facts for the C++ metric walk; run_json.py ships as a single file, so it
+# keeps its own copy and tests/test_run_json_nonfinite_report.py pins the two.
+MIN_ANNUALIZATION_SPAN_MS = 86_400_000
+SHORT_SPAN_ANNUALIZED_FIELDS = ("cagr", "calmar")
 
 
 def _annualization_diagnostics(curve, metrics):
@@ -3614,6 +3596,12 @@ def _annualization_diagnostics(curve, metrics):
         for field in SHORT_SPAN_ANNUALIZED_FIELDS
         if metrics["equity"][EQUITY_REPORT_KEYS.get(field, field)] is None
     }
+
+
+def _annualization_block(curve, metrics) -> dict:
+    """The diagnostics entry for revision 3.1: present only when the rule fired."""
+    reasons = _annualization_diagnostics(curve, metrics)
+    return {"annualization": reasons} if reasons else {}
 
 
 def _stats_dict(s) -> dict:
@@ -3708,7 +3696,7 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                 "open_profit": float(p.open_profit),
             })
 
-    out = {
+    return {
         "engine": "pineforge",
         "input": {
             "ohlcv":      str(ohlcv_path),
@@ -3742,15 +3730,12 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "magnifier_sub_bars_total":     int(report.magnifier_sub_bars_total),
             "magnifier_sample_ticks_total": int(report.magnifier_sample_ticks_total),
             "bar_magnifier_enabled":        bool(report.bar_magnifier_enabled),
+            **_annualization_block(equity_curve, metrics),
         },
         "trades": trades,
         "metrics": metrics,
         "equity_curve": equity_curve,
     }
-    annualization = _annualization_diagnostics(equity_curve, metrics)
-    if annualization:
-        out["diagnostics"]["annualization"] = annualization
-    return out
 
 
 def _validate_report_result(out: dict) -> None:

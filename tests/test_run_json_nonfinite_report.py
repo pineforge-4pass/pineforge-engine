@@ -423,6 +423,24 @@ def test_failure_line_preserves_fields_outside_monthly_report_aliases(code, fiel
                         "code": code, "args": args}
 
 
+def test_run_json_annualization_policy_equals_the_native_policy_list():
+    # docker/report_annualization.def is what the C++ metric walk includes;
+    # run_json.py ships alone and keeps its own copy of the same two facts.
+    import re
+    text = (Path(run_json.__file__).with_name("report_annualization.def")
+            .read_text(encoding="utf-8"))
+    spans = re.findall(r"^PF_ANNUALIZATION_SPAN_MS\((\d+)\)$", text, re.M)
+    fields = re.findall(r"^PF_SHORT_SPAN_ANNUALIZED_FIELD\(([a-z_]+)\)$", text, re.M)
+    assert [int(s) for s in spans] == [run_json.MIN_ANNUALIZATION_SPAN_MS]
+    assert tuple(fields) == run_json.SHORT_SPAN_ANNUALIZED_FIELDS
+    # Every other non-comment line is refused: the list stays a closed policy.
+    others = [line for line in text.splitlines()
+              if line.strip() and not line.startswith("//")
+              and not line.startswith(("PF_ANNUALIZATION_SPAN_MS(",
+                                       "PF_SHORT_SPAN_ANNUALIZED_FIELD("))]
+    assert others == []
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_sub_day_annualization_completes_in_report_routes(harness, mode):
     result = harness.run(mode, short_span_metrics=True)
