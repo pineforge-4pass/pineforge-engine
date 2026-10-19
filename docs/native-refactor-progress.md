@@ -212,7 +212,7 @@ brief asked it to "read the receipts ONCE per bar instead of three times". The
 lane gated the read instead: `observe_terminal_receipts`
 (`src/source/pine_adapter.cpp:6446`) returns at its receipt gate when no
 command lies above its cursor. `every_gate_is_taken_both_ways`
-(`tests/test_adapter_quiet_bar.cpp:1102`) prints
+(`tests/test_adapter_quiet_bar.cpp:1110`) prints
 `gate ReceiptRead asked 40996 quiet 33552 live 7444`, against `asked 13248`
 for every gate asked once per bar open, so the adapter reads 3.09 times a bar
 and 82 % of those reads stop at the gate (macOS arm64, this tree). PERF-L4's

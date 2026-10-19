@@ -43,7 +43,9 @@ def emitted_schema(root: Path) -> dict:
     """
     tree = ast.parse((root / "docker/run_json.py").read_text(encoding="utf-8"))
     classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC"}
-    functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict"}
+    functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict",
+                 "_annualization_diagnostics", "_annualization_block"}
+    assigned = {"EQUITY_REPORT_KEYS", "MIN_ANNUALIZATION_SPAN_MS", "SHORT_SPAN_ANNUALIZED_FIELDS"}
     selected = [ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
     found = set()
     for node in tree.body:
@@ -53,11 +55,12 @@ def emitted_schema(root: Path) -> dict:
         elif isinstance(node, ast.FunctionDef) and node.name in functions:
             selected.append(node)
             found.add(node.name)
-        elif isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "EQUITY_REPORT_KEYS" for t in node.targets):
-            selected.append(node)
-            found.add("EQUITY_REPORT_KEYS")
-    if found != classes | functions | {"EQUITY_REPORT_KEYS"}:
+        elif isinstance(node, ast.Assign):
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)} & assigned
+            if names:
+                selected.append(node)
+                found |= names
+    if found != classes | functions | assigned:
         raise AssertionError(f"independent D4 builder extraction is incomplete: {sorted(found)}")
     namespace = {"ctypes": ctypes, "math": math, "Path": Path,
                  "datetime": datetime, "timezone": timezone}

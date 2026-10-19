@@ -60,7 +60,7 @@ values are null. No reason is attached to the existing absence cases.
 Calmar carries the short-span reason with CAGR even when the curve also has
 zero drawdown.
 
-`_annualization_diagnostics` (`docker/run_json.py:3596`) derives the span from
+`_annualization_diagnostics` (`docker/run_json.py:3578`) derives the span from
 the same first and last curve times. The existing `metrics.all.net_profit_pct`
 domain witnesses positive initial capital without assuming the first equity
 mark equals that capital or requiring resolved provenance. No kernel state,
