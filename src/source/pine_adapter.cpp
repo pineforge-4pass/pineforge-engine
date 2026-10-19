@@ -3548,25 +3548,25 @@ bool carry_reissue_bindings() noexcept {
 std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memory_order_relaxed); }
 } // namespace detail
 
-// Whether a row's leg lifecycle can still be read: the margin revival picks
-// dormant legs of the current position cycle (the reversal suspension and the
-// pair hold rewrite lifecycles for it), and exit() asks whether a leg bound to
-// an origin that is live or opened was consumed. A row of an ended cycle
-// bound to any other origin stays unreadable: cycles only advance, and an
-// origin opens only while its request works. So does a leg the script
-// withdrew (R5 lane V19-FIX), whatever its cycle, unless it is bound to such
-// an origin: the revival never picks it, so what the suspension and the hold
-// write into it is read by nobody but that consumed-leg question.
+// Audit mirror of the sweep's K1, including its oldest retained dormant representative.
 bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) const noexcept {
     if (row.legs.target().incarnation == 0) return false;
-    if (row.placement_cycle >= current_position_cycle_ && !withdrawn(row.legs)) return true;
     const std::uint64_t origin = row.bracket_origin.incarnation;
-    if (origin == 0) return false;
-    for (const auto& handle : live_handles_)
-        if (handle.incarnation == origin) return true;
-    for (const auto& cohort : cohorts_by_id_) {
-        for (const auto& opening : cohort.second.opened)
-            if (opening.incarnation == origin) return true;
+    bool askable = false;
+    for (const auto& handle : live_handles_) if (handle.incarnation == origin) askable = true;
+    for (const auto& cohort : cohorts_by_id_)
+        for (const auto& opening : cohort.second.opened) if (opening.incarnation == origin) askable = true;
+    if ((row.placement_cycle >= current_position_cycle_ && !withdrawn(row.legs)
+         && ((current_position_sign_ == 0 && !row.legs.dormant()) || origin == 0 || askable))
+        || (askable && !row.legs.dormant())) return true;
+    if (!askable || !row.legs.dormant() || (row.family != PineOrderFamily::ExitLimit
+        && row.family != PineOrderFamily::ExitStop && row.family != PineOrderFamily::ExitTrail)) return false;
+    for (auto peer : placement_) {
+        const auto& pin = peer.second;
+        if (!pin.legs.dormant() || pin.legs.target().incarnation == 0 || pin.family != row.family
+            || pin.bracket_origin != row.bracket_origin || pin.source_id != row.source_id
+            || pin.from_entry != row.from_entry) continue;
+        return &pin == &row;
     }
     return false;
 }
