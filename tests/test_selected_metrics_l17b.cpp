@@ -8,6 +8,7 @@
 
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_host.hpp>
+#include <pineforge/execution_observer.h>
 #include <pineforge/report_sink.h>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/selected_window.h>
@@ -292,6 +293,8 @@ struct Report {
 };
 
 struct Host final : NativeStrategyHost {
+    enum class CurveFault { none, account, noncontiguous, count };
+    CurveFault curve_fault = CurveFault::none;
     bool open_position = false;
     bool edit_tail = false;
     bool edit_middle = false;
@@ -301,17 +304,32 @@ struct Host final : NativeStrategyHost {
     std::int64_t published_limit = -1;
     std::int64_t tail_cut = 0;
     bool entered = false;
+    int calculations = 0;
     mutable int presentations = 0;
     mutable std::int64_t length_at_presentation = 0;
     mutable std::int64_t actual_length_at_presentation = 0;
     mutable std::array<pf_equity_point_t, kSelectedPresentationWindowPoints> tail_at_presentation{};
     mutable std::uint64_t hash_at_capture = 0;
+    mutable int scratch_descriptor_at_presentation = -1;
     // The execution input as the presentation hook sees it, before any edit.
     mutable std::vector<pf_equity_point_t> held_at_presentation;
 
     std::vector<pf_equity_point_t> held_curve() const { return equity_curve_; }
+    std::size_t recorded_capacity() const { return equity_curve_.capacity(); }
     std::int64_t held_bars_in_market() const { return bars_in_market_; }
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
+        ++calculations;
+        if (auto* held = last_equity_point()) {
+            // Edit only the still-held execution point, before its successor
+            // releases it. The sink-OFF run receives the identical edit.
+            if (curve_fault == CurveFault::account && context.script_bar_open_ms == kT + kMinute)
+                held->equity += 1.0;
+            if (curve_fault == CurveFault::noncontiguous
+                && context.script_bar_open_ms == kT + 4 * kMinute)
+                held->time_ms = kT + 10 * kMinute;
+            if (curve_fault == CurveFault::count && context.script_bar_open_ms == kT + 3 * kMinute)
+                held->time_ms = kT + kMinute;
+        }
         if (open_position && !entered && context.script_bar_open_ms >= kT + 2 * kMinute) {
             entered = true;
             (void)submit({no::Transact{1.0}, "entry", ""});
@@ -323,6 +341,7 @@ struct Host final : NativeStrategyHost {
         length_at_presentation = legacy_full_curve ? out->equity_curve_len
             : std::min(out->equity_curve_len, kSelectedPresentationWindowPoints);
         held_at_presentation = equity_curve_;
+        scratch_descriptor_at_presentation = report_sink_equity_scratch_region().descriptor;
         if (legacy_full_curve) {
             // Preserve the old unrestricted hook for sink-OFF regressions.
             if (edit_middle && out->equity_curve_len > 2) {
@@ -517,6 +536,8 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     // bit-identical before and after the sink-on read, and to what the
     // presentation hook saw before it edited.
     const auto held_before = streamed.held_curve();
+    CHECK(held_before.size() <= kReportSinkHeldEquityPoints);
+    CHECK(streamed.recorded_capacity() <= kReportSinkHeldEquityPoints);
     streamed.fill_report(&scratch.value);
     const auto held_after = streamed.held_curve();
     CHECK(same_points(held_before, held_after));
@@ -533,6 +554,17 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     const auto cut = hide ? window_len : window_len - after_shrink
         + std::min(after_shrink, tail_cut);
     CHECK(array.value.equity_curve_len == logical_len - cut);
+    CHECK(streamed.scratch_descriptor_at_presentation >= 0);
+    if (streamed.scratch_descriptor_at_presentation >= 0) {
+        std::vector<pf_equity_point_t> raw(static_cast<std::size_t>(logical_len));
+        report_sink::read_scratch_points(
+            {streamed.scratch_descriptor_at_presentation, 0, logical_len}, 0,
+            raw.data(), logical_len);
+        CHECK(array.value.equity_curve != nullptr);
+        if (array.value.equity_curve)
+            CHECK(std::memcmp(raw.data(), array.value.equity_curve,
+                              raw.size() * sizeof(pf_equity_point_t)) == 0);
+    }
     CHECK(same_metrics(array.value.metrics, scratch.value.metrics));
     CHECK(array.value.net_profit == scratch.value.net_profit);
     CHECK(array.value.total_trades == scratch.value.total_trades);
@@ -606,6 +638,79 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     CHECK(same_metrics(next_array.value.metrics, next_scratch.value.metrics));
     CHECK(receipt(streamed).count_e == 1);
     CHECK(streamed.presentations == 2);
+    CHECK(streamed.held_curve().size() <= kReportSinkHeldEquityPoints);
+    CHECK(streamed.recorded_capacity() <= kReportSinkHeldEquityPoints);
+}
+
+void selected_recorder_refusals_stay_at_capture(Directory& directory) {
+    const Bar bars[] = {
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + kMinute},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + 2 * kMinute},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + 3 * kMinute},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + 4 * kMinute}};
+    const pf_selected_window_config_v1 window{
+        sizeof window, 1, kT + 2 * kMinute, kT + 10 * kMinute};
+    for (const auto fault : {Host::CurveFault::account, Host::CurveFault::noncontiguous,
+                             Host::CurveFault::count}) {
+        Host baseline, streamed;
+        baseline.curve_fault = streamed.curve_fault = fault;
+        const auto path = directory.file("recorder-refusal.ndjson");
+        const pf_report_sink_v1 sink{
+            sizeof sink, 1, path.c_str(), "L17C", directory.path.c_str()};
+        CHECK(streamed.set_report_sink_v1(&sink) == 0);
+        for (Host* host : {&baseline, &streamed}) {
+            CHECK(host->configure_native(spec(1)).status == NativeSetupStatus::Applied);
+            CHECK(native_set_selected_window_v1(host, &window) == 0);
+            host->run(bars, static_cast<int>(std::size(bars)));
+            CHECK(host->native_state().kind == NativeLifecycleKind::Failed);
+            // A mid-run refusal would leave fewer callbacks. Capture must
+            // reject before presentation after every script bar has completed.
+            CHECK(host->calculations == static_cast<int>(std::size(bars)));
+            CHECK(host->presentations == 0);
+            CHECK(run_failure_value_of(*host).code == RunFailureCode::engine_invariant);
+            pf_execution_observation_v1 seen{};
+            seen.struct_size = sizeof seen;
+            seen.version = 1;
+            CHECK(NativeExecutionConsumer::execution_observation_v1(host, &seen) == 0);
+            CHECK(seen.phase == 3 && seen.fault_stage == 1 && seen.attempt_outcome == 2);
+            Report refused;
+            host->fill_report(&refused.value);
+            CHECK(refused.value.equity_curve == nullptr && refused.value.trades == nullptr);
+        }
+        const char* message = fault == Host::CurveFault::account
+            ? "native selected report: the account changed before the window start"
+            : fault == Host::CurveFault::noncontiguous
+                ? "native selected report: the window's equity observations are not one run"
+                : "native selected report: the window's equity observations differ from its script bars";
+        CHECK(baseline.last_error().find(message) != std::string::npos);
+        CHECK(streamed.last_error() == baseline.last_error());
+        CHECK(std::strcmp(run_failure_code_of(streamed), run_failure_code_of(baseline)) == 0);
+        CHECK(std::strcmp(run_failure_args_of(streamed), run_failure_args_of(baseline)) == 0);
+        CHECK(streamed.held_curve().size() <= kReportSinkHeldEquityPoints);
+        CHECK(streamed.recorded_capacity() <= kReportSinkHeldEquityPoints);
+        CHECK(receipt(streamed).complete == 0);
+        CHECK(read(path).find("{\"trailer\":") == std::string::npos);
+    }
+}
+
+void selected_recorder_drops_reused_array_capacity(Directory& directory) {
+    Host reused, baseline;
+    selected_run(reused, 2, false, 1, static_cast<int>(3 * report_sink::kScratchWindowPoints));
+    CHECK(reused.recorded_capacity() > kReportSinkHeldEquityPoints);
+    const auto path = directory.file("recorder-reuse.ndjson");
+    const pf_report_sink_v1 sink{
+        sizeof sink, 1, path.c_str(), "L17C", directory.path.c_str()};
+    CHECK(reused.set_report_sink_v1(&sink) == 0);
+    selected_run(reused, 2, false, 2);
+    selected_run(baseline, 2, false, 2);
+    CHECK(reused.held_curve().size() <= kReportSinkHeldEquityPoints);
+    CHECK(reused.recorded_capacity() <= kReportSinkHeldEquityPoints);
+    Report array, summary;
+    baseline.fill_report(&array.value);
+    reused.fill_report(&summary.value);
+    CHECK(same_metrics(summary.value.metrics, array.value.metrics));
+    compare_sink_records(baseline, array.value, read(path));
 }
 
 void legacy_sink_off_hooks_stay_full() {
@@ -667,6 +772,8 @@ struct PineHost final : source::PineStrategyHost {
     }
     mutable int presentations = 0;
     mutable std::int64_t presented_length = 0;
+    std::size_t recorded_points() const { return equity_curve_.size(); }
+    std::size_t recorded_capacity() const { return equity_curve_.capacity(); }
     void on_source_bar(const Bar&) override {
         if (open_ && bar_index_ == 2) strategy_entry("held", long_side_);
     }
@@ -718,6 +825,8 @@ void compare_pine_selected(Directory& directory, const char* name, bool open,
     streamed.run(bars.data(), static_cast<int>(bars.size()), "1", quote ? "15" : "1", quote);
     CHECK(baseline.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(streamed.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(streamed.recorded_points() <= kReportSinkHeldEquityPoints);
+    CHECK(streamed.recorded_capacity() <= kReportSinkHeldEquityPoints);
     pf_selected_window_counts_v1 array_counts{}, scratch_counts{};
     array_counts.struct_size = scratch_counts.struct_size = sizeof array_counts;
     array_counts.version = scratch_counts.version = 1;
@@ -825,6 +934,8 @@ void invalid_window_hooks_refuse(Directory& directory) {
 struct CaptureStorage {
     std::size_t largest_request = 0;
     std::size_t peak_live = 0;
+    std::size_t recorded_points = 0;
+    std::size_t recorded_capacity_bytes = 0;
 };
 
 CaptureStorage measured_capture;
@@ -855,7 +966,23 @@ struct StorageHost final : NativeStrategyHost {
     mutable int presentations = 0;
     mutable std::int64_t presented_length = 0;
     mutable pf_equity_point_t first_presented{}, last_presented{};
-    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+    std::size_t peak_recorded_points = 0;
+    std::size_t peak_recorded_capacity = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        peak_recorded_points = std::max(peak_recorded_points, equity_curve_.size());
+        peak_recorded_capacity = std::max(peak_recorded_capacity, equity_curve_.capacity());
+    }
+    std::size_t recorded_points() const { return equity_curve_.size(); }
+    std::size_t recorded_capacity() const { return equity_curve_.capacity(); }
+    metrics::ScratchCurveRegion recorded_prefix() const {
+        return report_sink_equity_scratch_region();
+    }
+    void rewrite_held_equity(double equity) {
+        auto* held = last_equity_point();
+        if (!held) throw std::logic_error("L17C missing held execution point");
+        held->equity = equity;
+        refold_equity_tail();
+    }
     void present_report(ReportC* report) const override {
         ++presentations;
         presented_length = report->equity_curve_len;
@@ -865,6 +992,102 @@ struct StorageHost final : NativeStrategyHost {
         }
     }
 };
+
+void final_preroll_value_is_judged_at_capture(Directory& directory) {
+    const Bar bars[] = {
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + kMinute}};
+    for (const bool repaired : {false, true}) {
+        StorageHost baseline, streamed;
+        const auto path = directory.file("final-preroll.ndjson");
+        const pf_report_sink_v1 sink{
+            sizeof sink, 1, path.c_str(), "L17C", directory.path.c_str()};
+        CHECK(streamed.set_report_sink_v1(&sink) == 0);
+        const pf_selected_window_config_v1 window{
+            sizeof window, 1, kT + 2 * kMinute, kT + 10 * kMinute};
+        for (StorageHost* host : {&baseline, &streamed}) {
+            CHECK(host->configure_native(spec(1)).status == NativeSetupStatus::Applied);
+            CHECK(native_set_selected_window_v1(host, &window) == 0);
+            CHECK(host->stream_begin(bars, static_cast<int>(std::size(bars)), "", ""));
+            CHECK(host->presentations == 0);
+            host->rewrite_held_equity(kCapital + 1.0);
+            if (repaired) host->rewrite_held_equity(kCapital);
+        }
+        // Neither pre-T observation belongs to the file; only its anchor does.
+        CHECK(streamed.recorded_prefix().point_count == 1);
+        const bool array_ended = baseline.stream_end();
+        const bool scratch_ended = streamed.stream_end();
+        CHECK(array_ended == repaired && scratch_ended == repaired);
+        if (repaired) {
+            CHECK(streamed.native_state().kind == NativeLifecycleKind::Completed);
+            Report array, summary;
+            baseline.fill_report(&array.value);
+            streamed.fill_report(&summary.value);
+            CHECK(same_metrics(array.value.metrics, summary.value.metrics));
+            compare_sink_records(baseline, array.value, read(path));
+            CHECK(streamed.presentations == 1 && baseline.presentations == 1);
+        } else {
+            CHECK(streamed.native_state().kind == NativeLifecycleKind::Failed);
+            CHECK(streamed.last_error() == baseline.last_error());
+            CHECK(streamed.last_error().find(
+                "native selected report: the account changed before the window start")
+                  != std::string::npos);
+            CHECK(run_failure_value_of(streamed).code == RunFailureCode::engine_invariant);
+            CHECK(streamed.presentations == 0 && baseline.presentations == 0);
+            CHECK(receipt(streamed).complete == 0);
+            CHECK(read(path).find("{\"trailer\":") == std::string::npos);
+        }
+    }
+}
+
+void scratch_tail_replacement_preserves_recorded_prefix(Directory& directory) {
+    report_sink::ScratchCurveWriter writer(directory.path);
+    std::vector<pf_equity_point_t> expected;
+    // Cover replacement wholly in a pending batch, crossing onto disk, and
+    // after region() flushed everything. No second production buffer is used.
+    for (const auto count : {std::size_t{1}, report_sink::kScratchWindowPoints,
+                             report_sink::kScratchWindowPoints + 1}) {
+        writer.clear();
+        expected.clear();
+        for (std::size_t i = 0; i < count; ++i) {
+            const pf_equity_point_t point{kT + static_cast<std::int64_t>(i) * kMinute,
+                                          kCapital + static_cast<double>(i), 0.0};
+            expected.push_back(point);
+            writer.append(point);
+        }
+        for (const bool on_disk : {false, true}) {
+            if (on_disk) writer.flush();
+            const auto tail_count = std::min(expected.size(),
+                static_cast<std::size_t>(kSelectedPresentationWindowPoints));
+            auto* tail = expected.data() + expected.size() - tail_count;
+            for (std::size_t i = 0; i < tail_count; ++i) {
+                tail[i].equity -= 0.75;
+                tail[i].open_profit = -0.0;
+            }
+            writer.replace_tail(tail, tail_count);
+            CHECK(writer.size() == static_cast<std::int64_t>(expected.size()));
+            std::vector<pf_equity_point_t> actual(expected.size());
+            report_sink::read_scratch_points(
+                writer.region(), 0, actual.data(), static_cast<std::int64_t>(actual.size()));
+            CHECK(same_points(actual, expected));
+        }
+        const auto count_before = writer.size();
+        writer.replace_tail(nullptr, 0);
+        CHECK(writer.size() == count_before);
+        for (const auto invalid_count : {report_sink::kScratchWindowPoints + 1,
+                                         std::numeric_limits<std::size_t>::max()}) {
+            bool refused = false;
+            try {
+                writer.replace_tail(expected.data(), invalid_count);
+            } catch (const std::logic_error& error) {
+                refused = true;
+                CHECK(classify_run_failure(error).code == RunFailureCode::engine_invariant);
+            }
+            CHECK(refused);
+            CHECK(writer.size() == count_before);
+        }
+    }
+}
 
 CaptureStorage selected_capture_storage(Directory& directory, const char* name, int m) {
     std::vector<Bar> bars;
@@ -882,12 +1105,32 @@ CaptureStorage selected_capture_storage(Directory& directory, const char* name, 
     CHECK(warmed);
     if (!warmed) throw std::runtime_error("L17B storage warmup failed");
     CHECK(host.presentations == 0);
+    const auto recorded_points = std::max(host.peak_recorded_points, host.recorded_points());
+    const auto recorded_capacity =
+        std::max(host.peak_recorded_capacity, host.recorded_capacity()) * sizeof(pf_equity_point_t);
+    const auto prefix = host.recorded_prefix();
+    CHECK(prefix.descriptor >= 0);
+    // The real record-time file contains anchor + M-1 released observations
+    // before capture. An implementation that spills only at capture fails.
+    CHECK(prefix.point_count == m);
+    if (prefix.descriptor >= 0 && prefix.point_count == m) {
+        pf_equity_point_t anchor{}, last_released{};
+        report_sink::read_scratch_points(prefix, 0, &anchor, 1);
+        report_sink::read_scratch_points(prefix, m - 1, &last_released, 1);
+        const pf_equity_point_t expected_anchor{kT, kCapital, 0.0};
+        const pf_equity_point_t expected_last{
+            bars[static_cast<std::size_t>(m - 2)].timestamp, kCapital, 0.0};
+        CHECK(std::memcmp(&anchor, &expected_anchor, sizeof anchor) == 0);
+        CHECK(std::memcmp(&last_released, &expected_last, sizeof last_released) == 0);
+    }
     bool ended = false;
     {
         const CaptureAllocationScope allocation_scope;
         ended = host.stream_end();
     }
-    const auto storage = measured_capture;
+    auto storage = measured_capture;
+    storage.recorded_points = recorded_points;
+    storage.recorded_capacity_bytes = recorded_capacity;
     CHECK(ended);
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(host.presentations == 1);
@@ -928,6 +1171,17 @@ void selected_capture_storage_is_bounded(Directory& directory) {
     CHECK(small.peak_live == large.peak_live);
     CHECK(small.largest_request <= budget && large.largest_request <= budget);
     CHECK(small.peak_live <= budget && large.peak_live <= budget);
+    // This measures the production vector throughout recording, outside the
+    // existing capture interval. The old merged code retains M points and
+    // fails both the two-run comparison and this production held-point bound.
+    const auto recorded_budget = kReportSinkHeldEquityPoints * sizeof(pf_equity_point_t);
+    CHECK(small.recorded_points > 0 && small.recorded_capacity_bytes > 0);
+    CHECK(small.recorded_points == large.recorded_points);
+    CHECK(small.recorded_capacity_bytes == large.recorded_capacity_bytes);
+    CHECK(small.recorded_points <= kReportSinkHeldEquityPoints);
+    CHECK(large.recorded_points <= kReportSinkHeldEquityPoints);
+    CHECK(small.recorded_capacity_bytes <= recorded_budget);
+    CHECK(large.recorded_capacity_bytes <= recorded_budget);
 }
 }
 
@@ -965,6 +1219,10 @@ int main() {
                              false, false, false, refills, true,
                              kSelectedPresentationWindowPoints);
         legacy_sink_off_hooks_stay_full();
+        selected_recorder_refusals_stay_at_capture(directory);
+        selected_recorder_drops_reused_array_capacity(directory);
+        final_preroll_value_is_judged_at_capture(directory);
+        scratch_tail_replacement_preserves_recorded_prefix(directory);
 #ifdef PINEFORGE_L17B_SOURCE
         compare_pine_selected(directory, "pine-open.ndjson", true, true, false);
         compare_pine_selected(directory, "pine-quote-long.ndjson", true, true, true);

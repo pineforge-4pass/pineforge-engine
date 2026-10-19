@@ -218,6 +218,25 @@ void ScratchCurveWriter::clear() {
     state.pending_count = 0;
 }
 
+void ScratchCurveWriter::replace_tail(const pf_equity_point_t* points, std::size_t count) {
+    auto& state = *state_;
+    if (count > state.pending.size() || static_cast<std::int64_t>(count) > size()) {
+        throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {},
+                                        "report scratch replacement tail is invalid");
+    }
+    check_buffer(points, count * sizeof(*points));
+    if (count == 0) return;
+    if (count > state.pending_count) {
+        // Complete the old batch before changing its authoritative range.
+        // On failure flush() leaves every old pending point available to retry.
+        flush();
+        state.disk_points -= static_cast<std::int64_t>(count);
+        state.pending_count = count;
+    }
+    std::memcpy(state.pending.data() + state.pending_count - count,
+                points, count * sizeof(*points));
+}
+
 void ScratchCurveWriter::flush() const {
     auto& state = *state_;
     if (state.pending_count == 0) return;

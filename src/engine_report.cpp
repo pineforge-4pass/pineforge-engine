@@ -4,7 +4,7 @@
 
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
-
+#include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
 #include <algorithm>
@@ -641,9 +641,10 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
     if (report_sink_state_.equity_scratch) {
         if (next.enabled) {
             // Replacing next-run configuration must not discard the current
-            // ordinary generation's metric source.
+            // generation's record-time curve and validation latches.
             next.equity_scratch = std::move(report_sink_state_.equity_scratch);
             next.equity_tail_stored = report_sink_state_.equity_tail_stored;
+            next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
         } else {
             // Removing the sink restores the existing array-report contract.
             NativeExecutionConsumer::restore_report_sink_equity_curve(*this);
@@ -675,6 +676,13 @@ void BacktestEngine::begin_report_sink() {
     sink.writer.reset();
     sink.equity_scratch.reset();
     sink.equity_tail_stored = false;
+    sink.selected_equity_stream.reset();
+#ifndef NDEBUG
+    sink.selected_released_extremes[0] = initial_capital_;
+    sink.selected_released_extremes[1] = initial_capital_;
+    sink.selected_released_extremes[2] = 0.0;
+    sink.selected_released_extremes[3] = 0.0;
+#endif
     sink.receipt = {};
     sink.output_base = 0;
     if (!sink.enabled) return;
@@ -694,12 +702,22 @@ void BacktestEngine::begin_report_sink() {
         sink.writer->write_header({outputs_enabled_, trace_enabled_, broker_state_hash_recording_,
                                    outputs_slots_, outputs_constants_});
         pf_selected_window_config_v1 window{};
-        if (!NativeExecutionConsumer::selected_window_admitted(*this, &window)) {
-            // The ordinary run owns only its editable tail in RAM, including
+        const bool selected = NativeExecutionConsumer::selected_window_admitted(*this, &window);
+        const auto* consumer = execution_consumer_slot_.ptr
+            ? &as_native_consumer(*execution_consumer_slot_.ptr) : nullptr;
+        const auto* spec = consumer ? consumer->view().spec : nullptr;
+        if (!selected || (spec && spec->report_policy != NativeReportPolicy::HostRecorded)) {
+            // The kernel recorder owns only its editable tail in RAM, including
             // when this handle previously retained a full sink-off curve.
             std::vector<pf_equity_point_t>().swap(equity_curve_);
+            if (selected) equity_curve_.reserve(kReportSinkHeldEquityPoints);
             sink.equity_scratch =
                 std::make_unique<report_sink::ScratchCurveWriter>(sink.scratch_dir);
+            if (selected) {
+                sink.selected_equity_stream = std::make_unique<report::SelectedReportStream>(
+                    window.start_ms, window.end_ms, initial_capital_);
+                sink.equity_scratch->append({window.start_ms, initial_capital_, 0.0});
+            }
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
@@ -815,6 +833,16 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
     out->trace_names = nullptr; out->trace_names_len = 0;
 }
 
+void BacktestEngine::stage_report_sink_equity_point(const pf_equity_point_t& point) const {
+    auto& sink = report_sink_state_;
+    if (sink.equity_tail_stored) {
+        sink.equity_scratch->replace_last(point);
+    } else {
+        sink.equity_scratch->append(point);
+        sink.equity_tail_stored = true;
+    }
+}
+
 void BacktestEngine::stage_report_sink_equity_tail(const ReportC* out) const {
     auto& sink = report_sink_state_;
     if (!sink.equity_scratch || !last_equity_point()) return;
@@ -822,12 +850,7 @@ void BacktestEngine::stage_report_sink_equity_tail(const ReportC* out) const {
         if (!out->equity_curve || out->equity_curve_len != 1)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                 "ordinary sink presentation lost its held equity point");
-        if (sink.equity_tail_stored) {
-            sink.equity_scratch->replace_last(out->equity_curve[0]);
-        } else {
-            sink.equity_scratch->append(out->equity_curve[0]);
-            sink.equity_tail_stored = true;
-        }
+        stage_report_sink_equity_point(out->equity_curve[0]);
         sink.equity_scratch->flush();
     } catch (const std::exception& error) {
         sink.writer.reset();

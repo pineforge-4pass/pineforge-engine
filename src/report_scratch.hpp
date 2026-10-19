@@ -57,6 +57,10 @@ public:
 
     void append(const pf_equity_point_t& point);
     void replace_last(const pf_equity_point_t& point);
+    // Replace a suffix of at most one scratch batch without changing size.
+    // Reuses the authoritative pending batch, including after a failed flush.
+    // Readers must be rebound after replacement, as with replace_last().
+    void replace_tail(const pf_equity_point_t* points, std::size_t count);
     void clear();
     void flush() const;
     std::int64_t size() const noexcept;
