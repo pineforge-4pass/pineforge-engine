@@ -252,9 +252,21 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
             'ts_open': 600000 + i * 60000, 'o': 100, 'h': 102, 'l': 99, 'c': 101, 'v': 0.8,
         }} for i in range(40)]
         example_feed.write_text(''.join(json.dumps(row) + '\n' for row in feed_rows))
+        # The byte checks below use receipt order. One in-flight request makes
+        # both initial delivery and offline redelivery preserve ordinal order.
+        example_url = f'http://127.0.0.1:{server.server_port}/webhook'
+        example_routes = root / 'native-example-routes.json'
+        os.environ['PINEFORGE_NATIVE_STARTUP_HMAC'] = 'native-startup-fixture'
+        example_routes.write_text(json.dumps({
+            'schema_version': 1, 'default_target': 'default',
+            'targets': {'default': {'url': example_url,
+                                    'secret_env': 'PINEFORGE_NATIVE_STARTUP_HMAC'}},
+            'rules': [],
+            'delivery': {'max_in_flight': 1, 'transport_retries': 0},
+        }))
         example_cmd = [runner, 'run', '--strategy', native_example, '--warmup', str(example_warmup),
                        '--mode', 'bars', '--ledger', str(example_ledger),
-                       '--webhook-url', f'http://127.0.0.1:{server.server_port}/webhook',
+                       '--webhook-url', example_url, '--webhook-routes', str(example_routes),
                        '--allow-insecure-http', '--feed', str(example_feed),
                        '--native-config', str(cfg), '--name', 'native-example']
         failed_delivery = invoke(example_cmd + ['--max-attempts', '1'])
