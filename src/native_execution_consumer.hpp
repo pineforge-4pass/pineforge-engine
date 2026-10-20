@@ -367,7 +367,44 @@ public:
     bool closed_rows_digest_holds(const TradeLedger& rows) const noexcept;
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
-    void closed_rows_amended(std::size_t first) noexcept { rewind_closed_rows(first); }
+    void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }
+    // L8c: these are storage-boundary seeds of folds already represented by
+    // the logical closed-row sequence, not additional decision/hash inputs.
+    // The source host supplies the phase/money seeds because it owns those
+    // folds; the consumer owns the digest, report folds and sink writer.
+    struct ClosedTradePrefix {
+        std::size_t base = 0;
+        std::uint64_t rows_digest = 1469598103934665603ULL;
+        std::uint64_t exit_phase_digest = 1469598103934665603ULL;
+        double source_gains = 0.0;
+        double source_losses = 0.0;
+        double pnl = 0.0;
+    };
+    bool streams_closed_rows(const BacktestEngine& engine) const noexcept;
+    bool begin_closed_row_seal(std::int64_t script_bar_open) noexcept {
+        if (closed_trade_seal_bar_ && *closed_trade_seal_bar_ == script_bar_open) return false;
+        closed_trade_seal_bar_ = script_bar_open;
+        return true;
+    }
+    std::size_t closed_rows_final() const noexcept { return closed_rows_final_; }
+    const ClosedTradePrefix& closed_trade_prefix() const noexcept { return closed_trade_prefix_; }
+    std::size_t closed_rows_sealable(const TradeLedger& rows, std::size_t phase_final,
+        std::uint64_t money_folded, std::int64_t script_bar_open,
+        std::optional<std::uint64_t> mutable_entry) const;
+    // The caller has proved all five seal conditions and exit-phase finality.
+    // L18 spills every reachable row BEFORE this call retires its storage.
+    void seal_closed_rows(BacktestEngine& engine, std::size_t global_end,
+                          std::uint64_t exit_phase_digest,
+                          double source_gains, double source_losses);
+    // Complete report folds from the sealed prefix, resident rows and the
+    // presented open-lot view. The engine owns the no-copy report path.
+    void finish_streamed_trade_metrics(const BacktestEngine& engine, ReportC* out,
+                                      const TradeC* open_rows, int count) const;
+    void fold_sealed_exit_phase(std::uint8_t phase);
+    std::uint64_t replay_sealed_exit_phases(std::uint64_t seed) const noexcept;
+    void restart_exit_phases() noexcept { exit_phases_restarted_ = closed_trade_prefix_.base != 0; }
+    void finish_exit_phase_restart() noexcept { exit_phases_restarted_ = false; }
+    bool exit_phases_restarted() const noexcept { return exit_phases_restarted_; }
     uint64_t terminal_receipt_high_water() const noexcept {
         return terminal_receipt_high_water_;
     }
@@ -1648,7 +1685,10 @@ private:
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
     void verify_closed_rows(const BacktestEngine& engine) const noexcept;
-    void rewind_closed_rows(std::size_t first) const noexcept;
+    void rewind_closed_rows(std::size_t first) const;
+    void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
+                               const TradeC& row) const;
+    void fill_streamed_report(const BacktestEngine& engine, ReportC* out) const;
     uint64_t spec_digest(const NativeRunSpec& spec, uint64_t run_base) const noexcept;
     void forget_spec_digests() const noexcept;
 
@@ -1934,8 +1974,28 @@ private:
     mutable std::size_t closed_rows_digested_ = 0;
     std::size_t closed_rows_final_ = 0;
     // The digest after each digested row, so an amendment (closed_rows_amended)
-    // rewinds to the row before it in O(1): one word per closed row.
+    // rewinds to the row before it in O(1): one word per resident final row.
+    // Index zero stores the digest after global row closed_trade_prefix_.base.
     mutable std::vector<std::uint64_t> closed_row_prefix_;
+    ClosedTradePrefix closed_trade_prefix_;
+    std::optional<std::int64_t> closed_trade_seal_bar_;
+    struct ClosedTradeReport {
+        explicit ClosedTradeReport(double capital)
+            : all(metrics::TradeFilter::ALL, capital),
+              longs(metrics::TradeFilter::LONG, capital),
+              shorts(metrics::TradeFilter::SHORT, capital) {}
+        metrics::TradeStatsAccumulator all, longs, shorts;
+        // Selected carry-in validation must still inspect sealed entry times.
+        std::int64_t first_entry_time = std::numeric_limits<std::int64_t>::max();
+    };
+    std::unique_ptr<ClosedTradeReport> closed_trade_report_;
+    // A phase is 0..4. Its u64 fold XORs only the low three bits; on each
+    // residue modulo 8 the whole prefix is affine in the remaining bits.
+    // Nine basis seeds replay that prefix for ANY incoming hash, preserving
+    // the pre-refold hash's historical (0, initial_digest, all phases) shape
+    // without keeping a phase per sealed row or changing a hash constant.
+    std::array<std::uint64_t, 9> sealed_exit_phase_basis_{{0, 1, 2, 3, 4, 5, 6, 7, 8}};
+    bool exit_phases_restarted_ = false;
     // A host-owned margin verdict is part of the continuation only when the
     // generic spec actually exposes an initial-margin gate.  Source specs do
     // not set that gate, preserving their established fingerprint while the
@@ -2094,11 +2154,11 @@ public:
     static bool refuse_report_in_dispatch(const BacktestEngine& engine,
                                           ReportC* out) noexcept;
 
-    // The selected-window report, asked by BacktestEngine::fill_report right
-    // after its rows_are_current gate. False when the caller must fill the report
-    // exactly as before: an OFF engine, a selected run still admitted-open, and a
-    // handle whose latest generation was admitted with neither a window nor an
-    // observer. True when the generation behind the engine is closed -- a
+    // The report router, asked by BacktestEngine::fill_report right after its
+    // rows_are_current gate. A streamable sink uses its prefix/resident-tail
+    // path even before a capture seals. Other reads return false for an OFF
+    // engine, an admitted-open selected run, or a generation without a window
+    // or observer. Remaining reads return true for a closed generation -- a
     // selected window that has sealed, or a generation admitted with an observer
     // (a window or not) that has sealed -- with `*out` written whole: the empty
     // report (every array NULL, every count zero, never freed) unless the
@@ -2214,8 +2274,8 @@ private:
     // flags. The destructor calls it, and the selected lifecycle will at
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
-    // Sink captures keep scalars here. Closed rows stay in the ledger; the
-    // separate editable range-end view is bounded by open lots, not history.
+    // Sink captures keep scalars here. Closed rows live in the sealed prefix
+    // folds plus the resident ledger; only the editable open-lot view is owned.
     // Sink OFF keeps its original independently owned arrays.
     ReportC presentation_{};
     std::unique_ptr<TradeC[]> presentation_open_trades_;

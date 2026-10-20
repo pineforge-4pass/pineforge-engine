@@ -2424,6 +2424,43 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         if (const auto moved = sort_same_bar_exit_trades(trades_, adapter_))
             native_closed_rows_amended(*moved);
     }
+    // CR-150 L8c: publish only the immutable prefix, once at this script-bar
+    // boundary. Keep the last exit-time block AND its predecessor: sorting
+    // and global-child re-cutting both inspect that predecessor.
+    auto& consumer = detail::run_consumer(*this);
+    if (consumer.streams_closed_rows(*this) && consumer.begin_closed_row_seal(bar.timestamp)) {
+        const std::size_t base = trades_.base();
+        auto prefix = consumer.closed_trade_prefix();
+        if (prefix.base != base)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "source trade seal has a mismatched base");
+        const bool can_swap = adapter_.short_seed_.final_short.incarnation != 0
+            && adapter_.config_.default_qty_type != static_cast<int>(QtyType::FIXED);
+        const std::size_t next = consumer.closed_rows_sealable(trades_,
+            adapter_.exit_phase_final_, adapter_.source_money_folded_, bar.timestamp,
+            can_swap ? std::optional<std::uint64_t>(adapter_.short_seed_.materialize_long.incarnation)
+                     : std::nullopt);
+        if (next - base > adapter_.trade_exit_phase_.size())
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "source trade seal exceeds resident exit phases");
+        for (std::size_t index = base; index < next; ++index) {
+            const Trade& row = trades_[index];
+            prefix.exit_phase_digest = PineExecutionAdapter::fold_exit_phase(
+                prefix.exit_phase_digest, adapter_.trade_exit_phase_[index - base]);
+            if (row.pnl > 0.0) prefix.source_gains += row.pnl;
+            else prefix.source_losses += row.pnl;
+            // L18's position-tail spill consumes this row here, before the
+            // seal below retires storage, including older-time barriers.
+        }
+        if (next > base) {
+            consumer.seal_closed_rows(*this, next, prefix.exit_phase_digest,
+                                      prefix.source_gains, prefix.source_losses);
+            for (std::size_t offset = 0; offset < next - base; ++offset)
+                consumer.fold_sealed_exit_phase(adapter_.trade_exit_phase_[offset]);
+            adapter_.trade_exit_phase_.erase(adapter_.trade_exit_phase_.begin(),
+                adapter_.trade_exit_phase_.begin() + (next - base));
+        }
+    }
     adapter_.observe_terminal_receipts();
     // ab9714be src/source/pine_scheduler.cpp:242,258: under
     // process_orders_on_close the orders that were already resting fill at step 1

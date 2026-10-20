@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -109,6 +110,15 @@ void BacktestEngine::fill_report(ReportC* out) const {
 // freshly heap-allocated TradeC[] on ``out`` and accumulate ``net_profit``.
 // A sink allocates only the range-end view. free_report owns either array.
 void BacktestEngine::fill_trades_section(ReportC* out) const {
+    const std::size_t closed = trades_.size();
+    const std::size_t open = range_end_trades_.size();
+    if (closed > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        || open > static_cast<std::size_t>(std::numeric_limits<int>::max()) - closed)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade count exceeds the report row limit");
+    if (!report_sink_state_.enabled && trades_.base() != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "array report requires the sealed trade rows in the report sink");
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();
     out->total_trades = n;
@@ -159,13 +169,16 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
 }
 
 double BacktestEngine::report_closed_net_profit() const {
-    // A resident-only fold starts at global zero. A sealing owner must supply
-    // its exact report prefix before retiring rows; a suffix is not a report.
-    // The engine's differently seeded decision counters are not substitutes.
-    if (trades_.base() != 0)
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-            "report trade fold is missing its sealed prefix");
     double sum = 0.0;
+    if (trades_.base() != 0) {
+        const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+            execution_consumer_slot_.ptr.get());
+        if (!consumer || consumer->closed_trade_prefix().base != trades_.base())
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "report trade fold is missing its sealed prefix");
+        sum = consumer->closed_trade_prefix().pnl;
+    }
+    // Continue the original left fold; the decision counters use other seeds.
     for (const auto& trade : trades_) sum += trade.pnl;
     return sum;
 }
@@ -175,9 +188,15 @@ void BacktestEngine::compute_report_sink_trade_metrics(
     // Keep each filter's original left-fold order: closed rows, then the
     // presented range-end rows. Interleaving independent filters changes none
     // of their additions. No TradeC history or separately summed tail exists.
-    if (trades_.base() != 0)
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-            "report trade metrics are missing their sealed prefix");
+    if (trades_.base() != 0) {
+        const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+            execution_consumer_slot_.ptr.get());
+        if (!consumer)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "report trade metrics are missing their sealed prefix");
+        consumer->finish_streamed_trade_metrics(*this, out, open_rows, count);
+        return;
+    }
     metrics::TradeStatsAccumulator all(metrics::TradeFilter::ALL, initial_capital_);
     metrics::TradeStatsAccumulator longs(metrics::TradeFilter::LONG, initial_capital_);
     metrics::TradeStatsAccumulator shorts(metrics::TradeFilter::SHORT, initial_capital_);
