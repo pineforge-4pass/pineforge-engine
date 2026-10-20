@@ -7237,3 +7237,9 @@ if(TARGET outputs_fixture_strategy)
         ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
 # --- CR-150 core-cr150-l2 end ---
+
+# --- CR-150 core-cr150-l22s begin ---
+if(UNIX)
+    target_link_libraries(test_scratch_arena_threads PRIVATE Threads::Threads)
+endif()
+# --- CR-150 core-cr150-l22s end ---
