@@ -1,0 +1,5 @@
+self-hosted-runner:
+  labels:
+    - pf-ci
+    - pf-ci-x64
+    - pf-ci-x64-16

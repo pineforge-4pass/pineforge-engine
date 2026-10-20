@@ -207,6 +207,7 @@ _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
 # call of ci_verify itself, as a script or a module.
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
 _VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
+_STATUS_FUNCTION = re.compile(r'\b(?:always|cancelled|failure|success)\s*\(', re.IGNORECASE)
 
 
 def _jobs_text(workflow: str) -> str | None:
@@ -502,7 +503,8 @@ def _step_named(steps: list[str], marker: str) -> str:
 
 
 def _step_values(step: str, key: str) -> list[str]:
-    return _job_values('\n'.join(step.splitlines()[1:]), key)
+    # Keep a leading uses:/run: key on unnamed steps at the other keys' depth.
+    return _job_values(re.sub(r'^( *)- ', r'\1  ', step, count=1), key)
 
 
 def _needs(body: str) -> list[str]:
@@ -550,7 +552,15 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
             findings.append(f'{name} job {job} must carry no secrets, tokens or environment')
         if job != 'authz' and _job_values(body, 'permissions') not in ([], ['contents: read']):
             findings.append(f'{name} job {job} must inherit or set only contents: read')
-        for step in _steps(body):
+        steps = _steps(body)
+        status_function = job != 'authz' and any(
+            _STATUS_FUNCTION.search(value) for value in _job_values(body, 'if'))
+        # Reusable workflow callers cannot declare steps; their job conditions
+        # are pinned separately. Every inline job with a status function refuses first.
+        if (status_function and not _job_values(body, 'uses')
+                and (not steps or _code(steps[0]) != _code(AUTHZ_REFUSE_STEP))):
+            findings.append(f'{name} job {job} with a status function must refuse authz first')
+        for step in steps:
             uses = _step_values(step, 'uses')
             checkout = any(value.startswith('actions/checkout@') for value in uses)
             if checkout and '          persist-credentials: false' not in _code(step):
@@ -559,8 +569,7 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
             # Repository steps need their own positive authz condition as well.
             repository_step = (checkout or any(value.startswith('./') for value in uses)
                                or any('scripts/' in value for value in _step_values(step, 'run')))
-            if (job != 'authz' and any('always()' in value for value in _job_values(body, 'if'))
-                    and repository_step
+            if (status_function and repository_step
                     and _step_values(step, 'if') not in ([AUTHZ_SUCCESS], [AUTHZ_ALWAYS])):
                 findings.append(f'{name} job {job} must guard repository steps on authz success')
     gate = jobs.get(aggregate, '')

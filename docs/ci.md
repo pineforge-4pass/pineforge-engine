@@ -888,7 +888,7 @@ including the sitemap. Both footer
 variants already include a visible link to <https://pineforge.dev> on every
 page rendered by the theme, including source listings.
 
-The first job of `ci.yml`, `changes`, decides with
+The first job of `ci.yml` is `authz`. The `changes` job needs it and decides with
 [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
 documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
 unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a

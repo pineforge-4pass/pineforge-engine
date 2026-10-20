@@ -156,6 +156,49 @@ class PreflightFailures(unittest.TestCase):
                                                       '    if: ' + condition + '\n')
                 self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
 
+    def test_status_function_jobs_refuse_before_checkout_from_mutated_files(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for job in ('preflight', 'build', 'sanitizers', 'kernel-only'):
+            for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
+                          '      - uses: actions/checkout@v4\n' + AUTHZ_REFUSE_STEP):
+                with self.subTest(job=job, mutation=after):
+                    findings = self.mutated_file_findings(0, job, AUTHZ_REFUSE_STEP, after)
+                    self.assertIn(f'ci.yml job {job} with a status function must refuse authz first',
+                                  findings)
+
+    def test_all_status_functions_require_refusal_and_repository_guards_from_mutated_files(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=self.other_sources()), [])
+        body = _jobs(original[0])['preflight']
+        steps = ci_preflight._steps(body)
+        checkout = ci_preflight._step_named(steps, '      - uses: actions/checkout@v4')
+        verify = ci_preflight._step_named(steps, '      - name: Verify workflow wiring and source guards')
+        guard = f'        if: {ci_preflight.AUTHZ_SUCCESS}\n'
+        unnamed_run = '      - run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
+        for function in ('always()', 'cancelled()', 'failure()', 'success()'):
+            conditioned = in_job(body, None, f'    if: {AUTHZ_ALWAYS}\n',
+                                 '    if: ${{ ' + function + " && needs.authz.result == 'success' }}\n")
+            mutations = (
+                (in_job(conditioned, None, AUTHZ_REFUSE_STEP, ''),
+                 'ci.yml job preflight with a status function must refuse authz first'),
+                (in_job(conditioned, None, checkout, in_job(checkout, None, guard, '')),
+                 'ci.yml job preflight must guard repository steps on authz success'),
+                (in_job(conditioned, None, verify, in_job(verify, None, guard, '')),
+                 'ci.yml job preflight must guard repository steps on authz success'),
+                (conditioned + '\n' + unnamed_run,
+                 'ci.yml job preflight must guard repository steps on authz success'),
+            )
+            for after, finding in mutations:
+                with self.subTest(function=function, mutation=after):
+                    findings = self.mutated_file_findings(0, 'preflight', body, after)
+                    self.assertIn(finding, findings)
+        # An unnamed repository run is allowed with either canon positive guard.
+        for condition in (ci_preflight.AUTHZ_SUCCESS, AUTHZ_ALWAYS):
+            with self.subTest(positive_condition=condition):
+                findings = self.mutated_file_findings(0, 'preflight', verify,
+                    verify + '\n' + unnamed_run + f'        if: {condition}\n')
+                self.assertEqual(findings, [])
+
     def test_ci_contract_pins_parallel_pr_light_and_full_events(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
@@ -533,11 +576,6 @@ class PreflightFailures(unittest.TestCase):
              f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'
              ' && JOBS=4 ./scripts/check_corpus_parity.sh --subset',
              'corpus-parity.yml job corpus-parity-subset must size'),
-            (0, 'kernel-only', f'      - name: Verify (kernel)\n        run: python3 scripts/ci_verify.py kernel '
-             f'--build-dir build-kernel --jobs {CORES} --ccache',
-             f'      - name: python3 scripts/ci_verify.py kernel --jobs {CORES}\n'
-             '        run: python3 -m ci_verify kernel --build-dir build-kernel --ccache',
-             'ci.yml job kernel-only must size'),
             (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
              'run: |\n          JOBS=4 ./scripts/check_corpus_parity.sh --subset',
              'corpus-parity.yml job corpus-parity-subset must size'),
@@ -554,6 +592,21 @@ class PreflightFailures(unittest.TestCase):
                 changed[index] = in_job(changed[index], job, before, after)
                 findings = ci_workflow_findings(*changed, others=others)
                 self.assertTrue(any(finding in line for line in findings), findings)
+
+    def test_verifier_looking_step_name_cannot_hide_an_unsized_call_from_mutated_file(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=self.other_sources()), [])
+        before = ci_preflight._step_named(ci_preflight._steps(_jobs(original[0])['kernel-only']),
+                                          '      - name: Verify (kernel)')
+        # Match name and run independently, preserving any intervening if/env keys.
+        after = in_job(before, None, '      - name: Verify (kernel)\n',
+                       f'      - name: python3 scripts/ci_verify.py kernel --jobs {CORES}\n')
+        after = in_job(after, None,
+                       f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache',
+                       'run: python3 -m ci_verify kernel --build-dir build-kernel --ccache')
+        self.assertEqual(ci_preflight._step_values(after, 'if'), [ci_preflight.AUTHZ_SUCCESS])
+        findings = self.mutated_file_findings(0, 'kernel-only', before, after)
+        self.assertIn('ci.yml job kernel-only must size its parallelism to the runner', findings)
 
     def test_every_spot_job_requires_the_exact_fragment_and_job_label_string(self):
         original = self.ci_sources()

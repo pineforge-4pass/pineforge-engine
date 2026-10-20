@@ -168,6 +168,11 @@ jobs:
     # slow stage never fails the run.
     timeout-minutes: 360
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       - uses: actions/checkout@v4
         if: ${{ needs.authz.result == 'success' }}
         with:
@@ -188,6 +193,7 @@ jobs:
             --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
 
       - name: Install workflow linters
+        if: ${{ needs.authz.result == 'success' }}
         shell: bash
         env:
           ACTIONLINT_VERSION: "1.7.12"
@@ -249,6 +255,11 @@ jobs:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       - uses: actions/checkout@v4
         if: ${{ needs.authz.result == 'success' }}
         with:
@@ -273,13 +284,13 @@ jobs:
       # (US/Eastern, Japan, GB); noble split them out of tzdata, and the hosted
       # image happens to have it, so the row stays green on a bare runner too.
       - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+        if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
       - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
+        if: ${{ needs.authz.result == 'success' && runner.os == 'macOS' }}
         run: |
           export HOMEBREW_NO_AUTO_UPDATE=1
           brew install eigen ccache
@@ -340,6 +351,11 @@ jobs:
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       - uses: actions/checkout@v4
         if: ${{ needs.authz.result == 'success' }}
         with:
@@ -361,6 +377,7 @@ jobs:
             --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
 
       - name: Install dependencies
+        if: ${{ needs.authz.result == 'success' }}
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
@@ -406,6 +423,11 @@ jobs:
     # (owner rule, 2026-10-12).
     timeout-minutes: 360
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       - uses: actions/checkout@v4
         if: ${{ needs.authz.result == 'success' }}
         with:
@@ -427,6 +449,7 @@ jobs:
             --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
 
       - name: Install dependencies
+        if: ${{ needs.authz.result == 'success' }}
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
