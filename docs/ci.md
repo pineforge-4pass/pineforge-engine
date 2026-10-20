@@ -15,6 +15,9 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 `run-json-harness-tests` stage runs every `docker/run_json_*_test.py` under it
 and fails, never skips, without it.
 
+Actionlint only accepts declared custom self-hosted runner labels; preflight
+checks the declarations in `.github/actionlint.yaml`.
+
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
@@ -1020,6 +1023,34 @@ checkouts disable credential persistence. `ci.yml` has no PR path or branch
 filter. The reusable native workflow inherits the caller's PR event and
 performs its own authz check.
 
+LB-435 moves release routing to `["self-hosted","pf-ci","pf-ci-release"]`,
+replacing the hosted-only release ruling of 2026-10-19. The isolated class
+serves release/deploy/publish jobs that reference `secrets.*`, request
+`id-token`, name an `environment` or mint an App token, and jobs that build
+artifacts those jobs publish, even without secrets. Its runner group is
+restricted to selected workflows at protected refs, with its own no-role
+service account, one job per runner and nothing shared with PR classes.
+Inherited workflow environment secrets count too. A conditional deployment
+step still holds those references in its job.
+
+In `release.yml`, `release`, `notify-hub` and the Linux x64 `prebuilt` leg
+select `["self-hosted","pf-ci","pf-ci-release"]` directly, with no hosted
+fallback. The `prebuilt` matrix keeps its three legs and
+`runs-on: ${{ matrix.runner }}`; `linux-aarch64` retains `ubuntu-22.04-arm`
+and waits for a release arm64 class, while `macos-universal` retains
+`macos-latest`. The workflow remains `workflow_dispatch` only.
+
+L6's 15:40 addendum also moves baseline `promote` in `promote-baseline.yml`
+to `["self-hosted","pf-ci","pf-ci-release"]` for its GitHub App secrets and
+inherited `id-token: write` permission. This named exception retains its
+closed `pull_request_target` and manual dispatch triggers; only its
+`runs-on` line changes in the workflow.
+
+Other jobs in workflows triggered by `pull_request` or `pull_request_target`
+do not move to the release class. Docs `build` stays on `ubuntu-latest` because
+`docs.yml` accepts `pull_request`, even though its Cloudflare deployment step
+skips that event. That workflow is left intact.
+
 Both aggregates use `if: always()` and first refuse unless authz succeeded,
 before any checkout or repository code. The native aggregate then requires
 every profile to succeed. The caller's `build` aggregate requires every
@@ -1052,14 +1083,20 @@ steps. Under owner #827 (2026-10-20), no job or step may declare
 `timeout-minutes`, authz included. GitHub's own 6 h platform maximum is the
 only bound; no step, stage or row deadline is added.
 
-`corpus-parity.yml`, documentation deployment, baseline promotion and release
-workflows retain their existing routing and separate pins; this migration does
-not certify them against the new canon. The legacy corpus runner expression
+`corpus-parity.yml` and documentation deployment retain their existing routing
+and separate pins. Baseline promotion and release use #461's separate release
+pins; this CI/native migration does not certify those workflows against the
+new canon. The legacy corpus runner expression
 is pinned separately so it cannot become the CI/native default. This replaces
 the CI/native fallback policy documented by `28fe3466a` and `f9bee2220`, using
 the `b240f6d7` fragments after `1fe46216`. The temporary runner stopgap was
 `3484a7c40` / `693fd9e68`; the earlier runner and docs-only descriptions were
 `d0935605c` and `133f57148`. The platform maxima from `2394ba2fc` remain.
+
+Release's separate matrix routes Linux x64 to `pf-ci-release`, keeps its
+hosted ARM/macOS labels and sets no `PF_CI_LABELS`.
+Promotion uses `pf-ci-release` for both closed `pull_request_target` and
+`workflow_dispatch` triggers.
 
 Owner ruling of 2026-10-20, CI-HOSTED = B: all CI runs on our own machines,
 credentialed jobs included. Credential-free jobs run on the `pf-ci` pool;
@@ -1070,10 +1107,22 @@ jobs stay on GitHub runners. The earlier CR-171 hosted exception is VOID.
 Owner ruling of 2026-10-20, REL-HOSTED = B: there is no hosted exception for
 the release workflow either; the release cut runs on `pf-ci-release`.
 
-As of 2026-10-21, `scripts/ci_preflight.py:126-131` and `:433-438` still pin
-the docs, promote and release jobs to hosted runners; that pin is removed by
-the `pf-ci-release` branches (#461 and the `ci/pfrel-*` heads), and this PR
-does not change those pins.
+As of 2026-10-21, #461 has merged as main `03b2406dd`: the old hosted pins
+for the engine's release and promote jobs are gone. `scripts/ci_preflight.py:132-136`
+and `scripts/ci_preflight.py:437-444` pin those jobs to `pf-ci-release`, with
+the release `prebuilt` job selecting its pinned matrix. `HOSTED_JOB_RUNNERS`
+at `scripts/ci_preflight.py:127-129` now lists only docs `build` on
+`ubuntu-latest`. The existing guard for unlisted credential-bearing jobs
+still requires standard hosted routing (`scripts/ci_preflight.py:445-460`),
+and the release matrix retains its hosted ARM/macOS legs
+(`scripts/ci_preflight.py:74-86`). The remaining hosted Linux routes have yet to
+be migrated under the owner rulings above.
+
+The `release.yml` pin requires readable `workflow_dispatch`-only triggers,
+refusing both PR events. The named promotion exception requires its existing
+`pull_request_target` and `workflow_dispatch` event set and retains the
+closed-PR promotion checks. Both workflows require exact runner values without
+a fallback and carry no `PF_CI_LABELS`.
 
 The temporary standard-runner stopgap was recorded by `3484a7c40` and
 squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner costs
