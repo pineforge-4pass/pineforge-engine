@@ -6,7 +6,7 @@
 #include "native_execution_consumer.hpp"
 
 #include <pineforge/metrics.hpp>
-
+#include "report_scratch.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -181,15 +181,19 @@ void compute_report_metrics(pf_metrics_t& result,
 }  // namespace internal
 
 
-// Copy the equity curve out and compute all metric blocks. Must run AFTER
-// fill_trades_section (reads out->trades). Owns the curve allocation;
-// freed by free_report (which expects new pf_equity_point_t[n]).
-// equity_curve_len derives from the vector size, NOT script_bars_processed:
+// Compute metrics after fill_trades_section (reads out->trades). Sink-off
+// and selected fallback arrays are owned and freed by free_report; ordinary
+// sinks present one tail copy and read their full history from scratch.
+// Metric history derives from recorded points, NOT script_bars_processed:
 // an exception mid-run can truncate the curve (metrics then describe the
 // truncated prefix; consumers must check strategy_get_last_error).
 // No ScopedTimezone may be held here: compute_equity_stats takes the
 // non-recursive global tz lock when chart_timezone_ is non-UTC.
 void BacktestEngine::fill_metrics_section(ReportC* out) const {
+    if (report_sink_state_.equity_scratch) {
+        fill_report_sink_metrics_section(out);
+        return;
+    }
     const int64_t n = (int64_t)equity_curve_.size();
     out->equity_curve_len = n;
     if (n > 0) {
@@ -589,6 +593,20 @@ double BacktestEngine::output_constant_value(int index) const {
 
 namespace pineforge {
 
+BacktestEngine::ReportSinkState::ReportSinkState() = default;
+BacktestEngine::ReportSinkState::~ReportSinkState() = default;
+BacktestEngine::ReportSinkState::ReportSinkState(const ReportSinkState& other)
+    : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
+      path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
+BacktestEngine::ReportSinkState&
+BacktestEngine::ReportSinkState::operator=(const ReportSinkState& other) {
+    if (this != &other) *this = ReportSinkState(other);
+    return *this;
+}
+BacktestEngine::ReportSinkState::ReportSinkState(ReportSinkState&&) noexcept = default;
+BacktestEngine::ReportSinkState&
+BacktestEngine::ReportSinkState::operator=(ReportSinkState&&) noexcept = default;
+
 int BacktestEngine::report_sink_setter_status() const {
     const auto& sink = report_sink_state_;
     const auto* consumer = execution_consumer_slot_.ptr
@@ -605,6 +623,12 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
         || descriptor->version != 1 || !descriptor->path || !*descriptor->path)) return -1;
     const int status = report_sink_setter_status();
     if (status != 0) return status;
+    // A scratch-backed generation cannot become an array report on removal.
+    // Keep its sink and metric source intact, including an observer capture.
+    // A nonzero ledger base likewise requires the streamed report: its sealed
+    // rows are gone from RAM. A new begin clears size/base to zero, lifting
+    // this guard; the scratch-owner guard still applies to ordinary runs.
+    if (!descriptor && (report_sink_state_.equity_scratch || trades_.base() > 0)) return -3;
     // Construct the full replacement first. Allocation failure cannot erase
     // an installed sink, its receipt or its copied strings.
     ReportSinkState next;
@@ -619,6 +643,12 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
             next.scratch_dir = slash == std::string::npos ? "."
                 : slash == 0 ? "/" : next.path.substr(0, slash);
         }
+    }
+    if (report_sink_state_.equity_scratch) {
+        // Replacing next-run configuration must not discard the current
+        // ordinary generation's metric source.
+        next.equity_scratch = std::move(report_sink_state_.equity_scratch);
+        next.equity_tail_stored = report_sink_state_.equity_tail_stored;
     }
     report_sink_state_ = std::move(next);
     return 0;
@@ -638,12 +668,20 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
     if (report_sink_setter_status() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "trade history policy cannot change during a run");
+    // Refuse before changing policy: ordinary reports need the sealed rows
+    // that are gone from RAM. A new begin clears size/base to zero and allows
+    // the policy to change again, without reading those rows back.
+    if (!streamable && trades_.base() > 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "trade history policy cannot retain sealed trade rows");
     report_sink_state_.trade_history_streamable = streamable;
 }
 
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
     sink.writer.reset();
+    sink.equity_scratch.reset();
+    sink.equity_tail_stored = false;
     sink.receipt = {};
     sink.output_base = 0;
     if (!sink.enabled) return;
@@ -662,6 +700,14 @@ void BacktestEngine::begin_report_sink() {
         sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
         sink.writer->write_header({outputs_enabled_, trace_enabled_, broker_state_hash_recording_,
                                    outputs_slots_, outputs_constants_});
+        pf_selected_window_config_v1 window{};
+        if (!NativeExecutionConsumer::selected_window_admitted(*this, &window)) {
+            // The ordinary run owns only its editable tail in RAM, including
+            // when this handle previously retained a full sink-off curve.
+            std::vector<pf_equity_point_t>().swap(equity_curve_);
+            sink.equity_scratch =
+                std::make_unique<report_sink::ScratchCurveWriter>(sink.scratch_dir);
+        }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
         const auto code = error.reason() == report_sink::WriterFailure::io
@@ -682,9 +728,21 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         if (sink.writer && !sink.receipt.complete && last_run_status_ == 0
             && last_error_.empty() && consumer
             && consumer->state_kind() == NativeLifecycleKind::Completed) {
-            for (int64_t i = sink.receipt.count_e; i < out->equity_curve_len; ++i) {
-                sink.writer->write_e(out->equity_curve[i]);
-                ++sink.receipt.count_e;
+            if (sink.equity_scratch) {
+                // Metrics/capture have already staged the presented copy.
+                // region() flushes scratch before a trailer can claim success.
+                const auto region = sink.equity_scratch->region();
+                for (int64_t i = sink.receipt.count_e; i < region.point_count; ++i) {
+                    pf_equity_point_t point{};
+                    report_sink::read_scratch_points(region, i, &point, 1);
+                    sink.writer->write_e(point);
+                    ++sink.receipt.count_e;
+                }
+            } else {
+                for (int64_t i = sink.receipt.count_e; i < out->equity_curve_len; ++i) {
+                    sink.writer->write_e(out->equity_curve[i]);
+                    ++sink.receipt.count_e;
+                }
             }
             for (int i = 0; i < out->trades_len; ++i) {
                 const TradeC& row = out->trades[i];
@@ -762,6 +820,71 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
     out->broker_state_hash = nullptr; out->broker_state_hash_len = 0;
     out->trace = nullptr; out->trace_len = 0;
     out->trace_names = nullptr; out->trace_names_len = 0;
+}
+
+void BacktestEngine::stage_report_sink_equity_tail(const ReportC* out) const {
+    auto& sink = report_sink_state_;
+    if (!sink.equity_scratch || !last_equity_point()) return;
+    try {
+        if (!out->equity_curve || out->equity_curve_len != 1)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "ordinary sink presentation lost its held equity point");
+        if (sink.equity_tail_stored) {
+            sink.equity_scratch->replace_last(out->equity_curve[0]);
+        } else {
+            sink.equity_scratch->append(out->equity_curve[0]);
+            sink.equity_tail_stored = true;
+        }
+        sink.equity_scratch->flush();
+    } catch (const std::exception& error) {
+        sink.writer.reset();
+        auto& engine = const_cast<BacktestEngine&>(*this);
+        engine.last_run_status_ = 1;
+        note_run_failure(engine, error.what(), classify_run_failure(error));
+        throw;
+    }
+}
+
+void BacktestEngine::compute_report_sink_metrics(ReportC* out,
+                                                std::int64_t equity_count) const {
+    try {
+        const auto region = report_sink_state_.equity_scratch->region();
+        if (region.point_count != equity_count)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "ordinary sink metric curve differs from its captured point count");
+        using metrics::TradeFilter;
+        out->metrics.all = metrics::compute_trade_stats(
+            out->trades, out->trades_len, TradeFilter::ALL, initial_capital_);
+        out->metrics.longs = metrics::compute_trade_stats(
+            out->trades, out->trades_len, TradeFilter::LONG, initial_capital_);
+        out->metrics.shorts = metrics::compute_trade_stats(
+            out->trades, out->trades_len, TradeFilter::SHORT, initial_capital_);
+        const report_sink::ScratchCurveWindow curve(region);
+        out->metrics.equity = metrics::compute_equity_stats(
+            curve, equity_count, initial_capital_, chart_timezone_, first_bar_open_,
+            current_bar_.close, bars_in_market_, out->net_profit);
+    } catch (const std::exception& error) {
+        report_sink_state_.writer.reset();
+        auto& engine = const_cast<BacktestEngine&>(*this);
+        engine.last_run_status_ = 1;
+        note_run_failure(engine, error.what(), classify_run_failure(error));
+        throw;
+    }
+}
+
+void BacktestEngine::fill_report_sink_metrics_section(ReportC* out) const {
+    try {
+        const auto* held = last_equity_point();
+        out->equity_curve_len = held ? 1 : 0;
+        out->equity_curve = held ? new pf_equity_point_t[1]{*held} : nullptr;
+        present_report_equity_tail(out);
+        stage_report_sink_equity_tail(out);
+        compute_report_sink_metrics(out, report_sink_state_.equity_scratch->size());
+    } catch (...) {
+        free_report(out);
+        *out = {};
+        throw;
+    }
 }
 
 // Callback-time writes use the same failure codes as begin/fill. The writer
