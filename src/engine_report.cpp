@@ -5,6 +5,7 @@
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
 #include "selected_report_view.hpp"
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
 #include <algorithm>
@@ -715,6 +716,7 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
             next.scratch_dir = slash == std::string::npos ? "."
                 : slash == 0 ? "/" : next.path.substr(0, slash);
         }
+        detail::ScratchArena::attach_from_environment();
     }
     if (report_sink_state_.equity_scratch) {
         if (next.enabled) {
@@ -744,6 +746,7 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
         next.fd = descriptor->fd;
         next.run_id = descriptor->run_id ? descriptor->run_id : "";
         // No path parent or scratch directory exists for a borrowed stream.
+        detail::ScratchArena::attach_from_environment();
     }
     report_sink_state_ = std::move(next);
     return 0;
