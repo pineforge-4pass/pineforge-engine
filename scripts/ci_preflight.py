@@ -59,12 +59,15 @@ CORPUS_RUNNER = '''>-
           fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}'''
 HOSTED_MATRIX_RUNNER = '${{ matrix.runner }}'
 # The build job's whole strategy, exactly (comments and blank lines aside):
-# the same four legs, with Linux x64 pinned to the heavy pool class.
+# D3 excludes only macOS Debug on PRs; every other event keeps all four legs.
+# Linux x64 legs are pinned to the heavy pool ["self-hosted","pf-ci","pf-ci-x64-16"]; macOS stays on macos-26.
 BUILD_STRATEGY = ('    strategy:\n'
                   '      fail-fast: false\n'
                   '      matrix:\n'
                   '        os: [ubuntu-24.04, macos-26]\n'
                   '        build_type: [Release, Debug]\n'
+                  '        exclude: ${{ fromJSON(github.event_name == \'pull_request\' && '
+                  '\'[{"os":"macos-26","build_type":"Debug"}]\' || \'[]\') }}\n'
                   '        include:\n'
                   '          - os: ubuntu-24.04\n'
                   f'            runner: {MATRIX_LINUX_RUNNER}\n'
@@ -196,6 +199,40 @@ PREFLIGHT_VERIFIER_SLOW = ("${{ needs.changes.result == 'success' && "
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [authz, changes, preflight, build, sanitizers, native-live, kernel-only, '
               'corpus-parity-subset]')
+# The matrix dependency already aggregates the selected cells. Its result must
+# never be excused for the PR-only exclusion: no job was created for that cell.
+# Pin the whole step so a widened passed(), a later override or a missing-result
+# fallback cannot keep the required snippets while accepting a failed proof.
+GATE_STEP = r'''      - name: Require every verification lane to have passed
+        shell: bash
+        env:
+          AUTHZ_RESULT: ${{ needs.authz.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          SANITIZER_RESULT: ${{ needs.sanitizers.result }}
+          NATIVE_RESULT: ${{ needs.native-live.result }}
+          KERNEL_RESULT: ${{ needs.kernel-only.result }}
+          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
+        run: |
+          printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
+            "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
+            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT"
+          # The matrix result covers only the selected cells: the PR exclusion
+          # creates no skipped cell to excuse. Every existing cell must pass.
+          # A proof lane passes by succeeding, or by having been skipped after
+          # the changes job succeeded and answered docs-only. A lane skipped
+          # for any other reason fails, and preflight must always succeed.
+          docs_only=false
+          if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
+          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
+          [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
+            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
+            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"
+'''
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
 # submodule guards across parallel unittest shards (run_unittest_shards.py),
@@ -490,7 +527,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
     if _job_block(build, 'strategy') != _code(BUILD_STRATEGY):
-        findings.append('ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types')
+        findings.append('ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types, '
+                        'excluding only macOS Debug on pull_request')
     if _job_values(build, 'name') != [BUILD_NAME]:
         findings.append(f'ci.yml build legs must keep their names: {BUILD_NAME}')
     if 'release.yml' in workflows:
@@ -798,6 +836,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     for job, variable in PROOF_JOBS.items():
         if f'passed "${variable}"' not in gate:
             findings.append(f'build-gate must require {job} success or a docs-only skip')
+    gate_steps = _steps(gate)
+    if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP):
+        findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
     pr_flag = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
     # D1 reverses the full-on-PR Release/kernel rule. Each allowed job has
     # exactly one PR-only flag; every other event keeps the full population.
