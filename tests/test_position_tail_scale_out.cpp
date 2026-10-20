@@ -119,7 +119,10 @@ public:
             strategy_entry(entry_id(), side, missing, missing, bar_index_ == 0 ? 8.0 : 4.0);
         if (bar_index_ % 4 == 2 && signed_position_size() != 0.0) {
             ++scaled_while_open;
-            strategy_exit("half", entry_id(), bar.close + (side ? 0.25 : -0.25), missing,
+            // One exit id per cycle: an id that already exited (partly) is
+            // consumed for this entry, so a repeated "half" never fires again.
+            strategy_exit("half" + std::to_string(bar_index_), entry_id(),
+                          bar.close + (side ? 0.25 : -0.25), missing,
                           missing, missing, missing, 50.0);
         }
     }
