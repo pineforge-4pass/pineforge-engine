@@ -2589,7 +2589,7 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
-    pineforge::detail::IdPairStore<std::int64_t> consumed_partial_exit_cycles_;
+    pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of

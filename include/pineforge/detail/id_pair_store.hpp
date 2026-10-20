@@ -3,7 +3,7 @@
 // CR-150 L19l-C. Exact string / string-pair tables with no per-key RAM
 // directory. Like L19a's successor-root file, scratch files are private,
 // unlinked at creation, close-on-exec, and accessed with pread/pwrite.
-#include <pineforge/run_failure.hpp>
+#include <pineforge/detail/id_pair_ordered_fold.hpp>
 
 #include <algorithm>
 #include <array>
@@ -27,106 +27,12 @@
 
 namespace pineforge::detail {
 
-// Keep L19a's system_error surface, carrying the run's resource failure too.
-class IdPairStoreError final : public std::system_error, public RunFailureInfo {
-public:
-    IdPairStoreError(int error, const char* operation)
-        : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
-};
-
-class IdPairScratchFile {
-public:
-    IdPairScratchFile() = default;
-    IdPairScratchFile(const IdPairScratchFile&) = delete;
-    IdPairScratchFile& operator=(const IdPairScratchFile&) = delete;
-    IdPairScratchFile(IdPairScratchFile&& other) noexcept
-        : fd_(std::exchange(other.fd_, -1)) {}
-    IdPairScratchFile& operator=(IdPairScratchFile&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, -1);
-        }
-        return *this;
-    }
-    ~IdPairScratchFile() { reset(); }
-
-    bool opened() const noexcept { return fd_ >= 0; }
-    void reset() noexcept {
-        if (fd_ >= 0) ::close(fd_);
-        fd_ = -1;
-    }
-    void open(const std::string& directory) {
-        if (opened()) return;
-        const char* temporary = std::getenv("TMPDIR");
-        std::string name = directory.empty()
-            ? (temporary && *temporary ? temporary : "/tmp") : directory;
-        if (name.back() != '/') name += '/';
-        name += "pineforge-id-pairs-XXXXXX";
-        const int opened = ::mkstemp(name.data());
-        if (opened < 0) throw IdPairStoreError(errno, "id table create");
-        if (::unlink(name.c_str()) != 0) {
-            const int error = errno;
-            ::close(opened);
-            throw IdPairStoreError(error, "id table unlink");
-        }
-        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
-            const int error = errno;
-            ::close(opened);
-            throw IdPairStoreError(error, "id table cloexec");
-        }
-        fd_ = opened;
-    }
-    void resize(std::uint64_t bytes) {
-        check_range(0, bytes);
-        int result;
-        do {
-            result = ::ftruncate(fd_, static_cast<off_t>(bytes));
-        } while (result != 0 && errno == EINTR);
-        if (result != 0) throw IdPairStoreError(errno, "id table resize");
-    }
-    void read(std::uint64_t offset, void* destination, std::size_t length) const {
-        check_range(offset, length);
-        auto* bytes = static_cast<unsigned char*>(destination);
-        std::size_t received = 0;
-        while (received < length) {
-            const ssize_t count = ::pread(fd_, bytes + received, length - received,
-                static_cast<off_t>(offset + received));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0)
-                throw IdPairStoreError(count < 0 ? errno : EIO, "id table read");
-            received += static_cast<std::size_t>(count);
-        }
-    }
-    void write(std::uint64_t offset, const void* source, std::size_t length) {
-        check_range(offset, length);
-        const auto* bytes = static_cast<const unsigned char*>(source);
-        std::size_t written = 0;
-        while (written < length) {
-            const ssize_t count = ::pwrite(fd_, bytes + written, length - written,
-                static_cast<off_t>(offset + written));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0)
-                throw IdPairStoreError(count < 0 ? errno : EIO, "id table write");
-            written += static_cast<std::size_t>(count);
-        }
-    }
-
-private:
-    static void check_range(std::uint64_t offset, std::uint64_t length) {
-        constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
-        if (offset > maximum || length > maximum - offset)
-            throw IdPairStoreError(EFBIG, "id table offset exhausted");
-    }
-    int fd_ = -1;
-};
-
 // One 40-byte record plus both strings per distinct key ever seen, and a
 // 16-byte on-disk hash slot at <= 1/2 load (32..64 bytes/key after warmup).
 // Replacing a value, erasing and recurring reuse the original record.
 // Single keys and pairs are separate domains; ("x", "") is not single "x".
 // Hash collisions are always resolved by comparing the complete byte strings.
-template<class Value>
+template<class Value, bool MaintainSortedFold = false>
 class IdPairStore {
     static_assert(std::is_integral_v<Value> && sizeof(Value) == 8,
                   "id auxiliary values are fixed-width 64-bit integers");
@@ -149,6 +55,17 @@ class IdPairStore {
     static constexpr std::uint64_t kLive = 1;
     static constexpr std::uint64_t kPair = 2;
     static constexpr std::uint64_t kInitialSlots = 64;
+
+    // Opt-in only for the consumed-cycle single-key table. Ordinary minima
+    // tables keep their existing disk layout, lookup and iteration paths.
+    struct NoFold {};
+    struct FoldState {
+        IdPairOrderedFold ordered;
+        Header pending_header;
+        Slot pending_slot;
+        std::uint64_t pending_offset = 0, pending_at = 0;
+        bool pending = false, slot_pending = false;
+    };
 
 public:
     struct Entry {
@@ -261,13 +178,44 @@ public:
         slots_ = 0;
         used_ = 0;
         size_ = 0;
+        if constexpr (MaintainSortedFold) {
+            fold_.ordered.clear();
+            fold_.pending = fold_.slot_pending = false;
+        }
         if (memory_) memory_->clear();
     }
     std::size_t size() const noexcept { return size_; }
     bool empty() const noexcept { return size_ == 0; }
-    std::uint64_t disk_bytes() const noexcept { return data_bytes_ + slots_ * sizeof(Slot); }
+    std::uint64_t disk_bytes() const noexcept {
+        const auto table = data_bytes_ + slots_ * sizeof(Slot);
+        if constexpr (MaintainSortedFold) {
+            const auto ordered = fold_.ordered.disk_bytes();
+            const auto maximum = std::numeric_limits<std::uint64_t>::max();
+            return ordered > maximum - table ? maximum : table + ordered;
+        }
+        return table;
+    }
     const_iterator begin() const { return const_iterator(this, false); }
     const_iterator end() const { return const_iterator(this, true); }
+
+    // The count and byte spelling are exactly the former hash_state loop.
+    // The explicit memory fixture remains an independent sorted reference.
+    void fold_sorted(BrokerStateHashSink& sink) const {
+        static_assert(MaintainSortedFold, "ordered fold must be selected for this table");
+        sink.u(size_);
+        if (memory_) {
+            for (const auto& row : *memory_) {
+                sink.s(row.first.first);
+                sink.i(row.second);
+            }
+        } else {
+            sink.h = fold_.ordered.apply(sink.h);
+        }
+    }
+    void fixture_count_io(IdPairScratchFile::FixtureIO* io) noexcept {
+        data_.fixture_count_io(io); index_.fixture_count_io(io);
+        if constexpr (MaintainSortedFold) fold_.ordered.fixture_count_io(io);
+    }
 
     // An explicit, per-instance fixture seam; production always uses disk.
     // No global switch, environment knob, cached key roster or fallback on IO
@@ -291,6 +239,7 @@ public:
         return assign_key(id, std::nullopt, value);
     }
     bool insert_or_assign(std::string_view id, std::string_view from_entry, Value value) {
+        static_assert(!MaintainSortedFold, "consumed-cycle sorted fold accepts single keys");
         return assign_key(id, from_entry, value);
     }
     void min_assign(std::string_view id, Value value) {
@@ -317,6 +266,7 @@ private:
         swap(used_, other.used_);
         swap(size_, other.size_);
         swap(memory_, other.memory_);
+        swap(fold_, other.fold_);
     }
     static MemoryKey memory_key(std::string_view first, std::optional<std::string_view> second) {
         return {std::string(first), second ? std::optional<std::string>{std::string(*second)}
@@ -344,7 +294,12 @@ private:
         if (offset > data_bytes_ || data_bytes_ - offset < sizeof(Header))
             throw IdPairStoreError(EIO, "id table truncated record");
         Header header;
-        data_.read(offset, &header, sizeof(header));
+        if constexpr (MaintainSortedFold) {
+            if (fold_.pending && offset == fold_.pending_offset) header = fold_.pending_header;
+            else data_.read(offset, &header, sizeof(header));
+        } else {
+            data_.read(offset, &header, sizeof(header));
+        }
         const auto available = data_bytes_ - offset - sizeof(Header);
         if (header.first_size > available || header.second_size > available - header.first_size
             || (header.flags & ~(kLive | kPair)) != 0
@@ -370,7 +325,12 @@ private:
         std::uint64_t at = hash & (slots_ - 1);
         for (std::uint64_t probes = 0; probes < slots_; ++probes) {
             Slot slot;
-            index_.read(at * sizeof(Slot), &slot, sizeof(slot));
+            if constexpr (MaintainSortedFold) {
+                if (fold_.slot_pending && at == fold_.pending_at) slot = fold_.pending_slot;
+                else index_.read(at * sizeof(Slot), &slot, sizeof(slot));
+            } else {
+                index_.read(at * sizeof(Slot), &slot, sizeof(slot));
+            }
             if (slot.offset_plus_one == 0) return {at, slot};
             if (slot.hash == hash) {
                 const auto offset = slot.offset_plus_one - 1;
@@ -406,6 +366,7 @@ private:
         if (slots_ > maximum / 2) throw IdPairStoreError(EFBIG, "id table index exhausted");
         const auto next_slots = slots_ == 0 ? kInitialSlots : slots_ * 2;
         IdPairScratchFile next;
+        next.fixture_count_io(index_.fixture_io());
         next.open(directory_);
         next.resize(next_slots * sizeof(Slot)); // fresh sparse bytes read as zero
         std::array<Slot, 128> buffer{};
@@ -438,6 +399,7 @@ private:
             if (inserted.second) ++size_;
             return inserted.second;
         }
+        if constexpr (MaintainSortedFold) flush_pending();
         const auto hash = key_hash(first, second);
         if (slots_ == 0) grow_index();
         auto found = locate(first, second, hash);
@@ -447,7 +409,8 @@ private:
             const bool inserted = (header.flags & kLive) == 0;
             header.value = value;
             header.flags |= kLive;
-            data_.write(offset, &header, sizeof(header));
+            if constexpr (MaintainSortedFold) publish_fold(first, offset, header);
+            else data_.write(offset, &header, sizeof(header));
             if (inserted) ++size_;
             return inserted;
         }
@@ -471,7 +434,8 @@ private:
         if (second)
             data_.write(data_bytes_ + sizeof(Header) + first.size(), second->data(), second->size());
         const Slot slot{hash, data_bytes_ + 1};
-        index_.write(found.first * sizeof(Slot), &slot, sizeof(slot));
+        if constexpr (MaintainSortedFold) publish_fold(first, data_bytes_, header, found.first, slot);
+        else index_.write(found.first * sizeof(Slot), &slot, sizeof(slot));
         data_bytes_ += sizeof(Header) + first.size() + second_size;
         ++used_;
         ++size_;
@@ -483,6 +447,7 @@ private:
             size_ -= count;
             return count != 0;
         }
+        if constexpr (MaintainSortedFold) flush_pending();
         if (slots_ == 0) return false;
         const auto found = locate(first, second, key_hash(first, second)).second;
         if (found.offset_plus_one == 0) return false;
@@ -490,9 +455,113 @@ private:
         Header header = read_header(offset);
         if ((header.flags & kLive) == 0) return false;
         header.flags &= ~kLive;
-        data_.write(offset, &header, sizeof(header));
+        if constexpr (MaintainSortedFold) publish_fold(first, offset, header);
+        else data_.write(offset, &header, sizeof(header));
         --size_;
         return true;
+    }
+
+    // Exactly one committed header and (on append) index slot may be pending
+    // in fixed RAM. Every read consults them. Flush BOTH before discarding
+    // either overlay: a partial header/slot write cannot expose mixed state.
+    // This also avoids relying on pwrite atomicity or a fallible rollback
+    // after the ordered root has been published.
+    void flush_pending() {
+        if (!fold_.pending) return;
+        data_.write(fold_.pending_offset, &fold_.pending_header, sizeof(Header));
+        if (fold_.slot_pending)
+            index_.write(fold_.pending_at * sizeof(Slot), &fold_.pending_slot, sizeof(Slot));
+        fold_.pending = fold_.slot_pending = false;
+    }
+
+    struct FoldReader {
+        const IdPairStore& owner;
+        std::uint64_t changed;
+        const Header& prospective;
+        std::array<unsigned char, 512> a{}, b{};
+
+        Header header(std::uint64_t row) const {
+            return row == changed ? prospective : owner.read_header(row);
+        }
+        unsigned symbol(std::uint64_t row, std::uint64_t at) const {
+            const auto h = header(row);
+            if (at >= h.first_size) return 0;
+            unsigned char byte = 0;
+            owner.data_.read(row + sizeof(Header) + at, &byte, 1);
+            return static_cast<unsigned>(byte) + 1;
+        }
+        int compare(std::uint64_t row, std::string_view key) {
+            const auto h = header(row);
+            const auto common = std::min<std::uint64_t>(h.first_size, key.size());
+            for (std::uint64_t at = 0; at < common;) {
+                const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(a.size(), common - at));
+                owner.data_.read(row + sizeof(Header) + at, a.data(), n);
+                const int order = std::char_traits<char>::compare(
+                    reinterpret_cast<const char*>(a.data()), key.data() + at, n);
+                if (order != 0) return order;
+                at += n;
+            }
+            return h.first_size < key.size() ? -1 : (h.first_size > key.size() ? 1 : 0);
+        }
+        IdPairOrderedFold::Position difference(std::uint64_t row, std::string_view key) {
+            const auto h = header(row);
+            const auto common = std::min<std::uint64_t>(h.first_size, key.size());
+            for (std::uint64_t at = 0; at < common;) {
+                const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(a.size(), common - at));
+                owner.data_.read(row + sizeof(Header) + at, a.data(), n);
+                for (std::size_t i = 0; i < n; ++i) {
+                    const auto byte = static_cast<unsigned char>(key[at + i]);
+                    if (a[i] != byte)
+                        return IdPairOrderedFold::differing_symbol(at + i, a[i] + 1U, byte + 1U);
+                }
+                at += n;
+            }
+            if (h.first_size == key.size()) throw std::logic_error("id fold duplicate row");
+            return IdPairOrderedFold::differing_symbol(common, symbol(row, common),
+                                                      IdPairOrderedFold::symbol(key, common));
+        }
+        IdPairOrderedFold::Position difference(std::uint64_t first, std::uint64_t second) {
+            const auto x = header(first), y = header(second);
+            const auto common = std::min(x.first_size, y.first_size);
+            for (std::uint64_t at = 0; at < common;) {
+                const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(a.size(), common - at));
+                owner.data_.read(first + sizeof(Header) + at, a.data(), n);
+                owner.data_.read(second + sizeof(Header) + at, b.data(), n);
+                for (std::size_t i = 0; i < n; ++i)
+                    if (a[i] != b[i])
+                        return IdPairOrderedFold::differing_symbol(at + i, a[i] + 1U, b[i] + 1U);
+                at += n;
+            }
+            if (x.first_size == y.first_size) throw std::logic_error("id fold duplicate row");
+            return IdPairOrderedFold::differing_symbol(common, symbol(first, common), symbol(second, common));
+        }
+        void append(std::uint64_t row, BrokerStateByteFold& fold) {
+            const auto h = header(row);
+            if ((h.flags & kLive) == 0) return;
+            // BrokerStateHashSink::s uses u(size), followed by the raw key;
+            // ::i uses the native int64 representation. No endian rewrite.
+            fold.bytes(&h.first_size, sizeof(h.first_size));
+            for (std::uint64_t at = 0; at < h.first_size;) {
+                const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(a.size(), h.first_size - at));
+                owner.data_.read(row + sizeof(Header) + at, a.data(), n);
+                fold.bytes(a.data(), n);
+                at += n;
+            }
+            const auto value = static_cast<std::int64_t>(h.value);
+            fold.bytes(&value, sizeof(value));
+        }
+    };
+    void publish_fold(std::string_view key, std::uint64_t offset, const Header& header) {
+        publish_fold(key, offset, header, 0, Slot{});
+    }
+    void publish_fold(std::string_view key, std::uint64_t offset, const Header& header,
+                      std::uint64_t at, Slot slot) {
+        FoldReader reader{*this, offset, header};
+        fold_.ordered.update(key, offset, directory_, reader);
+        // The root and table commit together with no more IO or allocation.
+        fold_.pending_header = header; fold_.pending_offset = offset;
+        fold_.pending_slot = slot; fold_.pending_at = at;
+        fold_.pending = true; fold_.slot_pending = slot.offset_plus_one != 0;
     }
 
     IdPairScratchFile data_;
@@ -503,6 +572,10 @@ private:
     std::uint64_t used_ = 0; // distinct keys including erased keys
     std::size_t size_ = 0;  // live keys
     std::unique_ptr<MemoryMap> memory_; // allocated only by the explicit fixture seam
+    std::conditional_t<MaintainSortedFold, FoldState, NoFold> fold_;
 };
+
+static_assert(sizeof(IdPairStore<std::int64_t, true>) + IdPairOrderedFold::workspace_bytes() + 8192 <= 32768,
+              "consumed-cycle store plus all fixed fold buffers <=32 KiB");
 
 } // namespace pineforge::detail
