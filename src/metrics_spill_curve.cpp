@@ -3,18 +3,18 @@
 #include <pineforge/run_failure.hpp>
 #include <pineforge/spill_curve_reader.hpp>
 
+#include "report_scratch.hpp"
+
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <stdexcept>
-#include <system_error>
+#include <sys/types.h>
 #include <type_traits>
-#include <unistd.h>
 
 namespace pineforge {
 namespace metrics {
@@ -23,24 +23,12 @@ namespace {
 constexpr std::size_t window_bytes = 64 * 1024;
 constexpr std::int64_t window_points =
     static_cast<std::int64_t>(window_bytes / sizeof(pf_equity_point_t));
-constexpr std::int64_t point_bytes = sizeof(pf_equity_point_t);
 static_assert(window_points > 0, "scratch window holds a complete point");
 static_assert(std::is_trivially_copyable<pf_equity_point_t>::value,
               "scratch points preserve their binary representation");
 
-// Match L6b-4's scratch I/O transport while keeping this lane independently
-// linkable before that dependency lands. errno remains visible to callers
-// catching system_error; the engine's classifier also retains the sink code.
-class ScratchCurveReadError final : public std::system_error, public RunFailureInfo {
-public:
-    ScratchCurveReadError(int error, const char* operation)
-        : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
-};
-
-// The ONE L6b-4 binding: the frozen P00 region supplies the borrowed descriptor,
-// byte offset and committed count. If L6b-4 provides an exact-read helper, only
-// this adapter needs to delegate to it; the cache and metric walks stay shared.
+// Both production backends borrow the same facade region. Keep raw-descriptor
+// compatibility in the shared adapter too; no backend decision belongs here.
 void read_scratch_curve_region(const void* context, std::int64_t index,
                                std::int64_t count, pf_equity_point_t* output) {
     const auto& region = *static_cast<const ScratchCurveRegion*>(context);
@@ -48,26 +36,7 @@ void read_scratch_curve_region(const void* context, std::int64_t index,
         count > region.point_count - index) {
         throw std::out_of_range("scratch curve read outside its region");
     }
-    // State validates the whole region before installing this callback, so
-    // both the multiplication and every positional-read offset fit off_t.
-    off_t offset = static_cast<off_t>(region.byte_offset + index * point_bytes);
-    auto* bytes = reinterpret_cast<unsigned char*>(output);
-    std::size_t remaining = static_cast<std::size_t>(count) * sizeof(*output);
-    while (remaining != 0) {
-        const ssize_t got = ::pread(region.descriptor, bytes, remaining, offset);
-        if (got < 0) {
-            const int error = errno;
-            if (error == EINTR) continue;
-            throw ScratchCurveReadError(error, "read report scratch curve");
-        }
-        if (got == 0) {
-            throw ScratchCurveReadError(EIO, "short report scratch curve");
-        }
-        const auto copied = static_cast<std::size_t>(got);
-        bytes += copied;
-        remaining -= copied;
-        offset += static_cast<off_t>(got);
-    }
+    report_sink::read_scratch_points(region, index, output, count);
 }
 
 } // namespace
@@ -84,7 +53,7 @@ struct SpillCurve::State {
     explicit State(const ScratchCurveRegion& value)
         : region(value), reader{&region, region.point_count, read_scratch_curve_region} {
         if (region.byte_offset < 0 || region.point_count < 0 ||
-            (region.point_count != 0 && region.descriptor < 0)) {
+            (region.point_count != 0 && !region.scratch && region.descriptor < 0)) {
             throw std::invalid_argument("invalid scratch curve region");
         }
         const auto limit = std::min<std::uintmax_t>(

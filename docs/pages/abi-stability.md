@@ -69,9 +69,9 @@ Three layers:
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-A built strategy `.so` exposes 102 compiled-strategy `PF_API` declarations
-(86 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 145 `PF_API` exports in total; a script that declares
+A built strategy `.so` exposes 103 compiled-strategy `PF_API` declarations
+(87 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 146 `PF_API` exports in total; a script that declares
 `use_bar_magnifier = true` also exports `strategy_declares_bar_magnifier`, and a
 module that records outputs its three outputs exports. `nm -gU` also reports libc++'s
 `std::piecewise_construct`; no project-internal C++ symbol is exported. The grouped table below is a guide,
@@ -129,7 +129,7 @@ not the complete inventory:
 | `strategy_report_sink_summary_v1` | Report-only T-row folds and nonfinite validation |
 
 Sixteen per-strategy exports include the five create/run/free lifecycle
-functions. The remaining 86 runtime implementations, including the
+functions. The remaining 87 runtime implementations, including the
 closed-trade incarnation accessor, are force-linked into each strategy library,
 so consumers resolve the same complete ABI from the strategy `.so`. All
 additions remain covered by the minor-version append-only guarantee.

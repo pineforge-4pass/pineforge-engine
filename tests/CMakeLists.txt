@@ -7337,3 +7337,38 @@ if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
             --module $<TARGET_FILE:run_sigterm_abort_strategy>)
 endif()
 # --- CR-150 core-cr150-q7 end ---
+
+# --- CR-150 core-cr150-l22p begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_report_scratch_arena)
+    add_executable(test_report_scratch_arena test_report_scratch_arena.cpp)
+    target_link_libraries(test_report_scratch_arena PRIVATE pineforge)
+    target_compile_options(test_report_scratch_arena PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_report_scratch_arena PRIVATE ${_pf_cov_test_flags})
+    endif()
+    target_link_options(test_report_scratch_arena PRIVATE
+        "-Wl,--wrap=mkstemp" "-Wl,--wrap=pwrite" "-Wl,--wrap=write"
+        "-Wl,--wrap=ftruncate" "-Wl,--wrap=mmap" "-Wl,--wrap=munmap")
+    add_test(NAME test_report_scratch_arena_curve_bytes
+        COMMAND test_report_scratch_arena curve bytes)
+    add_test(NAME test_report_scratch_arena_curve_fsize
+        COMMAND test_report_scratch_arena curve fsize)
+    add_test(NAME test_report_scratch_arena_curve_exhaustion
+        COMMAND test_report_scratch_arena curve exhaustion)
+    add_test(NAME test_report_scratch_arena_curve_address_space
+        COMMAND test_report_scratch_arena curve address_space)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_report_scratch_arena PRIVATE PINEFORGE_L22P_SOURCE=1)
+        add_test(NAME test_report_scratch_arena_position_tail_bytes
+            COMMAND test_report_scratch_arena position_tail bytes)
+        add_test(NAME test_report_scratch_arena_position_tail_fsize
+            COMMAND test_report_scratch_arena position_tail fsize)
+        add_test(NAME test_report_scratch_arena_position_tail_exhaustion
+            COMMAND test_report_scratch_arena position_tail exhaustion)
+        add_test(NAME test_report_scratch_arena_position_tail_address_space
+            COMMAND test_report_scratch_arena position_tail address_space)
+    endif()
+    add_test(NAME test_report_scratch_arena_startup COMMAND test_report_scratch_arena startup)
+endif()
+# --- CR-150 core-cr150-l22p end ---

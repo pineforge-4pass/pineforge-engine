@@ -155,7 +155,7 @@ HISTORICAL_ONLY_RUNTIME = frozenset({
 })
 HISTORICAL_ONLY_PHRASE = "stream_begin() fails closed"
 
-# The C-level native host API. Additive to the 86 above: every symbol here is
+# The C-level native host API. Additive to the 87 above: every symbol here is
 # declared in include/pineforge/native_c_api.h and implemented in
 # src/native_c_host.cpp, and neither file contributes to the two counts above.
 EXPECTED_NATIVE_C_API = frozenset({
