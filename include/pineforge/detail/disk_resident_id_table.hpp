@@ -145,6 +145,12 @@ public:
         for (auto at = index_.first_inserted(); at != 0; at = index_.next_inserted(at))
             visit(index_.key(at));
     }
+    // Decisions over historical ids must not depend on row residency.
+    // Walk keys alone, without restoring facts or retaining a key vector.
+    template<class F> void for_each_sorted_id(F&& visit) const {
+        for (auto at = index_.first_sorted(); at != 0; at = index_.next_sorted(at))
+            visit(index_.key(at));
+    }
     iterator find(const std::string& key) {
         spill();
         const auto at = index_.find(key);

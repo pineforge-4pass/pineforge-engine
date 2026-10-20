@@ -24778,27 +24778,27 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // the new one.  The generic settlement event owns that fact; mirror
         // it into every source cohort so a later reuse of an old entry id
         // cannot reserve against already-closed exposure.
-        std::vector<SourceId> closed_cohorts;
-        for (const auto& cohort : cohorts_by_id_) {
-            const bool nested_new_side_opening = std::any_of(
-                live_handles_.begin(), live_handles_.end(),
-                [&](const native_order::RequestHandle& handle) {
-                    const auto pending = placement_.find(handle.incarnation);
-                    return pending != placement_.end()
-                        && pending->second.opening
-                        && pending->second.family == PineOrderFamily::Entry
-                        && pending->second.source_id == cohort.first
-                        && pending->second.is_long == (live_position > 0.0);
-                });
-            if ((!placement_snapshot
-                 || cohort.first != placement_snapshot->source_id)
-                && !nested_new_side_opening) {
-                closed_cohorts.push_back(cohort.first);
+        std::vector<SourceId> preserved_cohorts;
+        if (placement_snapshot) preserved_cohorts.push_back(placement_snapshot->source_id);
+        for (const auto& handle : live_handles_) {
+            const auto pending = placement_.find(handle.incarnation);
+            if (pending != placement_.end()
+                && pending->second.opening
+                && pending->second.family == PineOrderFamily::Entry
+                && pending->second.is_long == (live_position > 0.0)) {
+                preserved_cohorts.push_back(pending->second.source_id);
             }
         }
-        std::sort(closed_cohorts.begin(), closed_cohorts.end());
-        for (const auto& id : closed_cohorts)
-            cancel_exit_orders_for_full_close(id);
+        std::sort(preserved_cohorts.begin(), preserved_cohorts.end());
+        // An empty, spilled cohort can still own queued exits. The old map
+        // cancelled those too, in sorted id order. Snapshot only the live
+        // exemptions, then stream every logical id without restoring facts.
+        cohorts_by_id_.for_each_sorted_id([&](const SourceId& id) {
+            if (!std::binary_search(preserved_cohorts.begin(), preserved_cohorts.end(), id)) {
+                cancel_exit_orders_for_full_close(id);
+            }
+        });
+
         for (auto& cohort : cohorts_by_id_) {
             ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
             ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
