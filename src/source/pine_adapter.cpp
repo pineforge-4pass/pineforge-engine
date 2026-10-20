@@ -849,7 +849,6 @@ std::unique_ptr<PlacementSnapshot> PlacementTable::take(std::uint64_t incarnatio
 }
 
 void PlacementTable::remember_erased(const PlacementSnapshot& row) {
-    fold_sequence(erased_minima_, row);
     if (row.family != PineOrderFamily::Margin && erased_foreign_ids_.size() < 3
         && std::find(erased_foreign_ids_.begin(), erased_foreign_ids_.end(), row.source_id)
             == erased_foreign_ids_.end()) {
@@ -900,27 +899,28 @@ void PlacementTable::compact() {
 
 std::uint64_t PlacementTable::command_sequence_for(const std::string& source_id,
                                                    const std::string& from_entry) const {
-    for (const auto incarnation : unfolded_) {
-        if (const PlacementSnapshot* row = locate(incarnation)) fold_sequence(sequence_index_, *row);
-    }
-    // The pending ids are folded now; release their storage so an erased
-    // history cannot leave a capacity-sized allocation behind.
-    std::vector<std::uint64_t>().swap(unfolded_);
     constexpr auto absent = std::numeric_limits<std::uint64_t>::max();
     bool known = false;
     std::uint64_t any = absent;
     bool paired_known = false;
     std::uint64_t paired = absent;
-    const Minima* const indexes[] = {&sequence_index_, &erased_minima_};
-    for (const Minima* index : indexes) {
-        const auto minima = index->lookup(source_id);
-        if (!minima) continue;
+    visit_rows([&](std::uint64_t, const PlacementSnapshot& row) {
+        if (row.source_id != source_id) return false;
+        known = true;
+        any = std::min(any, row.command_sequence);
+        if (row.from_entry == from_entry) {
+            paired_known = true;
+            paired = std::min(paired, row.command_sequence);
+        }
+        return false;
+    });
+    if (const auto minima = erased_minima_.lookup(source_id)) {
         known = true;
         any = std::min(any, *minima);
-        const auto pair = index->lookup(source_id, from_entry);
-        if (!pair) continue;
-        paired_known = true;
-        paired = std::min(paired, *pair);
+        if (const auto pair = erased_minima_.lookup(source_id, from_entry)) {
+            paired_known = true;
+            paired = std::min(paired, *pair);
+        }
     }
     if (!known) return absent;
     if (paired_known && paired != absent) return paired;
@@ -3652,14 +3652,16 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     if (exit_phase_final_ < phase_base)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "exit-phase fold precedes the sealed prefix");
-    for (; exit_phase_final_ < phase_base + trade_exit_phase_.size(); ++exit_phase_final_) {
-        exit_phase_digest_ = fold_exit_phase(exit_phase_digest_,
-                                             trade_exit_phase_.at(exit_phase_final_ - phase_base));
-    }
-    detail::run_consumer(require_host()).finish_exit_phase_restart();
+    const auto finish_phases = [&] {
+        for (; exit_phase_final_ < phase_base + trade_exit_phase_.size(); ++exit_phase_final_) {
+            exit_phase_digest_ = fold_exit_phase(exit_phase_digest_,
+                                                 trade_exit_phase_.at(exit_phase_final_ - phase_base));
+        }
+        detail::run_consumer(require_host()).finish_exit_phase_restart();
+    };
     const bool retain_rows = detail::retain_retired_rows();
     // Every live handle has a row; nothing beyond them means nothing retired.
-    if (placement_.size() <= live_handles_.size()) return;
+    if (placement_.size() <= live_handles_.size()) { finish_phases(); return; }
     const int interval = context.coordinate.interval_index;
     const std::int64_t cycle = current_position_cycle_;
 
@@ -3809,10 +3811,10 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     if (!unpinned) release_superseded();
     // Quiet bars stop before gathering roots. Market-add marks still need
     // the full pass to prune them against the roots.
-    if (market_pyramid_adds_.empty() && !unpinned && released.empty()) return;
+    if (market_pyramid_adds_.empty() && !unpinned && released.empty()) { finish_phases(); return; }
     // Only a host whose kernel can say what it still works erases a row.
     IExecutionConsumer* consumer = bound_consumer();
-    if (!consumer) return;
+    if (!consumer) { finish_phases(); return; }
     const auto& core = as_native_consumer(*consumer).request_core();
 
     auto& roots = sweep.roots;
@@ -3926,12 +3928,6 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     root(short_seed_long_candidate_.incarnation);
     std::sort(roots.begin(), roots.end());
     roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
-    // Only an open lot or working request can still ask for a market-add mark.
-    for (auto mark = market_pyramid_adds_.begin(); mark != market_pyramid_adds_.end();) {
-        if (std::binary_search(roots.begin(), roots.end(), *mark)) ++mark;
-        else mark = market_pyramid_adds_.erase(mark);
-    }
-
     // Live rows supply K7/K8; K1's unwithdrawn current-cycle lifecycles
     // supply the K2/K3 revival candidates.
     for (const auto& handle : live_handles_) {
@@ -4040,6 +4036,20 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         doomed.push_back(incarnation);
         return false;
     });
+    // The entire retirement workset, before phase/digest publication, mark
+    // pruning, bracket consumed facts, cohort sides or the first row removal.
+    // The workset contains handles only; the ticket borrows the retained rows.
+    if (!retain_rows) {
+        placement_.preflight_erased_rows([&](const auto& emit) {
+            for (const auto incarnation : doomed) emit(placement_.at(incarnation));
+        });
+    }
+    finish_phases();
+    // Only an open lot or working request can still ask for a market-add mark.
+    for (auto mark = market_pyramid_adds_.begin(); mark != market_pyramid_adds_.end();) {
+        if (std::binary_search(roots.begin(), roots.end(), *mark)) ++mark;
+        else mark = market_pyramid_adds_.erase(mark);
+    }
     if (doomed.empty()) return;
 
     for (const auto incarnation : doomed) {
@@ -16432,6 +16442,41 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
     return result;
 }
 
+bool PineExecutionAdapter::partial_exit_sibling_live(
+        const PlacementSnapshot& source, native_order::RequestHandle target) const {
+    return std::any_of(live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+        if (handle == target) return false;
+        const auto sibling = placement_.find(handle.incarnation);
+        if (sibling == placement_.end()) return false;
+        const auto family = sibling->second.family;
+        // One bracket's stop/limit/trail legs are one owner order. Keep the
+        // existing consumed-cycle predicate, shared with on_applied below.
+        if (sibling->second.command_sequence == source.command_sequence
+            && sibling->second.bracket_origin == source.bracket_origin) return false;
+        return sibling->second.source_id == source.source_id
+            && sibling->second.from_entry == source.from_entry
+            && (family == PineOrderFamily::ExitLimit || family == PineOrderFamily::ExitStop
+                || family == PineOrderFamily::ExitTrail);
+    });
+}
+
+void PineExecutionAdapter::preflight_id_pair_precommit(const NativePrecommitView& view) const {
+    if (view.settlement_readiness != execution::Status::Applied
+        || !(view.inspected_closed_units > 0.0) || view.account.signed_units_after == 0.0)
+        return;
+    const auto found = placement_.find(view.target.incarnation);
+    if (found == placement_.end()) return;
+    const auto& source = found->second;
+    if ((source.family != PineOrderFamily::ExitLimit && source.family != PineOrderFamily::ExitStop
+         && source.family != PineOrderFamily::ExitTrail)
+        || !((std::isfinite(source.requested_qty) && source.requested_qty > 0.0)
+             || (std::isfinite(source.qty_percent) && source.qty_percent < 100.0 - 1e-9))
+        || partial_exit_sibling_live(source, view.target)) return;
+    // Still ONE single-string key with one separator. This borrowed view
+    // performs no allocation, publication or financial/source mutation.
+    consumed_partial_exit_cycles_.preflight_joined_single(source.source_id, '\x1f', source.from_entry);
+}
+
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot != placement_.end()) {
@@ -16581,6 +16626,9 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             }
         }
     }
+    // All exit-specific refusal gates above have passed. A storage refusal
+    // is a coded exception, never a trading-policy Refuse verdict.
+    preflight_id_pair_precommit(view);
     if (!view.account.would_open) return NativePrecommitVerdict::Admit;
     if (snapshot == placement_.end()) return NativePrecommitVerdict::Refuse;
     const auto& source = snapshot->second;
@@ -24850,27 +24898,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 exit_tombstones_[placement_snapshot->source_id + "\x1f"
                                  + placement_snapshot->from_entry] = origin;
         }
-        const bool sibling_leg_still_live = std::any_of(
-            live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
-                if (handle == event.handle()) return false;
-                const auto sibling = placement_.find(handle.incarnation);
-                if (sibling == placement_.end()) return false;
-                const auto family = sibling->second.family;
-                // ab9714be pine_fills.cpp:7012-7024 counts other PENDING
-                // ORDERS with the id (a second binding); the stop/limit/trail
-                // legs of one strategy.exit call are one owner order, so a
-                // same-bracket leg the fill is about to OCA-retire is not a
-                // surviving sibling.
-                if (sibling->second.command_sequence == placement_snapshot->command_sequence
-                    && sibling->second.bracket_origin == placement_snapshot->bracket_origin)
-                    return false;
-                return sibling->second.source_id == placement_snapshot->source_id
-                    && sibling->second.from_entry == placement_snapshot->from_entry
-                    && (family == PineOrderFamily::ExitLimit
-                        || family == PineOrderFamily::ExitStop
-                        || family == PineOrderFamily::ExitTrail);
-            });
-        if (!sibling_leg_still_live) {
+        // ab9714be pine_fills.cpp:7012-7024: other pending orders with this
+        // id count as siblings; same-bracket legs are one owner order.
+        if (!partial_exit_sibling_live(*placement_snapshot, event.handle())) {
             consumed_partial_exit_cycles_.insert_or_assign(
                 placement_snapshot->source_id + "\x1f" + placement_snapshot->from_entry,
                 current_position_cycle_);
@@ -28225,8 +28255,12 @@ PineExecutionAdapter::require_cohort(const SourceId& id) {
 namespace pineforge::source {
 
 void PlacementTable::set_auxiliary_tables_directory(const std::string& directory) {
-    sequence_index_.set_directory(directory);
     erased_minima_.set_directory(directory);
+}
+
+void PlacementTable::bind_auxiliary_scratch_tables(const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab) {
+    erased_minima_.bind_scratch_tables(slab, ::pineforge::detail::ScratchResource::erased_data,
+                                      ::pineforge::detail::ScratchResource::erased_index);
 }
 
 void PlacementTable::fixture_use_memory_auxiliary_tables() {
@@ -28234,12 +28268,11 @@ void PlacementTable::fixture_use_memory_auxiliary_tables() {
         throw coded<std::logic_error>(
             RunFailureCode::engine_invariant, {},
             "placement auxiliary fixture backend changed after use");
-    sequence_index_.fixture_use_memory_reference();
     erased_minima_.fixture_use_memory_reference();
 }
 
 std::uint64_t PlacementTable::auxiliary_disk_bytes() const noexcept {
-    return sequence_index_.disk_bytes() + erased_minima_.disk_bytes();
+    return erased_minima_.disk_bytes();
 }
 
 // Part C's name for the merged binding: set_id_tables_directory above binds
@@ -28273,11 +28306,11 @@ void bind_tree_scratch_tables(source::PineExecutionAdapter&,
             "bounded tree scratch binding is not installed");
 }
 
-void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
+void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,
                                  const std::shared_ptr<ScratchSlab>& slab) {
-    if (slab)
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-            "bounded IdPair scratch binding is not installed");
+    adapter.placement_.bind_auxiliary_scratch_tables(slab);
+    adapter.consumed_partial_exit_cycles_.bind_scratch_tables(
+        slab, ScratchResource::consumed_data, ScratchResource::consumed_index);
 }
 
 } // namespace pineforge::detail
