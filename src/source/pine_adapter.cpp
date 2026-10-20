@@ -28226,7 +28226,7 @@ PineExecutionAdapter::CohortFacts::restore_record(const Record& row) {
     if (row.handle == 0 || static_cast<std::uint64_t>(
             static_cast<std::size_t>(row.origin_count)) != row.origin_count
         || row.erased_sides > 3) {
-        throw ::pineforge::detail::ScratchIoError(EIO, "scratch cohort invalid record");
+        ::pineforge::detail::raise_scratch_io_error(EIO, "scratch cohort invalid record");
     }
     CohortFacts facts;
     facts.handle.value = row.handle;

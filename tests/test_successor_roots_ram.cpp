@@ -102,8 +102,8 @@ std::shared_ptr<pd::ScratchSlab> slab_for(std::uint64_t roots, bool neighbors = 
     pd::ScratchManifest manifest{};
     manifest.R = roots;
     if (neighbors) {
-        manifest.K_q = manifest.K_e = manifest.K_c = manifest.U = manifest.V = 1;
-        manifest.B_q = 17;
+        // K_q and B_q stay zero: the q store is removed and the layout refuses a nonzero q.
+        manifest.K_e = manifest.K_c = manifest.U = manifest.V = 1;
         manifest.B_e = 23;
         manifest.B_c = 29;
         manifest.B_U = 5;

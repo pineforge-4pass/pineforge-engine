@@ -56,4 +56,8 @@ public:
           RunFailureInfo(RunFailureCode::scratch_io_failed, {}) {}
 };
 
+[[noreturn]] inline void raise_scratch_io_error(int error, const char* operation) {
+    throw ScratchIoError(error, operation);
+}
+
 } // namespace pineforge::detail

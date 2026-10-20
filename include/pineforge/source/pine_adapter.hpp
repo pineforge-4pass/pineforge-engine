@@ -1479,6 +1479,17 @@ struct PineReplayRiskConfig {
 
 class PineExecutionAdapter;
 
+} // namespace pineforge::source
+
+namespace pineforge::detail {
+void bind_tree_scratch_tables(source::PineExecutionAdapter&,
+                              const std::shared_ptr<ScratchSlab>&);
+void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
+                                 const std::shared_ptr<ScratchSlab>&);
+} // namespace pineforge::detail
+
+namespace pineforge::source {
+
 // Allocation-free view facade for Appendix C's later C projection. L2 does
 // not wire the C ABI; this only exposes named truthful sources to native
 // fixture tests and keeps observer reads side-effect-free.
