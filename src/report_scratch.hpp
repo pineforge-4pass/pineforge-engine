@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/metrics_stream.hpp>
 
 #include <cstddef>
@@ -18,10 +19,10 @@ inline constexpr std::size_t kScratchWindowBytes = 64U * 1024U;
 inline constexpr std::size_t kScratchWindowPoints =
     kScratchWindowBytes / sizeof(pf_equity_point_t);
 
-// One private, unlinked, close-on-exec file. The caller supplies the already
-// resolved scratch directory (the sink path's parent when scratch_dir is NULL).
-// There is deliberately no fallback to a different directory. L18 can own a
-// second instance for variable-length position-tail records.
+// One positional store through the frozen detail::ScratchFile facade. Startup
+// explicitly attaches an arena; otherwise the facade uses a private unlinked
+// file in the supplied directory (empty selects its usual TMPDIR default).
+// L18 owns a separate position_tail store for variable-length records.
 //
 // I/O errors remain std::system_error (including their errno) and carry
 // RunFailureCode::report_sink_failed through the existing failure classifier.
@@ -29,18 +30,21 @@ inline constexpr std::size_t kScratchWindowPoints =
 // used: callers may have independent readers over immutable regions.
 class ScratchFile {
 public:
-    explicit ScratchFile(const std::string& directory);
+    explicit ScratchFile(const std::string& directory,
+                         detail::ScratchStore store = detail::ScratchStore::unknown);
     ~ScratchFile();
     ScratchFile(const ScratchFile&) = delete;
     ScratchFile& operator=(const ScratchFile&) = delete;
 
-    int descriptor() const noexcept;
     void write(std::int64_t byte_offset, const void* bytes, std::size_t length);
     void read(std::int64_t byte_offset, void* bytes, std::size_t length) const;
-    void truncate(std::int64_t byte_count);
+    void ensure_size(std::int64_t byte_count);
+    void clear() noexcept;
+    metrics::ScratchCurveRegion curve_region(std::int64_t byte_offset,
+                                             std::int64_t point_count) const;
 
 private:
-    int descriptor_ = -1;
+    detail::ScratchFile file_;
 };
 
 // A binary curve with at most one 64 KiB RAM batch (2730 complete points).
@@ -64,7 +68,7 @@ public:
     void clear();
     void flush() const;
     std::int64_t size() const noexcept;
-    // Flush first, then borrow the descriptor/count. The owner must outlive
+    // Flush first, then borrow the facade/count. The owner must outlive
     // all readers. Appending preserves an old region; replace_last/clear need
     // fresh readers so a cached window cannot return an earlier revision.
     metrics::ScratchCurveRegion region() const;
@@ -74,9 +78,11 @@ private:
     std::unique_ptr<State> state_;
 };
 
-// Exact binary pread, with no cache or allocation. This is the single adapter
-// L7c needs if it owns its window itself. Positive short reads and EINTR are
-// retried; premature EOF is EIO, never a manufactured zero/NaN point.
+// Exact binary positional read, with no cache or allocation. The same adapter
+// serves facade regions and the older explicitly borrowed-descriptor form.
+// File reads retry positive short reads and EINTR. Arena reads retain the
+// frozen facade's typed short-backing refusal and size recheck. Premature EOF
+// is EIO, never a manufactured zero/NaN point.
 void read_scratch_points(const metrics::ScratchCurveRegion& region,
                          std::int64_t first, pf_equity_point_t* points,
                          std::int64_t count);

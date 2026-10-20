@@ -5,6 +5,7 @@
 #include "global_allocation_replacement.hpp"
 
 #include "../src/report_scratch.hpp"
+#include "scratch_descriptor_fixture.hpp"
 
 #include <pineforge/run_failure.hpp>
 
@@ -198,15 +199,16 @@ void curve_writer_matches_array() {
         const auto& const_writer = writer;
         const auto region = const_writer.region();
         require(directory.empty(), "curve file is unlinked while owned");
+        const int descriptor = scratch_fixture::descriptor(region);
         struct stat status{};
-        require(::fstat(region.descriptor, &status) == 0, "stat curve file");
+        require(::fstat(descriptor, &status) == 0, "stat curve file");
         require(status.st_size == static_cast<off_t>(points.size() * sizeof(pf_equity_point_t)),
                 "scratch is exactly 24 bytes per point");
-        require(::lseek(region.descriptor, 11, SEEK_SET) == 11, "set shared file cursor");
+        require(::lseek(descriptor, 11, SEEK_SET) == 11, "set shared file cursor");
         compare_walks(region, points, random);
-        require(::lseek(region.descriptor, 0, SEEK_CUR) == 11, "pread preserves file cursor");
+        require(::lseek(descriptor, 0, SEEK_CUR) == 11, "pread preserves file cursor");
         const auto again = writer.region();
-        require(again.descriptor == region.descriptor && again.point_count == region.point_count,
+        require(again.scratch == region.scratch && again.point_count == region.point_count,
                 "repeated region does not duplicate or consume points");
     }
 }
@@ -245,7 +247,7 @@ void arbitrary_regions_and_raw_file_lifetime() {
         int descriptor = -1;
         {
             rs::ScratchFile file(directory.path);
-            descriptor = file.descriptor();
+            descriptor = scratch_fixture::descriptor(file.curve_region(0, 0));
             struct stat status{};
             require(::fstat(descriptor, &status) == 0 && S_ISREG(status.st_mode)
                         && status.st_nlink == 0 && (status.st_mode & 0777) == 0600,
@@ -254,8 +256,7 @@ void arbitrary_regions_and_raw_file_lifetime() {
             require(directory.empty(), "raw scratch file has no directory entry");
             file.write(offset, points.data(), points.size() * sizeof(points[0]));
             file.read(0, nullptr, 0);
-            const metrics::ScratchCurveRegion region{
-                descriptor, offset, static_cast<std::int64_t>(points.size())};
+            const auto region = file.curve_region(offset, static_cast<std::int64_t>(points.size()));
             compare_walks(region, points, random);
             std::array<pf_equity_point_t, 3> block{};
             rs::read_scratch_points(region, static_cast<std::int64_t>(rs::kScratchWindowPoints) - 1,
@@ -281,7 +282,9 @@ void arbitrary_regions_and_raw_file_lifetime() {
     ::close(regular);
     expect_io([&] { rs::ScratchFile not_directory(regular_path + "/child"); }, ENOTDIR);
     require(::unlink(regular_path.c_str()) == 0, "remove directory-refusal fixture");
-    expect_invariant([&] { rs::ScratchFile empty(""); });
+    expect_invariant([&] { rs::ScratchFile embedded_nul(std::string("bad\0directory", 13)); });
+    // Empty is the facade's default directory, needed by a borrowed-fd sink.
+    expect_io([&] { rs::ScratchFile default_directory(""); }, ENOENT);
 }
 
 void replace_clear_and_snapshot_counts() {
@@ -304,10 +307,12 @@ void replace_clear_and_snapshot_counts() {
             "borrowed region keeps its snapshot count");
     require(same_point(rs::ScratchCurveWindow(prefix)[0], {3, 98.0, -2.0}),
             "append preserves a borrowed prefix");
+    const int descriptor = scratch_fixture::descriptor(extended);
     writer.clear();
     require(writer.size() == 0 && writer.region().point_count == 0, "clear resets count");
-    struct stat status{};
-    require(::fstat(region.descriptor, &status) == 0 && status.st_size == 0, "clear truncates bytes");
+    errno = 0;
+    require(::fcntl(descriptor, F_GETFD) == -1 && errno == EBADF,
+            "clear releases the old backing instead of shrinking it");
     writer.append({9, 200.0, 0.0});
     require(same_point(rs::ScratchCurveWindow(writer.region())[0], {9, 200.0, 0.0}),
             "curve can be reused after clear");
@@ -321,7 +326,7 @@ void malformed_regions_and_short_reads() {
     require(rs::ScratchCurveWindow(empty).size() == 0, "empty region needs no live descriptor");
     rs::read_scratch_points(empty, 0, nullptr, 0);
     file.write(0, &point, sizeof(point));
-    const int descriptor = file.descriptor();
+    const int descriptor = scratch_fixture::descriptor(file.curve_region(0, 1));
     const auto limit = static_cast<std::int64_t>(std::numeric_limits<off_t>::max());
     const metrics::ScratchCurveRegion malformed[] = {
         {-1, 0, 1}, {descriptor, -1, 1}, {descriptor, 0, -1},
@@ -330,15 +335,15 @@ void malformed_regions_and_short_reads() {
     };
     for (const auto& region : malformed)
         expect_invariant([&] { rs::ScratchCurveWindow rejected(region); });
-    const metrics::ScratchCurveRegion valid{descriptor, 0, 1};
+    const auto valid = file.curve_region(0, 1);
     expect_invariant([&] { rs::read_scratch_points(valid, -1, nullptr, 0); });
     expect_invariant([&] { rs::read_scratch_points(valid, 0, nullptr, -1); });
     expect_invariant([&] { rs::read_scratch_points(valid, 1, nullptr, 1); });
     expect_invariant([&] { rs::read_scratch_points(valid, 0, nullptr, 1); });
     expect_invariant([&] { file.write(-1, &point, sizeof(point)); });
     expect_invariant([&] { file.write(limit, &point, sizeof(point)); });
-    expect_invariant([&] { file.truncate(-1); });
-    file.truncate(sizeof(point) - 1);
+    expect_invariant([&] { file.ensure_size(-1); });
+    require(::ftruncate(descriptor, sizeof(point) - 1) == 0, "inject a short backing");
     expect_io([&] { (void)rs::ScratchCurveWindow(valid)[0]; }, EIO);
 
     const int borrowed = ::dup(descriptor);
@@ -361,11 +366,13 @@ void failed_refill_invalidates_old_cache() {
     const auto points = random_points(2 * rs::kScratchWindowPoints, random);
     const auto length = points.size() * sizeof(points[0]);
     file.write(0, points.data(), length);
-    const metrics::ScratchCurveRegion region{
-        file.descriptor(), 0, static_cast<std::int64_t>(points.size())};
+    const auto region = file.curve_region(0, static_cast<std::int64_t>(points.size()));
+    const int descriptor = scratch_fixture::descriptor(region);
     const rs::ScratchCurveWindow curve(region);
     require(same_point(curve[0], points[0]), "prime first cache window");
-    file.truncate(static_cast<std::int64_t>(rs::kScratchWindowPoints * sizeof(points[0]) + 12));
+    require(::ftruncate(descriptor,
+                        static_cast<off_t>(rs::kScratchWindowPoints * sizeof(points[0]) + 12)) == 0,
+            "inject a partial next window");
     expect_io([&] { (void)curve[static_cast<std::int64_t>(rs::kScratchWindowPoints)]; }, EIO);
     file.write(0, points.data(), length);
     require(same_point(curve[0], points[0]), "failed refill cannot expose partially overwritten old cache");
@@ -379,7 +386,7 @@ void partial_flush_is_retryable() {
     const auto points = random_points(rs::kScratchWindowPoints + 1, random);
     for (std::size_t i = 0; i < rs::kScratchWindowPoints; ++i) writer.append(points[i]);
     {
-        // Not a multiple of 24: forces a positive short pwrite and then EFBIG.
+        // Not a multiple of 24: complete-extent growth refuses before publish.
         FileSizeLimit limit(97);
         expect_io([&] { writer.append(points.back()); }, EFBIG);
     }

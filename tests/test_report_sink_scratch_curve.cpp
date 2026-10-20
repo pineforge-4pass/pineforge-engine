@@ -47,6 +47,7 @@
 #include <pineforge/run_failure.hpp>
 
 #include "../src/report_scratch.hpp"
+#include "scratch_descriptor_fixture.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -459,11 +460,12 @@ std::int64_t check_scratch_prefix(const pineforge::metrics::ScratchCurveRegion& 
 
 // DESIGN 3.8: private, anonymous, close-on-exec.
 void check_private_file(const pineforge::metrics::ScratchCurveRegion& region) {
+    const int descriptor = scratch_fixture::descriptor(region);
     struct stat status{};
-    require(::fstat(region.descriptor, &status) == 0, "scratch descriptor is not open");
+    require(::fstat(descriptor, &status) == 0, "scratch descriptor is not open");
     require(S_ISREG(status.st_mode) && status.st_nlink == 0 && (status.st_mode & 0777) == 0600,
             "scratch curve is not a private unlinked regular file");
-    const int flags = ::fcntl(region.descriptor, F_GETFD);
+    const int flags = ::fcntl(descriptor, F_GETFD);
     require(flags != -1 && (flags & FD_CLOEXEC) != 0, "scratch curve does not close on exec");
 }
 
@@ -572,7 +574,7 @@ void prove_curve(const TestRoot& root, const Plan& plan) {
     on->probe_present = plan.present;
     install(*on, path, root.scratch().c_str());
     sink_on_run(*on, oracle, 1, path, root.scratch(), plan.early_probe);
-    const int descriptor = on->probe_scratch().descriptor;
+    const int descriptor = scratch_fixture::descriptor(on->probe_scratch());
     require(descriptor >= 0, "no scratch descriptor after a completed sink-on run");
     on.reset();
     errno = 0;
