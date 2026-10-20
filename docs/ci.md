@@ -927,9 +927,9 @@ The `build` aggregate always runs, refuses any non-success authz result in
 its first step, and requires authz, classification and preflight success.
 It accepts a skipped proof job only for a classified docs-only change;
 failure and cancellation always fail it. A skipped matrix is not expanded,
-so a documentation-only run shows one skipped `build` check instead of the
-four legs. Required-check configuration must retain this aggregate to enforce
-that exception.
+so a documentation-only run shows one skipped `build` check under its
+unexpanded name instead of the four legs. Required-check configuration must
+retain this aggregate to enforce that exception.
 
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
@@ -1033,6 +1033,16 @@ The routing-only matrix includes contain JSON label arrays, decoded by
 its matching job-level string `PF_CI_LABELS`; hosted macOS ignores that string.
 Parallelism remains `--jobs "$(getconf _NPROCESSORS_ONLN)"`.
 
+The dispatcher's actor allowlist follows the frozen canon `ci-labels.md` at
+line 192: members, collaborators, `dependabot[bot]` on same-repository pull
+requests, and `pineforge-app[bot]`; the dispatcher's own rerun App is admitted
+only on its recorded-rerun path. The CI/native fragments do not extend this
+actor allowlist.
+
+The pre-job hook requires each pool job's `PF_CI_LABELS` to match its runner
+labels. `authz` is canon-verbatim and has no `PF_CI_LABELS`; whether the pool
+hook accepts it is settled by the first pool run.
+
 `scripts/ci_preflight.py` pins the runner arrays, matrix, exact canon authz
 step digest, every authz dependency, read-only permissions and both refuse-first
 aggregates. Its mutation tests write altered workflow files and read them back
@@ -1048,6 +1058,29 @@ the CI/native fallback policy documented by `28fe3466a` and `f9bee2220`, using
 the `b240f6d7` fragments after `1fe46216`. The temporary runner stopgap was
 `3484a7c40` / `693fd9e68`; the earlier runner and docs-only descriptions were
 `d0935605c` and `133f57148`. The platform maxima from `2394ba2fc` remain.
+
+Owner ruling of 2026-10-20, CI-HOSTED = B: all CI runs on our own machines,
+credentialed jobs included. Credential-free jobs run on the `pf-ci` pool;
+jobs that carry production credentials run on the separate `pf-ci-release`
+class (protected refs, one job per VM), never on the shared pool. Only macOS
+jobs stay on GitHub runners. The earlier CR-171 hosted exception is VOID.
+
+Owner ruling of 2026-10-20, REL-HOSTED = B: there is no hosted exception for
+the release workflow either; the release cut runs on `pf-ci-release`.
+
+As of 2026-10-21, `scripts/ci_preflight.py:128-133` and `:436-440` still pin
+the docs, promote and release jobs to hosted runners; that pin is removed by
+the `pf-ci-release` branches (#461 and the `ci/pfrel-*` heads), and this PR
+does not change `scripts/ci_preflight.py`.
+
+The temporary standard-runner stopgap was recorded by `3484a7c40` and
+squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner costs
+exceeded US$3,000.
+
+The contract refuses `pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and
+any `larger_runner` key in every workflow. No job of `ci.yml`, `native-live.yml`
+or `corpus-parity.yml`, nor any of their steps, may continue on error: that
+would report success to the aggregate however it ended.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
