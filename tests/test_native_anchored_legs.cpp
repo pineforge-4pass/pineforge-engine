@@ -1066,7 +1066,7 @@ void facts_resolve_at_the_arm() {
 //   directional_tick          src/source/pine_adapter.cpp:297-301
 //   source_bar_fill_tick / nearest_tick are not needed on these on-grid levels
 //   source_trigger_threshold  src/source/pine_adapter.cpp:328-375
-//   the fill booking          src/source/pine_adapter.cpp:9907-9926 (an
+//   the fill booking          src/source/pine_adapter.cpp:10042-10061 (an
 //                             ExitLimit books directional_tick(resolved,
 //                             !is_buy) clamped to its level; an ExitStop /
 //                             ExitTrail books directional_tick(resolved,
@@ -1259,9 +1259,9 @@ private:
     }
 
     // The adapter's fill booking: an exit crossed intrabar at a half-tick
-    // threshold books the grid level (pine_adapter.cpp:9907-9926); the
+    // threshold books the grid level (pine_adapter.cpp:10042-10061); the
     // explicit-zero trail books the next open (resolve_terms
-    // explicit_zero_trail, pine_adapter.cpp:9466-9476 and its
+    // explicit_zero_trail, pine_adapter.cpp:9601-9611 and its
     // zero_trail_policy_price).
     no::ExecutionTerms resolve_execution_terms(const NativeExecutionTermsFacts& facts) const override {
         no::ExecutionTerms terms{facts.default_resolved_price, std::nullopt,

@@ -2010,6 +2010,13 @@ private:
     NativeStrategyHost& require_host() const;
     bool modeled_input() const;
     native_order::CohortHandle cohort_for(const SourceId& id);
+    // held_cohort_ids_ upkeep: hold_cohort after `id`'s cohort gains an
+    // opening or live units, forget_emptied_cohorts after any cohort loses
+    // its last of both.
+    void hold_cohort(const SourceId& id);
+    void forget_emptied_cohorts();
+    const std::vector<SourceId>& held_cohort_ids() const noexcept;
+    bool held_cohort_ids_exact() const noexcept;
     std::optional<native_order::RequestHandle> submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key = {});
@@ -2517,6 +2524,14 @@ private:
     std::uint32_t entry_attempts_on_bar_ = 0;
     std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
     std::vector<SourceId> cohort_order_;
+    // The ids whose cohort holds an opening or live units, in cohort_order_
+    // order, which is the order of their kernel handles: cohort_for opens the
+    // handle as it appends the id, and the core numbers handles upward.
+    // cohorts_by_id_ keeps a cohort for every id the run has used, so a walk
+    // that reads only `opened` and `live_units_by_origin` walks this instead
+    // and costs what is open, not every id used so far. Not state: a function
+    // of cohorts_by_id_ and cohort_order_.
+    std::vector<SourceId> held_cohort_ids_;
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
@@ -2845,6 +2860,14 @@ private:
         std::vector<std::pair<native_order::CohortHandle, std::uint64_t>> released_origins;
         native_order::RequestHandle lot_probe{};
         bool roster_pass_due = true;
+        // A memo too (a run begin empties it): the kernel rosters that hold
+        // members, by handle, as of the last pass, and how many of the core's
+        // cohort receipts it has read. Only an applied add puts a member in a
+        // roster, so a pass reads these (held_rosters, its working list), not
+        // every roster the run opened.
+        std::vector<native_order::CohortHandle> rostered;
+        std::size_t cohort_receipts_read = 0;
+        std::vector<const native_order::CohortRoster*> held_rosters;
         void clear() noexcept {
             roots.clear();
             askable_origins.clear();

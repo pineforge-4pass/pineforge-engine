@@ -132,8 +132,24 @@
 // of CI's size (the large leg 27.5 % dearer a bar) the blocks' window is four
 // small runs longer than the rounds': on that runner about 0.8 s against 0.1.
 //
+// Spaced unique ids (pineforge-engine#452), without recording: an opening
+// every 20 bars, each under an id of its own the way scripts that tag every
+// trade with its bar or time spell `strategy.entry`, closed 10 bars later.
+// The adapter keeps a cohort for every id the run has used, and the kernel a
+// roster for each. Walks over all of them ran on every bar (the open-entry
+// count the pyramiding gate reads, the openings erase_retired_rows()
+// collects, the bar-open roster pass) and at every fill and placement, so a
+// run cost the square of its trades; they now read only the cohorts that
+// hold an opening or live units and the rosters that hold members. The row
+// closes each opening before the next, so no fill reverses the position: a
+// reversal still cancels the exits of every id the run has used
+// (on_applied). Fail-before, this TU against the base 0212cabe with one
+// attempt (macOS arm64, Apple clang 17, Release): 32,000 bars 0.3703 s,
+// 128,000 bars 8.4500 s, ratio 22.82 (bound 5.0); after, 128,000 bars
+// 0.1115 s, 512,000 bars 0.4546 s, ratio 4.08.
+//
 // Single-leg mode for peak-RSS rows: `test_adapter_live_state_scaling --leg
-// replay|churn|straddle|recancel|constant|cancelall|flip <bars>
+// replay|churn|straddle|recancel|constant|cancelall|flip|uniqueids <bars>
 // [--no-recording]` runs one leg and prints its CPU time, retained rows and
 // ru_maxrss.
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -178,7 +194,7 @@ int failures = 0;
 constexpr double kNa = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t T = 1736121600000LL;
 
-enum class Workload { Replay, Churn, Straddle, Recancel, Constant, CancelAll, Flip };
+enum class Workload { Replay, Churn, Straddle, Recancel, Constant, CancelAll, Flip, UniqueIds };
 
 long triangle(int index, int period) {
     const int phase = index % (2 * period);
@@ -264,6 +280,13 @@ public:
             // One opening every second bar, closed on the next.
             if (i % 2 == 0) strategy_entry("L", true, kNa, kNa, 1.0);
             else strategy_close("L");
+            return;
+        }
+        if (workload_ == Workload::UniqueIds) {
+            // An opening every 20 bars under an id of its own, closed 10
+            // bars later.
+            if (i % 20 == 0) strategy_entry("L" + std::to_string(i), true, kNa, kNa, 1.0);
+            else if (i % 20 == 10) strategy_close("L" + std::to_string(i - 10));
             return;
         }
         if (workload_ == Workload::Straddle) {
@@ -391,7 +414,7 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
     // The straddle and the re-cancels run four times longer: their bars cost
     // microseconds.
     const bool lane_rows = workload == Workload::Constant || workload == Workload::CancelAll
-        || workload == Workload::Flip;
+        || workload == Workload::Flip || workload == Workload::UniqueIds;
     const bool short_bars = workload == Workload::Straddle || workload == Workload::Recancel
         || lane_rows;
     const int scale = short_bars ? 4 : 1;
@@ -431,6 +454,11 @@ void cost_and_rows_are_live(Workload workload, const char* name, bool recording 
         CHECK(small.trades == 0);
         CHECK(large.trades == 0);
     }
+    if (workload == Workload::UniqueIds) {
+        // One round trip per 20 bars; the last opening may still be open.
+        CHECK(small.trades >= bars / 20 - 1);
+        CHECK(large.trades >= bars / 5 - 1);
+    }
     if (workload == Workload::Flip) {
         // One round trip per two bars; the last opening may still be open.
         CHECK(small.trades >= bars / 2 - 1);
@@ -458,6 +486,7 @@ int single_leg(const char* workload_name, const char* bars_text, bool recording)
         : std::strcmp(workload_name, "constant") == 0                 ? Workload::Constant
         : std::strcmp(workload_name, "cancelall") == 0                ? Workload::CancelAll
         : std::strcmp(workload_name, "flip") == 0                     ? Workload::Flip
+        : std::strcmp(workload_name, "uniqueids") == 0                ? Workload::UniqueIds
                                                                       : Workload::Replay;
     const int bars = std::atoi(bars_text);
     if (bars <= 0) return 2;
@@ -475,7 +504,8 @@ int single_leg(const char* workload_name, const char* bars_text, bool recording)
 } // namespace
 
 int main(int argc, char** argv) {
-    // --leg <replay|churn|straddle|recancel|constant|cancelall|flip> <bars> [--no-recording]
+    // --leg <replay|churn|straddle|recancel|constant|cancelall|flip|uniqueids> <bars>
+    // [--no-recording]
     if ((argc == 4 || argc == 5) && std::strcmp(argv[1], "--leg") == 0)
         return single_leg(argv[2], argv[3],
                           !(argc == 5 && std::strcmp(argv[4], "--no-recording") == 0));
@@ -499,6 +529,8 @@ int main(int argc, char** argv) {
     row("cancelall", Workload::CancelAll,
         "cancel_all and an exit at the entry price x 0.95 every bar", false);
     row("flip", Workload::Flip, "an opening every second bar, closed on the next");
+    row("uniqueids", Workload::UniqueIds,
+        "an opening every 20 bars under an id of its own, closed 10 bars later", false);
     if (failures == 0) std::printf("test_adapter_live_state_scaling: ok\n");
     return failures == 0 ? 0 : 1;
 }

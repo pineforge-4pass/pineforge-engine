@@ -710,19 +710,19 @@ void configuration_is_validated() {
 //
 //     Itemized differences, each a named TradingView quirk:
 //       * MG14 (day key): TV keys the day on chart_day_key, the composite
-//         mday*100+month of the chart timezone (pine_adapter.cpp:11281-11305).
+//         mday*100+month of the chart timezone (pine_adapter.cpp:11416-11440).
 //         The kernel keys on the calendar day ordinal of the spec timezone.
 //         Same boundary here, different key.
 //       * MG12 (cancel-pending): TV's forced close also latches
 //         intraday_cancel_pending and withdraws the working orders
-//         (pine_adapter.cpp:12400-12409). The kernel blocks openings and
+//         (pine_adapter.cpp:12535-12544). The kernel blocks openings and
 //         leaves every working order where it is.
 //       * MG12 (fill pricing and comment): TV submits its Flatten with
 //         NearestTick pricing and the legacy comment "Close Position (Max
 //         intraday Loss)"; the kernel books AsPresented at the evaluation
 //         point under its own engine-owned label.
 //       * MG12 (threshold epsilon): TV compares loss + 1e-9*max(1,|limit|)
-//         >= limit (pine_adapter.cpp:11427-11429); the kernel compares
+//         >= limit (pine_adapter.cpp:11562-11564); the kernel compares
 //         exactly. Both fire at -1200 against 1000.
 //       * MG12 (unbooked closing fill): TV excludes the closing fill's own
 //         realized P&L at its own tick; the kernel marks equity as it stands.

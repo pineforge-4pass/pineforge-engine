@@ -604,7 +604,7 @@ void a_default_sized_reversal_keeps_both_rows() {
 //
 // The core resolves a ScopeFraction as units = scope * fraction, one binary64
 // multiplication.  TradingView resolves basis * percent / 100.0
-// (src/source/pine_adapter.cpp:2545) and then applies its own percentage-exit
+// (src/source/pine_adapter.cpp:2550) and then applies its own percentage-exit
 // quantizer (:2550-2565, with a +1e-6 floor and a keep-one-lot rule).  The two
 // agree on the integer lot below and disagree on a fractional basis, so the
 // percentage exits are NOT re-lowered.

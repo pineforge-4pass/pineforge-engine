@@ -718,7 +718,7 @@ void maintenance_only_model() {
 // The native model with initial = maintenance = 0.5 and ShortfallMultiple 4.0
 // liquidates on the SAME bar, on the same side, for the SAME units. The only
 // difference is the booked price, and it is a named TV quirk (MG15, fill
-// pricing pine_adapter.cpp:11588-11597): the adapter pins its slice to the
+// pricing pine_adapter.cpp:11723-11732): the adapter pins its slice to the
 // bar's adverse extreme it sized against, while the generic kernel rests the
 // reduction at the liquidation level and books it where the account actually
 // runs out of margin.

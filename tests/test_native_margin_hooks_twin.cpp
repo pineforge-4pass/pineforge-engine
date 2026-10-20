@@ -172,7 +172,7 @@ struct TvNativeHost final : Host {
     void on_native_margin_call(const no::MarginCallEvent& event) override {
         margin_calls.push_back(event);
     }
-    // MG-B: pine_adapter.cpp:11491-11499. The requirement is money, and this
+    // MG-B: pine_adapter.cpp:11626-11634. The requirement is money, and this
     // broker keeps money to ten significant digits whenever a lot is worth
     // less than one unit of account.
     std::optional<NativeMarginDecision> resolve_margin_requirement(
@@ -185,7 +185,7 @@ struct TvNativeHost final : Host {
         decision.equity = view.equity;
         return decision;
     }
-    // MG-F / MG-G: pine_adapter.cpp:11505-11533, on the kernel's own facts.
+    // MG-F / MG-G: pine_adapter.cpp:11640-11668, on the kernel's own facts.
     std::optional<double> resolve_margin_call_units(
             const NativeMarginCallView& view) const override {
         const double unit_margin = view.mark * fraction();
@@ -213,7 +213,7 @@ struct TvNativeHost final : Host {
         units = std::min(book, units);
         return units > 1e-10 && std::isfinite(units) ? units : 0.0;
     }
-    // MG-H: pine_adapter.cpp:11588-11597. The slice fires at the waypoint the
+    // MG-H: pine_adapter.cpp:11723-11732. The slice fires at the waypoint the
     // kernel rested it on; the booked price is that fire price on the tick
     // ladder plus the EXIT side's own market slippage.
     no::ExecutionTerms resolve_execution_terms(

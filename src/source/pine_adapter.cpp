@@ -1184,7 +1184,7 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
 
     std::string_view first_lot_id;
     std::uint64_t first_lot_incarnation = 0;
-    for (const auto& id : cohort_order_) {
+    for (const auto& id : held_cohort_ids()) {
         const auto cohort = cohorts_by_id_.find(id);
         if (cohort == cohorts_by_id_.end()) continue;
         for (const auto& opening : cohort->second.opened) {
@@ -2189,12 +2189,14 @@ void PineExecutionAdapter::purge_brackets_after_applied_reversal(
         (void)require_host().cancel(handle);
         retire(handle);
     }
-    for (auto& cohort : cohorts_by_id_) {
-        if (cohort_opened_on_side(cohort.second, prior_long)) {
-            cohort.second.opened.clear();
-            cohort.second.live_units_by_origin.clear();
+    for (const auto& id : held_cohort_ids()) {
+        auto& cohort = cohorts_by_id_.at(id);
+        if (cohort_opened_on_side(cohort, prior_long)) {
+            cohort.opened.clear();
+            cohort.live_units_by_origin.clear();
         }
     }
+    forget_emptied_cohorts();
 }
 
 void PineExecutionAdapter::revive_brackets_after_margin(
@@ -2398,11 +2400,14 @@ void PineExecutionAdapter::reset_for_run() {
     // Incarnations start over with the run.
     retired_row_scratch_.unsuperseded.clear();
     retired_row_scratch_.roster_pass_due = true;
+    retired_row_scratch_.rostered.clear();
+    retired_row_scratch_.cohort_receipts_read = 0;
     if (auto* index = adapter_lookup_index(bound_consumer(), this, run_counter_, false))
         index->clear();
     admission_journal.reset();
     cohorts_by_id_.clear();
     cohort_order_.clear();
+    held_cohort_ids_.clear();
     placement_.clear();
     live_by_source_key_.clear();
     bracket_families_.clear();
@@ -3553,8 +3558,10 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
     if (origin == 0) return false;
     for (const auto& handle : live_handles_)
         if (handle.incarnation == origin) return true;
-    for (const auto& cohort : cohorts_by_id_) {
-        for (const auto& opening : cohort.second.opened)
+    for (const auto& id : held_cohort_ids()) {
+        const auto cohort = cohorts_by_id_.find(id);
+        if (cohort == cohorts_by_id_.end()) continue;
+        for (const auto& opening : cohort->second.opened)
             if (opening.incarnation == origin) return true;
     }
     return false;
@@ -3659,8 +3666,10 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // consumed-leg facts pruned below).
     auto& askable_origins = sweep.askable_origins;
     for (const auto& handle : live_handles_) askable_origins.push_back(handle.incarnation);
-    for (const auto& cohort : cohorts_by_id_) {
-        for (const auto& opening : cohort.second.opened)
+    for (const auto& id : held_cohort_ids()) {
+        const auto cohort = cohorts_by_id_.find(id);
+        if (cohort == cohorts_by_id_.end()) continue;
+        for (const auto& opening : cohort->second.opened)
             askable_origins.push_back(opening.incarnation);
     }
     std::sort(askable_origins.begin(), askable_origins.end());
@@ -3834,8 +3843,10 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             }, command);
             return false;
         });
-    for (const auto& cohort : cohorts_by_id_) {
-        for (const auto& opening : cohort.second.opened) root(opening.incarnation);
+    for (const auto& id : held_cohort_ids()) {
+        const auto cohort = cohorts_by_id_.find(id);
+        if (cohort == cohorts_by_id_.end()) continue;
+        for (const auto& opening : cohort->second.opened) root(opening.incarnation);
     }
     if (auto* pine = pine_view_of(host_)) {
         for (const auto& lot : pine->pyramid_entries_) root(lot.entry_incarnation);
@@ -4091,8 +4102,47 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     auto* pine = pine_view_of(host_);
     if (!pine) return;
     const auto& core = as_native_consumer(*consumer).request_core();
+    // The rosters that hold members, in handle order (core.cohorts()'s):
+    // every loop below reads a roster only through its members, so these
+    // alone answer what walking every roster the run opened would.
+    auto& rostered = scratch.rostered;
+    const auto& receipts = core.cohort_receipts();
+    if (receipts.size() < scratch.cohort_receipts_read) {
+        rostered.clear();
+        scratch.cohort_receipts_read = 0;
+    }
+    for (; scratch.cohort_receipts_read < receipts.size(); ++scratch.cohort_receipts_read) {
+        const auto& receipt = receipts[scratch.cohort_receipts_read];
+        if (receipt.operation != native_order::CohortReceiptOperation::Add
+            || receipt.status != native_order::CohortReceiptStatus::Applied) {
+            continue;
+        }
+        const auto at = std::lower_bound(rostered.begin(), rostered.end(), receipt.cohort);
+        if (at == rostered.end() || *at != receipt.cohort) rostered.insert(at, receipt.cohort);
+    }
+    const auto roster_of = [&](native_order::CohortHandle handle) {
+        const auto& all = core.cohorts();
+        const auto at = std::lower_bound(all.begin(), all.end(), handle,
+            [](const native_order::CohortRoster& roster, native_order::CohortHandle value) {
+                return roster.handle < value;
+            });
+        return at != all.end() && at->handle == handle ? &*at : nullptr;
+    };
+    auto& rosters = scratch.held_rosters;
+    rosters.clear();
+    rostered.erase(std::remove_if(rostered.begin(), rostered.end(),
+        [&](native_order::CohortHandle handle) {
+            const auto* roster = roster_of(handle);
+            if (!roster || roster->origins.empty()) return true;
+            rosters.push_back(roster);
+            return false;
+        }), rostered.end());
+    assert(std::count_if(core.cohorts().begin(), core.cohorts().end(),
+               [](const native_order::CohortRoster& roster) {
+                   return !roster.origins.empty();
+               }) == static_cast<std::ptrdiff_t>(rosters.size()));
     std::size_t members = 0;
-    for (const auto& roster : core.cohorts()) members += roster.origins.size();
+    for (const auto* roster : rosters) members += roster->origins.size();
     if (members == 0) return;
     // The common case, in a direct scan with nothing allocated or sorted:
     // every member still opened a lot that is open, or roots a working
@@ -4104,8 +4154,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     constexpr std::size_t kDirectScan = 64;
     if (members * (pine->pyramid_entries_.size() + core.live().size()) <= kDirectScan) {
         bool every_member_bound = true;
-        for (const auto& roster : core.cohorts()) {
-            for (const auto& origin : roster.origins) {
+        for (const auto* roster : rosters) {
+            for (const auto& origin : roster->origins) {
                 const std::uint64_t incarnation = origin.incarnation;
                 const bool bound = std::any_of(pine->pyramid_entries_.begin(),
                         pine->pyramid_entries_.end(), [&](const PyramidEntry& lot) {
@@ -4150,8 +4200,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
     for (const auto opening : lots) {
         if (opening == 0) continue;
         bool root = false;
-        for (const auto& roster : core.cohorts()) {
-            if (member(roster.origins, opening)) {
+        for (const auto* roster : rosters) {
+            if (member(roster->origins, opening)) {
                 root = true;
                 break;
             }
@@ -4159,7 +4209,8 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         if (!root) successor_lots.push_back(opening);
     }
     auto& probe = scratch.lot_probe;
-    for (const auto& roster : core.cohorts()) {
+    for (const auto* roster_row : rosters) {
+        const auto& roster = *roster_row;
         const auto& origins = roster.origins;
         if (origins.empty()) continue;
         if (probe.run != origins.front().run) probe.run = origins.front().run;
@@ -4187,6 +4238,11 @@ void PineExecutionAdapter::release_closed_cohort_origins() {
         origin.incarnation = incarnation;
         host.cohort_remove(cohort, std::move(origin));
     }
+    rostered.erase(std::remove_if(rostered.begin(), rostered.end(),
+        [&](native_order::CohortHandle handle) {
+            const auto* roster = roster_of(handle);
+            return !roster || roster->origins.empty();
+        }), rostered.end());
 }
 
 void PineExecutionAdapter::maybe_activate_short_seed_plan() {
@@ -4200,7 +4256,7 @@ bool PineExecutionAdapter::short_seed_context_is_live() const noexcept {
     const auto physical = detail::run_position(*host_);
     if (!(physical.signed_units < 0.0) || physical.lot_count != 1U) return false;
     const double held = std::abs(physical.signed_units);
-    for (const auto& id : cohort_order_) {
+    for (const auto& id : held_cohort_ids()) {
         const auto cohort = cohorts_by_id_.find(id);
         if (cohort == cohorts_by_id_.end()) continue;
         if (cohort_exposure_for(id) == held) return true;
@@ -5074,13 +5130,82 @@ std::optional<double> PineExecutionAdapter::from_entry_units(
 }
 
 int PineExecutionAdapter::source_entry_slot_count() const noexcept {
+    const auto walk = [&] {
+        std::size_t walked = 0;
+        for (const auto& id : cohort_order_) {
+            const auto found = cohorts_by_id_.find(id);
+            if (found != cohorts_by_id_.end()) walked += found->second.opened.size();
+        }
+        return walked;
+    };
+    (void)walk;
     std::size_t total = 0;
-    for (const auto& id : cohort_order_) {
+    for (const auto& id : held_cohort_ids()) {
         const auto found = cohorts_by_id_.find(id);
         if (found != cohorts_by_id_.end()) total += found->second.opened.size();
     }
+    assert(total == walk());
     return total > static_cast<std::size_t>(std::numeric_limits<int>::max())
         ? std::numeric_limits<int>::max() : static_cast<int>(total);
+}
+
+void PineExecutionAdapter::hold_cohort(const SourceId& id) {
+    if (std::find(held_cohort_ids_.begin(), held_cohort_ids_.end(), id) != held_cohort_ids_.end())
+        return;
+    const auto handle_of = [&](const SourceId& held) {
+        const auto found = cohorts_by_id_.find(held);
+        return found == cohorts_by_id_.end() ? 0 : found->second.handle.value;
+    };
+    const std::uint64_t handle = handle_of(id);
+    auto at = held_cohort_ids_.begin();
+    while (at != held_cohort_ids_.end() && handle_of(*at) <= handle) ++at;
+    held_cohort_ids_.insert(at, id);
+}
+
+void PineExecutionAdapter::forget_emptied_cohorts() {
+    held_cohort_ids_.erase(
+        std::remove_if(held_cohort_ids_.begin(), held_cohort_ids_.end(),
+            [&](const SourceId& id) {
+                const auto found = cohorts_by_id_.find(id);
+                return found == cohorts_by_id_.end()
+                    || (found->second.opened.empty()
+                        && found->second.live_units_by_origin.empty());
+            }),
+        held_cohort_ids_.end());
+}
+
+const std::vector<SourceId>& PineExecutionAdapter::held_cohort_ids() const noexcept {
+    assert(held_cohort_ids_exact());
+    return held_cohort_ids_;
+}
+
+// The index names each cohort that holds an opening or live units once, in
+// cohort_order_ order, and nothing else; so a walk over it visits, in the
+// same order, every cohort a walk over cohort_order_ or cohorts_by_id_ finds
+// anything in.
+bool PineExecutionAdapter::held_cohort_ids_exact() const noexcept {
+    std::size_t holding = 0;
+    for (const auto& cohort : cohorts_by_id_)
+        if (!cohort.second.opened.empty() || !cohort.second.live_units_by_origin.empty())
+            ++holding;
+    if (holding != held_cohort_ids_.size()) return false;
+    auto position = cohort_order_.begin();
+    for (const auto& id : held_cohort_ids_) {
+        const auto found = cohorts_by_id_.find(id);
+        if (found == cohorts_by_id_.end()) return false;
+        if (found->second.opened.empty() && found->second.live_units_by_origin.empty())
+            return false;
+        position = std::find(position, cohort_order_.end(), id);
+        if (position == cohort_order_.end()) return false;
+        ++position;
+    }
+    std::uint64_t previous = 0;
+    for (const auto& id : cohort_order_) {
+        const auto handle = cohorts_by_id_.at(id).handle.value;
+        if (!(handle > previous)) return false;
+        previous = handle;
+    }
+    return true;
 }
 
 double PineExecutionAdapter::percent_commission_live_equity(double mark) const noexcept {
@@ -5895,6 +6020,7 @@ void PineExecutionAdapter::consume_cohort_units(
         if (unit->second == 0.0) facts.live_units_by_origin.erase(unit);
         if (!(remaining > 0.0)) break;
     }
+    forget_emptied_cohorts();
 }
 
 void PineExecutionAdapter::consume_closed_trade_rows(
@@ -5936,22 +6062,34 @@ void PineExecutionAdapter::consume_closed_trade_rows(
         if (index >= static_cast<std::size_t>(host.trade_count())) continue;
         const Trade& trade = host.get_trade(static_cast<int>(index));
         double remaining = trade.qty;
-        bool matched = false;
-        for (auto& cohort : cohorts_by_id_) {
-            auto units = cohort.second.live_units_by_origin.find(
-                trade.entry_incarnation);
-            if (units == cohort.second.live_units_by_origin.end()) continue;
+        // An opening's units live in its own id's cohort alone, so the first
+        // holder in cohort order is the one any walk finds.
+        const auto holds_entry = [&](const CohortFacts& cohort) {
+            return cohort.live_units_by_origin.count(trade.entry_incarnation) != 0;
+        };
+        assert(std::count_if(cohorts_by_id_.begin(), cohorts_by_id_.end(),
+                   [&](const auto& cohort) { return holds_entry(cohort.second); }) <= 1);
+        auto holder = cohorts_by_id_.end();
+        for (const auto& id : held_cohort_ids()) {
+            const auto cohort = cohorts_by_id_.find(id);
+            if (cohort != cohorts_by_id_.end() && holds_entry(cohort->second)) {
+                holder = cohort;
+                break;
+            }
+        }
+        if (holder != cohorts_by_id_.end()) {
+            auto units = holder->second.live_units_by_origin.find(trade.entry_incarnation);
             const double consumed = std::min(units->second, remaining);
             units->second -= consumed;
             remaining -= consumed;
             const bool drained = !(units->second > 1e-10);
             if (drained)
-                cohort.second.live_units_by_origin.erase(units);
-            settle_slot(cohort.second, trade, drained);
-            matched = true;
-            break;
+                holder->second.live_units_by_origin.erase(units);
+            settle_slot(holder->second, trade, drained);
+            forget_emptied_cohorts();
+            continue;
         }
-        if (matched || !(remaining > 0.0)) continue;
+        if (!(remaining > 0.0)) continue;
         const auto cohort = cohorts_by_id_.find(trade.entry_id);
         if (cohort == cohorts_by_id_.end()) continue;
         // False once nothing remains to consume.
@@ -5965,6 +6103,7 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             if (drained)
                 cohort->second.live_units_by_origin.erase(units);
             settle_slot(cohort->second, trade, drained);
+            forget_emptied_cohorts();
             return remaining > 0.0;
         };
         auto* lookup = cohort->second.origins.size() <= kIndexedFrom ? nullptr
@@ -6920,7 +7059,7 @@ bool PineExecutionAdapter::coof_current_fill_was_forced_waypoint() const noexcep
     if (!coof_recalc_active_) return false;
     const auto point = detail::callback_point(require_host());
     if (!point) return false;
-    for (const auto& id : cohort_order_) {
+    for (const auto& id : held_cohort_ids()) {
         const auto cohort = cohorts_by_id_.find(id);
         if (cohort == cohorts_by_id_.end()) continue;
         for (const auto& opening : cohort->second.opened) {
@@ -7117,9 +7256,7 @@ void PineExecutionAdapter::flush_coof_tail(
 std::size_t PineExecutionAdapter::accepted_entries_in_cycle(
         bool is_long, const SourceId& id) const {
     std::size_t accepted_in_cycle = 0;
-    std::vector<SourceId> cohort_ids;
-    cohort_ids.reserve(cohorts_by_id_.size());
-    for (const auto& row : cohorts_by_id_) cohort_ids.push_back(row.first);
+    std::vector<SourceId> cohort_ids = held_cohort_ids();
     std::sort(cohort_ids.begin(), cohort_ids.end());
     for (const auto& cohort_id : cohort_ids) {
         const auto cohort = cohorts_by_id_.find(cohort_id);
@@ -8324,9 +8461,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         }
         std::vector<native_order::RequestHandle> carried_brackets;
         std::vector<SourceId> carried_ids;
-        std::vector<SourceId> cohort_ids;
-        cohort_ids.reserve(cohorts_by_id_.size());
-        for (const auto& row : cohorts_by_id_) cohort_ids.push_back(row.first);
+        std::vector<SourceId> cohort_ids = held_cohort_ids();
         std::sort(cohort_ids.begin(), cohort_ids.end());
         for (const auto& cohort_id : cohort_ids) {
             const auto cohort = cohorts_by_id_.find(cohort_id);
@@ -9293,8 +9428,8 @@ void PineExecutionAdapter::flush_pending_closes() {
             if (incarnation == 0) return std::nullopt;
             if (!included.insert(incarnation).second) continue;
             const native_order::RequestHandle* receipt = nullptr;
-            for (const auto& cohort : cohorts_by_id_) {
-                for (const auto& opened : cohort.second.opened)
+            for (const auto& id : held_cohort_ids()) {
+                for (const auto& opened : cohorts_by_id_.at(id).opened)
                     if (opened.incarnation == incarnation) receipt = &opened;
             }
             if (!receipt) return std::nullopt;
@@ -12812,8 +12947,8 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
     // (src/source/pine_strategy_commands.cpp:481-482,
     // src/source/pine_strategy_commands.cpp:2627-2648). This route carries the
     // same fact on the snapshot's source sequence, which a re-issued bracket
-    // inherits (src/source/pine_adapter.cpp:6601) and the book walk already
-    // ranks on (src/source/pine_adapter.cpp:11288).
+    // inherits (src/source/pine_adapter.cpp:6740) and the book walk already
+    // ranks on (src/source/pine_adapter.cpp:11423).
     const auto parent_precedes_leg
         = [](const PlacementSnapshot& leg, const PlacementSnapshot& parent) {
         return parent.source_sequence < leg.source_sequence;
@@ -12992,7 +13127,7 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
     // the leg, so the leg settles with the position open ahead of the body. A
     // leg whose parent entry was the fill that opened the position has already
     // had that parent's calculation, so the walk also satisfies the deferred
-    // post-parent-calculation parking flag (pine_adapter.cpp:7393).
+    // post-parent-calculation parking flag (pine_adapter.cpp:7530).
     const auto parent_walks_first
         = [&](const PlacementSnapshot& leg) {
         if (!pre_script_drain) return false;
@@ -15931,7 +16066,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
         const bool keep_mc_close_surplus = [&]() {
             if (!source.affordability_keep_mc_close_surplus) return false;
             bool receipt_origin_live = false;
-            for (const auto& cohort_id : cohort_order_) {
+            for (const auto& cohort_id : held_cohort_ids()) {
                 const auto cohort = cohorts_by_id_.find(cohort_id);
                 if (cohort == cohorts_by_id_.end()) continue;
                 const auto units = cohort->second.live_units_by_origin.find(
@@ -17789,7 +17924,7 @@ bool PineExecutionAdapter::source_margin_rounded_tie_veto() const {
         return false;
     }
     bool rounded_tie_opening = false;
-    for (const auto& cohort_id : cohort_order_) {
+    for (const auto& cohort_id : held_cohort_ids()) {
         const auto cohort = cohorts_by_id_.find(cohort_id);
         if (cohort == cohorts_by_id_.end()) continue;
         for (const auto& origin : cohort->second.opened) {
@@ -18416,10 +18551,11 @@ bool PineExecutionAdapter::slipped_long_book_scope() const {
         }
     }
     const CohortFacts* sole_cohort = nullptr;
-    for (const auto& row : cohorts_by_id_) {
-        if (row.second.opened.empty()) continue;
+    for (const auto& id : held_cohort_ids()) {
+        const auto& row = cohorts_by_id_.at(id);
+        if (row.opened.empty()) continue;
         if (sole_cohort != nullptr) return false;
-        sole_cohort = &row.second;
+        sole_cohort = &row;
     }
     if (sole_cohort == nullptr || sole_cohort->opened.size() != 1) return false;
     const auto placement = placement_.find(sole_cohort->opened.front().incarnation);
@@ -18748,10 +18884,11 @@ bool PineExecutionAdapter::slipped_pooc_opening_money_scope(
     }
 
     const CohortFacts* sole_cohort = nullptr;
-    for (const auto& row : cohorts_by_id_) {
-        if (row.second.opened.empty()) continue;
+    for (const auto& id : held_cohort_ids()) {
+        const auto& row = cohorts_by_id_.at(id);
+        if (row.opened.empty()) continue;
         if (sole_cohort != nullptr) return false;
-        sole_cohort = &row.second;
+        sole_cohort = &row;
     }
     if (sole_cohort == nullptr || sole_cohort->opened.size() != 1
         || sole_cohort->live_units_by_origin.size() != 1) {
@@ -19004,8 +19141,8 @@ std::optional<std::int64_t> PineExecutionAdapter::flat_sibling_placement(
     const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0 || position.lot_count < min_lots) return std::nullopt;
     std::optional<std::int64_t> placed;
-    for (const auto& cohort : cohorts_by_id_) {
-        for (const auto& [incarnation, units] : cohort.second.live_units_by_origin) {
+    for (const auto& id : held_cohort_ids()) {
+        for (const auto& [incarnation, units] : cohorts_by_id_.at(id).live_units_by_origin) {
             if (!(units > 0.0)) continue;
             const auto found = placement_.find(incarnation);
             if (found == placement_.end()) return std::nullopt;
@@ -19098,8 +19235,8 @@ std::size_t PineExecutionAdapter::add_sibling_lots(std::int64_t placed) const {
     const auto position = detail::run_position(require_host());
     if (position.signed_units == 0.0) return 0;
     std::size_t count = 0;
-    for (const auto& cohort : cohorts_by_id_) {
-        for (const auto& [incarnation, units] : cohort.second.live_units_by_origin) {
+    for (const auto& id : held_cohort_ids()) {
+        for (const auto& [incarnation, units] : cohorts_by_id_.at(id).live_units_by_origin) {
             if (!(units > 0.0)) continue;
             const auto found = placement_.find(incarnation);
             if (found == placement_.end()) continue;
@@ -24715,10 +24852,12 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         std::sort(closed_cohorts.begin(), closed_cohorts.end());
         for (const auto& id : closed_cohorts)
             cancel_exit_orders_for_full_close(id);
-        for (auto& cohort : cohorts_by_id_) {
-            cohort.second.opened.clear();
-            cohort.second.live_units_by_origin.clear();
+        for (const auto& id : held_cohort_ids()) {
+            auto& cohort = cohorts_by_id_.at(id);
+            cohort.opened.clear();
+            cohort.live_units_by_origin.clear();
         }
+        held_cohort_ids_.clear();
         // ab9714be pine_strategy_host.cpp:244 / :261
         // reset_source_open_position_ledgers_before_book clears the close
         // ledgers when a position is opened or reversed, so unclosed units of
@@ -24882,6 +25021,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 facts.opened.push_back(event.handle());
             facts.live_units_by_origin[event.handle().incarnation]
                 += std::abs(event.opened_units);
+            hold_cohort(placement_snapshot->source_id);
         }
         credit_close_ledger(placement_snapshot->source_id, std::abs(event.opened_units));
         credit_pyramiding_record(placement_snapshot->source_id, event.handle().incarnation,
@@ -25282,7 +25422,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         const auto physical = detail::run_position(require_host());
         std::uint64_t sole_live_entry_incarnation = 0;
         std::size_t live_entry_count = 0;
-        for (const auto& id : cohort_order_) {
+        for (const auto& id : held_cohort_ids()) {
             const auto cohort = cohorts_by_id_.find(id);
             if (cohort == cohorts_by_id_.end()) continue;
             for (const auto& opening : cohort->second.opened) {
@@ -25318,7 +25458,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         std::uint64_t sole_entry_incarnation = 0;
         int live_entry_origins = 0;
         if (physical.signed_units != 0.0 && physical.lot_count == 1U) {
-            for (const auto& cohort_id : cohort_order_) {
+            for (const auto& cohort_id : held_cohort_ids()) {
                 const auto cohort = cohorts_by_id_.find(cohort_id);
                 if (cohort == cohorts_by_id_.end()) continue;
                 for (const auto& origin : cohort->second.opened) {
@@ -25428,7 +25568,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (placement_snapshot && placement_snapshot->opening) {
         const double physical_exposure =
             std::abs(detail::run_position(require_host()).signed_units);
-        for (const auto& id : cohort_order_) {
+        // A copy: the reconciliation may cancel and re-place exit orders.
+        const auto held = held_cohort_ids();
+        for (const auto& id : held) {
             const double exposure = cohort_exposure_for(id);
             const bool paired_source_transaction =
                 placement_snapshot->paired_flat_market_candidate
@@ -25535,7 +25677,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::CloseAll
         && event.closed_units > 0.0) {
-        for (auto& cohort : cohorts_by_id_) cohort.second.live_units_by_origin.clear();
+        for (const auto& id : held_cohort_ids())
+            cohorts_by_id_.at(id).live_units_by_origin.clear();
+        forget_emptied_cohorts();
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
         && event.closed_units > 0.0
@@ -25657,11 +25801,13 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         exit_tombstones_.clear();
         std::vector<SourceId> ended_sources;
         pending_margin_revivals_.clear();
-        for (auto& cohort : cohorts_by_id_) {
-            if (!cohort.second.opened.empty()) ended_sources.push_back(cohort.first);
-            cohort.second.opened.clear();
-            cohort.second.live_units_by_origin.clear();
+        for (const auto& id : held_cohort_ids()) {
+            auto& cohort = cohorts_by_id_.at(id);
+            if (!cohort.opened.empty()) ended_sources.push_back(id);
+            cohort.opened.clear();
+            cohort.live_units_by_origin.clear();
         }
+        held_cohort_ids_.clear();
         const auto handles = live_handles_;
         for (const auto& handle : handles) {
             const auto found = placement_.find(handle.incarnation);

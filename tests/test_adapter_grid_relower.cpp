@@ -436,7 +436,7 @@ std::vector<Bar> feed(Shape shape) {
         push(14.01, 14.02, 14.00, 14.01);   // 3
         break;
     case Shape::SubTickSellLimit:
-        // pine_adapter.cpp:7830-7834: NYSE:F high 10.175 -> 10.18 fills a
+        // pine_adapter.cpp:7967-7971: NYSE:F high 10.175 -> 10.18 fills a
         // 10.18 sell limit.
         push(10.10, 10.10, 10.10, 10.10);   // 0: entry placed
         push(10.10, 10.12, 10.08, 10.10);   // 1: L fills @10.10, limit 10.18 placed
