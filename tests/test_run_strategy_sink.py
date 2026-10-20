@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -938,6 +939,75 @@ def test_canary_log_checker_accepts_exact_probe_coverage(
             "check", log, "--probes", *(f"corpus/validation/{probe}" for probe in probes))
     assert result.returncode == 0, result.stderr
     assert f"ok probes={len(probes)}" in result.stdout
+
+
+def test_canary_log_subset_summary_counts_parsed_successes(
+        tmp_path, sweep_probe_outputs):
+    probes = ["alpha", "beta"]
+    log = tmp_path / "canaries.log"
+    for probe in probes:
+        canary_log.append_lines(log, sweep_probe_outputs[probe].splitlines(True))
+    result = run_canary_tool("check", log, "--subset-summary", "--probes", *probes)
+    assert result.returncode == 0, result.stderr
+    assert (f"sink-on subset: {len(probes)} sink_canary ok lines for "
+            f"{len(probes)} probes") in result.stdout.splitlines()
+
+
+@pytest.mark.parametrize("damage", [
+    None, "missing-line", "duplicate", "unexpected", "missing-file", "empty-file",
+    "outside-directory", "shared-file", "malformed",
+])
+def test_kept_sink_manifest_hashes_real_harness_artifacts(
+        tmp_path, monkeypatch, capsys, sink_directory, damage):
+    monkeypatch.setenv("PINEFORGE_REPORT_SINK", "1")
+    probe_dir = Path("corpus/validation/alpha  probe")
+    probe = rs._probe_id(probe_dir)
+    log = tmp_path / "kept.log"
+    with strategy(HarnessLibrary(trade_fixture())).run(bars.csv_file(tmp_path)) as report:
+        report.sink.keep = True
+        try:
+            rs._sink_canary(probe, report)
+            output = capsys.readouterr().out
+            path = Path(report.sink.path)
+            raw = path.read_bytes()
+            expected = (f"sink_kept: probe={probe} "
+                        f"sha256={hashlib.sha256(raw).hexdigest()} bytes={len(raw)}")
+            probes = [str(probe_dir)]
+            if damage == "missing-line":
+                output = "\n".join(canary_lines(output)) + "\n"
+            elif damage == "duplicate":
+                output += next(line for line in output.splitlines()
+                               if line.startswith("sink_kept:")) + "\n"
+            elif damage == "unexpected":
+                output = output.replace(f"sink_kept: probe={probe} ",
+                                        "sink_kept: probe=stranger ")
+            elif damage == "missing-file":
+                path.unlink()
+            elif damage == "empty-file":
+                path.write_bytes(b"")
+            elif damage == "outside-directory":
+                outside = tmp_path / "outside.sink"
+                outside.write_bytes(raw)
+                output = output.replace(f"path={path}", f"path={outside}")
+            elif damage == "shared-file":
+                probes.append("beta")
+                output += f"sink_kept: probe=beta path={path}\n"
+            elif damage == "malformed":
+                output = output.replace(f"path={path}", "no-path")
+            canary_log.append_lines(log, output.splitlines(True))
+            result = run_canary_tool(
+                "kept", log, "--directory", sink_directory, "--probes", *probes)
+            if damage is None:
+                assert result.returncode == 0, result.stderr
+                assert result.stdout.splitlines() == [
+                    f"sink-on kept sinks: {len(probes)}", expected,
+                ]
+            else:
+                assert result.returncode == 1, result.stdout + result.stderr
+                assert "sink_canary_log:" in result.stderr
+                assert "sink-on kept sinks:" not in result.stdout
+        finally:
+            report.sink.keep = False
 
 
 @pytest.mark.parametrize("damage, offenders", [
