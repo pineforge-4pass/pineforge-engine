@@ -3,6 +3,9 @@
 // CR-150 L19l-C. Exact string / string-pair tables with no per-key RAM
 // directory. Like L19a's successor-root file, scratch files are private,
 // unlinked at creation, close-on-exec, and accessed with pread/pwrite.
+// Those file-mode properties now belong to ScratchFile; an explicitly
+// attached ScratchArena instead supplies a separate region for each file.
+#include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
@@ -10,8 +13,6 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <fcntl.h>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -20,9 +21,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/types.h>
 #include <system_error>
 #include <type_traits>
-#include <unistd.h>
 #include <utility>
 
 namespace pineforge::detail {
@@ -40,75 +41,46 @@ public:
     IdPairScratchFile() = default;
     IdPairScratchFile(const IdPairScratchFile&) = delete;
     IdPairScratchFile& operator=(const IdPairScratchFile&) = delete;
-    IdPairScratchFile(IdPairScratchFile&& other) noexcept
-        : fd_(std::exchange(other.fd_, -1)) {}
-    IdPairScratchFile& operator=(IdPairScratchFile&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, -1);
-        }
-        return *this;
-    }
-    ~IdPairScratchFile() { reset(); }
+    IdPairScratchFile(IdPairScratchFile&&) noexcept = default;
+    IdPairScratchFile& operator=(IdPairScratchFile&&) noexcept = default;
+    ~IdPairScratchFile() = default;
 
-    bool opened() const noexcept { return fd_ >= 0; }
-    void reset() noexcept {
-        if (fd_ >= 0) ::close(fd_);
-        fd_ = -1;
-    }
+    bool opened() const noexcept { return file_.opened(); }
+    void reset() noexcept { file_.clear(); }
     void open(const std::string& directory) {
         if (opened()) return;
-        const char* temporary = std::getenv("TMPDIR");
-        std::string name = directory.empty()
-            ? (temporary && *temporary ? temporary : "/tmp") : directory;
-        if (name.back() != '/') name += '/';
-        name += "pineforge-id-pairs-XXXXXX";
-        const int opened = ::mkstemp(name.data());
-        if (opened < 0) throw IdPairStoreError(errno, "id table create");
-        if (::unlink(name.c_str()) != 0) {
-            const int error = errno;
-            ::close(opened);
-            throw IdPairStoreError(error, "id table unlink");
+        try {
+            file_.set_directory(directory);
+            file_.open("pineforge-id-pairs");
+        } catch (const ScratchIoError& error) {
+            throw IdPairStoreError(error.code().value(), "id table create");
         }
-        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
-            const int error = errno;
-            ::close(opened);
-            throw IdPairStoreError(error, "id table cloexec");
-        }
-        fd_ = opened;
     }
     void resize(std::uint64_t bytes) {
         check_range(0, bytes);
-        int result;
-        do {
-            result = ::ftruncate(fd_, static_cast<off_t>(bytes));
-        } while (result != 0 && errno == EINTR);
-        if (result != 0) throw IdPairStoreError(errno, "id table resize");
+        if (!opened()) throw IdPairStoreError(EBADF, "id table resize");
+        try {
+            file_.ensure_size(bytes);
+        } catch (const ScratchIoError& error) {
+            throw IdPairStoreError(error.code().value(), "id table resize");
+        }
     }
     void read(std::uint64_t offset, void* destination, std::size_t length) const {
         check_range(offset, length);
-        auto* bytes = static_cast<unsigned char*>(destination);
-        std::size_t received = 0;
-        while (received < length) {
-            const ssize_t count = ::pread(fd_, bytes + received, length - received,
-                static_cast<off_t>(offset + received));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0)
-                throw IdPairStoreError(count < 0 ? errno : EIO, "id table read");
-            received += static_cast<std::size_t>(count);
+        if (length != 0 && !opened()) throw IdPairStoreError(EBADF, "id table read");
+        try {
+            file_.read(offset, destination, length);
+        } catch (const ScratchIoError& error) {
+            throw IdPairStoreError(error.code().value(), "id table read");
         }
     }
     void write(std::uint64_t offset, const void* source, std::size_t length) {
         check_range(offset, length);
-        const auto* bytes = static_cast<const unsigned char*>(source);
-        std::size_t written = 0;
-        while (written < length) {
-            const ssize_t count = ::pwrite(fd_, bytes + written, length - written,
-                static_cast<off_t>(offset + written));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0)
-                throw IdPairStoreError(count < 0 ? errno : EIO, "id table write");
-            written += static_cast<std::size_t>(count);
+        if (length != 0 && !opened()) throw IdPairStoreError(EBADF, "id table write");
+        try {
+            file_.write(offset, source, length);
+        } catch (const ScratchIoError& error) {
+            throw IdPairStoreError(error.code().value(), "id table write");
         }
     }
 
@@ -118,7 +90,7 @@ private:
         if (offset > maximum || length > maximum - offset)
             throw IdPairStoreError(EFBIG, "id table offset exhausted");
     }
-    int fd_ = -1;
+    ScratchFile file_;
 };
 
 // One 40-byte record plus both strings per distinct key ever seen, and a
@@ -126,6 +98,13 @@ private:
 // Replacing a value, erasing and recurring reuse the original record.
 // Single keys and pairs are separate domains; ("x", "") is not single "x".
 // Hash collisions are always resolved by comparing the complete byte strings.
+// For N historical distinct singles and pairs, data D is the sum of
+// (40 + |id|) per single and (40 + |id| + |entry|) per pair. Index bytes are
+// 16*S, with S=0 for N=0, otherwise the least 64*2^k >= 2*N (k >= 0).
+// For Q=1 MiB and R(x)=Q*ceil(x/Q), arena steady use is R(D)+R(16*S).
+// Rebuilding S to 2*S peaks at R(D_before_append)+R(16*S)+R(32*S);
+// initial construction has no old index. Admission takes the maximum of
+// these rebuild peaks and the steady use after each distinct-key append.
 template<class Value>
 class IdPairStore {
     static_assert(std::is_integral_v<Value> && sizeof(Value) == 8,
@@ -417,6 +396,8 @@ private:
                 if (buffer[i].offset_plus_one != 0) place_slot(next, next_slots, buffer[i]);
             at += count;
         }
+        // ScratchFile move assignment clears the old region immediately,
+        // before taking the completed new region; no third index is held.
         index_ = std::move(next); // publish only a complete replacement
         slots_ = next_slots;
     }
