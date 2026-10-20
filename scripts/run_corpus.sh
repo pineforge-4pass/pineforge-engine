@@ -16,6 +16,8 @@
 #   SKIP_BUILD    — set to 1 to reuse an existing build directory
 #   SKIP_RUN      — set to 1 to skip the Python harness pass
 #   SKIP_VERIFY   — set to 1 to skip the parity verifier
+#   PINEFORGE_CANARY_LOG — optional sink_canary:/sink_kept: log; truncate once,
+#                         append every probe's lines, then check coverage
 
 set -euo pipefail
 
@@ -40,6 +42,11 @@ RUNNER="${RUNNER:-ctypes}"
 log()  { printf '\033[1;34m[run_corpus]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[run_corpus]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[run_corpus]\033[0m %s\n' "$*" >&2; exit 1; }
+
+CANARY_LOG="${PINEFORGE_CANARY_LOG:-}"
+if [[ -n "$CANARY_LOG" ]]; then
+    : > "$CANARY_LOG"
+fi
 
 if [[ ! -f "$ROOT_DIR/corpus/CMakeLists.txt" ]]; then
     fail "validation corpus is not checked out (missing corpus/CMakeLists.txt).
@@ -91,6 +98,9 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
     n_fail=0
     n_selected=0
     failed=()
+    # Keep the option even if no command can run (e.g. missing libraries), so
+    # an empty array expansion under Bash 3 + nounset cannot hide the failure.
+    canary_args=(--probes)
     started=$(date +%s)
 
     for strat_dir in corpus/validation/*/; do
@@ -136,6 +146,7 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
             run_cmd=("$PY" scripts/run_strategy.py "$strat_dir" --so-name "$so_name")
         fi
 
+        canary_args+=("$strat_dir")
         run_output=""
         if run_output="$("${run_cmd[@]}" 2>&1)"; then
             n_ok=$((n_ok + 1))
@@ -147,6 +158,9 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
                 warn "  $line"
             done <<< "$run_output"
         fi
+        if [[ -n "$CANARY_LOG" ]]; then
+            "$PY" -I scripts/check_sink_canary_log.py append "$CANARY_LOG" <<< "$run_output"
+        fi
     done
 
     if (( n_selected == 0 )); then
@@ -154,12 +168,20 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
     fi
     elapsed=$(( $(date +%s) - started ))
     log "ran $((n_ok + n_fail)) strategies in ${elapsed}s -- ok=$n_ok fail=$n_fail"
+    canary_rc=0
+    if [[ -n "$CANARY_LOG" ]]; then
+        "$PY" -I scripts/check_sink_canary_log.py check "$CANARY_LOG" \
+            "${canary_args[@]}" || canary_rc=$?
+    fi
     if (( n_fail > 0 )); then
         warn "failed strategies:"
         for f in "${failed[@]}"; do
             warn "  $f"
         done
         fail "$n_fail strategy run(s) failed; refusing to verify stale engine_trades.csv"
+    fi
+    if (( canary_rc != 0 )); then
+        fail "sink canary coverage failed; see $CANARY_LOG"
     fi
 fi
 
