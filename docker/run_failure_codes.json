@@ -937,9 +937,30 @@
    "since": "1.5.0"
   },
   "report_sink_failed": {
-   "args": {},
-   "class": "resource",
-   "description": "The engine could not create or write the report sink. The run has no completed sink or valid trailer.",
+   "args": {
+    "arena_bytes": {
+     "kind": "integer",
+     "optional": true
+    },
+    "high_water_bytes": {
+     "kind": "integer",
+     "optional": true
+    },
+    "reason": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "arena_exhausted",
+      "arena_io",
+      "arena_backing",
+      "scratch_io",
+      "sink_io",
+      "sink_peer_closed"
+     ]
+    }
+   },
+   "class": "engine_fault",
+   "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io) and a closed sink peer (sink_peer_closed). high_water_bytes and arena_bytes are byte counts meaningful with arena_exhausted. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
    "english": [
     "report sink open failed",
     "report sink write failed",

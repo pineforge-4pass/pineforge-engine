@@ -420,6 +420,38 @@ class CatalogDiff(unittest.TestCase):
                                 text=True, cwd=ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_report_sink_failed_is_engine_fault(self) -> None:
+        # APP derives billing from this shipped JSON. Pin the named code's
+        # policy independently of the C++ registry's classification test.
+        catalog = json.loads((ROOT / CATALOG).read_text(encoding="utf-8"))
+        entry = catalog["codes"]["report_sink_failed"]
+        self.assertEqual(entry["class"], "engine_fault")
+        self.assertIs(entry["retryable"], False)
+        self.assertEqual(entry["since"], "1.7.0")
+        self.assertEqual(entry["args"], {
+            "arena_bytes": {"kind": "integer", "optional": True},
+            "high_water_bytes": {"kind": "integer", "optional": True},
+            "reason": {
+                "kind": "vocab",
+                "optional": True,
+                "values": ["arena_exhausted", "arena_io", "arena_backing", "scratch_io",
+                           "sink_io", "sink_peer_closed"],
+            },
+        })
+        self.assertEqual(entry["english"], [
+            "report sink open failed",
+            "report sink write failed",
+            "report sink write made no progress",
+        ])
+        # It has not shipped in the diff's published base: corrections to its
+        # class/args are part of the whole addition, not a breaking change.
+        diff = json.loads((ROOT / DIFF).read_text(encoding="utf-8"))
+        additions = [item for item in diff["added"] if item["code"] == "report_sink_failed"]
+        self.assertEqual(additions, [
+            {"code": "report_sink_failed", "collection": "codes", "entry": entry},
+        ])
+        self.assertNotIn("report_sink_failed", [item["code"] for item in diff["changed"]])
+
     def test_docs_tables(self) -> None:
         catalog = json.loads((ROOT / CATALOG).read_text(encoding="utf-8"))
         page = DOCS_PAGE.read_text(encoding="utf-8")
