@@ -19,6 +19,7 @@ struct EquitySnapshot {
 #ifdef PINEFORGE_L6B2_MODULE
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include "../src/report_scratch.hpp"
 
 #include <cstring>
 #include <stdexcept>
@@ -77,7 +78,10 @@ public:
         result.extremes[1] = min_equity_;
         result.extremes[2] = max_drawdown_;
         result.extremes[3] = max_runup_;
-        result.count = static_cast<std::int64_t>(equity_curve_.size());
+        const auto prefix = report_sink_equity_scratch_region();
+        result.count = prefix.scratch != nullptr
+            ? prefix.point_count + (last_equity_point() ? 1 : 0)
+            : static_cast<std::int64_t>(equity_curve_.size());
         result.presentations = presentations;
         result.presented_length = presented_length;
         return result;
@@ -86,13 +90,22 @@ public:
         // Independent full walk, including the initial-capital seed and the
         // trough reset on a new peak. Compare the four doubles' exact bits.
         double peak = initial_capital_, trough = initial_capital_, dd = 0.0, ru = 0.0;
-        for (const auto& point : equity_curve_) {
+        const auto fold = [&](const pf_equity_point_t& point) {
             if (point.equity > peak) { peak = point.equity; trough = point.equity; }
             if (point.equity < trough) trough = point.equity;
             const double drawdown = peak - point.equity;
             if (drawdown > dd) dd = drawdown;
             const double runup = point.equity - trough;
             if (runup > ru) ru = runup;
+        };
+        const auto prefix = report_sink_equity_scratch_region();
+        if (prefix.scratch) {
+            const pineforge::report_sink::ScratchCurveWindow curve(prefix);
+            for (std::int64_t i = 0; i < curve.size(); ++i) fold(curve[i]);
+            if (const auto* held = last_equity_point()) fold(*held);
+        } else {
+            // Sink-off and selected runs retain the independent array walk.
+            for (const auto& point : equity_curve_) fold(point);
         }
         const double expected[] = {peak, trough, dd, ru};
         const auto actual = snapshot();
