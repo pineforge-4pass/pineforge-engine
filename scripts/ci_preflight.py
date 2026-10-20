@@ -45,6 +45,7 @@ PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d1
 # tests replace the whole value, never an earlier matrix name or step string.
 LIGHT_LABELS = '["self-hosted","pf-ci","pf-ci-x64"]'
 LINUX_LABELS = '["self-hosted","pf-ci","pf-ci-x64-16"]'
+RELEASE_RUNNER = '["self-hosted","pf-ci","pf-ci-release"]'
 LIGHT_RUNNER = '''>-
       ${{ github.event_name != 'pull_request_target' &&
           github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
@@ -73,7 +74,7 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '      matrix:\n'
                     '        include:\n'
                     '          - triple: linux-x86_64\n'
-                    '            runner: ubuntu-22.04\n'
+                    f'            runner: {RELEASE_RUNNER}\n'
                     '            cmake_extra: ""\n'
                     '          - triple: linux-aarch64\n'
                     '            runner: ubuntu-22.04-arm\n'
@@ -118,16 +119,20 @@ JOB_RUNNERS = {
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
 }
-# L6: credential-bearing deployment jobs and the entire release workflow
-# retain their exact pre-CR-171 hosted routing, including its older images.
+# The docs deployment accepts pull_request, so retains its exact hosted routing.
+# L6's 15:40 addendum separately moves baseline promotion to pf-ci-release.
 HOSTED_JOB_RUNNERS = {
     'docs.yml': {'build': 'ubuntu-latest'},
-    'promote-baseline.yml': {'promote': 'ubuntu-latest'},
-    'release.yml': {'release': 'ubuntu-latest', 'prebuilt': MATRIX_RUNNER,
-                    'notify-hub': 'ubuntu-latest'},
 }
-# New credential-bearing jobs use standard hosted labels. Existing hosted
-# exceptions above are pinned separately; macOS and ARM never use the pool.
+# LB-435 plus addendum 2: isolate releases and the named promotion exception.
+# The strategy pin keeps the existing macOS and Linux ARM hosted legs.
+RELEASE_JOB_RUNNERS = {
+    'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': MATRIX_RUNNER,
+                    'notify-hub': RELEASE_RUNNER},
+    'promote-baseline.yml': {'promote': RELEASE_RUNNER},
+}
+# Credential-bearing jobs outside the release pins retain standard hosted
+# labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'macos-26')
 # Refuse paid labels and the old matrix key in every workflow, including the
 # release matrix. Scan code so nested/flow mappings count too.
@@ -359,7 +364,7 @@ def _holds_credentials(workflow: str, body: str) -> bool:
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Keep credentials hosted; pin current pool fragments and refuse paid labels."""
+    """Pin isolated releases, hosted PR deployments and current pool fragments."""
     findings = []
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
@@ -369,8 +374,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not define a larger_runner key; use ci-spot or hosted exceptions')
         timed = JOB_RUNNERS.get(name, {})
         fixed_hosted = HOSTED_JOB_RUNNERS.get(name, {})
+        fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
         pinned = {job: values[0] for job, values in timed.items()}
         pinned.update(fixed_hosted)
+        pinned.update(fixed_release)
+        if (fixed_release and name != 'promote-baseline.yml'
+                and _events(workflow) != {'workflow_dispatch'}):
+            findings.append(f'{name} must retain workflow_dispatch only for pf-ci-release jobs')
+        if (name == 'promote-baseline.yml'
+                and _events(workflow) != {'pull_request_target', 'workflow_dispatch'}):
+            findings.append(f'{name} must retain pull_request_target and workflow_dispatch '
+                            'only for pf-ci-release promotion')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
@@ -395,9 +409,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     continue
             hosted_platform = (len(runs_on) == 1 and (runs_on[0] == 'macos-26' or
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
-            if job in fixed_hosted or credentials or (job not in pinned and hosted_platform):
-                # Restored deployment/release jobs retain their exact original
-                # labels; new credential jobs use ubuntu-24.04 or hosted macOS.
+            if job in fixed_release:
+                if runs_on != [fixed_release[job]]:
+                    findings.append(f'{name} job {job} must run on {fixed_release[job]} '
+                                    '(isolated release)')
+                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                    'on an isolated release job')
+            elif job in fixed_hosted or credentials or (job not in pinned and hosted_platform):
+                # PR deployment jobs retain their exact original labels;
+                # unlisted credential jobs retain standard hosted routing.
                 if job in fixed_hosted:
                     hosted_ok = runs_on == [fixed_hosted[job]]
                     if not hosted_ok:
@@ -440,8 +462,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
-            findings.append('release.yml prebuilt must use exactly the original hosted '
-                            'Linux x64/ARM/macOS matrix')
+            findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
+                            'and hosted ARM/macOS matrix')
     return findings
 
 
