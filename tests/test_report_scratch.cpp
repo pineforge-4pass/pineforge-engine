@@ -115,6 +115,9 @@ void expect_io(Operation operation, int error_number) {
         require(pineforge::classify_run_failure(error).code
                     == pineforge::RunFailureCode::report_sink_failed,
                 "scratch disk error carries report_sink_failed");
+        const auto failure = pineforge::classify_run_failure(error);
+        require(failure.args && *failure.args == "{\"reason\":\"scratch_io\"}",
+                "file-mode scratch failures carry only their reason");
         caught = true;
     }
     require(caught, "expected scratch I/O exception");

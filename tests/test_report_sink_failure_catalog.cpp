@@ -37,8 +37,8 @@ void expect_rejected(const RunFailureArgs& args) {
     assert(args_json(value) == "{}");
 }
 
-// Exercise carried payloads through the public bases without changing a
-// production raiser in this catalog lane.
+// Exercise carried registry payloads through the public bases; real I/O
+// raisers are exercised separately.
 class SinkFailureWithArgs final : public std::system_error, public pineforge::RunFailureInfo {
 public:
     explicit SinkFailureWithArgs(const RunFailureArgs& args)
@@ -201,7 +201,7 @@ void sink_counters() {
 }
 
 void existing_scratch_error() {
-    // W1 wires the real legacy-file raiser to this required A7 reason.
+    // File-mode errors default to a reason-only payload.
     bool caught = false;
     try {
         throw pineforge::detail::ScratchIoError(EIO, "scratch write");

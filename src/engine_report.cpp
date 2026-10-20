@@ -5,7 +5,6 @@
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
 #include "selected_report_view.hpp"
-#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
 #include <algorithm>
@@ -667,6 +666,7 @@ double BacktestEngine::output_constant_value(int index) const {
 
 // CR-150 L6B1/L22A: sink runtime. Kept after the existing report/output code
 // so the line-pinned documentation above retains its source coordinates.
+#include <pineforge/detail/scratch_arena.hpp>
 #include "report_sink_writer.hpp"
 
 namespace pineforge {
@@ -839,9 +839,7 @@ void BacktestEngine::begin_report_sink() {
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        throw coded<std::runtime_error>(code, {}, error.what());
+        throw coded<std::runtime_error>(error.run_failure(), error.what());
     }
 }
 
@@ -911,9 +909,7 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         *out = {};
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         note_run_failure(engine, failure.what(), classify_run_failure(failure));
         throw failure;
     } catch (const std::exception& error) {
@@ -1049,9 +1045,7 @@ void BacktestEngine::report_sink_record(Write write) const {
     try {
         write();
     } catch (const report_sink::WriterError& error) {
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
         note_run_failure(engine, failure.what(), classify_run_failure(failure));

@@ -133,7 +133,7 @@ std::string exhaustion_args(std::uint64_t high_water, std::uint64_t arena_bytes,
 
 template<class F>
 void expect_io(F&& operation, int error, const char* message = nullptr,
-               const char* reason = nullptr) {
+               const char* reason = "scratch_io") {
     bool caught = false;
     try { operation(); }
     catch (const ScratchIoError& failure) {
@@ -762,6 +762,33 @@ void deterministic_exhaustion(ScratchArenaBackend backend) {
     check_report_arena_stats(0, small.bytes);
 }
 
+void exhaustion_signed_transport_boundary(ScratchArenaBackend backend) {
+    auto backing = arena_backing(backend, kChunk + 23);
+    Attachment attachment(backing);
+    ScratchFile file;
+    file.set_store(ScratchStore::curve);
+    file.open("signed-transport-boundary");
+    constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    static_assert(std::numeric_limits<off_t>::max() == std::numeric_limits<std::int64_t>::max(),
+                  "boundary fixture requires signed 64-bit offsets");
+    const auto last_whole_chunk = maximum - maximum % kChunk;
+    // The first request rounding to 2^63, the next byte, and off_t's last
+    // byte all reach the real atomic capacity refusal without huge mappings.
+    for (const auto requested : {last_whole_chunk + 1, last_whole_chunk + 2, maximum}) {
+        expect_exhaustion([&] { file.ensure_size(requested); },
+                          0, backing.bytes, 0, maximum, "curve");
+        const std::uint8_t byte = 0x57;
+        expect_exhaustion([&] { file.write(requested - 1, &byte, 1); },
+                          0, backing.bytes, 0, maximum, "curve");
+        check_report_arena_stats(0, backing.bytes);
+        check_stats(ScratchArena::kDefaultWindowBytes, 0);
+    }
+    // At and above 2^63, offset validation wins; EFBIG alone must never
+    // manufacture arena_exhausted or append sizes to arena_io.
+    for (const auto requested : {maximum + 1, maximum + 2})
+        expect_io([&] { file.ensure_size(requested); }, EFBIG, nullptr, "arena_io");
+}
+
 void store_identity_contract(ScratchArenaBackend backend) {
     // Metadata also survives a file-mode move and clear before an arena open.
     ScratchFile legacy;
@@ -1122,7 +1149,9 @@ void finalizer_epipe(ScratchArenaBackend backend) {
     try { (void)writer.write_trailer(); }
     catch (const pineforge::report_sink::WriterError& error) {
         caught = error.reason() == pineforge::report_sink::WriterFailure::io
-            && error.error_number() == EPIPE;
+            && error.error_number() == EPIPE
+            && error.run_failure_code() == pineforge::RunFailureCode::report_sink_failed
+            && failure_args(error.run_failure()) == "{\"reason\":\"sink_peer_closed\"}";
     }
     require(caught, "finalizer EPIPE retains its sink I/O reason with either arena backend");
     check_report_arena_stats(0, backing.bytes);
@@ -1384,6 +1413,7 @@ int main() {
         for (const auto backend : kBackends) {
             invalid_backing_and_environment(backend);
             deterministic_exhaustion(backend);
+            exhaustion_signed_transport_boundary(backend);
             store_identity_contract(backend);
             arena_replay_and_sparse_reuse(backend, expected);
             default_cap_and_no_allocation(backend);

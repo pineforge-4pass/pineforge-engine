@@ -27,12 +27,12 @@
 
 namespace pineforge::detail {
 
-// Keep L19a's system_error surface, carrying the run's resource failure too.
+// Keep L19a's system_error surface, carrying the typed file-scratch failure too.
 class IdPairStoreError final : public std::system_error, public RunFailureInfo {
 public:
     IdPairStoreError(int error, const char* operation)
         : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
+          RunFailureInfo(RunFailureCode::report_sink_failed, {{"reason", "scratch_io"}}) {}
 };
 
 class IdPairScratchFile {
