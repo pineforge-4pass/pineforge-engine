@@ -182,7 +182,7 @@ summary of it.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
   `KernelRecorded`. Under `HostRecorded` an unrecorded curve still degenerates —
   `compute_equity_stats` answers its all-NaN value with no error (`src/engine_metrics.cpp:316`,
-  consumed by `fill_metrics_section`, `src/engine_report.cpp:192-206`) — which is why the policy exists.
+  consumed by `fill_metrics_section`, `src/engine_report.cpp:192-210`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
   (`native_host.hpp:1376`) returns the consumer's event/continuation hash. **A digest names
   the run's inputs** (rule 2): the timezone identity enters it as the zone's *content* —

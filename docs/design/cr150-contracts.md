@@ -210,7 +210,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
 | Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9609-9612`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9634-9636` | 361-363 |
 | Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3006-3012` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2775-2776`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13329-13334` | 364-365 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2775-2776`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13384-13389` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:234-244`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:294-301` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1191-1197` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
@@ -254,3 +254,8 @@ one presentation of the full selected curve, preserving the hook's published-len
 changes before the selected writer emits the anchor and final window observations.
 At capture, the existing admitted selected-window flag chooses the presentation
 once; subsequent report reads reuse that capture.
+Ordinary sink removal (`set_report_sink_v1(NULL)`) returns the typed setter
+refusal `-3` while that run's scratch curve is live and keeps the sink,
+scratch-backed summary report and bounded observer capture unchanged;
+the scratch is dropped at the next run begin or handle destruction without
+restoring a curve array.
