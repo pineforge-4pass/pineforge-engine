@@ -15,6 +15,9 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 `run-json-harness-tests` stage runs every `docker/run_json_*_test.py` under it
 and fails, never skips, without it.
 
+Actionlint only accepts declared custom self-hosted runner labels; preflight
+checks the declarations in `.github/actionlint.yaml`.
+
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
@@ -996,23 +999,36 @@ Credential-free Linux x64 jobs use the fragments in `pf-ci-spot`'s
 | Linux `build` legs, `sanitizers`, `kernel-only`, all three `native-live` profiles, both corpus-parity jobs | `engine-x64-16.yml`: `["self-hosted","pf-ci","pf-ci-x64-16"]` | e2-standard-16, 16 vCPU, 64 GB, 100 GB disk; engine only |
 | `changes`, `preflight`, both aggregate jobs | `public.yml`: `["self-hosted","pf-ci","pf-ci-x64"]` | e2-standard-4, 4 vCPU, 16 GB, 30 GB disk |
 
-L6's standing ruling of 2026-10-19 keeps production credentials on hosted
-runners. A job that references any secret other than `secrets.GITHUB_TOKEN`,
-has `id-token: write` at job or workflow scope, or names an `environment`
-must use a hosted standard runner and carry no `PF_CI_LABELS`. Inherited
-workflow environment secrets count too. A conditional deployment step still
-holds those references in its job.
+LB-435 prepares release routing to `["self-hosted","pf-ci","pf-ci-release"]`,
+replacing the hosted-only release ruling of 2026-10-19. The isolated class
+serves release/deploy/publish jobs that reference `secrets.*`, request
+`id-token`, name an `environment` or mint an App token, and jobs that build
+artifacts those jobs publish, even without secrets. Its runner group is
+restricted to selected workflows at protected refs, with its own no-role
+service account, one job per runner and nothing shared with PR classes.
+Inherited workflow environment secrets count too. A conditional deployment
+step still holds those references in its job.
 
-The existing jobs restore their exact pre-CR-171 hosted routing: docs
-`build` uses `ubuntu-latest` for its Cloudflare secrets; baseline `promote`
-uses `ubuntu-latest` for its GitHub App secrets and workflow OIDC permission.
-Every job in `release.yml` stays hosted under the explicit release ruling,
-including `prebuilt`, which references only `GITHUB_TOKEN`. That workflow is
-byte-identical to the pre-CR-171 `origin/main` copy: `release` and `notify-hub`
-use `ubuntu-latest`, and `prebuilt` selects `ubuntu-22.04`,
-`ubuntu-22.04-arm` and `macos-latest`. New credential-bearing jobs use
-`ubuntu-24.04` or the standard macOS label; the existing hosted aliases above
-are pinned explicitly to preserve their original values.
+In `release.yml`, `release`, `notify-hub` and the Linux x64 `prebuilt` leg
+select `["self-hosted","pf-ci","pf-ci-release"]` directly, with no hosted
+fallback. The `prebuilt` matrix keeps its three legs and
+`runs-on: ${{ matrix.runner }}`; `linux-aarch64` retains `ubuntu-22.04-arm`
+and waits for a release arm64 class, while `macos-universal` retains
+`macos-latest`. The workflow remains `workflow_dispatch` only.
+
+L6's 15:40 addendum also moves baseline `promote` in `promote-baseline.yml`
+to `["self-hosted","pf-ci","pf-ci-release"]` for its GitHub App secrets and
+inherited `id-token: write` permission. This named exception retains its
+closed `pull_request_target` and manual dispatch triggers; only its
+`runs-on` line changes in the workflow.
+Push this prepared migration only after both CORE-TOP gates: laneboss posts
+**"pf-ci-release live"** and the owner answers **REL-HOSTED**. Until then a
+job on that label with no runners only waits, and nothing is pushed.
+
+Other jobs in workflows triggered by `pull_request` or `pull_request_target`
+do not move to the release class. Docs `build` stays on `ubuntu-latest` because
+`docs.yml` accepts `pull_request`, even though its Cloudflare deployment step
+skips that event. That workflow is left intact.
 
 This follow-up rewords the pool-allocation, release/deploy routing and
 fallback sentences introduced by `28fe3466a` and carried into `f9bee2220`.
@@ -1026,7 +1042,7 @@ reworded originated in `d0935605c` (#290), and the documentation-only runner
 sentence in `133f57148` (#308). The platform job limits from `2394ba2fc`
 (#373) remain in force.
 
-Each pool job uses the fragment's expression verbatim and sets its
+Each job using these two CI fragments uses the expression verbatim and sets its
 matching array as a job-level **string** `PF_CI_LABELS`, merged into any
 existing job environment. The engine build fragment is:
 
@@ -1056,17 +1072,19 @@ names. Its routing-only `include` entries carry the engine fragment for
 Linux and `macos-26` for macOS, selected with `runs-on: ${{ matrix.runner }}`.
 The two hosted macOS legs stay on `macos-26` (M1, 3 cores, 7 GB). The shared
 build job sets the engine label string once; hosted macOS legs ignore it.
-Release's separate matrix stays entirely hosted and sets no pool labels.
-Promotion stays hosted for both target and dispatch triggers.
+Release's separate matrix routes Linux x64 to `pf-ci-release`, keeps its
+hosted ARM/macOS labels and sets no `PF_CI_LABELS`.
+Promotion uses `pf-ci-release` for both closed `pull_request_target` and
+`workflow_dispatch` triggers.
 
 The dispatcher's actor allowlist is `luisleo526`, `pineforge-app[bot]` and
 `github-actions[bot]` (chain triggers only). Dependabot-specific jobs stay
 hosted; this repository currently has no Dependabot configuration or such job.
 The fragments do not extend that actor allowlist. The dispatcher accepts
 `pf-ci` plus exactly one class, with optional `self-hosted`, `linux` and that
-class's architecture and no duplicate labels. The pre-job hook also requires
-the matching `PF_CI_LABELS` string. ARM pool dispatch is disabled, so ARM stays
-hosted.
+class's architecture and no duplicate labels. The pre-job hook for those CI
+fragments also requires the matching `PF_CI_LABELS` string. ARM pool dispatch
+is disabled, so ARM stays hosted.
 
 Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
 `check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
@@ -1076,14 +1094,20 @@ change starts preflight alone among the verification jobs.
 
 `scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
 limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included. It pins the original hosted labels in `docs.yml`,
-`promote-baseline.yml` and `release.yml`, the release matrix included, and
-checks every job for production secrets, OIDC write permission or an
-environment. Credential-bearing jobs must stay hosted without pool env;
-every other Linux x64 job must use one of the two current fragments and its
-matching job-level `PF_CI_LABELS`. macOS and ARM stay hosted. The contract refuses
+strategy block included. It pins the hosted PR deployment job in `docs.yml`,
+the isolated jobs in `release.yml` and `promote-baseline.yml`, and the complete
+release matrix with its hosted ARM/macOS exceptions. The `release.yml` pin
+requires readable `workflow_dispatch`-only triggers, refusing both PR events.
+The named promotion exception requires its existing `pull_request_target`
+and `workflow_dispatch` event set and retains the closed-PR promotion checks.
+Both workflows require exact runner values without a fallback and carry no
+`PF_CI_LABELS`; unlisted credential-bearing jobs retain the existing hosted
+guard, while other Linux x64 jobs use one of the two current CI fragments and
+its matching job-level `PF_CI_LABELS`. The contract refuses
 `pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and any `larger_runner`
-key in every workflow. A credential-bearing job on the pool, an old
+key in every workflow. A credential-bearing job on a PR pool, a restored hosted
+label on a moved release job, a PR trigger on `release.yml`, a `pull_request`
+trigger or changed event set on promotion, an old
 `ubuntu-latest` fragment fallback, a missing, duplicate, non-string or
 mismatched pool `PF_CI_LABELS`, a changed build or release matrix, a call to a
 workflow outside `.github/workflows/`, a changed time limit, a `ci_verify.py` call without

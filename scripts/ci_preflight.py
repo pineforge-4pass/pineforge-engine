@@ -45,6 +45,7 @@ PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d1
 # tests replace the whole value, never an earlier matrix name or step string.
 LIGHT_LABELS = '["self-hosted","pf-ci","pf-ci-x64"]'
 LINUX_LABELS = '["self-hosted","pf-ci","pf-ci-x64-16"]'
+RELEASE_RUNNER = '["self-hosted","pf-ci","pf-ci-release"]'
 LIGHT_RUNNER = '''>-
       ${{ github.event_name != 'pull_request_target' &&
           github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
@@ -73,7 +74,7 @@ RELEASE_STRATEGY = ('    strategy:\n'
                     '      matrix:\n'
                     '        include:\n'
                     '          - triple: linux-x86_64\n'
-                    '            runner: ubuntu-22.04\n'
+                    f'            runner: {RELEASE_RUNNER}\n'
                     '            cmake_extra: ""\n'
                     '          - triple: linux-aarch64\n'
                     '            runner: ubuntu-22.04-arm\n'
@@ -117,16 +118,20 @@ JOB_RUNNERS = {
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, PARITY)},
 }
-# L6: credential-bearing deployment jobs and the entire release workflow
-# retain their exact pre-CR-171 hosted routing, including its older images.
+# The docs deployment accepts pull_request, so retains its exact hosted routing.
+# L6's 15:40 addendum separately moves baseline promotion to pf-ci-release.
 HOSTED_JOB_RUNNERS = {
     'docs.yml': {'build': 'ubuntu-latest'},
-    'promote-baseline.yml': {'promote': 'ubuntu-latest'},
-    'release.yml': {'release': 'ubuntu-latest', 'prebuilt': MATRIX_RUNNER,
-                    'notify-hub': 'ubuntu-latest'},
 }
-# New credential-bearing jobs use standard hosted labels. Existing hosted
-# exceptions above are pinned separately; macOS and ARM never use the pool.
+# LB-435 plus addendum 2: isolate releases and the named promotion exception.
+# The strategy pin keeps the existing macOS and Linux ARM hosted legs.
+RELEASE_JOB_RUNNERS = {
+    'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': MATRIX_RUNNER,
+                    'notify-hub': RELEASE_RUNNER},
+    'promote-baseline.yml': {'promote': RELEASE_RUNNER},
+}
+# Credential-bearing jobs outside the release pins retain standard hosted
+# labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'macos-26')
 # Refuse paid labels and the old matrix key in every workflow, including the
 # release matrix. Scan code so nested/flow mappings count too.
@@ -358,7 +363,7 @@ def _holds_credentials(workflow: str, body: str) -> bool:
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Keep credentials hosted; pin current pool fragments and refuse paid labels."""
+    """Pin isolated releases, hosted PR deployments and current pool fragments."""
     findings = []
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
@@ -368,8 +373,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             findings.append(f'{name} must not define a larger_runner key; use ci-spot or hosted exceptions')
         timed = JOB_RUNNERS.get(name, {})
         fixed_hosted = HOSTED_JOB_RUNNERS.get(name, {})
+        fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
         pinned = {job: values[0] for job, values in timed.items()}
         pinned.update(fixed_hosted)
+        pinned.update(fixed_release)
+        if (fixed_release and name != 'promote-baseline.yml'
+                and _events(workflow) != {'workflow_dispatch'}):
+            findings.append(f'{name} must retain workflow_dispatch only for pf-ci-release jobs')
+        if (name == 'promote-baseline.yml'
+                and _events(workflow) != {'pull_request_target', 'workflow_dispatch'}):
+            findings.append(f'{name} must retain pull_request_target and workflow_dispatch '
+                            'only for pf-ci-release promotion')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
@@ -394,9 +408,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     continue
             hosted_platform = (len(runs_on) == 1 and (runs_on[0] == 'macos-26' or
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
-            if job in fixed_hosted or credentials or (job not in pinned and hosted_platform):
-                # Restored deployment/release jobs retain their exact original
-                # labels; new credential jobs use ubuntu-24.04 or hosted macOS.
+            if job in fixed_release:
+                if runs_on != [fixed_release[job]]:
+                    findings.append(f'{name} job {job} must run on {fixed_release[job]} '
+                                    '(isolated release)')
+                environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                    findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                    'on an isolated release job')
+            elif job in fixed_hosted or credentials or (job not in pinned and hosted_platform):
+                # PR deployment jobs retain their exact original labels;
+                # unlisted credential jobs retain standard hosted routing.
                 if job in fixed_hosted:
                     hosted_ok = runs_on == [fixed_hosted[job]]
                     if not hosted_ok:
@@ -443,8 +465,28 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
     if 'release.yml' in workflows:
         prebuilt = _jobs(workflows['release.yml']).get('prebuilt', '')
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
-            findings.append('release.yml prebuilt must use exactly the original hosted '
-                            'Linux x64/ARM/macOS matrix')
+            findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
+                            'and hosted ARM/macOS matrix')
+        # The workflow's only fan-out is notify-hub's dispatch to the release
+        # hub; a rehearsal must never reach it (owner, the 1.6.2 dry cut: the
+        # hub's receivers are disabled, so a real dispatch would be lost).
+        notify = _jobs(workflows['release.yml']).get('notify-hub', '')
+        if _job_values(notify, 'if') != ['${{ !inputs.dry_run }}']:
+            findings.append('release.yml job notify-hub must carry '
+                            'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+        # The guard reads a dispatch input: a workflow that dropped or
+        # retyped that declaration would not be the one this contract pins.
+        dispatch = workflows['release.yml'].split('\n  workflow_dispatch:\n', 1)
+        dispatch = dispatch[1].split('\npermissions:', 1)[0] if len(dispatch) == 2 else ''
+        lines = dispatch.split('\n')
+        start = next((index for index, line in enumerate(lines) if line == '      dry_run:'), None)
+        block = []
+        for follow in (lines[start + 1:] if start is not None else []):
+            if follow.strip() and _indent(follow) <= 6:
+                break
+            block.append(follow)
+        if not any(line.strip() == 'type: boolean' for line in block):
+            findings.append('release.yml must declare dry_run as a boolean dispatch input')
     return findings
 
 
@@ -757,6 +799,54 @@ def docs_workflow_self_test(workflow: str) -> int:
     return 0
 
 
+_LITERAL_RUNNER_LABEL = r'''(?:"[^"\n]+"|'[^'\n]+'|[A-Za-z0-9_.-]+)'''
+
+
+def actionlint_runner_label_findings(source: Path) -> list[str]:
+    """Check the repo's simple block-list config without a YAML dependency.
+
+    Unsupported config shapes fail closed; actionlint in workflow-lint also
+    parses this same required file with its full YAML/schema parser.
+    """
+    config_name = '.github/actionlint.yaml'
+    try:
+        config = (source / config_name).read_text()
+    except (OSError, UnicodeError) as error:
+        return [f'{config_name}: cannot read config: {error}']
+    lines = [re.sub(r'\s+#.*$', '', line).rstrip() for line in _code(config)]
+    entries = [re.fullmatch(r'    - (' + _LITERAL_RUNNER_LABEL + r')', line)
+               for line in lines[2:]]
+    if (lines[:2] != ['self-hosted-runner:', '  labels:']
+            or not entries or not all(entries)):
+        return [f'{config_name}: cannot parse config: expected self-hosted-runner.labels '
+                'as a block list of literal labels']
+    declared = {entry.group(1).strip('\'"') for entry in entries}
+    findings = []
+    for path in sorted((source / '.github/workflows').glob('*')):
+        if path.suffix not in ('.yml', '.yaml'):
+            continue
+        workflow = path.read_text()
+        if _unparsed(workflow):
+            findings.append(f'{path.name}: cannot parse jobs for literal runner labels')
+            continue
+        for job, body in _jobs(workflow).items():
+            for value in _job_values(body, 'runs-on'):
+                if not value.startswith('['):
+                    continue
+                if not re.fullmatch(r'\[\s*' + _LITERAL_RUNNER_LABEL
+                                    + r'(?:\s*,\s*' + _LITERAL_RUNNER_LABEL
+                                    + r')*\s*,?\s*\]', value):
+                    findings.append(f'{path.name} job {job}: cannot parse literal runs-on array')
+                    continue
+                labels = {token.strip('\'"') for token in re.findall(_LITERAL_RUNNER_LABEL, value)
+                          if '${{' not in token}
+                if 'self-hosted' in labels:
+                    for label in sorted(labels - declared):
+                        findings.append(f'{path.name} job {job}: label "{label}" is not declared '
+                                        f'in {config_name}')
+    return findings
+
+
 RUN_JSON_TESTS = 'run_json_*_test.py'
 
 
@@ -774,18 +864,22 @@ def run_json_harness_command(source: Path) -> list[str]:
 def check_commands(source: Path, output: Path | None = None,
                    *, env: dict[str, str] | None = None) -> list[tuple]:
     output_dir = (source / 'build-ci-preflight') if output is None else output
+    workflows = sorted(str(path) for path in (source / '.github/workflows').glob('*')
+                       if path.suffix in ('.yml', '.yaml'))
     class_args = (['--class-tier', 'fast']
                   if verifier_class_tier(os.environ if env is None else env) == 'fast'
                   else [])
     return [
         ('shellcheck-version', ['shellcheck', '--version']),
+        ('actionlint-runner-labels',
+         [sys.executable, str(source / 'scripts/ci_preflight.py'),
+          '--check-actionlint-runner-labels']),
+        # Require the config explicitly: absent/malformed config and undeclared
+        # literal self-hosted labels are actionlint findings, including in new
+        # workflows. A missing workflows directory must not lint another tree.
         ('workflow-lint', ['actionlint', '-color',
-                           str(source / '.github/workflows/ci.yml'),
-                           str(source / '.github/workflows/native-live.yml'),
-                           str(source / '.github/workflows/corpus-parity.yml'),
-                           str(source / '.github/workflows/docs.yml'),
-                           str(source / '.github/workflows/promote-baseline.yml'),
-                           str(source / '.github/workflows/release.yml')]),
+                           '-config-file', str(source / '.github/actionlint.yaml'),
+                           *(workflows or [str(source / '.github/workflows/*.yml')])]),
         ('ci-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
                                   '--check-ci-workflow']),
         ('docs-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
@@ -974,7 +1068,15 @@ def main() -> int:
     parser.add_argument('--check-docs-workflow', action='store_true')
     parser.add_argument('--self-test-docs-workflow', action='store_true')
     parser.add_argument('--check-ci-workflow', action='store_true')
+    parser.add_argument('--check-actionlint-runner-labels', action='store_true')
     args = parser.parse_args()
+    if args.check_actionlint_runner_labels:
+        findings = actionlint_runner_label_findings(ROOT)
+        for finding in findings:
+            print(finding)
+        if not findings:
+            print('actionlint runner labels: all literal self-hosted labels declared')
+        return 1 if findings else 0
     if args.check_ci_workflow:
         workflows = ROOT / '.github/workflows'
         named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',
