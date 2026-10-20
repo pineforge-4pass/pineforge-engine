@@ -1,0 +1,7 @@
+// Revision 3.1 policy included by the kernel build.
+// The public report writer's copy is checked against this file by a pin test.
+PF_ANNUALIZATION_SPAN_MS(86400000)
+PF_SHORT_SPAN_ANNUALIZED_FIELD(cagr)
+PF_SHORT_SPAN_ANNUALIZED_FIELD(calmar)
+PF_SHORT_SPAN_ANNUALIZED_FIELD(sharpe_bar)
+PF_SHORT_SPAN_ANNUALIZED_FIELD(sortino_bar)
