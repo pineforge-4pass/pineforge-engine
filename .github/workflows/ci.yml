@@ -112,7 +112,6 @@ jobs:
     runs-on: ["self-hosted","pf-ci","pf-ci-x64"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
-    timeout-minutes: 360
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}
@@ -166,7 +165,6 @@ jobs:
     # shards, and no stage of this preflight carries a timeout of its own any
     # more (owner rule, 2026-10-12). A hang reaches the platform maximum; a
     # slow stage never fails the run.
-    timeout-minutes: 360
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -237,7 +235,6 @@ jobs:
     # test_ci_verify CTest row, 976-1288 s on the standard runners at
     # 0d76a099, which more cores do not shorten. No bound of ours may fail a
     # slow leg (owner rule, 2026-10-12).
-    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -345,7 +342,6 @@ jobs:
     # full set ran out of the old 30- and 60-minute stage bounds twice, and
     # the owner rule of 2026-10-12 removed the bounds rather than raising
     # them again.
-    timeout-minutes: 360
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
@@ -421,7 +417,6 @@ jobs:
     # PRs exclude the measured slow rows; push and dispatch run the whole
     # kernel set. 360 minutes is the platform maximum, the only hang catcher
     # (owner rule, 2026-10-12).
-    timeout-minutes: 360
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
@@ -514,7 +509,6 @@ jobs:
     runs-on: ["self-hosted","pf-ci","pf-ci-x64"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
-    timeout-minutes: 360
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}

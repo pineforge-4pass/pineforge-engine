@@ -249,8 +249,9 @@ receipts, and saving a cache cannot turn a failed verification into success.
 The verifier accepts no row or stage deadline options (owner rule,
 2026-10-12: no time limit may fail a run for slowness). It passes
 `ctest --timeout 0` to request no default per-test deadline; an explicit
-`TIMEOUT` property on a row remains untouched. The native workflow retains
-only its 360-minute job envelopes, with no verification-step deadline.
+`TIMEOUT` property on a row remains untouched. Under owner #827 (2026-10-20),
+this repository declares no job or step time limits; GitHub's own 6 h platform
+maximum is the only bound.
 The summary records discovered and selected row counts, executed rows,
 skipped or not-run rows, and stage timings, including when a test fails.
 
@@ -1047,8 +1048,9 @@ hook accepts it is settled by the first pool run.
 step digest, every authz dependency, read-only permissions and both refuse-first
 aggregates. Its mutation tests write altered workflow files and read them back
 before checking hosted regressions, missing authz dependencies and lost refusal
-steps. Existing 360-minute job maxima remain; authz inherits the platform maximum
-without adding `timeout-minutes`. No new step, stage or row deadline is added.
+steps. Under owner #827 (2026-10-20), no job or step may declare
+`timeout-minutes`, authz included. GitHub's own 6 h platform maximum is the
+only bound; no step, stage or row deadline is added.
 
 `corpus-parity.yml`, documentation deployment, baseline promotion and release
 workflows retain their existing routing and separate pins; this migration does
@@ -1068,10 +1070,10 @@ jobs stay on GitHub runners. The earlier CR-171 hosted exception is VOID.
 Owner ruling of 2026-10-20, REL-HOSTED = B: there is no hosted exception for
 the release workflow either; the release cut runs on `pf-ci-release`.
 
-As of 2026-10-21, `scripts/ci_preflight.py:128-133` and `:436-440` still pin
+As of 2026-10-21, `scripts/ci_preflight.py:126-131` and `:433-438` still pin
 the docs, promote and release jobs to hosted runners; that pin is removed by
 the `pf-ci-release` branches (#461 and the `ci/pfrel-*` heads), and this PR
-does not change `scripts/ci_preflight.py`.
+does not change those pins.
 
 The temporary standard-runner stopgap was recorded by `3484a7c40` and
 squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner costs
@@ -1103,21 +1105,21 @@ that rule removed: the `test_ci_verify` row's 3600 s property outlived main's
 2820 s native-live stage deadline, and main's own native-live job refused its
 row set with `TIMEOUT 3600 must be positive and less than stage deadline
 2820`. The hosted kernel-only job lost the same day's run the other way, to a
-1800 s stage bound (exit 124). Under the owner rule, no required-check stage,
-row, step, profile or matrix entry may carry a time limit of this repository's;
-the only hang catcher is the platform's own 360-minute job maximum, which
-the existing jobs below carry. The new authz jobs inherit it without an explicit
-timeout.
+1800 s stage bound (exit 124). Under owner #827 (2026-10-20), this repository
+declares no time limits: no required-check job, stage, row, step, profile or
+matrix entry may declare one, and GitHub's own 6 h platform maximum is the only
+bound. The new authz jobs also inherit it without an explicit timeout.
 The native-live aggregate job names a stop at that maximum
 `HANG (re-run)` in its log; the check still fails. Exit-code, signal,
 missing-summary and diagnostic failures still fail. Historically, `test_ci_verify` alone took up to 1288 s
 at 0d76a099 (Ubuntu Debug), most of the 30-minute stage it then had, and a
-fork's sanitizers compile took 1277-1335 s; those measurements now inform the
-job-level maximum alone.
+fork's sanitizers compile took 1277-1335 s; those measurements remain historical
+context for job duration.
 
-The table below reports each job's measured duration and the platform maximum
-that replaced its old limit, so the margin the removal buys stays visible. The
-numbers are measured durations, not a two-times multiplier.
+The table below reports each job's measured duration and GitHub's platform
+maximum, with the old declared limits retained for historical context; owner
+#827 removed every `timeout-minutes` declaration on 2026-10-20.
+The duration numbers are measurements, not declared time limits.
 The standard-runner times are the eight CI runs from
 main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
 and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. The
@@ -1126,9 +1128,9 @@ measurements; the standard-runner timings describe the former hosted policy
 and provide historical context for the former runner policy. Pool timings await
 measurements on the new runners.
 
-| Job | Limit (min) | Measured basis |
+| Job | Platform maximum (min; no declared limit) | Measured basis |
 | --- | --- | --- |
-| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); the native-live aggregate job names a stop at the platform's 360-minute maximum `HANG (re-run)` in its log; the check still fails. |
+| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12), and owner #827 (2026-10-20) removed every declared job timeout; the native-live aggregate job names a stop at GitHub's own 6 h platform maximum `HANG (re-run)` in its log; the check still fails. |
 | `build` | 360 (was 75) | A Release leg runs its full population on push and dispatch events; a pull request's Release legs, a fork's included, exclude the `slow` rows like its Debug legs, and that pull-request time is to be measured on real PR runs. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
 | `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 360 (was 60) | Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |

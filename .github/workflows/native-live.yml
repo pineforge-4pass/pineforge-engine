@@ -104,7 +104,6 @@ jobs:
     needs: [authz]
     # All three profiles use the canon heavy pool class on every event.
     runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
-    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -213,7 +212,6 @@ jobs:
     runs-on: ["self-hosted","pf-ci","pf-ci-x64"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
-    timeout-minutes: 360
     steps:
       - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
