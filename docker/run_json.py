@@ -120,7 +120,9 @@ setting the strategy refuses, an --outputs it cannot honour (see OutputsError),
 or any other failure of the harness (see failure_line and main). "code" is a stable code of the closed vocabulary
 docker/run_failure_codes.json and "args" its typed arguments. The engine's code
 is read only from strategy_get_last_error_code and its args from
-strategy_get_last_error_args. A run failure from a library without the code
+strategy_get_last_error_args. For report_sink_failed, reason, high_water_bytes
+and arena_bytes are also copied from args to the top level whenever present.
+A run failure from a library without the code
 getter prints a line without "code" and "args": the earlier
 {"engine":"pineforge","error":"<text>"} line byte for byte, or, for a run status
 of 1 with no text, that line with the text "the run did not complete and the
@@ -2132,6 +2134,8 @@ def normalize_release_provenance(provenance, cpp_text, receipt, checked):
 # failure it finds itself (RunFailure): never read from any text. A run failure
 # from a library without the code getter prints neither key, so that line is
 # the earlier one byte for byte (a consumer keeps its text rules for it).
+# report_sink_failed also mirrors reason, high_water_bytes and arena_bytes
+# from args at the top level when present, without querying after cleanup.
 #
 # Caps keep the line well inside the 64 KiB a consumer reads: the text is cut at
 # 16 KiB and each string argument at 1 KiB of UTF-8, on a character boundary;
@@ -2208,6 +2212,7 @@ def failure_line(text, code=None, code_args=None) -> str:
     (the code stays), then the text is cut to the longest prefix that fits."""
     full = _no_surrogates(str(text))
     doc = {"engine": "pineforge", "error": _cut_utf8(full, ERROR_TEXT_MAX)}
+    mirrors = ("reason", "high_water_bytes", "arena_bytes") if code == "report_sink_failed" else ()
     if code is not None:
         doc["code"] = code
         doc["args"] = {
@@ -2215,10 +2220,13 @@ def failure_line(text, code=None, code_args=None) -> str:
             (_cut_utf8(_no_surrogates(value), ERROR_ARG_TEXT_MAX)
              if isinstance(value, str) else value)
             for name, value in (code_args or {}).items()}
+        doc.update({name: doc["args"][name] for name in mirrors if name in doc["args"]})
     line = _dump_line(doc)
     if len(line) > ERROR_LINE_MAX:
         if code is not None and len(_dump_line({**doc, "error": ""})) > ERROR_LINE_MAX:
             doc["args"] = {}  # arguments no registry could hold: the code stays
+            for name in mirrors:
+                doc.pop(name, None)
         low, high = 0, len(doc["error"].encode("utf-8", "surrogatepass"))
         while low < high:  # the longest cut whose line fits
             mid = (low + high + 1) // 2
@@ -4669,6 +4677,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             sink if sink is not None else trade_entry_incarnations)
         if sink is None:
             _validate_report_result(out)
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(
             equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
@@ -5207,6 +5216,7 @@ def _main(argv, binary_inputs) -> int:
             sink if sink is not None else trade_entry_incarnations)
         if sink is None:
             _validate_report_result(out)
+        _add_scratch_arena_diagnostics(lib, out["diagnostics"])
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(
@@ -5329,6 +5339,8 @@ class ReportSinkSummaryC(ctypes.Structure):
 def _bind_report_sink(lib) -> None:
     signatures = {
         "pf_report_sink_version": (ctypes.c_uint32, []),
+        "pf_report_scratch_arena_stats": (ctypes.c_int, [
+            ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]),
         "strategy_set_report_sink_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkC)]),
         "strategy_set_report_sink_fd_v1": (ctypes.c_int, [
@@ -5342,6 +5354,19 @@ def _bind_report_sink(lib) -> None:
         if hasattr(lib, name):
             function = getattr(lib, name)
             function.restype, function.argtypes = restype, argtypes
+
+
+def _add_scratch_arena_diagnostics(lib, diagnostics):
+    # Attachment-lifetime counters: read after report finalization, before
+    # strategy_free can detach. Never add them to a sink trailer or fingerprint.
+    getter = getattr(lib, "pf_report_scratch_arena_stats", None)
+    if getter is None:
+        return  # older modules have no such diagnostics
+    high_water, arena_bytes = ctypes.c_uint64(), ctypes.c_uint64()
+    if getter(ctypes.byref(high_water), ctypes.byref(arena_bytes)) != 0:
+        raise _engine_invariant("the engine's scratch arena statistics could not be read")
+    diagnostics["scratch_arena_high_water_bytes"] = high_water.value
+    diagnostics["scratch_arena_bytes"] = arena_bytes.value
 
 
 def _validate_sink_options(args):
@@ -5426,7 +5451,17 @@ class _FdReportSink:
             descriptor = ReportSinkFdC(ctypes.sizeof(ReportSinkFdC), 1, fd,
                                        run_id.encode("utf-8"))
             if lib.strategy_set_report_sink_fd_v1(state, ctypes.byref(descriptor)) != 0:
-                raise RunFailure("report sink fd setup failed", "report_sink_failed")
+                failure = run_failure(lib, state)
+                if failure is not None and failure[1]:
+                    raise RunFailure(*failure)
+                raise RunFailure("report sink fd setup failed", "report_sink_failed",
+                                 {"reason": "sink_io"})
+        except OSError as error:
+            self.close()
+            raise RunFailure(
+                "report sink fd setup failed", "report_sink_failed",
+                {"reason": "sink_peer_closed" if error.errno in (
+                    errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN) else "sink_io"}) from error
         except BaseException:
             self.close()
             raise
@@ -5490,7 +5525,8 @@ class _ReportSink:
                 handle, path = tempfile.mkstemp(prefix="pineforge-report-sink-", suffix=".sink",
                                                 dir=self.directory)
             except OSError as error:
-                raise RunFailure("report sink open failed", "report_sink_failed") from error
+                raise RunFailure("report sink open failed", "report_sink_failed",
+                                 {"reason": "sink_io"}) from error
             self.path = os.path.abspath(path)
         try:
             if not self.named:
@@ -5586,7 +5622,8 @@ class _JSONColumn:
                 self.file.write(",")
             self.file.write(json.dumps(value, separators=(",", ":"), allow_nan=False))
         except OSError as error:
-            raise RunFailure("report sink write failed", "report_sink_failed") from error
+            raise RunFailure("report sink write failed", "report_sink_failed",
+                             {"reason": "scratch_io"}) from error
         self.empty = False
 
 
@@ -5594,7 +5631,8 @@ def _json_temporary(resources, directory):
     try:
         file = tempfile.TemporaryFile(mode="w+", encoding="ascii", newline="\n", dir=directory)
     except OSError as error:
-        raise RunFailure("report sink open failed", "report_sink_failed") from error
+        raise RunFailure("report sink open failed", "report_sink_failed",
+                         {"reason": "scratch_io"}) from error
     try:
         resources.callback(_close_json_temporary, file)
     except BaseException:
@@ -5609,7 +5647,8 @@ def _close_json_temporary(file):
     except OSError as error:
         # A failed buffered flush can fail again during close. Preserve the
         # disk-failure code instead of replacing it with an untyped exception.
-        raise RunFailure("report sink write failed", "report_sink_failed") from error
+        raise RunFailure("report sink write failed", "report_sink_failed",
+                         {"reason": "scratch_io"}) from error
 
 
 def _stream_json(value, destination):
@@ -5658,7 +5697,8 @@ def _prepare_stream_report(document, resources, directory):
         file.flush()  # disk errors must precede the first stdout byte
         file.seek(0)
     except OSError as error:
-        raise RunFailure("report sink write failed", "report_sink_failed") from error
+        raise RunFailure("report sink write failed", "report_sink_failed",
+                         {"reason": "scratch_io"}) from error
     return file
 
 

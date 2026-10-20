@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "e8d1c4d9d888bfb199737061ee3b9fbfd7dfc5d75631c4fd7e19ff812d493183"
+    "catalogSha256": "3b3917e74a8fce3025b650bbe5ce2c0a7f7577241c15b25ce08a44c6b20ed40c"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -22,6 +22,10 @@
       "entry": {
         "args": {
           "arena_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "cap_bytes": {
             "kind": "integer",
             "optional": true
           },
@@ -46,8 +50,13 @@
               "arena_backing",
               "scratch_io",
               "sink_io",
-              "sink_peer_closed"
+              "sink_peer_closed",
+              "sink_exhausted"
             ]
+          },
+          "sink_bytes": {
+            "kind": "integer",
+            "optional": true
           },
           "store": {
             "kind": "vocab",
@@ -69,7 +78,7 @@
           }
         },
         "class": "engine_fault",
-        "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io) and a closed sink peer (sink_peer_closed). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, store identifies the requesting scratch user, and needed_bytes_lower_bound is the least additional arena bytes needed to satisfy the failed request. Other reasons carry no sizes. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
+        "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, store identifies the requesting scratch user, and needed_bytes_lower_bound is the least additional arena bytes needed to satisfy the failed request. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
         "english": [
           "report sink open failed",
           "report sink write failed",
