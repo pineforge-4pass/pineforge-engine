@@ -430,6 +430,85 @@ void differential(Directory& directory, const Options& options, int count = 146)
     }
 }
 
+// Reconcile L17c/d with L8c: exercise both the captured selected read and the
+// ordinary sink read after real publication has retired a nonempty prefix.
+// The sink-off engine supplies every expected row, identity and metric byte.
+void sealed_sink_capture_and_read(Directory& directory) {
+    const auto bars = tape(146); // ends with real open lots after many round trips
+    for (const bool selected : {false, true}) {
+        Options options;
+        options.selected = selected;
+        Strategy baseline(options), streamed(options);
+        const auto path = directory.file();
+        install(streamed, path);
+        for (auto* host : {&baseline, &streamed}) {
+            configure_observation(*host, options, static_cast<int>(bars.size()));
+            host->execute(bars);
+            require(host->last_error().empty(),
+                    "reconcile fixture failed: " + latched_error(*host));
+        }
+        const auto base = streamed.ledger().base();
+        require(base > 0 && base < streamed.ledger().size(),
+                "reconcile fixture must seal rows and retain a closed suffix");
+        require(streamed.consumer().closed_trade_prefix().base == base,
+                "ledger and report prefix disagree");
+        require(baseline.ledger().base() == 0, "sink-off reference retired rows");
+        const auto before = receipt(streamed);
+        require(before.complete == 0 && before.count_t == static_cast<std::int64_t>(base),
+                "pre-read T cursor must equal the sealed global base");
+
+        Report expected, actual, again;
+        baseline.fill_report(&expected.value);
+        require(expected.value.trades != nullptr && expected.value.trades_len > 0,
+                "sink-off reference has no report rows");
+        const int open_count = static_cast<int>(std::count_if(
+            expected.value.trades, expected.value.trades + expected.value.trades_len,
+            [](const TradeC& row) { return row.open_at_end != 0; }));
+        require(open_count > 0, "reconcile fixture must present a real open-trade tail");
+        if (selected) {
+            const TradeC* open_rows = nullptr;
+            int captured_count = -1;
+            require(NativeExecutionConsumer::report_sink_open_trades(
+                        streamed, open_rows, captured_count),
+                    "selected sink did not capture its open-lot view");
+            require(open_rows != nullptr && captured_count == open_count,
+                    "selected sink capture copied closed rows into its open-lot view");
+        }
+        const auto reference_path = directory.file();
+        expected_records(baseline, expected.value, reference_path);
+        const auto expected_trades = records(read(reference_path), 'T');
+        std::size_t prefix_end = 0;
+        for (std::size_t global = 0; global < base; ++global) {
+            const auto end = expected_trades.find('\n', prefix_end);
+            require(end != std::string::npos, "sealed base exceeds the sink-off row count");
+            prefix_end = end + 1;
+        }
+        // The v1 LineWriter buffers up to 64 KiB before it writes (report_sink_writer.cpp), so the
+        // file is not current before the final read. The mid-run state is covered by the receipt
+        // cursor check above; the sealed prefix is compared on the final bytes below.
+        streamed.fill_report(&actual.value);
+        compare_summary(expected.value, actual.value);
+        require(actual.value.trades == nullptr && actual.value.trades_len == 0,
+                "sink summary exposed an owned trade-history array");
+        const auto bytes = read(path);
+        require(records(bytes, 'T').compare(0, prefix_end, expected_trades, 0, prefix_end) == 0,
+                "seal must write exactly the sink-off prefix, with global row numbers");
+        require(records(bytes, 'T') == expected_trades,
+                "sealed + resident + open T rows differ in values, global order or multiplicity");
+        require(receipt(streamed).complete == 1
+                && receipt(streamed).count_t == expected.value.total_trades,
+                "final sink row count differs from the unsealed engine");
+        streamed.fill_report(&again.value);
+        compare_summary(actual.value, again.value);
+        require(read(path) == bytes, "repeated read duplicated the sealed prefix or suffix");
+        require(streamed.set_report_sink_v1(nullptr) == 0, "sink removal failed");
+        Report unavailable;
+        invariant([&] { streamed.fill_report(&unavailable.value); });
+        require(unavailable.value.trades == nullptr,
+                "array refusal allocated rows before noticing the sealed base");
+    }
+}
+
 void seal_conditions() {
     Strategy host(Options{});
     const auto bars = tape(80);
@@ -597,6 +676,7 @@ int main() {
         };
         attempt("seal_conditions", seal_conditions);
         attempt("phase_transform", phase_transform);
+        attempt("sealed_sink_capture_and_read", [&] { sealed_sink_capture_and_read(directory); });
         run();
         options.coof = options.pooc = options.brackets = true;
         run();

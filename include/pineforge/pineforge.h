@@ -694,6 +694,36 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
  *  @{
  */
 
+/** Read process-wide scratch-arena diagnostics, outside canonical report bytes.
+ *  Writes the peak bytes of simultaneously claimed chunks since attachment
+ *  and the exact supplied backing size (including any unallocatable tail).
+ *  Returns 0; with no arena attached both values are 0. Returns -1 with both
+ *  outputs unchanged if either pointer is NULL, the pointers alias, or the
+ *  snapshot cannot be read. Never throws or changes a strategy's last error.
+ *  Query after report finalization and before arena detach. The counters
+ *  belong to the attachment, not a strategy or repeat; detach resets them.
+ *  No pf_report_t, sink receipt, trailer or broker-state hash layout changes. */
+PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes,
+                                       uint64_t* arena_bytes);
+
+/** Install the invocation's cooperative SIGTERM handler. The handler only
+ *  stores a volatile sig_atomic_t flag; batch runs observe it at completed
+ *  input-bar boundaries, independently of #strategy_request_abort.
+ *  Opt-in, process-wide, for one serialized child invocation. Call on the
+ *  invoking thread with SIGTERM blocked, then unblock it; pending SIGTERM is
+ *  preserved. Returns 0, or -1 on signal-setup failure. Repeated installation
+ *  preserves an already requested stop. No ABI layout or signal disposition
+ *  changes occur until this function is called. */
+PF_API int pf_run_abort_install_sigterm_v1(void);
+
+/** Read the invocation stop flag: 0 or 1. No allocation or state mutation. */
+PF_API int pf_run_abort_requested_v1(void);
+
+/** Restore the disposition saved by #pf_run_abort_install_sigterm_v1.
+ *  Call with SIGTERM blocked, after native cleanup and failure publication.
+ *  Returns 0 (also when uninstalled), or -1 on signal-setup failure. */
+PF_API int pf_run_abort_restore_sigterm_v1(void);
+
 /** Return the physical entry incarnation for one closed-trade row.
  *
  *  Partial-close/FIFO fragments emitted from the same physical entry share

@@ -40,7 +40,8 @@ if (code != NULL && code[0] != '\0') {
   `engine_unclassified_error`, never `""`.
 - #strategy_get_last_error_args answers the arguments as one canonical JSON
   object: UTF-8, keys sorted, no whitespace; an `integer` argument is a JSON
-  integer, a `number` the shortest round-trip double, a `nullable_string` a
+  integer, a `number` the shortest round-trip double, a `boolean` a JSON
+  `true` or `false`, a `nullable_string` a
   JSON string or `null`, a `scalar` a JSON string, integer, finite number,
   `true`, `false` or `null` (a boolean or a null is never written as a
   string), every other kind a JSON string. It is `"{}"` for a code without
@@ -78,6 +79,9 @@ codes it tested the text alone, so a script stopped by an empty
   symbol or timeframe, the bar a failure happened on and any text a script
   built are not arguments, so a failing run cannot carry results out through
   them.
+- **Cancellation progress is engine-owned.** Q7's `run_aborted` witnesses
+  are the count of fully completed input bars and a boolean start witness.
+  They are produced by the run boundary, never read from script output.
 - **Validation is central.** An undeclared argument, a wrong kind, a value
   outside an argument's closed list or a missing required argument turns the
   failure into `engine_invariant`, its English kept: a wrong call cannot mint
@@ -142,16 +146,16 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `report_result_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 4 values) | The report producer generated an invalid canonical result: an engine or harness fault, never a strategy failure. |
 | `report_shape_request_invalid` | `input` | no | `option` (vocab, 2 values), `value` (scalar) | The report-shape request is invalid: the report shape or the curve point budget carries a value the runner refuses. |
 | `report_shape_unsupported` | `unsupported` | no | `shape` (string) | The runner does not support the requested report shape. The first selected-window build supports the full shape only. |
-| `report_sink_failed` | `resource` | no | none | The engine could not create or write the report sink. The run has no completed sink or valid trailer. |
+| `report_sink_failed` | `engine_fault` | no | `arena_bytes` (integer, optional), `cap_bytes` (integer, optional), `claimed_bytes` (integer, optional), `high_water_bytes` (integer, optional), `needed_bytes_lower_bound` (integer, optional), `reason` (vocab, 7 values, optional), `sink_bytes` (integer, optional), `store` (vocab, 12 values, optional) | The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, store identifies the requesting scratch user, and needed_bytes_lower_bound is the least additional arena bytes needed to satisfy the failed request. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer. |
 | `request_symbol_invalid` | `strategy` | no | none | A request.security symbol is not a valid symbol. |
 | `request_timeframe_invalid` | `strategy` | no | `api` (vocab, 2 values) | A request timeframe literal does not parse. |
 | `request_timeframe_unsupported` | `unsupported` | no | `input_tf` (timeframe, optional), `reason` (vocab, 7 values), `script_tf` (timeframe, optional) | A request timeframe cannot be served for this run's chart timeframe. |
 | `request_unsupported` | `unsupported` | no | `line` (integer, optional), `reason` (vocab, 2 values) | A request shape PineForge does not support. |
 | `results_digest_unsupported` | `unsupported` | no | `requested` (string) | The runner does not support the requested results digest. The first selected-window build declares no digest. |
-| `run_aborted` | `engine_fault` | yes | none | The run was aborted on request. |
+| `run_aborted` | `engine_fault` | yes | `bars_count` (integer, optional), `strategy_started` (boolean, optional) | The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used). |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
-| `run_request_invalid` | `input` | no | `option` (vocab, 22 values) | The harness command line or one of its JSON options is invalid. |
+| `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |
@@ -185,6 +189,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 
 | Kind | Its value |
 | --- | --- |
+| `boolean` | A JSON boolean. |
 | `identifier` | A name the compiled strategy spells as a literal (a built-in, an argument). |
 | `integer` | A JSON integer. |
 | `keyword` | A fixed keyword. |

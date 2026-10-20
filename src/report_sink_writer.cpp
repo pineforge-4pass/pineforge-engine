@@ -10,6 +10,9 @@
 #include <cmath>
 #include <cstring>
 #include <fcntl.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
 
@@ -253,6 +256,8 @@ struct LineWriter::State {
     std::string run_id;
     std::string scratch_dir;
     int descriptor = -1;
+    bool borrowed = false;
+    bool socket = false;
     Phase phase = Phase::configured;
     RecordSet records{};
     Trailer trailer{};
@@ -275,10 +280,19 @@ struct LineWriter::State {
         }
     }
 
+    explicit State(const pf_report_sink_fd_v1& sink) {
+        if (sink.struct_size != sizeof(pf_report_sink_fd_v1) || sink.version != 1
+                || sink.fd < 0)
+            invalid("invalid report sink fd descriptor");
+        descriptor = sink.fd;
+        borrowed = true;
+        run_id = sink.run_id ? sink.run_id : "";
+    }
+
     ~State() {
         // Resource release only: abandoned buffered bytes never cause a
         // successful trailer or an unchecked destructor-time write.
-        if (descriptor >= 0) ::close(descriptor);
+        if (!borrowed && descriptor >= 0) ::close(descriptor);
     }
 
     void require_writing() const {
@@ -299,13 +313,47 @@ struct LineWriter::State {
                           + std::error_code(number, std::generic_category()).message(), number);
     }
 
+    void validate_stream() {
+        struct stat info{};
+        int result;
+        do { result = ::fstat(descriptor, &info); } while (result < 0 && errno == EINTR);
+        if (result < 0) io_error("fstat failed", errno);
+        socket = S_ISSOCK(info.st_mode);
+        if (!socket && !S_ISFIFO(info.st_mode))
+            io_error("fd is not a FIFO or stream socket", EINVAL);
+        if (socket) {
+            int type = 0;
+            socklen_t length = sizeof type;
+            do { result = ::getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &type, &length); }
+            while (result < 0 && errno == EINTR);
+            if (result < 0) io_error("getsockopt failed", errno);
+            if (type != SOCK_STREAM) io_error("fd is not a stream socket", EINVAL);
+        }
+    }
+
+    void wait_writable() {
+        pollfd ready{descriptor, POLLOUT, 0};
+        int result;
+        do { result = ::poll(&ready, 1, -1); } while (result < 0 && errno == EINTR);
+        if (result < 0) io_error("poll failed", errno);
+        if (ready.revents & POLLNVAL) io_error("poll invalid fd", EBADF);
+        if (ready.revents & (POLLERR | POLLHUP)) io_error("stream peer closed", EPIPE);
+    }
+
     void flush() {
         std::size_t written = 0;
         while (written < used) {
-            const auto count = ::write(descriptor, buffer.data() + written, used - written);
+            const auto count = socket
+                ? ::send(descriptor, buffer.data() + written, used - written, MSG_NOSIGNAL)
+                : ::write(descriptor, buffer.data() + written, used - written);
             if (count < 0) {
-                if (errno == EINTR) continue;
-                io_error("write failed", errno);
+                const int number = errno;
+                if (number == EINTR) continue;
+                if (number == EAGAIN || number == EWOULDBLOCK) {
+                    wait_writable();
+                    continue;
+                }
+                io_error("write failed", number);
             }
             if (count == 0) io_error("write made no progress", EIO);
             written += static_cast<std::size_t>(count);
@@ -354,6 +402,7 @@ struct LineWriter::State {
 };
 
 LineWriter::LineWriter(const pf_report_sink_v1& sink) : state_(std::make_unique<State>(sink)) {}
+LineWriter::LineWriter(const pf_report_sink_fd_v1& sink) : state_(std::make_unique<State>(sink)) {}
 LineWriter::~LineWriter() = default;
 
 void LineWriter::write_header(const RecordSet& records) {
@@ -362,11 +411,15 @@ void LineWriter::write_header(const RecordSet& records) {
         if (state.phase != State::Phase::configured)
             throw WriterError(WriterFailure::invalid_state, "report sink header was already attempted");
         const auto line = header(state.run_id, records);
-        int descriptor;
-        do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666); }
-        while (descriptor < 0 && errno == EINTR);
-        if (descriptor < 0) state.io_error("open failed", errno);
-        state.descriptor = descriptor;
+        if (state.borrowed) {
+            state.validate_stream();
+        } else {
+            int descriptor;
+            do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666); }
+            while (descriptor < 0 && errno == EINTR);
+            if (descriptor < 0) state.io_error("open failed", errno);
+            state.descriptor = descriptor;
+        }
         state.records = records;
         state.phase = State::Phase::writing;
         state.line(line);
@@ -419,6 +472,20 @@ void LineWriter::write_t(std::int64_t n, const pf_trade_t& trade,
         line += ']';
         state.line(line);
         ++state.trailer.count_t;
+    } catch (...) {
+        state.fail();
+        throw;
+    }
+}
+
+void LineWriter::abandon() {
+    auto& state = *state_;
+    try {
+        state.require_writing();
+        // line() can cross the fixed buffer boundary. Flush its retained
+        // suffix here so EOF follows LF, never a partially emitted record.
+        state.flush();
+        state.fail();
     } catch (...) {
         state.fail();
         throw;
