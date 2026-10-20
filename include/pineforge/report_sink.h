@@ -21,8 +21,8 @@ extern "C" {
  *  the strings. The engine creates or truncates path, writes the version-1
  *  header at run begin, and writes checked, buffered records (3.7:881-888).
  *  NULL run_id means ""; NULL scratch_dir means the directory of path.
- *  Scratch files are engine-private and live until handle destruction
- *  (3.8:902-909). */
+ *  Scratch files are engine-private and live until the next run begins or
+ *  handle destruction (3.8:902-909). */
 typedef struct pf_report_sink_v1 {
     uint32_t    struct_size;
     uint32_t    version;
@@ -61,7 +61,10 @@ PF_API uint32_t pf_report_sink_version(void);
 
 /** Install, replace or remove (NULL descriptor) the sink (6:1301, 1307-1309).
  *  Returns 0 accepted; -1 bad struct_size, version, path or handle; -2 a
- *  stream is running or begins; -3 run in progress. Strings are copied.
+ *  stream is running or begins; -3 run in progress or removal while an
+ *  ordinary run's scratch curve is live. Strings are copied.
+ *  A refused removal keeps the sink and its summary report unchanged;
+ *  it never restores a full curve array from scratch.
  *  The sink composes with the execution observer and selected window.
  *  Write errors fail the run with the sink I/O code planned for
  *  docker/run_failure_codes.json (DESIGN 3.7:881-888; 6:1330-1332).
