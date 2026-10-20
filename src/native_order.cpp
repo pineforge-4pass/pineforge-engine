@@ -1238,13 +1238,22 @@ std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
     return RequestHandle{identity_, *root};
 }
 
-std::size_t WorkingRequestCore::cohort_index(CohortHandle cohort) const noexcept {
-    const auto it = std::lower_bound(
-        cohorts_.begin(), cohorts_.end(), cohort,
-        [](const CohortRoster& roster, CohortHandle value) { return roster.handle < value; });
-    return it != cohorts_.end() && it->handle == cohort
-        ? static_cast<std::size_t>(it - cohorts_.begin())
-        : cohorts_.size();
+WorkingRequestCore::CohortView WorkingRequestCore::cohorts() const noexcept {
+    return CohortView(this);
+}
+
+WorkingRequestCore::CohortView::const_iterator::reference
+WorkingRequestCore::CohortView::const_iterator::operator*() const noexcept {
+    assert(core_ && index_ < core_->next_cohort_handle_ - 1);
+    const auto handle = static_cast<std::uint64_t>(index_) + 1;
+    const auto found = core_->cohorts_.find(handle);
+    if (found != core_->cohorts_.end()) return found->second;
+    empty_.handle = CohortHandle{handle};
+    return empty_;
+}
+
+bool WorkingRequestCore::cohort_exists(CohortHandle cohort) const noexcept {
+    return cohort.value > 0 && cohort.value < next_cohort_handle_;
 }
 
 CohortHandle WorkingRequestCore::cohort_open() {
@@ -1254,7 +1263,6 @@ CohortHandle WorkingRequestCore::cohort_open() {
         throw std::overflow_error("native cohort handle exhausted");
     }
     const CohortHandle handle{next_cohort_handle_};
-    cohorts_.push_back(CohortRoster{handle, {}});
     ++next_cohort_handle_;
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
     return handle;
@@ -1267,17 +1275,21 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
     receipt.operation = CohortReceiptOperation::Add;
     receipt.cohort = cohort;
     receipt.origin = origin;
-    const std::size_t index = cohort_index(cohort);
-    if (cohort.value == 0 || index == cohorts_.size()) {
+    if (!cohort_exists(cohort)) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
     } else if (!issued(origin)) {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
     } else if (!find_live(origin)) {
         receipt.status = CohortReceiptStatus::TerminalOrigin;
     } else if (const auto canonical = canonical_cohort_origin(origin)) {
-        auto& origins = cohorts_[index].origins;
-        const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
-        if (where == origins.end() || *where != *canonical) origins.insert(where, *canonical);
+        const auto found = cohorts_.find(cohort.value);
+        if (found == cohorts_.end()) {
+            cohorts_.emplace(cohort.value, CohortRoster{cohort, {*canonical}});
+        } else {
+            auto& origins = found->second.origins;
+            const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
+            if (where == origins.end() || *where != *canonical) origins.insert(where, *canonical);
+        }
         receipt.status = CohortReceiptStatus::Applied;
     } else {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
@@ -1293,13 +1305,16 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
     receipt.operation = CohortReceiptOperation::Remove;
     receipt.cohort = cohort;
     receipt.origin = origin;
-    const std::size_t index = cohort_index(cohort);
-    if (cohort.value == 0 || index == cohorts_.size()) {
+    if (!cohort_exists(cohort)) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
     } else if (const auto canonical = canonical_cohort_origin(origin)) {
-        auto& origins = cohorts_[index].origins;
-        const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
-        if (where != origins.end() && *where == *canonical) origins.erase(where);
+        const auto found = cohorts_.find(cohort.value);
+        if (found != cohorts_.end()) {
+            auto& origins = found->second.origins;
+            const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
+            if (where != origins.end() && *where == *canonical) origins.erase(where);
+            if (origins.empty()) cohorts_.erase(found);
+        }
         receipt.status = CohortReceiptStatus::Applied;
     } else {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
@@ -1310,11 +1325,12 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
 
 bool WorkingRequestCore::cohort_contains(
         CohortHandle cohort, const RequestHandle& opening) const {
-    const std::size_t index = cohort_index(cohort);
-    if (cohort.value == 0 || index == cohorts_.size()) return false;
+    if (!cohort_exists(cohort)) return false;
     const auto root = canonical_cohort_origin(opening);
     if (!root) return false;
-    const auto& origins = cohorts_[index].origins;
+    const auto found = cohorts_.find(cohort.value);
+    if (found == cohorts_.end()) return false;
+    const auto& origins = found->second.origins;
     return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
 }
 
@@ -1784,7 +1800,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
             || live_count != cohort.size()) return RequestRejectReason::InvalidOwner;
     } else if (const auto* bind = std::get_if<BindCohort>(&request.owner)) {
         if (!host_sized || host_sized->kind != HostSizedKind::Close
-            || bind->cohort.value == 0 || cohort_index(bind->cohort) == cohorts_.size()) {
+            || !cohort_exists(bind->cohort)) {
             return RequestRejectReason::InvalidOwner;
         }
     } else {

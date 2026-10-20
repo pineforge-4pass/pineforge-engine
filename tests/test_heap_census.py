@@ -100,8 +100,7 @@ class CensusEvidence(unittest.TestCase):
             ("L19l", "pineforge::source::PineExecutionAdapter::note_exit_rank_key("
              "std::__cxx11::basic_string<char> const&) (src/source/pine_adapter.cpp:6339)"),
             ("L19l", "pineforge::source::PlacementTable::fold_sequence("
-             "std::unordered_map<std::__cxx11::basic_string<char>, "
-             "pineforge::source::PlacementTable::SequenceMinima>&, "
+             "pineforge::detail::IdPairStore<unsigned long>&, "
              "pineforge::source::PlacementSnapshot const&) (include/pineforge/source/pine_adapter.hpp:864)"),
             ("L19k", "pineforge::source::tradingview_multi_day_stamps("
              "int, pineforge::Bar const*, int, bool, std::vector<pineforge::Bar> const&, "
@@ -160,8 +159,7 @@ class CensusEvidence(unittest.TestCase):
         self.assertEqual(census.owner(vector + " <- " + push), ("L19h", False))
         self.assertEqual(census.owner(node + " <- " + push), ("L19j", False))
         self.assertEqual(census.owner("pineforge::source::PlacementTable::fold_sequence("
-                         "std::unordered_map<std::__cxx11::basic_string<char>, "
-                         "pineforge::source::PlacementTable::SequenceMinima>&, "
+                         "pineforge::detail::IdPairStore<unsigned long>&, "
                          "pineforge::source::PlacementSnapshot const&)"), ("L19l", False))
         applied = ("pineforge::source::PineExecutionAdapter::on_applied("
                    "pineforge::native_order_v7::ExecutionAppliedEvent const&, "

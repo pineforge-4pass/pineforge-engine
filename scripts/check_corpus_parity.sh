@@ -50,6 +50,8 @@
 #                    (default: scripts/corpus_parity_subset.txt)
 #   SKIP_BUILD=1     reuse an existing BUILD_DIR (developer loop only)
 #   SKIP_RUN=1       judge the trades already on disk (developer loop only)
+#   PINEFORGE_CANARY_LOG  optional sink_canary:/sink_kept: log, checked against
+#                        the probes run; full mode delegates to run_corpus.sh
 #
 # Exit codes: 0 parity holds, 1 parity drifted, 2 the check could not run.
 
@@ -89,6 +91,11 @@ log()  { printf '\033[1;34m[corpus-parity]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[corpus-parity]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[corpus-parity]\033[0m %s\n' "$*" >&2; exit 1; }
 unrunnable() { printf '\033[1;31m[corpus-parity]\033[0m %s\n' "$*" >&2; exit 2; }
+
+CANARY_LOG="${PINEFORGE_CANARY_LOG:-}"
+if [[ "$MODE" == subset && -n "$CANARY_LOG" ]]; then
+    : > "$CANARY_LOG"
+fi
 
 # --- 1) the corpus, at the gitlink this repository records -------------
 
@@ -216,8 +223,23 @@ else
                   fi' corpus-parity-subset || run_rc=$?
         elapsed=$(( $(date +%s) - started ))
         log "ran ${#PROBES[@]} probes in ${elapsed}s"
+        canary_rc=0
+        if [[ -n "$CANARY_LOG" ]]; then
+            # Collect only after every child finishes: no concurrent append
+            # to the shared log, and failed probes keep their lines too.
+            probe_logs=()
+            for probe in "${PROBES[@]}"; do
+                probe_logs+=("$RUN_LOGS/$(printf %s "$probe" | tr / _).log")
+            done
+            "$PY" -I scripts/check_sink_canary_log.py append "$CANARY_LOG" "${probe_logs[@]}"
+            "$PY" -I scripts/check_sink_canary_log.py check "$CANARY_LOG" \
+                --probes "${PROBES[@]}" || canary_rc=$?
+        fi
         if (( run_rc != 0 )); then
             unrunnable "a subset probe failed to run; refusing to judge stale trades"
+        fi
+        if (( canary_rc != 0 )); then
+            fail "sink canary coverage failed; see $CANARY_LOG"
         fi
     fi
 fi
