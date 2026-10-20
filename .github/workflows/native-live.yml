@@ -46,7 +46,6 @@ jobs:
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
           fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -161,7 +160,6 @@ jobs:
           fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
-    timeout-minutes: 360
     steps:
       - name: Require every native profile to have passed
         env:
