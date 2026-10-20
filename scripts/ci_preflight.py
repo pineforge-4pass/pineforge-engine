@@ -122,7 +122,7 @@ JOB_RUNNERS = {
 # retain their exact pre-CR-171 hosted routing, including its older images.
 HOSTED_JOB_RUNNERS = {
     'docs.yml': {'build': 'ubuntu-latest'},
-    'promote-baseline.yml': {'promote': 'ubuntu-latest'},
+    'promote-baseline.yml': {'promote-guard': 'ubuntu-latest', 'promote': 'ubuntu-latest'},
     'release.yml': {'release': 'ubuntu-latest', 'prebuilt': MATRIX_RUNNER,
                     'notify-hub': 'ubuntu-latest'},
 }
@@ -176,6 +176,60 @@ PREFLIGHT_VERIFIER_SLOW = ("${{ needs.changes.result == 'success' && "
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kernel-only, '
               'corpus-parity-subset]')
+# SEC846: an independent literal pins the promotion-specific canon variant.
+# No checkout, secrets, inherited OIDC, skip condition or error suppression may
+# be inserted into this job. Mutation tests change the real workflow text.
+PROMOTE_GUARD = '''    name: promote-guard
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Only our own merged pull requests and dispatches promote the baseline
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for the PR merger
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            workflow_dispatch)
+              ;;
+            pull_request_target)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac
+              [ "$MERGED" = "true" ] || { echo "promote-guard: unmerged pull request; promotion is skipped" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+              [ -n "$MERGED_BY" ] || fail "pull_request_target merger is empty"
+              case " $ALLOWED_BOTS " in
+                *" $MERGED_BY "*) ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$MERGED_BY/permission" --jq .permission 2>/dev/null || echo none)
+                  case "$perm" in admin|maintain|write) ;; *) fail "pull_request_target merger ${MERGED_BY:-unknown} has permission '$perm', not write" ;; esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run baseline promotion (only pull_request_target and workflow_dispatch are allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+'''
+PROMOTE_IF = "${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}"
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
 # submodule guards across parallel unittest shards (run_unittest_shards.py),
@@ -675,6 +729,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     # engine axis needs the newest pineforge/verify and pineforge/parity
     # statuses on the PR head.
     if ('  pull_request_target:\n    types: [closed]' not in promote
+            or _events(promote) != {'pull_request_target', 'workflow_dispatch'}
             or re.search(r'^  pull_request:', promote, re.MULTILINE)
             or '  statuses: read' not in promote
             or '  id-token: write' not in promote
@@ -687,6 +742,14 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or '.["pineforge/parity"] == "success"' not in promote
             or promote.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
         findings.append("baseline promotion must run main's copy and require the latest two head statuses")
+    promotion_jobs = _jobs(promote)
+    if (_JOB_HEADER.findall(_jobs_text(promote) or '') != ['promote-guard', 'promote']
+            or _code(promotion_jobs.get('promote-guard', '')) != _code(PROMOTE_GUARD)):
+        findings.append('baseline promotion must start with the pinned credential-free promote-guard')
+    promotion = promotion_jobs.get('promote', '')
+    if (_job_values(promotion, 'needs') != ['[promote-guard]']
+            or _job_values(promotion, 'if') != [PROMOTE_IF]):
+        findings.append('baseline promotion must need promote-guard and keep its merged-or-dispatch condition')
     # PRs are squash-merged, so the PR head is never an ancestor of the base
     # branch. The merge commit (the event's merge_commit_sha, or the dispatch
     # input) must be on the base branch and carry the gated PR head's tree; the
