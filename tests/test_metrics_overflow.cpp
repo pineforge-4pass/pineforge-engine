@@ -1,5 +1,5 @@
-// Report overflow is R(nonfinite), except revision 3.1's sub-day
-// cagr, calmar, sharpe_bar and sortino_bar defined absences.
+// CAGR is proportional below one day and on compounded overflow.
+// Every remaining report overflow is R(nonfinite).
 #include <pineforge/metrics.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -248,11 +248,21 @@ void equity_arithmetic() {
     nonfinite("buy_hold_pct_product", "metrics.equity.buy_hold_return_pct", [] {
         (void)equity({}, 1, kYear, 0, 1, 1e307);
     });
-    nonfinite("cagr_pow", "metrics.equity.cagr", [] {
-        (void)equity({1, 1e300}, 1, kDay);
+    nonfinite("cagr_pow_and_simple_overflow", "metrics.equity.cagr", [] {
+        const double span_years = static_cast<double>(kDay) / (365.25 * 86400.0 * 1000.0);
+        const double ratio = 1e305 / 1.0;
+        CHECK(!std::isfinite((std::pow(ratio, 1.0 / span_years) - 1.0) * 100.0));
+        CHECK(!std::isfinite((ratio - 1.0) * (1.0 / span_years) * 100.0));
+        (void)equity({1, 1e305}, 1, kDay);
     });
     nonfinite("cagr_ratio", "metrics.equity.cagr", [] {
         (void)equity({1e-308, 1e308}, 1e-308, 100 * kYear);
+    });
+    nonfinite("sub_day_cagr_ratio", "metrics.equity.cagr", [] {
+        (void)equity({1e-308, 1e308}, 1e-308, 7 * 60'000);
+    });
+    nonfinite("sub_day_cagr_simple_overflow", "metrics.equity.cagr", [] {
+        (void)equity({1, 1e305}, 1, 7 * 60'000);
     });
     nonfinite("cagr_pct_product", "metrics.equity.cagr", [] {
         (void)equity({1, 1e307});
@@ -301,14 +311,9 @@ void equity_arithmetic() {
     nonfinite("bar_variance", "metrics.equity.sharpe_bar", [] {
         (void)equity({1, 1e200, 1}, 1, kDay);
     });
-    row = "sub_day_bar_variance";
-    try {
-        const auto got = equity({1, 1e200, 1}, 1, 60'000);
-        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
-        CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
-    } catch (const std::exception&) {
-        CHECK(false);  // The ruled domain must be checked before variance.
-    }
+    nonfinite("sub_day_bar_variance", "metrics.equity.sharpe_bar", [] {
+        (void)equity({1, 1e200, 1}, 1, 60'000);
+    });
     nonfinite("bar_return_ratio", "metrics.equity.sharpe_bar", [] {
         (void)equity({1e-308, 1e308, 1e-308}, 1e-308, kDay);
     });
@@ -324,17 +329,20 @@ void equity_arithmetic() {
         // Exactly one day, all 401 points in January: no monthly returns.
         (void)equity(values, 1, kDay / 400);
     });
+    nonfinite("sub_day_bar_return_sum_isolated", "metrics.equity.sharpe_bar", [] {
+        std::vector<double> values{1};
+        for (int i = 0; i < 200; ++i) {
+            values.push_back(1e306);
+            values.push_back(1);
+        }
+        (void)equity(values, 1, 60'000);
+    });
     nonfinite("bar_downside_square", "metrics.equity.sortino_bar", [] {
         (void)equity({1, -1e200, 1, -1e200}, 1, kDay);
     });
-    row = "sub_day_bar_downside_square";
-    try {
-        const auto got = equity({1, -1e200, 1, -1e200}, 1, 60'000);
-        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
-        CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
-    } catch (const std::exception&) {
-        CHECK(false);  // The ruled domain must be checked before downside.
-    }
+    nonfinite("sub_day_bar_downside_square", "metrics.equity.sortino_bar", [] {
+        (void)equity({1, -1e200, 1, -1e200}, 1, 60'000);
+    });
 }
 
 void annualization_span_rule() {
@@ -343,37 +351,40 @@ void annualization_span_rule() {
         {kTime, 10000, 0}, {kTime + 60'000, 9900, 0},
         {kTime + 7 * 60'000, 10800, 0},
     };
-    // The frozen walk supplies all eleven unchanged fields. Only the four
-    // ruled fields have a different domain; the reference itself stays frozen.
+    // The frozen walk supplies all thirteen unchanged fields. The two
+    // proportional expectations come from the input curve independently.
     auto want = equity_stats_reference::compute_equity_stats(
         curve, 3, 10000, "UTC", 100, 108, 1, 800);
     CHECK(std::isinf(want.cagr) && std::isinf(want.calmar));
     CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
-    want.cagr = kNaN;
-    want.calmar = kNaN;
-    want.sharpe_bar = kNaN;
-    want.sortino_bar = kNaN;
+    const double span_years = static_cast<double>(curve[2].time_ms - curve[0].time_ms)
+                           / (365.25 * 86400.0 * 1000.0);
+    const double ratio = curve[2].equity / 10000.0;
+    want.cagr = (ratio - 1.0) * (1.0 / span_years) * 100.0;
+    want.calmar = want.cagr / want.max_equity_drawdown_pct;
+    CHECK(std::isfinite(want.cagr) && std::isfinite(want.calmar));
     try {
         const auto got = metrics::compute_equity_stats(
             curve, 3, 10000, "UTC", 100, 108, 1, 800);
-        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
+        CHECK(same_bits(got.cagr, want.cagr) && same_bits(got.calmar, want.calmar));
         CHECK(equity_stats_reference::first_difference(got, want) == nullptr);
-        CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
+        CHECK(std::isfinite(got.sharpe_bar) && std::isfinite(got.sortino_bar));
+        CHECK(same_bits(got.sharpe_bar, want.sharpe_bar));
+        CHECK(same_bits(got.sortino_bar, want.sortino_bar));
     } catch (const std::exception&) {
         CHECK(false);
     }
     // Monthly ratios remain their existing defined absence (one month).
     CHECK(std::isnan(want.sharpe_monthly) && std::isnan(want.sortino_monthly));
 
-    for (const std::int64_t span : {kDay, 3 * kDay}) {
-        nonfinite("one_or_several_days_pow", "metrics.equity.cagr", [span] {
-            (void)equity({1, 1e300}, 1, span);
-        });
-    }
-    row = "just_under_one_day";
+    row = "just_under_one_day_large_gain";
     try {
+        const double years = static_cast<double>(kDay - 1) / (365.25 * 86400.0 * 1000.0);
+        const double large_ratio = 1e300 / 1.0;
+        const double expected = (large_ratio - 1.0) * (1.0 / years) * 100.0;
         const auto got = equity({1, 1e300}, 1, kDay - 1);
-        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
+        CHECK(std::isfinite(got.cagr) && same_bits(got.cagr, expected));
+        CHECK(std::isnan(got.calmar));  // No drawdown.
         CHECK(std::isfinite(got.buy_hold_return));
     } catch (const std::exception&) {
         CHECK(false);
@@ -387,17 +398,96 @@ void annualization_span_rule() {
     CHECK(std::isfinite(daily_got.cagr));
     CHECK(equity_stats_reference::first_difference(daily_got, daily_want) == nullptr);
 
-    // A finite sub-day CAGR used to be published too: the rule is about its
-    // domain, not whether this particular pow would overflow.
+    // A zero return has a defined zero CAGR even on a sub-day span.
     row = "sub_day_flat_curve";
     const auto flat = equity({10000, 10000}, 10000, 7 * 60'000);
-    CHECK(std::isnan(flat.cagr) && std::isnan(flat.calmar));
+    CHECK(flat.cagr == 0.0 && std::isnan(flat.calmar));
+}
+
+void sub_day_monotonic_returns() {
+    row = "sub_day_monotonic_returns";
+    const std::int64_t span = 7 * 60'000;
+    const double span_years = static_cast<double>(span) / (365.25 * 86400.0 * 1000.0);
+    const double capital = 10000.0;
+    const double finals[] = {9200.0, 10400.0, 10800.0};
+    double previous = -kInf;
+    for (const double final_equity : finals) {
+        const pf_equity_point_t curve[] = {
+            {kTime, capital, 0}, {kTime + span, final_equity, 0},
+        };
+        const double ratio = final_equity / capital;
+        const double expected = (ratio - 1.0) * (1.0 / span_years) * 100.0;
+        const auto got = metrics::compute_equity_stats(
+            curve, 2, capital, "UTC", 1, 1, 0, final_equity - capital);
+        CHECK(std::isfinite(got.cagr));
+        CHECK(same_bits(got.cagr, expected));
+        CHECK(got.cagr > previous);
+        CHECK(final_equity < capital ? got.cagr < 0.0 : got.cagr > 0.0);
+        previous = got.cagr;
+    }
+}
+
+void compounded_overflow_fallback() {
+    struct Case { std::int64_t span; double final_equity; bool finite_power; };
+    const Case cases[] = {
+        {kDay, 1e300, false}, {kDay + 1, 1e300, false}, {3 * kDay, 1e300, false},
+        // pow itself fits, but converting its return to percent overflows.
+        {kYear - kYear / 100, 1e305, true},
+    };
+    for (const auto& test : cases) {
+        row = test.finite_power ? "compounded_percent_overflow_fallback"
+                                : "one_or_several_days_pow_fallback";
+        const pf_equity_point_t curve[] = {
+            {kTime, 1, 0}, {kTime + test.span, test.final_equity, 0},
+        };
+        auto want = equity_stats_reference::compute_equity_stats(
+            curve, 2, 1, "UTC", 1, 1, 0, 0);
+        const double years = static_cast<double>(test.span) / (365.25 * 86400.0 * 1000.0);
+        const double ratio = test.final_equity / 1.0;
+        const double power = std::pow(ratio, 1.0 / years);
+        CHECK(std::isfinite(power) == test.finite_power);
+        CHECK(!std::isfinite(want.cagr));
+        want.cagr = (ratio - 1.0) * (1.0 / years) * 100.0;
+        CHECK(std::isfinite(want.cagr));
+        try {
+            const auto got = metrics::compute_equity_stats(
+                curve, 2, 1, "UTC", 1, 1, 0, 0);
+            CHECK(same_bits(got.cagr, want.cagr));
+            CHECK(equity_stats_reference::first_difference(got, want) == nullptr);
+            CHECK(std::isfinite(got.buy_hold_return));
+        } catch (const std::exception&) {
+            CHECK(false);
+        }
+    }
+
+    row = "one_day_pow_fallback_with_drawdown";
+    const pf_equity_point_t drawdown[] = {
+        {kTime, 1, 0}, {kTime + kDay / 2, 0.99, 0}, {kTime + kDay, 10, 0},
+    };
+    auto want = equity_stats_reference::compute_equity_stats(
+        drawdown, 3, 1, "UTC", 1, 1, 0, 9);
+    CHECK(std::isinf(want.cagr) && std::isinf(want.calmar));
+    CHECK(want.max_equity_drawdown_pct > 0.0);
+    CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
+    const double years = static_cast<double>(kDay) / (365.25 * 86400.0 * 1000.0);
+    const double ratio = drawdown[2].equity / 1.0;
+    want.cagr = (ratio - 1.0) * (1.0 / years) * 100.0;
+    want.calmar = want.cagr / want.max_equity_drawdown_pct;
+    try {
+        const auto got = metrics::compute_equity_stats(
+            drawdown, 3, 1, "UTC", 1, 1, 0, 9);
+        CHECK(std::isfinite(got.cagr) && std::isfinite(got.calmar));
+        CHECK(same_bits(got.cagr, want.cagr) && same_bits(got.calmar, want.calmar));
+        CHECK(equity_stats_reference::first_difference(got, want) == nullptr);
+    } catch (const std::exception&) {
+        CHECK(false);
+    }
 }
 
 void bar_ratio_span_boundary() {
-    // The frozen walk defines both ratios on this down/up curve. The input
-    // span alone decides whether revision 3.1 replaces the four fields.
-    const std::int64_t spans[] = {7 * 60'000, kDay - 1, kDay};
+    // Both ratios always equal the frozen walk. Only sub-day CAGR/calmar
+    // use the proportional formula; at and above one day compounding fits.
+    const std::int64_t spans[] = {7 * 60'000, kDay - 1, kDay, kDay + 1};
     for (const std::int64_t span : spans) {
         row = span < kDay ? "sub_day_finite_bar_ratios" : "one_day_finite_bar_ratios";
         const pf_equity_point_t curve[] = {
@@ -406,24 +496,26 @@ void bar_ratio_span_boundary() {
         };
         auto want = equity_stats_reference::compute_equity_stats(
             curve, 3, 10000, "UTC", 1, 1, 0, 20);
+        CHECK(std::isfinite(want.cagr) && std::isfinite(want.calmar));
         CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
+        const double years = static_cast<double>(span) / (365.25 * 86400.0 * 1000.0);
+        const double ratio = curve[2].equity / 10000.0;
+        const double simple = (ratio - 1.0) * (1.0 / years) * 100.0;
+        CHECK(!same_bits(want.cagr, simple));
         if (span < kDay) {
-            want.cagr = kNaN;
-            want.calmar = kNaN;
-            want.sharpe_bar = kNaN;
-            want.sortino_bar = kNaN;
+            want.cagr = simple;
+            want.calmar = simple / want.max_equity_drawdown_pct;
         }
         try {
             const auto got = metrics::compute_equity_stats(
                 curve, 3, 10000, "UTC", 1, 1, 0, 20);
             CHECK(equity_stats_reference::first_difference(got, want) == nullptr);
-            if (span < kDay) {
-                CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
-                CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
-            } else {
-                CHECK(std::isfinite(got.cagr) && std::isfinite(got.calmar));
-                CHECK(std::isfinite(got.sharpe_bar) && std::isfinite(got.sortino_bar));
-            }
+            CHECK(std::isfinite(got.cagr) && std::isfinite(got.calmar));
+            CHECK(std::isfinite(got.sharpe_bar) && std::isfinite(got.sortino_bar));
+            CHECK(same_bits(got.cagr, want.cagr));
+            CHECK(same_bits(got.calmar, want.calmar));
+            CHECK(same_bits(got.sharpe_bar, want.sharpe_bar));
+            CHECK(same_bits(got.sortino_bar, want.sortino_bar));
         } catch (const std::exception&) {
             CHECK(false);
         }
@@ -459,6 +551,11 @@ void short_span_real_report() {
     for (int i = 0; i < 8; ++i)
         bars.push_back({100, i == 7 ? 900.0 : 100.0, 100,
                         i == 7 ? 900.0 : 100.0, 1, kTime + i * 60'000});
+    pf_equity_point_t expected_curve[8]{};
+    for (std::size_t i = 0; i < bars.size(); ++i) {
+        const double open_profit = i == 0 ? 0.0 : (bars[i].close - bars[1].open) * 1.0;
+        expected_curve[i] = {bars[i].timestamp, spec.initial_capital + open_profit, open_profit};
+    }
     host.run(bars.data(), static_cast<int>(bars.size()));
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
@@ -470,22 +567,63 @@ void short_span_real_report() {
             CHECK(report.equity_curve[0].equity == 10000);
             CHECK(report.equity_curve[7].equity == 10800);
             CHECK(report.equity_curve[7].time_ms - report.equity_curve[0].time_ms == 7 * 60'000);
+            for (std::size_t i = 0; i < bars.size(); ++i) {
+                CHECK(report.equity_curve[i].time_ms == expected_curve[i].time_ms);
+                CHECK(same_bits(report.equity_curve[i].equity, expected_curve[i].equity));
+            }
         }
         CHECK(report.net_profit == 800);
-        CHECK(std::isnan(report.metrics.equity.cagr) && std::isnan(report.metrics.equity.calmar));
-        CHECK(std::isnan(report.metrics.equity.sharpe_bar)
-              && std::isnan(report.metrics.equity.sortino_bar));
-        const auto reference = equity_stats_reference::compute_equity_stats(
-            report.equity_curve, report.equity_curve_len, 10000, "UTC", 100, 900, 0, 800);
+        auto reference = equity_stats_reference::compute_equity_stats(
+            expected_curve, 8, spec.initial_capital, "UTC", 100, 900, 0, 800);
         CHECK(std::isfinite(reference.sharpe_bar) && std::isfinite(reference.sortino_bar));
+        // Expected return and span come from the input tape, not ReportC.
+        const double final_equity = spec.initial_capital
+                                  + (bars.back().close - bars[1].open) * 1.0;
+        const double years = static_cast<double>(bars.back().timestamp - bars.front().timestamp)
+                           / (365.25 * 86400.0 * 1000.0);
+        const double ratio = final_equity / spec.initial_capital;
+        reference.cagr = (ratio - 1.0) * (1.0 / years) * 100.0;
+        if (reference.max_equity_drawdown > 0.0 && reference.max_equity_drawdown_pct > 0.0)
+            reference.calmar = reference.cagr / reference.max_equity_drawdown_pct;
+        CHECK(std::isfinite(report.metrics.equity.cagr));
+        CHECK(same_bits(report.metrics.equity.cagr, reference.cagr));
+        CHECK(same_bits(report.metrics.equity.calmar, reference.calmar));
+        CHECK(same_bits(report.metrics.equity.sharpe_bar, reference.sharpe_bar));
+        CHECK(same_bits(report.metrics.equity.sortino_bar, reference.sortino_bar));
+        double pf_equity_stats_t::*const members[] = {
+            &pf_equity_stats_t::max_equity_drawdown, &pf_equity_stats_t::max_equity_drawdown_pct,
+            &pf_equity_stats_t::max_equity_runup, &pf_equity_stats_t::max_equity_runup_pct,
+            &pf_equity_stats_t::buy_hold_return, &pf_equity_stats_t::buy_hold_return_pct,
+            &pf_equity_stats_t::sharpe_monthly, &pf_equity_stats_t::sortino_monthly,
+            &pf_equity_stats_t::sharpe_bar, &pf_equity_stats_t::sortino_bar,
+            &pf_equity_stats_t::cagr, &pf_equity_stats_t::calmar,
+            &pf_equity_stats_t::recovery_factor, &pf_equity_stats_t::time_in_market_pct,
+            &pf_equity_stats_t::open_pl,
+        };
+        for (const auto member : members)
+            CHECK(std::isnan(report.metrics.equity.*member) == std::isnan(reference.*member));
+        CHECK(host.last_error().empty());
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
         // ReportC mirrors pf_report_t member for member at the C boundary;
         // this size check keeps the cast honest if either side changes.
         static_assert(sizeof(ReportC) == sizeof(pf_report_t),
                       "ReportC and pf_report_t must stay layout twins");
         const auto wire = live::native_report_json(reinterpret_cast<const pf_report_t&>(report));
-        for (const char* field : {"cagr", "calmar", "sharpe_bar", "sortino_bar"}) {
-            const auto& value = wire.at("metrics").at("equity").at(field);
-            CHECK(value.kind == live::Json::Kind::String && value.value == "NaN");
+        struct Metric { const char* name; double pf_equity_stats_t::*member; };
+        const Metric annualized[] = {
+            {"cagr", &pf_equity_stats_t::cagr}, {"calmar", &pf_equity_stats_t::calmar},
+            {"sharpe_bar", &pf_equity_stats_t::sharpe_bar},
+            {"sortino_bar", &pf_equity_stats_t::sortino_bar},
+        };
+        for (const auto& field : annualized) {
+            const auto& value = wire.at("metrics").at("equity").at(field.name);
+            const double expected = reference.*field.member;
+            if (std::isnan(expected)) {
+                CHECK(value.kind == live::Json::Kind::String && value.value == "NaN");
+            } else {
+                CHECK(value.kind == live::Json::Kind::Number);
+                CHECK(value.value == live::report_number(expected).value);
+            }
         }
     } catch (const std::exception&) {
         CHECK(false);
@@ -687,6 +825,8 @@ int main() {
     trade_arithmetic();
     equity_arithmetic();
     annualization_span_rule();
+    sub_day_monotonic_returns();
+    compounded_overflow_fallback();
     bar_ratio_span_boundary();
     short_span_real_report();
     defined_absences_and_finite_values();

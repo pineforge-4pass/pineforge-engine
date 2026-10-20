@@ -263,9 +263,9 @@ void compare(const Curve& c, double initial_capital, const std::string& tz) {
     const pf_equity_point_t* data = c.points.empty() ? nullptr : c.points.data();
     pf_equity_stats_t want = ref::compute_equity_stats(
         data, n, initial_capital, tz, c.first_open, c.last_close, c.in_market, c.net_profit);
-    report_failure_checks::apply_short_span_absence(want, data, n);
+    report_failure_checks::apply_proportional_annualization(want, data, n, initial_capital);
     if (const char* field = report_failure_checks::annualization_overflow(want)) {
-        // Revision 3.1 keeps >= one-day overflow a typed, exact-field fault.
+        // Any overflow remaining after the proportional rule is an exact-field fault.
         CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
             (void)pineforge::metrics::compute_equity_stats(
                 data, n, initial_capital, tz, c.first_open, c.last_close,

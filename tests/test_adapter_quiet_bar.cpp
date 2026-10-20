@@ -239,8 +239,8 @@ public:
         auto reference = equity_stats_reference::compute_equity_stats(
             report.equity_curve, report.equity_curve_len, initial_capital_, chart_timezone_,
             first_bar_open_, current_bar_.close, bars_in_market_, report.net_profit);
-        report_failure_checks::apply_short_span_absence(
-            reference, report.equity_curve, report.equity_curve_len);
+        report_failure_checks::apply_proportional_annualization(
+            reference, report.equity_curve, report.equity_curve_len, initial_capital_);
         return reference;
     }
 #endif
@@ -816,8 +816,8 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
         host.fill_report(&report);
         CHECK(expected_failure() == nullptr);
     } catch (const std::exception& error) {
-        // Revision 3.1 keeps overflow strict at >= one day. The input-derived
-        // frozen walk must independently prove the exact failing field.
+        // After proportional annualization, the input-derived frozen walk
+        // must independently prove the exact remaining overflow field.
         const char* field = expected_failure();
         if (!field || !report_failure_checks::is_nonfinite(error, field)) {
             BacktestEngine::free_report(&report);

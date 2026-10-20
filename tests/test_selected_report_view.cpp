@@ -642,10 +642,10 @@ void compare_walk(const Walk& w, double capital, const std::string& tz) {
     const pf_equity_point_t* data = w.points.empty() ? nullptr : w.points.data();
     pf_equity_stats_t want = ref::compute_equity_stats(
         data, n, capital, tz, w.first_open, w.last_close, w.in_market, w.net_profit);
-    report_failure_checks::apply_short_span_absence(want, data, n);
+    report_failure_checks::apply_proportional_annualization(want, data, n, capital);
 
     if (const char* field = report_failure_checks::annualization_overflow(want)) {
-        // Revision 3.1 leaves >= one-day overflow strict on all three entries;
+        // Remaining overflow is strict on all three entries;
         // only the exposure denominator differs between them.
         CHECK(report_failure_checks::rejects_nonfinite(field, [&] {
             (void)metrics::compute_equity_stats(

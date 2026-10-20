@@ -6,32 +6,33 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
-#include <limits>
 #include <string>
 
 namespace report_failure_checks {
 
-// Independent revision 3.1 expectation from the input curve, never the result.
-// The frozen reference is not edited. Every other field remains bit-exact.
-inline void apply_short_span_absence(pf_equity_stats_t& reference,
-                                     const pf_equity_point_t* curve, std::int64_t n) {
-    if (curve && n > 0) {
-        const auto first = curve[0].time_ms;
-        const auto last = curve[n - 1].time_ms;
-        constexpr std::uint64_t day_ms = 24ULL * 60 * 60 * 1000;
-        if (last < first
-            || static_cast<std::uint64_t>(last) - static_cast<std::uint64_t>(first) < day_ms) {
-            reference.cagr = std::numeric_limits<double>::quiet_NaN();
-            reference.calmar = std::numeric_limits<double>::quiet_NaN();
-            reference.sharpe_bar = std::numeric_limits<double>::quiet_NaN();
-            reference.sortino_bar = std::numeric_limits<double>::quiet_NaN();
-        }
+// Independent proportional expectation from the inputs and the frozen walk.
+// The bar ratios and every other field keep the reference's exact values.
+inline void apply_proportional_annualization(pf_equity_stats_t& reference,
+                                             const pf_equity_point_t* curve, std::int64_t n,
+                                             double initial_capital) {
+    if (!curve || n <= 0 || initial_capital <= 0.0 || curve[n - 1].equity <= 0.0) return;
+    const auto first = curve[0].time_ms;
+    const auto last = curve[n - 1].time_ms;
+    if (last <= first) return;
+    constexpr std::uint64_t day_ms = 24ULL * 60 * 60 * 1000;
+    const auto span_ms = static_cast<std::uint64_t>(last) - static_cast<std::uint64_t>(first);
+    if (span_ms < day_ms || !std::isfinite(reference.cagr)) {
+        const double span_years = static_cast<double>(span_ms) / (365.25 * 86400.0 * 1000.0);
+        const double ratio = curve[n - 1].equity / initial_capital;
+        reference.cagr = (ratio - 1.0) * (1.0 / span_years) * 100.0;
+        if (reference.max_equity_drawdown > 0.0 && reference.max_equity_drawdown_pct > 0.0)
+            reference.calmar = reference.cagr / reference.max_equity_drawdown_pct;
     }
 }
 
-// Revision 3 Appendix A:83/93 still requires R for overflow at >= one day.
+// Remaining overflow is a typed fault on every span, in computation order.
 // `reference` must come from the frozen, unguarded equity_stats_reference
-// walk with only the input-derived revision 3.1 domain applied above.
+// walk with the input-derived proportional rule applied above.
 inline const char* annualization_overflow(const pf_equity_stats_t& reference) {
     if (std::isinf(reference.cagr)) return "metrics.equity.cagr";
     if (std::isinf(reference.calmar)) return "metrics.equity.calmar";
