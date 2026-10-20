@@ -98,6 +98,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/source/magnifier_intrabars.cpp
     src/source/market_admission.cpp
     src/source/pine_adapter.cpp
+    src/source/pine_position_tail.cpp
     src/source/pine_path_resolve.cpp
     src/source/pine_scheduler_native.cpp
     src/source/pine_scheduler.cpp

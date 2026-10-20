@@ -2367,6 +2367,10 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
             // seal below retires storage, including older-time barriers.
         }
         if (next > base) {
+            // L18: spill the position tail of the whole prefix, in forward row
+            // order, before the seal retires its storage; a throw seals nothing.
+            adapter_.preserve_position_tail_before_seal(
+                next, consumer.report_scratch_directory(*this));
             consumer.seal_closed_rows(*this, next, prefix.exit_phase_digest,
                                       prefix.source_gains, prefix.source_losses);
             for (std::size_t offset = 0; offset < next - base; ++offset)
