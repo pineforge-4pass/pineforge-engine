@@ -35,7 +35,9 @@ built, compiled or tested on the P00 machine.
 | File / declaration | DESIGN / amendment authority | Implementing lane |
 |---|---|---|
 | `include/pineforge/report_sink.h`: `pf_report_sink_v1` | 6:1283-1289,1307-1309 | L6b-1 |
+| `pf_report_sink_fd_v1` and `strategy_set_report_sink_fd_v1(pf_strategy_t,const pf_report_sink_fd_v1*)` | CORE-TOP CX-SINK-B1/B2 inherited-fd amendment, 10-20 | L22a |
 | `pf_report_sink_receipt_v1` and its layout assertions | 6:1291-1298,1305-1306 | L6b-1 |
+| `pf_report_sink_summary_v1` and `strategy_report_sink_summary_v1(pf_strategy_t,pf_report_sink_summary_v1*)` | CORE-TOP CX-SINK-B5a ordered T-summary amendment, 10-20; [layout and lifecycle](../pages/abi-stability.md#report-sink-summary-receipt) | L22q |
 | `pf_report_sink_version(void)` | 6:1300 | L6b-1 |
 | `strategy_set_report_sink_v1(pf_strategy_t,const pf_report_sink_v1*)` | 6:1301,1307-1317 | L6b-1 |
 | `strategy_report_sink_receipt_v1(pf_strategy_t,pf_report_sink_receipt_v1*)` | 6:1302; 3.7:791-793; amendment S1 | L6b-1 |
@@ -57,6 +59,21 @@ L6b-1 must enroll `report_sink.h`, the three definitions and their counts
 together, and add `PINEFORGE_HAS_REPORT_SINK_V1` only with runtime support
 (DESIGN 6:1268-1271,1333-1338). There is no transitive include from an existing
 header in P00. O/V/K/X/H operations remain L6b-3's extension.
+
+CORE-TOP's CX-SINK-B1/B2 amendment supersedes DESIGN 3.11's path-only
+statement for jailed children. `LineWriter` also accepts a borrowed
+`pf_report_sink_fd_v1`, with no path or scratch directory; both modes share
+the canonical v1 builder and receipt. The fd route retries sequential writes
+and waits on back-pressure without growing its buffer. It never closes the
+caller's fd or changes SIGPIPE handling. The trusted finalizer owns file
+creation. See the [fd ABI contract](../pages/abi-stability.md).
+
+CX-SINK-B5a adds a separate 64-byte, 8-byte-aligned summary receipt without
+changing the 144-byte trailer receipt. Report-only sealed-prefix folds and
+a copy folded over the resident/presented suffix preserve the Python T-fold
+bits, strict win/loss counts, first zero sign and first nonfinite T-field
+index (5..12). Neither the fold nor the published receipt enters broker
+state hashes; completion is published with the successful trailer.
 
 ## TradeLedger
 
@@ -206,19 +223,19 @@ references; L15a must maintain these anchors and mechanically pin every current
 
 | Reader to route through the view/source | Source anchors in this tree | DESIGN lines |
 |---|---|---|
-| Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.cpp:10069-10124` | 357-358 |
+| Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.cpp:10069-10125` | 357-358 |
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
 | Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9609-9612`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9634-9636` | 361-363 |
-| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3006-3012` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2775-2776`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13329-13334` | 364-365 |
+| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3011-3017` | 361-363; V1/V2 change 5 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2775-2776`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13679` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:234-244`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:294-301` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1191-1197` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
-| Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.cpp:3229-3305` | 371,1221-1222 |
+| Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.cpp:3230-3305` | 371,1221-1222 |
 | Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:289` | 371,1223-1224 |
 | Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:8686-8719` | 371,1225 |
 | Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:265-287`; `next_open` `src/source/pine_scheduler_native.cpp:328-329` | 371,1226-1227 |
-| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3430-3434` | 371,1228 |
+| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3437-3443` | 371,1228 |
 
 Every count/digest must fold the same bytes/order for copied and borrowed
 feeds, including cached and uncached paths (2.2:372-375). Views replace storage;
@@ -249,8 +266,76 @@ remain required before integration is declared verified.
 
 An ordinary report sink, including an observed run without an admitted selected
 window, presents a one-point copy of the editable equity tail so a hook cannot
-rewrite prefix records that have already been emitted. A selected sink performs
-one presentation of the full selected curve, preserving the hook's published-length
-changes before the selected writer emits the anchor and final window observations.
+rewrite prefix records that have already been emitted. A selected sink presents
+only the last min(W, M + 1) points to the hook, with W =
+`kSelectedPresentationWindowPoints` (2) and `equity_curve_len` equal to that
+tail-window length. The logical M + 1 stays capture-internal; hooks see only
+the window, with no ReportC or C ABI extension. Interior points are immutable
+to hooks and stream to scratch unchanged before presentation; the edited
+window follows them. The published count is the logical length minus the
+number of window points the hook cut. Metrics retain all M + 1 presented
+points, including any hidden suffix. Sink OFF keeps the full array unchanged.
 At capture, the existing admitted selected-window flag chooses the presentation
 once; subsequent report reads reuse that capture.
+
+On the sink path, both ordinary and selected `present_report` hooks receive
+only the open-at-end trade rows, in the same lot order as the suffix of the
+sink-OFF array. `trades_len` is this open-lot count; `total_trades` still includes
+all closed rows. The hook may edit these rows in place, keeping their pointer
+and count. Its incoming `net_profit` still includes all rows. A hook that
+re-sums edited rows must continue `report_closed_net_profit()` one open row
+at a time, preserving the original left fold. Trade metrics fold directly over
+the ledger and then the presented open rows. T emission projects one ledger
+row at a time, followed by that same edited view; neither capture nor read
+allocates a closed-history `TradeC[]`. Sink OFF keeps the full array and is
+byte-identical.
+
+The sink's `presentation_` stores scalar report values with null trade and
+equity pointers. The independent open-lot view is retained only to preserve
+the hook's edits across reads and explicit sink removal; its size depends on
+open lots, never closed trades. An ordinary capture keeps its presented equity
+tail as one value. With a resident base of zero, removing the sink explicitly
+requests full report arrays again, without dispatching a captured hook a second
+time. After sealing, an array read refuses with `engine_invariant`: retired
+rows remain in the sink and cannot be recovered from resident storage.
+
+L17c/d and L8c use one report path. `fill_trades_section`
+(`src/engine_report.cpp:112-169`) keeps the logical global count and copies only
+open rows for a sink. `report_closed_net_profit`
+(`src/engine_report.cpp:171-184`) starts at `ClosedTradePrefix::pnl` and adds the
+resident suffix in order. `finish_streamed_trade_metrics`
+(`src/native_execution_consumer.cpp:13544`) finishes copies of the sealed
+accumulators over resident closed rows, then the presented open rows. The
+source host's terminal-quote presentation continues that same closed-row PnL
+fold before adding its edited open rows (`net_profit`
+`src/source/pine_strategy_host.cpp:1911-1912`).
+
+Selected carry-in validation includes the minimum entry time folded at seal
+(`first_entry_time` `src/native_execution_consumer.cpp:12512-12515`), so a
+window starting after a sealed entry refuses with the existing typed
+`engine_invariant`. Validation never indexes a retired row. `write_report_sink_trades`
+(`src/engine_report.cpp:942-975`) resumes at the global T cursor: sealed rows
+already in the sink are emitted exactly once, followed by the resident suffix
+and open rows. The sink remains the complete row report.
+
+HostRecorded contract, also to be carried into DESIGN 3.6 and the release-notes
+draft: a host that owns and pushes the curve owns its memory; the production Pine host uses KernelRecordedAtHostMarks (src/source/pine_adapter.cpp:2862), whose recorded curve is held in O(1) and streamed to the scratch file.
+HostRecorded's host-owned curve and the sink-OFF curve path retain their
+existing behavior.
+
+The kernel recorder uses the ordinary sink's scratch owner and single editable
+execution point for selected runs too. Released pre-window points update the
+existing selected validation latches; only the anchor and observations in
+[T, E) enter scratch. Capture judges those latches and the final execution
+point before presenting, then reads the bounded window from the scratch suffix
+and held point. It replaces that suffix with the edited window and transfers
+the same scratch owner to the selected metric snapshot. No selected history
+vector or second scratch writer is built on this recorder path.
+
+A live `fill_report` (`src/engine_report.cpp:57-80`) during an open selected
+kernel-recorder sink run refuses with a coded `std::logic_error`,
+`report_shape_unsupported` and `{"shape":"live_selected_sink"}`. It clears the
+output before allocating report rows, calling presentation or staging a point.
+The host may catch this read refusal and continue; the recorder, run-failure
+state and later selected capture remain unchanged. Sink OFF retains its live
+full-prefix array report.
