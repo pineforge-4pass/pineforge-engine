@@ -16,6 +16,17 @@ _Static_assert(offsetof(pf_report_sink_v1, run_id) == 8 + sizeof(const char*),
 _Static_assert(offsetof(pf_report_sink_v1, scratch_dir) == 8 + 2 * sizeof(const char*),
                "sink scratch_dir moved");
 
+_Static_assert(sizeof(int) == 4, "sink fd requires a 32-bit C int");
+_Static_assert(offsetof(pf_report_sink_fd_v1, struct_size) == 0, "fd sink size prefix moved");
+_Static_assert(offsetof(pf_report_sink_fd_v1, version) == 4, "fd sink version moved");
+_Static_assert(offsetof(pf_report_sink_fd_v1, fd) == 8, "sink fd moved");
+_Static_assert(offsetof(pf_report_sink_fd_v1, run_id)
+               == (12 + _Alignof(const char*) - 1) / _Alignof(const char*) * _Alignof(const char*),
+               "fd sink run_id moved");
+_Static_assert(sizeof(pf_report_sink_fd_v1)
+               == offsetof(pf_report_sink_fd_v1, run_id) + sizeof(const char*),
+               "fd sink descriptor size changed");
+
 _Static_assert(sizeof(pf_report_sink_receipt_v1) == 144, "sink receipt size changed");
 _Static_assert(offsetof(pf_report_sink_receipt_v1, struct_size) == 0, "receipt size prefix moved");
 _Static_assert(offsetof(pf_report_sink_receipt_v1, version) == 4, "receipt version moved");

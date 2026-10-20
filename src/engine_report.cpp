@@ -583,7 +583,7 @@ double BacktestEngine::output_constant_value(int index) const {
 
 }  // namespace pineforge
 
-// CR-150 L6B1: path sink runtime. Kept after the existing report/output code
+// CR-150 L6B1/L22A: sink runtime. Kept after the existing report/output code
 // so the line-pinned documentation above retains its source coordinates.
 #include "report_sink_writer.hpp"
 
@@ -624,6 +624,23 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
     return 0;
 }
 
+int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor) {
+    if (descriptor && (descriptor->struct_size != sizeof(*descriptor)
+        || descriptor->version != 1 || descriptor->fd < 0)) return -1;
+    const int status = report_sink_setter_status();
+    if (status != 0) return status;
+    ReportSinkState next;
+    next.trade_history_streamable = report_sink_state_.trade_history_streamable;
+    if (descriptor) {
+        next.enabled = true;
+        next.fd = descriptor->fd;
+        next.run_id = descriptor->run_id ? descriptor->run_id : "";
+        // No path parent or scratch directory exists for a borrowed stream.
+    }
+    report_sink_state_ = std::move(next);
+    return 0;
+}
+
 int BacktestEngine::report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_receipt_v1 local{};
@@ -656,10 +673,16 @@ void BacktestEngine::begin_report_sink() {
     std::vector<int64_t>().swap(output_close_ms_);
     std::vector<OutputEvent>().swap(output_events_);
     sink.receipt.trades_retained = sink.trade_history_streamable ? 0u : 1u;
-    const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1,
-        sink.path.c_str(), sink.run_id.c_str(), sink.scratch_dir.c_str()};
     try {
-        sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        if (sink.fd >= 0) {
+            const pf_report_sink_fd_v1 descriptor{sizeof(pf_report_sink_fd_v1), 1,
+                sink.fd, sink.run_id.c_str()};
+            sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        } else {
+            const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1,
+                sink.path.c_str(), sink.run_id.c_str(), sink.scratch_dir.c_str()};
+            sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        }
         sink.writer->write_header({outputs_enabled_, trace_enabled_, broker_state_hash_recording_,
                                    outputs_slots_, outputs_constants_});
     } catch (const report_sink::WriterError& error) {

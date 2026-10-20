@@ -7237,3 +7237,12 @@ if(TARGET outputs_fixture_strategy)
         ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
 # --- CR-150 core-cr150-l2 end ---
+
+# --- CR-150 core-cr150-l22a begin ---
+if(UNIX)
+    target_link_libraries(test_report_sink_fd PRIVATE Threads::Threads)
+    target_compile_definitions(test_report_sink_fd PRIVATE
+        PINEFORGE_L22A_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L22A_READER="${CMAKE_CURRENT_SOURCE_DIR}/report_sink_fd_reader.py")
+endif()
+# --- CR-150 core-cr150-l22a end ---

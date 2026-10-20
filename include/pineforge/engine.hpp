@@ -2298,6 +2298,7 @@ private:
         bool enabled = false;
         bool trade_history_streamable = false;
         std::string path, run_id, scratch_dir;
+        int fd = -1; // borrowed stream; -1 selects the owned path writer
         std::uint32_t active_calls = 0;
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
@@ -2312,7 +2313,8 @@ private:
         ReportSinkState() = default;
         ReportSinkState(const ReportSinkState& other)
             : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
-              path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
+              path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir),
+              fd(other.fd) {}
         ReportSinkState& operator=(const ReportSinkState& other) {
             if (this != &other) *this = ReportSinkState(other);
             return *this;
@@ -2356,6 +2358,7 @@ private:
 public:
     // The additive C ABI delegates here; receipt queries never bind a consumer.
     int set_report_sink_v1(const pf_report_sink_v1* sink);
+    int set_report_sink_fd_v1(const pf_report_sink_fd_v1* sink);
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
     // Codegen opts in only for modules that do not read closedtrades.*.
     // L6B1 still retains every row; L8c consumes this policy at sealing.
