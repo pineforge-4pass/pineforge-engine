@@ -2239,7 +2239,7 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:1850`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1309`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1321`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
@@ -3173,7 +3173,7 @@ These are existing refusals, not implied future features:
   recorded request series
 
 A C host has the same stream and the same commands. Streaming needs no new
-symbol — `strategy_stream_begin` and its family (`pineforge.h:739`) take
+symbol — `strategy_stream_begin` and its family (`pineforge.h:751`) take
 a `pf_strategy_t` from `strategy_native_host_create_v1` unchanged — and
 `strategy_native_submit_v1` (`native_c_api.h:2742`) obeys the one legality
 rule its C++ spelling does.
@@ -4552,7 +4552,7 @@ Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
 `src/compat/pine/` units and all fourteen `src/source/` ones, and
 `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:116`) holds the kernel's own
-forty-four, which are what `add_library` (`CMakeLists.txt:163`) compiles into
+forty-four, which are what `add_library` (`CMakeLists.txt:164`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the

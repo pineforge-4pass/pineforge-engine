@@ -149,15 +149,15 @@ overrides or imported libraries, its receipt must bind those inputs too.
 
 ### Declaration facts do not replace compiled program facts
 
-The carried declaration fields are visible in
-`include/pineforge/source/pine_adapter.hpp:65`. Their projection starts at
-`src/source/pine_adapter.cpp:2777`. The relevant rules are:
+The carried declaration fields are visible in `PineStrategyConfig` at
+`include/pineforge/source/pine_adapter.hpp:66`. Their `project` projection starts at
+`src/source/pine_adapter.cpp:2732`. The relevant rules are:
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset, as the comment at `src/source/pine_adapter.cpp:2863` states. Do not assume this caps strategy.order or use it as an unconditional H. |
-| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard through the native cadence at `src/source/pine_adapter.cpp:2829`; the literal is declared at `include/pineforge/source/pine_adapter.hpp:63`. The native point budget is a callback bound, not a total fill bound. |
-| max_recalculations_per_point | Further executions still apply after callbacks stop; see the comment at `include/pineforge/native_run_spec.hpp:686`. The actual counter check is `src/native_execution_consumer.cpp:7723`. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset, as the `max_open_lots` comment and surrounding projection at `src/source/pine_adapter.cpp:2860-2864` state. Do not assume this caps strategy.order or use it as an unconditional H. |
+| calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:2832`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:64`. The native point budget is a callback bound, not a total fill bound. |
+| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7723`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2818`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
@@ -334,15 +334,15 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 
 | Physical user | Logical peak bytes | Code evidence |
 | --- | --- | --- |
-| Equity writer / selected hold-back / SpillCurve | 24*E | `include/pineforge/metrics_stream.hpp:14`; `src/report_scratch.cpp:243` |
+| Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:15`; `src/report_scratch.cpp:243` |
 | Position tail | (30+L)*T | L18 sibling footer evidence described below; absent from this base |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:107`; `include/pineforge/source/pine_adapter.hpp:1830` |
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6375`; `include/pineforge/detail/disk_id_table.hpp:107` |
-| Sequence minima data | (40+L)*D + (40+2*L)*Q | `include/pineforge/detail/id_pair_store.hpp:140`; `include/pineforge/source/pine_adapter.hpp:933` |
+| Sequence minima data | (40+L)*D + (40+2*L)*Q | `include/pineforge/detail/id_pair_store.hpp:140`; `sequence_index_` `include/pineforge/source/pine_adapter.hpp:934` |
 | Sequence minima index | indexPeak(D+Q) | `include/pineforge/detail/id_pair_store.hpp:403` |
-| Erased minima data | (40+L)*D + (40+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:935`; `src/source/pine_adapter.cpp:852` |
+| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` `include/pineforge/source/pine_adapter.hpp:936`; `remember_erased` `src/source/pine_adapter.cpp:853` |
 | Erased minima index | indexPeak(D+Q) | `include/pineforge/detail/id_pair_store.hpp:403` |
-| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2580`; `src/source/pine_adapter.cpp:24874` |
+| Consumed partial-cycle data | (41+2*L)*Q | `consumed_partial_exit_cycles_` `include/pineforge/source/pine_adapter.hpp:2592`; `src/source/pine_adapter.cpp:24874` |
 | Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:403` |
 | Successor-root rows | 16*R | `src/native_order.cpp:5913`; `src/native_order.cpp:5964` |
 
@@ -368,8 +368,8 @@ and ID length (4), after the ID bytes. This is not sizeof(Row). The exact
 external file:line evidence is recorded in the lane report; these sources
 must be merged and their local anchors refreshed before claiming coverage.
 
-Successor rows are two uint64 values. `WorkingRequestCore::index_committed`
-at `src/native_order.cpp:1190` omits kept-handle replacements and appends a
+Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
+defined at `src/native_order.cpp:1190` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
@@ -403,7 +403,7 @@ not include the rehash overlap and must not replace indexPeak in sizing.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
-writer (`src/engine_report.cpp:796`), and capture transfers that writer
+writer (`src/engine_report.cpp:796`), and capture transfers that writer as `metric_curve`
 instead of copying its prefix (`src/native_execution_consumer.cpp:12675`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
@@ -483,7 +483,7 @@ or trace calls made inside an unknown loop.
 
 Safe signed JSON integers use <=17 characters, hash64 is 18 quoted
 characters, and f64 conservatively uses <=64 characters: the formatter
-at `src/report_sink_writer.cpp:159` builds scientific output with a fixed
+`f64` at `src/report_sink_writer.cpp:162` builds scientific output with a fixed
 buffer then performs bounded exponent relayout. Each input string byte
 becomes at most six JSON bytes, plus two quotes; see
 `src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:
