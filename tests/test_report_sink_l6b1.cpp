@@ -368,7 +368,10 @@ void equal_run(const Api& api, const std::string& path, bool selected, bool obse
     api.run(streamed, bars.data(), static_cast<int>(bars.size()), &after);
     assert(receipt(api, streamed).complete == 1 && receipt(api, streamed).count_t == 0);
     api.free(&after);
-    assert(api.set(streamed, nullptr) == 0 && receipt(api, streamed).complete == 0);
+    // The ordinary run just made keeps its curve on scratch, so the sink cannot
+    // be removed (typed setter refusal -3, nothing changes): the receipt of the
+    // finished run stays complete. A handle without a run removes it (below).
+    assert(api.set(streamed, nullptr) == -3 && receipt(api, streamed).complete == 1);
     api.destroy(streamed); api.destroy(baseline);
     assert(!observer || callbacks == 3);
 }

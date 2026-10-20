@@ -476,3 +476,23 @@ void BacktestEngine::reset_trade_percent_prefix() {
 }
 
 }  // namespace pineforge
+
+// CR-150 L6b-4 read-side binding. Keep the existing metric implementation and
+// its array instantiations above unchanged; L7c owns the public SpillCurve
+// instantiations. The internal window can exercise the real scratch reader
+// before that downstream adapter is merged.
+#include "report_scratch.hpp"
+
+namespace pineforge {
+namespace metrics {
+
+template pf_equity_stats_t compute_equity_stats<report_sink::ScratchCurveWindow>(
+    const report_sink::ScratchCurveWindow&, int64_t, double, const std::string&,
+    double, double, int64_t, double);
+
+template pf_equity_stats_t compute_equity_stats<report_sink::ScratchCurveWindow>(
+    const report_sink::ScratchCurveWindow&, int64_t, double, const std::string&,
+    double, double, int64_t, double, int64_t);
+
+} // namespace metrics
+} // namespace pineforge
