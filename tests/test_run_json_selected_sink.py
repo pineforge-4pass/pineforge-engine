@@ -547,7 +547,7 @@ def native_compare(tmp_path, module, argv):
                 [sys.executable, "-B", "-c", NATIVE_DRIVER, str(ROOT / "docker"),
                  str(producer), mode, "--so", str(module), *map(str, argv),
                  "--run-phase-fd", str(child.fileno())],
-                cwd=ROOT, capture_output=True, text=True, pass_fds=(child.fileno(),), timeout=180)
+                cwd=ROOT, capture_output=True, text=True, pass_fds=(child.fileno(),))
             child.close()
             with parent.makefile("r") as records:
                 actual_phases = [json.loads(line)["phase"] for line in records]

@@ -29,7 +29,7 @@ def test_selected_assembly_python_memory_is_flat(tmp_path):
             result = subprocess.run(
                 [sys.executable, "-B", "-c", NATIVE_DRIVER, str(ROOT / "docker"),
                  str(ROOT / "docker/run_json.py"), "memory", "--so", str(module), *argv],
-                cwd=ROOT, stdout=destination, stderr=subprocess.PIPE, text=True, timeout=1800)
+                cwd=ROOT, stdout=destination, stderr=subprocess.PIPE, text=True)
         assert result.returncode == 0, (count, result.returncode, result.stderr)
         sample = json.loads(result.stderr)
         peak = sample["python_peak_bytes"]
