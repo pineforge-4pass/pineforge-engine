@@ -210,7 +210,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
 | Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9597-9600`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9622-9624` | 361-363 |
 | Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3006-3012` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2775-2776`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13328-13333` | 364-365 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2775-2776`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13317-13322` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:234-244`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:293-300` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1169-1175` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
@@ -269,3 +269,11 @@ point before presenting, then reads the bounded window from the scratch suffix
 and held point. It replaces that suffix with the edited window and transfers
 the same scratch owner to the selected metric snapshot. No selected history
 vector or second scratch writer is built on this recorder path.
+
+A live `fill_report` (`src/engine_report.cpp:56-79`) during an open selected
+kernel-recorder sink run refuses with a coded `std::logic_error`,
+`report_shape_unsupported` and `{"shape":"live_selected_sink"}`. It clears the
+output before allocating report rows, calling presentation or staging a point.
+The host may catch this read refusal and continue; the recorder, run-failure
+state and later selected capture remain unchanged. Sink OFF retains its live
+full-prefix array report.

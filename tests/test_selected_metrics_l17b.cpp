@@ -648,6 +648,155 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     CHECK(streamed.recorded_capacity() <= kReportSinkHeldEquityPoints);
 }
 
+struct LiveReportHost final : NativeStrategyHost {
+    bool expect_live_refusal = false;
+    bool reading_live = false;
+    bool entered = false;
+    int calculations = 0;
+    int live_reads = 0;
+    int live_refusals = 0;
+    std::array<std::int64_t, 2> live_held_times{};
+    mutable int live_presentations = 0;
+    mutable int captures = 0;
+    mutable int scratch_descriptor_at_capture = -1;
+
+    void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
+        ++calculations;
+        if (!entered && context.script_bar_open_ms >= kT + 2 * kMinute) {
+            entered = true;
+            const auto result = submit({no::Transact{1.0}, "entry", ""});
+            CHECK(result.status == no::SubmitStatus::Accepted && result.handle.has_value());
+        }
+        if (context.script_bar_open_ms != kT + kMinute
+            && context.script_bar_open_ms != kT + 3 * kMinute) return;
+
+        // The preceding point is still held: first outside, then inside [T,E).
+        const auto held_before = equity_curve_;
+        const auto prefix_before = report_sink_equity_scratch_region();
+        const auto slot = static_cast<std::size_t>(live_reads++);
+        CHECK(!held_before.empty() && slot < live_held_times.size());
+        if (!held_before.empty() && slot < live_held_times.size())
+            live_held_times[slot] = held_before.back().time_ms;
+        Report live;
+        bool refused = false;
+        reading_live = true;
+        try {
+            fill_report(&live.value);
+        } catch (const coded<std::logic_error>& error) {
+            refused = true;
+            ++live_refusals;
+            CHECK(error.run_failure_code() == RunFailureCode::report_shape_unsupported);
+            const auto& failure = error.run_failure();
+            CHECK(failure.args && *failure.args == "{\"shape\":\"live_selected_sink\"}");
+            CHECK(std::strcmp(error.what(),
+                "native selected report: a live sink report is unavailable before capture") == 0);
+        }
+        reading_live = false;
+        CHECK(refused == expect_live_refusal);
+        if (!refused && !expect_live_refusal) {
+            // Sink OFF still returns the full ordinary execution prefix, with
+            // no selected anchor, through the existing presentation hook.
+            CHECK(live.value.equity_curve_len == static_cast<std::int64_t>(held_before.size()));
+            CHECK(live.value.equity_curve != nullptr);
+            if (live.value.equity_curve
+                && live.value.equity_curve_len == static_cast<std::int64_t>(held_before.size()))
+                CHECK(std::memcmp(live.value.equity_curve, held_before.data(),
+                                  held_before.size() * sizeof(pf_equity_point_t)) == 0);
+        }
+        if (refused) {
+            CHECK(live.value.equity_curve == nullptr && live.value.equity_curve_len == 0);
+            CHECK(live.value.trades == nullptr && live.value.trades_len == 0);
+        }
+        const auto prefix_after = report_sink_equity_scratch_region();
+        CHECK(prefix_after.descriptor == prefix_before.descriptor);
+        CHECK(prefix_after.byte_offset == prefix_before.byte_offset);
+        CHECK(prefix_after.point_count == prefix_before.point_count);
+        CHECK(same_points(held_before, equity_curve_));
+        CHECK(last_error().empty());
+        CHECK(run_failure_value_of(*this).code == RunFailureCode::none);
+    }
+
+    void present_report(ReportC*) const override {
+        if (reading_live) {
+            ++live_presentations;
+        } else {
+            ++captures;
+            scratch_descriptor_at_capture = report_sink_equity_scratch_region().descriptor;
+        }
+    }
+};
+
+void live_selected_reads_preserve_capture(Directory& directory) {
+    const Bar bars[] = {
+        {50.0, 50.0, 50.0, 50.0, 1.0, kT},
+        {50.0, 50.0, 50.0, 50.0, 1.0, kT + kMinute},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + 2 * kMinute},
+        {100.0, 110.0, 100.0, 110.0, 1.0, kT + 3 * kMinute},
+        {110.0, 110.0, 104.5, 104.5, 1.0, kT + 4 * kMinute}};
+    const pf_selected_window_config_v1 window{
+        sizeof window, 1, kT + 2 * kMinute, kT + 5 * kMinute};
+    LiveReportHost baseline, streamed;
+    streamed.expect_live_refusal = true;
+    const auto path = directory.file("live-selected-reads.ndjson");
+    const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "L17C", directory.path.c_str()};
+    CHECK(streamed.set_report_sink_v1(&sink) == 0);
+    for (auto* host : {&baseline, &streamed}) {
+        CHECK(host->configure_native(spec(1)).status == NativeSetupStatus::Applied);
+        CHECK(native_set_selected_window_v1(host, &window) == 0);
+        host->run(bars, static_cast<int>(std::size(bars)));
+        CHECK(host->native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host->last_error().empty());
+        CHECK(host->calculations == static_cast<int>(std::size(bars)));
+        CHECK(host->live_reads == static_cast<int>(host->live_held_times.size()));
+        CHECK(host->live_held_times[0] < window.start_ms);
+        CHECK(host->live_held_times[1] >= window.start_ms
+              && host->live_held_times[1] < window.end_ms);
+        CHECK(host->captures == 1);
+    }
+    CHECK(streamed.live_held_times == baseline.live_held_times);
+    CHECK(baseline.live_refusals == 0 && baseline.live_presentations == baseline.live_reads);
+    CHECK(streamed.live_refusals == streamed.live_reads && streamed.live_presentations == 0);
+    pf_selected_window_counts_v1 array_counts{}, scratch_counts{};
+    array_counts.struct_size = sizeof array_counts;
+    scratch_counts.struct_size = sizeof scratch_counts;
+    array_counts.version = scratch_counts.version = 1;
+    CHECK(native_selected_window_counts_v1(&baseline, &array_counts) == 0);
+    CHECK(native_selected_window_counts_v1(&streamed, &scratch_counts) == 0);
+    CHECK(scratch_counts.window_script_bars == array_counts.window_script_bars);
+    CHECK(scratch_counts.fed_script_bars == array_counts.fed_script_bars);
+    Report array, summary, again;
+    baseline.fill_report(&array.value);
+    streamed.fill_report(&summary.value);
+    CHECK(same_metrics(summary.value.metrics, array.value.metrics));
+    CHECK(summary.value.net_profit == array.value.net_profit);
+    CHECK(summary.value.total_trades == array.value.total_trades);
+    CHECK(array.value.trades_len > 0);
+    if (array.value.trades_len > 0)
+        CHECK(array.value.trades[array.value.trades_len - 1].open_at_end == 1);
+    CHECK(array.value.equity_curve_len
+          == static_cast<std::int64_t>(array_counts.window_script_bars) + 1);
+    CHECK(summary.value.equity_curve == nullptr && summary.value.equity_curve_len == 0);
+    CHECK(summary.value.trades == nullptr && summary.value.trades_len == 0);
+    CHECK(streamed.scratch_descriptor_at_capture >= 0 && array.value.equity_curve != nullptr);
+    if (streamed.scratch_descriptor_at_capture >= 0 && array.value.equity_curve) {
+        std::vector<pf_equity_point_t> raw(static_cast<std::size_t>(array.value.equity_curve_len));
+        report_sink::read_scratch_points(
+            {streamed.scratch_descriptor_at_capture, 0, array.value.equity_curve_len},
+            0, raw.data(), array.value.equity_curve_len);
+        CHECK(std::memcmp(raw.data(), array.value.equity_curve,
+                          raw.size() * sizeof(pf_equity_point_t)) == 0);
+    }
+    const auto done = receipt(streamed);
+    CHECK(done.complete == 1 && done.count_e == array.value.equity_curve_len);
+    CHECK(done.count_t == array.value.trades_len);
+    const auto bytes = read(path);
+    compare_sink_records(baseline, array.value, bytes);
+    streamed.fill_report(&again.value);
+    CHECK(same_metrics(again.value.metrics, array.value.metrics));
+    CHECK(read(path) == bytes);
+    CHECK(baseline.captures == 1 && streamed.captures == 1);
+}
+
 void selected_recorder_refusals_stay_at_capture(Directory& directory) {
     const Bar bars[] = {
         {100.0, 100.0, 100.0, 100.0, 1.0, kT},
@@ -1353,6 +1502,7 @@ int main() {
                              false, false, false, refills, true,
                              kSelectedPresentationWindowPoints);
         legacy_sink_off_hooks_stay_full();
+        live_selected_reads_preserve_capture(directory);
         selected_recorder_refusals_stay_at_capture(directory);
         selected_recorder_drops_reused_array_capacity(directory);
         empty_selected_windows_follow_array_path(directory);

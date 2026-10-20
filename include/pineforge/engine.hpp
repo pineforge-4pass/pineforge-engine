@@ -55,7 +55,7 @@ namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
 namespace report_sink { class ScratchCurveWriter; }
 namespace report { class SelectedReportStream; }
-// Physical emulator lot entry/exit in execution order; no range-end report rows.
+// Physical emulator lot entry/exit in execution order; no range-end report rows. A reversal may produce several exits followed by an entry.
 struct StreamOrderAction {
     uint64_t sequence = 0;
     int64_t timestamp_ms = 0;

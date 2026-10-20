@@ -63,10 +63,18 @@ void BacktestEngine::fill_report(ReportC* out) const {
         return;
     }
     // Sealed selected/observed generations use their capture (or the empty
-    // report). All other reads retain the ordinary presentation path.
+    // report). A live selected sink cannot supply the ordinary full prefix.
     if (NativeExecutionConsumer::fill_selected_report(*this, out)) {
         finish_report_sink(out);
         return;
+    }
+    if (report_sink_state_.selected_equity_stream) {
+        // Refuse before allocating rows or staging a presented execution point.
+        // A host may catch this read refusal and continue the same generation.
+        *out = ReportC{};
+        throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
+            {{"shape", "live_selected_sink"}},
+            "native selected report: a live sink report is unavailable before capture");
     }
     fill_trades_section(out);
 
@@ -190,7 +198,7 @@ void compute_report_metrics(pf_metrics_t& result,
 // No ScopedTimezone may be held here: compute_equity_stats takes the
 // non-recursive global tz lock when chart_timezone_ is non-UTC.
 void BacktestEngine::fill_metrics_section(ReportC* out) const {
-    if (report_sink_state_.equity_scratch) {
+    if (report_sink_state_.equity_scratch && !report_sink_state_.selected_equity_stream) {
         fill_report_sink_metrics_section(out);
         return;
     }
