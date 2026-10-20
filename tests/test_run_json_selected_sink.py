@@ -398,7 +398,7 @@ def test_selected_sink_setup_failure_frees_the_state(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise OSError(28, "injected selected sink open failure")
 
-    monkeypatch.setattr(run_json.tempfile, "TemporaryFile", fail)
+    monkeypatch.setattr(run_json.tempfile, "mkstemp", fail)
     status, text, stderr, library, writers = invoke(tmp_path, monkeypatch)
     assert status == 1 and stderr == ""
     assert json.loads(text)["code"] == "report_sink_failed"

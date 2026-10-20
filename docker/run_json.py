@@ -5333,18 +5333,22 @@ def _new_report_sink(lib, state, args, *, body=True):
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
     # Only the body run may create/truncate the caller's sink. Bench states
-    # retain the existing unlinked-file lifetime.
+    # use their own temporary paths, unlinked at close.
     return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
                        path=getattr(args, "report_sink", None) if body else None)
 
 
 class _ReportSink:
-    """A caller-owned path or an unlinked file for the engine's path ABI.
+    """A caller-owned path or an owner-only (0600) temporary sink file.
 
-    TemporaryFile uses O_TMPFILE or unlinks immediately. The descriptor path
-    lets the engine open that file with its existing path-only API. Keep the
-    temporary owner open until report_free and strategy_free have returned.
+    Temporary sinks use mkstemp and give the engine a real path through its
+    existing path-only ABI. The writer accepts and truncates the empty file
+    (O_WRONLY | O_CREAT | O_TRUNC, no O_EXCL: src/report_sink_writer.cpp).
+    Every reader opens the path again and owns its offset; Darwin's /dev/fd
+    would share an offset instead. close() unlinks only temporary sinks,
+    unless ``keep`` is set by the harness's test-only artifact switch.
+    Keep the owner open until report_free and strategy_free have returned.
     A named file is created/truncated by the engine and persists for its caller.
     """
 
@@ -5352,17 +5356,19 @@ class _ReportSink:
         self.directory = os.fspath(directory) if directory is not None else tempfile.gettempdir()
         self.header, self.counts, self.sha256 = {}, {}, ""
         self.named, self.run_id = path is not None, run_id
-        self.file = None
+        self.keep, self.closed = False, False
         if self.named:
             self.path = os.fspath(path)
         else:
             try:
-                self.file = tempfile.TemporaryFile(mode="w+b", dir=self.directory)
+                handle, path = tempfile.mkstemp(prefix="pineforge-report-sink-", suffix=".sink",
+                                                dir=self.directory)
             except OSError as error:
                 raise RunFailure("report sink open failed", "report_sink_failed") from error
-            directory_path = "/proc/self/fd" if sys.platform.startswith("linux") else "/dev/fd"
-            self.path = f"{directory_path}/{self.file.fileno()}"
+            self.path = os.path.abspath(path)
         try:
+            if not self.named:
+                os.close(handle)  # the engine and every reader open the path themselves
             descriptor = ReportSinkC(ctypes.sizeof(ReportSinkC), 1, os.fsencode(self.path),
                                      run_id.encode("utf-8"), os.fsencode(self.directory))
             if lib.strategy_set_report_sink_v1(state, ctypes.byref(descriptor)) != 0:
@@ -5405,8 +5411,17 @@ class _ReportSink:
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
 
     def close(self):
-        if self.file is not None:
-            self.file.close()
+        if not self.closed:
+            if not self.named and not self.keep:
+                try:
+                    os.unlink(self.path)
+                except FileNotFoundError:
+                    pass
+            self.closed = True
+
+
+# The harness uses the temporary-only spelling with no caller-owned path.
+_TemporaryReportSink = _ReportSink
 
 
 def _free_sink_run(lib, state, report, sink):

@@ -218,7 +218,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:289` | 371,1223-1224 |
 | Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:8686-8719` | 371,1225 |
 | Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:265-287`; `next_open` `src/source/pine_scheduler_native.cpp:328-329` | 371,1226-1227 |
-| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3431-3435` | 371,1228 |
+| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3430-3434` | 371,1228 |
 
 Every count/digest must fold the same bytes/order for copied and borrowed
 feeds, including cached and uncached paths (2.2:372-375). Views replace storage;

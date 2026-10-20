@@ -110,7 +110,7 @@ OWNERS = (
     ("L19a", ("WorkingRequestCore::index_committed",)),
     ("L19l", ("PineExecutionAdapter::cohort_for", "CohortFacts", "CohortRoster",
               "PineExecutionAdapter::note_exit_rank_key", "PlacementTable::fold_sequence",
-              "PlacementTable::SequenceMinima",
+              "IdPairStore<",
               ("PineExecutionAdapter::on_applied", "basic_string<char", ", long"))),
     ("L19j", ("PlacementSnapshot", "PlacementTable::place")),
     ("L19i (or L3/L4)", ("NativeExecutionConsumer::begin_timeframe_subscriptions",)),
