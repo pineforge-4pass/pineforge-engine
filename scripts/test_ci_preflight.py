@@ -1355,7 +1355,7 @@ class ActionlintRunnerLabels(unittest.TestCase):
         workflow.write_text(
             'on: workflow_dispatch\njobs:\n  labels:\n'
             '    runs-on: ["self-hosted", "pf-ci", "pf-ci-release", '
-            '"pf-ci-release-arm64", "pf-ci-x64", "pf-ci-x64-16"]\n'
+            '"pf-ci-x64", "pf-ci-x64-16"]\n'
             '    steps:\n      - run: "true"\n')
         code, output = self.runner_labels()
         self.assertEqual(code, 0, output)

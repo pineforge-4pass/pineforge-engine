@@ -4,6 +4,5 @@ self-hosted-runner:
     - self-hosted
     - pf-ci
     - pf-ci-release
-    - pf-ci-release-arm64
     - pf-ci-x64
     - pf-ci-x64-16
