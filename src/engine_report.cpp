@@ -664,7 +664,7 @@ double BacktestEngine::output_constant_value(int index) const {
 
 }  // namespace pineforge
 
-// CR-150 L6B1: path sink runtime. Kept after the existing report/output code
+// CR-150 L6B1/L22A: sink runtime. Kept after the existing report/output code
 // so the line-pinned documentation above retains its source coordinates.
 #include "report_sink_writer.hpp"
 
@@ -674,7 +674,8 @@ BacktestEngine::ReportSinkState::ReportSinkState() = default;
 BacktestEngine::ReportSinkState::~ReportSinkState() = default;
 BacktestEngine::ReportSinkState::ReportSinkState(const ReportSinkState& other)
     : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
-      path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
+      path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir),
+      fd(other.fd) {}
 BacktestEngine::ReportSinkState&
 BacktestEngine::ReportSinkState::operator=(const ReportSinkState& other) {
     if (this != &other) *this = ReportSinkState(other);
@@ -731,10 +732,40 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
     return 0;
 }
 
+int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor) {
+    if (descriptor && (descriptor->struct_size != sizeof(*descriptor)
+        || descriptor->version != 1 || descriptor->fd < 0)) return -1;
+    const int status = report_sink_setter_status();
+    if (status != 0) return status;
+    ReportSinkState next;
+    next.trade_history_streamable = report_sink_state_.trade_history_streamable;
+    if (descriptor) {
+        next.enabled = true;
+        next.fd = descriptor->fd;
+        next.run_id = descriptor->run_id ? descriptor->run_id : "";
+        // No path parent or scratch directory exists for a borrowed stream.
+    }
+    report_sink_state_ = std::move(next);
+    return 0;
+}
+
 int BacktestEngine::report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_receipt_v1 local{};
     if (report_sink_state_.enabled) local = report_sink_state_.receipt;
+    local.struct_size = sizeof local;
+    local.version = 1;
+    *out = local;
+    return 0;
+}
+
+int BacktestEngine::report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept {
+    if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
+    pf_report_sink_summary_v1 local{};
+    if (report_sink_state_.enabled) {
+        local = report_sink_state_.summary;
+        local.complete = report_sink_state_.receipt.complete;
+    }
     local.struct_size = sizeof local;
     local.version = 1;
     *out = local;
@@ -761,6 +792,7 @@ void BacktestEngine::begin_report_sink() {
     sink.selected_released_extremes[3] = 0.0;
 #endif
     sink.receipt = {};
+    sink.summary = {};
     sink.output_base = 0;
     if (!sink.enabled) return;
     // The new run owns these histories. Drop capacity left by a previous
@@ -772,10 +804,16 @@ void BacktestEngine::begin_report_sink() {
     std::vector<int64_t>().swap(output_close_ms_);
     std::vector<OutputEvent>().swap(output_events_);
     sink.receipt.trades_retained = sink.trade_history_streamable ? 0u : 1u;
-    const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1,
-        sink.path.c_str(), sink.run_id.c_str(), sink.scratch_dir.c_str()};
     try {
-        sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        if (sink.fd >= 0) {
+            const pf_report_sink_fd_v1 descriptor{sizeof(pf_report_sink_fd_v1), 1,
+                sink.fd, sink.run_id.c_str()};
+            sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        } else {
+            const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1,
+                sink.path.c_str(), sink.run_id.c_str(), sink.scratch_dir.c_str()};
+            sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        }
         sink.writer->write_header({outputs_enabled_, trace_enabled_, broker_state_hash_recording_,
                                    outputs_slots_, outputs_constants_});
         pf_selected_window_config_v1 window{};
@@ -835,6 +873,10 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             const TradeC* open_rows = out->trades;
             int open_count = out->trades_len;
             NativeExecutionConsumer::report_sink_open_trades(*this, open_rows, open_count);
+            auto summary = consumer->finish_report_sink_summary(*this, open_rows, open_count);
+            if (summary.count_t != out->total_trades)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                    "report summary count differs from the report trade count");
             write_report_sink_trades(open_rows, open_count);
             if (outputs_enabled_) {
                 write_report_sink_output_row();
@@ -842,6 +884,9 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
                 ++sink.receipt.count_k;
             }
             write_report_sink_hashes();
+            if (summary.count_t != sink.receipt.count_t)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                    "report summary count differs from the sink trade count");
             const auto trailer = sink.writer->write_trailer();
             sink.receipt.count_e = trailer.count_e;
             sink.receipt.count_t = trailer.count_t;
@@ -851,6 +896,10 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             sink.receipt.count_x = trailer.count_x;
             sink.receipt.count_h = trailer.count_h;
             std::memcpy(sink.receipt.sha256_hex, trailer.sha256_hex, sizeof trailer.sha256_hex);
+            summary.struct_size = sizeof summary;
+            summary.version = 1;
+            summary.complete = 1;
+            sink.summary = summary;
             sink.receipt.complete = 1;
         }
     } catch (const report_sink::WriterError& error) {

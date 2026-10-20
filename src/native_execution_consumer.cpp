@@ -13531,6 +13531,7 @@ void NativeExecutionConsumer::seal_closed_rows(
         closed_trade_report_->all.fold(record);
         closed_trade_report_->longs.fold(record);
         closed_trade_report_->shorts.fold(record);
+        closed_trade_report_->summary.fold(record);
         closed_trade_report_->first_entry_time =
             std::min(closed_trade_report_->first_entry_time, row.entry_time);
         closed_trade_prefix_.pnl += row.pnl;
@@ -13568,6 +13569,56 @@ void NativeExecutionConsumer::finish_streamed_trade_metrics(
     out->metrics.all = all.finish();
     out->metrics.longs = longs.finish();
     out->metrics.shorts = shorts.finish();
+}
+
+void NativeExecutionConsumer::ReportTradeSummary::fold(const TradeC& row) noexcept {
+    if (value.nonfinite_t_field == 0) {
+        // T wire indices 5..12, also the Python validation order. Preserve
+        // the FIRST row/field even when a later row has a lower field index.
+        const double fields[] = {row.entry_price, row.exit_price, row.qty, row.pnl,
+            row.pnl_pct, row.max_runup, row.max_drawdown, row.commission};
+        for (std::size_t field = 0; field < sizeof fields / sizeof fields[0]; ++field) {
+            if (!std::isfinite(fields[field])) {
+                value.nonfinite_t_field = static_cast<std::int32_t>(field) + 5;
+                break;
+            }
+        }
+    }
+    // Python max(previous, pnl)/min(previous, pnl) keep the first operand
+    // on equality (and unordered comparisons), including either zero sign.
+    if (!has_trade) {
+        value.best_trade = value.worst_trade = row.pnl;
+        has_trade = true;
+    } else {
+        if (row.pnl > value.best_trade) value.best_trade = row.pnl;
+        if (row.pnl < value.worst_trade) value.worst_trade = row.pnl;
+    }
+    ++value.count_t;
+    if (row.pnl > 0.0) ++value.wins;
+    if (row.pnl < 0.0) ++value.losses;
+    // Keep the exact Python left-fold order over ORIGINAL report P&Ls.
+    cumulative += row.pnl;
+    if (cumulative > peak) peak = cumulative;
+    const double drawdown = cumulative - peak;
+    if (drawdown < value.max_drawdown) value.max_drawdown = drawdown;
+}
+
+pf_report_sink_summary_v1 NativeExecutionConsumer::finish_report_sink_summary(
+        const BacktestEngine& engine, const TradeC* open_rows, int count) const {
+    if (engine.trades_.base() != closed_trade_prefix_.base
+        || (engine.trades_.base() != 0 && !closed_trade_report_)
+        || count < 0 || (count > 0 && !open_rows))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report summary has no matching sealed prefix or open-lot view");
+    // Retaining/non-streamable modules have no sealed report accumulator.
+    // Both routes resume the same global sequence after presentation.
+    auto summary = closed_trade_report_ ? closed_trade_report_->summary : ReportTradeSummary{};
+    if (summary.value.count_t != static_cast<std::int64_t>(engine.trades_.base()))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report summary count differs from the sealed trade base");
+    for (const auto& row : engine.trades_) summary.fold(internal::report_trade_row(row));
+    for (int index = 0; index < count; ++index) summary.fold(open_rows[index]);
+    return summary.value;
 }
 
 void NativeExecutionConsumer::fill_streamed_report(

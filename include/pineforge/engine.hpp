@@ -2298,6 +2298,7 @@ private:
         bool enabled = false;
         bool trade_history_streamable = false;
         std::string path, run_id, scratch_dir;
+        int fd = -1; // borrowed stream; -1 selects the owned path writer
         std::uint32_t active_calls = 0;
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
@@ -2306,6 +2307,7 @@ private:
         std::unique_ptr<report_sink::ScratchCurveWriter> equity_scratch;
         bool equity_tail_stored = false; // scratch includes the held tail
         pf_report_sink_receipt_v1 receipt{};
+        pf_report_sink_summary_v1 summary{}; // report output, shares the sink hash waiver
         // Derived report-tail prefix, in max/min/drawdown/runup order. The
         // resulting extrema already have their broker-state folds; this
         // reconstructible prefix shares report_sink_state_'s output waiver.
@@ -2371,7 +2373,9 @@ private:
 public:
     // The additive C ABI delegates here; receipt queries never bind a consumer.
     int set_report_sink_v1(const pf_report_sink_v1* sink);
+    int set_report_sink_fd_v1(const pf_report_sink_fd_v1* sink);
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
+    int report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept;
     // Codegen opts in only for modules that do not read closedtrades.*.
     // L6B1 still retains every row; L8c consumes this policy at sealing.
     void set_trade_history_streamable(bool streamable);
