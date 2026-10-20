@@ -112,6 +112,12 @@
       {"field": "summary.best_trade", "reasons": ["nonfinite"]}, {"field": "summary.worst_trade", "reasons": ["nonfinite"]},
       {"field": "summary.max_drawdown", "reasons": ["nonfinite"]}
     ]},
+    {"id": "report._sink_summary", "file": "docker/run_json.py", "anchor": "_sink_summary", "producer": "report_result_invalid", "stage": null, "fields": [
+      {"field": "trades.entry_price", "reasons": ["nonfinite"]}, {"field": "trades.exit_price", "reasons": ["nonfinite"]},
+      {"field": "trades.qty", "reasons": ["nonfinite"]}, {"field": "trades.pnl", "reasons": ["nonfinite"]},
+      {"field": "trades.pnl_pct", "reasons": ["nonfinite"]}, {"field": "trades.max_runup", "reasons": ["nonfinite"]},
+      {"field": "trades.max_drawdown", "reasons": ["nonfinite"]}, {"field": "trades.commission", "reasons": ["nonfinite"]}
+    ]},
     {"id": "report._main", "file": "docker/run_json.py", "anchor": "_main", "producer": "report_result_invalid", "stage": null, "fields": [{"field": "report.document", "reasons": ["nonfinite"]}]},
     {"id": "post._post_boundary_failure", "file": "docker/run_json.py", "anchor": "_post_boundary_failure", "producer": "report_post_execution_failed", "stage": null, "fields": [], "phases": ["result_assembly", "results_digest", "serialization"], "reasons": ["resource", "io", "exception"]},
     {"id": "post._post_boundary_engine_failure", "file": "docker/run_json.py", "anchor": "_post_boundary_engine_failure", "producer": "report_post_execution_failed", "stage": null, "fields": [], "phases": ["result_assembly", "results_digest", "serialization"], "reasons": ["resource", "exception"]}
