@@ -83,6 +83,11 @@ every **script-bar close**, timestamped with the script-bar **open** time
 | `time_in_market_pct` | `100 ·` script bars with an open position at close `/ total script bars` | empty curve |
 | `open_pl` | Mark-to-market open profit at the final bar | — |
 
+@note `cagr` takes its simple proportional form, `100 · (final_equity/initial_capital − 1) / years`,
+when the measured span is under one day, and in place of the compounded value above when that value is
+not finite; the report names the form used (see @ref report_schema). `calmar` divides that `cagr`, so the
+report names the same form under its own key whenever `calmar` is defined.
+
 @note Metrics are only meaningful when `strategy_get_last_error()` returns
 an empty string: `run()` captures exceptions, so a failed run yields a
 truncated curve and metrics over the truncated prefix.

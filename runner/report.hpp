@@ -2,6 +2,7 @@
 
 #include "json.hpp"
 #include "report_delta.hpp"
+#include "../src/report_value_invalid.hpp"
 #include <pineforge/pineforge.h>
 #include <algorithm>
 #include <cmath>
@@ -25,9 +26,22 @@ template<class Value> inline Json report_number(Value value) {
     }
 }
 
+// Metrics alone may carry an explicit native NaN absence. Executed trade,
+// summary and curve values have no such sentinel. Trace values keep their
+// independent report_number representation above.
+template<class Value>
+inline Json report_result_number(Value value, const char* field,
+                                 bool nullable = false, const char* prefix = nullptr) {
+    if constexpr (!std::is_integral_v<Value>) {
+        if (nullable && std::isnan(value)) return report_number(value);
+        pineforge::report::finite_value(value, field, prefix);
+    }
+    return report_number(value);
+}
+
 inline Json report_trade(const pf_trade_t& trade) {
     Json result = Json::object({});
-#define PF_REPORT_FIELD(field) result.members[#field] = report_number(trade.field)
+#define PF_REPORT_FIELD(field) result.members[#field] = report_result_number(trade.field, "trades." #field)
     PF_REPORT_FIELD(entry_time); PF_REPORT_FIELD(exit_time);
     PF_REPORT_FIELD(entry_price); PF_REPORT_FIELD(exit_price);
     PF_REPORT_FIELD(pnl); PF_REPORT_FIELD(pnl_pct); PF_REPORT_FIELD(is_long);
@@ -39,9 +53,9 @@ inline Json report_trade(const pf_trade_t& trade) {
     return result;
 }
 
-inline Json report_stats(const pf_trade_stats_t& stats) {
+inline Json report_stats(const pf_trade_stats_t& stats, const char* prefix = "metrics.all") {
     Json result = Json::object({});
-#define PF_REPORT_FIELD(field) result.members[#field] = report_number(stats.field)
+#define PF_REPORT_FIELD(field) result.members[#field] = report_result_number(stats.field, #field, true, prefix)
     PF_REPORT_FIELD(num_trades); PF_REPORT_FIELD(num_wins); PF_REPORT_FIELD(num_losses);
     PF_REPORT_FIELD(num_even); PF_REPORT_FIELD(percent_profitable);
     PF_REPORT_FIELD(net_profit); PF_REPORT_FIELD(net_profit_pct);
@@ -62,11 +76,14 @@ inline Json report_stats(const pf_trade_stats_t& stats) {
 
 inline Json report_equity_stats(const pf_equity_stats_t& stats) {
     Json result = Json::object({});
-#define PF_REPORT_FIELD(field) result.members[#field] = report_number(stats.field)
+#define PF_REPORT_FIELD(field) result.members[#field] = report_result_number(stats.field, "metrics.equity." #field, true)
     PF_REPORT_FIELD(max_equity_drawdown); PF_REPORT_FIELD(max_equity_drawdown_pct);
     PF_REPORT_FIELD(max_equity_runup); PF_REPORT_FIELD(max_equity_runup_pct);
     PF_REPORT_FIELD(buy_hold_return); PF_REPORT_FIELD(buy_hold_return_pct);
-    PF_REPORT_FIELD(sharpe_monthly); PF_REPORT_FIELD(sortino_monthly);
+    result.members["sharpe_monthly"] = report_result_number(
+        stats.sharpe_monthly, "metrics.equity.sharpe_tv", true);
+    result.members["sortino_monthly"] = report_result_number(
+        stats.sortino_monthly, "metrics.equity.sortino_tv", true);
     PF_REPORT_FIELD(sharpe_bar); PF_REPORT_FIELD(sortino_bar); PF_REPORT_FIELD(cagr);
     PF_REPORT_FIELD(calmar); PF_REPORT_FIELD(recovery_factor);
     PF_REPORT_FIELD(time_in_market_pct); PF_REPORT_FIELD(open_pl);
@@ -94,7 +111,7 @@ inline Json native_report_json(const pf_report_t& report,
         return report_array(values ? values + offset : nullptr, count - offset, serialize);
     };
 #define PF_REPORT_FIELD(field) result.members[#field] = report_number(report.field)
-    PF_REPORT_FIELD(total_trades); PF_REPORT_FIELD(trades_len); PF_REPORT_FIELD(net_profit);
+    PF_REPORT_FIELD(total_trades); PF_REPORT_FIELD(trades_len);
     PF_REPORT_FIELD(input_bars_processed); PF_REPORT_FIELD(script_bars_processed);
     PF_REPORT_FIELD(security_feeds_total); PF_REPORT_FIELD(security_complete_total);
     PF_REPORT_FIELD(security_partial_total); PF_REPORT_FIELD(magnifier_sub_bars_total);
@@ -104,11 +121,13 @@ inline Json native_report_json(const pf_report_t& report,
     PF_REPORT_FIELD(security_diag_len); PF_REPORT_FIELD(trace_len); PF_REPORT_FIELD(trace_names_len);
     PF_REPORT_FIELD(equity_curve_len); PF_REPORT_FIELD(broker_state_hash_len);
 #undef PF_REPORT_FIELD
+    result.members["net_profit"] = report_result_number(report.net_profit, "summary.net_pnl");
     result.members["trades"] = array("trades", report.trades, report.trades_len, report_trade);
     result.members["equity_curve"] = array("equity_curve", report.equity_curve, report.equity_curve_len,
         [](const pf_equity_point_t& point) { return Json::object({
-            {"time_ms", report_number(point.time_ms)}, {"equity", report_number(point.equity)},
-            {"open_profit", report_number(point.open_profit)}}); });
+            {"time_ms", report_number(point.time_ms)},
+            {"equity", report_result_number(point.equity, "equity_curve.equity")},
+            {"open_profit", report_result_number(point.open_profit, "equity_curve.open_profit")}}); });
     result.members["security_diag"] = array("security_diag", report.security_diag, report.security_diag_len,
         [](const pf_security_diag_t& diag) { return Json::object({
             {"sec_id", report_number(diag.sec_id)}, {"feed_count", report_number(diag.feed_count)},
@@ -123,7 +142,8 @@ inline Json native_report_json(const pf_report_t& report,
     result.members["broker_state_hash"] = array("broker_state_hash", report.broker_state_hash, report.broker_state_hash_len,
         [](std::uint64_t hash) { return report_number(hash); });
     result.members["metrics"] = Json::object({{"all", report_stats(report.metrics.all)},
-        {"longs", report_stats(report.metrics.longs)}, {"shorts", report_stats(report.metrics.shorts)},
+        {"longs", report_stats(report.metrics.longs, "metrics.longs")},
+        {"shorts", report_stats(report.metrics.shorts, "metrics.shorts")},
         {"equity", report_equity_stats(report.metrics.equity)}});
     return result;
 }

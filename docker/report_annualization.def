@@ -1,0 +1,2 @@
+// Sub-day boundary for simple proportional CAGR, included by the kernel.
+PF_ANNUALIZATION_SPAN_MS(86400000)

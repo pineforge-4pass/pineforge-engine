@@ -35,6 +35,8 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/metrics.hpp>
 
+#include "equity_stats_reference.hpp"
+
 using namespace pineforge;
 
 static int tests_passed = 0;
@@ -318,7 +320,16 @@ static void test_equity_stats_drawdown_walk() {
     CHECK(std::fabs(e.max_equity_runup - 200.0) < 1e-12);
     CHECK(std::fabs(e.max_equity_runup_pct - 200.0 / 9.0) < 1e-9);
     CHECK(std::fabs(e.recovery_factor - 100.0 / 300.0) < 1e-12);
-    CHECK(!std::isnan(e.cagr));
+    auto reference = equity_stats_reference::compute_equity_stats(
+        c, 4, 1000.0, "", 100.0, 110.0, 0, 100.0);
+    const double span_years = static_cast<double>(c[3].time_ms - c[0].time_ms)
+                           / (365.25 * 86400.0 * 1000.0);
+    const double ratio = c[3].equity / 1000.0;
+    reference.cagr = (ratio - 1.0) * (1.0 / span_years) * 100.0;
+    reference.calmar = reference.cagr / reference.max_equity_drawdown_pct;
+    CHECK(std::isfinite(e.cagr) && std::isfinite(e.calmar));
+    CHECK(std::isfinite(e.sharpe_bar) && std::isfinite(e.sortino_bar));
+    CHECK(equity_stats_reference::first_difference(e, reference) == nullptr);
     CHECK(std::isnan(e.sharpe_monthly));   // single month bucket -> <2 returns
 }
 
