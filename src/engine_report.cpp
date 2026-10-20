@@ -7,6 +7,8 @@
 
 #include <pineforge/metrics.hpp>
 
+#include "report_value_invalid.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -53,7 +55,7 @@ void BacktestEngine::trace(const std::string& name, double value) {
 // release. strategy_stream_fill_report, the explicit snapshot, runs this same
 // function asking for the rows' own owner (NativeExecutionConsumer::
 // fill_snapshot_report), so a live stream's rows survive such a refusal.
-void BacktestEngine::fill_report(ReportC* out) const {
+void BacktestEngine::fill_report(ReportC* out) const try {
     // A read from inside a capture or an observer call is refused before any
     // gate: the empty report, latched for the terminal helper, and no recursive
     // present_report.
@@ -92,6 +94,14 @@ void BacktestEngine::fill_report(ReportC* out) const {
     out->broker_state_hash_len = hn;
     out->broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
     if (hn > 0) std::copy(broker_state_hashes_.begin(), broker_state_hashes_.end(), out->broker_state_hash);
+} catch (const std::exception& error) {
+    // A C wrapper can ask for partial rows after execution already failed.
+    // A later invalid metric must not replace that latched typed failure.
+    if (!last_error().empty()
+        && classify_run_failure(error).code == RunFailureCode::report_result_invalid) {
+        throw coded<std::runtime_error>(run_failure_value_of(*this), last_error());
+    }
+    throw;
 }
 
 
@@ -103,8 +113,9 @@ void BacktestEngine::fill_report(ReportC* out) const {
 void BacktestEngine::fill_trades_section(ReportC* out) const {
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();
-    out->total_trades = n;
-    out->trades_len = n;
+    out->total_trades = 0;
+    out->trades_len = 0;
+    out->net_profit = 0.0;
 
     if (n > 0) {
         out->trades = new TradeC[n];
@@ -113,6 +124,7 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         for (int i = 0; i < n; i++) {
             const Trade& t = (i < n_closed) ? trades_[i]
                                             : range_end_trades_[i - n_closed];
+            report::validate_trade(t);
             out->trades[i].entry_time = t.entry_time;
             out->trades[i].exit_time = t.exit_time;
             out->trades[i].entry_price = t.entry_price;
@@ -127,13 +139,14 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->trades[i].entry_bar_index = t.entry_bar_index;
             out->trades[i].exit_bar_index = t.exit_bar_index;
             out->trades[i].open_at_end = t.open_at_end ? 1 : 0;
-            net_profit += t.pnl;
+            // A partial report keeps each fully initialized row, including
+            // this one if only the following aggregate overflows.
+            out->trades_len = out->total_trades = i + 1;
+            net_profit = report::finite_value(net_profit + t.pnl, "summary.net_pnl");
+            out->net_profit = net_profit;
         }
-
-        out->net_profit = net_profit;
     } else {
         out->trades = nullptr;
-        out->net_profit = 0.0;
     }
 }
 

@@ -44,7 +44,11 @@ namespace {
 // ── Portable pins (harvested on engine main 3f6fd57, see the header) ────
 // expectation corrected: 16941677776193786888 -> 4011217037958131497, because v19-B: this host keeps NativeEventRetention::Full to read its whole event record back, and the spec digest folds a retention that is not the default Window.
 constexpr std::uint64_t kNeutralSpecDigest = 4011217037958131497ULL;
-constexpr std::uint64_t kNeutralReportDigest = 7202933235328973332ULL;
+// Revision 3.1 makes cagr (about 1.4e10 % on main), sharpe_bar and sortino_bar
+// absent on this 14-minute span of 15 one-minute bars: 10000 -> about 10005,
+// with no drawdown. Calmar was already NaN; trades and hashes are unchanged.
+// The report digest pin is a lab harvest.
+constexpr std::uint64_t kNeutralReportDigest = 8139101939074791901ULL;
 constexpr std::size_t kNeutralEventCount = 72;
 
 // A canonical one-minute slot label. The R4 harness's tape starts at
