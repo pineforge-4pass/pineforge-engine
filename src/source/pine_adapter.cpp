@@ -3019,6 +3019,8 @@ std::uint64_t PineExecutionAdapter::key_for(const SourceId& left, const SourceId
 }
 
 native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) {
+    // Read index bytes before find can spill and before the host issues a handle.
+    cohorts_by_id_.require_insert(id);
     auto found = cohorts_by_id_.find(id);
     if (found != cohorts_by_id_.end()) return found->second.handle;
     CohortFacts facts;
@@ -4397,6 +4399,9 @@ void PineExecutionAdapter::activate_short_seed_plan_at_open(const NativeDecision
 std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key) {
+    // The accepted opening appends its cohort below. Hold the complete node
+    // ticket before any host submit/replace or source placement/origin write.
+    if (opening) cohorts_by_id_.require_insert(snapshot.source_id);
     auto& host = require_host();
     // A core-sized opening freezes its basis at the execution point the CORE
     // sees when it accepts the command; the source froze the same rule when
@@ -6387,6 +6392,7 @@ void PineExecutionAdapter::note_exit_rank_key(const SourceId& id) {
         // The recorded population remains capped at 27 keys, as before.
         return;
     }
+    exit_rank_keys_.require_insert(id);
     exit_rank_keys_.insert(id, static_cast<std::uint32_t>(exit_rank_keys_.size()));
     const std::uint64_t size = id.size();
     exit_rank_keys_digest_ = fnv_append(exit_rank_keys_digest_, &size, sizeof(size));
@@ -6639,6 +6645,7 @@ native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bo
     // HostSized, but the generic book authority remains the whole physical
     // position rather than a synthetic empty cohort.
     if (id.empty()) return native_order::Independent{};
+    cohorts_by_id_.require_insert(id);
     // pine_fills.cpp:7669-7675 uses from_entry as a position-cycle existence
     // gate under FIFO; the actual reduction still consumes the global physical
     // roster.  ANY alone selects the named cohort as the settlement scope.
@@ -7224,6 +7231,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
 void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double limit_price,
                                        double stop_price, double qty, const std::string& comment,
                                        const std::string& oca_name, int oca_type, int qty_type) {
+    require_cohort_ticket(&id);
     native_order::Request request;
     // An infinite quantity trades the default quantity, as na does (lab tv
     // tailc-a-qty-nonfinite2: +-Infinity and na legs all enter at the
@@ -9691,6 +9699,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    require_cohort_ticket();
     record_close_first(!immediately && !std::isfinite(qty)
                        && (!std::isfinite(qty_percent) || qty_percent >= 100.0)
                        && (id.empty() || open_lot_of(id)));
@@ -10600,6 +10609,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
 
 void PineExecutionAdapter::close_all() {
     if (intraday_loss_orders_blocked()) return;
+    require_cohort_ticket();
     reroute_fixed_entries_before_request();
     const double held = detail::run_position(require_host()).signed_units;
     if (held == 0.0) return;
@@ -11103,6 +11113,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    const bool cohort_candidate = !from_entry.empty()
+        && (!std::isnan(limit_price) || !std::isnan(stop_price)
+            || !std::isnan(profit_ticks) || !std::isnan(loss_ticks)
+            || !std::isnan(trail_points) || !std::isnan(trail_price));
+    require_cohort_ticket(cohort_candidate ? &from_entry : nullptr);
     reroute_fixed_entries_before_request();
     if (!from_entry.empty()) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
@@ -13420,6 +13435,7 @@ void PineExecutionAdapter::materialize_pending_bracket_legs(
 
 void PineExecutionAdapter::release_delayed_orders(
         bool explicit_brackets_only, double current_open) {
+    require_cohort_ticket();
     auto delayed = std::move(delayed_market_orders_);
     delayed_market_orders_.clear();
     for (auto& order : delayed) {
@@ -13475,6 +13491,7 @@ void PineExecutionAdapter::release_delayed_orders(
 }
 
 void PineExecutionAdapter::flush_pending_entries() {
+    require_cohort_ticket();
     // Quiet (pine_quiet_bar.hpp): no delayed order, same-bar batch or held
     // entry is queued; the batch's close total is still reset, as the flush
     // below always does.
@@ -13571,6 +13588,7 @@ void PineExecutionAdapter::flush_pending_entries() {
 }
 
 void PineExecutionAdapter::reroute_fixed_entries_before_request(bool invalidate_batch) {
+    require_cohort_ticket();
     const auto point = detail::callback_point(require_host());
     if (!point) return;
     const auto script_open = point->decision.script_bar_open_ms;
@@ -13641,6 +13659,7 @@ void PineExecutionAdapter::reroute_incomplete_fixed_batch(bool invalidate_batch)
 
 void PineExecutionAdapter::flush_pending_same_bar_commands(
         bool flat_pair_follows, bool invalidate_batch) {
+    require_cohort_ticket();
     reroute_incomplete_fixed_batch(invalidate_batch);
     std::vector<PendingSameBarCommand> queued;
     queued.swap(pending_same_bar_commands_);
@@ -14689,6 +14708,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    require_cohort_ticket(&id);
     reroute_fixed_entries_before_request();
     // ab9714be pine_strategy_commands.cpp:2120-2203: strategy.order appends to pending book after earlier script commands
     if (!pending_same_bar_commands_.empty()) {
@@ -16478,6 +16498,7 @@ void PineExecutionAdapter::preflight_id_pair_precommit(const NativePrecommitView
 }
 
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
+    require_tree_precommit(view);
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot != placement_.end()) {
         const auto& source = snapshot->second;
@@ -21675,6 +21696,7 @@ void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
 }
 
 void PineExecutionAdapter::admit_deferred_open_marketable_sells() {
+    require_cohort_ticket();
     auto queued = std::move(deferred_open_marketable_sells_);
     deferred_open_marketable_sells_.clear();
     std::stable_sort(queued.begin(), queued.end(),
@@ -28204,9 +28226,7 @@ PineExecutionAdapter::CohortFacts::restore_record(const Record& row) {
     if (row.handle == 0 || static_cast<std::uint64_t>(
             static_cast<std::size_t>(row.origin_count)) != row.origin_count
         || row.erased_sides > 3) {
-        throw coded<std::runtime_error>(
-            RunFailureCode::report_sink_failed, {},
-            ::pineforge::detail::ScratchIoError(EIO, "scratch cohort invalid record").what());
+        throw ::pineforge::detail::ScratchIoError(EIO, "scratch cohort invalid record");
     }
     CohortFacts facts;
     facts.handle.value = row.handle;
@@ -28299,11 +28319,14 @@ namespace pineforge::detail {
 
 // The tree and IdPair lanes fill their respective backend-owned seams;
 // the foundation's begin calls and binder declarations remain unchanged.
-void bind_tree_scratch_tables(source::PineExecutionAdapter&,
+void bind_tree_scratch_tables(source::PineExecutionAdapter& adapter,
                               const std::shared_ptr<ScratchSlab>& slab) {
-    if (slab)
+    // Refuse a late rebind before either table can change backing/bytes.
+    if (adapter.cohorts_by_id_.size() != 0 || adapter.exit_rank_keys_.size() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-            "bounded tree scratch binding is not installed");
+            "tree scratch backend changed after use");
+    adapter.cohorts_by_id_.bind_scratch(slab, ScratchResource::cohort);
+    adapter.exit_rank_keys_.bind_scratch(slab, ScratchResource::exit_rank);
 }
 
 void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,
@@ -28314,3 +28337,42 @@ void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,
 }
 
 } // namespace pineforge::detail
+
+namespace pineforge::source {
+
+void PineExecutionAdapter::require_cohort_ticket(const SourceId* prospective) const {
+    cohorts_by_id_.require_inserts([&](auto&& visit) {
+        if (prospective) visit(*prospective);
+        for (const auto& row : pending_same_bar_commands_)
+            if (row.opening) visit(row.snapshot.source_id);
+        for (const auto& row : pending_entries_) visit(row.snapshot.source_id);
+        for (const auto& row : pending_coof_requests_)
+            if (row.opening) visit(row.snapshot.source_id);
+        for (const auto& row : delayed_market_orders_)
+            if (row.snapshot.family == PineOrderFamily::Entry
+                || row.snapshot.family == PineOrderFamily::Order)
+                visit(row.snapshot.source_id);
+        for (const auto& row : deferred_open_marketable_sells_) visit(row.snapshot.source_id);
+    });
+}
+
+void PineExecutionAdapter::require_exit_rank_key(const SourceId& id) const {
+    // Preserve the 27/28 cutoff: an ignored 28th key needs no ticket, even
+    // when its string would exceed the admitted aggregate byte allowance.
+    if (exit_rank_keys_.size() > 26) return;
+    exit_rank_keys_.require_insert(id);
+}
+
+void PineExecutionAdapter::require_tree_precommit(const NativePrecommitView& view) const {
+    // The kernel calls PRECOMMIT only for an Applied-ready candidate, before
+    // financial effects. Capacity is a coded infrastructure exception, never
+    // a trading Refuse. This mirrors note_exit_rank_key's on_applied predicate.
+    if (!view.account.would_open || view.inspected_opened_units == 0.0) return;
+    const auto row = placement_.find(view.target.incarnation);
+    if (row != placement_.end()
+        && (row->second.family == PineOrderFamily::Entry
+            || row->second.family == PineOrderFamily::Order))
+        require_exit_rank_key(row->second.source_id);
+}
+
+} // namespace pineforge::source
