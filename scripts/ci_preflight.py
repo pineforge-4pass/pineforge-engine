@@ -39,24 +39,26 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
-# The pool is live (CR-171, 2026-10-18). Pin the public and engine-x64-16
-# fragments from pf-ci-spot b240f6d7, including the ubuntu-24.04 fallback.
-# Values retain their YAML folding marker and job-level indentation so mutation
-# tests replace the whole value, never an earlier matrix name or step string.
+# CI/native routing follows ci-labels.md, canon SHA-256 ac875205d8bdae2d7e0c23aca438118a0e9da2efb297de4e6b2cd80e7416f5b3.
+# Matrix values are JSON strings decoded to arrays, including the macOS exception.
 LIGHT_LABELS = '["self-hosted","pf-ci","pf-ci-x64"]'
 LINUX_LABELS = '["self-hosted","pf-ci","pf-ci-x64-16"]'
-LIGHT_RUNNER = '''>-
+LIGHT_RUNNER = LIGHT_LABELS
+LINUX_RUNNER = LINUX_LABELS
+MATRIX_RUNNER = '${{ fromJSON(matrix.runner) }}'
+MATRIX_LINUX_RUNNER = f"'{LINUX_LABELS}'"
+# corpus-parity.yml is outside this migration. Preserve its existing pin;
+# never use this legacy expression for a CI/native job.
+CORPUS_RUNNER = '''>-
       ${{ github.event_name != 'pull_request_target' &&
           github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
           contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
           (github.event_name != 'pull_request' ||
            (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}'''
-LINUX_RUNNER = LIGHT_RUNNER.replace(LIGHT_LABELS, LINUX_LABELS)
-MATRIX_RUNNER = '${{ matrix.runner }}'
-MATRIX_LINUX_RUNNER = LINUX_RUNNER.replace('\n', '\n        ')
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}'''
+HOSTED_MATRIX_RUNNER = '${{ matrix.runner }}'
 # The build job's whole strategy, exactly (comments and blank lines aside):
-# the same four legs, with only Linux x64 routed through the engine fragment.
+# the same four legs, with Linux x64 pinned to the heavy pool class.
 BUILD_STRATEGY = ('    strategy:\n'
                   '      fail-fast: false\n'
                   '      matrix:\n'
@@ -66,7 +68,7 @@ BUILD_STRATEGY = ('    strategy:\n'
                   '          - os: ubuntu-24.04\n'
                   f'            runner: {MATRIX_LINUX_RUNNER}\n'
                   '          - os: macos-26\n'
-                  '            runner: macos-26\n')
+                  '            runner: \'["macos-26"]\'\n')
 BUILD_NAME = 'build (${{ matrix.os }}, ${{ matrix.build_type }})'
 RELEASE_STRATEGY = ('    strategy:\n'
                     '      fail-fast: false\n'
@@ -103,27 +105,30 @@ VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
 PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # Every job with a runner in the workflows a CI run starts: its runs-on, its
 # timeout-minutes, exactly, and the command that must carry the core count.
-# Every one of them is the platform's own 360-minute job maximum, the only
+# Every row records the platform's own 360-minute job maximum, the only
 # hang catcher left (owner rule, 2026-10-12: no time limit of this repository
-# may fail a run for slowness); docs/ci.md says so.
+# may fail a run for slowness); docs/ci.md says so. authz inherits that maximum
+# without adding timeout-minutes to the canon job.
 JOB_RUNNERS = {
-    'ci.yml': {'changes': (LIGHT_RUNNER, 360, None),
-               'preflight': (LIGHT_RUNNER, 360, None),
+    'ci.yml': {'authz': (LIGHT_RUNNER, 360, None),
+               'changes': (LIGHT_RUNNER, 360, None),
+               'preflight': (LINUX_RUNNER, 360, None),
                'build': (MATRIX_RUNNER, 360, VERIFY),
                'sanitizers': (LINUX_RUNNER, 360, VERIFY),
                'kernel-only': (LINUX_RUNNER, 360, VERIFY),
                'build-gate': (LIGHT_RUNNER, 360, None)},
-    'native-live.yml': {'native-live': (LINUX_RUNNER, 360, VERIFY),
+    'native-live.yml': {'authz': (LIGHT_RUNNER, 360, None),
+                         'native-live': (LINUX_RUNNER, 360, VERIFY),
                          'native-live-gate': (LIGHT_RUNNER, 360, None)},
-    'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
-                          'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
+    'corpus-parity.yml': {'corpus-parity': (CORPUS_RUNNER, 360, PARITY),
+                          'corpus-parity-subset': (CORPUS_RUNNER, 360, PARITY)},
 }
 # L6: credential-bearing deployment jobs and the entire release workflow
 # retain their exact pre-CR-171 hosted routing, including its older images.
 HOSTED_JOB_RUNNERS = {
     'docs.yml': {'build': 'ubuntu-latest'},
     'promote-baseline.yml': {'promote': 'ubuntu-latest'},
-    'release.yml': {'release': 'ubuntu-latest', 'prebuilt': MATRIX_RUNNER,
+    'release.yml': {'release': 'ubuntu-latest', 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': 'ubuntu-latest'},
 }
 # New credential-bearing jobs use standard hosted labels. Existing hosted
@@ -135,14 +140,26 @@ _LARGER_RUNNER_LABEL = re.compile(
     r'(?<![\w.-])(?:pf-linux-x64-16|[\w.-]+-(?:xlarge|large))(?![\w.-])')
 _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
-# for the changes job alone and skips only when it succeeded and answered
+# for authz and changes and skips only when changes succeeded and answered
 # docs-only -- exactly the skip the build aggregate accepts -- so a failed or
 # unanswered classification runs it.
 PROOF_JOBS = {'build': 'BUILD_RESULT', 'sanitizers': 'SANITIZER_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT'}
-DOCS_ONLY_SKIP = ("${{ !cancelled() && (needs.changes.result != 'success' || "
+AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
+AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
+DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
+# The complete canon step, including its env, comments and shell, byte for byte.
+# PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
+# file is needed on CI runners. Changing the script requires a new canon pin.
+AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
+AUTHZ_REFUSE_STEP = '''      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+'''
 # The classification step, exactly: the base's copy of the rule judges the
 # change, a base without one runs every job, and the answer is the script's.
 CLASSIFY_STEP = """      - name: Classify the change
@@ -174,7 +191,7 @@ VERIFIER_CLASSIFY_STEP = """      - name: Classify verifier self-tests
 PREFLIGHT_VERIFIER_SLOW = ("${{ needs.changes.result == 'success' && "
                           "needs.changes.outputs.verifier_slow || 'true' }}")
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
-GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kernel-only, '
+GATE_NEEDS = ('needs: [authz, changes, preflight, build, sanitizers, native-live, kernel-only, '
               'corpus-parity-subset]')
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
@@ -241,7 +258,7 @@ def _key_value(line: str, key: str) -> str | None:
     return '' if value.startswith('#') else value
 
 
-def _job_values(body: str, key: str) -> list[str]:
+def _job_values(body: str, key: str, *, unquote: bool = True) -> list[str]:
     """Every value of a job-level key, a block value's lines folded onto one."""
     lines = body.split('\n')
     code = _code(body)
@@ -262,7 +279,7 @@ def _job_values(body: str, key: str) -> list[str]:
                          if part.strip() and not part.lstrip().startswith('#'))
         quoted = re.fullmatch(r'"([^"]*)"|\'([^\']*)\'', value)
         values.append(next(group for group in quoted.groups() if group is not None)
-                      if quoted else value)
+                      if quoted and unquote else value)
     return values
 
 
@@ -358,8 +375,17 @@ def _holds_credentials(workflow: str, body: str) -> bool:
     return False
 
 
+def _runner_value(value: str) -> str | list[str]:
+    """Compare literal runner arrays as arrays; expressions remain exact pins."""
+    try:
+        labels = json.loads(value)
+    except ValueError:
+        return value
+    return labels if isinstance(labels, list) and all(isinstance(x, str) for x in labels) else value
+
+
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Keep credentials hosted; pin current pool fragments and refuse paid labels."""
+    """Pin canon CI/native arrays and preserve out-of-scope workflow routing."""
     findings = []
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
@@ -412,22 +438,30 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS on a hosted job')
             else:
-                runner = pinned.get(job, LINUX_RUNNER if runs_on == [' '.join(LINUX_RUNNER.split())]
-                                    else LIGHT_RUNNER)
-                if runs_on != [' '.join(runner.split())]:
+                runner = pinned.get(job, LINUX_RUNNER if [_runner_value(value) for value in runs_on]
+                                    == [_runner_value(LINUX_RUNNER)] else LIGHT_RUNNER)
+                expected_runner = _runner_value(' '.join(runner.split()))
+                # A quoted JSON-looking scalar is a runner label, not a YAML
+                # array. Only the matrix's explicit fromJSON decodes a string.
+                actual_runners = (_job_values(body, 'runs-on', unquote=False)
+                                  if isinstance(expected_runner, list) else runs_on)
+                if [_runner_value(value) for value in actual_runners] != [expected_runner]:
                     findings.append(f'{name} job {job} must run on {runner}')
-                labels = LINUX_LABELS if runner in (LINUX_RUNNER, MATRIX_RUNNER) else LIGHT_LABELS
+                labels = LINUX_LABELS if runner in (LINUX_RUNNER, MATRIX_RUNNER, CORPUS_RUNNER) else LIGHT_LABELS
                 env = _job_block(body, 'env')
                 label_values = [_key_value(line, 'PF_CI_LABELS') for line in env[1:]
                                 if _key_value(line, 'PF_CI_LABELS') is not None]
-                if (len(_job_values(body, 'env')) != 1
+                if job != 'authz' and (len(_job_values(body, 'env')) != 1
                         or _job_values('\n'.join(env[1:]), 'PF_CI_LABELS') != [labels]
                         or label_values != [f"'{labels}'"]):
                     findings.append(f'{name} job {job} must set job env PF_CI_LABELS to {labels} exactly once')
             if job not in timed:
                 continue
             _, minutes, command = timed[job]
-            if _job_values(body, 'timeout-minutes') != [str(minutes)]:
+            if job == 'authz':
+                if _job_values(body, 'timeout-minutes'):
+                    findings.append(f'{name} job authz must inherit the platform maximum without timeout-minutes')
+            elif _job_values(body, 'timeout-minutes') != [str(minutes)]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
             # Keep parallelism tied to the runner's available cores.
             if not _sized(_counted_text(body), command):
@@ -471,18 +505,87 @@ def _step_values(step: str, key: str) -> list[str]:
     return _job_values('\n'.join(step.splitlines()[1:]), key)
 
 
-def native_workflow_findings(native: str, curl_action: str | None = None) -> list[str]:
+def _needs(body: str) -> list[str]:
+    values = _job_values(body, 'needs')
+    if len(values) != 1:
+        return []
+    value = values[0]
+    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', value):
+        return [value]
+    if re.fullmatch(r'\[\s*[A-Za-z_][A-Za-z0-9_-]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_-]*)*\s*\]', value):
+        return [part.strip() for part in value[1:-1].split(',')]
+    return []
+
+
+def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[str]:
+    """Bind scoped workflows to the frozen canon before any repository code."""
     findings = []
+    jobs = _jobs(workflow)
+    authz = jobs.get('authz', '')
+    steps = _steps(authz)
+    step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
+    if (not jobs or next(iter(jobs)) != 'authz'
+            or _job_values(authz, 'name') != ['authz']
+            or _job_values(authz, 'permissions') != ['{}']
+            or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
+            or hashlib.sha256(step.encode()).hexdigest() != AUTHZ_STEP_SHA256):
+        findings.append(f'{name} must start with the verbatim canon authz job')
+    events = _events(workflow)
+    if events is None or 'pull_request_target' in events:
+        findings.append(f'{name} must use readable events without pull_request_target')
+    pr = re.search(r'(?m)^  pull_request:[^\n]*(?:\n(?:    [^\n]*|[ \t]*))*', workflow)
+    if name == 'ci.yml' and (not pr or pr[0].strip() != 'pull_request:'):
+        findings.append('ci.yml must run on every pull_request without event filters')
+    if _job_values(workflow, 'permissions') != ['contents: read']:
+        findings.append(f'{name} must retain contents: read workflow permissions')
+    for job, body in jobs.items():
+        if job != 'authz' and 'authz' not in _needs(body):
+            findings.append(f'{name} job {job} must need authz')
+        code = '\n'.join(_code(body))
+        inherited_env = '\n'.join(_job_values(workflow, 'env'))
+        if (_holds_credentials(workflow, body)
+                or _job_values(body, 'secrets')
+                or re.search(r'\bsecrets\s*[.\[]', code + '\n' + inherited_env)
+                or (job != 'authz' and re.search(r'\bgithub\s*\.\s*token\b', code))):
+            findings.append(f'{name} job {job} must carry no secrets, tokens or environment')
+        if job != 'authz' and _job_values(body, 'permissions') not in ([], ['contents: read']):
+            findings.append(f'{name} job {job} must inherit or set only contents: read')
+        for step in _steps(body):
+            uses = _step_values(step, 'uses')
+            checkout = any(value.startswith('actions/checkout@') for value in uses)
+            if checkout and '          persist-credentials: false' not in _code(step):
+                findings.append(f'{name} job {job} must disable checkout credential persistence')
+            # Explicit status functions bypass GitHub's implicit success() guard.
+            # Repository steps need their own positive authz condition as well.
+            repository_step = (checkout or any(value.startswith('./') for value in uses)
+                               or any('scripts/' in value for value in _step_values(step, 'run')))
+            if (job != 'authz' and any('always()' in value for value in _job_values(body, 'if'))
+                    and repository_step
+                    and _step_values(step, 'if') not in ([AUTHZ_SUCCESS], [AUTHZ_ALWAYS])):
+                findings.append(f'{name} job {job} must guard repository steps on authz success')
+    gate = jobs.get(aggregate, '')
+    gate_steps = _steps(gate)
+    if (_job_values(gate, 'if') not in (['always()'], ['${{ always() }}'])
+            or len(gate_steps) != 2 or _code(gate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
+            or _step_values(gate_steps[-1], 'if')):
+        findings.append(f'{name} {aggregate} must always run and refuse authz first')
+    return findings
+
+
+def native_workflow_findings(native: str, curl_action: str | None = None) -> list[str]:
+    findings = authz_workflow_findings(native, 'native-live.yml', 'native-live-gate')
     jobs = _jobs(native)
     job, gate = jobs.get('native-live', ''), jobs.get('native-live-gate', '')
     if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
-            or _job_values(job, 'needs') or _job_values(job, 'if')
+            or _needs(job) != ['authz'] or _job_values(job, 'if')
             or _job_values(job, 'name') != ['native-live (${{ matrix.profile }})']):
         findings.append('native-live must run all three independent profiles with fail-fast false, '
                         'the platform job maximum and no per-run budget')
-    if (set(jobs) != {'native-live', 'native-live-gate'}
-            or _job_values(gate, 'needs') != ['native-live']
+    if (set(jobs) != {'authz', 'native-live', 'native-live-gate'}
+            or _needs(gate) != ['authz', 'native-live']
             or _job_values(gate, 'if') != ['always()']
+            or '          AUTHZ_RESULT: ${{ needs.authz.result }}' not in _code(gate)
+            or '          test "$AUTHZ_RESULT" = success' not in _code(gate)
             or '          PROFILES_RESULT: ${{ needs.native-live.result }}' not in _code(gate)
             or '          test "$PROFILES_RESULT" = success' not in _code(gate)):
         findings.append('native-live-gate must fail unless every profile succeeds')
@@ -581,25 +684,26 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     findings = runner_findings({'ci.yml': ci, 'native-live.yml': native,
                                 'corpus-parity.yml': parity, 'docs.yml': docs,
                                 'promote-baseline.yml': promote, **(others or {})})
+    findings += authz_workflow_findings(ci, 'ci.yml', 'build-gate')
     findings += native_workflow_findings(native, curl_action)
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
-    for trigger in ('push:\n    branches: [main]',
-                    'pull_request:\n    branches: [main]', 'workflow_dispatch:'):
+    for trigger in ('push:\n    branches: [main]', 'pull_request:', 'workflow_dispatch:'):
         if '  ' + trigger not in events:
             findings.append(f'ci.yml must retain {trigger.split(":", 1)[0]}')
     jobs = _jobs(ci)
-    for job in ('changes', 'preflight', *PROOF_JOBS, 'build-gate'):
+    for job in ('authz', 'changes', 'preflight', *PROOF_JOBS, 'build-gate'):
         if job not in jobs:
             findings.append(f'ci.yml is missing job {job}')
-    # Preflight runs on every change, including a failed classification. It
-    # waits only for the shared diff decision, alongside all proof jobs.
-    if _job_values(jobs.get('changes', ''), 'needs') or _job_values(jobs.get('changes', ''), 'if'):
-        findings.append('changes must start at once on every run')
+    # All repository work follows authz. Classification and preflight remain
+    # separate: failed classification still runs proof, and fails the aggregate.
+    if (_needs(jobs.get('changes', '')) != ['authz']
+            or _job_values(jobs.get('changes', ''), 'if')):
+        findings.append('changes must start after authz on every run')
     preflight = jobs.get('preflight', '')
-    if (_job_values(preflight, 'needs') not in (['changes'], ['[changes]'])
-            or _job_values(preflight, 'if') != ['${{ !cancelled() }}']):
-        findings.append('preflight must follow changes alone and run even if classification fails')
+    if (set(_needs(preflight)) != {'authz', 'changes'} or len(_needs(preflight)) != 2
+            or _job_values(preflight, 'if') != [AUTHZ_ALWAYS]):
+        findings.append('preflight must follow authz and changes and run even if classification fails')
     if (f'      PINEFORGE_VERIFIER_SLOW: {PREFLIGHT_VERIFIER_SLOW}\n' not in preflight
             or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):
         findings.append('preflight must consume verifier_slow and default to all classes')
@@ -608,9 +712,10 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             'python3 scripts/ci_preflight.py --output-dir build-ci-preflight']:
         findings.append('preflight must invoke its unfiltered event-aware stage plan')
     for job in PROOF_JOBS:
-        if (_job_values(jobs.get(job, ''), 'needs') not in (['changes'], ['[changes]'])
+        if (set(_needs(jobs.get(job, ''))) != {'authz', 'changes'}
+                or len(_needs(jobs.get(job, ''))) != 2
                 or _job_values(jobs.get(job, ''), 'if') != [DOCS_ONLY_SKIP]):
-            findings.append(f'{job} must start alongside preflight, after changes alone, '
+            findings.append(f'{job} must start alongside preflight, after authz and changes, '
                             'and skip only a docs-only change')
     changes = jobs.get('changes', '')
     if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
@@ -628,13 +733,15 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                 findings.append(f'{name} job {job} must not continue on error')
     gate = jobs.get('build-gate', '')
     if GATE_NEEDS not in gate or '    if: always()' not in gate or '    name: build' not in gate:
-        findings.append('build-gate must aggregate every proof job, preflight and changes')
-    for job, variable in (('changes', 'CHANGES_RESULT'), ('preflight', 'PREFLIGHT_RESULT'),
+        findings.append('build-gate must aggregate authz, every proof job, preflight and changes')
+    for job, variable in (('authz', 'AUTHZ_RESULT'), ('changes', 'CHANGES_RESULT'), ('preflight', 'PREFLIGHT_RESULT'),
                           *PROOF_JOBS.items()):
         if f'{variable}: ${{{{ needs.{job}.result }}}}' not in gate:
             findings.append(f'build-gate must read the result of {job}')
     if 'DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}' not in gate:
         findings.append("build-gate must read changes' docs_only answer")
+    if '[[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]]' not in gate:
+        findings.append('build-gate must require authz and changes success')
     # The shell itself is run over every outcome by scripts/test_ci_preflight.py.
     if '[[ "$PREFLIGHT_RESULT" == "success" ]]' not in gate or 'passed "$PREFLIGHT_RESULT"' in gate:
         findings.append('build-gate must require preflight success')

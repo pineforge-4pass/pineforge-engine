@@ -17,7 +17,8 @@ import ci_preflight
 import ci_verify
 from ci_verifier_classes import select_test_ids, verifier_class_tier
 from run_unittest_shards import discover_test_ids
-from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LIGHT_LABELS, LIGHT_RUNNER,
+from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES, CORPUS_RUNNER,
+                          DOCS_ONLY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS, LIGHT_LABELS, LIGHT_RUNNER,
                           LINUX_LABELS, LINUX_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, _jobs, check_commands,
@@ -35,9 +36,12 @@ CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/corpus-parity.yml', '.github/workflows/docs.yml')
 
 
-def job_script(ci, job):
+def job_script(ci, job, step_name=None):
     """A job's run block, exactly as the runner receives it."""
-    lines = _jobs(ci)[job].split('\n')
+    body = _jobs(ci)[job]
+    if step_name is not None:
+        body = ci_preflight._step_named(ci_preflight._steps(body), '      - name: ' + step_name)
+    lines = body.split('\n')
     start = next(index for index, line in enumerate(lines) if line.strip() == 'run: |')
     depth = len(lines[start + 1]) - len(lines[start + 1].lstrip(' '))
     script = []
@@ -68,6 +72,90 @@ class PreflightFailures(unittest.TestCase):
                 for path in sorted((ROOT / '.github/workflows').iterdir())
                 if path.suffix in ('.yml', '.yaml') and path.name not in named}
 
+    def mutated_file_findings(self, index, job, before, after):
+        """Write a mutation, then let the contract consume the file read back."""
+        sources = self.ci_sources()
+        changed = in_job(sources[index], job, before, after)
+        self.assertNotEqual(changed, sources[index], 'the mutation must change the input')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / Path(CI_SOURCES[index]).name
+            path.write_text(changed)
+            sources[index] = path.read_text()
+            return ci_workflow_findings(*sources, others=self.other_sources())
+
+    def test_pool_jobs_reject_hosted_runners_and_fallbacks_from_mutated_files(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for index in (0, 1):
+            name = Path(CI_SOURCES[index]).name
+            for job, (runner, _, _) in JOB_RUNNERS[name].items():
+                # The matrix expression is pinned together with its include values.
+                marker = '    runs-on: ' + (runner if job != 'authz' else
+                                            '["self-hosted", "pf-ci", "pf-ci-x64"]')
+                for replacement in ('ubuntu-24.04', 'ubuntu-latest', 'pf-linux-x64-16',
+                                    "'" + (LINUX_LABELS if job == 'build' else runner) + "'",
+                                    "${{ fromJSON('" + LINUX_LABELS + "') || 'ubuntu-24.04' }}"):
+                    with self.subTest(workflow=name, job=job, runner=replacement):
+                        findings = self.mutated_file_findings(index, job, marker,
+                                                              '    runs-on: ' + replacement)
+                        self.assertIn(f'{name} job {job} must run on {runner}', findings)
+        for replacement in ("'ubuntu-24.04'", "'" + '["ubuntu-24.04"]' + "'",
+                            "${{ fromJSON('" + LINUX_LABELS + "') || 'ubuntu-24.04' }}"):
+            with self.subTest(matrix_runner=replacement):
+                findings = self.mutated_file_findings(0, 'build',
+                    '            runner: ' + MATRIX_LINUX_RUNNER,
+                    '            runner: ' + replacement)
+                self.assertIn('ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types',
+                              findings)
+
+    def test_authz_and_every_dependency_are_required_from_mutated_files(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=self.other_sources()), [])
+        for index in (0, 1):
+            name = Path(CI_SOURCES[index]).name
+            authz = '  authz:' + _jobs(original[index])['authz']
+            findings = self.mutated_file_findings(index, None, authz, '')
+            self.assertIn(f'{name} must start with the verbatim canon authz job', findings)
+            # A no-op refusal changes the real canon script and must be caught.
+            findings = self.mutated_file_findings(index, 'authz',
+                'exit 1; }', ':; }')
+            self.assertIn(f'{name} must start with the verbatim canon authz job', findings)
+            findings = self.mutated_file_findings(index, 'authz',
+                '    permissions: {}\n', '    permissions: {}\n    timeout-minutes: 360\n')
+            self.assertIn(f'{name} job authz must inherit the platform maximum without timeout-minutes', findings)
+            for job, body in _jobs(original[index]).items():
+                if job == 'authz':
+                    continue
+                needs = ci_preflight._job_values(body, 'needs')[0]
+                without = [dependency for dependency in ci_preflight._needs(body) if dependency != 'authz']
+                for after in ('', '    needs: [' + ', '.join(without) + ']\n'):
+                    with self.subTest(workflow=name, job=job, needs=after):
+                        findings = self.mutated_file_findings(index, job,
+                                                              '    needs: ' + needs + '\n', after)
+                        self.assertIn(f'{name} job {job} must need authz', findings)
+        for after in ('  pull_request:\n    branches: [main]\n',
+                      '  pull_request:\n    paths: [src/**]\n'):
+            findings = self.mutated_file_findings(0, None, '  pull_request:\n', after)
+            self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_aggregates_refuse_first_even_when_authz_is_skipped_from_mutated_files(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for index, job in ((0, 'build-gate'), (1, 'native-live-gate')):
+            name = Path(CI_SOURCES[index]).name
+            for after in ('', AUTHZ_REFUSE_STEP.replace('exit 1', 'true'),
+                          AUTHZ_REFUSE_STEP.replace("!= 'success'", "== 'failure'"),
+                          AUTHZ_REFUSE_STEP + '      - uses: actions/checkout@v4\n'):
+                with self.subTest(workflow=name, mutation=after):
+                    findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP, after)
+                    self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
+            # Keeping the refusal after checkout cannot satisfy refuse-first.
+            findings = self.mutated_file_findings(index, job, AUTHZ_REFUSE_STEP,
+                                                  '      - uses: actions/checkout@v4\n' + AUTHZ_REFUSE_STEP)
+            self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
+            for condition in ('${{ !cancelled() }}', '${{ success() }}'):
+                findings = self.mutated_file_findings(index, job, '    if: always()\n',
+                                                      '    if: ' + condition + '\n')
+                self.assertIn(f'{name} {job} must always run and refuse authz first', findings)
+
     def test_ci_contract_pins_parallel_pr_light_and_full_events(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
@@ -82,7 +170,7 @@ class PreflightFailures(unittest.TestCase):
             (0, 'passed "$SANITIZER_RESULT"', 'true'),
             (0, '[[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT"',
                 'passed "$PREFLIGHT_RESULT" && passed "$BUILD_RESULT"'),
-            (0, 'needs: [changes, preflight, build,', 'needs: [preflight, build,'),
+            (0, 'needs: [authz, changes, preflight, build,', 'needs: [authz, preflight, build,'),
             (0, '          CHANGES_RESULT: ${{ needs.changes.result }}\n', ''),
             (0, '          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}\n',
                 "          DOCS_ONLY: 'true'\n"),
@@ -287,13 +375,13 @@ class PreflightFailures(unittest.TestCase):
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(LIGHT_LABELS, '["self-hosted","pf-ci","pf-ci-x64"]')
         self.assertEqual(LINUX_LABELS, '["self-hosted","pf-ci","pf-ci-x64-16"]')
-        self.assertIn(f"fromJSON('{LINUX_LABELS}')", LINUX_RUNNER)
-        self.assertIn(f"fromJSON('{LIGHT_LABELS}')", LIGHT_RUNNER)
-        self.assertEqual(MATRIX_RUNNER, '${{ matrix.runner }}')
+        self.assertEqual(json.loads(LINUX_RUNNER), ['self-hosted', 'pf-ci', 'pf-ci-x64-16'])
+        self.assertEqual(json.loads(LIGHT_RUNNER), ['self-hosted', 'pf-ci', 'pf-ci-x64'])
+        self.assertEqual(MATRIX_RUNNER, '${{ fromJSON(matrix.runner) }}')
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         mutations = (
-            # Each job must keep its exact fragment, including the hosted fallback.
-            (0, 'preflight', LIGHT_RUNNER, 'pf-linux-x64-16', 'ci.yml job preflight must run on'),
+            # Each scoped pool job must keep its canon array without a hosted fallback.
+            (0, 'preflight', LINUX_RUNNER, 'pf-linux-x64-16', 'ci.yml job preflight must run on'),
             (0, 'sanitizers', LINUX_RUNNER, 'macos-26-xlarge', 'ci.yml job sanitizers must run on'),
             (0, 'kernel-only', LINUX_RUNNER, 'ubuntu-latest', 'ci.yml job kernel-only must run on'),
             # Target runs-on exactly, never an earlier matrix reference or name.
@@ -302,17 +390,17 @@ class PreflightFailures(unittest.TestCase):
             (0, 'build', f'    runs-on: {MATRIX_RUNNER}\n',
              '    runs-on: ${{ matrix.larger_runner }}\n', 'ci.yml job build must run on'),
             (1, 'native-live', LINUX_RUNNER, 'pf-linux-x64-16', 'native-live.yml job native-live must run on'),
-            (4, 'corpus-parity', LINUX_RUNNER, 'pf-linux-x64-16', 'corpus-parity.yml job corpus-parity must run on'),
-            (4, 'corpus-parity-subset', LINUX_RUNNER, 'pf-linux-x64-16',
+            (4, 'corpus-parity', CORPUS_RUNNER, 'pf-linux-x64-16', 'corpus-parity.yml job corpus-parity must run on'),
+            (4, 'corpus-parity-subset', CORPUS_RUNNER, 'pf-linux-x64-16',
              'corpus-parity.yml job corpus-parity-subset must run on'),
             # An event-based paid-runner route is forbidden, even for trusted events.
-            (0, 'preflight', LIGHT_RUNNER,
+            (0, 'preflight', LINUX_RUNNER,
              "${{ github.event_name == 'push' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              'ci.yml job preflight must run on'),
             (1, 'native-live', LINUX_RUNNER,
              "${{ github.event_name == 'workflow_dispatch' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              'native-live.yml job native-live must run on'),
-            (4, 'corpus-parity', LINUX_RUNNER,
+            (4, 'corpus-parity', CORPUS_RUNNER,
              "${{ github.event_name == 'schedule' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
              'corpus-parity.yml job corpus-parity must run on'),
             (0, 'sanitizers', LINUX_RUNNER,
@@ -354,7 +442,7 @@ class PreflightFailures(unittest.TestCase):
              '      - run: "true"\n\n', 'docs.yml job pre_build needs a pinned runner'),
             (5, None, '\njobs:\n', '\njobs:\n  "pre-build":\n    runs-on: macos-26-xlarge\n    steps:\n'
              '      - run: "true"\n\n', 'docs.yml has jobs lines the runner contract cannot read'),
-            (4, 'corpus-parity-subset', f'runs-on: {LINUX_RUNNER}', 'runs-on:\n      group: pineforge-ci-large',
+            (4, 'corpus-parity-subset', f'runs-on: {CORPUS_RUNNER}', 'runs-on:\n      group: pineforge-ci-large',
              'corpus-parity.yml job corpus-parity-subset must run on'),
             (0, 'build-gate', LIGHT_RUNNER, 'pf-linux-x64-16',
              'ci.yml job build-gate must run on'),
@@ -473,7 +561,7 @@ class PreflightFailures(unittest.TestCase):
                      if path.endswith(('.yml', '.yaml'))}
         workflows.update(self.other_sources())
         routes = {
-            'ci.yml': {'changes': LIGHT_LABELS, 'preflight': LIGHT_LABELS,
+            'ci.yml': {'changes': LIGHT_LABELS, 'preflight': LINUX_LABELS,
                        'build': LINUX_LABELS, 'sanitizers': LINUX_LABELS,
                        'kernel-only': LINUX_LABELS, 'build-gate': LIGHT_LABELS},
             'native-live.yml': {'native-live': LINUX_LABELS, 'native-live-gate': LIGHT_LABELS},
@@ -504,51 +592,55 @@ class PreflightFailures(unittest.TestCase):
                 matrix = (name, job) == ('ci.yml', 'build')
                 runner = (MATRIX_LINUX_RUNNER if matrix else
                           LINUX_RUNNER if labels == LINUX_LABELS else LIGHT_RUNNER)
-                dependabot_guard = (' ' * (18 if matrix else 10)
-                                    + "github.actor != 'dependabot[bot]' && "
-                                      "github.triggering_actor != 'dependabot[bot]' &&\n")
-                self.assertIn(dependabot_guard, runner)
-                for replacement in (
-                        # The old fragment without either Dependabot check must fail.
+                if name == 'corpus-parity.yml':
+                    runner = CORPUS_RUNNER
+                    dependabot_guard = ("          github.actor != 'dependabot[bot]' && "
+                                        "github.triggering_actor != 'dependabot[bot]' &&\n")
+                    replacements = (
                         runner.replace(dependabot_guard, '', 1),
                         runner.replace("github.actor != 'dependabot[bot]' && ", '', 1),
                         runner.replace(" && github.triggering_actor != 'dependabot[bot]'", '', 1),
-                        runner.replace(labels, '["self-hosted","pf-ci","pf-ci-small"]'),
-                        runner.replace(labels, other_class),
-                        runner.replace(labels, '["self-hosted","pf-ci","pf-ci-x64","pf-ci-x64-16"]'),
                         runner.replace("'ubuntu-24.04'", "'ubuntu-latest'"),
                         runner.replace(' && github.event.pull_request.head.repo.fork == false', ''),
                         runner.replace("github.event_name != 'pull_request_target' &&", 'true &&'),
-                        runner.replace('"schedule","release"', '"schedule","release","workflow_run"')):
+                        runner.replace('"schedule","release"', '"schedule","release","workflow_run"'))
+                else:
+                    replacements = ('ubuntu-24.04', 'ubuntu-latest',
+                                    "${{ fromJSON('" + labels + "') || 'ubuntu-24.04' }}")
+                replacements += (
+                    runner.replace(labels, '["self-hosted","pf-ci","pf-ci-small"]'),
+                    runner.replace(labels, other_class),
+                    runner.replace(labels, '["self-hosted","pf-ci","pf-ci-x64","pf-ci-x64-16"]'))
+                for replacement in replacements:
                     with self.subTest(name=name, job=job, runner=replacement):
                         changed = in_job(workflows[name], job, runner, replacement)
                         findings = ci_preflight.runner_findings(dict(workflows, **{name: changed}))
-                        expected = (f'{name} {job} must use exactly' if matrix else
+                        expected = (f'{name} build must use exactly' if matrix else
                                     f'{name} job {job} must run on')
                         self.assertTrue(any(expected in line for line in findings), findings)
         # A step's env cannot stand in for the job env the runner pre-job hook reads.
         changed = in_job(workflows['ci.yml'], 'preflight',
-                         f"      PF_CI_LABELS: '{LIGHT_LABELS}'\n", '')
+                         f"      PF_CI_LABELS: '{LINUX_LABELS}'\n", '')
         changed = in_job(changed, 'preflight', '      - uses: actions/checkout@v4\n',
                          '      - uses: actions/checkout@v4\n        env:\n'
-                         f"          PF_CI_LABELS: '{LIGHT_LABELS}'\n")
+                         f"          PF_CI_LABELS: '{LINUX_LABELS}'\n")
         findings = ci_preflight.runner_findings(dict(workflows, **{'ci.yml': changed}))
         self.assertTrue(any('ci.yml job preflight must set job env PF_CI_LABELS' in line
                             for line in findings), findings)
 
     def test_ci_contract_pins_the_docs_only_skip(self):
-        """Each proof job waits for changes alone and skips only its docs-only
+        """Each proof job waits for authz and changes and skips only its docs-only
         answer; preflight also waits for the class decision and always runs."""
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         skip = f'    if: {DOCS_ONLY_SKIP}\n'
         mutations = []
         for job in PROOF_JOBS:
-            refused = f'{job} must start alongside preflight, after changes alone'
+            refused = f'{job} must start alongside preflight, after authz and changes'
             mutations += [
-                (job, '    needs: changes\n', '', refused),
-                (job, '    needs: changes\n', '    needs: [changes, preflight]\n', refused),
-                (job, '    needs: changes\n', '    needs: preflight\n', refused),
+                (job, '    needs: [authz, changes]\n', '', refused),
+                (job, '    needs: [authz, changes]\n', '    needs: [changes, preflight]\n', refused),
+                (job, '    needs: [authz, changes]\n', '    needs: preflight\n', refused),
                 (job, skip, '', refused),
                 # A failed or unanswered classification must run the job.
                 (job, skip, "    if: ${{ needs.changes.outputs.docs_only != 'true' }}\n", refused),
@@ -560,19 +652,19 @@ class PreflightFailures(unittest.TestCase):
                 (job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
                  refused)]
         mutations += [
-            ('preflight', '    needs: changes\n', '',
-             'preflight must follow changes alone'),
-            ('preflight', '    needs: changes\n', '    needs: build\n',
-             'preflight must follow changes alone'),
-            ('preflight', '    if: ${{ !cancelled() }}\n', skip,
-             'preflight must follow changes alone'),
-            ('preflight', '    if: ${{ !cancelled() }}\n', '',
-             'preflight must follow changes alone'),
+            ('preflight', '    needs: [authz, changes]\n', '',
+             'preflight must follow authz and changes'),
+            ('preflight', '    needs: [authz, changes]\n', '    needs: build\n',
+             'preflight must follow authz and changes'),
+            ('preflight', f'    if: {AUTHZ_ALWAYS}\n', skip,
+             'preflight must follow authz and changes'),
+            ('preflight', f'    if: {AUTHZ_ALWAYS}\n', '',
+             'preflight must follow authz and changes'),
             ('changes', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    needs: preflight\n',
-             'changes must start at once'),
+             'changes must start after authz'),
             ('changes', '    timeout-minutes: 360\n',
              "    timeout-minutes: 360\n    if: github.event_name != 'pull_request'\n",
-             'changes must start at once'),
+             'changes must start after authz'),
             # A lane that continues on error reports success however it ended.
             ('sanitizers', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    continue-on-error: true\n',
              'ci.yml job sanitizers must not continue on error'),
@@ -589,7 +681,7 @@ class PreflightFailures(unittest.TestCase):
                 self.assertTrue(any(finding in line for line in findings), findings)
         # The same wiring spelled another way is no finding.
         for job, before, after in (
-                ('kernel-only', '    needs: changes\n', '    needs: [changes]\n'),
+                ('kernel-only', '    needs: [authz, changes]\n', '    needs: [changes, authz]\n'),
                 ('sanitizers', skip, f'    if: "{DOCS_ONLY_SKIP}"\n'),
                 ('changes', '    steps:\n', '    # classify first\n    steps:\n')):
             with self.subTest(job=job, harmless=after):
@@ -604,8 +696,9 @@ class PreflightFailures(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         script = Path(directory.name) / 'gate.sh'
-        script.write_text(job_script(self.ci_sources()[0], 'build-gate'))
-        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
+        script.write_text(job_script(self.ci_sources()[0], 'build-gate',
+                                     'Require every verification lane to have passed'))
+        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success'}
         lanes = list(PROOF_JOBS.values())
         vectors = set()
         for common in ('success', 'skipped'):
@@ -640,13 +733,15 @@ class PreflightFailures(unittest.TestCase):
         for case, answer in zip(cases, answers):
             changes, docs_only, preflight, *results = case
             excused = changes == 'success' and docs_only == 'true'
-            expected = preflight == 'success' and all(
+            expected = changes == 'success' and preflight == 'success' and all(
                 result == 'success' or (excused and result == 'skipped') for result in results)
             with self.subTest(case=dict(zip(names, case))):
                 self.assertEqual(answer == '0', expected, answer)
         # And as the runner starts it: the docs-only pass, and a skip that is not.
         docs_only = dict(zip(names, ('success', 'true', 'success', *['skipped'] * len(lanes))))
-        for override, code in (({}, 0), ({'DOCS_ONLY': 'false'}, 1), ({'CHANGES_RESULT': 'failure'}, 1)):
+        for override, code in (({}, 0), ({'DOCS_ONLY': 'false'}, 1), ({'CHANGES_RESULT': 'failure'}, 1),
+                               *[({'AUTHZ_RESULT': result}, 1)
+                                 for result in ('failure', 'cancelled', 'skipped', '')]):
             with self.subTest(override=override):
                 result = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', str(script)],
                                         env={**env, **docs_only, **override}, capture_output=True, text=True)
@@ -917,7 +1012,7 @@ class PreflightFailures(unittest.TestCase):
         for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote',)),
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
-                before = MATRIX_RUNNER if job == 'prebuilt' else 'ubuntu-latest'
+                before = HOSTED_MATRIX_RUNNER if job == 'prebuilt' else 'ubuntu-latest'
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
                               f'    runs-on: {LIGHT_RUNNER}\n')
                 findings = ci_preflight.runner_findings(dict(
@@ -982,19 +1077,17 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn('runners and time limits OK', output)
         for mutation, finding in (
-                (('preflight', LIGHT_RUNNER,
-                  LIGHT_RUNNER.replace("'ubuntu-24.04'", "'ubuntu-latest'")),
+                (('preflight', LINUX_RUNNER, 'ubuntu-latest'),
                  'ci.yml job preflight must run on'),
                 (('preflight', '    steps:\n',
                   '    environment: production\n    steps:\n'),
                  'ci.yml job preflight must keep production credentials on a hosted standard runner'),
-                (('preflight', LIGHT_RUNNER, LIGHT_RUNNER.replace(
-                    "          github.actor != 'dependabot[bot]' && "
-                    "github.triggering_actor != 'dependabot[bot]' &&\n", '', 1)),
+                (('preflight', LINUX_RUNNER,
+                  "${{ fromJSON('" + LINUX_LABELS + "') || 'ubuntu-24.04' }}"),
                  'ci.yml job preflight must run on'),
-                (('preflight', f"      PF_CI_LABELS: '{LIGHT_LABELS}'\n", ''),
+                (('preflight', f"      PF_CI_LABELS: '{LINUX_LABELS}'\n", ''),
                  'ci.yml job preflight must set job env PF_CI_LABELS'),
-                (('preflight', f"      PF_CI_LABELS: '{LIGHT_LABELS}'\n",
+                (('preflight', f"      PF_CI_LABELS: '{LINUX_LABELS}'\n",
                   "      PF_CI_LABELS: '[\"self-hosted\",\"pf-ci\",\"pf-ci-small\"]'\n"),
                  'ci.yml job preflight must set job env PF_CI_LABELS'),
                 (('sanitizers', LINUX_RUNNER,
@@ -1228,6 +1321,79 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(summary['stages'][1]['startedAt'], running['startedAt'])
 
 
+class CanonAuthz(unittest.TestCase):
+    def test_real_workflow_scripts_admit_our_events_and_refuse_untrusted_identity(self):
+        scripts = [job_script((ROOT / path).read_text(), 'authz') for path in CI_SOURCES[:2]]
+        self.assertEqual(scripts[0], scripts[1])
+        base = {'EVENT': 'pull_request', 'REPO': 'owner/engine', 'HEAD_REPO': 'owner/engine',
+                'HEAD_IS_FORK': 'false', 'ASSOCIATION': 'MEMBER', 'PR_AUTHOR': 'member',
+                'WR_HEAD_REPO': '', 'WR_ACTOR': '', 'PERMISSION': 'none', 'LOOKUP_EXIT': '0',
+                'ALLOWED_BOTS': 'dependabot[bot] pineforge-app[bot]'}
+        cases = [
+            ({}, True, False),
+            ({'PR_AUTHOR': 'dependabot[bot]', 'ASSOCIATION': 'NONE'}, True, False),
+            ({'PR_AUTHOR': 'pineforge-app[bot]', 'ASSOCIATION': 'NONE'}, True, False),
+            ({'HEAD_REPO': 'outside/engine'}, False, False),
+            ({'HEAD_IS_FORK': 'true'}, False, False),
+            ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider'}, False, True),
+            ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'other[bot]'}, False, True),
+            ({'EVENT': 'pull_request_target'}, False, False),
+            ({'EVENT': 'push'}, True, False),
+        ]
+        for permission in ('admin', 'maintain', 'write', 'read', 'triage', ''):
+            cases.append(({'ASSOCIATION': 'CONTRIBUTOR', 'PERMISSION': permission},
+                          permission in ('admin', 'maintain', 'write'), True))
+        cases.append(({'ASSOCIATION': 'CONTRIBUTOR', 'LOOKUP_EXIT': '1'}, False, True))
+        workflow_run = {'EVENT': 'workflow_run', 'WR_HEAD_REPO': 'owner/engine', 'WR_ACTOR': 'rerunner'}
+        for change, allowed, lookup in (
+                ({'WR_HEAD_REPO': 'outside/engine'}, False, False),
+                ({'WR_HEAD_REPO': ''}, False, False),
+                ({'WR_ACTOR': ''}, False, False),
+                ({'WR_ACTOR': 'pineforge-app[bot]'}, True, False),
+                ({'WR_ACTOR': 'pineforge-ci-dispatcher[bot]'}, True, False),
+                ({'WR_ACTOR': 'dependabot[bot]', 'PERMISSION': 'write'}, False, False),
+                ({'WR_ACTOR': 'github-actions[bot]', 'PERMISSION': 'write'}, False, False),
+                ({'PERMISSION': 'admin'}, True, True),
+                ({'PERMISSION': 'maintain'}, True, True),
+                ({'PERMISSION': 'write'}, True, True),
+                ({'PERMISSION': 'read'}, False, True),
+                ({'PERMISSION': ''}, False, True),
+                ({'PERMISSION': 'write', 'LOOKUP_EXIT': '1'}, False, True)):
+            cases.append(({**workflow_run, **change}, allowed, lookup))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / 'gh'
+            gh.write_text('#!' + sys.executable + '\n'
+                'import os, pathlib, sys\n'
+                'actor = os.environ["WR_ACTOR"] if os.environ["EVENT"] == "workflow_run" else os.environ["PR_AUTHOR"]\n'
+                'expected = ["api", "repos/" + os.environ["REPO"] + "/collaborators/" + actor + "/permission", "--jq", ".permission"]\n'
+                'if sys.argv[1:] != expected: raise SystemExit(2)\n'
+                'with pathlib.Path(os.environ["LOOKUP_LOG"]).open("a") as log: log.write(actor + "\\n")\n'
+                'print(os.environ["PERMISSION"])\n'
+                'raise SystemExit(int(os.environ["LOOKUP_EXIT"]))\n')
+            gh.chmod(0o755)
+            for index, script in enumerate(scripts):
+                for case, (change, allowed, lookup) in enumerate(cases):
+                    with self.subTest(workflow=CI_SOURCES[index], identity=change):
+                        log = root / f'lookup-{index}-{case}'
+                        env = {**os.environ, **base, **change, 'LOOKUP_LOG': str(log),
+                               'GITHUB_STEP_SUMMARY': str(root / f'summary-{index}-{case}'),
+                               'PATH': str(root) + os.pathsep + os.environ.get('PATH', '')}
+                        ran = subprocess.run(['bash', '-eu', '-c', script], env=env,
+                                             text=True, capture_output=True)
+                        self.assertEqual(ran.returncode == 0, allowed, ran.stdout + ran.stderr)
+                        self.assertEqual(log.exists(), lookup, ran.stdout + ran.stderr)
+                # Disabling fail must flip a refused fork verdict, proving that
+                # the cases exercise the shell rather than just a source digest.
+                mutant = script.replace('exit 1; }', ':; }', 1)
+                self.assertNotEqual(mutant, script)
+                env = {**os.environ, **base, 'HEAD_IS_FORK': 'true',
+                       'GITHUB_STEP_SUMMARY': str(root / f'mutant-{index}')}
+                before = subprocess.run(['bash', '-eu', '-c', script], env=env, capture_output=True)
+                after = subprocess.run(['bash', '-eu', '-c', mutant], env=env, capture_output=True)
+                self.assertNotEqual(before.returncode == 0, after.returncode == 0)
+
+
 class PinnedLiveCurl(unittest.TestCase):
     def test_all_live_profiles_use_the_shared_pinned_dependency(self):
         kernel = _jobs((ROOT / CI_SOURCES[0]).read_text())['kernel-only']
@@ -1266,7 +1432,7 @@ class IndependentNativeProfiles(unittest.TestCase):
             ('fail-fast: false', 'fail-fast: true'),
             ('    name: native-live (${{ matrix.profile }})',
              '    name: native-live (${{ matrix.profile }})\n    needs: prior'),
-            ('needs: native-live', 'needs: []'),
+            ('needs: [authz, native-live]', 'needs: [authz]'),
             ('test "$PROFILES_RESULT" = success', 'true'),
             ('PROFILES_RESULT: ${{ needs.native-live.result }}', 'PROFILES_RESULT: success'),
             ('contents: read', 'contents: write'),
@@ -1335,13 +1501,15 @@ class IndependentNativeProfiles(unittest.TestCase):
 
     def test_native_aggregate_rejects_failure_cancellation_and_skip(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
-        script = job_script(native, 'native-live-gate')
-        for result in ('success', 'failure', 'cancelled', 'skipped', ''):
-            with self.subTest(result=result):
+        script = job_script(native, 'native-live-gate', 'Require every native profile to have passed')
+        for authz, result in ((authz, profile)
+                              for authz in ('success', 'failure', 'cancelled', 'skipped', '')
+                              for profile in ('success', 'failure', 'cancelled', 'skipped', '')):
+            with self.subTest(authz=authz, result=result):
                 ran = subprocess.run(['bash', '-e', '-c', script], capture_output=True,
-                                     env={**os.environ, 'PROFILES_RESULT': result})
-                self.assertEqual(ran.returncode == 0, result == 'success', ran.stdout)
-                if result != 'success':
+                                     env={**os.environ, 'AUTHZ_RESULT': authz, 'PROFILES_RESULT': result})
+                self.assertEqual(ran.returncode == 0, authz == result == 'success', ran.stdout)
+                if authz != 'success' or result != 'success':
                     self.assertEqual(ran.returncode, 1, ran.stdout)
                 # A cancelled profile job is how the platform stops a hang at the job maximum: the
                 # aggregate still fails, and the log names it as a HANG to re-run (EN-116).
@@ -1359,7 +1527,7 @@ class IndependentNativeProfiles(unittest.TestCase):
         for budget in ('matrix.job_minutes', 'matrix.verify_minutes',
                        '--test-timeout', '--ctest-timeout'):
             self.assertNotIn(budget, job)
-        self.assertIn('needs: native-live', _jobs(native)['native-live-gate'])
+        self.assertIn('needs: [authz, native-live]', _jobs(native)['native-live-gate'])
 
     def test_cold_mode_bypasses_both_restores_and_dependencies_save_early(self):
         native = (ROOT / '.github/workflows/native-live.yml').read_text()
