@@ -1,8 +1,8 @@
 #include <pineforge/native_order.hpp>
 #include <cassert>
 #include <cerrno>
-#include <cstdlib>
-#include <fcntl.h>
+#include <pineforge/detail/scratch_file.hpp>
+#include <cstring>
 #include <system_error>
 #include <unistd.h>
 #include "native_matching.hpp" // Price grids share the matcher's value-only geometry.
@@ -5919,45 +5919,45 @@ struct WorkingRequestCore::SuccessorRootIndex {
     std::array<Row, kTailRows> tail{};
     std::size_t tail_size = 0;
     uint64_t disk_rows = 0;
-    int fd = -1;
+    detail::ScratchFile file;
+    bool arena_mode = false;
     std::string directory;
 
     SuccessorRootIndex() = default;
     SuccessorRootIndex(const SuccessorRootIndex&) = delete;
     SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
-    ~SuccessorRootIndex() { if (fd >= 0) ::close(fd); }
+    ~SuccessorRootIndex() { file.clear(); }
 
     void set_directory(const std::string& value) {
-        if (fd >= 0 && directory != value) {
+        if (file.opened() && directory != value) {
             throw std::logic_error("native successor roots directory changed after spill");
         }
         directory = value;
     }
 
+    [[noreturn]] void throw_io(int error, const char* operation) const {
+        // File mode keeps its original unclassified std::system_error;
+        // the arena's typed refusal must survive the kernel's catch.
+        if (arena_mode) throw detail::ScratchIoError(error, operation);
+        throw std::system_error(error, std::generic_category(), operation);
+    }
+
     void open_file() {
-        if (fd >= 0) return;
-        const char* temporary = std::getenv("TMPDIR");
-        std::string name = directory.empty()
-                ? (temporary && *temporary ? temporary : "/tmp") : directory;
-        if (name.back() != '/') name += '/';
-        name += "pineforge-roots-XXXXXX";
-        const int opened = ::mkstemp(name.data());
-        if (opened < 0) {
-            throw std::system_error(errno, std::generic_category(), "native successor roots create");
-        }
+        if (file.opened()) return;
+        file.set_directory(directory);
+        arena_mode = detail::ScratchArena::attached() != nullptr;
         // Unlink before publishing the descriptor: an opened scratch file
         // has no directory entry. mkstemp creates it with mode 0600.
-        if (::unlink(name.c_str()) != 0) {
-            const int error = errno;
-            ::close(opened);
-            throw std::system_error(error, std::generic_category(), "native successor roots unlink");
+        // ScratchFile owns these file-mode steps and bypasses them in arena mode.
+        try {
+            file.open("pineforge-roots");
+        } catch (const detail::ScratchIoError& error) {
+            if (std::strncmp(error.what(), "scratch unlink", sizeof("scratch unlink") - 1) == 0)
+                throw_io(error.code().value(), "native successor roots unlink");
+            if (std::strncmp(error.what(), "scratch cloexec", sizeof("scratch cloexec") - 1) == 0)
+                throw_io(error.code().value(), "native successor roots cloexec");
+            throw_io(error.code().value(), "native successor roots create");
         }
-        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
-            const int error = errno;
-            ::close(opened);
-            throw std::system_error(error, std::generic_category(), "native successor roots cloexec");
-        }
-        fd = opened;
     }
 
     void prepare_append() {
@@ -5967,19 +5967,10 @@ struct WorkingRequestCore::SuccessorRootIndex {
             throw std::overflow_error("native successor roots file offset exhausted");
         }
         open_file();
-        const off_t offset = static_cast<off_t>(disk_rows * sizeof(Row));
-        const auto* bytes = reinterpret_cast<const unsigned char*>(tail.data());
-        const std::size_t length = tail_size * sizeof(Row);
-        std::size_t written = 0;
-        while (written < length) {
-            const ssize_t count = ::pwrite(fd, bytes + written, length - written,
-                                           offset + static_cast<off_t>(written));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) {
-                const int error = count < 0 ? errno : EIO;
-                throw std::system_error(error, std::generic_category(), "native successor roots write");
-            }
-            written += static_cast<std::size_t>(count);
+        try {
+            file.write(disk_rows * sizeof(Row), tail.data(), tail_size * sizeof(Row));
+        } catch (const detail::ScratchIoError& error) {
+            throw_io(error.code().value(), "native successor roots write");
         }
         // Publish only a complete batch. A short/error write leaves the
         // authoritative tail intact; retry overwrites the same file offset.
@@ -5995,20 +5986,12 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     Row read(uint64_t index) const {
-        assert(fd >= 0 && index < disk_rows);
+        assert(file.opened() && index < disk_rows);
         Row row;
-        auto* bytes = reinterpret_cast<unsigned char*>(&row);
-        const off_t offset = static_cast<off_t>(index * sizeof(Row));
-        std::size_t received = 0;
-        while (received < sizeof(Row)) {
-            const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
-                                          offset + static_cast<off_t>(received));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) {
-                const int error = count < 0 ? errno : EIO;
-                throw std::system_error(error, std::generic_category(), "native successor roots read");
-            }
-            received += static_cast<std::size_t>(count);
+        try {
+            file.read(index * sizeof(Row), &row, sizeof(Row));
+        } catch (const detail::ScratchIoError& error) {
+            throw_io(error.code().value(), "native successor roots read");
         }
         if (row.root == 0 || row.root >= row.successor) {
             throw std::system_error(EIO, std::generic_category(), "native successor roots invalid row");

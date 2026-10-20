@@ -2941,6 +2941,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // host that keeps its own notion of the flag rewrites it in its callbacks.
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
+    // Reset drops the root index and its directory; bind each run's scratch
+    // backing before a callback can replace enough requests to spill.
+    if (engine.report_sink_state_.enabled)
+        requests_.set_successor_roots_directory(engine.report_sink_state_.scratch_dir);
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
