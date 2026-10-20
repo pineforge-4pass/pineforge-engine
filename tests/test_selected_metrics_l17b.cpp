@@ -37,6 +37,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -332,11 +333,14 @@ struct Host final : NativeStrategyHost {
         }
         if (open_position && !entered && context.script_bar_open_ms >= kT + 2 * kMinute) {
             entered = true;
-            (void)submit({no::Transact{1.0}, "entry", ""});
+            const auto result = submit({no::Transact{1.0}, "entry", ""});
+            CHECK(result.status == no::SubmitStatus::Accepted && result.handle.has_value());
         }
     }
     void present_report(ReportC* out) const override {
         ++presentations;
+        if (open_position)
+            CHECK(position_side_ != PositionSide::FLAT && !pyramid_entries_.empty());
         actual_length_at_presentation = out->equity_curve_len;
         length_at_presentation = legacy_full_curve ? out->equity_curve_len
             : std::min(out->equity_curve_len, kSelectedPresentationWindowPoints);
@@ -398,6 +402,8 @@ NativeRunSpec spec(std::uint64_t generation) {
     result.point_value = result.account_fx = 1.0;
     result.price_tick = 0.01;
     result.report_policy = NativeReportPolicy::KernelRecorded;
+    // Bare hosts opt in to the range-end row that the open fixtures assert.
+    result.report_open_position_at_end = true;
     return result;
 }
 
@@ -713,6 +719,93 @@ void selected_recorder_drops_reused_array_capacity(Directory& directory) {
     compare_sink_records(baseline, array.value, read(path));
 }
 
+void empty_selected_windows_follow_array_path(Directory& directory) {
+    const Bar bars[] = {
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + 2 * kMinute}};
+    const pf_selected_window_config_v1 window{
+        sizeof window, 1, kT + kMinute, kT + 2 * kMinute};
+    const pf_equity_point_t anchor{window.start_ms, kCapital, 0.0};
+    // No execution point, only a pre-T point, and a gap spanning the window
+    // with its final point exactly at E. The native counter includes every
+    // delivered callback at/after T, so that last case must keep the array
+    // path's capture-time count refusal rather than silently discard a bar.
+    for (const int n : {0, 1, 2}) {
+        const bool completes = n < 2;
+        Host baseline, streamed;
+        const auto path = directory.file("empty-window.ndjson");
+        const pf_report_sink_v1 sink{
+            sizeof sink, 1, path.c_str(), "L17C", directory.path.c_str()};
+        CHECK(streamed.set_report_sink_v1(&sink) == 0);
+        for (Host* host : {&baseline, &streamed}) {
+            CHECK(host->configure_native(spec(1)).status == NativeSetupStatus::Applied);
+            CHECK(native_set_selected_window_v1(host, &window) == 0);
+            host->run(n == 0 ? nullptr : bars, n);
+            CHECK(host->calculations == n);
+            CHECK(host->native_state().kind == (completes ? NativeLifecycleKind::Completed
+                                                         : NativeLifecycleKind::Failed));
+            CHECK(host->presentations == (completes ? 1 : 0));
+            pf_selected_window_counts_v1 counts{};
+            counts.struct_size = sizeof counts;
+            counts.version = 1;
+            CHECK(native_selected_window_counts_v1(host, &counts) == (completes ? 0 : -2));
+            CHECK(counts.window_script_bars == 0);
+            if (!completes) {
+                CHECK(run_failure_value_of(*host).code == RunFailureCode::engine_invariant);
+                pf_execution_observation_v1 seen{};
+                seen.struct_size = sizeof seen;
+                seen.version = 1;
+                CHECK(NativeExecutionConsumer::execution_observation_v1(host, &seen) == 0);
+                CHECK(seen.phase == 3 && seen.fault_stage == 1 && seen.attempt_outcome == 2);
+                Report refused;
+                host->fill_report(&refused.value);
+                CHECK(refused.value.equity_curve == nullptr && refused.value.trades == nullptr);
+            }
+        }
+        CHECK(streamed.held_curve().size() == (n == 0 ? std::size_t{0} : std::size_t{1}));
+        CHECK(streamed.recorded_capacity() <= kReportSinkHeldEquityPoints);
+        if (!completes) {
+            CHECK(baseline.last_error().find(
+                "native selected report: the window's equity observations differ from its script bars")
+                  != std::string::npos);
+            CHECK(streamed.last_error() == baseline.last_error());
+            CHECK(std::strcmp(run_failure_code_of(streamed), run_failure_code_of(baseline)) == 0);
+            CHECK(std::strcmp(run_failure_args_of(streamed), run_failure_args_of(baseline)) == 0);
+            CHECK(receipt(streamed).complete == 0);
+            CHECK(read(path).find("{\"trailer\":") == std::string::npos);
+            continue;
+        }
+        Report array, summary;
+        baseline.fill_report(&array.value);
+        streamed.fill_report(&summary.value);
+        CHECK(array.value.equity_curve_len == 1 && array.value.equity_curve != nullptr);
+        if (array.value.equity_curve)
+            CHECK(std::memcmp(array.value.equity_curve, &anchor, sizeof anchor) == 0);
+        CHECK(same_metrics(array.value.metrics, summary.value.metrics));
+        CHECK(std::isnan(summary.value.metrics.equity.time_in_market_pct));
+        CHECK(std::isnan(summary.value.metrics.equity.buy_hold_return));
+        CHECK(summary.value.equity_curve == nullptr && summary.value.equity_curve_len == 0);
+        compare_sink_records(baseline, array.value, read(path));
+        CHECK(receipt(streamed).count_e == 1 && receipt(streamed).complete == 1);
+        CHECK(streamed.scratch_descriptor_at_presentation >= 0);
+        if (streamed.scratch_descriptor_at_presentation >= 0) {
+            pf_equity_point_t stored{};
+            report_sink::read_scratch_points(
+                {streamed.scratch_descriptor_at_presentation, 0, 1}, 0, &stored, 1);
+            CHECK(std::memcmp(&stored, &anchor, sizeof stored) == 0);
+        }
+        CHECK(streamed.set_report_sink_v1(nullptr) == 0);
+        Report restored;
+        streamed.fill_report(&restored.value);
+        CHECK(same_metrics(array.value.metrics, restored.value.metrics));
+        CHECK(restored.value.equity_curve_len == array.value.equity_curve_len);
+        if (array.value.equity_curve && restored.value.equity_curve)
+            CHECK(std::memcmp(restored.value.equity_curve, array.value.equity_curve,
+                              sizeof anchor) == 0);
+        else CHECK(false);
+    }
+}
+
 void legacy_sink_off_hooks_stay_full() {
     const auto extra = static_cast<int>(3 * report_sink::kScratchWindowPoints);
     Host plain;
@@ -958,19 +1051,46 @@ struct CaptureAllocationScope {
     }
 };
 
-// Keep the test's input, warmup and recorded execution storage outside the
-// measured interval. stream_end(false) appends no bar: it seals the existing
-// selected window and performs the real capture. This host allocates nothing
-// in its presentation hook, unlike Host's independent input snapshots above.
+// Sink v1 supports batches, not stream_begin. Host marks use the real kernel
+// recorder, but let this fixture edit the final raw point and start measuring
+// AFTER it was recorded, before the batch's terminal capture. The remaining
+// callback epilogue is included; input and recorded storage stay outside the
+// interval. The presentation hook allocates nothing.
 struct StorageHost final : NativeStrategyHost {
+    int expected_bars = 0;
+    int calculations = 0;
+    bool rewrite_preroll = false;
+    bool repair_preroll = false;
+    bool measure_capture = false;
     mutable int presentations = 0;
     mutable std::int64_t presented_length = 0;
     mutable pf_equity_point_t first_presented{}, last_presented{};
     std::size_t peak_recorded_points = 0;
     std::size_t peak_recorded_capacity = 0;
-    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+    metrics::ScratchCurveRegion prefix_before_capture{-1, 0, 0};
+    pf_equity_point_t anchor_before_capture{}, last_released_before_capture{};
+    std::optional<CaptureAllocationScope> capture_scope;
+    void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
+        CHECK(presentations == 0);
+        CHECK(mark_native_report_point(context.script_bar_open_ms));
+        ++calculations;
         peak_recorded_points = std::max(peak_recorded_points, equity_curve_.size());
         peak_recorded_capacity = std::max(peak_recorded_capacity, equity_curve_.capacity());
+        if (calculations != expected_bars) return;
+        if (rewrite_preroll) {
+            rewrite_held_equity(kCapital + 1.0);
+            if (repair_preroll) rewrite_held_equity(kCapital);
+        }
+        // Snapshot the actual record-time prefix before capture transfers its
+        // owner. These reads and checks precede the allocation measurement.
+        prefix_before_capture = recorded_prefix();
+        if (prefix_before_capture.descriptor >= 0 && prefix_before_capture.point_count > 0) {
+            report_sink::read_scratch_points(prefix_before_capture, 0, &anchor_before_capture, 1);
+            report_sink::read_scratch_points(
+                prefix_before_capture, prefix_before_capture.point_count - 1,
+                &last_released_before_capture, 1);
+        }
+        if (measure_capture) capture_scope.emplace();
     }
     std::size_t recorded_points() const { return equity_curve_.size(); }
     std::size_t recorded_capacity() const { return equity_curve_.capacity(); }
@@ -1006,18 +1126,23 @@ void final_preroll_value_is_judged_at_capture(Directory& directory) {
         const pf_selected_window_config_v1 window{
             sizeof window, 1, kT + 2 * kMinute, kT + 10 * kMinute};
         for (StorageHost* host : {&baseline, &streamed}) {
-            CHECK(host->configure_native(spec(1)).status == NativeSetupStatus::Applied);
+            host->expected_bars = static_cast<int>(std::size(bars));
+            host->rewrite_preroll = true;
+            host->repair_preroll = repaired;
+            auto run_spec = spec(1);
+            run_spec.report_policy = NativeReportPolicy::KernelRecordedAtHostMarks;
+            CHECK(host->configure_native(run_spec).status == NativeSetupStatus::Applied);
             CHECK(native_set_selected_window_v1(host, &window) == 0);
-            CHECK(host->stream_begin(bars, static_cast<int>(std::size(bars)), "", ""));
-            CHECK(host->presentations == 0);
-            host->rewrite_held_equity(kCapital + 1.0);
-            if (repaired) host->rewrite_held_equity(kCapital);
+            host->run(bars, static_cast<int>(std::size(bars)));
+            CHECK(host->calculations == static_cast<int>(std::size(bars)));
         }
         // Neither pre-T observation belongs to the file; only its anchor does.
-        CHECK(streamed.recorded_prefix().point_count == 1);
-        const bool array_ended = baseline.stream_end();
-        const bool scratch_ended = streamed.stream_end();
+        CHECK(streamed.prefix_before_capture.point_count == 1);
+        const bool array_ended = baseline.native_state().kind == NativeLifecycleKind::Completed;
+        const bool scratch_ended = streamed.native_state().kind == NativeLifecycleKind::Completed;
         CHECK(array_ended == repaired && scratch_ended == repaired);
+        CHECK(streamed.recorded_points() <= kReportSinkHeldEquityPoints);
+        CHECK(streamed.recorded_capacity() <= kReportSinkHeldEquityPoints);
         if (repaired) {
             CHECK(streamed.native_state().kind == NativeLifecycleKind::Completed);
             Report array, summary;
@@ -1033,7 +1158,17 @@ void final_preroll_value_is_judged_at_capture(Directory& directory) {
                 "native selected report: the account changed before the window start")
                   != std::string::npos);
             CHECK(run_failure_value_of(streamed).code == RunFailureCode::engine_invariant);
+            CHECK(run_failure_value_of(baseline).code == RunFailureCode::engine_invariant);
+            CHECK(std::strcmp(run_failure_code_of(streamed), run_failure_code_of(baseline)) == 0);
+            CHECK(std::strcmp(run_failure_args_of(streamed), run_failure_args_of(baseline)) == 0);
             CHECK(streamed.presentations == 0 && baseline.presentations == 0);
+            for (StorageHost* host : {&baseline, &streamed}) {
+                pf_execution_observation_v1 seen{};
+                seen.struct_size = sizeof seen;
+                seen.version = 1;
+                CHECK(NativeExecutionConsumer::execution_observation_v1(host, &seen) == 0);
+                CHECK(seen.phase == 3 && seen.fault_stage == 1 && seen.attempt_outcome == 2);
+            }
             CHECK(receipt(streamed).complete == 0);
             CHECK(read(path).find("{\"trailer\":") == std::string::npos);
         }
@@ -1095,43 +1230,42 @@ CaptureStorage selected_capture_storage(Directory& directory, const char* name, 
     for (int i = 0; i < m; ++i)
         bars.push_back({100.0, 100.0, 100.0, 100.0, 1.0, kT + i * kMinute});
     StorageHost host;
-    CHECK(host.configure_native(spec(1)).status == NativeSetupStatus::Applied);
+    host.expected_bars = m;
+    host.measure_capture = true;
+    auto run_spec = spec(1);
+    run_spec.report_policy = NativeReportPolicy::KernelRecordedAtHostMarks;
+    CHECK(host.configure_native(run_spec).status == NativeSetupStatus::Applied);
     const auto path = directory.file(name);
     const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "L17B", directory.path.c_str()};
     CHECK(host.set_report_sink_v1(&sink) == 0);
     const pf_selected_window_config_v1 window{sizeof window, 1, kT, kT + m * kMinute};
     CHECK(native_set_selected_window_v1(&host, &window) == 0);
-    const bool warmed = host.stream_begin(bars.data(), m, "", "");
-    CHECK(warmed);
-    if (!warmed) throw std::runtime_error("L17B storage warmup failed");
-    CHECK(host.presentations == 0);
+    measured_capture = {};
+    host.run(bars.data(), m);
+    const bool measured = host.capture_scope.has_value();
+    host.capture_scope.reset(); // stop before any report read or test allocation
+    CHECK(measured);
+    CHECK(host.calculations == m);
+    auto storage = measured_capture;
     const auto recorded_points = std::max(host.peak_recorded_points, host.recorded_points());
     const auto recorded_capacity =
         std::max(host.peak_recorded_capacity, host.recorded_capacity()) * sizeof(pf_equity_point_t);
-    const auto prefix = host.recorded_prefix();
+    const auto prefix = host.prefix_before_capture;
     CHECK(prefix.descriptor >= 0);
     // The real record-time file contains anchor + M-1 released observations
     // before capture. An implementation that spills only at capture fails.
     CHECK(prefix.point_count == m);
     if (prefix.descriptor >= 0 && prefix.point_count == m) {
-        pf_equity_point_t anchor{}, last_released{};
-        report_sink::read_scratch_points(prefix, 0, &anchor, 1);
-        report_sink::read_scratch_points(prefix, m - 1, &last_released, 1);
         const pf_equity_point_t expected_anchor{kT, kCapital, 0.0};
         const pf_equity_point_t expected_last{
             bars[static_cast<std::size_t>(m - 2)].timestamp, kCapital, 0.0};
-        CHECK(std::memcmp(&anchor, &expected_anchor, sizeof anchor) == 0);
-        CHECK(std::memcmp(&last_released, &expected_last, sizeof last_released) == 0);
+        CHECK(std::memcmp(&host.anchor_before_capture, &expected_anchor,
+                          sizeof expected_anchor) == 0);
+        CHECK(std::memcmp(&host.last_released_before_capture, &expected_last,
+                          sizeof expected_last) == 0);
     }
-    bool ended = false;
-    {
-        const CaptureAllocationScope allocation_scope;
-        ended = host.stream_end();
-    }
-    auto storage = measured_capture;
     storage.recorded_points = recorded_points;
     storage.recorded_capacity_bytes = recorded_capacity;
-    CHECK(ended);
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(host.presentations == 1);
     const auto window_length =
@@ -1221,6 +1355,7 @@ int main() {
         legacy_sink_off_hooks_stay_full();
         selected_recorder_refusals_stay_at_capture(directory);
         selected_recorder_drops_reused_array_capacity(directory);
+        empty_selected_windows_follow_array_path(directory);
         final_preroll_value_is_judged_at_capture(directory);
         scratch_tail_replacement_preserves_recorded_prefix(directory);
 #ifdef PINEFORGE_L17B_SOURCE
