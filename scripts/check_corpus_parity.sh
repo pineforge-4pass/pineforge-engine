@@ -29,7 +29,8 @@
 # probes: derive 2 s (a no-op when the feeds are fresh), build the runtime +
 # the 30 strategy .so 68 s from clean,
 # run 45 s wall for 80 s of probe CPU, judge <1 s — 94 s end to end over an
-# up-to-date build directory, against 1792 s for the run phase alone in full
+# up-to-date build directory, plus the sink-on pass of about the same length
+# as the run phase, against 1792 s for the run phase alone in full
 # mode. That fits the ~25 min a required check is budgeted for, which is why
 # .github/workflows/ci.yml can make it a dependency of the required `build`
 # context.
@@ -50,8 +51,12 @@
 #                    (default: scripts/corpus_parity_subset.txt)
 #   SKIP_BUILD=1     reuse an existing BUILD_DIR (developer loop only)
 #   SKIP_RUN=1       judge the trades already on disk (developer loop only)
+#   PINEFORGE_SUBSET_SINK=0  skip the default second, sink-on subset pass
+#                           (developer loop only; also skipped by SKIP_RUN=1)
 #   PINEFORGE_CANARY_LOG  optional sink_canary:/sink_kept: log, checked against
 #                        the probes run; full mode delegates to run_corpus.sh
+#                        (subset sink-on default: "$BUILD_DIR/sink_canary.log")
+#   The sink-on subset keeps the first five probes' sinks in "$BUILD_DIR/sink-kept".
 #
 # Exit codes: 0 parity holds, 1 parity drifted, 2 the check could not run.
 
@@ -64,7 +69,7 @@ MODE=full
 while (( $# > 0 )); do
     case "$1" in
         --subset) MODE=subset ;;
-        -h|--help) sed -n '2,52p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,61p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) printf 'check_corpus_parity: unknown argument %s\n' "$1" >&2; exit 2 ;;
     esac
     shift
@@ -91,11 +96,6 @@ log()  { printf '\033[1;34m[corpus-parity]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[corpus-parity]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[corpus-parity]\033[0m %s\n' "$*" >&2; exit 1; }
 unrunnable() { printf '\033[1;31m[corpus-parity]\033[0m %s\n' "$*" >&2; exit 2; }
-
-CANARY_LOG="${PINEFORGE_CANARY_LOG:-}"
-if [[ "$MODE" == subset && -n "$CANARY_LOG" ]]; then
-    : > "$CANARY_LOG"
-fi
 
 # --- 1) the corpus, at the gitlink this repository records -------------
 
@@ -195,52 +195,39 @@ else
         elif [[ -f "corpus/${PROBES[0]}/strategy.dll" ]]; then
             SO_NAME=strategy.dll
         fi
+        run_subset_probes() {
+            local run_rc=0 started elapsed
+            rm -rf "$RUN_LOGS" || return 2
+            mkdir -p "$RUN_LOGS" || return 2
+            log "re-running the subset ($SO_NAME, $JOBS at a time)"
+            started=$(date +%s)
+            # The probes write into disjoint directories and share only the
+            # read-only feeds, so the run phase parallelises exactly; the full
+            # sweep's serial loop is what puts it out of a pull-request budget.
+            # One probe per child, passed as $1 -- NOT through xargs -I, whose
+            # replacement string is capped at 255 bytes on BSD xargs ("command
+            # line cannot be assembled, too long").
+            # SC2016: the child's body is deliberately unexpanded here — PF_PY,
+            # PF_SO and PF_LOGS are read from its own environment, exported above.
+            # shellcheck disable=SC2016
+            printf '%s\n' "${PROBES[@]}" \
+                | PF_PY="$PY" PF_SO="$SO_NAME" PF_LOGS="$RUN_LOGS" \
+                  xargs -P "$JOBS" -n 1 sh -c '
+                      probe="$1"
+                      log="$PF_LOGS/$(printf %s "$probe" | tr / _).log"
+                      if ! "$PF_PY" scripts/run_strategy.py "corpus/$probe" \
+                              --so-name "$PF_SO" > "$log" 2>&1; then
+                          printf "FAILED %s\n" "$probe" >&2
+                          cat "$log" >&2
+                          exit 1
+                      fi' corpus-parity-subset || run_rc=$?
+            elapsed=$(( $(date +%s) - started ))
+            log "ran ${#PROBES[@]} probes in ${elapsed}s"
+            return "$run_rc"
+        }
         RUN_LOGS="$BUILD_DIR/subset-run-logs"
-        rm -rf "$RUN_LOGS"
-        mkdir -p "$RUN_LOGS"
-        log "re-running the subset ($SO_NAME, $JOBS at a time)"
-        started=$(date +%s)
-        # The probes write into disjoint directories and share only the
-        # read-only feeds, so the run phase parallelises exactly; the full
-        # sweep's serial loop is what puts it out of a pull-request budget.
-        run_rc=0
-        # One probe per child, passed as $1 -- NOT through xargs -I, whose
-        # replacement string is capped at 255 bytes on BSD xargs ("command
-        # line cannot be assembled, too long").
-        # SC2016: the child's body is deliberately unexpanded here — PF_PY,
-        # PF_SO and PF_LOGS are read from its own environment, exported above.
-        # shellcheck disable=SC2016
-        printf '%s\n' "${PROBES[@]}" \
-            | PF_PY="$PY" PF_SO="$SO_NAME" PF_LOGS="$RUN_LOGS" \
-              xargs -P "$JOBS" -n 1 sh -c '
-                  probe="$1"
-                  log="$PF_LOGS/$(printf %s "$probe" | tr / _).log"
-                  if ! "$PF_PY" scripts/run_strategy.py "corpus/$probe" \
-                          --so-name "$PF_SO" > "$log" 2>&1; then
-                      printf "FAILED %s\n" "$probe" >&2
-                      cat "$log" >&2
-                      exit 1
-                  fi' corpus-parity-subset || run_rc=$?
-        elapsed=$(( $(date +%s) - started ))
-        log "ran ${#PROBES[@]} probes in ${elapsed}s"
-        canary_rc=0
-        if [[ -n "$CANARY_LOG" ]]; then
-            # Collect only after every child finishes: no concurrent append
-            # to the shared log, and failed probes keep their lines too.
-            probe_logs=()
-            for probe in "${PROBES[@]}"; do
-                probe_logs+=("$RUN_LOGS/$(printf %s "$probe" | tr / _).log")
-            done
-            "$PY" -I scripts/check_sink_canary_log.py append "$CANARY_LOG" "${probe_logs[@]}"
-            "$PY" -I scripts/check_sink_canary_log.py check "$CANARY_LOG" \
-                --probes "${PROBES[@]}" || canary_rc=$?
-        fi
-        if (( run_rc != 0 )); then
-            unrunnable "a subset probe failed to run; refusing to judge stale trades"
-        fi
-        if (( canary_rc != 0 )); then
-            fail "sink canary coverage failed; see $CANARY_LOG"
-        fi
+        PINEFORGE_REPORT_SINK=0 run_subset_probes \
+            || unrunnable "a subset probe failed to run; refusing to judge stale trades"
     fi
 fi
 
@@ -301,6 +288,69 @@ if (( status != 0 )); then
     fi
     fail "TradingView parity DRIFTED at corpus $GITLINK"
 fi
+
+# --- 5) subset sink-on proof, only after the sink-off judgement passed --
+
+if [[ "$MODE" == subset ]]; then
+    if [[ "${PINEFORGE_SUBSET_SINK:-1}" == "0" ]]; then
+        log "sink-on subset: skipped (PINEFORGE_SUBSET_SINK=0)"
+    elif [[ "${SKIP_RUN:-0}" == "1" ]]; then
+        log "sink-on subset: skipped (SKIP_RUN=1)"
+    else
+        (
+            CANARY_LOG="${PINEFORGE_CANARY_LOG:-$BUILD_DIR/sink_canary.log}"
+            KEPT_DIR="$BUILD_DIR/sink-kept"
+            mkdir -p "$KEPT_DIR" \
+                || unrunnable "could not create the kept sink directory: $KEPT_DIR"
+            KEPT_DIR="$(cd "$KEPT_DIR" && pwd)" \
+                || unrunnable "could not resolve the kept sink directory"
+            KEEP_PROBES=("${PROBES[@]:0:5}")
+            KEEP_IDS=""
+            for probe in "${KEEP_PROBES[@]}"; do
+                # The validated subset spelling forbids whitespace, so the
+                # basename is exactly run_strategy.py's _probe_id here.
+                KEEP_IDS+="${KEEP_IDS:+,}${probe##*/}"
+            done
+            : > "$CANARY_LOG" \
+                || unrunnable "could not truncate the sink-on canary log: $CANARY_LOG"
+            export PINEFORGE_REPORT_SINK=1 PINEFORGE_CANARY_LOG="$CANARY_LOG"
+            export PINEFORGE_KEEP_REPORT_SINK="$KEEP_IDS" TMPDIR="$KEPT_DIR"
+            RUN_LOGS="$BUILD_DIR/subset-sink-run-logs"
+            log "running the sink-on subset with the same strategy libraries"
+            run_rc=0
+            run_subset_probes || run_rc=$?
+            # Collect only after every child finishes: no concurrent append
+            # to the shared log, and failed probes keep their lines too.
+            probe_logs=()
+            for probe in "${PROBES[@]}"; do
+                probe_logs+=("$RUN_LOGS/$(printf %s "$probe" | tr / _).log")
+            done
+            "$PY" -I scripts/check_sink_canary_log.py append "$CANARY_LOG" "${probe_logs[@]}" \
+                || unrunnable "could not collect sink-on canaries; see $RUN_LOGS"
+            if (( run_rc != 0 )); then
+                unrunnable "a sink-on subset probe failed to run; refusing to judge stale trades"
+            fi
+            log "sink-on byte-identity against scripts/corpus_parity_baseline.txt"
+            identity_rc=0
+            "$PY" scripts/corpus_trades_identity.py --corpus corpus \
+                --subset "$SUBSET_FILE" \
+                --files "$DIFF_FILES" --lines "$DIFF_LINES" || identity_rc=$?
+            if (( identity_rc == 2 )); then
+                unrunnable "the sink-on byte-identity check could not run"
+            fi
+            if (( identity_rc != 0 )); then
+                fail "sink-on subset byte-identity DRIFTED at corpus $GITLINK"
+            fi
+            "$PY" -I scripts/check_sink_canary_log.py check "$CANARY_LOG" \
+                --probes "${PROBES[@]}" --subset-summary \
+                || fail "sink canary coverage failed; see $CANARY_LOG"
+            "$PY" -I scripts/check_sink_canary_log.py kept "$CANARY_LOG" \
+                --directory "$KEPT_DIR" --probes "${KEEP_PROBES[@]}" \
+                || fail "kept sink coverage failed; see $CANARY_LOG"
+        )
+    fi
+fi
+
 if [[ "$MODE" == subset ]]; then
     log "TradingView parity holds on the ${#PROBES[@]}-probe subset at corpus $GITLINK"
 else
