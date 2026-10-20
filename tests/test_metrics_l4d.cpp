@@ -320,6 +320,7 @@ static void test_equity_stats_drawdown_walk() {
     CHECK(std::fabs(e.max_equity_runup - 200.0) < 1e-12);
     CHECK(std::fabs(e.max_equity_runup_pct - 200.0 / 9.0) < 1e-9);
     CHECK(std::fabs(e.recovery_factor - 100.0 / 300.0) < 1e-12);
+    CHECK(!std::isnan(e.cagr));
     auto reference = equity_stats_reference::compute_equity_stats(
         c, 4, 1000.0, "", 100.0, 110.0, 0, 100.0);
     const double span_years = static_cast<double>(c[3].time_ms - c[0].time_ms)
