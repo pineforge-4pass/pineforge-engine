@@ -438,7 +438,19 @@ public:
                 && snapshot(*slab()) == bytes_before, "precommit capacity is read-only");
         // Then reach it through actual settlement. A post-on_applied check
         // would already have charged the entry fee and opened a physical lot.
-        (void)execute_current({definition->handle, NativeCurrentPriceRule::NearestTick});
+        // execute_current latches the precommit failure and throws its coded
+        // cause; catch that boundary exception to inspect the failed run.
+        bool execution_threw = false;
+        try {
+            (void)execute_current({definition->handle, NativeCurrentPriceRule::NearestTick});
+        } catch (const std::exception& error) {
+            const auto failure = classify_run_failure(error);
+            require(failure.code == RunFailureCode::scratch_capacity_exceeded && failure.args
+                    && *failure.args == "{\"resource\":\"exit_rank\"}",
+                    "current execution throws the latched rank capacity cause");
+            execution_threw = true;
+        }
+        require(execution_threw, "current execution must throw after the precommit capacity failure");
         require(run_failure_value_of(*this).code == RunFailureCode::scratch_capacity_exceeded,
                 "kernel transports the thrown capacity code, never a trading Refuse");
         const auto physical = physical_position();

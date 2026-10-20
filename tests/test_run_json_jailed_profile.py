@@ -300,7 +300,11 @@ def test_environment_profile_is_read_once_before_any_fresh_handle(tmp_path, monk
     monkeypatch.setenv(PROFILE_ENV, "jailed")
     monkeypatch.setattr(run_json.os.environ, "get", get)
     library = ProfileLibrary()
-    library.on_create = lambda: monkeypatch.setenv(PROFILE_ENV, "unjailed")
+    def change_profile():
+        # setenv saves the old value via environ.get, which would count the
+        # fixture's own read on every handle. The initial setenv owns cleanup.
+        run_json.os.environ[PROFILE_ENV] = "unjailed"
+    library.on_create = change_profile
     files = forbid_spools(monkeypatch)
     status, text, stderr = invoke(tmp_path, monkeypatch, library,
                                   "--bench", "--warmup", "1", "--repeats", "2")
