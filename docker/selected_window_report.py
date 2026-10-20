@@ -619,7 +619,9 @@ def check_selected_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
     with the capital is skipped. No capital is guessed or written back, and every other check
     above, the finiteness of the actual anchor equity included, is made in both cases. When the
     provenance does establish a finite capital (a number or text spelling one), the anchor
-    equity must equal it, or the run is an engine invariant failure."""
+    equity must equal it, or the run is an engine invariant failure. The anchor is also the
+    initial capital the report writer recomputes the compounded cagr from, with or without an
+    established capital (run_json._annualization_diagnostics, window_anchor)."""
     if len(curve) != window_script_bars + 1:
         raise _invariant(f"the selected curve has {len(curve)} points, the plan says "
                          f"{window_script_bars + 1}")

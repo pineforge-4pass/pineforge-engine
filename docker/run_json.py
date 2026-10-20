@@ -3568,42 +3568,64 @@ def _num(x, *, report_metric=False):
 EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino_tv"}
 
 
-# Revision 3.1 policy. docker/report_annualization.def holds the same span
-# threshold and four fields for the C++ metric walk; run_json.py ships alone,
-# so tests/test_run_json_nonfinite_report.py pins this copy to the native list.
+# Proportional annualisation (revision 3.1): a span under one day annualises cagr
+# by the simple proportional form; one day or more keeps the compounded form. The
+# bound is docker/report_annualization.def's; run_json.py ships alone, so
+# tests/test_run_json_nonfinite_report.py pins this copy to the native one.
 MIN_ANNUALIZATION_SPAN_MS = 86_400_000
-SHORT_SPAN_ANNUALIZED_FIELDS = ("cagr", "calmar", "sharpe_bar", "sortino_bar")
 
 
-def _annualization_diagnostics(curve, metrics):
-    """Explain only the revision 3.1 absence, from native report observations.
+def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
+    """Name the simple proportional form of cagr, and of the calmar made from it.
 
-    net_profit_pct's existing domain witnesses positive initial capital even
-    when the first equity mark differs from it or provenance is unresolved.
-    With positive initial capital and final equity, a null sharpe_bar or
-    sortino_bar on a positive sub-day span always carries the reason: the
-    kernel rule makes both null, even when a flat curve is null anyway.
+    No span makes cagr, calmar, sharpe_bar or sortino_bar null, so the writer
+    names the form from what it holds. Under one day the kernel always takes
+    the simple form: a finite cagr on a positive sub-day span is flagged. From
+    one day on it takes the compounded form unless that is not finite, so the
+    writer repeats the kernel's arithmetic on the curve's own marks: the ratio
+    of the last mark to the initial capital. The initial capital is the first
+    mark only when the rows prove it untouched: the selected-window anchor
+    (window_anchor), or no open profit and no trade entered at it. With no such
+    proof the writer makes no claim and names nothing. calmar is cagr over the
+    drawdown percent, so it carries the same flag as the cagr it was computed
+    from: its key is present exactly when the cagr key is and calmar is not
+    null (zero drawdown leaves it null: then no calmar key). The bar ratios use
+    one formula on every span and have no reason.
     Python's integer subtraction is exact across the full int64 timestamp
     domain; convert the difference to double just as the kernel does.
     """
-    if (not curve or metrics["all"]["net_profit_pct"] is None
-            or not math.isfinite(metrics["all"]["net_profit_pct"])
-            or not math.isfinite(curve[-1]["equity"]) or curve[-1]["equity"] <= 0):
+    cagr = metrics["equity"]["cagr"]
+    if not curve or cagr is None or not math.isfinite(cagr):
         return {}
     first, last = curve[0]["time_ms"], curve[-1]["time_ms"]
     span_ms = float(last - first) if last >= first else -float(first - last)
-    if not 0 < span_ms < MIN_ANNUALIZATION_SPAN_MS:
+    if not span_ms > 0:
         return {}
-    return {
-        EQUITY_REPORT_KEYS.get(field, field): "span_too_short_to_annualize"
-        for field in SHORT_SPAN_ANNUALIZED_FIELDS
-        if metrics["equity"][EQUITY_REPORT_KEYS.get(field, field)] is None
-    }
+    if span_ms < MIN_ANNUALIZATION_SPAN_MS:
+        form = "simple_proportional_subday"
+    else:
+        if not window_anchor and (curve[0]["open_profit"] != 0
+                                  or any(row["entry_bar_index"] <= 0 for row in trades)):
+            return {}
+        capital, final = curve[0]["equity"], curve[-1]["equity"]
+        if not (math.isfinite(capital) and capital > 0 and math.isfinite(final) and final > 0):
+            return {}
+        span_years = span_ms / (365.25 * 86400.0 * 1000.0)
+        try:
+            compounded = (math.pow(final / capital, 1.0 / span_years) - 1.0) * 100.0
+        except OverflowError:
+            compounded = math.inf
+        if math.isfinite(compounded):
+            return {}
+        form = "simple_proportional_overflow"
+    if metrics["equity"]["calmar"] is None:
+        return {"cagr": form}
+    return {"cagr": form, "calmar": form}
 
 
-def _annualization_block(curve, metrics) -> dict:
-    """The diagnostics entry for revision 3.1: present only when the rule fired."""
-    reasons = _annualization_diagnostics(curve, metrics)
+def _annualization_block(curve, metrics, trades=(), window_anchor=False) -> dict:
+    """The diagnostics entry for revision 3.1: present only when cagr used a simple form."""
+    reasons = _annualization_diagnostics(curve, metrics, trades, window_anchor)
     return {"annualization": reasons} if reasons else {}
 
 
@@ -3628,7 +3650,10 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                       applied_inputs: dict[str, str],
                       applied_overrides: dict[str, str],
                       applied_runtime: dict[str, object] | None = None,
-                      trade_entry_incarnations: list[int] | None = None) -> dict:
+                      trade_entry_incarnations: list[int] | None = None,
+                      window_anchor: bool = False) -> dict:
+    # window_anchor: the curve's first point is the selected-window anchor, the
+    # engine's own initial capital by construction (_annualization_diagnostics).
     trades = []
     pnls: list[float] = []
     for i in range(report.trades_len):
@@ -3733,7 +3758,7 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "magnifier_sub_bars_total":     int(report.magnifier_sub_bars_total),
             "magnifier_sample_ticks_total": int(report.magnifier_sample_ticks_total),
             "bar_magnifier_enabled":        bool(report.bar_magnifier_enabled),
-            **_annualization_block(equity_curve, metrics),
+            **_annualization_block(equity_curve, metrics, trades, window_anchor),
         },
         "trades": trades,
         "metrics": metrics,
@@ -4464,7 +4489,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             if incarnation_accessor is not None else None)
         out = build_report_dict(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
-            elapsed, inputs, overrides, applied_runtime, trade_entry_incarnations)
+            elapsed, inputs, overrides, applied_runtime, trade_entry_incarnations,
+            window_anchor=True)
         _validate_report_result(out)
         out["report_window"] = window
         out["report_shape"] = swr.report_shape_full(len(out["equity_curve"]),

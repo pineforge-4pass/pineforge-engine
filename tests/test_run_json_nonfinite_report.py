@@ -22,11 +22,13 @@ import contextlib
 import ctypes
 import io
 import json
+import math
 import os
 import socket
 import subprocess
 import sys
 import types
+from decimal import Decimal, localcontext
 from pathlib import Path
 from unittest import mock
 
@@ -61,6 +63,18 @@ BAD_VALUES = (
     pytest.param(float("-inf"), id="negative-infinity"),
 )
 MODES = ("ordinary", "selected")
+# Pinned from the revision 3.1 rule of proportional annualisation BEFORE any execution; never
+# derived from output, the .def or the implementation. A curve's cagr is the simple proportional
+# form (ratio - 1) * (1 / span_years) * 100 under one day, and from one day on the compounded
+# form (pow(ratio, 1 / span_years) - 1) * 100 unless that is not finite, then the simple one.
+# The wire names a simple form under diagnostics.annualization.cagr. calmar is cagr over the
+# maximum drawdown percent, so it carries the SAME string under diagnostics.annualization.calmar
+# exactly when the cagr string is present and calmar is not null (null at zero drawdown, and
+# then no calmar key); sharpe_bar and sortino_bar never have a reason.
+ONE_DAY_MS = 86_400_000
+YEAR_MS = 365.25 * 86400.0 * 1000.0
+SUBDAY = "simple_proportional_subday"
+OVERFLOW = "simple_proportional_overflow"
 # The frozen producer: docker/run_json.py on engine main just before EN-133 (the file is
 # byte-identical at the commit the change was authored on, 9da4c984, and here).
 BASE_SOURCE = "7da487ab2907c428bdfc755e10452811f95beaf2:docker/run_json.py"
@@ -77,12 +91,103 @@ def strict_line(stdout):
     return json.loads(lines[0], parse_constant=reject_constant)
 
 
+def simple_cagr(span_ms, capital, final_equity):
+    """The simple proportional cagr (percent per year), in the kernel's operation order."""
+    span_years = span_ms / YEAR_MS
+    return (final_equity / capital - 1.0) * (1.0 / span_years) * 100.0
+
+
+def compounded_cagr(span_ms, capital, final_equity):
+    """The compounded cagr, for the curves whose compounded form is a finite double."""
+    span_years = span_ms / YEAR_MS
+    return ((final_equity / capital) ** (1.0 / span_years) - 1.0) * 100.0
+
+
+def max_drawdown_pct(equities):
+    """The kernel's max_equity_drawdown_pct over equity marks: the largest drop below the running
+    peak, as a percent of the peak in effect when it was hit; 0.0 for marks that never fall."""
+    peak, worst, percent = equities[0], 0.0, 0.0
+    for equity in equities:
+        peak = max(peak, equity)
+        if peak - equity > worst:
+            worst, percent = peak - equity, (peak - equity) / peak * 100.0
+    return percent
+
+
+def kernel_equity_metrics(form, span_ms, capital, final_equity, dip=None):
+    """What the kernel publishes for a curve of two marks, or of three when `dip` is the middle
+    mark, from the rule alone: `form` is the cagr form the rule gives the curve ("simple",
+    "compounded") or None where the existing domain leaves it absent (span <= 0, capital <= 0,
+    final equity <= 0). calmar is cagr over the drawdown percent, absent at zero drawdown (a
+    curve that never falls) and with an absent cagr. These short curves have fewer than three
+    returns, so both bar ratios stay in their existing absence: no span is involved."""
+    nan = float("nan")
+    if form is None:
+        return {"cagr": nan, "calmar": nan, "sharpe_bar": nan, "sortino_bar": nan}
+    cagr = (simple_cagr if form == "simple" else compounded_cagr)(span_ms, capital, final_equity)
+    drawdown_pct = max_drawdown_pct(
+        [capital] + ([] if dip is None else [dip]) + [final_equity])
+    return {"cagr": cagr, "max_equity_drawdown_pct": drawdown_pct,
+            "calmar": cagr / drawdown_pct if drawdown_pct > 0.0 else nan,
+            "sharpe_bar": nan, "sortino_bar": nan}
+
+
+def metrics_of(cagr, calmar=None):
+    """The report's metric blocks as build_report_dict hands them to the annualization writer,
+    reduced to what it may read: the kernel's net_profit_pct (a defined number under a positive
+    capital), cagr and calmar (None: the defined absence of a curve that never falls)."""
+    return {"all": {"net_profit_pct": 0.0}, "equity": {"cagr": cagr, "calmar": calmar}}
+
+
+def wire_document(marks, equity_metrics, entry_bars=(1,), positive_capital=True, **options):
+    """The strict JSON wire of the real report builder for a ReportC holding the given
+    (time_ms, equity, open_profit) marks, the kernel's equity metrics and one zeroed trade row
+    per entry bar index. compute_trade_stats' existing domain makes net_profit_pct null iff the
+    initial capital is not positive (positive_capital). options reach build_report_dict."""
+    report = run_json.ReportC()
+    report.metrics.all.net_profit_pct = 0.0 if positive_capital else float("nan")
+    curve = (run_json.EquityPointC * len(marks))(*(run_json.EquityPointC(*m) for m in marks))
+    report.equity_curve = curve
+    report.equity_curve_len = len(marks)
+    trades = (run_json.TradeC * len(entry_bars))()
+    for i, bar in enumerate(entry_bars):
+        trades[i].entry_bar_index = bar
+    report.trades = trades
+    report.trades_len = report.total_trades = len(entry_bars)
+    for name, value in equity_metrics.items():
+        setattr(report.metrics.equity, name, value)
+    # Calendar-month ratios are already absent with fewer than two monthly returns; that
+    # domain has no span and never receives a reason.
+    report.metrics.equity.sharpe_monthly = report.metrics.equity.sortino_monthly = float("nan")
+    document = run_json.build_report_dict(
+        report, Path("annualization.csv"), len(marks), marks[0][0], marks[-1][0],
+        0.0, {}, {}, {"chart_tz": "America/New_York"}, **options)
+    run_json._validate_report_result(document)
+    return json.loads(json.dumps(document, allow_nan=False))
+
+
+def exact_overflow_ratio(span_ms, factor):
+    """`factor` times the ratio at which the compounded form first overflows a double, in exact
+    arithmetic from the compounded formula. (pow - 1) * 100 rounds to infinity from
+    2**1024 - 2**970 on (half an ulp above the largest double), and pow - 1 is pow at that
+    size, so the threshold ratio is that limit over 100, raised to span_years."""
+    with localcontext() as context:
+        context.prec = 80
+        exponent = 1.0 / (span_ms / YEAR_MS)
+        limit = (Decimal(2) ** 1024 - Decimal(2) ** 970) / 100
+        return float(limit ** (Decimal(1) / Decimal(exponent)) * Decimal(factor))
+
+
 class ReportLib(selected.FakeLib):
-    """Only the execution stand-in: owns the backing arrays until cleanup."""
+    """Only the execution stand-in: owns the backing arrays until cleanup. equity_metrics are
+    the kernel's published equity fields; last_mark (time_ms, equity) replaces the curve's
+    last point after the stand-in run built it, and dip replaces the equity of point 1 (the
+    anchor is point 0 and every later point rises above it): a curve that falls once, from the
+    first mark to dip, then climbs, so its maximum drawdown is the one from the first mark."""
 
     def __init__(self, plan, events, *, trade_field=None, bad_value=None,
                  net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None,
-                 failure_field=None, short_span_metrics=False):
+                 failure_field=None, equity_metrics=None, last_mark=None, dip=None):
         engine_failure = None
         if failure_field is not None:
             engine_failure = (
@@ -97,7 +202,9 @@ class ReportLib(selected.FakeLib):
         self.pnls = pnls
         self.metric = metric
         self.curve_value = curve_value
-        self.short_span_metrics = short_span_metrics
+        self.equity_metrics = equity_metrics
+        self.last_mark = last_mark
+        self.dip = dip
         self._trades = None
 
     def _run(self, *args):
@@ -127,9 +234,12 @@ class ReportLib(selected.FakeLib):
         report.net_profit = self.net_profit
         report.metrics.all.profit_factor = 2.0
         report.metrics.equity.sharpe_monthly = 0.5
-        if self.short_span_metrics:
-            report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
-            report.metrics.equity.sharpe_bar = report.metrics.equity.sortino_bar = float("nan")
+        if self.last_mark is not None:
+            self._curve[-1].time_ms, self._curve[-1].equity = self.last_mark
+        if self.dip is not None:
+            self._curve[1].equity = self.dip
+        for name, value in (self.equity_metrics or {}).items():
+            setattr(report.metrics.equity, name, value)
         if self.metric is not None:
             block, name = self.metric
             setattr(getattr(report.metrics, block), name, self.bad_value)
@@ -424,97 +534,177 @@ def test_failure_line_preserves_fields_outside_monthly_report_aliases(code, fiel
                         "code": code, "args": args}
 
 
-def test_run_json_annualization_policy_equals_the_native_policy_list():
-    # docker/report_annualization.def is what the C++ metric walk includes;
-    # run_json.py ships alone and copies the span threshold and four-field set.
+def test_run_json_annualization_span_equals_the_native_span():
+    # docker/report_annualization.def is what the C++ metric walk includes; run_json.py ships
+    # alone and copies its one span bound. The bound is the whole policy: no field is named, so
+    # no span makes any metric null (the .def holds nothing else, and run_json keeps no list).
     import re
     text = (Path(run_json.__file__).with_name("report_annualization.def")
             .read_text(encoding="utf-8"))
     spans = re.findall(r"^PF_ANNUALIZATION_SPAN_MS\((\d+)\)$", text, re.M)
-    fields = re.findall(r"^PF_SHORT_SPAN_ANNUALIZED_FIELD\(([a-z_]+)\)$", text, re.M)
-    assert [int(s) for s in spans] == [run_json.MIN_ANNUALIZATION_SPAN_MS]
-    assert tuple(fields) == run_json.SHORT_SPAN_ANNUALIZED_FIELDS
-    assert run_json.SHORT_SPAN_ANNUALIZED_FIELDS == (
-        "cagr", "calmar", "sharpe_bar", "sortino_bar")
-    # Every other non-comment line is refused: the list stays a closed policy.
+    assert [int(s) for s in spans] == [run_json.MIN_ANNUALIZATION_SPAN_MS] == [ONE_DAY_MS]
     others = [line for line in text.splitlines()
               if line.strip() and not line.startswith("//")
-              and not line.startswith(("PF_ANNUALIZATION_SPAN_MS(",
-                                       "PF_SHORT_SPAN_ANNUALIZED_FIELD("))]
+              and not line.startswith("PF_ANNUALIZATION_SPAN_MS(")]
     assert others == []
+    assert not hasattr(run_json, "SHORT_SPAN_ANNUALIZED_FIELDS")
+
+
+def route_equity_metrics(cagr, final_equity, dip, **others):
+    """The kernel's equity fields for the route harness curve, from the rule: it starts at the
+    initial capital, falls once to `dip` when one is given (ReportLib's dip), and ends at
+    final_equity. calmar is cagr over that drawdown percent, absent for a curve that never
+    falls (the harness curve rises). `others` are published as given."""
+    drawdown_pct = max_drawdown_pct(
+        (selected.CAPITAL,) + (() if dip is None else (dip,)) + (final_equity,))
+    return {"cagr": cagr, "max_equity_drawdown_pct": drawdown_pct,
+            "calmar": cagr / drawdown_pct if drawdown_pct > 0.0 else float("nan"), **others}
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_sub_day_annualization_completes_in_report_routes(harness, mode):
-    result = harness.run(mode, short_span_metrics=True)
+@pytest.mark.parametrize("dip,flags", (
+    (None, {"cagr": SUBDAY}),
+    (selected.CAPITAL * 0.98, {"cagr": SUBDAY, "calmar": SUBDAY}),
+), ids=("zero-drawdown", "drawdown"))
+def test_sub_day_annualization_completes_in_report_routes(harness, mode, dip, flags):
+    # Ten minutes, +8%: the rule gives a finite simple proportional cagr, named under cagr.
+    # calmar is cagr over the drawdown percent: null for a curve that never falls (no calmar
+    # key), a finite number for a curve 2% below its first mark at the dip, which carries the
+    # same string as cagr. The bar ratios keep their one formula (finite numbers, passed
+    # through) and never have a reason.
+    span_ms, final_equity = 10 * 60_000, selected.CAPITAL * 1.08
+    cagr = simple_cagr(span_ms, selected.CAPITAL, final_equity)
+    metrics = route_equity_metrics(cagr, final_equity, dip, sharpe_bar=1.5, sortino_bar=2.5)
+    result = harness.run(mode, last_mark=(selected.T + span_ms, final_equity), dip=dip,
+                         equity_metrics=metrics)
     document = strict_line(result.stdout)
     assert (result.status, result.stderr) == (0, "")
-    assert document["metrics"]["equity"]["cagr"] is None
-    assert document["metrics"]["equity"]["calmar"] is None
-    assert document["metrics"]["equity"]["sharpe_bar"] is None
-    assert document["metrics"]["equity"]["sortino_bar"] is None
-    assert document["diagnostics"]["annualization"] == {
-        "cagr": "span_too_short_to_annualize",
-        "calmar": "span_too_short_to_annualize",
-        "sharpe_bar": "span_too_short_to_annualize",
-        "sortino_bar": "span_too_short_to_annualize",
-    }
+    equity = document["metrics"]["equity"]
+    assert equity["cagr"] == cagr
+    assert equity["calmar"] == (None if dip is None else metrics["calmar"])
+    assert (equity["sharpe_bar"], equity["sortino_bar"]) == (1.5, 2.5)
+    assert document["diagnostics"]["annualization"] == flags
     assert result.records[-1]["phase"] == "completed"
 
 
-@pytest.mark.parametrize("first_mark_is_capital", (True, False))
-@pytest.mark.parametrize("span_ms,capital,final_equity,has_reason", (
-    (7 * 60_000, 10_000.0, 10_800.0, True),
-    (7 * 60_000, 10_000.0, 10_000.0, True),
-    (86_399_999, 1.0, 1e300, True),
-    (86_400_000, 10_000.0, 10_800.0, False),
-    (7 * 60_000, 0.0, 10_800.0, False),
-    (7 * 60_000, -1.0, 10_800.0, False),
-    (7 * 60_000, 10_000.0, 0.0, False),
-    (0, 10_000.0, 10_800.0, False),
-    (-1, 10_000.0, 10_800.0, False),
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("dip,flags", (
+    (None, {"cagr": OVERFLOW}),
+    (selected.CAPITAL * 0.5, {"cagr": OVERFLOW, "calmar": OVERFLOW}),
+), ids=("zero-drawdown", "drawdown"))
+def test_overflow_fallback_completes_in_report_routes(harness, mode, dip, flags):
+    # One day, a 1e30 ratio: pow(1e30, 365.25) is not a double, so the kernel takes the simple
+    # form, which is finite, and the wire names it under cagr. No trade, so the first mark (the
+    # capital; in selected mode the anchor) is the initial capital the writer recomputes the
+    # compounded form from. calmar (null at zero drawdown; a finite number after a fall to half
+    # the capital) carries the same string as cagr when it is not null.
+    final_equity = selected.CAPITAL * 1e30
+    cagr = simple_cagr(ONE_DAY_MS, selected.CAPITAL, final_equity)
+    assert math.isfinite(cagr)
+    metrics = route_equity_metrics(cagr, final_equity, dip, sharpe_bar=1.5, sortino_bar=2.5)
+    result = harness.run(
+        mode, pnls=(), net_profit=0.0, last_mark=(selected.T + ONE_DAY_MS, final_equity),
+        dip=dip, equity_metrics=metrics)
+    document = strict_line(result.stdout)
+    assert (result.status, result.stderr) == (0, "")
+    equity = document["metrics"]["equity"]
+    assert equity["cagr"] == cagr
+    assert equity["calmar"] == (None if dip is None else metrics["calmar"])
+    assert (equity["sharpe_bar"], equity["sortino_bar"]) == (1.5, 2.5)
+    assert document["diagnostics"]["annualization"] == flags
+    assert result.records[-1]["phase"] == "completed"
+
+
+@pytest.mark.parametrize("dip,chosen_flags", (
+    (None, {"cagr": OVERFLOW}),
+    (selected.CAPITAL * 0.5, {"cagr": OVERFLOW, "calmar": OVERFLOW}),
+), ids=("zero-drawdown", "drawdown"))
+def test_the_selected_route_gives_the_writer_the_anchor_and_the_ordinary_route_does_not(
+        harness, dip, chosen_flags):
+    # ReportLib's first trade is entered at script bar 0. A selected run still knows its initial
+    # capital (the anchor, passed by the selected route); an ordinary run, with a trade entered
+    # at its first bar, has no proof of it and names nothing: calmar carries cagr's string, so
+    # an ordinary run with a finite calmar still has no calmar key.
+    final_equity = selected.CAPITAL * 1e30
+    cagr = simple_cagr(ONE_DAY_MS, selected.CAPITAL, final_equity)
+    options = {"last_mark": (selected.T + ONE_DAY_MS, final_equity), "dip": dip,
+               "equity_metrics": route_equity_metrics(cagr, final_equity, dip)}
+    chosen = strict_line(harness.run("selected", **options).stdout)
+    assert chosen["diagnostics"]["annualization"] == chosen_flags
+    plain = strict_line(harness.run("ordinary", **options).stdout)
+    assert (plain["metrics"]["equity"]["calmar"] is None) == (dip is None)
+    assert "annualization" not in plain["diagnostics"]
+
+
+# (span_ms, capital, dip, final_equity, form, flags): the cagr form the rule gives a curve of two
+# marks (three when `dip` is the middle one, a fall below the capital that gives the curve a
+# drawdown) and the diagnostics.annualization object it carries on the wire, stated per row from
+# the rule and not computed. Under one day cagr is always the simple form, named, even a flat
+# curve's 0.0. From one day on it is the compounded form, not named; where that overflows a
+# double (a 1e30 ratio over one day) it is the simple form, named. calmar carries cagr's string
+# when it is not null and has no key when it is null (a curve that never falls: zero drawdown).
+# A finite calmar beside a cagr that is not named (the one-day boundary rows, the losses) gets no
+# key. The existing domain absences stay null with no object.
+@pytest.mark.parametrize("span_ms,capital,dip,final_equity,form,flags", (
+    pytest.param(7 * 60_000, 10_000.0, None, 10_800.0, "simple",
+                 {"cagr": SUBDAY}, id="sub-day-rise-calmar-null"),
+    pytest.param(7 * 60_000, 10_000.0, None, 10_000.0, "simple",
+                 {"cagr": SUBDAY}, id="sub-day-flat-calmar-null"),
+    pytest.param(7 * 60_000, 10_000.0, None, 9_000.0, "simple",
+                 {"cagr": SUBDAY, "calmar": SUBDAY}, id="sub-day-loss"),
+    pytest.param(7 * 60_000, 10_000.0, 9_800.0, 10_800.0, "simple",
+                 {"cagr": SUBDAY, "calmar": SUBDAY}, id="sub-day-dip-then-gain"),
+    pytest.param(86_399_999, 1.0, None, 1e300, "simple",
+                 {"cagr": SUBDAY}, id="one-ms-under-a-day-1e300-calmar-null"),
+    pytest.param(86_399_999, 100.0, 50.0, 120.0, "simple",
+                 {"cagr": SUBDAY, "calmar": SUBDAY}, id="one-ms-under-a-day-dip"),
+    pytest.param(86_400_000, 10_000.0, None, 10_800.0, "compounded",
+                 None, id="exactly-a-day"),
+    pytest.param(86_400_000, 10_000.0, 9_800.0, 10_800.0, "compounded",
+                 None, id="exactly-a-day-dip-calmar-finite"),
+    pytest.param(86_400_000, 10_000.0, None, 9_999.0, "compounded",
+                 None, id="exactly-a-day-loss-calmar-finite"),
+    pytest.param(86_400_001, 10_000.0, None, 10_800.0, "compounded",
+                 None, id="one-ms-over-a-day"),
+    pytest.param(30 * 86_400_000, 10_000.0, None, 9_000.0, "compounded",
+                 None, id="30-days-loss-calmar-finite"),
+    pytest.param(86_400_000, 1.0, None, 1e30, "simple",
+                 {"cagr": OVERFLOW}, id="a-day-overflow-calmar-null"),
+    pytest.param(3 * 86_400_000, 1.0, None, 1e30, "simple",
+                 {"cagr": OVERFLOW}, id="3-days-overflow-calmar-null"),
+    pytest.param(86_400_000, 1.0, 0.5, 1e30, "simple",
+                 {"cagr": OVERFLOW, "calmar": OVERFLOW}, id="a-day-overflow-dip"),
+    pytest.param(3 * 86_400_000, 1.0, 0.5, 1e30, "simple",
+                 {"cagr": OVERFLOW, "calmar": OVERFLOW}, id="3-days-overflow-dip"),
+    pytest.param(7 * 60_000, 0.0, None, 10_800.0, None, None, id="sub-day-capital-0"),
+    pytest.param(7 * 60_000, -1.0, None, 10_800.0, None, None, id="sub-day-capital-negative"),
+    pytest.param(7 * 60_000, 10_000.0, None, 0.0, None, None, id="sub-day-final-0"),
+    pytest.param(86_400_000, 0.0, None, 10_800.0, None, None, id="a-day-capital-0"),
+    pytest.param(86_400_000, 10_000.0, None, 0.0, None, None, id="a-day-final-0"),
+    pytest.param(0, 10_000.0, None, 10_800.0, None, None, id="span-0"),
+    pytest.param(-1, 10_000.0, None, 10_800.0, None, None, id="span-negative"),
 ))
-def test_annualization_reason_on_wire(span_ms, capital, final_equity, has_reason,
-                                     first_mark_is_capital):
-    # Native NaN absence is supplied by the producer stand-in, as in the other
-    # wire tests. The C++ rows separately prove the real metric computation.
-    report = run_json.ReportC()
-    curve = (run_json.EquityPointC * 2)(
-        run_json.EquityPointC(selected.T, capital if first_mark_is_capital else 100.0, 0),
-        run_json.EquityPointC(selected.T + span_ms, final_equity, 0))
-    report.equity_curve = curve
-    report.equity_curve_len = 2
-    report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
-    report.metrics.equity.sharpe_bar = report.metrics.equity.sortino_bar = float("nan")
-    # Calendar-month ratios are already absent with fewer than two monthly
-    # returns; that domain never receives the span-annualization reason.
-    report.metrics.equity.sharpe_monthly = report.metrics.equity.sortino_monthly = float("nan")
-    # compute_trade_stats' existing domain: null iff initial_capital <= 0,
-    # even for an empty trade list. Do not infer capital from the first mark.
-    report.metrics.all.net_profit_pct = 0.0 if capital > 0 else float("nan")
-    trades = (run_json.TradeC * 1)()
-    report.trades = trades
-    report.trades_len = report.total_trades = 1
-    document = run_json.build_report_dict(
-        report, Path("annualization.csv"), 2, selected.T, selected.T + span_ms,
-        0.0, {}, {}, {"chart_tz": "America/New_York"})
-    run_json._validate_report_result(document)
-    wire = json.loads(json.dumps(document, allow_nan=False))
-    assert wire["metrics"]["equity"]["cagr"] is None
-    assert wire["metrics"]["equity"]["calmar"] is None
-    assert wire["metrics"]["equity"]["sharpe_bar"] is None
-    assert wire["metrics"]["equity"]["sortino_bar"] is None
+def test_annualization_reason_on_wire(span_ms, capital, dip, final_equity, form, flags):
+    # The kernel's values are supplied by the producer stand-in, as in the other wire tests.
+    # The C++ rows separately prove the real metric computation.
+    metrics = kernel_equity_metrics(form, span_ms, capital, final_equity, dip)
+    marks = (((selected.T, capital, 0.0),)
+             + (() if dip is None else ((selected.T + span_ms // 2, dip, 0.0),))
+             + ((selected.T + span_ms, final_equity, 0.0),))
+    wire = wire_document(marks, metrics, positive_capital=capital > 0)
+    for name in ("cagr", "calmar", "sharpe_bar", "sortino_bar"):
+        # A finite value reaches the wire as that number, an absence as null; none is
+        # replaced or rounded by the writer, and only cagr and calmar have a reason.
+        assert wire["metrics"]["equity"][name] == (
+            None if math.isnan(metrics[name]) else metrics[name])
     assert wire["metrics"]["equity"]["sharpe_tv"] is None
     assert wire["metrics"]["equity"]["sortino_tv"] is None
-    if has_reason:
-        assert wire["diagnostics"]["annualization"] == {
-            "cagr": "span_too_short_to_annualize",
-            "calmar": "span_too_short_to_annualize",
-            "sharpe_bar": "span_too_short_to_annualize",
-            "sortino_bar": "span_too_short_to_annualize",
-        }
-    else:
+    if flags is None:
         assert "annualization" not in wire["diagnostics"]
+    else:
+        # Row check on the published inputs: a calmar key is expected exactly for a finite calmar.
+        assert ("calmar" in flags) == (not math.isnan(metrics["calmar"])), flags
+        assert wire["diagnostics"]["annualization"] == flags
     # Appendix A's scalar leaf expansion stays exactly 135. This tests the
     # metric/summary names independently of the producer's descriptors.
     trade_keys = {
@@ -552,6 +742,77 @@ def test_annualization_reason_on_wire(span_ms, capital, final_equity, has_reason
     # version + summary + 3 trade blocks + equity + trade-row fields + curve:
     assert (1 + len(summary_keys) + 3 * len(trade_keys) + len(equity_keys)
             + len(trade_row_keys) + 3) == 135
+
+
+# The kernel's initial capital is 100 and the curve ends at 600 after exactly one day: a ratio of
+# 6, whose compounded form is finite (6 ** 365.25 is about 1e284), so the kernel keeps the
+# compounded form and nothing is flagged. A writer that took the first mark (75) for the capital
+# would see a ratio of 8, whose compounded form overflows, and flag a form the kernel did not
+# use. The first mark differs from the capital by open profit or a realized loss at it (the
+# rows show a trade entered at the first bar); no row proves the capital, so nothing is named.
+@pytest.mark.parametrize("first_mark,entry_bars", (
+    ((selected.T, 75.0, -25.0), (0,)),
+    ((selected.T, 75.0, 0.0), (0,)),
+    ((selected.T, 75.0, -25.0), (3,)),
+    ((selected.T, 75.0, 0.0), (-1,)),
+), ids=("open-position", "realized-at-the-first-bar", "open-profit-alone", "unusable-bar-index"))
+def test_a_first_mark_that_is_not_provably_the_capital_names_no_form(first_mark, entry_bars):
+    capital, final_equity = 100.0, 600.0
+    metrics = kernel_equity_metrics("compounded", ONE_DAY_MS, capital, final_equity)
+    wire = wire_document((first_mark, (selected.T + ONE_DAY_MS, final_equity, 0.0)),
+                         metrics, entry_bars=entry_bars)
+    assert wire["metrics"]["equity"]["cagr"] == metrics["cagr"]
+    assert "annualization" not in wire["diagnostics"]
+
+
+def test_the_window_anchor_is_the_initial_capital_whatever_the_trades():
+    # The selected-window anchor is the engine's own initial capital by construction, so a trade
+    # entered at the first window bar (script bar 0 when no preroll precedes it) leaves it known.
+    # The curve falls to half the capital on the way, so calmar is finite and carries cagr's
+    # string; without the anchor and with that trade nothing is proved, and neither key is named.
+    marks = ((selected.T, 1.0, 0.0), (selected.T + ONE_DAY_MS // 2, 0.5, 0.0),
+             (selected.T + ONE_DAY_MS, 1e30, 0.0))
+    metrics = kernel_equity_metrics("simple", ONE_DAY_MS, 1.0, 1e30, dip=0.5)
+    anchored = wire_document(marks, metrics, entry_bars=(0,), window_anchor=True)
+    assert anchored["metrics"]["equity"]["calmar"] == metrics["calmar"]
+    assert anchored["diagnostics"]["annualization"] == {"cagr": OVERFLOW, "calmar": OVERFLOW}
+    # The same ordinary curve and trade carry no proof of the capital.
+    plain = wire_document(marks, metrics, entry_bars=(0,))
+    assert plain["metrics"]["equity"]["calmar"] == metrics["calmar"]
+    assert "annualization" not in plain["diagnostics"]
+
+
+@pytest.mark.parametrize("days", (1, 2, 7, 30, 100, 300))
+def test_overflow_decision_agrees_with_exact_arithmetic_at_the_threshold(days):
+    # Ratios 1e-8 under and over the exact ratio at which (pow(ratio, 1 / span_years) - 1) * 100
+    # first overflows a double, for several spans, from exact arithmetic and not from pow: a
+    # ratio under it has a finite compounded form (nothing named, under cagr or calmar), a ratio
+    # over it has none (the kernel takes the simple form: cagr named, and calmar with the same
+    # string when it is not null; with a null calmar, zero drawdown, only the cagr key). The
+    # margin moves the power by at least 1e-8, over 1e7 times the error of a double power, so
+    # every working pow, C's included, decides these the same way.
+    span_ms = days * ONE_DAY_MS
+    for factor, with_null_calmar, with_finite_calmar in (
+            ("0.99999999", {}, {}),
+            ("1.00000001", {"cagr": OVERFLOW}, {"cagr": OVERFLOW, "calmar": OVERFLOW})):
+        ratio = exact_overflow_ratio(span_ms, factor)
+        curve = [{"time_ms": selected.T, "equity": 1.0, "open_profit": 0.0},
+                 {"time_ms": selected.T + span_ms, "equity": ratio, "open_profit": 0.0}]
+        assert run_json._annualization_diagnostics(
+            curve, metrics_of(1.0)) == with_null_calmar, (days, factor, ratio)
+        assert run_json._annualization_diagnostics(
+            curve, metrics_of(1.0, calmar=7.0)) == with_finite_calmar, (days, factor, ratio)
+
+
+@pytest.mark.parametrize("final_equity", (0.5, 1e-300, 5e-324))
+@pytest.mark.parametrize("days", (1, 100))
+def test_a_losing_curve_never_names_an_overflow(days, final_equity):
+    # The power of a ratio under 1 underflows to 0.0 (cagr -100): an underflow is no overflow,
+    # and a finite calmar (the loss is a drawdown) is named only beside a named cagr.
+    curve = [{"time_ms": selected.T, "equity": 1.0, "open_profit": 0.0},
+             {"time_ms": selected.T + days * ONE_DAY_MS, "equity": final_equity,
+              "open_profit": 0.0}]
+    assert run_json._annualization_diagnostics(curve, metrics_of(-100.0, calmar=-1.0)) == {}
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -615,7 +876,11 @@ def base_runner():
 @pytest.mark.parametrize("phase_fd", (True, False), ids=("phase-fd", "no-phase-fd"))
 @pytest.mark.parametrize("pnls", ((10.0, -7.0), ()), ids=("trades", "no-trades"))
 def test_finite_report_bytes_match_base(harness, base_runner, mode, phase_fd, pnls):
-    options = {"pnls": pnls, "net_profit": 3.0 if pnls else 0.0}
+    # These curves are minutes long, and a finite cagr on a sub-day span is flagged on the wire,
+    # which the frozen producer cannot write: the stand-in publishes cagr as an absence (a null
+    # on both wires), so no annualization flag applies and the bytes are the base's.
+    options = {"pnls": pnls, "net_profit": 3.0 if pnls else 0.0,
+               "equity_metrics": {"cagr": float("nan")}}
     before = harness.run(mode, runner=base_runner, phase_fd=phase_fd, **options)
     after = harness.run(mode, phase_fd=phase_fd, **options)
     assert (before.status, before.stderr, after.status, after.stderr) == (0, "", 0, "")
