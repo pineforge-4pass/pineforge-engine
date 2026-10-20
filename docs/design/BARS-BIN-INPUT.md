@@ -364,7 +364,9 @@ exists (`_csv2bin_main` docker/run_json.py:4823).
 
 ## 6. Release and support detection
 
-**not yet released: carried by batch-C, 1.7.0 if batch-C reaches it**
+**ships in 1.7.0 (firm): the .bin bar input route is part of the 1.7.0
+release, carried by batch-C on the integration branch; it is not conditional
+on a later release**
 
 History inspection with `git log -S` identifies converter commit
 `0157156d6a` (`BAR_RECORD` docker/pf_bars.py:28) and mapped-loader/capability
