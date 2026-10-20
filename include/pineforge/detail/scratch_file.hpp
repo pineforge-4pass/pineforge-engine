@@ -42,6 +42,18 @@ public:
     }
     ~ScratchFile() { clear(); }
 
+    // Optional diagnostic identity; set before open(), including lazy opens.
+    // Default unknown, retained by clear/reopen and moves; file mode ignores
+    // it. ScratchFile remains noncopyable; owners cloning a store reapply it.
+    // CR150-CX's ports label cohort (cohorts_by_id_), exit_rank
+    // (exit_rank_keys_), sequence_index / erased_minima (IdPairStore data)
+    // and their *_idx files, partial_cycles (consumed_partial_exit_cycles_
+    // data) and partial_cycles_idx, and native_order's successor_roots.
+    // l22p labels curve (equity scratch shared by SpillCurve/read windows)
+    // and position_tail (L18's separate spill). Rehash replacement files
+    // inherit their index label before open(); prefixes are never identities.
+    void set_store(ScratchStore store) noexcept { region_.store = store; }
+
     void set_directory(const std::string& value) {
         if (arena_) return;
         if (fd_ >= 0 && directory_ != value)

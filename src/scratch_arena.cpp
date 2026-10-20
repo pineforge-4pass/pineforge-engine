@@ -34,6 +34,24 @@ namespace {
     throw ScratchIoError(error, operation, {{"reason", reason}});
 }
 
+const char* store_name(ScratchStore store) noexcept {
+    switch (store) {
+    case ScratchStore::unknown: return "unknown";
+    case ScratchStore::curve: return "curve";
+    case ScratchStore::position_tail: return "position_tail";
+    case ScratchStore::cohort: return "cohort";
+    case ScratchStore::exit_rank: return "exit_rank";
+    case ScratchStore::sequence_index: return "sequence_index";
+    case ScratchStore::sequence_index_idx: return "sequence_index_idx";
+    case ScratchStore::erased_minima: return "erased_minima";
+    case ScratchStore::erased_minima_idx: return "erased_minima_idx";
+    case ScratchStore::partial_cycles: return "partial_cycles";
+    case ScratchStore::partial_cycles_idx: return "partial_cycles_idx";
+    case ScratchStore::successor_roots: return "successor_roots";
+    }
+    return "unknown";
+}
+
 std::uint64_t decimal(const char* text, const char* operation) {
     if (!text || !*text) arena_error(EINVAL, operation, "arena_backing");
     std::uint64_t value = 0;
@@ -196,17 +214,22 @@ struct ScratchArena::Impl {
         return windows.front();
     }
 
-    [[noreturn]] void exhausted() const {
+    [[noreturn]] void exhausted(ScratchStore store, std::uint64_t needed_chunks) const {
         // Called only with mutex held. The snapshot survives unwinding,
         // region release and detach; consumers need no English matching.
+        // bytes_used counts all stores' currently claimed chunks, not the
+        // historical peak. Demand is this grow's additional whole chunks,
+        // before any claims, without subtracting the arena's free chunks.
         throw ScratchIoError(EFBIG, "scratch arena exhausted",
             {{"reason", "arena_exhausted"}, {"high_water_bytes", counters.high_water},
-             {"arena_bytes", supplied_bytes}});
+             {"arena_bytes", supplied_bytes}, {"claimed_bytes", counters.bytes_used},
+             {"needed_bytes_lower_bound", std::max<std::uint64_t>(needed_chunks, 1) * kChunkBytes},
+             {"store", store_name(store)}});
     }
 
-    std::uint32_t claim_chunk() {
+    std::uint32_t claim_chunk(ScratchStore store, std::uint64_t needed_chunks) {
         if (counters.chunks_free == 0)
-            exhausted();
+            exhausted(store, needed_chunks);
         // search_word always starts at the lowest possibly free word;
         // release_chunk lowers it regardless of punching/unmapping results.
         while (free_bits[search_word] == 0) ++search_word;
@@ -257,7 +280,7 @@ struct ScratchArena::Impl {
         const auto old_count = region.chunks.size();
         if (target > counters.chunks_total
             || target - old_count > counters.chunks_free)
-            exhausted();
+            exhausted(region.store, target - old_count);
         if (target > region.chunks.max_size())
             arena_error(EFBIG, "scratch arena chunk table size");
         if (target > region.chunks.capacity()) {
@@ -275,7 +298,7 @@ struct ScratchArena::Impl {
         }
         try {
             while (region.chunks.size() < target) {
-                const auto chunk = claim_chunk();
+                const auto chunk = claim_chunk(region.store, target - region.chunks.size());
                 try { zero_chunk(chunk); }
                 catch (...) {
                     release_chunk(chunk);

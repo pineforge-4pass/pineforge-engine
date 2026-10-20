@@ -19,6 +19,23 @@ public:
           RunFailureInfo(RunFailureCode::report_sink_failed, args) {}
 };
 
+// Closed report_sink_failed.store vocabulary; never derive it from a path
+// or an open() prefix. The port owners label each physical ScratchFile.
+enum class ScratchStore : std::uint8_t {
+    unknown,
+    curve,
+    position_tail,
+    cohort,
+    exit_rank,
+    sequence_index,
+    sequence_index_idx,
+    erased_minima,
+    erased_minima_idx,
+    partial_cycles,
+    partial_cycles_idx,
+    successor_roots,
+};
+
 enum class ScratchArenaBackend : std::uint8_t {
     sealed_memfd,
     regular_file,
@@ -67,6 +84,10 @@ class ScratchFile;
 // index for a given arena size, across window caps, absent other I/O/resource
 // failures. Concurrent regions share the same capacity bound, but scheduling
 // decides which operation reaches it; no per-thread failing-index guarantee.
+// Exhaustion snapshots high_water_bytes, arena_bytes, claimed_bytes (all
+// currently owned chunks) and needed_bytes_lower_bound (the requesting
+// region's additional whole chunks), plus its store, under that same lock.
+// Other failure reasons carry no byte counts or store identity.
 class ScratchArena final {
 public:
     static constexpr std::uint64_t kChunkBytes = 1024ULL * 1024ULL;
@@ -97,6 +118,7 @@ private:
         // Four bytes per claimed 1 MiB chunk, in logical-file order.
         std::vector<std::uint32_t> chunks;
         std::uint64_t size = 0;
+        ScratchStore store = ScratchStore::unknown;
     };
     struct Impl;
     ScratchArena(int fd, std::uint64_t bytes);

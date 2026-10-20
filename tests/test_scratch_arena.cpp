@@ -103,6 +103,7 @@ using pineforge::detail::ScratchArena;
 using pineforge::detail::ScratchArenaBackend;
 using pineforge::detail::ScratchFile;
 using pineforge::detail::ScratchIoError;
+using pineforge::detail::ScratchStore;
 constexpr auto kChunk = ScratchArena::kChunkBytes;
 constexpr std::uint64_t kReplayBytes = 6 * kChunk + 149;
 constexpr ScratchArenaBackend kBackends[]{
@@ -120,10 +121,14 @@ std::string failure_args(const pineforge::RunFailureValue& failure) {
     return failure.args ? *failure.args : "{}";
 }
 
-std::string exhaustion_args(std::uint64_t high_water, std::uint64_t arena_bytes) {
+std::string exhaustion_args(std::uint64_t high_water, std::uint64_t arena_bytes,
+                            std::uint64_t claimed_bytes, std::uint64_t needed_bytes,
+                            const char* store) {
     return "{\"arena_bytes\":" + std::to_string(arena_bytes)
+        + ",\"claimed_bytes\":" + std::to_string(claimed_bytes)
         + ",\"high_water_bytes\":" + std::to_string(high_water)
-        + ",\"reason\":\"arena_exhausted\"}";
+        + ",\"needed_bytes_lower_bound\":" + std::to_string(needed_bytes)
+        + ",\"reason\":\"arena_exhausted\",\"store\":\"" + store + "\"}";
 }
 
 template<class F>
@@ -136,10 +141,10 @@ void expect_io(F&& operation, int error, const char* message = nullptr,
             && pineforge::classify_run_failure(failure).code
                 == pineforge::RunFailureCode::report_sink_failed
             && (!message || std::strstr(failure.what(), message))
-            && (!reason || failure_args(pineforge::classify_run_failure(failure))
-                == std::string("{\"reason\":\"") + reason + "\"}");
+            && failure_args(pineforge::classify_run_failure(failure))
+                == (reason ? std::string("{\"reason\":\"") + reason + "\"}" : "{}");
     }
-    require(caught, "ScratchIoError preserves errno, message, code and typed reason");
+    require(caught, "non-exhaustion ScratchIoError preserves its reason without sizes or store");
 }
 
 template<class F>
@@ -148,16 +153,19 @@ void expect_backing(F&& operation, int error, const char* message = nullptr) {
 }
 
 template<class F>
-void expect_exhaustion(F&& operation, std::uint64_t high_water, std::uint64_t arena_bytes) {
+void expect_exhaustion(F&& operation, std::uint64_t high_water, std::uint64_t arena_bytes,
+                       std::uint64_t claimed_bytes, std::uint64_t needed_bytes,
+                       const char* store) {
     bool caught = false;
     try { operation(); }
     catch (const ScratchIoError& failure) {
         const auto typed = pineforge::classify_run_failure(failure);
         caught = failure.code().value() == EFBIG
             && typed.code == pineforge::RunFailureCode::report_sink_failed
-            && failure_args(typed) == exhaustion_args(high_water, arena_bytes);
+            && failure_args(typed)
+                == exhaustion_args(high_water, arena_bytes, claimed_bytes, needed_bytes, store);
     }
-    require(caught, "capacity refusal carries arena_exhausted and both exact byte counts");
+    require(caught, "capacity refusal carries the store and all four exact byte counts");
 }
 
 void check_report_arena_stats(std::uint64_t high_water, std::uint64_t arena_bytes) {
@@ -424,6 +432,7 @@ void same_replay(ReplayResult observed, ReplayResult expected) {
 
 void file_contract() {
     ScratchFile file;
+    file.set_store(ScratchStore::curve); // Optional identity has no effect in file mode.
     expect_logic([&] { file.ensure_size(1); });
     const std::uint8_t value = 0x93;
     expect_io([&] { file.write(0, &value, 1); }, EBADF);
@@ -504,10 +513,18 @@ void interleave_exhaustion_and_reuse(const Backing& backing, std::uint64_t cap) 
     require(backing.bytes == 4 * kChunk, "four-chunk exhaustion fixture");
     Attachment attachment(backing);
     ScratchFile first, second, extra;
+    first.set_store(ScratchStore::curve);
+    second.set_store(ScratchStore::position_tail);
     first.open("arena-first");
     second.open("arena-second");
     extra.open("arena-extra");
     std::array<std::vector<std::uint8_t>, 2> reference;
+    const auto model_chunks = [](std::uint64_t bytes) {
+        return bytes / kChunk + (bytes % kChunk != 0 ? 1 : 0);
+    };
+    const auto model_claimed = [&] {
+        return (model_chunks(reference[0].size()) + model_chunks(reference[1].size())) * kChunk;
+    };
     const auto put = [&](ScratchFile& file, std::size_t which, std::uint64_t offset,
                           const std::vector<std::uint8_t>& payload) {
         file.write(offset, payload.data(), payload.size());
@@ -530,14 +547,28 @@ void interleave_exhaustion_and_reuse(const Backing& backing, std::uint64_t cap) 
     check_stats(cap, 4);
     require(ScratchArena::attached()->stats().chunks_free == 0, "model fills every chunk");
     const std::uint8_t byte = 0x5d;
-    expect_exhaustion([&] { extra.write(0, &byte, 1); }, 4 * kChunk, backing.bytes);
-    expect_exhaustion([&] { first.ensure_size(3 * kChunk); }, 4 * kChunk, backing.bytes);
+    const auto model_high_water = model_claimed();
+    expect_exhaustion([&] { extra.write(0, &byte, 1); }, model_high_water, backing.bytes,
+                      model_claimed(), model_chunks(1) * kChunk, "unknown");
+    expect_exhaustion([&] { first.ensure_size(3 * kChunk); }, model_high_water, backing.bytes,
+                      model_claimed(), (model_chunks(3 * kChunk)
+                          - model_chunks(reference[0].size())) * kChunk, "curve");
     check_stats(cap, 4);
     compare(first, reference[0]);
     compare(second, reference[1]);
     first.clear();
     reference[0].clear();
     check_stats(cap, 2);
+    // This nonempty region needs three more chunks although two are free.
+    // Round the sparse write's end up before subtracting existing ownership;
+    // neither its payload length nor the one-chunk capacity deficit is demand.
+    const auto offset = 4 * kChunk - 1;
+    const std::array<std::uint8_t, 2> crossing{{0x31, 0x97}};
+    expect_exhaustion([&] { second.write(offset, crossing.data(), crossing.size()); },
+                      model_high_water, backing.bytes, model_claimed(),
+                      (model_chunks(offset + crossing.size())
+                          - model_chunks(reference[1].size())) * kChunk, "position_tail");
+    compare(second, reference[1]);
     extra.ensure_size(2 * kChunk);
     std::vector<std::uint8_t> zeros(static_cast<std::size_t>(2 * kChunk));
     compare(extra, zeros);
@@ -557,6 +588,9 @@ void interleave_exhaustion_and_reuse(const Backing& backing, std::uint64_t cap) 
 struct ExhaustionReplay {
     std::size_t failing_operation;
     std::uint64_t high_water;
+    std::uint64_t claimed_bytes;
+    std::uint64_t needed_bytes;
+    std::string store;
     pineforge::RunFailureValue failure;
 };
 
@@ -566,6 +600,10 @@ ExhaustionReplay exhaustion_replay(ScratchArenaBackend backend, std::uint64_t ca
     auto backing = arena_backing(backend, 6 * kChunk + 149, true);
     Attachment attachment(backing);
     std::array<ScratchFile, 3> files;
+    const ScratchStore stores[]{ScratchStore::sequence_index, ScratchStore::partial_cycles_idx,
+                                ScratchStore::cohort};
+    const char* const store_names[]{"sequence_index", "partial_cycles_idx", "cohort"};
+    for (std::size_t i = 0; i < files.size(); ++i) files[i].set_store(stores[i]);
     std::array<std::vector<std::uint8_t>, 3> contents;
     std::array<std::vector<std::size_t>, 3> ownership;
     // Independent physical-chunk model: count distinct ids ever assigned,
@@ -576,8 +614,11 @@ ExhaustionReplay exhaustion_replay(ScratchArenaBackend backend, std::uint64_t ca
         return static_cast<std::uint64_t>(std::count(ever_claimed.begin(),
                                                    ever_claimed.end(), true)) * kChunk;
     };
+    const auto model_claimed = [&] {
+        return static_cast<std::uint64_t>(std::count(busy.begin(), busy.end(), true)) * kChunk;
+    };
     const auto check_model = [&] {
-        check_stats(cap, static_cast<std::uint64_t>(std::count(busy.begin(), busy.end(), true)));
+        check_stats(cap, model_claimed() / kChunk);
         require(ScratchArena::attached()->stats().high_water == model_high_water(),
                 "high-water equals independently counted distinct chunks times 1 MiB");
         check_report_arena_stats(model_high_water(), backing.bytes);
@@ -633,6 +674,7 @@ ExhaustionReplay exhaustion_replay(ScratchArenaBackend backend, std::uint64_t ca
         const auto target = static_cast<std::size_t>(size / kChunk + (size % kChunk != 0));
         const bool model_exhausted = target - owned.size()
             > static_cast<std::size_t>(std::count(busy.begin(), busy.end(), false));
+        const auto needed_bytes = static_cast<std::uint64_t>(target - owned.size()) * kChunk;
         std::vector<std::uint8_t> payload(operation.length);
         for (std::size_t i = 0; i < payload.size(); ++i)
             payload[i] = static_cast<std::uint8_t>(index * 29 + i * 17);
@@ -657,8 +699,10 @@ ExhaustionReplay exhaustion_replay(ScratchArenaBackend backend, std::uint64_t ca
             const auto failure = pineforge::classify_run_failure(error);
             require(model_exhausted && error.code().value() == EFBIG
                         && failure.code == pineforge::RunFailureCode::report_sink_failed
-                        && failure_args(failure) == exhaustion_args(model_high_water(), backing.bytes),
-                    "the model predicts the failing operation, reason and exact snapshot");
+                        && failure_args(failure) == exhaustion_args(model_high_water(), backing.bytes,
+                            model_claimed(), needed_bytes, store_names[operation.file]),
+                    "the model predicts the failing operation, store, reason and exact byte counts");
+            const auto claimed_bytes = model_claimed();
             check_model(); // Failed multi-chunk grow claimed nothing.
             for (std::size_t i = 0; i < files.size(); ++i) {
                 if (!files[i].opened()) continue;
@@ -669,7 +713,8 @@ ExhaustionReplay exhaustion_replay(ScratchArenaBackend backend, std::uint64_t ca
             }
             check_stats(cap, 0);
             check_report_arena_stats(model_high_water(), backing.bytes);
-            return {index, model_high_water(), failure};
+            return {index, model_high_water(), claimed_bytes, needed_bytes,
+                    store_names[operation.file], failure};
         }
         require(!model_exhausted, "the real allocator must refuse where the model exhausts");
         while (owned.size() < target) {
@@ -694,22 +739,104 @@ void deterministic_exhaustion(ScratchArenaBackend backend) {
         const auto repeated = exhaustion_replay(backend, cap);
         require(repeated.failing_operation == first.failing_operation
                     && repeated.high_water == first.high_water
+                    && repeated.claimed_bytes == first.claimed_bytes
+                    && repeated.needed_bytes == first.needed_bytes
+                    && repeated.store == first.store
                     && repeated.failure.code == first.failure.code
                     && failure_args(repeated.failure) == failure_args(first.failure),
                 "repeat and different-window replays fail at the same index with identical diagnostics");
     }
     // The exception's copy of the counts remains valid after every region
     // has been cleared and its attachment has been destroyed.
-    require(failure_args(first.failure) == exhaustion_args(first.high_water, 6 * kChunk + 149),
+    require(failure_args(first.failure) == exhaustion_args(first.high_water, 6 * kChunk + 149,
+                first.claimed_bytes, first.needed_bytes, first.store.c_str()),
             "exhaustion detail survives teardown without querying a detached arena");
     check_report_arena_stats(0, 0);
     auto small = arena_backing(backend, 2 * kChunk + 37);
     Attachment attachment(small);
     ScratchFile file;
     file.open("oversized-first-claim");
-    expect_exhaustion([&] { file.ensure_size(3 * kChunk); }, 0, small.bytes);
+    expect_exhaustion([&] { file.ensure_size(3 * kChunk); },
+                      0, small.bytes, 0, 3 * kChunk, "unknown");
     check_stats(ScratchArena::kDefaultWindowBytes, 0);
     check_report_arena_stats(0, small.bytes);
+}
+
+void store_identity_contract(ScratchArenaBackend backend) {
+    // Metadata also survives a file-mode move and clear before an arena open.
+    ScratchFile legacy;
+    legacy.set_store(ScratchStore::exit_rank);
+    legacy.open("legacy-store-move");
+    ScratchFile from_legacy(std::move(legacy));
+    from_legacy.clear();
+
+    auto backing = arena_backing(backend, kChunk + 53);
+    Attachment attachment(backing);
+    ScratchFile blocker;
+    blocker.open("fill-arena");
+    const std::array<std::uint8_t, 7> contents{{2, 3, 5, 7, 11, 13, 17}};
+    blocker.write(0, contents.data(), contents.size());
+    const auto claimed = ((contents.size() + kChunk - 1) / kChunk) * kChunk;
+    ScratchFile reopened(std::move(from_legacy)); // Destroy this region before the attachment.
+    reopened.open("not-an-exit-rank-prefix");
+    expect_exhaustion([&] { reopened.ensure_size(1); },
+                      claimed, backing.bytes, claimed, kChunk, "exit_rank");
+
+    struct Identity {
+        ScratchStore value;
+        const char* name;
+    };
+    const Identity identities[]{
+        {ScratchStore::unknown, "unknown"},
+        {ScratchStore::curve, "curve"},
+        {ScratchStore::position_tail, "position_tail"},
+        {ScratchStore::cohort, "cohort"},
+        {ScratchStore::exit_rank, "exit_rank"},
+        {ScratchStore::sequence_index, "sequence_index"},
+        {ScratchStore::sequence_index_idx, "sequence_index_idx"},
+        {ScratchStore::erased_minima, "erased_minima"},
+        {ScratchStore::erased_minima_idx, "erased_minima_idx"},
+        {ScratchStore::partial_cycles, "partial_cycles"},
+        {ScratchStore::partial_cycles_idx, "partial_cycles_idx"},
+        {ScratchStore::successor_roots, "successor_roots"},
+    };
+    for (const auto& identity : identities) {
+        ScratchFile original;
+        original.set_store(identity.value);
+        ScratchFile before_open(std::move(original));
+        before_open.open("caller-prefix-is-not-a-store-name");
+        ScratchFile moved(std::move(before_open));
+        require(!original.opened() && !before_open.opened() && moved.opened(),
+                "moves before and after open transfer the requesting store");
+        expect_exhaustion([&] { moved.ensure_size(kChunk + 17); },
+                          claimed, backing.bytes, claimed, 2 * kChunk, identity.name);
+        ScratchFile assigned;
+        assigned.set_store(ScratchStore::curve);
+        assigned.open("discarded-destination-store");
+        assigned = std::move(moved);
+        require(!moved.opened() && assigned.opened(), "move assignment transfers the store");
+        expect_exhaustion([&] { assigned.write(0, contents.data(), contents.size()); },
+                          claimed, backing.bytes, claimed, kChunk, identity.name);
+        assigned.clear();
+        assigned.open("reopened-store");
+        expect_exhaustion([&] { assigned.ensure_size(1); },
+                          claimed, backing.bytes, claimed, kChunk, identity.name);
+    }
+
+    // Exercise the typed transport for every non-capacity reason while a
+    // used arena exists: no ambient counters or store may enter these args.
+    // Real backing/I/O refusals are also checked by expect_io at their sites;
+    // the sink and file-mode reason producers belong to the port lanes.
+    for (const char* reason : {"arena_io", "arena_backing", "scratch_io",
+                               "sink_io", "sink_peer_closed"}) {
+        expect_io([&] {
+            throw ScratchIoError(EIO, "human operation text stays outside args", {{"reason", reason}});
+        }, EIO, nullptr, reason);
+    }
+    std::array<std::uint8_t, 7> observed{};
+    blocker.read(0, observed.data(), observed.size());
+    require(observed == contents, "failed claims and moves preserve the occupying store");
+    check_stats(ScratchArena::kDefaultWindowBytes, claimed / kChunk);
 }
 
 void arena_replay_and_sparse_reuse(ScratchArenaBackend backend, ReplayResult expected) {
@@ -825,6 +952,7 @@ void moves_lifetime_and_backend_selection(ScratchArenaBackend backend) {
     expect_logic([&] { ScratchArena::attach(backing.fd, backing.bytes - 1); });
     {
         ScratchFile first;
+        first.set_store(ScratchStore::successor_roots);
         first.open("arena-move");
         expect_logic([] { ScratchArena::detach(); }); // even an empty open region
         legacy.write(0, expected.data(), expected.size());
@@ -832,6 +960,8 @@ void moves_lifetime_and_backend_selection(ScratchArenaBackend backend) {
         first.write(kChunk - 2, expected.data(), expected.size());
         ScratchFile moved(std::move(first));
         require(!first.opened() && moved.opened(), "arena move transfers one region");
+        expect_exhaustion([&] { moved.ensure_size(backing.bytes + 1); },
+                          2 * kChunk, backing.bytes, 2 * kChunk, 7 * kChunk, "successor_roots");
         first.open("moved-from-reused");
         first.write(0, expected.data(), expected.size());
         ScratchFile assigned;
@@ -840,6 +970,8 @@ void moves_lifetime_and_backend_selection(ScratchArenaBackend backend) {
         check_stats(ScratchArena::kDefaultWindowBytes, 4);
         assigned = std::move(moved);
         check_stats(ScratchArena::kDefaultWindowBytes, 3);
+        expect_exhaustion([&] { assigned.ensure_size(backing.bytes + 1); },
+                          4 * kChunk, backing.bytes, 3 * kChunk, 7 * kChunk, "successor_roots");
         std::array<std::uint8_t, 5> observed{};
         assigned.read(kChunk - 2, observed.data(), observed.size());
         require(observed == expected && !moved.opened(), "move assignment keeps chunk order");
@@ -1252,6 +1384,7 @@ int main() {
         for (const auto backend : kBackends) {
             invalid_backing_and_environment(backend);
             deterministic_exhaustion(backend);
+            store_identity_contract(backend);
             arena_replay_and_sparse_reuse(backend, expected);
             default_cap_and_no_allocation(backend);
             partial_subwindows(backend);
