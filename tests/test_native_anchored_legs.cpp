@@ -48,7 +48,7 @@ constexpr std::uint64_t kNeutralSpecDigest = 4011217037958131497ULL;
 // one-minute bars: 10000 -> about 10005, with no drawdown. Calmar remains
 // NaN by that domain; the bar ratios retain main's formulas.
 // The report digest pin is a lab harvest.
-constexpr std::uint64_t kNeutralReportDigest = 8139101939074791901ULL;
+constexpr std::uint64_t kNeutralReportDigest = 6216030702059937357ULL;
 constexpr std::size_t kNeutralEventCount = 72;
 
 // A canonical one-minute slot label. The R4 harness's tape starts at
