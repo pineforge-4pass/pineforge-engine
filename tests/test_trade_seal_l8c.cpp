@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -30,6 +31,9 @@ constexpr std::int64_t minute = 60000;
 constexpr double missing = std::numeric_limits<double>::quiet_NaN();
 
 void require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(message);
+}
+void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 bool same(double left, double right) {
@@ -85,6 +89,24 @@ std::string records(const std::string& bytes, char tag) {
     }
     return result;
 }
+// Names the first line two record streams disagree on, with both lines.
+std::string first_difference(const std::string& left, const std::string& right) {
+    const auto lines = [](const std::string& text) {
+        std::vector<std::string> result;
+        for (std::size_t begin = 0; begin < text.size();) {
+            const auto end = text.find('\n', begin);
+            const auto stop = end == std::string::npos ? text.size() : end;
+            result.push_back(text.substr(begin, stop - begin));
+            begin = stop + 1;
+        }
+        return result;
+    };
+    const auto a = lines(left), b = lines(right);
+    for (std::size_t i = 0; i < std::min(a.size(), b.size()); ++i)
+        if (a[i] != b[i])
+            return "line " + std::to_string(i + 1) + " [" + a[i] + "] vs [" + b[i] + "]";
+    return "line counts " + std::to_string(a.size()) + " vs " + std::to_string(b.size());
+}
 pf_report_sink_receipt_v1 receipt(const BacktestEngine& host) {
     pf_report_sink_receipt_v1 result{};
     result.struct_size = sizeof result;
@@ -123,6 +145,26 @@ struct Options {
     bool variable = false;
     std::string script_tf = "1";
 };
+// The case an assertion belongs to: every failure below names it, so a lab log
+// says which option set broke without a rerun.
+std::string describe(const Options& options, int count) {
+    const std::pair<const char*, bool> flags[] = {
+        {"coof", options.coof}, {"pooc", options.pooc}, {"brackets", options.brackets},
+        {"rewind", options.rewind}, {"zero_fee", options.zero_fee},
+        {"percent_fee", options.percent_fee}, {"selected", options.selected},
+        {"observed", options.observed}, {"quote", options.quote}, {"empty", options.empty},
+        {"fail", options.fail}, {"abort", options.abort}, {"magnifier", options.magnifier},
+        {"variable", options.variable}};
+    std::string text = "case{bars=" + std::to_string(count) + " script_tf=" + options.script_tf;
+    for (const auto& flag : flags)
+        if (flag.second) text += std::string(" ") + flag.first;
+    return text + "}";
+}
+// What a run latched, from the engine's own failure record.
+std::string latched_error(const BacktestEngine& host) {
+    return "last_error=\"" + host.last_error() + "\" code=" + run_failure_code_of(host)
+        + " args=" + run_failure_args_of(host);
+}
 struct Observation {
     std::uint64_t hash = 0, extension = 0;
     std::array<double, 3> averages{};
@@ -130,7 +172,13 @@ struct Observation {
 class Strategy final : public source::PineStrategyHost {
 public:
     explicit Strategy(Options options, bool streamable = true) : options_(std::move(options)) {
-        set_syminfo_timezone("UTC+0");
+        // "UTC", not "UTC+0": a selected window's source-bar count compares the
+        // chart zone's clock token with this one (selected_window_plan.cpp
+        // admit_clock, clock_token), and "UTC+0" is a token of its own. The
+        // mismatch makes the count throw engine_invariant at the run's begin
+        // (pine_scheduler_native.cpp selected_executed_source_bars); the Pine
+        // host latches it, skips every source bar and the capture finds none.
+        set_syminfo_timezone("UTC");
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
         source::PineStrategyConfig config;
@@ -152,6 +200,15 @@ public:
     TradeLedger& ledger() { return trades_; }
     const TradeLedger& ledger() const { return trades_; }
     NativeExecutionConsumer& consumer() const { return NativeExecutionConsumer::bound(*this); }
+    // How far the run got and where the ledger stood: printed with a latched
+    // error, so the log shows the seal state at the failure, not only its text.
+    std::string progress() const {
+        return "callbacks=" + std::to_string(observations.size())
+            + " ledger_size=" + std::to_string(trades_.size())
+            + " ledger_base=" + std::to_string(trades_.base())
+            + " closed_rows_final=" + std::to_string(consumer().closed_rows_final())
+            + " sealed_base=" + std::to_string(consumer().closed_trade_prefix().base);
+    }
     std::uint64_t extension_hash() const {
         BrokerStateHashSink f;
         hash_host_extension(f);
@@ -210,13 +267,17 @@ private:
 };
 
 void compare_observations(const Strategy& reference, const Strategy& actual) {
-    require(reference.observations.size() == actual.observations.size(), "callback count changed");
+    require(reference.observations.size() == actual.observations.size(),
+            "callback count changed: " + std::to_string(reference.observations.size()) + " vs "
+                + std::to_string(actual.observations.size()));
     for (std::size_t i = 0; i < reference.observations.size(); ++i) {
         const auto& a = reference.observations[i];
         const auto& b = actual.observations[i];
-        require(a.hash == b.hash && a.extension == b.extension, "live hash changed with the sink");
+        const std::string at = " at callback " + std::to_string(i);
+        require(a.hash == b.hash, "live broker-state hash changed with the sink" + at);
+        require(a.extension == b.extension, "live source-extension hash changed with the sink" + at);
         require(std::memcmp(a.averages.data(), b.averages.data(), sizeof a.averages) == 0,
-                "sealed/unsealed percentage accessor bits changed");
+                "sealed/unsealed percentage accessor bits changed" + at);
     }
 }
 void compare_summary(const ReportC& reference, const ReportC& actual) {
@@ -267,19 +328,34 @@ void configure_observation(Strategy& host, const Options& options, int count) {
                 "terminal quote installation failed");
 }
 
-void differential(Directory& directory, Options options, int count = 146) {
+void differential_checks(Directory& directory, const Options& options, int count) {
     Strategy baseline(options), streamed(options), retained(options, false);
     const auto stream_path = directory.file(), retain_path = directory.file();
     install(streamed, stream_path);
     install(retained, retain_path);
     const auto bars = tape(count);
-    for (auto* host : {&baseline, &streamed, &retained}) {
+    struct Role {
+        const char* name;
+        Strategy* host;
+    };
+    const Role roles[] = {{"baseline (sink off)", &baseline},
+                          {"streamed (sink on, streamable)", &streamed},
+                          {"retained (sink on, retaining)", &retained}};
+    // All three hosts run before any verdict, so one lab log shows which of
+    // them latched an error and where each stood.
+    std::string run_errors;
+    for (const Role& role : roles) {
+        Strategy* const host = role.host;
         configure_observation(*host, options, count);
         host->execute(bars, options.script_tf, options.magnifier);
-        require(host->last_error().empty() || options.fail || options.abort, "fixture run failed");
-        require(host->consumer().closed_rows_digest_holds(host->ledger()),
-                "Debug resident re-fold does not match the seeded digest");
+        if (!host->last_error().empty() && !options.fail && !options.abort)
+            run_errors += std::string(role.name) + " run latched an engine error: "
+                + latched_error(*host) + " [" + host->progress() + "]; ";
     }
+    require(run_errors.empty(), run_errors);
+    for (const Role& role : roles)
+        require(role.host->consumer().closed_rows_digest_holds(role.host->ledger()),
+                std::string(role.name) + ": Debug resident re-fold does not match the seeded digest");
     if (!options.empty && options.script_tf == "1") {
         require(streamed.ledger().base() > 0, "test did not exercise production sealing");
         require(streamed.maximum_resident < baseline.maximum_resident,
@@ -323,15 +399,34 @@ void differential(Directory& directory, Options options, int count = 146) {
         require(receipt(streamed).complete == 1, "successful sink lacks trailer");
         require(receipt(streamed).count_t == expected.value.total_trades,
                 "sealed + tail + range-end T count differs");
-        for (char tag : {'E', 'T', 'H', 'X'})
-            require(records(bytes, tag) == records(retained_bytes, tag),
-                    "streamed records differ from retaining sink records");
+        for (char tag : {'E', 'T', 'H', 'X'}) {
+            const auto streamed_records = records(bytes, tag);
+            const auto retained_records = records(retained_bytes, tag);
+            require(streamed_records == retained_records,
+                    std::string("streamed ") + tag + " records differ from retaining sink records: "
+                        + first_difference(streamed_records, retained_records));
+        }
         const auto reference_path = directory.file();
         expected_records(baseline, expected.value, reference_path);
         const auto reference = read(reference_path);
-        for (char tag : {'E', 'T'})
-            require(records(bytes, tag) == records(reference, tag),
-                    "sink record fields differ from sink-off report arrays");
+        for (char tag : {'E', 'T'}) {
+            const auto streamed_records = records(bytes, tag);
+            const auto reference_records = records(reference, tag);
+            require(streamed_records == reference_records,
+                    std::string("sink ") + tag + " record fields differ from sink-off report arrays: "
+                        + first_difference(streamed_records, reference_records));
+        }
+    }
+}
+
+void differential(Directory& directory, const Options& options, int count = 146) {
+    const std::string where = describe(options, count);
+    // Printed before the case runs, so even a crash (no exception) names it.
+    std::fprintf(stderr, "L8c: running %s\n", where.c_str());
+    try {
+        differential_checks(directory, options, count);
+    } catch (const std::exception& error) {
+        throw std::runtime_error(where + ": " + error.what());
     }
 }
 
@@ -339,7 +434,9 @@ void seal_conditions() {
     Strategy host(Options{});
     const auto bars = tape(80);
     host.execute(bars);
-    require(host.last_error().empty(), "seal-condition fixture failed");
+    require(host.last_error().empty(),
+            "seal-condition fixture run latched an engine error: " + latched_error(host)
+                + " [" + host.progress() + "]");
     const auto final = host.consumer().closed_rows_final();
     require(final > 5, "seal-condition fixture lacks closed notifications");
     invariant([&] { host.consumer().seal_closed_rows(host, 1, 0, 0.0, 0.0); });
@@ -414,7 +511,10 @@ void restarts_and_reuse(Directory& directory) {
     const auto bars = tape(146);
     for (auto* host : {&baseline, &streamed}) {
         host->execute(bars);
-        require(host->last_error().empty(), "restart fixture failed");
+        require(host->last_error().empty(),
+                std::string(host == &baseline ? "restart baseline" : "restart streamed")
+                    + " fixture run latched an engine error: " + latched_error(*host)
+                    + " [" + host->progress() + "]");
     }
     const auto base = streamed.ledger().base();
     require(base > 0 && base < streamed.consumer().closed_rows_final(),
@@ -458,8 +558,13 @@ void restarts_and_reuse(Directory& directory) {
     // A new sink run on the same host resets every prefix and report fold.
     Strategy fresh(Options{});
     install(fresh, directory.file());
-    for (auto* host : {&streamed, &fresh})
+    for (auto* host : {&streamed, &fresh}) {
         host->execute(bars);
+        require(host->last_error().empty(),
+                std::string(host == &streamed ? "reused streamed host" : "fresh host")
+                    + " rerun latched an engine error: " + latched_error(*host)
+                    + " [" + host->progress() + "]");
+    }
     compare_observations(fresh, streamed);
     Report reused, expected;
     streamed.fill_report(&reused.value);
@@ -471,51 +576,71 @@ void restarts_and_reuse(Directory& directory) {
 } // namespace
 
 int main() {
+    int failures = 0;
+    // Each step reports on its own and the next one still runs, so one lab
+    // round names every broken case instead of only the first.
+    const auto attempt = [&failures](const char* step, const std::function<void()>& action) {
+        // Printed first, so a crash in any step (not only a differential case) names it.
+        std::fprintf(stderr, "L8c: step %s\n", step);
+        try {
+            action();
+        } catch (const std::exception& error) {
+            ++failures;
+            std::fprintf(stderr, "L8c: FAILED %s: %s\n", step, error.what());
+        }
+    };
     try {
         Directory directory;
-        seal_conditions();
-        phase_transform();
-        differential(directory, {});
         Options options;
+        const auto run = [&](int count = 146) {
+            attempt("differential", [&] { differential(directory, options, count); });
+        };
+        attempt("seal_conditions", seal_conditions);
+        attempt("phase_transform", phase_transform);
+        run();
         options.coof = options.pooc = options.brackets = true;
-        differential(directory, options);
+        run();
         options = {};
         options.zero_fee = options.rewind = true;
-        differential(directory, options);
+        run();
         options = {};
         options.variable = true;
         options.percent_fee = true;
-        differential(directory, options);
+        run();
         options = {};
         options.script_tf = "5";
         options.magnifier = true;
-        differential(directory, options, 432);
+        run(432);
         options = {};
         options.observed = true;
-        differential(directory, options);
+        run();
         options = {};
         options.selected = true;
-        differential(directory, options);
+        run();
         options.empty = true;
-        differential(directory, options, 12);
+        run(12);
         options = {};
         options.empty = true;
-        differential(directory, options, 0);
+        run(0);
         options = {};
         options.script_tf = "5";
         options.magnifier = options.quote = true;
-        differential(directory, options, 432);
+        run(432);
         options = {};
         options.fail = true;
-        differential(directory, options);
+        run();
         options = {};
         options.abort = true;
-        differential(directory, options);
-        restarts_and_reuse(directory);
-        std::puts("L8c seal, fold-restart and sink differential checks passed");
-        return 0;
+        run();
+        attempt("restarts_and_reuse", [&] { restarts_and_reuse(directory); });
     } catch (const std::exception& error) {
         std::fprintf(stderr, "L8c: %s\n", error.what());
         return 1;
     }
+    if (failures != 0) {
+        std::fprintf(stderr, "L8c: %d step(s) failed\n", failures);
+        return 1;
+    }
+    std::puts("L8c seal, fold-restart and sink differential checks passed");
+    return 0;
 }

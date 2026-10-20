@@ -3718,9 +3718,9 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             && value.projection_created_bar >= interval) {
             return true;
         }
-        // K5
+        // K5: last_broker_open_ms_ is still the prior script bar's open (on_bar_open updates it after this sweep).
         return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
-            && value.projection_created_bar >= interval - 1;
+            && value.placement_script_open_ms >= last_broker_open_ms_;
     };
     // Dormant askable-origin legs can be superseded too. A non-dormant
     // askable-origin leg still answers the consumed-leg question and stays.
@@ -3733,8 +3733,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     };
     auto& held = sweep.held;
     bool unpinned = false;
-    // Test each row's own pins first: K5 can keep a long input/script split's
-    // entry rows, all visited at each bar open, without an askable-origin search.
+    // K5 ages in script-bar space even when a chart gathers finer input;
+    // only the current and previous script bars keep their retired commands.
     auto askable_cursor = askable_origins.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         const bool cycle_held = held_by_cycle(value);
