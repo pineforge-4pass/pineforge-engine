@@ -1,0 +1,89 @@
+#pragma once
+
+#include <pineforge/run_failure.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <system_error>
+#include <vector>
+
+namespace pineforge::detail {
+
+// Also used by the legacy ScratchFile backend. Keep errno and the typed run
+// failure together, so callers keep their existing std::system_error catch.
+class ScratchIoError final : public std::system_error, public RunFailureInfo {
+public:
+    ScratchIoError(int error, const char* operation)
+        : std::system_error(error, std::generic_category(), operation),
+          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
+};
+
+struct ScratchArenaStats {
+    std::uint64_t bytes_total = 0;          // Complete, allocatable chunks.
+    std::uint64_t bytes_used = 0;           // Claimed chunks, including slack.
+    std::uint64_t chunks_total = 0;
+    std::uint64_t chunks_free = 0;
+    std::uint64_t windows_mapped_bytes = 0; // Current mappings, not dirty bytes.
+    std::uint64_t high_water = 0;           // Peak bytes_used since attach.
+};
+
+class ScratchFile;
+
+// Explicit, process-wide scratch backing; ScratchFile::open never attaches.
+// Attach/detach belong to single-threaded startup/teardown. Once attached,
+// independent single-thread-owned ScratchFiles share a mutex-protected
+// allocator and LRU. Close all arena ScratchFiles before detach.
+//
+// The wrapper owns sizing: this class never grows, shrinks, writes with
+// write/pwrite, or changes seals on the backing fd. It owns a CLOEXEC dup;
+// the caller keeps ownership of the supplied fd. Linux memfds must carry
+// GROW|SHRINK|SEAL; sized regular files need no seals.
+//
+// Successful attach deliberately sets process-wide SIGXFSZ to SIG_IGN, and
+// detach does not restore it: a later EFBIG must be a typed refusal instead
+// of killing the strategy child under RLIMIT_FSIZE=0.
+class ScratchArena final {
+public:
+    static constexpr std::uint64_t kChunkBytes = 1024ULL * 1024ULL;
+    static constexpr std::uint64_t kDefaultWindowBytes = 32ULL * kChunkBytes;
+    static constexpr int kInheritedFd = 5;
+
+    // Same fd/bytes on an existing attachment is an idempotent no-op;
+    // replacing a live attachment is a std::logic_error.
+    // Invalid backing/configuration and I/O failures throw ScratchIoError.
+    static void attach(int fd, std::uint64_t bytes);
+
+    // No PF_SCRATCH_ARENA_FD => no-op (even if the size variable is present).
+    // Otherwise require FD=5 and a positive decimal PF_SCRATCH_ARENA_BYTES.
+    // attach also reads PF_SCRATCH_WINDOW_BYTES: a total mapping cap, default
+    // 32 MiB, rounded down to whole pages; less than one page is refused.
+    static void attach_from_environment();
+    static ScratchArena* attached() noexcept;
+    static void detach(); // std::logic_error if any arena file is still open.
+
+    ScratchArenaStats stats() const;
+    ScratchArena(const ScratchArena&) = delete;
+    ScratchArena& operator=(const ScratchArena&) = delete;
+    ~ScratchArena();
+
+private:
+    friend class ScratchFile;
+    struct Region {
+        // Four bytes per claimed 1 MiB chunk, in logical-file order.
+        std::vector<std::uint32_t> chunks;
+        std::uint64_t size = 0;
+    };
+    struct Impl;
+    ScratchArena(int fd, std::uint64_t bytes);
+    void open_region(Region& region);
+    void release_region(Region& region) noexcept;
+    void ensure_size(Region& region, std::uint64_t bytes);
+    void write(Region& region, std::uint64_t offset, const void* data, std::size_t length);
+    void read(const Region& region, std::uint64_t offset, void* data, std::size_t length) const;
+
+    std::unique_ptr<Impl> impl_;
+    static std::unique_ptr<ScratchArena> singleton_;
+};
+
+} // namespace pineforge::detail

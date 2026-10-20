@@ -1,0 +1,8 @@
+if(UNIX)
+    list(APPEND TEST_SOURCES test_scratch_arena)
+    pineforge_add_unit_test(test_scratch_arena)
+    set_tests_properties(test_scratch_arena PROPERTIES TIMEOUT 180)
+    list(APPEND TEST_SOURCES test_scratch_arena_threads)
+    pineforge_add_unit_test(test_scratch_arena_threads)
+    set_tests_properties(test_scratch_arena_threads PROPERTIES TIMEOUT 180)
+endif()
