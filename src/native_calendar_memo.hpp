@@ -41,12 +41,26 @@
 // A memo serves one calendar value. The owner calls reset() whenever the
 // calendar it passes is rebuilt or reassigned; a memo handed a calendar at
 // another address forgets everything first (the address is identity only,
-// never dereferenced). It holds a bounded number of days (kDaySlots),
+// never dereferenced). It holds a bounded number of days (kDayCapacity),
 // intervals and civil dates, and is not thread-safe: one owner, one thread,
 // like the calendar value it serves.
+//
+// What it owns does not depend on what it was asked (CR-150 lane L19n). The
+// day slots are direct-mapped by the open date's day number: a day asked after
+// kDayCapacity others replaces the one in its slot and is resolved again if it
+// is asked again. That moves no answer. A lookup reads a day by address and
+// copies what it keeps before it reads another, so none waits on a day being
+// held, and a resolution is a function of the calendar value and the open date
+// (up to the glibc fold above, where the memo keeps the first answer and a day
+// evicted takes the one it resolves again). Every slot's span buffer is
+// reserved once, when the memo binds its calendar, to the most spans a session
+// day of that calendar has (session_day_span_bound), and is only assigned into
+// after: the heap is the same after the first lookup as after the millionth,
+// whatever days they asked (retained_days, retained_span_capacity).
 
 #include <pineforge/native_calendar.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -60,6 +74,9 @@ class SessionDayMemo {
 public:
     // Defined in native_calendar.cpp, the only translation unit that reads it.
     struct State;
+
+    // The session days the memo keeps at once.
+    static constexpr std::size_t kDayCapacity = 64;
 
     SessionDayMemo() noexcept;
     ~SessionDayMemo();
@@ -86,6 +103,17 @@ public:
     // How many times, since then, it read libc's local time for its calendar's
     // zone. The same kind of cost reading.
     std::uint64_t libc_local_reads() const noexcept;
+    // How many session days it has resolved since then, as opposed to answered
+    // from the days it keeps: a day asked again after kDayCapacity others is
+    // resolved again. The same kind of cost reading.
+    std::uint64_t day_resolutions() const noexcept;
+    // Its footprint, for the tests that pin it: how many of its day slots hold
+    // an answer now (a day, or that the calendar has none), and the capacity,
+    // in spans, of their buffers together. The first never passes
+    // kDayCapacity; the second is reserved when the calendar is bound and does
+    // not move after it. Both are 0 for a memo that has bound no calendar.
+    std::size_t retained_days() const noexcept;
+    std::size_t retained_span_capacity() const noexcept;
 
 private:
     State& bind(const SessionCalendar& calendar);
@@ -94,6 +122,15 @@ private:
     const SessionCalendar* calendar_ = nullptr;
     std::unique_ptr<State> state_;
 };
+
+// An upper bound on the spans of one session day of `calendar`, a function of
+// the calendar value alone: a day merges at most one span per declared window
+// for each of the three civil dates its cycle reads (the date before the open
+// date, the open date and the date after), or is the one span of an all-day
+// calendar, and merging and resolving never add one. 0 for a calendar that is
+// not valid, which resolves no day. The memo reserves it in every day slot, and
+// the consumer in every certified cycle it keeps.
+std::size_t session_day_span_bound(const SessionCalendar& calendar) noexcept;
 
 // Value for value what interval_containing(calendar, script_tf, input_tf, ms)
 // answers.
