@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_native_o1_request_journal)
+pineforge_add_unit_test(test_native_o1_request_journal)
