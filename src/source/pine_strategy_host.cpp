@@ -869,8 +869,9 @@ std::optional<double> source::PineStrategyHost::resolve_anchored_level(
 
 NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         const NativePrecommitView& view) const {
+    const auto verdict = adapter_.validate_precommit(view);
     precommit_held_units_ = std::abs(detail::run_position(*this).signed_units);
-    return adapter_.validate_precommit(view);
+    return verdict;
 }
 
 void source::PineStrategyHost::configure_pine_strategy(const PineStrategyConfig& config) {

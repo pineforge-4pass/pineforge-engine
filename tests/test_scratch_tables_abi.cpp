@@ -32,8 +32,12 @@ int (*const setter)(pf_strategy_t, const pf_scratch_tables_v1*) = &strategy_set_
 pf_strategy_t handle(BacktestEngine& engine) { return static_cast<pf_strategy_t>(&engine); }
 
 pf_scratch_tables_v1 descriptor(std::uint32_t backend = PF_SCRATCH_TABLE_BOUNDED_MEMORY) {
+    // q is reserved zero. De=40*3+11=131, Dc=40*4+13=173; both
+    // indexes=16*64=1024. Coh=1+96*5+17=498; Rank=1+60*6+19=380;
+    // Roots=16*7=112. Seven one-page spans give SLAB=7*4096=28672,
+    // with offsets [0,0,0,4096,8192,12288,16384,20480,24576].
     return {static_cast<std::uint32_t>(sizeof(pf_scratch_tables_v1)), 1, backend, 0,
-            2, 7, 3, 11, 4, 13, 5, 17, 6, 19, 7};
+            0, 0, 3, 11, 4, 13, 5, 17, 6, 19, 7};
 }
 
 bool same_manifest(const detail::ScratchManifest& left, const detail::ScratchManifest& right) {
@@ -170,7 +174,7 @@ void descriptor_layout_and_idle_setter() {
     require(setter(nullptr, &config) == -1 && setter(nullptr, nullptr) == -1, "NULL handle refused");
     require(setter(handle(host), &config) == 0, "idle C setter exists and accepts v1");
     const detail::ScratchTableConfig expected{detail::ScratchTableBackend::bounded_memory,
-                                              {2, 7, 3, 11, 4, 13, 5, 17, 6, 19, 7}};
+                                              {0, 0, 3, 11, 4, 13, 5, 17, 6, 19, 7}};
     config = {}; // The engine must have copied every field, not borrowed this object.
     same_config(host, expected);
 
@@ -267,20 +271,30 @@ void allocation_precedes_provider_and_copies_drop_ownership() {
     require(host.has_run_owner(), "changing policy preserves old readers until the next begin");
 }
 
-void overflow_precedes_provider_mutation() {
+void layout_refusal_precedes_provider_mutation(const pf_scratch_tables_v1& config) {
     InspectionHost host;
-    auto config = descriptor();
-    config.K_q = 0;
-    config.B_q = std::numeric_limits<std::uint64_t>::max(); // page(max) cannot fit.
     require(setter(handle(host), &config) == 0, "copy representable scalar fields while idle");
     host.run(bars.data(), static_cast<int>(bars.size()));
     require(host.prepare_calls == 0 && host.begin_calls == 0 && host.bar_calls == 0,
-            "overflow refused before any provider callback");
-    require(!host.has_run_owner(), "overflow publishes no allocation");
+            "invalid layout refused before any provider callback");
+    require(!host.has_run_owner(), "invalid layout publishes no allocation");
     require(std::strcmp(strategy_get_last_error_code(handle(host)), "scratch_capacity_exceeded") == 0,
             "pre-begin typed layout refusal");
     require(std::strcmp(strategy_get_last_error_args(handle(host)), "{\"resource\":\"layout\"}") == 0,
             "pre-begin refusal carries only its closed resource");
+}
+
+void invalid_layouts_precede_provider_mutation() {
+    auto config = descriptor();
+    config.K_q = 1; // One reserved q key must fail before provider work.
+    layout_refusal_precedes_provider_mutation(config);
+    config = descriptor();
+    config.B_q = 1; // Independently reject one reserved q byte.
+    layout_refusal_precedes_provider_mutation(config);
+    config = descriptor();
+    config.K_e = 0;
+    config.B_e = std::numeric_limits<std::uint64_t>::max(); // page(max) cannot fit.
+    layout_refusal_precedes_provider_mutation(config);
 }
 
 } // namespace
@@ -290,7 +304,7 @@ int main() {
         descriptor_layout_and_idle_setter();
         active_batch_and_stream_refusals();
         allocation_precedes_provider_and_copies_drop_ownership();
-        overflow_precedes_provider_mutation();
+        invalid_layouts_precede_provider_mutation();
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "test_scratch_tables_abi: %s\n", error.what());

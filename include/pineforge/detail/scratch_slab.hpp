@@ -75,6 +75,7 @@ inline bool fits(std::uint64_t bytes) noexcept {
 inline Layout compute_layout(const ScratchManifest& manifest) {
     using namespace scratch_layout_detail;
     if (manifest.V > 27) throw ScratchCapacityError(ScratchResource::layout);
+    if (manifest.K_q != 0 || manifest.B_q != 0) throw ScratchCapacityError(ScratchResource::layout);
     const std::array<std::uint64_t, kScratchRegionCount> capacities{{
         add(multiply(40, manifest.K_q), manifest.B_q),
         multiply(16, slots(manifest.K_q)),

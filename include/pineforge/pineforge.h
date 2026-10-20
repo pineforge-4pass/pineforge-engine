@@ -840,7 +840,8 @@ typedef enum pf_scratch_table_backend_e {
 
 /** Version 1 scratch-table admission maxima, in keys/rows and key bytes.
  *  Set struct_size = sizeof(pf_scratch_tables_v1), version = 1, reserved = 0.
- *  Each K/B pair includes all distinct ever-stored keys, including erased
+ *  K_q/B_q are reserved zero; q's two region descriptors remain empty.
+ *  Each other K/B pair includes all distinct ever-stored keys, including erased
  *  keys. U/B_U cover all cohort IDs, V/B_V all exit-rank IDs (V <= 27), and R
  *  all rooted successors, including internally generated replacements.
  *  Counts and UTF-8/binary key-byte totals are admitted maxima supplied by
@@ -848,7 +849,12 @@ typedef enum pf_scratch_table_backend_e {
  *  Bounded mode reserves one fixed slab before run preparation; exceeding
  *  the manifest fails the run with scratch_capacity_exceeded. The layout
  *  and every offset must fit uint64_t, size_t and off_t. Allocation failure
- *  remains out_of_memory. This policy is independent of the report sink. */
+ *  remains out_of_memory. This policy is independent of the report sink.
+ *  In bounded mode, all eleven maxima zero select the P0 policy at each
+ *  begin: finite batches use that run's input-bar count, and streams without
+ *  a declared lifetime use the fixed stream tier (warmup is not lifetime).
+ *  Any nonzero maximum makes the entire manifest explicit, zeros included.
+ *  The default is an admission policy, not a measured workload bound. */
 typedef struct pf_scratch_tables_v1 {
     uint32_t struct_size;
     uint32_t version;

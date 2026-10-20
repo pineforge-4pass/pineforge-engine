@@ -13,6 +13,7 @@ enum class ScratchTableBackend : std::uint32_t {
 // Admission maxima, not observed populations. K/B include erased keys and
 // generated identifiers; all B fields count bytes, including embedded NULs.
 struct ScratchManifest {
+    // Reserved zero: q is removed; retain these fields in their ABI order.
     std::uint64_t K_q = 0;
     std::uint64_t B_q = 0;
     std::uint64_t K_e = 0;

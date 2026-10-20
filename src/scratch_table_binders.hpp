@@ -6,7 +6,6 @@
 
 namespace pineforge {
 namespace source { class PineExecutionAdapter; }
-namespace native_order { inline namespace native_order_v7 { class WorkingRequestCore; } }
 
 namespace detail {
 
@@ -22,8 +21,6 @@ void bind_tree_scratch_tables(source::PineExecutionAdapter& adapter,
                               const std::shared_ptr<ScratchSlab>& slab);
 void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,
                                  const std::shared_ptr<ScratchSlab>& slab);
-void bind_successor_root_scratch_tables(native_order::WorkingRequestCore& requests,
-                                        const std::shared_ptr<ScratchSlab>& slab);
 
 } // namespace detail
 } // namespace pineforge

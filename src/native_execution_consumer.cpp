@@ -2,13 +2,13 @@
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
-#include "scratch_table_binders.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
 #include "report_sink_writer.hpp"
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/timeframe.hpp>
+#include <pineforge/detail/scratch_defaults.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1750,7 +1750,20 @@ bool NativeExecutionConsumer::prepare_public_begin(
         return false;
     }
     try {
-        const auto config = engine.scratch_table_config_;
+        auto config = engine.scratch_table_config_;
+        const auto& m = config.manifest;
+        if (config.backend == detail::ScratchTableBackend::bounded_memory
+            && m.K_q == 0 && m.B_q == 0 && m.K_e == 0 && m.B_e == 0
+            && m.K_c == 0 && m.B_c == 0 && m.U == 0 && m.B_U == 0
+            && m.V == 0 && m.B_V == 0 && m.R == 0) {
+            // Stream n is warmup, not a declared lifetime input-bar count.
+            if (args.is_stream)
+                config.manifest = detail::default_scratch_manifest();
+            else if (args.n >= 0)
+                config.manifest = detail::default_scratch_manifest(
+                    static_cast<std::uint64_t>(args.n));
+            // Invalid negative batch n keeps its existing input-validation path.
+        }
         engine.prepare_scratch_table_run(config);
     } catch (const std::exception& e) {
         render_exception(engine, e);
@@ -2939,8 +2952,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // that path (driver_statistics_.intrabar_path_enabled below) for any host.
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
-    ::pineforge::detail::bind_successor_root_scratch_tables(
-        requests_, engine.scratch_table_run_.slab);
+    requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;

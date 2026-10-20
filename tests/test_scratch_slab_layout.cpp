@@ -80,45 +80,74 @@ void hand_derived_layouts() {
     // 1. Q(0)=0, zero U/V/R produce no regions. max(4096,0)=4096.
     layout_case({}, Nine{}, Nine{}, Nine{}, 4096);
 
-    // 2. q:40*1+3=43; e:40*2+9=89; c:40*3+11=131.
-    // All Q=64, hence I=16*64=1024. Coh=1+96*2+7=200;
-    // Rank=1+60*2+5=126; Roots=16*3=48. Each nonzero region
-    // rounds to one page: nine pages, prefix offsets 0 through 8*4096.
-    layout_case({1, 3, 2, 9, 3, 11, 2, 7, 2, 5, 3},
-        {{43, 1024, 89, 1024, 131, 1024, 200, 126, 48}},
-        {{4096, 4096, 4096, 4096, 4096, 4096, 4096, 4096, 4096}},
-        {{0, 4096, 8192, 12288, 16384, 20480, 24576, 28672, 32768}}, 36864);
+    // 2. q is reserved zero: Dq=Iq=0, with no page span. e:40*2+9=89;
+    // c:40*3+11=131. Both Q=64, hence I=16*64=1024.
+    // Coh=1+96*2+7=200; Rank=1+60*2+5=126; Roots=16*3=48.
+    // Seven nonzero regions each take one page; prefix page counts are
+    // [0,0,0,1,2,3,4,5,6], ending at 7*4096=28672.
+    layout_case({0, 0, 2, 9, 3, 11, 2, 7, 2, 5, 3},
+        {{0, 0, 89, 1024, 131, 1024, 200, 126, 48}},
+        {{0, 0, 4096, 4096, 4096, 4096, 4096, 4096, 4096}},
+        {{0, 0, 0, 4096, 8192, 12288, 16384, 20480, 24576}}, 28672);
 
-    // 3. Dq=1280+2816=4096; De=1320+2777=4097 -> TWO pages.
-    // Q(32)=64 ->1024; Q(33)=128 ->2048. Coh=1+4032+63=4096;
-    // Rank=1+1620+2475=4096; Roots=4096. c has zero length.
-    // Page counts [1,1,2,1,0,0,1,1,1] sum to 8, hence 32768.
-    layout_case({32, 2816, 33, 2777, 0, 0, 42, 63, 27, 2475, 256},
-        {{4096, 1024, 4097, 2048, 0, 0, 4096, 4096, 4096}},
-        {{4096, 4096, 8192, 4096, 0, 0, 4096, 4096, 4096}},
-        {{0, 4096, 8192, 16384, 20480, 20480, 20480, 24576, 28672}}, 32768);
+    // 3. q and c are empty. De=40*33+2777=1320+2777=4097 -> TWO pages;
+    // Q(33)=128 -> Ie=2048 -> one page. Coh=1+96*42+63=4096;
+    // Rank=1+60*27+2475=4096; Roots=16*256=4096 -> one page each.
+    // Page counts [0,0,2,1,0,0,1,1,1] sum to 6; prefix page counts
+    // [0,0,0,2,3,3,3,4,5] end at 6*4096=24576.
+    layout_case({0, 0, 33, 2777, 0, 0, 42, 63, 27, 2475, 256},
+        {{0, 0, 4097, 2048, 0, 0, 4096, 4096, 4096}},
+        {{0, 0, 8192, 4096, 0, 0, 4096, 4096, 4096}},
+        {{0, 0, 0, 8192, 12288, 12288, 12288, 16384, 20480}}, 24576);
 
-    // 4. Q(129)=512, Q(256)=512, Q(257)=1024 -> indexes 8192,
-    // 8192,16384. D=5165,10240,10287 -> pages 2,3,3. Roots=4112
-    // ->2 pages. U=V=0 ignores B_U/B_V. Page counts [2,2,3,2,3,4,0,0,2]
-    // sum to 18; the independently summed prefixes end at 18*4096=73728.
-    layout_case({129, 5, 256, 0, 257, 7, 0, 99, 0, 99, 257},
-        {{5165, 8192, 10240, 8192, 10287, 16384, 0, 0, 4112}},
-        {{8192, 8192, 12288, 8192, 12288, 16384, 0, 0, 8192}},
-        {{0, 8192, 16384, 28672, 36864, 49152, 65536, 65536, 65536}}, 73728);
+    // 4. q is empty. Q(256)=512, Q(257)=1024 -> indexes 8192,16384
+    // -> pages 2,4. De=40*256=10240 ->3 pages; Dc=40*257+7=10287
+    // ->3 pages. Roots=16*257=4112 ->2 pages; U=V=0 ignores B_U/B_V.
+    // Page counts [0,0,3,2,3,4,0,0,2] sum to 14; prefix page counts
+    // [0,0,0,3,5,8,12,12,12] end at 14*4096=57344.
+    layout_case({0, 0, 256, 0, 257, 7, 0, 99, 0, 99, 257},
+        {{0, 0, 10240, 8192, 10287, 16384, 0, 0, 4112}},
+        {{0, 0, 12288, 8192, 12288, 16384, 0, 0, 8192}},
+        {{0, 0, 0, 12288, 20480, 32768, 49152, 49152, 49152}}, 57344);
 
-    // 5. K=0 keeps each Q/index at zero even with a byte allowance. D=B:
-    // 4097 ->2 pages, 1 ->1 page, 4096 ->1 page; total four pages.
-    layout_case({0, 4097, 0, 1, 0, 4096, 0, 1, 0, 1, 0},
-        {{4097, 0, 1, 0, 4096, 0, 0, 0, 0}},
-        {{8192, 0, 4096, 0, 4096, 0, 0, 0, 0}},
-        {{0, 8192, 8192, 12288, 12288, 16384, 16384, 16384, 16384}}, 16384);
+    // 5. q is empty; K_e=K_c=0 keeps their Q/index at zero even with
+    // byte allowances. De=B_e=1, Dc=B_c=4096 -> one page each.
+    // U=V=0 ignores B_U/B_V. Prefix page counts [0,0,0,1,1,2,2,2,2]
+    // end at 2*4096=8192.
+    layout_case({0, 0, 0, 1, 0, 4096, 0, 1, 0, 1, 0},
+        {{0, 0, 1, 0, 4096, 0, 0, 0, 0}},
+        {{0, 0, 4096, 0, 4096, 0, 0, 0, 0}},
+        {{0, 0, 0, 4096, 4096, 8192, 8192, 8192, 8192}}, 8192);
+
+    // 6. Preserve q's former boundary witnesses in live e/c regions:
+    // De=40*129+5=5165 ->2 pages; Q(129)=512 -> Ie=8192 ->2 pages.
+    // Dc=40*32+2816=4096 ->1 page; Q(32)=64 -> Ic=1024 ->1 page.
+    // All other capacities are zero; page counts [0,0,2,2,1,1,0,0,0]
+    // give prefixes [0,0,0,2,4,5,6,6,6] and total 6*4096=24576.
+    layout_case({0, 0, 129, 5, 32, 2816, 0, 0, 0, 0, 0},
+        {{0, 0, 5165, 8192, 4096, 1024, 0, 0, 0}},
+        {{0, 0, 8192, 8192, 4096, 4096, 0, 0, 0}},
+        {{0, 0, 0, 8192, 16384, 20480, 24576, 24576, 24576}}, 24576);
+
+    // 7. Preserve the former q byte-only page-plus-one witness in e:
+    // K_e=0 -> Ie=0; De=B_e=4097 ->2 pages. All other capacities are zero.
+    // Prefix page counts [0,0,0,2,2,2,2,2,2] end at 2*4096=8192.
+    layout_case({0, 0, 0, 4097, 0, 0, 0, 0, 0, 0, 0},
+        {{0, 0, 4097, 0, 0, 0, 0, 0, 0}},
+        {{0, 0, 8192, 0, 0, 0, 0, 0, 0}},
+        {{0, 0, 0, 8192, 8192, 8192, 8192, 8192, 8192}}, 8192);
 }
 
 void checked_overflows() {
     constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
     ScratchManifest manifest;
-    manifest.K_q = maximum; // 40*K overflows.
+    manifest.K_q = 1; // Even one reserved q key is refused, before arithmetic.
+    capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
+    manifest = {};
+    manifest.B_q = 1; // Independently refuse a reserved q byte allowance.
+    capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
+    manifest = {};
+    manifest.K_e = maximum; // 40*K overflows in a live store.
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
     manifest = {};
     manifest.K_e = 1;
@@ -129,16 +158,16 @@ void checked_overflows() {
     manifest.K_c = (std::uint64_t{1} << 58) + 1;
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
     manifest = {};
-    manifest.B_q = maximum; // Page rounding itself would produce 2^64.
+    manifest.B_e = maximum; // K_e=0: page rounding itself would produce 2^64.
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
-    manifest.B_q = std::uint64_t{1} << 63;
-    manifest.B_e = std::uint64_t{1} << 63; // Two valid spans overflow their prefix sum.
+    manifest.B_e = std::uint64_t{1} << 63;
+    manifest.B_c = std::uint64_t{1} << 63; // Two valid spans overflow their prefix sum.
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
     manifest = {};
-    manifest.B_q = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+    manifest.B_e = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
     // The next page boundary exceeds the host's off_t (or uint64) maximum.
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
-    manifest.B_q = static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max());
+    manifest.B_e = static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max());
     capacity_failure("layout", [&] { (void)detail::compute_layout(manifest); });
     manifest = {};
     manifest.U = maximum / 96 + 1;
@@ -175,25 +204,26 @@ void unchanged(const ScratchSlab& slab, const Snapshot& before) {
 
 void bounds_reservations_and_reset() {
     const auto before_allocation = global_allocation::allocations;
-    ScratchSlab slab({1, 3, 2, 9, 3, 11, 2, 7, 2, 5, 3});
+    // Worked manifest 2 above: q empty, seven pages, De=89 live bytes.
+    ScratchSlab slab({0, 0, 2, 9, 3, 11, 2, 7, 2, 5, 3});
     require(global_allocation::allocations == before_allocation + 1,
             "one aligned backing allocation for all nine regions");
-    const auto& sequence = slab.region(ScratchResource::sequence_data);
+    const auto& erased = slab.region(ScratchResource::erased_data);
     const std::array<std::uint8_t, 4> sample{{7, 11, 19, 23}};
     std::array<std::uint8_t, 4> observed{};
-    require(sequence.logical_extent == 0, "new logical prefix is empty");
-    io_failure([&] { slab.read_at(sequence, 0, observed.data(), 1); });
-    slab.write_at(sequence, 0, sample.data(), sample.size());
-    slab.read_at(sequence, 0, observed.data(), observed.size());
-    require(observed == sample && sequence.logical_extent == sample.size(), "copy and extent");
+    require(erased.logical_extent == 0, "new logical prefix is empty");
+    io_failure([&] { slab.read_at(erased, 0, observed.data(), 1); });
+    slab.write_at(erased, 0, sample.data(), sample.size());
+    slab.read_at(erased, 0, observed.data(), observed.size());
+    require(observed == sample && erased.logical_extent == sample.size(), "copy and extent");
 
     const auto short_prefix = snapshot(slab);
     const auto before_reservation = global_allocation::allocations;
-    require(slab.can_extend(sequence, sequence.capacity), "exact byte capacity is reservable");
-    slab.require_extend(sequence, sequence.capacity);
+    require(slab.can_extend(erased, erased.capacity), "exact byte capacity is reservable");
+    slab.require_extend(erased, erased.capacity);
     require(global_allocation::allocations == before_reservation, "reservation allocates nothing");
     unchanged(slab, short_prefix); // Successful reservations are also read-only.
-    io_failure([&] { slab.read_at(sequence, sample.size(), observed.data(), 1); });
+    io_failure([&] { slab.read_at(erased, sample.size(), observed.data(), 1); });
 
     const std::array<const char*, 9> names{{"sequence_data", "sequence_index", "erased_data",
         "erased_index", "consumed_data", "consumed_index", "cohort", "exit_rank", "successor_roots"}};
@@ -225,15 +255,17 @@ void bounds_reservations_and_reset() {
         io_failure([&] { slab.read_at(region, region.capacity, observed.data(), 1); });
         unchanged(slab, full);
     }
-    io_failure([&] { slab.write_at(sequence, 0, nullptr, 1); });
-    io_failure([&] { slab.read_at(sequence, 0, nullptr, 1); });
+    io_failure([&] { slab.write_at(erased, 0, nullptr, 1); });
+    io_failure([&] { slab.read_at(erased, 0, nullptr, 1); });
     unchanged(slab, full);
-    slab.write_at(sequence, sequence.capacity, nullptr, 0);
-    slab.read_at(sequence, sequence.capacity, nullptr, 0);
+    slab.write_at(erased, erased.capacity, nullptr, 0);
+    slab.read_at(erased, erased.capacity, nullptr, 0);
     unchanged(slab, full);
 
-    ScratchSlab other({1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-    capacity_failure("layout", [&] { other.require_extend(sequence, 1); });
+    // Only e is live: De=40*1+3=43 and Ie=16*64=1024 each take one
+    // page. Offsets [0,0,0,4096,8192,8192,8192,8192,8192], SLAB=8192.
+    ScratchSlab other({0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0});
+    capacity_failure("layout", [&] { other.require_extend(erased, 1); });
     capacity_failure("layout", [&] { (void)slab.region(ScratchResource::layout); });
 
     slab.zero(ScratchResource::cohort);
@@ -260,13 +292,13 @@ void bounds_reservations_and_reset() {
     for (const auto& bytes : reset.bytes)
         require(std::all_of(bytes.begin(), bytes.end(), [](std::uint8_t byte) { return byte == 0; }),
                 "reset reinitializes every byte within the same slab");
-    slab.write_at(sequence, 8, sample.data(), sample.size());
-    slab.reset(ScratchResource::sequence_data);
-    require(sequence.logical_extent == 0, "store-local reset clears its prefix");
-    slab.extend(sequence.resource, 12);
+    slab.write_at(erased, 8, sample.data(), sample.size());
+    slab.reset(ScratchResource::erased_data);
+    require(erased.logical_extent == 0, "store-local reset clears its prefix");
+    slab.extend(erased.resource, 12);
     std::array<std::uint8_t, 12> zeros{};
     std::array<std::uint8_t, 12> after_local_reset{};
-    slab.read_at(sequence, 0, after_local_reset.data(), after_local_reset.size());
+    slab.read_at(erased, 0, after_local_reset.data(), after_local_reset.size());
     require(after_local_reset == zeros, "store-local reset removes prior bytes and holes");
 }
 
