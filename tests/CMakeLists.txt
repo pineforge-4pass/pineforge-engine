@@ -7227,6 +7227,14 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
 endif()
 # --- CR-150 core-cr150-l6b2 end ---
 
+# --- CR-150 core-cr150-l17b begin ---
+if(TARGET test_selected_metrics_l17b)
+    target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_L17B_SOURCE=1)
+    endif()
+endif()
+# --- CR-150 core-cr150-l17b end ---
 # --- CR-150 core-cr150-l19f begin ---
 # CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
 # --- CR-150 core-cr150-l19f end ---

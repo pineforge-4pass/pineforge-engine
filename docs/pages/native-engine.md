@@ -4552,7 +4552,7 @@ Nor is there a build-level one. The two source sets are disjoint:
 `PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
 `src/compat/pine/` units and all twelve `src/source/` ones, and
 `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:115`) holds the kernel's own
-thirty-five, which are what `add_library` (`CMakeLists.txt:161`) compiles into
+thirty-five, which are what `add_library` (`CMakeLists.txt:162`) compiles into
 `pineforge_kernel`. `libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the

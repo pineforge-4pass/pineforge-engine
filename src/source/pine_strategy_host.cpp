@@ -1994,7 +1994,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         row.pnl_pct = mark.pnl_pct;
         row.commission = mark.commission;
     }
-    out->net_profit = as_native_consumer(execution_consumer()).closed_trade_prefix().pnl;
+    out->net_profit = out->total_trades == out->trades_len ? 0.0 : report_closed_net_profit();
     for (int index = 0; index < out->trades_len; ++index) out->net_profit += out->trades[index].pnl;
     last.time_ms = report_quote_time_ms_;
     last.equity = initial_capital_ + out->net_profit;

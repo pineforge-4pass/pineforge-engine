@@ -37,7 +37,7 @@ Three layers, two of them meant to be optional:
    `timeframe`, `timezone`, `str_utils`, `c_abi`, `native_c_host`, `reservation_expansion`
    (`CMakeLists.txt:126`) and `pending_order_mirror` (`CMakeLists.txt:132`) units — plus the
    headers directly under `include/pineforge/`. That list is what `add_library`
-   (`CMakeLists.txt:161`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
+   (`CMakeLists.txt:162`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
    `PINEFORGE_SOURCE_LAYER_SOURCES` are disjoint: no file is in both, and none is outside both.
    **Two stems exist twice; the kernel copy is the generic half** —
    `ReservationExpansion` (`src/reservation_expansion.cpp:10`) and
@@ -172,7 +172,7 @@ summary of it.
   (`guard_native_mutation` `engine_aux_security.cpp:83`).
   Indicators are `ta_*.cpp`, session/calendar `session_time.cpp` / `native_calendar.cpp`, FX
   `configure_native_fx_curve` (`native_host.hpp:1202`).
-- **Reporting.** `fill_report` (`engine.hpp:1860`, `src/engine_report.cpp:56`) gives a bare host
+- **Reporting.** `fill_report` (`engine.hpp:1860`, `src/engine_report.cpp:57`) gives a bare host
   trade stats, and the equity curve is a run-spec choice rather than a host chore.
   `NativeReportPolicy::HostRecorded` (the default) leaves the series to the host, whose
   `record_equity_point` / `update_equity_extremes` remain protected
@@ -182,7 +182,7 @@ summary of it.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
   `KernelRecorded`. Under `HostRecorded` an unrecorded curve still degenerates —
   `compute_equity_stats` answers its all-NaN value with no error (`src/engine_metrics.cpp:316`,
-  consumed by `fill_metrics_section`, `src/engine_report.cpp:192-206`) — which is why the policy exists.
+  consumed by `fill_metrics_section`, `src/engine_report.cpp:267-287`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
   (`native_host.hpp:1376`) returns the consumer's event/continuation hash. **A digest names
   the run's inputs** (rule 2): the timezone identity enters it as the zone's *content* —
@@ -370,7 +370,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
 ## Current state vs. target (read before relying on "without Pine")
 
 - **The kernel is a separately linkable artifact.** `add_library`
-  (`CMakeLists.txt:161`) builds `pineforge_kernel` / `PineForge::kernel` from
+  (`CMakeLists.txt:162`) builds `pineforge_kernel` / `PineForge::kernel` from
   `PINEFORGE_KERNEL_SOURCES` alone, with the same flags `pineforge` uses, in **both**
   configurations. `libpineforge.a` still carries the adapter beside the kernel by default;
   `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` (`CMakeLists.txt:44`) compiles no source-layer
@@ -448,7 +448,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   `native_selected_strategy.cpp`), both of which include `native_host.hpp`. Each C host includes
   `<pineforge/pineforge.h>`, which includes `native_c_api.h`. Every one links `PineForge::kernel`
   and checks its own numbers before it prints its summary line. `PINEFORGE_BUILD_EXAMPLES`
-  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:390`) and
+  (`CMakeLists.txt:37`, default OFF) builds them (`add_subdirectory` `CMakeLists.txt:391`) and
   registers each as a CTest row that runs through `examples/native/run_example.cmake`, which
   fails on a nonzero exit, a signal **or** a missing summary line — so a row asserts
   both, which a bare `PASS_REGULAR_EXPRESSION` cannot. `scripts/test_example_runner.py` proves
@@ -764,7 +764,7 @@ number names its symbol on this tree.
 | `strategy_configure_native_v1` (`c_abi.cpp:981`) versus `strategy_configure_native_ext_result_v1` (`native_c_host.cpp:4066`) | **retained legacy base plus typed additive route** | A base specification the kernel rejects still returns `-1` and latches `Failed`, preserving its frozen caller contract; a Ready misuse retains that Contract latch. The C boundary refuses arguments, a Running phase and a Completed hash hook without entering kernel configure, so a read cannot reconfigure its host. The extended result call validates before its first configure, writes `pf_native_spec_error_t` / `pf_native_spec_field_t`, and names reused-host session-key and run-number refusals; no old signature or layout moved. |
 | `strategy_configure_native_fx_curve_v1` (`pineforge.h:546`) | **typed additive route** | `strategy_configure_native_fx_curve_ext_v1` writes the C twin of `NativeFxCurveValidation` and its offending index. The old `-1` route remains unchanged, while a C caller can now distinguish a decreasing timestamp, non-positive rate, allocation failure or wrong phase. |
 | `on_native_timeframe_bar` (`native_host.hpp:885`) and `NativeTimeframeBarContext::interval` (`native_host.hpp:809`) | **query routed** | The callback signature stays frozen. `strategy_native_timeframe_bar_interval_v1` is valid only during that callback and copies the kernel calendar interval without deriving it from the delivered bar or delivery timestamp. |
-| `magnifier_sub_bars_total` / `magnifier_sample_ticks_total` (`engine_report.cpp:75-76`) | **kernel-owned report facts** | The generic intrabar driver already increments `NativeDriverStatistics::sub_bars_processed` / `sample_ticks_processed` for every retained path (`native_execution_consumer.cpp:8824-8836`); the kernel now publishes those same counters for bare hosts. They are report fields, not new durable state: the existing `native_continuation_hash` fold of `NativeDriverStatistics` (`native_execution_consumer.cpp:1126-1131`) sees the same values, so no hash contract moves. |
+| `magnifier_sub_bars_total` / `magnifier_sample_ticks_total` (`engine_report.cpp:84-85`) | **kernel-owned report facts** | The generic intrabar driver already increments `NativeDriverStatistics::sub_bars_processed` / `sample_ticks_processed` for every retained path (`native_execution_consumer.cpp:8824-8836`); the kernel now publishes those same counters for bare hosts. They are report fields, not new durable state: the existing `native_continuation_hash` fold of `NativeDriverStatistics` (`native_execution_consumer.cpp:1126-1131`) sees the same values, so no hash contract moves. |
 | `pf_native_lot_excursion_v1` (`native_c_api.h:1912`) | **additive fee tail** | `entry_commission` carries the C++ `ClosedLotExcursionFacts::entry_commission` in account currency. The callback table publishes a trailing layout marker so F4 callers still receive the base facts length; current callers receive the fee tail without changing `PF_NATIVE_API_VERSION`. |
 | `strategy_outputs_set_enabled` and the eight `strategy_outputs_*` readers (`pineforge.h`, group `pf_outputs`) | **additive runtime exports** | Recording is off by default, and nothing a run computes reads the record. The event copy is size-prefixed like `strategy_pending_order_get`, and `PF_ABI_VERSION` stays 4. The writers are C++ only in this version (the BASE-CLASS SEAMS rows of `native_c_api.h`): a C host declares no outputs, so its handle answers every reader as empty. |
 
