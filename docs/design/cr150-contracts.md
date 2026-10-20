@@ -283,7 +283,7 @@ time. After sealing, an array read refuses with `engine_invariant`: retired
 rows remain in the sink and cannot be recovered from resident storage.
 
 L17c/d and L8c use one report path. `fill_trades_section`
-(`src/engine_report.cpp:112-170`) keeps the logical global count and copies only
+(`src/engine_report.cpp:112-169`) keeps the logical global count and copies only
 open rows for a sink. `report_closed_net_profit`
 (`src/engine_report.cpp:171-184`) starts at `ClosedTradePrefix::pnl` and adds the
 resident suffix in order. `finish_streamed_trade_metrics`
@@ -297,7 +297,7 @@ Selected carry-in validation includes the minimum entry time folded at seal
 (`first_entry_time` `src/native_execution_consumer.cpp:12512-12515`), so a
 window starting after a sealed entry refuses with the existing typed
 `engine_invariant`. Validation never indexes a retired row. `write_report_sink_trades`
-(`src/engine_report.cpp:894-926`) resumes at the global T cursor: sealed rows
+(`src/engine_report.cpp:894-927`) resumes at the global T cursor: sealed rows
 already in the sink are emitted exactly once, followed by the resident suffix
 and open rows. The sink remains the complete row report.
 

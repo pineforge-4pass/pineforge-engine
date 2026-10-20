@@ -7265,3 +7265,28 @@ if(TARGET report_sink_l6b1_strategy AND TARGET outputs_fixture_strategy
         "PINEFORGE_L9B_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
 # --- CR-150 core-cr150-l9b end ---
+
+# --- CR-150 core-cr150-l9s begin ---
+# CR-150 L9S: native selected-sink rows, after both module declarations.
+# The Python control row stays in cr150.d/core-cr150-l9s.cmake.
+# Corpus rows need a supervisor-supplied manifest; selecting them here would
+# otherwise always SKIP inside a green row.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS
+   AND NOT PINEFORGE_ENABLE_COVERAGE
+   AND TARGET report_sink_l6b1_strategy AND TARGET pineforge_window_plan)
+    add_test(NAME test_run_json_selected_sink_native_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_selected_sink_native_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    add_test(NAME test_run_json_selected_sink_memory_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink_memory.py)
+    set_property(TEST test_run_json_selected_sink_memory_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    set_tests_properties(test_run_json_selected_sink_memory_l9s PROPERTIES LABELS "slow;mem")
+endif()
+# --- CR-150 core-cr150-l9s end ---
