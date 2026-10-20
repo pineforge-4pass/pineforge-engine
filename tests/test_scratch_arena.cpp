@@ -32,12 +32,79 @@
 #include <utility>
 #include <vector>
 
+#if defined(__linux__)
+// Linker wrapping stays in this test executable; production has no fault
+// hooks. One-shot faults also prove that a short read is not retried.
+namespace scratch_syscalls {
+enum class ReadFault { none, short_read, eof, interrupted, failure };
+ReadFault next_read = ReadFault::none;
+int read_error = EIO;
+int next_stat_error = 0;
+int next_map_error = 0;
+std::size_t reads = 0;
+std::size_t stats = 0;
+std::size_t maps = 0;
+}
+
+extern "C" ssize_t __real_pread(int fd, void* data, std::size_t length, off_t offset);
+extern "C" int __real_fstat(int fd, struct stat* status);
+extern "C" void* __real_mmap(void* address, std::size_t length, int protection,
+                            int flags, int fd, off_t offset);
+
+extern "C" ssize_t __wrap_pread(int fd, void* data, std::size_t length, off_t offset) {
+    ++scratch_syscalls::reads;
+    switch (std::exchange(scratch_syscalls::next_read, scratch_syscalls::ReadFault::none)) {
+    case scratch_syscalls::ReadFault::short_read:
+        return __real_pread(fd, data, length / 2, offset);
+    case scratch_syscalls::ReadFault::eof:
+        return 0;
+    case scratch_syscalls::ReadFault::interrupted:
+        errno = EINTR;
+        return -1;
+    case scratch_syscalls::ReadFault::failure:
+        errno = scratch_syscalls::read_error;
+        return -1;
+    case scratch_syscalls::ReadFault::none:
+        return __real_pread(fd, data, length, offset);
+    }
+    return -1;
+}
+
+extern "C" int __wrap_fstat(int fd, struct stat* status) {
+    ++scratch_syscalls::stats;
+    const int error = std::exchange(scratch_syscalls::next_stat_error, 0);
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
+    return __real_fstat(fd, status);
+}
+
+extern "C" void* __wrap_mmap(void* address, std::size_t length, int protection,
+                            int flags, int fd, off_t offset) {
+    ++scratch_syscalls::maps;
+    const int error = std::exchange(scratch_syscalls::next_map_error, 0);
+    if (error != 0) {
+        errno = error;
+        return MAP_FAILED;
+    }
+    return __real_mmap(address, length, protection, flags, fd, offset);
+}
+#endif
+
 namespace {
 using pineforge::detail::ScratchArena;
+using pineforge::detail::ScratchArenaBackend;
 using pineforge::detail::ScratchFile;
 using pineforge::detail::ScratchIoError;
 constexpr auto kChunk = ScratchArena::kChunkBytes;
 constexpr std::uint64_t kReplayBytes = 6 * kChunk + 149;
+constexpr ScratchArenaBackend kBackends[]{
+    ScratchArenaBackend::regular_file,
+#if defined(__linux__)
+    ScratchArenaBackend::sealed_memfd,
+#endif
+};
 
 void require(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
@@ -83,13 +150,16 @@ struct Environment {
 struct Backing {
     int fd;
     std::uint64_t bytes;
-    Backing(int descriptor, std::uint64_t size) : fd(descriptor), bytes(size) {
+    ScratchArenaBackend backend;
+    Backing(int descriptor, std::uint64_t size,
+            ScratchArenaBackend kind = ScratchArenaBackend::regular_file)
+        : fd(descriptor), bytes(size), backend(kind) {
         require(fd >= 0, "create backing descriptor");
     }
     Backing(const Backing&) = delete;
     Backing& operator=(const Backing&) = delete;
     Backing(Backing&& other) noexcept
-        : fd(std::exchange(other.fd, -1)), bytes(other.bytes) {}
+        : fd(std::exchange(other.fd, -1)), bytes(other.bytes), backend(other.backend) {}
     ~Backing() { if (fd >= 0) ::close(fd); }
 };
 
@@ -103,24 +173,90 @@ void fill_backing(const Backing& backing, std::uint8_t value) {
         const ssize_t count = ::pwrite(backing.fd, buffer.data(), length,
                                        static_cast<off_t>(offset));
         if (count < 0 && errno == EINTR) continue;
-        require(count > 0, "prepare dirty regular-file backing");
+        require(count > 0, "prepare dirty arena backing before the jail");
         offset += static_cast<std::size_t>(count);
     }
 }
 
+struct TemporaryDirectory {
+    std::string path;
+    explicit TemporaryDirectory(const char* parent)
+        : path(std::string(parent) + "/pineforge-arena-dir-XXXXXX") {
+        require(::mkdtemp(path.data()) != nullptr, "create private 0700 fixture directory");
+        struct stat status{};
+        require(::stat(path.c_str(), &status) == 0 && S_ISDIR(status.st_mode)
+                    && (status.st_mode & 0777) == 0700,
+                "fixture directory really is private");
+    }
+    ~TemporaryDirectory() { ::rmdir(path.c_str()); }
+};
+
 Backing regular_backing(std::uint64_t bytes, bool dirty = false,
-                         const char* directory = "/tmp") {
-    std::string name = std::string(directory) + "/pineforge-arena-test-XXXXXX";
+                         const char* parent = ".") {
+    // Keep the disk fixture on the build filesystem, not a possibly tmpfs
+    // /tmp. An ext4-style backend must answer F_GET_SEALS with EINVAL.
+    TemporaryDirectory directory(parent);
+    std::string name = directory.path + "/arena-XXXXXX";
     Backing backing(::mkstemp(name.data()), bytes);
     require(::unlink(name.c_str()) == 0, "unlink regular backing");
+#if defined(__linux__)
+    int allocation;
+    do { allocation = ::posix_fallocate(backing.fd, 0, static_cast<off_t>(bytes)); }
+    while (allocation == EINTR);
+    require(allocation == 0, "parent preallocates all regular arena blocks");
+    errno = 0;
+    require(::fcntl(backing.fd, F_GET_SEALS) == -1 && errno == EINVAL,
+            "regular arena fixture requires a disk filesystem with no seals");
+#else
     require(::ftruncate(backing.fd, static_cast<off_t>(bytes)) == 0,
             "parent sizes regular backing");
+#endif
+    struct stat status{};
+    require(::fstat(backing.fd, &status) == 0 && S_ISREG(status.st_mode)
+                && (status.st_mode & 0777) == 0600
+                && status.st_size == static_cast<off_t>(bytes),
+            "regular fixture is an exactly sized 0600 file");
+    require((::fcntl(backing.fd, F_GETFL) & O_ACCMODE) == O_RDWR,
+            "wrapper passes a writable descriptor");
     if (dirty) fill_backing(backing, 0xa7);
     return backing;
 }
 
+#if defined(__linux__)
+constexpr int kRequiredSeals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+
+Backing memfd_backing(std::uint64_t bytes, int seals, bool dirty = false) {
+    Backing backing(::memfd_create("pineforge-scratch-test", MFD_ALLOW_SEALING | MFD_CLOEXEC),
+                    bytes, ScratchArenaBackend::sealed_memfd);
+    require(::ftruncate(backing.fd, static_cast<off_t>(bytes)) == 0,
+            "parent sizes the memfd before applying the jail");
+    if (dirty) fill_backing(backing, 0xa7);
+    if (seals != 0)
+        require(::fcntl(backing.fd, F_ADD_SEALS, seals) == 0, "parent seals the memfd");
+    return backing;
+}
+#endif
+
+Backing arena_backing(ScratchArenaBackend backend, std::uint64_t bytes, bool dirty = false) {
+#if defined(__linux__)
+    if (backend == ScratchArenaBackend::sealed_memfd)
+        return memfd_backing(bytes, kRequiredSeals, dirty);
+#else
+    require(backend == ScratchArenaBackend::regular_file, "memfd fixture is Linux-only");
+#endif
+    return regular_backing(bytes, dirty);
+}
+
+void check_backend(const Backing& backing) {
+    require(ScratchArena::attached()->stats().backend == backing.backend,
+            "stats reports the backend chosen from the real descriptor");
+}
+
 struct Attachment {
-    explicit Attachment(const Backing& backing) { ScratchArena::attach(backing.fd, backing.bytes); }
+    explicit Attachment(const Backing& backing) {
+        ScratchArena::attach(backing.fd, backing.bytes);
+        check_backend(backing);
+    }
     ~Attachment() { ScratchArena::detach(); }
 };
 
@@ -258,9 +394,10 @@ void file_contract() {
     require(observed == reference && !moved.opened(), "move assignment preserves file bytes");
 }
 
-void invalid_backing_and_environment() {
-    auto backing = regular_backing(4 * kChunk);
+void invalid_backing_and_environment(ScratchArenaBackend backend) {
+    auto backing = arena_backing(backend, 4 * kChunk);
     expect_io([&] { ScratchArena::attach(backing.fd, backing.bytes - 1); }, EINVAL);
+    expect_io([&] { ScratchArena::attach(backing.fd, backing.bytes + 1); }, EINVAL);
     expect_io([&] { ScratchArena::attach(backing.fd, 0); }, EINVAL);
     expect_io([&] { ScratchArena::attach(-1, backing.bytes); }, EBADF);
     int descriptors[2]{};
@@ -355,9 +492,9 @@ void interleave_exhaustion_and_reuse(const Backing& backing, std::uint64_t cap) 
             "release unmaps windows and retains independently reached high-water");
 }
 
-void regular_replay_and_sparse_reuse(ReplayResult expected) {
+void arena_replay_and_sparse_reuse(ScratchArenaBackend backend, ReplayResult expected) {
     Environment cap("PF_SCRATCH_WINDOW_BYTES", "65536");
-    auto backing = regular_backing(9 * kChunk + 313, true);
+    auto backing = arena_backing(backend, 9 * kChunk + 313, true);
     {
         Attachment attachment(backing);
         require(ScratchArena::attached()->stats().bytes_total == 9 * kChunk,
@@ -385,13 +522,13 @@ void regular_replay_and_sparse_reuse(ReplayResult expected) {
         expect_io([&] { file.write(maximum, observed.data(), 1); }, EFBIG);
         check_stats(65536, 2);
     }
-    auto small = regular_backing(4 * kChunk);
+    auto small = arena_backing(backend, 4 * kChunk);
     interleave_exhaustion_and_reuse(small, 65536);
 }
 
-void default_cap_and_no_allocation() {
+void default_cap_and_no_allocation(ScratchArenaBackend backend) {
     Environment cap("PF_SCRATCH_WINDOW_BYTES", nullptr);
-    auto backing = regular_backing(40 * kChunk);
+    auto backing = arena_backing(backend, 40 * kChunk);
     Attachment attachment(backing);
     ScratchFile file;
     file.open("default-window-bound");
@@ -421,13 +558,13 @@ void default_cap_and_no_allocation() {
             "read/write, stats and LRU eviction allocate no userspace memory");
 }
 
-void partial_subwindows_and_short_reads() {
+void partial_subwindows(ScratchArenaBackend backend) {
     const long page = ::sysconf(_SC_PAGESIZE);
     require(page > 0, "read fixture page size");
     const auto rounded = static_cast<std::uint64_t>(page) * 3;
     const auto requested = std::to_string(rounded + 17);
     Environment cap("PF_SCRATCH_WINDOW_BYTES", requested.c_str());
-    auto backing = regular_backing(4 * kChunk, true);
+    auto backing = arena_backing(backend, 4 * kChunk, true);
     Attachment attachment(backing);
     ScratchFile file;
     file.open("non-divisor-windows");
@@ -444,20 +581,23 @@ void partial_subwindows_and_short_reads() {
     file.read(0, observed.data(), observed.size());
     require(observed == reference, "partial subwindows and chunk splits preserve all bytes");
     check_stats(rounded, 3);
-    // Fault injection on the mutable regular-file fixture only. pread must
-    // turn a short backing read into typed EIO; no freed chunk is consulted.
-    require(::ftruncate(backing.fd, static_cast<off_t>(2 * kChunk - 1)) == 0,
-            "inject a short regular backing after allocation");
-    expect_io([&] { file.read(2 * kChunk - 2, observed.data(), 2); }, EIO, "scratch read");
+    if (backend == ScratchArenaBackend::regular_file) {
+        // Retain the POSIX short-read witness on hosts without Linux's
+        // linker-wrapped faults and jailed helper proof.
+        require(::ftruncate(backing.fd, static_cast<off_t>(2 * kChunk - 1)) == 0,
+                "inject a short regular backing after allocation");
+        expect_io([&] { file.read(2 * kChunk - 2, observed.data(), 2); }, EIO, "scratch read");
+    }
 }
 
-void moves_lifetime_and_backend_selection() {
+void moves_lifetime_and_backend_selection(ScratchArenaBackend backend) {
     ScratchFile legacy;
     legacy.open("open-before-attach");
     const std::array<std::uint8_t, 5> expected{{3, 7, 11, 19, 31}};
     legacy.write(0, expected.data(), expected.size());
-    auto backing = regular_backing(8 * kChunk);
+    auto backing = arena_backing(backend, 8 * kChunk);
     ScratchArena::attach(backing.fd, backing.bytes);
+    check_backend(backing);
     ScratchArena::attach(backing.fd, backing.bytes);
     expect_logic([&] { ScratchArena::attach(backing.fd, backing.bytes - 1); });
     {
@@ -494,9 +634,9 @@ void moves_lifetime_and_backend_selection() {
     require(observed == expected, "a pre-attach file remains file-backed across detach");
 }
 
-void disk_id_table_uses_facade() {
+void disk_id_table_uses_facade(ScratchArenaBackend backend) {
     Environment cap("PF_SCRATCH_WINDOW_BYTES", "65536");
-    auto backing = regular_backing(8 * kChunk);
+    auto backing = arena_backing(backend, 8 * kChunk);
     Attachment attachment(backing);
     pineforge::detail::DiskIdTable<std::uint64_t> table;
     table.set_directory("/missing-directory/arena-needs-no-path");
@@ -523,17 +663,6 @@ void disk_id_table_uses_facade() {
 }
 
 #if defined(__linux__)
-Backing memfd_backing(std::uint64_t bytes, int seals) {
-    Backing backing(::memfd_create("pineforge-scratch-test", MFD_ALLOW_SEALING | MFD_CLOEXEC), bytes);
-    require(::ftruncate(backing.fd, static_cast<off_t>(bytes)) == 0,
-            "parent sizes the memfd before applying the jail");
-    if (seals != 0)
-        require(::fcntl(backing.fd, F_ADD_SEALS, seals) == 0, "parent seals the memfd");
-    return backing;
-}
-
-constexpr int kRequiredSeals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
-
 void seal_validation() {
     for (const int omitted : {F_SEAL_GROW, F_SEAL_SHRINK, F_SEAL_SEAL}) {
         auto backing = memfd_backing(4 * kChunk, kRequiredSeals & ~omitted);
@@ -545,20 +674,23 @@ void seal_validation() {
     require(::ftruncate(unsealable.fd, static_cast<off_t>(unsealable.bytes)) == 0,
             "size memfd created without ALLOW_SEALING");
     expect_io([&] { ScratchArena::attach(unsealable.fd, unsealable.bytes); }, EINVAL);
-    // A normal tmpfs regular file may answer F_GET_SEALS without all three
-    // memfd seals. It must still be accepted. /dev/shm is a Linux lab fixture.
+    // The new contract treats every successful F_GET_SEALS as seal-capable,
+    // including ordinary tmpfs files. An incomplete mask must be refused.
     struct stat status{};
     if (::stat("/dev/shm", &status) == 0 && S_ISDIR(status.st_mode)
         && ::access("/dev/shm", W_OK | X_OK) == 0) {
-        auto regular = regular_backing(4 * kChunk, true, "/dev/shm");
-        Attachment attachment(regular);
-        ScratchFile file;
-        file.open("tmpfs-is-not-memfd");
-        file.ensure_size(101);
-        std::array<std::uint8_t, 101> observed{}, expected{};
-        observed.fill(0xff);
-        file.read(0, observed.data(), observed.size());
-        require(observed == expected, "unsealed regular tmpfs backing works");
+        TemporaryDirectory directory("/dev/shm");
+        std::string name = directory.path + "/unsealed-XXXXXX";
+        Backing regular(::mkstemp(name.data()), 4 * kChunk);
+        require(::unlink(name.c_str()) == 0, "unlink seal-capable tmpfs fixture");
+        require(::ftruncate(regular.fd, static_cast<off_t>(regular.bytes)) == 0,
+                "size seal-capable tmpfs fixture");
+        const int seals = ::fcntl(regular.fd, F_GET_SEALS);
+        require(seals >= 0 && (seals & kRequiredSeals) != kRequiredSeals,
+                "tmpfs witness answers F_GET_SEALS with incomplete seals");
+        expect_io([&] { ScratchArena::attach(regular.fd, regular.bytes); }, EINVAL,
+                  "scratch arena seals");
+        require(!ScratchArena::attached(), "seal-capable regular file fails closed");
     }
 }
 
@@ -600,6 +732,7 @@ void environment_fd_attach(const Backing& backing) {
     Environment bytes("PF_SCRATCH_ARENA_BYTES", size.c_str());
     ScratchArena::attach_from_environment();
     require(ScratchArena::attached() != nullptr, "explicit environment startup attaches");
+    check_backend(backing);
     ScratchArena::attach_from_environment();
 }
 
@@ -623,52 +756,164 @@ void child(F&& operation) {
             "jail proof child exits successfully instead of dying from SIGXFSZ/SIGBUS");
 }
 
-void sealed_memfd_under_jail(ReplayResult expected) {
-    // Keep the memfd to pass at fd >= 16, leaving fd 5 safe for the child to
-    // overwrite without losing the small exhaustion fixture's source fd.
-    auto large = memfd_backing(1024 * kChunk, kRequiredSeals);
+void syscall_refusals(const Backing& backing) {
+    Environment cap("PF_SCRATCH_WINDOW_BYTES", "65536");
+    Attachment attachment(backing);
+    ScratchFile file;
+    file.open("same-io-refusals");
+    file.ensure_size(2 * kChunk);
+    std::vector<std::uint8_t> reference(static_cast<std::size_t>(2 * kChunk));
+    std::array<std::uint8_t, 97> payload{}, observed{};
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload[i] = static_cast<std::uint8_t>(i * 37 + 11);
+    file.write(17, payload.data(), payload.size());
+    std::copy(payload.begin(), payload.end(), reference.begin() + 17);
+    for (const auto fault : {scratch_syscalls::ReadFault::short_read,
+                             scratch_syscalls::ReadFault::eof}) {
+        const auto reads = scratch_syscalls::reads;
+        const auto stats = scratch_syscalls::stats;
+        scratch_syscalls::next_read = fault;
+        expect_io([&] { file.read(17, observed.data(), observed.size()); }, EIO, "scratch read");
+        require(scratch_syscalls::reads == reads + 1 && scratch_syscalls::stats == stats + 1,
+                "each short pread rechecks size and refuses without retrying a readable tail");
+        file.read(17, observed.data(), observed.size());
+        require(observed == payload, "short-read refusal leaves backing bytes intact");
+        check_stats(65536, 2);
+    }
+    const auto reads = scratch_syscalls::reads;
+    scratch_syscalls::next_read = scratch_syscalls::ReadFault::interrupted;
+    file.read(17, observed.data(), observed.size());
+    require(scratch_syscalls::reads == reads + 2 && observed == payload,
+            "EINTR retries the real read and preserves bytes on either backend");
+    for (const int error : {EFBIG, EPERM, EIO}) {
+        const int expected = error == EPERM ? EFBIG : error;
+        scratch_syscalls::read_error = error;
+        scratch_syscalls::next_read = scratch_syscalls::ReadFault::failure;
+        expect_io([&] { file.read(17, observed.data(), observed.size()); }, expected);
+        const auto stats = scratch_syscalls::stats;
+        scratch_syscalls::next_read = scratch_syscalls::ReadFault::short_read;
+        scratch_syscalls::next_stat_error = error;
+        expect_io([&] { file.read(17, observed.data(), observed.size()); }, expected);
+        require(scratch_syscalls::stats == stats + 1,
+                "short-read revalidation errors retain the typed refusal");
+        const auto maps = scratch_syscalls::maps;
+        scratch_syscalls::next_stat_error = error;
+        expect_io([&] { file.write(kChunk + 17, payload.data(), payload.size()); }, expected);
+        require(scratch_syscalls::maps == maps,
+                "a failed size check refuses before any new mmap");
+        scratch_syscalls::next_map_error = error;
+        expect_io([&] { file.write(kChunk + 17, payload.data(), payload.size()); }, expected);
+        require(scratch_syscalls::maps == maps + 1,
+                "mapping syscall failures use the same typed refusal");
+        check_stats(65536, 2);
+    }
+    file.write(kChunk + 17, payload.data(), payload.size());
+    std::copy(payload.begin(), payload.end(),
+              reference.begin() + static_cast<std::ptrdiff_t>(kChunk + 17));
+    std::vector<std::uint8_t> all(reference.size());
+    file.read(0, all.data(), all.size());
+    require(all == reference, "I/O refusals never corrupt the backing's reference bytes");
+}
+
+void regular_shrink_refusals(const Backing& backing) {
+    Environment cap("PF_SCRATCH_WINDOW_BYTES", "65536");
+    environment_fd_attach(backing);
+    {
+        ScratchFile file;
+        file.open("real-shrink-refusal");
+        file.ensure_size(3 * kChunk);
+        const std::array<std::uint8_t, 2> payload{{0x39, 0xa6}};
+        file.write(2 * kChunk - 2, payload.data(), payload.size());
+        // The helper inherits FSIZE=0 too. Wait for the shrink, so the next
+        // map check can refuse deterministically without a SIGBUS race.
+        child([&] {
+            require(::ftruncate(ScratchArena::kInheritedFd,
+                                static_cast<off_t>(2 * kChunk - 1)) == 0,
+                    "an unsealed regular arena really can shrink under FSIZE=0");
+        });
+        struct stat status{};
+        require(::fstat(backing.fd, &status) == 0
+                    && status.st_size == static_cast<off_t>(2 * kChunk - 1),
+                "helper changed the real shared backing's size");
+        const auto maps = scratch_syscalls::maps;
+        expect_io([&] { file.write(2 * kChunk, payload.data(), payload.size()); },
+                  EIO, "scratch arena map size");
+        expect_io([&] { file.write(0, payload.data(), payload.size()); },
+                  EIO, "scratch arena map size");
+        require(scratch_syscalls::maps == maps,
+                "the next operation refuses new windows both beyond and within the new size");
+        std::array<std::uint8_t, 2> observed{};
+        const auto stats = scratch_syscalls::stats;
+        const auto reads = scratch_syscalls::reads;
+        expect_io([&] { file.read(2 * kChunk - 2, observed.data(), observed.size()); },
+                  EIO, "scratch read");
+        require(observed[0] == payload[0] && scratch_syscalls::reads == reads + 1
+                    && scratch_syscalls::stats == stats + 1,
+                "real positive short read copies its prefix, rechecks size and refuses");
+        const auto eof_stats = scratch_syscalls::stats;
+        expect_io([&] { file.read(2 * kChunk, observed.data(), 1); }, EIO, "scratch read");
+        require(scratch_syscalls::stats == eof_stats + 1,
+                "zero-byte backing read also rechecks size");
+        expect_io([&] { file.ensure_size(4 * kChunk); }, EIO, "scratch arena map size");
+        check_stats(65536, 3); // Failed zeroing returns its newly claimed chunk.
+    }
+    check_stats(65536, 0);
+    ScratchArena::detach();
+    require(::close(ScratchArena::kInheritedFd) == 0, "release shrunk caller descriptor");
+}
+
+void backend_under_jail(ScratchArenaBackend backend, ReplayResult expected) {
+    // Both backends exceed the 96 MiB address-space headroom. Use 128 MiB
+    // rather than reserving 1 GiB of disk for a seven-chunk replay.
+    auto large = arena_backing(backend, 128 * kChunk);
     const int stable = ::fcntl(large.fd, F_DUPFD_CLOEXEC, 16);
     require(stable >= 16, "retain arena source beyond inherited contract descriptors");
     ::close(std::exchange(large.fd, stable));
-    auto small = memfd_backing(4 * kChunk, kRequiredSeals);
+    auto small = arena_backing(backend, 4 * kChunk);
     const int small_stable = ::fcntl(small.fd, F_DUPFD_CLOEXEC, 16);
     require(small_stable >= 16, "retain exhaustion source beyond contract fd 5");
     ::close(std::exchange(small.fd, small_stable));
     child([&] {
         jail_limits(large.bytes);
         Environment cap("PF_SCRATCH_WINDOW_BYTES", "2097275"); // 2 MiB + 123; page-rounded cap
+        expect_io([&] { ScratchArena::attach(large.fd, large.bytes - 1); }, EINVAL);
+        expect_io([&] { ScratchArena::attach(large.fd, large.bytes + 1); }, EINVAL);
+        int descriptors[2]{};
+        require(::pipe(descriptors) == 0, "create non-regular fd in jailed validation");
+        Backing pipe_read(descriptors[0], large.bytes), pipe_write(descriptors[1], large.bytes);
+        expect_io([&] { ScratchArena::attach(pipe_read.fd, pipe_read.bytes); }, EINVAL);
         environment_fd_attach(large);
         const std::uint8_t byte = 0x6f;
         errno = 0;
         require(::pwrite(ScratchArena::kInheritedFd, &byte, 1, 0) == -1 && errno == EFBIG,
                 "kernel refuses even in-size pwrite while ignored SIGXFSZ keeps child alive");
         errno = 0;
+        require(::pwrite(ScratchArena::kInheritedFd, &byte, 1,
+                         static_cast<off_t>(large.bytes)) == -1 && errno == EFBIG,
+                "kernel refuses a write beyond either backend's fixed size");
+        errno = 0;
         require(::ftruncate(ScratchArena::kInheritedFd, static_cast<off_t>(large.bytes + 1)) == -1
                     && (errno == EFBIG || errno == EPERM),
                 "jail refuses arena growth");
-        errno = 0;
-        require(::ftruncate(ScratchArena::kInheritedFd, 0) == -1 && errno == EPERM,
-                "seal refuses arena shrink");
-        errno = 0;
-        require(::fcntl(ScratchArena::kInheritedFd, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EPERM,
-                "seal refuses a child seal change");
+        if (backend == ScratchArenaBackend::sealed_memfd) {
+            errno = 0;
+            require(::ftruncate(ScratchArena::kInheritedFd, 0) == -1 && errno == EPERM,
+                    "seal refuses arena shrink");
+            errno = 0;
+            require(::fcntl(ScratchArena::kInheritedFd, F_ADD_SEALS, F_SEAL_WRITE) == -1
+                        && errno == EPERM,
+                    "seal refuses a child seal change");
+        }
         same_replay(replay(2 * kChunk), expected);
         ScratchArena::detach();
         require(::close(ScratchArena::kInheritedFd) == 0, "detach leaves caller fd ownership intact");
         interleave_exhaustion_and_reuse(small, 2 * kChunk);
+        syscall_refusals(small);
+        if (backend == ScratchArenaBackend::regular_file) regular_shrink_refusals(large);
         struct sigaction disposition{};
         require(::sigaction(SIGXFSZ, nullptr, &disposition) == 0
                     && disposition.sa_handler == SIG_IGN,
                 "detach retains deliberate process-wide SIGXFSZ ignore");
-    });
-    // The later volume-file backend must also work under FSIZE=0. Its
-    // backing is sized in the parent, just like the wrapper's memfd.
-    auto regular = regular_backing(9 * kChunk);
-    child([&] {
-        jail_limits(large.bytes);
-        Environment cap("PF_SCRATCH_WINDOW_BYTES", "65536");
-        Attachment attachment(regular);
-        same_replay(replay(65536), expected);
     });
 }
 #endif
@@ -690,16 +935,20 @@ int main() {
             Environment ignored_size("PF_SCRATCH_ARENA_BYTES", "invalid-but-not-read");
             expected = replay(0);
         }
-        invalid_backing_and_environment();
-        regular_replay_and_sparse_reuse(expected);
-        default_cap_and_no_allocation();
-        partial_subwindows_and_short_reads();
-        moves_lifetime_and_backend_selection();
-        disk_id_table_uses_facade();
 #if defined(__linux__)
         seal_validation();
-        sealed_memfd_under_jail(expected);
 #endif
+        for (const auto backend : kBackends) {
+            invalid_backing_and_environment(backend);
+            arena_replay_and_sparse_reuse(backend, expected);
+            default_cap_and_no_allocation(backend);
+            partial_subwindows(backend);
+            moves_lifetime_and_backend_selection(backend);
+            disk_id_table_uses_facade(backend);
+#if defined(__linux__)
+            backend_under_jail(backend, expected);
+#endif
+        }
         require(!ScratchArena::attached(), "all fixture regions and arenas were released");
         std::puts("test_scratch_arena: reference, bounds, lifetime and backing checks passed");
         return 0;

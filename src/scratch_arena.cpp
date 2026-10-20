@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -64,42 +63,32 @@ int duplicate_fd(int fd) {
     return result;
 }
 
-void validate_backing(int fd, std::uint64_t bytes) {
+void validate_backing_size(int fd, std::uint64_t bytes, int mismatch_error,
+                           const char* operation) {
     struct stat status{};
     int result;
     do { result = ::fstat(fd, &status); } while (result != 0 && errno == EINTR);
-    if (result != 0) arena_error(errno, "scratch arena stat");
+    if (result != 0) arena_error(errno, operation);
     if (!S_ISREG(status.st_mode) || status.st_size < 0
         || static_cast<std::uint64_t>(status.st_size) != bytes)
-        throw ScratchIoError(EINVAL, "scratch arena backing");
+        throw ScratchIoError(mismatch_error, operation);
+}
+
+ScratchArenaBackend validate_backing(int fd, std::uint64_t bytes) {
+    validate_backing_size(fd, bytes, EINVAL, "scratch arena backing");
 
 #if defined(__linux__)
     int seals;
     do { seals = ::fcntl(fd, F_GET_SEALS); } while (seals < 0 && errno == EINTR);
-    // Ordinary volume files need no seals. tmpfs files can also answer
-    // F_GET_SEALS, so its success alone must not identify a file as a memfd.
     if (seals >= 0) {
         constexpr int required = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
-        if ((seals & required) != required) {
-            char path[64]{};
-            const int length = std::snprintf(path, sizeof path, "/proc/self/fd/%d", fd);
-            if (length < 0 || static_cast<std::size_t>(length) >= sizeof path)
-                throw ScratchIoError(EINVAL, "scratch arena descriptor path");
-            char target[8]{};
-            ssize_t count;
-            do { count = ::readlink(path, target, sizeof target); }
-            while (count < 0 && errno == EINTR);
-            // Fail closed when a seal-capable fd cannot be identified.
-            // No reopening, file reads, or backing mutations are involved.
-            if (count < 0) arena_error(errno, "scratch arena identify");
-            const bool memfd = (count >= 7 && std::memcmp(target, "/memfd:", 7) == 0)
-                || (count >= 6 && std::memcmp(target, "memfd:", 6) == 0);
-            if (memfd) throw ScratchIoError(EINVAL, "scratch arena seals");
-        }
-    } else if (errno != EINVAL && errno != ENOTTY && errno != ENOSYS) {
-        arena_error(errno, "scratch arena seals");
+        if ((seals & required) != required)
+            throw ScratchIoError(EINVAL, "scratch arena seals");
+        return ScratchArenaBackend::sealed_memfd;
     }
+    if (errno != EINVAL) arena_error(errno, "scratch arena seals");
 #endif
+    return ScratchArenaBackend::regular_file;
 }
 
 } // namespace
@@ -131,7 +120,7 @@ struct ScratchArena::Impl {
         if (bytes > maximum || chunks > std::numeric_limits<std::uint32_t>::max())
             throw ScratchIoError(EFBIG, "scratch arena size");
         if (chunks == 0) throw ScratchIoError(EINVAL, "scratch arena size");
-        validate_backing(fd.value, bytes);
+        counters.backend = validate_backing(fd.value, bytes);
 
         const long page_result = ::sysconf(_SC_PAGESIZE);
         if (page_result <= 0) throw ScratchIoError(EINVAL, "scratch arena page size");
@@ -188,6 +177,10 @@ struct ScratchArena::Impl {
         const auto offset = physical - in_chunk + window_start;
         const auto length = static_cast<std::size_t>(
             std::min<std::uint64_t>(window_bytes, kChunkBytes - window_start));
+        // A regular backing can be shrunk through the inherited fd despite
+        // RLIMIT_FSIZE=0. Refuse before mapping beyond its new EOF. This cannot
+        // protect a cached window or close a concurrent fstat-to-access race.
+        validate_backing_size(fd.value, supplied_bytes, EIO, "scratch arena map size");
         void* address = ::mmap(nullptr, length, PROT_READ | PROT_WRITE,
                                MAP_SHARED, fd.value, static_cast<off_t>(offset));
         if (address == MAP_FAILED) arena_error(errno, "scratch arena map");
@@ -400,7 +393,15 @@ void ScratchArena::read(const Region& region, std::uint64_t offset,
         const ssize_t result = ::pread(impl_->fd.value, destination + received, count,
                                        static_cast<off_t>(physical));
         if (result < 0 && errno == EINTR) continue;
-        if (result <= 0) arena_error(result < 0 ? errno : EIO, "scratch read");
-        received += static_cast<std::size_t>(result);
+        if (result < 0) arena_error(errno, "scratch read");
+        if (static_cast<std::size_t>(result) != count) {
+            // A positive short read is already a refusal, even if a size
+            // recheck finds no change. Never accept it by retrying the tail.
+            validate_backing_size(impl_->fd.value, impl_->supplied_bytes, EIO, "scratch read");
+            arena_error(EIO, "scratch read");
+        }
+        received += count;
     }
 }
+
+} // namespace pineforge::detail

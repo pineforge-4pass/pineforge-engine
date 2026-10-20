@@ -19,6 +19,11 @@ public:
           RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
 };
 
+enum class ScratchArenaBackend : std::uint8_t {
+    sealed_memfd,
+    regular_file,
+};
+
 struct ScratchArenaStats {
     std::uint64_t bytes_total = 0;          // Complete, allocatable chunks.
     std::uint64_t bytes_used = 0;           // Claimed chunks, including slack.
@@ -26,6 +31,7 @@ struct ScratchArenaStats {
     std::uint64_t chunks_free = 0;
     std::uint64_t windows_mapped_bytes = 0; // Current mappings, not dirty bytes.
     std::uint64_t high_water = 0;           // Peak bytes_used since attach.
+    ScratchArenaBackend backend = ScratchArenaBackend::regular_file;
 };
 
 class ScratchFile;
@@ -37,8 +43,16 @@ class ScratchFile;
 //
 // The wrapper owns sizing: this class never grows, shrinks, writes with
 // write/pwrite, or changes seals on the backing fd. It owns a CLOEXEC dup;
-// the caller keeps ownership of the supplied fd. Linux memfds must carry
-// GROW|SHRINK|SEAL; sized regular files need no seals.
+// the caller keeps ownership of the supplied fd. Both backends require
+// S_ISREG and exactly the supplied size. On Linux, F_GET_SEALS success
+// requires GROW|SHRINK|SEAL; EINVAL selects an unsealed regular file.
+// The wrapper preallocates regular files in a root-owned 0700 directory,
+// mode 0600, and passes O_RDWR. New mappings and short preads recheck size.
+// The one unrecoverable case is SIGBUS after a concurrent shrink invalidates
+// an already mapped window (including the fstat-to-access race). There is no
+// SIGBUS handler. With the wrapper retaining size until child exit, only the
+// child itself can cause this by shrinking its inherited regular-file fd;
+// the arena never shrinks it, and memfd SHRINK seals prevent it entirely.
 //
 // Successful attach deliberately sets process-wide SIGXFSZ to SIG_IGN, and
 // detach does not restore it: a later EFBIG must be a typed refusal instead
