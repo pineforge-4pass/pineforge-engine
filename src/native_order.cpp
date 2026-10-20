@@ -1,9 +1,9 @@
 #include <pineforge/native_order.hpp>
+#include <pineforge/detail/scratch_slab.hpp>
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
-#include <system_error>
 #include <unistd.h>
 #include "native_matching.hpp" // Price grids share the matcher's value-only geometry.
 #include <algorithm>
@@ -997,25 +997,6 @@ void WorkingRequestCore::reserve(std::size_t expected_events) {
     if (live_.capacity() < 8) live_.reserve(8);
 }
 
-void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
-    reserve_n(history_, plan.events.size());
-    reserve_n(ordinal_index_, plan.events.size());
-    if (plan.live_change == kLivePush) reserve_n(live_, 1);
-    if (plan.add_receipt) reserve_n(receipts_, 1);
-    // index_committed's two rows: an incarnation opens at most one issued
-    // range and names at most one successor root.
-    if (plan.consume_incarnation) {
-        reserve_n(issued_, 1);
-        reserve_successor_root();
-    }
-    // A re-price that kept its handle moves its row in the queue, which
-    // repriced_ records (note_repriced).
-    if (plan.live_change == kLiveErasePush && plan.live_row.definition
-        && plan.live_row.priority() != plan.live_row.handle().incarnation) {
-        reserve_n(repriced_, 1);
-    }
-}
-
 PreparedMutation WorkingRequestCore::finish_mutation(MutationPlan plan) {
     seal_plan(plan);
     auto impl = std::make_unique<PreparedMutation::Impl>();
@@ -1036,22 +1017,6 @@ void WorkingRequestCore::begin_direct() const {
                 "native run identity requires a nonempty session key and positive run number");
     }
     require_epoch_room();
-}
-
-void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool add_receipt,
-                                     bool consume_incarnation) {
-    require_epoch_room();
-    reserve_n(history_, events);
-    reserve_n(ordinal_index_, events);
-    if (push_live) reserve_n(live_, 1);
-    if (add_receipt) reserve_n(receipts_, 1);
-    if (consume_incarnation) {
-        reserve_n(issued_, 1);
-        reserve_successor_root();
-    }
-    if (!bump_epoch()) {
-        throw std::overflow_error("native working-request epoch exhausted");
-    }
 }
 
 template <class Event>
@@ -5913,16 +5878,21 @@ struct WorkingRequestCore::SuccessorRootIndex {
     static_assert(sizeof(Row) == 16, "successor root scratch rows are 16 bytes");
     static constexpr std::size_t kTailRows = 64;
 
-    // These are storage metadata, not additional broker state: the file and
-    // tail partition exactly the root sequence already in chain_roots_. The
+    // These are storage metadata, not additional broker state: the prefix
+    // and tail partition the root sequence already in chain_roots_. The slab,
     // descriptor, directory and partition boundary do not enter its digest.
     std::array<Row, kTailRows> tail{};
     std::size_t tail_size = 0;
     uint64_t disk_rows = 0;
     int fd = -1;
     std::string directory;
+    std::shared_ptr<detail::ScratchSlab> slab;
+    // Transient input for one bounded-memory preparation, never a root count.
+    bool next_adds_root = true;
 
     SuccessorRootIndex() = default;
+    explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner) noexcept
+        : slab(owner) {}
     SuccessorRootIndex(const SuccessorRootIndex&) = delete;
     SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
     ~SuccessorRootIndex() { if (fd >= 0) ::close(fd); }
@@ -5935,6 +5905,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     void open_file() {
+        assert(!slab);
         if (fd >= 0) return;
         const char* temporary = std::getenv("TMPDIR");
         std::string name = directory.empty()
@@ -5943,43 +5914,65 @@ struct WorkingRequestCore::SuccessorRootIndex {
         name += "pineforge-roots-XXXXXX";
         const int opened = ::mkstemp(name.data());
         if (opened < 0) {
-            throw std::system_error(errno, std::generic_category(), "native successor roots create");
+            throw detail::ScratchIoError(errno, "native successor roots create");
         }
         // Unlink before publishing the descriptor: an opened scratch file
         // has no directory entry. mkstemp creates it with mode 0600.
         if (::unlink(name.c_str()) != 0) {
             const int error = errno;
             ::close(opened);
-            throw std::system_error(error, std::generic_category(), "native successor roots unlink");
+            throw detail::ScratchIoError(error, "native successor roots unlink");
         }
         if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
             const int error = errno;
             ::close(opened);
-            throw std::system_error(error, std::generic_category(), "native successor roots cloexec");
+            throw detail::ScratchIoError(error, "native successor roots cloexec");
         }
         fd = opened;
     }
 
     void prepare_append() {
-        if (tail_size < tail.size()) return;
-        const auto maximum_rows = static_cast<uint64_t>(std::numeric_limits<off_t>::max()) / sizeof(Row);
-        if (disk_rows > maximum_rows - tail_size) {
-            throw std::overflow_error("native successor roots file offset exhausted");
-        }
-        open_file();
-        const off_t offset = static_cast<off_t>(disk_rows * sizeof(Row));
-        const auto* bytes = reinterpret_cast<const unsigned char*>(tail.data());
-        const std::size_t length = tail_size * sizeof(Row);
-        std::size_t written = 0;
-        while (written < length) {
-            const ssize_t count = ::pwrite(fd, bytes + written, length - written,
-                                           offset + static_cast<off_t>(written));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) {
-                const int error = count < 0 ? errno : EIO;
-                throw std::system_error(error, std::generic_category(), "native successor roots write");
+        if (slab) {
+            const bool adds_root = next_adds_root;
+            next_adds_root = true; // Also reset before a refused ticket throws.
+            // One read-only ticket covers BOTH the inline rows and the full
+            // future prefix, even before the first 64-row flush. Rootless
+            // preparations can flush a full tail without consuming a row.
+            const auto limit = slab->manifest().R;
+            const auto pending = static_cast<uint64_t>(tail_size);
+            if (disk_rows > limit || pending > limit - disk_rows
+                || (adds_root && disk_rows + pending == limit)) {
+                throw detail::ScratchCapacityError(detail::ScratchResource::successor_roots);
             }
-            written += static_cast<std::size_t>(count);
+            const auto rows = disk_rows + pending + (adds_root ? uint64_t{1} : uint64_t{0});
+            // compute_layout already proved 16*R representable before bind.
+            slab->require_extend(detail::ScratchResource::successor_roots, rows * sizeof(Row));
+        }
+        if (tail_size < tail.size()) return;
+        const std::size_t length = tail_size * sizeof(Row);
+        if (slab) {
+            slab->write_at(detail::ScratchResource::successor_roots,
+                           disk_rows * sizeof(Row), tail.data(), length);
+        } else {
+            const auto maximum_rows = static_cast<uint64_t>(std::numeric_limits<off_t>::max()) / sizeof(Row);
+            if (disk_rows > maximum_rows - tail_size) {
+                throw coded<std::overflow_error>(RunFailureCode::scratch_io_failed, {},
+                        "native successor roots file offset exhausted");
+            }
+            open_file();
+            const off_t offset = static_cast<off_t>(disk_rows * sizeof(Row));
+            const auto* bytes = reinterpret_cast<const unsigned char*>(tail.data());
+            std::size_t written = 0;
+            while (written < length) {
+                const ssize_t count = ::pwrite(fd, bytes + written, length - written,
+                                               offset + static_cast<off_t>(written));
+                if (count < 0 && errno == EINTR) continue;
+                if (count <= 0) {
+                    const int error = count < 0 ? errno : EIO;
+                    throw detail::ScratchIoError(error, "native successor roots write");
+                }
+                written += static_cast<std::size_t>(count);
+            }
         }
         // Publish only a complete batch. A short/error write leaves the
         // authoritative tail intact; retry overwrites the same file offset.
@@ -5995,23 +5988,28 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     Row read(uint64_t index) const {
-        assert(fd >= 0 && index < disk_rows);
+        assert((slab || fd >= 0) && index < disk_rows);
         Row row;
-        auto* bytes = reinterpret_cast<unsigned char*>(&row);
-        const off_t offset = static_cast<off_t>(index * sizeof(Row));
-        std::size_t received = 0;
-        while (received < sizeof(Row)) {
-            const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
-                                          offset + static_cast<off_t>(received));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) {
-                const int error = count < 0 ? errno : EIO;
-                throw std::system_error(error, std::generic_category(), "native successor roots read");
+        if (slab) {
+            slab->read_at(detail::ScratchResource::successor_roots,
+                          index * sizeof(Row), &row, sizeof(Row));
+        } else {
+            auto* bytes = reinterpret_cast<unsigned char*>(&row);
+            const off_t offset = static_cast<off_t>(index * sizeof(Row));
+            std::size_t received = 0;
+            while (received < sizeof(Row)) {
+                const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
+                                              offset + static_cast<off_t>(received));
+                if (count < 0 && errno == EINTR) continue;
+                if (count <= 0) {
+                    const int error = count < 0 ? errno : EIO;
+                    throw detail::ScratchIoError(error, "native successor roots read");
+                }
+                received += static_cast<std::size_t>(count);
             }
-            received += static_cast<std::size_t>(count);
         }
         if (row.root == 0 || row.root >= row.successor) {
-            throw std::system_error(EIO, std::generic_category(), "native successor roots invalid row");
+            throw detail::ScratchIoError(EIO, "native successor roots invalid row");
         }
         return row;
     }
@@ -6036,6 +6034,63 @@ struct WorkingRequestCore::SuccessorRootIndex {
         return std::nullopt;
     }
 };
+
+// These reservations need the complete private helper to stage its transient
+// ticket. Their declarations and all callers keep their existing signatures.
+void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
+    reserve_n(history_, plan.events.size());
+    reserve_n(ordinal_index_, plan.events.size());
+    if (plan.live_change == kLivePush) reserve_n(live_, 1);
+    if (plan.add_receipt) reserve_n(receipts_, 1);
+    // index_committed's two rows: an incarnation opens at most one issued
+    // range and names at most one successor root.
+    if (plan.consume_incarnation) {
+        reserve_n(issued_, 1);
+        if (successor_roots_ && successor_roots_->slab) {
+            successor_roots_->next_adds_root = plan.live_row.definition
+                    && plan.live_row.definition->root
+                    && plan.live_row.handle().incarnation == plan.incarnation_used;
+        }
+        reserve_successor_root();
+    }
+    // A re-price that kept its handle moves its row in the queue, which
+    // repriced_ records (note_repriced).
+    if (plan.live_change == kLiveErasePush && plan.live_row.definition
+        && plan.live_row.priority() != plan.live_row.handle().incarnation) {
+        reserve_n(repriced_, 1);
+    }
+}
+
+void WorkingRequestCore::seal_direct(std::size_t events, bool push_live, bool add_receipt,
+                                     bool consume_incarnation) {
+    require_epoch_room();
+    reserve_n(history_, events);
+    reserve_n(ordinal_index_, events);
+    if (push_live) reserve_n(live_, 1);
+    if (add_receipt) reserve_n(receipts_, 1);
+    if (consume_incarnation) {
+        reserve_n(issued_, 1);
+        if (successor_roots_ && successor_roots_->slab) {
+            // Only replacements root a newly issued incarnation.
+            successor_roots_->next_adds_root = !push_live;
+        }
+        reserve_successor_root();
+    }
+    if (!bump_epoch()) {
+        throw std::overflow_error("native working-request epoch exhausted");
+    }
+}
+
+// Called after reset and before the first callback. Construct the fixed tail
+// here, so bounded operations neither allocate a helper nor create a file.
+void WorkingRequestCore::bind_scratch_slab(
+        const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab) {
+    if (slab) {
+        successor_roots_ = std::make_shared<SuccessorRootIndex>(slab);
+    } else if (successor_roots_ && successor_roots_->slab) {
+        successor_roots_.reset();
+    }
+}
 
 void WorkingRequestCore::set_successor_roots_directory(const std::string& directory) {
     if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
