@@ -60,7 +60,7 @@ def subset_fixture(tmp_path, *, count=7, custom_log=False, fault=""):
             f"validation/{probe} # selected\n" for probe in probes), encoding="utf-8")
     # These are synthetic fixture pins; the repository's frozen pins are unused.
     (scripts / "corpus_parity_baseline.txt").write_text(json.dumps({
-        probe: hashlib.sha256(csv_bytes(probe)).hexdigest() for probe in probes,
+        probe: hashlib.sha256(csv_bytes(probe)).hexdigest() for probe in probes
     }), encoding="utf-8")
     (root / "events").mkdir()
     build = root / "build-subset"
@@ -129,7 +129,7 @@ def test_subset_defaults_to_two_passes_and_reports_exact_artifacts(
     assert result.returncode == 0, result.stdout + result.stderr
     runs = events(root)
     assert {(row["phase"], row["probe"]) for row in runs} == {
-        (phase, probe) for phase in ("0", "1") for probe in probes,
+        (phase, probe) for phase in ("0", "1") for probe in probes
     }
     assert len(runs) == 2 * len(probes)
     kept = probes[:5]
@@ -207,7 +207,7 @@ def test_first_identity_failure_stops_before_any_sink_run(tmp_path, fault, code)
     result = run_subset(root, env)
     assert result.returncode == code, result.stdout + result.stderr
     assert {(row["phase"], row["probe"]) for row in events(root)} == {
-        ("0", probe) for probe in probes,
+        ("0", probe) for probe in probes
     }
     assert len(identities(root)) == 1
     assert log.read_text(encoding="utf-8") == STALE_LOG
@@ -221,7 +221,7 @@ def test_explicit_opt_out_keeps_the_first_pass_sink_off(tmp_path):
     result = run_subset(root, env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert {(row["phase"], row["probe"]) for row in events(root)} == {
-        ("0", probe) for probe in probes,
+        ("0", probe) for probe in probes
     }
     assert len(identities(root)) == 1
     assert log.read_text(encoding="utf-8") == STALE_LOG
