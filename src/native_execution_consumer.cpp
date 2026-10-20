@@ -2905,6 +2905,13 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     engine.reset_run_state();
+    engine.reset_trade_percent_prefix();
+    closed_trade_prefix_ = {};
+    closed_trade_seal_bar_.reset();
+    closed_trade_report_.reset();
+    for (std::size_t index = 0; index < sealed_exit_phase_basis_.size(); ++index)
+        sealed_exit_phase_basis_[index] = index;
+    exit_phases_restarted_ = false;
     // The rows are this attempt's from here on, whether it completes or fails.
     rows_current_ = batch_current_ = true;
     // The generation is admitted here: after the reset and the last refusal,
@@ -3003,7 +3010,12 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     closed_rows_digest_ = BrokerStateHashSink{}.h;
     closed_rows_digested_ = 0;
     closed_rows_final_ = 0;
-    closed_row_prefix_.clear();
+    if (streams_closed_rows(engine)) {
+        std::vector<std::uint64_t>().swap(closed_row_prefix_);
+        closed_trade_report_ = std::make_unique<ClosedTradeReport>(engine.initial_capital_);
+    } else {
+        closed_row_prefix_.clear();
+    }
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;
@@ -11918,6 +11930,11 @@ void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
 
 uint64_t NativeExecutionConsumer::closed_rows_digest(
         const TradeLedger& rows) const {
+    if (rows.base() != closed_trade_prefix_.base
+        || closed_rows_digested_ < rows.base()
+        || closed_rows_final_ < rows.base())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "closed-row digest precedes the sealed prefix");
     const std::size_t final_rows = std::min(closed_rows_final_, rows.size());
     if (closed_rows_digested_ > final_rows) rewind_closed_rows(final_rows);
     BrokerStateHashSink f;
@@ -11934,18 +11951,27 @@ uint64_t NativeExecutionConsumer::closed_rows_digest(
     return f.h;
 }
 
-void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const noexcept {
+void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const {
+    const std::size_t base = closed_trade_prefix_.base;
+    if (first < base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "closed-row rewind precedes the sealed prefix");
     if (first >= closed_rows_digested_) return;
     closed_rows_digested_ = first;
-    closed_row_prefix_.resize(first);
-    closed_rows_digest_ = first == 0 ? BrokerStateHashSink{}.h : closed_row_prefix_.back();
+    closed_row_prefix_.resize(first - base);
+    closed_rows_digest_ = first == base ? closed_trade_prefix_.rows_digest
+                                       : closed_row_prefix_.back();
 }
 
 bool NativeExecutionConsumer::closed_rows_digest_holds(
         const TradeLedger& rows) const noexcept {
-    if (closed_rows_digested_ > rows.size()) return false;
+    const std::size_t base = closed_trade_prefix_.base;
+    if (rows.base() != base || closed_rows_digested_ < base
+        || closed_rows_digested_ > rows.size()
+        || closed_row_prefix_.size() != closed_rows_digested_ - base) return false;
     BrokerStateHashSink f;
-    for (std::size_t index = 0; index < closed_rows_digested_; ++index) {
+    f.h = closed_trade_prefix_.rows_digest;
+    for (std::size_t index = base; index < closed_rows_digested_; ++index) {
         fold_closed_row(f, rows[index]);
     }
     return f.h == closed_rows_digest_;
@@ -11953,8 +11979,8 @@ bool NativeExecutionConsumer::closed_rows_digest_holds(
 
 void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) const noexcept {
 #ifndef NDEBUG
-    // Debug builds re-fold, at the run's end, every closed row the running
-    // digest has taken: a host that amended a folded field of a final row
+    // Debug builds re-fold the resident rows from base, seeded with the
+    // immutable prefix digest: an amendment of a final row
     // without naming it aborts here instead of answering a digest no fresh
     // fold reproduces. Rows removed from the end are forgotten first, as a
     // read would.
@@ -12453,7 +12479,8 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
     int64_t metric_equity_len = 0;
     int64_t metric_observations = 0;
     try {
-        engine.fill_trades_section(&local);
+        if (streams_closed_rows(engine)) fill_streamed_trades(engine, &local);
+        else engine.fill_trades_section(&local);
 
         local.input_bars_processed = engine.diag_input_bars_processed_;
         local.script_bars_processed = engine.diag_script_bars_processed_;
@@ -12469,6 +12496,10 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
             const int64_t window_start = selected_epoch_.admitted_window.start_ms;
             const int64_t window_end = selected_epoch_.admitted_window.end_ms;
             const std::vector<pf_equity_point_t>& recorded = engine.equity_curve_;
+            if (closed_trade_report_
+                && closed_trade_report_->first_entry_time < window_start)
+                refuse_selected_capture(
+                    "native selected report: a trade was entered before the window start");
             // No position, fill or account change may precede T: a trade row
             // (closed, or the range-end row of an open lot) or an open lot
             // entered before the window is a carry-in.
@@ -12591,7 +12622,12 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
     const auto& slot = engine.execution_consumer_slot_;
     const auto* consumer = static_cast<const NativeExecutionConsumer*>(slot.ptr.get());
     if (slot.native) {
-        if (consumer == nullptr || !consumer->observed_epoch_sealed()) return false;
+        if (consumer == nullptr) return false;
+        if (!consumer->observed_epoch_sealed()) {
+            if (!consumer->streams_closed_rows(engine)) return false;
+            consumer->fill_streamed_report(engine, out);
+            return true;
+        }
     } else if (!selected_query_closed(engine)) {
         return false;
     }
@@ -12655,6 +12691,10 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
                                              local.net_profit, engine.initial_capital_,
                                              engine.chart_timezone_, engine.first_bar_open_,
                                              engine.current_bar_.close, engine.bars_in_market_);
+        }
+        if (consumer->streams_closed_rows(engine)) {
+            consumer->finish_streamed_trade_metrics(&local);
+            consumer->finish_streamed_trades(engine, &local);
         }
         engine.fill_security_diag_section(&local);
         engine.fill_trace_section(&local);
@@ -13026,6 +13066,229 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         throw;
     }
     return true;
+}
+
+namespace {
+// The existing report/wire projection, shared by seal-time and final-tail
+// publication. Identity strings stay on Trade and are consumed by write_t.
+template<class Result, class Row>
+Result closed_trade_record(const Row& row) {
+    Result result{};
+    result.entry_time = row.entry_time;
+    result.exit_time = row.exit_time;
+    result.entry_price = row.entry_price;
+    result.exit_price = row.exit_price;
+    result.pnl = row.pnl;
+    result.pnl_pct = row.pnl_pct;
+    result.is_long = row.is_long ? 1 : 0;
+    result.max_runup = row.max_runup;
+    result.max_drawdown = row.max_drawdown;
+    result.qty = row.qty;
+    result.commission = row.commission;
+    result.entry_bar_index = row.entry_bar_index;
+    result.exit_bar_index = row.exit_bar_index;
+    result.open_at_end = row.open_at_end ? 1 : 0;
+    return result;
+}
+} // namespace
+
+bool NativeExecutionConsumer::streams_closed_rows(const BacktestEngine& engine) const noexcept {
+    return engine.report_sink_state_.enabled
+        && engine.report_sink_state_.trade_history_streamable;
+}
+
+std::size_t NativeExecutionConsumer::closed_rows_sealable(
+        const TradeLedger& rows, std::size_t phase_final, std::uint64_t money_folded,
+        std::int64_t script_bar_open, std::optional<std::uint64_t> mutable_entry) const {
+    const std::size_t base = rows.base();
+    if (closed_rows_final_ < base || phase_final < base || money_folded < base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade seal fold mark precedes the resident base");
+    std::size_t tail = rows.size();
+    if (tail > base) {
+        --tail;
+        while (tail > base && rows[tail - 1].exit_time == rows.back().exit_time) --tail;
+    }
+    const std::size_t keep_from = tail > base ? tail - 1 : base;
+    const auto limit = std::min<std::uint64_t>(
+        std::min({keep_from, closed_rows_final_, phase_final}), money_folded);
+    std::size_t next = base;
+    for (; next < limit; ++next) {
+        const Trade& row = rows[next];
+        if (row.exit_time >= script_bar_open
+            || (mutable_entry && row.entry_incarnation == *mutable_entry)) break;
+    }
+    return next;
+}
+
+void NativeExecutionConsumer::fold_sealed_exit_phase(std::uint8_t phase) {
+    if (phase > static_cast<std::uint8_t>(NativePathPhase::Close))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "sealed exit phase is outside NativePathPhase");
+    for (auto& seed : sealed_exit_phase_basis_) {
+        BrokerStateHashSink f;
+        f.h = seed;
+        f.u(phase);
+        seed = f.h;
+    }
+}
+
+std::uint64_t NativeExecutionConsumer::replay_sealed_exit_phases(
+        std::uint64_t seed) const noexcept {
+    const auto residue = static_cast<std::size_t>(seed % 8);
+    // For F = the prefix's exact byte fold, F(r + 8*q) = F(r) +
+    // q*(F(8)-F(0)) modulo 2^64. Every XOR operand is <8; multiplying
+    // and XORing therefore preserve this relation, on either byte order.
+    return sealed_exit_phase_basis_[residue]
+        + (seed / 8) * (sealed_exit_phase_basis_[8] - sealed_exit_phase_basis_[0]);
+}
+
+void NativeExecutionConsumer::write_streamed_trade(
+        const BacktestEngine& engine, std::size_t global, const TradeC& row) const {
+    auto& sink = engine.report_sink_state_;
+    if (!sink.writer || sink.receipt.complete
+        || global > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        || sink.receipt.count_t != static_cast<std::int64_t>(global))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade sink cursor does not match the global row");
+    const auto wire = closed_trade_record<pf_trade_t>(row);
+    const Trade& identity = engine.get_report_trade(static_cast<int>(global));
+    try {
+        sink.writer->write_t(static_cast<std::int64_t>(global) + 1, wire,
+            identity.entry_incarnation, engine.closed_trade_close_cause(static_cast<int>(global)),
+            identity.entry_id, identity.exit_id, identity.exit_comment);
+        ++sink.receipt.count_t;
+    } catch (const report_sink::WriterError& error) {
+        sink.writer.reset();
+        const auto code = error.reason() == report_sink::WriterFailure::io
+            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
+        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        auto& mutable_engine = const_cast<BacktestEngine&>(engine);
+        mutable_engine.last_run_status_ = 1;
+        note_run_failure(mutable_engine, failure.what(), classify_run_failure(failure));
+        throw failure;
+    }
+}
+
+void NativeExecutionConsumer::seal_closed_rows(
+        BacktestEngine& engine, std::size_t global_end, std::uint64_t exit_phase_digest,
+        double source_gains, double source_losses) {
+    const std::size_t base = closed_trade_prefix_.base;
+    if (!streams_closed_rows(engine) || !closed_trade_report_
+        || engine.trades_.base() != base || global_end < base
+        || global_end > engine.trades_.size() || global_end > closed_rows_final_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade seal is outside the final resident prefix");
+    if (global_end == base) return;
+    // Materialize the digest before any row disappears, including in Release.
+    // Debug's notification folds and final re-walk use this same prefix seed.
+    (void)closed_rows_digest(engine.trades_);
+    const std::uint64_t rows_digest = closed_row_prefix_.at(global_end - base - 1);
+    // A failed write leaves every row resident and all report folds at the
+    // old base. The poisoned sink cannot acquire a successful trailer.
+    for (std::size_t index = base; index < global_end; ++index)
+        write_streamed_trade(engine, index, closed_trade_record<TradeC>(engine.trades_[index]));
+    for (std::size_t index = base; index < global_end; ++index) {
+        const Trade& row = engine.trades_[index];
+        const auto record = closed_trade_record<TradeC>(row);
+        closed_trade_report_->all.fold(record);
+        closed_trade_report_->longs.fold(record);
+        closed_trade_report_->shorts.fold(record);
+        closed_trade_report_->first_entry_time =
+            std::min(closed_trade_report_->first_entry_time, row.entry_time);
+        closed_trade_prefix_.pnl += row.pnl;
+        engine.fold_trade_percent_prefix(row);
+    }
+    engine.trades_.seal(global_end);
+    closed_row_prefix_.erase(closed_row_prefix_.begin(),
+                              closed_row_prefix_.begin() + (global_end - base));
+    closed_trade_prefix_.base = global_end;
+    closed_trade_prefix_.rows_digest = rows_digest;
+    closed_trade_prefix_.exit_phase_digest = exit_phase_digest;
+    closed_trade_prefix_.source_gains = source_gains;
+    closed_trade_prefix_.source_losses = source_losses;
+}
+
+void NativeExecutionConsumer::fill_streamed_trades(
+        const BacktestEngine& engine, ReportC* out) const {
+    const std::size_t base = engine.trades_.base();
+    const std::size_t closed = engine.trades_.size();
+    const std::size_t total = closed + engine.range_end_trades_.size();
+    if (base != closed_trade_prefix_.base
+        || total > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "streamed trade report has an invalid row window");
+    out->total_trades = static_cast<int>(total);
+    out->trades_len = static_cast<int>(total - base);
+    out->trades = out->trades_len > 0 ? new TradeC[out->trades_len] : nullptr;
+    out->net_profit = closed_trade_prefix_.pnl;
+    for (std::size_t global = base; global < total; ++global) {
+        const Trade& row = global < closed ? engine.trades_[global]
+                                          : engine.range_end_trades_[global - closed];
+        out->trades[global - base] = closed_trade_record<TradeC>(row);
+        out->net_profit += row.pnl;
+    }
+}
+
+void NativeExecutionConsumer::finish_streamed_trade_metrics(ReportC* out) const {
+    if (!closed_trade_report_) return; // a refused begin never sealed a row
+    // Finish copies after present_report has re-marked the range-end rows.
+    // The prefix and every suffix addition retain the original fold order.
+    auto all = closed_trade_report_->all;
+    auto longs = closed_trade_report_->longs;
+    auto shorts = closed_trade_report_->shorts;
+    for (int index = 0; index < out->trades_len; ++index) {
+        all.fold(out->trades[index]);
+        longs.fold(out->trades[index]);
+        shorts.fold(out->trades[index]);
+    }
+    out->metrics.all = all.finish();
+    out->metrics.longs = longs.finish();
+    out->metrics.shorts = shorts.finish();
+}
+
+void NativeExecutionConsumer::finish_streamed_trades(
+        const BacktestEngine& engine, ReportC* out) const {
+    const auto& sink = engine.report_sink_state_;
+    if (sink.writer && !sink.receipt.complete && engine.last_run_status_ == 0
+        && engine.last_error_.empty() && state_kind() == NativeLifecycleKind::Completed) {
+        for (int index = 0; index < out->trades_len; ++index)
+            write_streamed_trade(engine, closed_trade_prefix_.base
+                + static_cast<std::size_t>(index), out->trades[index]);
+    }
+    // The existing sink finalizer now owns E/output/hash/trailer only. T has
+    // already consumed the sealed prefix followed by this presented tail.
+    delete[] out->trades;
+    out->trades = nullptr;
+    out->trades_len = 0;
+}
+
+void NativeExecutionConsumer::fill_streamed_report(
+        const BacktestEngine& engine, ReportC* out) const {
+    ReportC local{};
+    try {
+        fill_streamed_trades(engine, &local);
+        local.input_bars_processed = engine.diag_input_bars_processed_;
+        local.script_bars_processed = engine.diag_script_bars_processed_;
+        local.magnifier_sub_bars_total = engine.diag_magnifier_sub_bars_processed_;
+        local.magnifier_sample_ticks_total = engine.diag_magnifier_sample_ticks_processed_;
+        local.input_tf_seconds = tf_to_seconds(engine.input_tf_);
+        local.script_tf_seconds = engine.script_tf_seconds_;
+        local.script_tf_ratio = engine.diag_script_tf_ratio_;
+        local.needs_aggregation = engine.diag_needs_aggregation_ ? 1 : 0;
+        local.bar_magnifier_enabled = engine.bar_magnifier_enabled_ ? 1 : 0;
+        engine.fill_metrics_section(&local);
+        finish_streamed_trade_metrics(&local);
+        engine.fill_security_diag_section(&local);
+        engine.fill_trace_section(&local);
+        // Hashes already use L6b-3's sink cursor. Their final resident suffix
+        // is written by finish_report_sink and need not be copied here.
+        finish_streamed_trades(engine, &local);
+    } catch (...) {
+        BacktestEngine::free_report(&local);
+        throw;
+    }
+    *out = local;
 }
 
 ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec)

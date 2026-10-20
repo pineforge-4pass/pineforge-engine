@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <type_traits>
 #include <variant>
 
@@ -464,9 +465,27 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.d(fee.nonpercent_fee);
     }
     // v4: the final prefix folded once, the current bar's tail in full.
-    f.u(trade_exit_phase_.size()); f.u(exit_phase_final_); f.u(exit_phase_digest_);
-    for (std::size_t index = exit_phase_final_; index < trade_exit_phase_.size(); ++index)
-        f.u(trade_exit_phase_[index]);
+    const auto trade_prefix = host_
+        ? NativeExecutionConsumer::bound(*host_).closed_trade_prefix()
+        : NativeExecutionConsumer::ClosedTradePrefix{};
+    const std::size_t phase_end = trade_prefix.base + trade_exit_phase_.size();
+    const auto* phase_consumer = host_ ? &NativeExecutionConsumer::bound(*host_) : nullptr;
+    f.u(phase_end);
+    if (phase_consumer && phase_consumer->exit_phases_restarted()) {
+        // Preserve the sink-off hash's raw reset marker AND its phase bytes.
+        // The bounded transform applies the sealed bytes to this incoming
+        // hash, rather than substituting a different digest representation.
+        f.u(0); f.u(BrokerStateHashSink{}.h);
+        f.h = phase_consumer->replay_sealed_exit_phases(f.h);
+        for (const auto phase : trade_exit_phase_) f.u(phase);
+    } else {
+        if (exit_phase_final_ < trade_prefix.base)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "hashed exit-phase fold precedes the sealed prefix");
+        f.u(exit_phase_final_); f.u(exit_phase_digest_);
+        for (std::size_t index = exit_phase_final_; index < phase_end; ++index)
+            f.u(trade_exit_phase_.at(index - trade_prefix.base));
+    }
     // The entry-id table orders children once it holds two ids, and its size
     // matters once its peak passes 13 keys; below both it decides nothing.
     if (exit_rank_keys_.size() >= 2 || exit_rank_peak_ > 13 || exit_rank_alt_peak_ > 13) {
@@ -661,9 +680,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             // as fold_source_money does.
             const std::uint64_t count = pine->closed_trade_count();
             const bool restart = count < source_money_folded_;
-            double gains = restart ? 0.0 : source_gains_;
-            double losses = restart ? 0.0 : source_losses_;
-            for (std::uint64_t index = restart ? 0 : source_money_folded_;
+            if (count < trade_prefix.base)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                               "hashed source-money rewind precedes the sealed prefix");
+            double gains = restart ? trade_prefix.source_gains : source_gains_;
+            double losses = restart ? trade_prefix.source_losses : source_losses_;
+            for (std::uint64_t index = restart ? trade_prefix.base : source_money_folded_;
                  index < count; ++index) {
                 const double profit = pine->closed_trade(index).pnl;
                 if (profit > 0.0) gains += profit;
