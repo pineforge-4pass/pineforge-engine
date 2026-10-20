@@ -1,6 +1,9 @@
 """Strict, streaming pf-report-sink version-1 reader (CR-150 DESIGN 3.7/4.4).
 
 Use ``with SinkReader(path) as reader:`` and consume the iterator to its end.
+For a blocking binary file or pipe, use ``SinkReader(stream=file)`` instead;
+no seek is required. The reader owns and closes either input on completion,
+refusal or context exit. Supply exactly one of path and stream.
 Each Record has a tag, an immutable values tuple and as_dict(). Records are
 provisional until exhaustion verifies the trailer; complete is then True and
 trailer/sha256 contain the verified receipt. A caller that stops early has no
@@ -232,7 +235,9 @@ def _field(value: Any, wire_type: str) -> Any:
 class SinkReader:
     """One-pass, bounded-memory iterator. Exhaustion verifies the entire sink."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path | None = None, *, stream: BinaryIO | None = None):
+        if (path is None) == (stream is None):
+            raise TypeError("supply exactly one of path and stream")
         self.header: dict[str, Any] = {}
         self.trailer: dict[str, Any] | None = None
         self.complete = False
@@ -242,7 +247,7 @@ class SinkReader:
         self._file: BinaryIO | None = None
         self._failed = False
         try:
-            self._file = open(path, "rb")
+            self._file = stream if stream is not None else open(path, "rb")
             value, line = self._readline()
             self._descriptors = _header(value)
             self._counts = {tag: 0 for tag in self._descriptors}

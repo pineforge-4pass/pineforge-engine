@@ -1,4 +1,4 @@
-"""CX-SINK-B4: real pipe transport, strict refusal, atomic cleanup and RSS.
+"""CX-SINK-B4: pipe transport, provisional stdout, file cleanup and RSS.
 
 CTest's native row supplies the existing L6B1 strategy module: the round
 trip then uses its real path sink through run_json's existing ctypes owner.
@@ -12,12 +12,14 @@ fly and requires peak RSS <20 MiB (less than one third of the input).
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import resource
 import subprocess
 import sys
+import threading
 
 
 DOCKER = Path(__file__).resolve().parent
@@ -44,7 +46,7 @@ def write_all(fd, data):
         remaining = remaining[count:]
 
 
-def rss_probe(directory, header_path):
+def rss_probe(directory, header_path, *, stdout_mode=False):
     """One child only; do not import pytest, run_json or the test fixtures."""
     directory = Path(directory)
     out = directory / "large.sink"
@@ -53,11 +55,32 @@ def rss_probe(directory, header_path):
     logical, wire = hashlib.sha256(), hashlib.sha256()
     total = 0
     in_read, in_write = os.pipe()
+    receipt_read, receipt_write = os.pipe() if stdout_mode else (None, None)
+    command = [sys.executable, "-B", "-S", str(TOOL), "--in-fd", str(in_read),
+               "--out", "-" if stdout_mode else str(out)]
+    inherited = [in_read]
+    if stdout_mode:
+        command += ["--receipt-fd", str(receipt_write)]
+        inherited.append(receipt_write)
     process = subprocess.Popen(
-        [sys.executable, "-B", "-S", str(TOOL), "--in-fd", str(in_read), "--out", str(out)],
-        pass_fds=(in_read,), stdin=subprocess.DEVNULL,
+        command, pass_fds=inherited, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=directory)
     os.close(in_read)
+    received_wire = hashlib.sha256()
+    received_bytes = 0
+
+    def drain():
+        nonlocal received_bytes
+        with process.stdout as file:
+            while chunk := file.read(64 * 1024):
+                received_wire.update(chunk)
+                received_bytes += len(chunk)
+
+    drainer = None
+    if stdout_mode:
+        os.close(receipt_write)
+        drainer = threading.Thread(target=drain, daemon=True)
+        drainer.start()
 
     def send(line, *, trailer=False):
         nonlocal total
@@ -81,7 +104,17 @@ def rss_probe(directory, header_path):
                       "counts": counts, "sha256": logical.hexdigest()}), trailer=True)
     finally:
         os.close(in_write)
+    if drainer is not None:
+        drainer.join(timeout=90)
+        if drainer.is_alive():
+            process.kill()
+            process.wait()
+            raise TimeoutError("stdout RSS probe did not drain")
+        process.stdout = None
     stdout, stderr = process.communicate(timeout=90)
+    if stdout_mode:
+        with os.fdopen(receipt_read, "rb") as file:
+            stdout = file.read()
     peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     # Darwin reports bytes; Linux and the lab's BSD-style interface use KiB.
     peak_bytes = int(peak if sys.platform == "darwin" else peak * 1024)
@@ -89,19 +122,23 @@ def rss_probe(directory, header_path):
                       "receipt": json.loads(stdout), "peak_bytes": peak_bytes,
                       "expected_counts": counts, "expected_bytes": total,
                       "expected_sha256": logical.hexdigest(),
-                      "expected_wire_sha256": wire.hexdigest()}, separators=(",", ":")))
+                      "expected_wire_sha256": wire.hexdigest(),
+                      "received_bytes": received_bytes,
+                      "received_wire_sha256": received_wire.hexdigest()}, separators=(",", ":")))
     return process.returncode
 
 
-if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "--rss-probe":
-    raise SystemExit(rss_probe(sys.argv[2], sys.argv[3]))
+if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] in (
+        "--rss-probe", "--rss-stdout-probe"):
+    raise SystemExit(rss_probe(sys.argv[2], sys.argv[3],
+                              stdout_mode=sys.argv[1] == "--rss-stdout-probe"))
 
 
 import ctypes
 import errno
+import select
 import socket
 import stat
-import threading
 import time
 
 import pytest
@@ -151,7 +188,9 @@ def refold(lines):
 
 
 def reference(path):
-    with pf_sink.SinkReader(path) as reader:
+    source = (pf_sink.SinkReader(stream=io.BytesIO(path)) if isinstance(path, bytes)
+              else pf_sink.SinkReader(path))
+    with source as reader:
         for _ in reader:
             pass
         assert reader.complete
@@ -180,8 +219,13 @@ def native_stream(tmp_path, module):
         runner._free_sink_run(lib, state, report, sink)
 
 
+def zero_file_limit():
+    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+
+
 def invoke(tmp_path, payload, *, extra=(), receipt_pipe=False, unix_socket=False,
-           tiny=False, out=None, explicit_spool=True, launcher=False):
+           tiny=False, out=None, explicit_spool=True, launcher=False,
+           cwd=None, tmpdir=None, fsize_zero=False, close_stdout=False, isolated=False):
     out = tmp_path / "out.sink" if out is None else out
     spool = tmp_path / "spool"
     spool.mkdir(exist_ok=True)
@@ -190,7 +234,10 @@ def invoke(tmp_path, payload, *, extra=(), receipt_pipe=False, unix_socket=False
                          if sockets else os.pipe())
     receipt_read, receipt_write = os.pipe() if receipt_pipe else (None, None)
     inherited = [in_read]
-    command = [sys.executable, "-B", "-S", str(LAUNCHER if launcher else TOOL),
+    # Under the file limit, exercise the entry points' own no-bytecode setting.
+    command = [sys.executable, *(["-I"] if isolated else []),
+               *([] if fsize_zero else ["-B"]),
+               "-S", str(LAUNCHER if launcher else TOOL),
                "--in-fd", str(in_read), "--out", str(out)]
     if explicit_spool:
         command += ["--spool-dir", str(spool)]
@@ -198,8 +245,14 @@ def invoke(tmp_path, payload, *, extra=(), receipt_pipe=False, unix_socket=False
         inherited.append(receipt_write)
         command += ["--receipt-fd", str(receipt_write)]
     command += list(extra)
-    process = subprocess.Popen(command, pass_fds=inherited, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=tmp_path)
+    environment = os.environ.copy()
+    if tmpdir is not None:
+        environment.update(TMPDIR=str(tmpdir), TMP=str(tmpdir), TEMP=str(tmpdir))
+    process = subprocess.Popen(
+        command, pass_fds=inherited, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=tmp_path if cwd is None else cwd, env=environment,
+        preexec_fn=zero_file_limit if fsize_zero else None)
     if sockets:
         sockets[0].close()
     else:
@@ -228,7 +281,15 @@ def invoke(tmp_path, payload, *, extra=(), receipt_pipe=False, unix_socket=False
     writer = threading.Thread(target=feed, daemon=True)
     writer.start()
     try:
+        prefix = b""
+        if close_stdout:
+            assert select.select([process.stdout], [], [], 5)[0], "stdout did not become ready"
+            prefix = process.stdout.read(1)
+            process.stdout.close()
+            process.stdout = None
         stdout, stderr = process.communicate(timeout=30)
+        if close_stdout:
+            stdout = prefix
     finally:
         if process.poll() is None:
             process.kill()
@@ -239,7 +300,8 @@ def invoke(tmp_path, payload, *, extra=(), receipt_pipe=False, unix_socket=False
     if receipt_pipe:
         with os.fdopen(receipt_read, "rb") as file:
             receipt_text = file.read()
-        assert stdout == b""
+        if out != "-":
+            assert stdout == b""
     else:
         receipt_text = stdout
     result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
@@ -254,31 +316,39 @@ def assert_failure(result, receipt, out, spool, code):
     assert result.returncode == code, result.stderr.decode()
     assert receipt["complete"] is False and receipt["sha256"] == ""
     assert result.stderr
-    assert not os.path.lexists(out)
+    if out != "-":
+        assert not os.path.lexists(out)
     assert list(spool.iterdir()) == []
 
 
 def assert_success(result, receipt, out, spool, payload):
     assert result.returncode == 0, result.stderr.decode()
     assert result.stderr == b""
-    assert out.read_bytes() == payload
-    assert stat.S_IMODE(out.stat().st_mode) == 0o600
-    _, counts, digest = reference(out)
+    if out == "-":
+        assert result.stdout == payload
+        _, counts, digest = reference(payload)
+    else:
+        assert out.read_bytes() == payload
+        assert stat.S_IMODE(out.stat().st_mode) == 0o600
+        _, counts, digest = reference(out)
     assert receipt["complete"] is True
     assert receipt["sink_bytes"] == len(payload)
     assert receipt["sha256"] == digest
-    assert receipt["finalizer_version"] == "1.0.0"
+    assert receipt["finalizer_version"] == finalizer.FINALIZER_VERSION
     assert {tag: receipt["count_" + tag.lower()] for tag in TAGS} == {
         tag: counts.get(tag, 0) for tag in TAGS}
     assert digest != hashlib.sha256(payload).hexdigest()  # trailer is excluded
     assert list(spool.iterdir()) == []
 
 
-def test_pipe_round_trip_from_path_writer(tmp_path):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_pipe_round_trip_from_path_writer(tmp_path, stdout_mode):
     module = os.environ.get("PINEFORGE_FINALIZE_STRATEGY_SO")
     payload = native_stream(tmp_path, module) if module else fixture_stream(tmp_path)
     expected_id = json.loads(payload.splitlines()[0])["run_id"]
-    result, receipt, out, spool = invoke(tmp_path, payload, extra=("--run-id", expected_id))
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, extra=("--run-id", expected_id),
+        out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     assert_success(result, receipt, out, spool, payload)
 
 
@@ -295,9 +365,206 @@ def test_chunking_socket_receipt_fd_and_launcher(tmp_path, tiny, unix_socket, re
     assert list(tmp_path.glob(".pineforge-sink-*.spool")) == []
 
 
+@pytest.mark.parametrize("tiny,unix_socket,launcher", [
+    (True, False, False), (True, True, False), (False, False, True),
+])
+def test_stdout_chunking_socket_and_launcher(tmp_path, tiny, unix_socket, launcher):
+    payload = fixture_stream(tmp_path)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, out="-", receipt_pipe=True, tiny=tiny,
+        unix_socket=unix_socket, launcher=launcher, explicit_spool=False)
+    assert_success(result, receipt, out, spool, payload)
+    assert not (tmp_path / "-").exists()
+
+
+def test_sink_reader_nonseekable_input_matches_path(tmp_path):
+    payload = fixture_stream(tmp_path)
+    with pf_sink.SinkReader(tmp_path / "source.sink") as reader:
+        expected_records = list(reader)
+        expected = reader.header, reader.trailer, reader.counts, reader.sha256
+
+    class Nonseekable(io.BytesIO):
+        def seek(self, *args):
+            raise AssertionError("stream input must not seek")
+
+        def tell(self):
+            raise AssertionError("stream input must not need an offset")
+
+    stream = Nonseekable(payload)
+    with pf_sink.SinkReader(stream=stream) as reader:
+        assert list(reader) == expected_records
+        assert reader.complete
+        assert (reader.header, reader.trailer, reader.counts, reader.sha256) == expected
+    assert stream.closed
+
+
+def test_stdout_delivers_verified_lines_before_input_eof(tmp_path):
+    payload = fixture_stream(tmp_path)
+    lines = payload.splitlines(keepends=True)
+    expected_prefix = b"".join(lines[:2])
+    in_read, in_write = os.pipe()
+    receipt_read, receipt_write = os.pipe()
+    process = subprocess.Popen(
+        [sys.executable, "-B", "-S", str(TOOL), "--in-fd", str(in_read),
+         "--out", "-", "--receipt-fd", str(receipt_write)],
+        pass_fds=(in_read, receipt_write), stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=tmp_path)
+    os.close(in_read)
+    os.close(receipt_write)
+    try:
+        write_all(in_write, expected_prefix)
+        received = bytearray()
+        while len(received) < len(expected_prefix):
+            ready, _, _ = select.select([process.stdout], [], [], 5)
+            assert ready, "verified lines were withheld until EOF"
+            chunk = os.read(process.stdout.fileno(), len(expected_prefix) - len(received))
+            assert chunk, "stdout closed before the verified prefix"
+            received.extend(chunk)
+        assert bytes(received) == expected_prefix
+        assert process.poll() is None
+        assert not select.select([receipt_read], [], [], 0)[0]
+        write_all(in_write, b"".join(lines[2:]))
+        os.close(in_write)
+        in_write = None
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0 and stderr == b""
+        assert bytes(received) + stdout == payload
+        with os.fdopen(receipt_read, "rb") as file:
+            receipt_read = None
+            receipt = json.loads(file.read())
+        _, counts, digest = reference(tmp_path / "source.sink")
+        assert receipt["complete"] is True and receipt["sink_bytes"] == len(payload)
+        assert receipt["sha256"] == digest
+        assert {tag: receipt["count_" + tag.lower()] for tag in TAGS} == {
+            tag: counts.get(tag, 0) for tag in TAGS}
+    finally:
+        if in_write is not None:
+            os.close(in_write)
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=10)
+        if receipt_read is not None:
+            os.close(receipt_read)
+
+
+def directory_snapshot(directory):
+    """Names, permissions, contents and modification times; ignore read atime."""
+    result = {}
+    for path in directory.rglob("*"):
+        metadata = path.stat()
+        result[str(path.relative_to(directory))] = (
+            metadata.st_mode, metadata.st_size, metadata.st_mtime_ns,
+            path.read_bytes() if path.is_file() else None)
+    return result
+
+
+@pytest.mark.parametrize("launcher", [False, True])
+@pytest.mark.parametrize("isolated", [False, True])
+def test_stdout_with_zero_file_limit_and_read_only_directories(tmp_path, launcher, isolated):
+    payload = fixture_stream(tmp_path)
+    cwd, tmpdir = tmp_path / "cwd", tmp_path / "tmp"
+    cwd.mkdir()
+    tmpdir.mkdir()
+    (tmp_path / "spool").mkdir()
+    (cwd / "-").write_bytes(payload[:64])
+    (tmpdir / "keep").write_bytes(payload[-64:])
+    cwd.chmod(0o555)
+    tmpdir.chmod(0o555)
+    before_cwd, before_tmp = directory_snapshot(cwd), directory_snapshot(tmpdir)
+    before_all = directory_snapshot(tmp_path)
+    try:
+        result, receipt, out, spool = invoke(
+            tmp_path, payload, out="-", receipt_pipe=True, launcher=launcher,
+            cwd=cwd, tmpdir=tmpdir, fsize_zero=True, isolated=isolated,
+            extra=("--spool-dir", str(tmpdir / "must-not-be-created")))
+        # Even uid 0 cannot grow a regular file under RLIMIT_FSIZE=(0,0):
+        # a data write would fail with EFBIG or SIGXFSZ. Pipes remain writable.
+        assert_success(result, receipt, out, spool, payload)
+        assert directory_snapshot(cwd) == before_cwd
+        assert directory_snapshot(tmpdir) == before_tmp
+        assert directory_snapshot(tmp_path) == before_all
+    finally:
+        cwd.chmod(0o700)
+        tmpdir.chmod(0o700)
+
+
+def test_stdout_closed_early_is_io_failure(tmp_path):
+    rows = [
+        ["V", number, 0, number - 1, None, None, 0, 1, 1, None,
+         "0123456789abcdef", "x" * (pf_sink.MAX_LINE_BYTES // 2)]
+        for number in range(1, 5)]
+    payload = fixture_stream(tmp_path, rows)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, out="-", receipt_pipe=True, close_stdout=True)
+    assert_failure(result, receipt, out, spool, 5)
+    assert result.stdout and payload.startswith(result.stdout)
+
+
+@pytest.mark.parametrize("broken_flush", [False, True])
+def test_stdout_flush_precedes_receipt_and_uses_no_files(tmp_path, monkeypatch, broken_flush):
+    payload = fixture_stream(tmp_path)
+    output, receipt_bytes, events = bytearray(), bytearray(), []
+    receipt_read, receipt_write = os.pipe()
+    real_write = os.write
+
+    class Stdout:
+        def flush(self):
+            assert bytes(output) == payload
+            events.append("flush")
+            if broken_flush:
+                raise BrokenPipeError(errno.EPIPE, "injected stdout flush failure")
+
+    def short_write(fd, data):
+        if fd == 1:
+            assert not events, "stdout was written after the flush"
+            chunk = data[:7]
+            output.extend(chunk)
+            return len(chunk)
+        if fd == receipt_write:
+            assert events == ["flush"]
+            receipt_bytes.extend(data)
+            events.append("receipt")
+            return len(data)
+        return real_write(fd, data)
+
+    def no_file_operation(*args, **kwargs):
+        raise AssertionError("stdout mode attempted a file operation")
+
+    try:
+        with (tmp_path / "source.sink").open("rb") as source, monkeypatch.context() as patch:
+            patch.setattr(finalizer.sys, "stdout", Stdout())
+            patch.setattr(finalizer.os, "write", short_write)
+            for name in ("open", "fsync", "replace", "unlink", "fchmod"):
+                patch.setattr(finalizer.os, name, no_file_operation)
+            patch.setattr(finalizer.tempfile, "mkstemp", no_file_operation)
+            patch.setattr(pf_sink, "open", no_file_operation, raising=False)
+            code = finalizer.main([
+                "--in-fd", str(source.fileno()), "--out", "-",
+                "--receipt-fd", str(receipt_write),
+                "--spool-dir", str(tmp_path / "ignored")])
+        assert code == (5 if broken_flush else 0)
+        assert bytes(output) == payload
+        if broken_flush:
+            assert events == ["flush"] and not receipt_bytes
+            return
+        assert events == ["flush", "receipt"]
+        receipt = json.loads(receipt_bytes)
+        assert tuple(receipt) == RECEIPT_KEYS
+        assert receipt["complete"] is True
+        _, counts, digest = reference(tmp_path / "source.sink")
+        assert receipt["sink_bytes"] == len(payload)
+        assert receipt["sha256"] == digest
+        assert {tag: receipt["count_" + tag.lower()] for tag in TAGS} == {
+            tag: counts.get(tag, 0) for tag in TAGS}
+    finally:
+        os.close(receipt_read)
+        os.close(receipt_write)
+
+
 @pytest.mark.parametrize("prefix", ["empty", "header", "records",
                                   "mid-header", "mid-record", "mid-trailer"])
-def test_eof_without_trailer_removes_output_and_spool(tmp_path, prefix):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_eof_without_trailer_removes_output_and_spool(tmp_path, prefix, stdout_mode):
     payload = fixture_stream(tmp_path)
     lines = payload.splitlines(keepends=True)
     if prefix == "empty":
@@ -314,9 +581,15 @@ def test_eof_without_trailer_removes_output_and_spool(tmp_path, prefix):
         truncated = b"".join(lines[:-1])
     out = tmp_path / "out.sink"
     out.write_bytes(b"old completed run must not survive")
-    result, receipt, out, spool = invoke(tmp_path, truncated)
+    result, receipt, out, spool = invoke(
+        tmp_path, truncated, out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     assert_failure(result, receipt, out, spool, 6)
     assert receipt["sink_bytes"] == len(truncated)
+    if stdout_mode:
+        assert result.stdout == b"".join(
+            line for line in truncated.splitlines(keepends=True) if line.endswith(b"\n"))
+        if prefix in ("records", "mid-trailer"):
+            assert result.stdout  # provisional bytes exist despite the failure receipt
     if prefix in ("records", "mid-trailer"):
         _, counts, _ = reference(tmp_path / "source.sink")
         assert {tag: receipt["count_" + tag.lower()] for tag in TAGS} == {
@@ -330,8 +603,10 @@ def test_eof_without_trailer_removes_output_and_spool(tmp_path, prefix):
     ("duplicate-key", 3), ("header-order", 3), ("swapped", 3),
     ("missing-lf", 6), ("hash", 4), ("count", 4), ("trailer-shape", 4),
     ("extra", 4), ("second-trailer", 4), ("wrong-run-id", 3), ("oversize", 3),
+    ("oversize-fragment", 3),
 ])
-def test_corruption_never_publishes(tmp_path, fault, code):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_corruption_never_publishes(tmp_path, fault, code, stdout_mode):
     payload = fixture_stream(tmp_path)
     lines = payload.splitlines(keepends=True)
     extra = ()
@@ -370,12 +645,28 @@ def test_corruption_never_publishes(tmp_path, fault, code):
         extra = ("--run-id", "different")
     elif fault == "oversize":
         lines[1] = b'"' + b"x" * pf_sink.MAX_LINE_BYTES + b'"\n'
-    result, receipt, out, spool = invoke(tmp_path, b"".join(lines), extra=extra)
+    elif fault == "oversize-fragment":
+        lines = [lines[0], b'"' + b"x" * pf_sink.MAX_LINE_BYTES]
+    damaged = b"".join(lines)
+    result, receipt, out, spool = invoke(
+        tmp_path, damaged, extra=extra, out="-" if stdout_mode else None,
+        receipt_pipe=stdout_mode)
     assert_failure(result, receipt, out, spool, code)
+    if stdout_mode:
+        if fault in ("bom", "duplicate-key", "header-order", "wrong-run-id"):
+            verified_prefix = b""
+        elif fault == "swapped":
+            verified_prefix = b"".join(lines[:2])
+        elif fault in ("bad-json", "wrong-type", "whitespace", "oversize", "oversize-fragment"):
+            verified_prefix = lines[0]
+        else:
+            verified_prefix = b"".join(payload.splitlines(keepends=True)[:-1])
+        assert result.stdout == verified_prefix  # never forward the offending line
 
 
 @pytest.mark.parametrize("kind", ["E", "T", "O", "K"])
-def test_record_order_is_checked_even_with_a_refolded_valid_receipt(tmp_path, kind):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_record_order_is_checked_even_with_a_refolded_valid_receipt(tmp_path, kind, stdout_mode):
     rows = sample_rows()
     if kind == "E":
         rows[0], rows[1] = rows[1], rows[0]
@@ -389,11 +680,13 @@ def test_record_order_is_checked_even_with_a_refolded_valid_receipt(tmp_path, ki
     # SinkReader accepts these wire values and the independent counts/hash;
     # the finalizer must additionally enforce the producer's row order.
     reference(tmp_path / "source.sink")
-    result, receipt, out, spool = invoke(tmp_path, payload)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     assert_failure(result, receipt, out, spool, 3)
 
 
-def test_all_seven_counts_and_legal_interleaving(tmp_path):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_all_seven_counts_and_legal_interleaving(tmp_path, stdout_mode):
     head = fixtures.header(outputs=True)
     for tag, columns in (("X", pf_sink._X), ("H", pf_sink._H)):
         head["records"].append(fixtures.descriptor(tag, *(
@@ -402,12 +695,14 @@ def test_all_seven_counts_and_legal_interleaving(tmp_path):
     rows = [rows[0], rows[2], rows[3], rows[5], rows[1], rows[4], rows[6],
             ["X", 1700000100000, 1, "trace", -0.0], ["H", "abcdef0123456789"]]
     payload = refold([encoded(head), *(encoded(row) for row in rows)])
-    result, receipt, out, spool = invoke(tmp_path, payload)
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     assert_success(result, receipt, out, spool, payload)
     assert receipt["count_x"] == receipt["count_h"] == 1
 
 
-def test_exact_line_limit_and_utf8_run_id(tmp_path):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_exact_line_limit_and_utf8_run_id(tmp_path, stdout_mode):
     head = fixtures.header(outputs=True)
     head["run_id"] = 'run"\n漢'
     event = ["V", 1, 0, 0, None, None, 0, 1, 1, None, "0123456789abcdef", ""]
@@ -415,20 +710,27 @@ def test_exact_line_limit_and_utf8_run_id(tmp_path):
     line = encoded(event)
     assert len(line) == pf_sink.MAX_LINE_BYTES
     payload = refold([encoded(head), line])
-    result, receipt, out, spool = invoke(tmp_path, payload, extra=("--run-id", head["run_id"]))
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, extra=("--run-id", head["run_id"]),
+        out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     assert_success(result, receipt, out, spool, payload)
 
 
 @pytest.mark.parametrize("cap_kind", ["zero", "short", "exact"])
-def test_size_cap_and_exact_fit(tmp_path, cap_kind):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_size_cap_and_exact_fit(tmp_path, cap_kind, stdout_mode):
     payload = fixture_stream(tmp_path)
     cap = 0 if cap_kind == "zero" else len(payload) - 1 if cap_kind == "short" else len(payload)
-    result, receipt, out, spool = invoke(tmp_path, payload, extra=("--max-bytes", str(cap)))
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, extra=("--max-bytes", str(cap)),
+        out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     if cap_kind == "exact":
         assert_success(result, receipt, out, spool, payload)
     else:
         assert_failure(result, receipt, out, spool, 5)
         assert receipt["sink_bytes"] == cap + 1
+        if stdout_mode:
+            assert len(result.stdout) <= cap and payload.startswith(result.stdout)
 
 
 def test_unwritable_output_path(tmp_path):
@@ -440,17 +742,26 @@ def test_unwritable_output_path(tmp_path):
     assert_failure(result, receipt, out, spool, 5)
 
 
-def test_invalid_receipt_fd_removes_an_already_verified_output(tmp_path):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_invalid_receipt_fd_removes_an_already_verified_output(tmp_path, stdout_mode):
     payload = fixture_stream(tmp_path)
-    result, receipt, out, spool = invoke(tmp_path, payload, extra=("--receipt-fd", "999999"))
-    assert result.returncode == 5 and result.stdout == b"" and receipt is None
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, extra=("--receipt-fd", "999999"),
+        out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
+    assert result.returncode == 5 and receipt is None
+    assert result.stdout == (payload if stdout_mode else b"")
     assert b"receipt write failed" in result.stderr
-    assert not out.exists() and list(spool.iterdir()) == []
+    if not stdout_mode:
+        assert not out.exists()
+    assert list(spool.iterdir()) == []
 
 
-def test_unreadable_input_fd_is_io_failure(tmp_path):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_unreadable_input_fd_is_io_failure(tmp_path, stdout_mode):
     payload = fixture_stream(tmp_path)
-    result, receipt, out, spool = invoke(tmp_path, payload, extra=("--in-fd", "999999"))
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, extra=("--in-fd", "999999"),
+        out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     assert_failure(result, receipt, out, spool, 5)
     assert receipt["sink_bytes"] == 0
 
@@ -472,12 +783,16 @@ def test_stderr_can_be_reserved_for_a_failure_receipt(tmp_path):
     ["--in-fd", "3", "--out", "out", "--receipt-fd", "3"],
     ["--in-fd", "3", "--out", "out", "--unknown"],
     ["--in-fd", "2147483648", "--out", "out"],
+    ["--in-fd", "3", "--out", "-"],
+    ["--in-fd", "3", "--out", "-", "--receipt-fd", "1"],
 ])
 def test_usage_is_exit_two_with_no_receipt(tmp_path, arguments):
     result = subprocess.run([sys.executable, "-B", "-S", str(TOOL), *arguments],
                             stdin=subprocess.DEVNULL, capture_output=True, cwd=tmp_path, timeout=10)
     assert result.returncode == 2 and result.stdout == b""
     assert b"usage:" in result.stderr
+    if "-" in arguments:
+        assert b"--receipt-fd different from stdout" in result.stderr
     assert list(tmp_path.iterdir()) == []
 
 
@@ -490,6 +805,8 @@ def test_help_contains_the_contract(tmp_path):
         assert option in text
     for code in (0, 2, 3, 4, 5, 6, 7):
         assert f"  {code}  " in text
+    for contract in ("PROVISIONAL", "MUST discard", "stdout flush", "EPIPE", "RLIMIT_FSIZE=0"):
+        assert contract in text
 
 
 def call_in_process(tmp_path, payload, monkeypatch, *, fault=None):
@@ -584,14 +901,15 @@ def test_fsync_then_verify_then_publish_and_short_writes(tmp_path, monkeypatch):
     assert out.read_bytes() == payload and list(spool.iterdir()) == []
 
 
-def test_64_mib_stream_has_flat_peak_rss(tmp_path):
+@pytest.mark.parametrize("stdout_mode", [False, True])
+def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode):
     header = tmp_path / "header.json"
     header.write_bytes(encoded(fixtures.header(outputs=True)))
     directory = tmp_path / "rss"
     directory.mkdir()
     result = subprocess.run(
         [sys.executable, "-B", "-S", str(Path(__file__).resolve()),
-         "--rss-probe", str(directory), str(header)],
+         "--rss-stdout-probe" if stdout_mode else "--rss-probe", str(directory), str(header)],
         stdin=subprocess.DEVNULL, capture_output=True, cwd=tmp_path, timeout=120)
     assert result.returncode == 0, result.stderr.decode()
     measured = json.loads(result.stdout)
@@ -604,11 +922,16 @@ def test_64_mib_stream_has_flat_peak_rss(tmp_path):
     assert receipt["sha256"] == measured["expected_sha256"]
     assert {tag: receipt["count_" + tag.lower()] for tag in TAGS} == {
         tag: measured["expected_counts"].get(tag, 0) for tag in TAGS}
-    out = directory / "large.sink"
-    wire = hashlib.sha256()
-    with out.open("rb") as file:
-        while chunk := file.read(64 * 1024):
-            wire.update(chunk)
-    assert out.stat().st_size == measured["expected_bytes"]
-    assert wire.hexdigest() == measured["expected_wire_sha256"]
+    if stdout_mode:
+        assert measured["received_bytes"] == measured["expected_bytes"]
+        assert measured["received_wire_sha256"] == measured["expected_wire_sha256"]
+        assert list(directory.iterdir()) == []
+    else:
+        out = directory / "large.sink"
+        wire = hashlib.sha256()
+        with out.open("rb") as file:
+            while chunk := file.read(64 * 1024):
+                wire.update(chunk)
+        assert out.stat().st_size == measured["expected_bytes"]
+        assert wire.hexdigest() == measured["expected_wire_sha256"]
     assert list(directory.glob(".pineforge-sink-*.spool")) == []

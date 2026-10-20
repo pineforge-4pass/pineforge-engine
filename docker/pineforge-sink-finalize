@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 """Install beside pineforge_sink_finalize.py and pf_sink.py, with mode 0755."""
+import sys
+
+sys.dont_write_bytecode = True
+if sys.flags.isolated:
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from pineforge_sink_finalize import main
 
 raise SystemExit(main())
