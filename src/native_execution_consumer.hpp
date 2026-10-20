@@ -2113,6 +2113,10 @@ public:
     // copied value, which lost its consumer, reads empty. All array storage
     // returned without a sink remains independently owned by the caller.
     static bool fill_selected_report(const BacktestEngine& engine, ReportC* out);
+    // Borrow the captured open-lot view for T emission. Closed rows stay in
+    // the ledger; the returned storage is never attached to a caller's report.
+    static bool report_sink_open_trades(const BacktestEngine& engine,
+                                        const TradeC*& rows, int& count) noexcept;
     // Removing an ordinary sink restores the current run's array storage,
     // including an observer capture, before its scratch owner is destroyed.
     static void restore_report_sink_equity_curve(BacktestEngine& engine);
@@ -2210,9 +2214,14 @@ private:
     // flags. The destructor calls it, and the selected lifecycle will at
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
-    // The capture. Its remaining arrays use BacktestEngine::free_report; a
-    // selected sink never owns a curve array here, only its private scratch file.
+    // Sink captures keep scalars here. Closed rows stay in the ledger; the
+    // separate editable range-end view is bounded by open lots, not history.
+    // Sink OFF keeps its original independently owned arrays.
     ReportC presentation_{};
+    std::unique_ptr<TradeC[]> presentation_open_trades_;
+    int presentation_open_trades_len_ = 0;
+    bool presentation_sink_trades_ = false;
+    pf_equity_point_t presentation_equity_tail_{};
     // The equity length the metrics read: the engine's recorded point count taken
     // before present_report ran (fill_metrics_section's `n`), which a
     // presentation may leave behind in presentation_.equity_curve_len, the length

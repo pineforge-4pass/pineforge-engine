@@ -23,6 +23,7 @@
 #include "../src/report_scratch.hpp"
 #include "../src/selected_report_view.hpp"
 #include "equity_stats_reference.hpp"
+#include "trade_stats_reference.hpp"
 
 #include <algorithm>
 #include <array>
@@ -314,6 +315,8 @@ struct Host final : NativeStrategyHost {
     mutable int scratch_descriptor_at_presentation = -1;
     // The execution input as the presentation hook sees it, before any edit.
     mutable std::vector<pf_equity_point_t> held_at_presentation;
+    mutable std::vector<TradeC> open_rows_at_presentation;
+    mutable int trade_rows_at_presentation = 0;
 
     std::vector<pf_equity_point_t> held_curve() const { return equity_curve_; }
     std::size_t recorded_capacity() const { return equity_curve_.capacity(); }
@@ -341,6 +344,11 @@ struct Host final : NativeStrategyHost {
         ++presentations;
         if (open_position)
             CHECK(position_side_ != PositionSide::FLAT && !pyramid_entries_.empty());
+        trade_rows_at_presentation = out->trades_len;
+        open_rows_at_presentation.clear();
+        for (int i = 0; i < out->trades_len; ++i) {
+            if (out->trades[i].open_at_end) open_rows_at_presentation.push_back(out->trades[i]);
+        }
         actual_length_at_presentation = out->equity_curve_len;
         length_at_presentation = legacy_full_curve ? out->equity_curve_len
             : std::min(out->equity_curve_len, kSelectedPresentationWindowPoints);
@@ -549,6 +557,14 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     CHECK(same_points(held_before, held_after));
     CHECK(same_points(streamed.held_at_presentation, held_after));
     CHECK(streamed.length_at_presentation == baseline.length_at_presentation);
+    CHECK(streamed.trade_rows_at_presentation
+          == static_cast<int>(baseline.open_rows_at_presentation.size()));
+    ReportC expected_open{}, actual_open{};
+    expected_open.trades = baseline.open_rows_at_presentation.data();
+    expected_open.trades_len = static_cast<int>(baseline.open_rows_at_presentation.size());
+    actual_open.trades = streamed.open_rows_at_presentation.data();
+    actual_open.trades_len = static_cast<int>(streamed.open_rows_at_presentation.size());
+    compare_trades(expected_open, actual_open);
     const auto logical_len = static_cast<std::int64_t>(counts.window_script_bars) + 1;
     const auto window_len = std::min(logical_len, kSelectedPresentationWindowPoints);
     CHECK(baseline.actual_length_at_presentation == logical_len);
@@ -1005,7 +1021,8 @@ void legacy_sink_off_hooks_stay_full() {
 
 #ifdef PINEFORGE_L17B_SOURCE
 struct PineHost final : source::PineStrategyHost {
-    explicit PineHost(bool open, bool long_side) : open_(open), long_side_(long_side) {
+    explicit PineHost(bool open, bool long_side, bool churn = false)
+        : open_(open), long_side_(long_side), churn_(churn) {
         source::PineStrategyConfig config;
         config.initial_capital = kCapital;
         config.default_qty_value = 1.0;
@@ -1017,6 +1034,8 @@ struct PineHost final : source::PineStrategyHost {
     std::size_t recorded_points() const { return equity_curve_.size(); }
     std::size_t recorded_capacity() const { return equity_curve_.capacity(); }
     void on_source_bar(const Bar&) override {
+        if (churn_ && bar_index_ == 0) strategy_entry("prior", true);
+        if (churn_ && bar_index_ == 1) strategy_close("prior");
         if (open_ && bar_index_ == 2) strategy_entry("held", long_side_);
     }
     void present_report(ReportC* report) const override {
@@ -1027,11 +1046,12 @@ struct PineHost final : source::PineStrategyHost {
 private:
     bool open_;
     bool long_side_;
+    bool churn_;
 };
 
 void compare_pine_selected(Directory& directory, const char* name, bool open,
-                           bool long_side, bool quote, int extra_bars = 0) {
-    PineHost baseline(open, long_side), streamed(open, long_side);
+                           bool long_side, bool quote, int extra_bars = 0, bool churn = false) {
+    PineHost baseline(open, long_side, churn), streamed(open, long_side, churn);
     std::vector<Bar> bars = {
         {50.0, 50.0, 50.0, 50.0, 1.0, kT},
         {50.0, 50.0, 50.0, 50.0, 1.0, kT + kMinute},
@@ -1082,6 +1102,10 @@ void compare_pine_selected(Directory& directory, const char* name, bool open,
     CHECK(std::memcmp(&array.value.net_profit, &summary.value.net_profit,
                       sizeof array.value.net_profit) == 0);
     CHECK(array.value.total_trades == summary.value.total_trades);
+    if (churn) {
+        CHECK(baseline.closed_trade_count() > 0);
+        CHECK(array.value.trades_len > 1);
+    }
     const auto logical_length = static_cast<std::int64_t>(array_counts.window_script_bars) + 1;
     CHECK(baseline.presented_length == logical_length);
     CHECK(streamed.presented_length
@@ -1466,6 +1490,272 @@ void selected_capture_storage_is_bounded(Directory& directory) {
     CHECK(small.recorded_capacity_bytes <= recorded_budget);
     CHECK(large.recorded_capacity_bytes <= recorded_budget);
 }
+
+// L17d: real alternating long/short round trips, through submit and settlement.
+// The final quiet callback starts counting after OHLCV and ledger storage have
+// already been loaded. The interval includes terminal capture AND two reads.
+// Unlike a fabricated ledger seed, these rows carry real identities/digests.
+struct TradeStorageHost final : NativeStrategyHost {
+    int target = 0;
+    int calculations = 0;
+    bool keep_open = false;
+    bool edit_open = false;
+    bool host_recorded = false;
+    bool measure = false;
+    mutable int presentations = 0;
+    mutable int presented_rows = 0;
+    mutable int presented_open_rows = 0;
+    mutable TradeC open_before{}, open_after{};
+    std::optional<CaptureAllocationScope> capture_scope;
+
+    void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
+        const int index = calculations++;
+        if (index < 2 * target) {
+            const double direction = (index / 2) % 2 == 0 ? 1.0 : -1.0;
+            const double units = index % 2 == 0 ? direction : -direction;
+            const auto result = submit({no::Transact{units}, "round-trip", ""});
+            CHECK(result.status == no::SubmitStatus::Accepted && result.handle.has_value());
+        } else if (keep_open && index == 2 * target) {
+            const auto result = submit({no::Transact{1.0}, "range-end", ""});
+            CHECK(result.status == no::SubmitStatus::Accepted && result.handle.has_value());
+        }
+        if (host_recorded) {
+            // This host deliberately owns/pushes its curve. Preserve that
+            // policy's existing memory and presentation semantics.
+            equity_curve_.push_back({bar.timestamp, kCapital + bar.close - 100.0, 0.0});
+        } else if (!keep_open) {
+            CHECK(mark_native_report_point(context.script_bar_open_ms));
+        }
+        if (index == 2 * target + 2) {
+            CHECK(closed_trade_count() == static_cast<std::size_t>(target));
+            if (measure) capture_scope.emplace();
+        }
+    }
+
+    void present_report(ReportC* report) const override {
+        ++presentations;
+        presented_rows = report->trades_len;
+        presented_open_rows = 0;
+        for (int i = 0; i < report->trades_len; ++i) {
+            auto& row = report->trades[i];
+            if (!row.open_at_end) continue;
+            ++presented_open_rows;
+            open_before = row;
+            if (edit_open) {
+                row.exit_price += 0.375;
+                row.commission += 0.03125;
+                row.pnl -= 0.15625;
+                row.pnl_pct = row.pnl / (row.entry_price * row.qty) * 100.0;
+            }
+            open_after = row;
+        }
+        if (edit_open) {
+            // Like Pine's terminal-quote hook, continue the closed-row seed
+            // one edited open row at a time. Never add a pre-summed suffix.
+            report->net_profit = report_closed_net_profit();
+            for (int i = 0; i < report->trades_len; ++i) {
+                if (report->trades[i].open_at_end) report->net_profit += report->trades[i].pnl;
+            }
+            if (report->equity_curve_len > 0) {
+                auto& last = report->equity_curve[report->equity_curve_len - 1];
+                last.equity = kCapital + report->net_profit;
+                last.open_profit = 0.0;
+            }
+        }
+    }
+};
+
+int accept_trade_observer(void*, const pf_execution_boundary_v1*,
+                          pf_boundary_receipt_v1* result) {
+    result->frame_bytes = result->handed_bytes = 0;
+    return 0;
+}
+
+// Stream the independent array oracle's E/T expectations too, avoiding a
+// second large test-side list. Every wire value/identity comes from sink OFF.
+void compare_trade_records(const BacktestEngine& baseline, const ReportC& array,
+                            const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    CHECK(input.good());
+    std::string line;
+    std::int64_t equities = 0;
+    int trades = 0;
+    while (std::getline(input, line)) {
+        if (line.compare(0, 5, "[\"E\",") == 0) {
+            CHECK(equities < array.equity_curve_len);
+            if (equities < array.equity_curve_len)
+                CHECK(line == equity_line(array.equity_curve[equities]));
+            ++equities;
+        } else if (line.compare(0, 5, "[\"T\",") == 0) {
+            CHECK(trades < array.trades_len);
+            if (trades < array.trades_len) CHECK(line == trade_line(baseline, array, trades));
+            ++trades;
+        }
+    }
+    CHECK(input.eof());
+    CHECK(equities == array.equity_curve_len);
+    CHECK(trades == array.trades_len);
+}
+
+void check_trade_reference(const ReportC& array, const ReportC& summary) {
+    using metrics::TradeFilter;
+    const auto all = trade_stats_reference::compute_trade_stats(
+        array.trades, array.trades_len, TradeFilter::ALL, kCapital);
+    const auto longs = trade_stats_reference::compute_trade_stats(
+        array.trades, array.trades_len, TradeFilter::LONG, kCapital);
+    const auto shorts = trade_stats_reference::compute_trade_stats(
+        array.trades, array.trades_len, TradeFilter::SHORT, kCapital);
+    CHECK(std::memcmp(&all, &summary.metrics.all, sizeof all) == 0);
+    CHECK(std::memcmp(&longs, &summary.metrics.longs, sizeof longs) == 0);
+    CHECK(std::memcmp(&shorts, &summary.metrics.shorts, sizeof shorts) == 0);
+    double pnl = 0.0;
+    for (int i = 0; i < array.trades_len; ++i) pnl += array.trades[i].pnl;
+    CHECK(std::memcmp(&pnl, &summary.net_profit, sizeof pnl) == 0);
+}
+
+CaptureStorage trade_capture_and_read_storage(
+        Directory& directory, const char* name, int trades, bool selected,
+        bool open = false, bool edit = false, bool observed = false,
+        bool host_recorded = false) {
+    const int count = 2 * trades + 3;
+    std::vector<Bar> bars;
+    bars.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const double price = 100.0 + ((i / 2) % 7 - 3) * 0.001
+            + (i % 2 == 0 ? 0.0 : 0.125);
+        bars.push_back({price, price, price, price, 1.0, kT + i * kMinute});
+    }
+    TradeStorageHost baseline, streamed;
+    const pf_selected_window_config_v1 window{
+        sizeof window, 1, kT, kT + count * kMinute};
+    const pf_execution_observer_v1 observer{
+        sizeof observer, 1, nullptr, accept_trade_observer};
+    for (auto* host : {&baseline, &streamed}) {
+        host->target = trades;
+        host->keep_open = open;
+        host->edit_open = edit;
+        host->host_recorded = host_recorded;
+        auto run_spec = spec(1);
+        // The bare-host range-end producer is KernelRecorded-only. Closed
+        // bound runs use host marks to start counting after the last point;
+        // open fixtures use the real kernel producer, as the L17b fixtures do.
+        run_spec.report_policy = host_recorded ? NativeReportPolicy::HostRecorded
+            : open ? NativeReportPolicy::KernelRecorded
+                   : NativeReportPolicy::KernelRecordedAtHostMarks;
+        CHECK(host->configure_native(run_spec).status == NativeSetupStatus::Applied);
+        if (selected) CHECK(native_set_selected_window_v1(host, &window) == 0);
+        if (observed)
+            CHECK(NativeExecutionConsumer::set_execution_observer_v1(host, &observer) == 0);
+    }
+    const auto path = directory.file(name);
+    const pf_report_sink_v1 sink{sizeof sink, 1, path.c_str(), "L17D", directory.path.c_str()};
+    CHECK(streamed.set_report_sink_v1(&sink) == 0);
+    baseline.run(bars.data(), count);
+    CHECK(baseline.native_state().kind == NativeLifecycleKind::Completed);
+    Report array, summary, again;
+    baseline.fill_report(&array.value);
+    CHECK(baseline.closed_trade_count() == static_cast<std::size_t>(trades));
+    CHECK(array.value.trades_len == trades + (open ? 1 : 0));
+
+    // Nothing belonging to the oracle or input allocates in this interval.
+    streamed.measure = !host_recorded;
+    measured_capture = {};
+    streamed.run(bars.data(), count);
+    const bool measured = streamed.capture_scope.has_value();
+    streamed.fill_report(&summary.value);
+    streamed.fill_report(&again.value);
+    const CaptureStorage storage = measured_capture;
+    streamed.capture_scope.reset();
+    CHECK(measured == !host_recorded);
+    CHECK(streamed.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(streamed.calculations == count);
+    CHECK(same_metrics(array.value.metrics, summary.value.metrics));
+    CHECK(same_metrics(summary.value.metrics, again.value.metrics));
+    check_trade_reference(array.value, summary.value);
+    CHECK(array.value.total_trades == summary.value.total_trades);
+    CHECK(summary.value.trades == nullptr && summary.value.trades_len == 0);
+    CHECK(again.value.trades == nullptr && again.value.trades_len == 0);
+    CHECK(summary.value.equity_curve == nullptr && summary.value.equity_curve_len == 0);
+    CHECK(streamed.presented_rows == baseline.presented_open_rows);
+    CHECK(streamed.presented_open_rows == baseline.presented_open_rows);
+    if (open) {
+        auto expected = baseline.open_before;
+        auto actual = streamed.open_before;
+        canonical_trade(expected);
+        canonical_trade(actual);
+        CHECK(std::memcmp(&expected, &actual, sizeof actual) == 0);
+        expected = baseline.open_after;
+        actual = streamed.open_after;
+        canonical_trade(expected);
+        canonical_trade(actual);
+        CHECK(std::memcmp(&expected, &actual, sizeof actual) == 0);
+    }
+    CHECK(streamed.presentations == (selected || observed ? 1 : 2));
+    const auto written = receipt(streamed);
+    CHECK(written.complete == 1);
+    CHECK(written.count_t == array.value.trades_len);
+    CHECK(written.count_e == array.value.equity_curve_len);
+    compare_trade_records(baseline, array.value, path);
+    const auto bytes_before = read(path);
+    Report third, restored;
+    streamed.fill_report(&third.value);
+    CHECK(read(path) == bytes_before);
+    CHECK(same_metrics(summary.value.metrics, third.value.metrics));
+    const int hooks_before_removal = streamed.presentations;
+    CHECK(streamed.set_report_sink_v1(nullptr) == 0);
+    streamed.fill_report(&restored.value);
+    compare_trades(array.value, restored.value);
+    CHECK(same_metrics(array.value.metrics, restored.value.metrics));
+    CHECK(streamed.presentations == hooks_before_removal + (selected || observed ? 0 : 1));
+    if (selected || observed) {
+        // Installing a sink after the array capture borrows its immutable
+        // trades for metrics. A later array read must still own intact rows.
+        CHECK(baseline.set_report_sink_v1(&sink) == 0);
+        Report late_summary, array_again;
+        baseline.fill_report(&late_summary.value);
+        CHECK(late_summary.value.trades == nullptr && late_summary.value.trades_len == 0);
+        CHECK(same_metrics(array.value.metrics, late_summary.value.metrics));
+        CHECK(baseline.set_report_sink_v1(nullptr) == 0);
+        baseline.fill_report(&array_again.value);
+        compare_trades(array.value, array_again.value);
+        CHECK(same_metrics(array.value.metrics, array_again.value.metrics));
+        CHECK(baseline.presentations == 1);
+    }
+    return storage;
+}
+
+void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
+    for (int mode = 0; mode < 3; ++mode) {
+        const bool selected = mode == 1;
+        const bool observed = mode == 2;
+        const auto small = trade_capture_and_read_storage(directory,
+            selected ? "trades-selected-1k.ndjson" : observed
+                ? "trades-observed-1k.ndjson" : "trades-ordinary-1k.ndjson",
+            1000, selected, false, false, observed);
+        const auto large = trade_capture_and_read_storage(directory,
+            selected ? "trades-selected-100k.ndjson" : observed
+                ? "trades-observed-100k.ndjson" : "trades-ordinary-100k.ndjson",
+            100000, selected, false, false, observed);
+        std::printf("sink trade capture/read heap mode=%d: 1k largest=%zu peak=%zu; "
+                    "100k largest=%zu peak=%zu\n", mode,
+                    small.largest_request, small.peak_live,
+                    large.largest_request, large.peak_live);
+        // Production's fixed scratch windows bound all capture/read working
+        // storage, including EVERY replaceable allocation and temporary buffer.
+        // Writer formatting can differ by integer width between these runs;
+        // the permitted difference is itself a fixed production window.
+        const auto window = report_sink::kScratchWindowBytes;
+        const auto budget = 2 * window;
+        CHECK(small.largest_request > 0 && small.peak_live > 0);
+        CHECK(large.largest_request > 0 && large.peak_live > 0);
+        CHECK(small.largest_request <= budget && large.largest_request <= budget);
+        CHECK(small.peak_live <= budget && large.peak_live <= budget);
+        CHECK(large.peak_live <= small.peak_live + window);
+        CHECK(small.peak_live <= large.peak_live + window);
+        CHECK(large.largest_request <= small.largest_request + window);
+        CHECK(small.largest_request <= large.largest_request + window);
+    }
+}
 }
 
 int main() {
@@ -1512,6 +1802,10 @@ int main() {
         compare_pine_selected(directory, "pine-open.ndjson", true, true, false);
         compare_pine_selected(directory, "pine-quote-long.ndjson", true, true, true);
         compare_pine_selected(directory, "pine-quote-short.ndjson", true, false, true);
+        compare_pine_selected(directory, "pine-quote-closed-long.ndjson",
+                              true, true, true, 0, true);
+        compare_pine_selected(directory, "pine-quote-closed-short.ndjson",
+                              true, false, true, 0, true);
         compare_pine_selected(directory, "pine-empty.ndjson", false, true, false);
         compare_pine_selected(directory, "pine-refills.ndjson", true, true, false, refills);
 #endif
@@ -1519,6 +1813,15 @@ int main() {
         invalid_window_hooks_refuse(directory);
 #endif
         selected_capture_storage_is_bounded(directory);
+        trade_capture_and_read_storage(directory, "trades-open-selected.ndjson",
+                                       23, true, true, true);
+        trade_capture_and_read_storage(directory, "trades-open-ordinary.ndjson",
+                                       23, false, true, true);
+        trade_capture_and_read_storage(directory, "trades-open-observed.ndjson",
+                                       23, false, true, true, true);
+        trade_capture_and_read_storage(directory, "trades-host-recorded.ndjson",
+                                       23, true, false, false, false, true);
+        sink_trade_capture_and_reads_are_bounded(directory);
     } catch (const std::exception& error) {
         ++failures;
         std::fprintf(stderr, "L17B exception: %s\n", error.what());

@@ -106,12 +106,25 @@ void BacktestEngine::fill_report(ReportC* out) const {
 // Copy ``trades_`` — followed by ``range_end_trades_``, the report-only rows
 // of a position still open after the final bar
 // (NativeExecutionConsumer::append_open_position_report_rows) — into a
-// freshly heap-allocated TradeC[] on ``out`` and accumulate ``net_profit``
-// for the report. Owns the allocation; freed by ``free_report``.
+// freshly heap-allocated TradeC[] on ``out`` and accumulate ``net_profit``.
+// A sink allocates only the range-end view. free_report owns either array.
 void BacktestEngine::fill_trades_section(ReportC* out) const {
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();
     out->total_trades = n;
+    if (report_sink_state_.enabled) {
+        // The hook can re-mark open lots, but closed history is immutable.
+        // Never materialize that history merely to discard it at finalization.
+        const int open_count = (int)range_end_trades_.size();
+        out->net_profit = report_closed_net_profit();
+        out->trades_len = open_count;
+        out->trades = open_count > 0 ? new TradeC[open_count] : nullptr;
+        for (int i = 0; i < open_count; ++i) {
+            out->trades[i] = report_trade_row(range_end_trades_[i]);
+            out->net_profit += out->trades[i].pnl;
+        }
+        return;
+    }
     out->trades_len = n;
 
     if (n > 0) {
@@ -143,6 +156,41 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         out->trades = nullptr;
         out->net_profit = 0.0;
     }
+}
+
+double BacktestEngine::report_closed_net_profit() const {
+    // A resident-only fold starts at global zero. A sealing owner must supply
+    // its exact report prefix before retiring rows; a suffix is not a report.
+    // The engine's differently seeded decision counters are not substitutes.
+    if (trades_.base() != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade fold is missing its sealed prefix");
+    double sum = 0.0;
+    for (const auto& trade : trades_) sum += trade.pnl;
+    return sum;
+}
+
+void BacktestEngine::compute_report_sink_trade_metrics(
+        ReportC* out, const TradeC* open_rows, int count) const {
+    // Keep each filter's original left-fold order: closed rows, then the
+    // presented range-end rows. Interleaving independent filters changes none
+    // of their additions. No TradeC history or separately summed tail exists.
+    if (trades_.base() != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade metrics are missing their sealed prefix");
+    metrics::TradeStatsAccumulator all(metrics::TradeFilter::ALL, initial_capital_);
+    metrics::TradeStatsAccumulator longs(metrics::TradeFilter::LONG, initial_capital_);
+    metrics::TradeStatsAccumulator shorts(metrics::TradeFilter::SHORT, initial_capital_);
+    const auto fold = [&](const TradeC& row) {
+        all.fold(row);
+        longs.fold(row);
+        shorts.fold(row);
+    };
+    for (const auto& trade : trades_) fold(report_trade_row(trade));
+    for (int i = 0; i < count; ++i) fold(open_rows[i]);
+    out->metrics.all = all.finish();
+    out->metrics.longs = longs.finish();
+    out->metrics.shorts = shorts.finish();
 }
 
 
@@ -189,9 +237,9 @@ void compute_report_metrics(pf_metrics_t& result,
 }  // namespace internal
 
 
-// Compute metrics after fill_trades_section (reads out->trades). Sink-off
-// and selected fallback arrays are owned and freed by free_report; ordinary
-// sinks present one tail copy and read their full history from scratch.
+// Compute metrics after fill_trades_section. Sink-off owns its full arrays;
+// a sink folds closed rows from the ledger plus its presented open-lot view
+// and reads equity history from scratch.
 // Metric history derives from recorded points, NOT script_bars_processed:
 // an exception mid-run can truncate the curve (metrics then describe the
 // truncated prefix; consumers must check strategy_get_last_error).
@@ -215,6 +263,8 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
                            out->equity_curve, n, out->net_profit,
                            initial_capital_, chart_timezone_,
                            first_bar_open_, current_bar_.close, bars_in_market_);
+    if (report_sink_state_.enabled)
+        compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
 }
 
 
@@ -763,29 +813,10 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
                     ++sink.receipt.count_e;
                 }
             }
-            for (int i = 0; i < out->trades_len; ++i) {
-                const TradeC& row = out->trades[i];
-                pf_trade_t wire{};
-                wire.entry_time = row.entry_time;
-                wire.exit_time = row.exit_time;
-                wire.entry_price = row.entry_price;
-                wire.exit_price = row.exit_price;
-                wire.pnl = row.pnl;
-                wire.pnl_pct = row.pnl_pct;
-                wire.is_long = row.is_long;
-                wire.max_runup = row.max_runup;
-                wire.max_drawdown = row.max_drawdown;
-                wire.qty = row.qty;
-                wire.commission = row.commission;
-                wire.entry_bar_index = row.entry_bar_index;
-                wire.exit_bar_index = row.exit_bar_index;
-                wire.open_at_end = row.open_at_end;
-                const Trade& identity = get_report_trade(i);
-                sink.writer->write_t(i + INT64_C(1), wire, identity.entry_incarnation,
-                    closed_trade_close_cause(i), identity.entry_id, identity.exit_id,
-                    identity.exit_comment);
-                ++sink.receipt.count_t;
-            }
+            const TradeC* open_rows = out->trades;
+            int open_count = out->trades_len;
+            NativeExecutionConsumer::report_sink_open_trades(*this, open_rows, open_count);
+            write_report_sink_trades(open_rows, open_count);
             if (outputs_enabled_) {
                 write_report_sink_output_row();
                 sink.writer->write_k(output_constants_.data(), outputs_constants_);
@@ -841,6 +872,41 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
     out->trace_names = nullptr; out->trace_names_len = 0;
 }
 
+void BacktestEngine::write_report_sink_trades(const TradeC* open_rows, int count) const {
+    auto& sink = report_sink_state_;
+    const auto closed_count = static_cast<int64_t>(trades_.size());
+    const int64_t total = closed_count + count;
+    if (sink.receipt.count_t < static_cast<int64_t>(trades_.base())
+        || sink.receipt.count_t > total)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade sink cursor is outside the resident window");
+    for (int64_t i = sink.receipt.count_t; i < total; ++i) {
+        const TradeC row = i < closed_count
+            ? report_trade_row(trades_[static_cast<std::size_t>(i)])
+            : open_rows[static_cast<std::size_t>(i - closed_count)];
+        pf_trade_t wire{};
+        wire.entry_time = row.entry_time;
+        wire.exit_time = row.exit_time;
+        wire.entry_price = row.entry_price;
+        wire.exit_price = row.exit_price;
+        wire.pnl = row.pnl;
+        wire.pnl_pct = row.pnl_pct;
+        wire.is_long = row.is_long;
+        wire.max_runup = row.max_runup;
+        wire.max_drawdown = row.max_drawdown;
+        wire.qty = row.qty;
+        wire.commission = row.commission;
+        wire.entry_bar_index = row.entry_bar_index;
+        wire.exit_bar_index = row.exit_bar_index;
+        wire.open_at_end = row.open_at_end;
+        const Trade& identity = get_report_trade(static_cast<int>(i));
+        sink.writer->write_t(i + INT64_C(1), wire, identity.entry_incarnation,
+            closed_trade_close_cause(static_cast<int>(i)), identity.entry_id,
+            identity.exit_id, identity.exit_comment);
+        ++sink.receipt.count_t;
+    }
+}
+
 void BacktestEngine::stage_report_sink_equity_point(const pf_equity_point_t& point) const {
     auto& sink = report_sink_state_;
     if (sink.equity_tail_stored) {
@@ -876,13 +942,7 @@ void BacktestEngine::compute_report_sink_metrics(ReportC* out,
         if (region.point_count != equity_count)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                 "ordinary sink metric curve differs from its captured point count");
-        using metrics::TradeFilter;
-        out->metrics.all = metrics::compute_trade_stats(
-            out->trades, out->trades_len, TradeFilter::ALL, initial_capital_);
-        out->metrics.longs = metrics::compute_trade_stats(
-            out->trades, out->trades_len, TradeFilter::LONG, initial_capital_);
-        out->metrics.shorts = metrics::compute_trade_stats(
-            out->trades, out->trades_len, TradeFilter::SHORT, initial_capital_);
+        compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
         const report_sink::ScratchCurveWindow curve(region);
         out->metrics.equity = metrics::compute_equity_stats(
             curve, equity_count, initial_capital_, chart_timezone_, first_bar_open_,

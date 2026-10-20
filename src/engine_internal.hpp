@@ -194,6 +194,27 @@ SettlementPathCounts settlement_path_counts() noexcept;
 bool closed_row_all_finite(const Trade& trade) noexcept;
 
 // ── Report metrics (defined in engine_report.cpp) ──
+// Project one resident ledger row at a time on the sink path. Sink OFF keeps
+// its existing array construction, including its original padding behavior.
+inline TradeC report_trade_row(const Trade& t) {
+    TradeC row{};
+    row.entry_time = t.entry_time;
+    row.exit_time = t.exit_time;
+    row.entry_price = t.entry_price;
+    row.exit_price = t.exit_price;
+    row.pnl = t.pnl;
+    row.pnl_pct = t.pnl_pct;
+    row.is_long = t.is_long ? 1 : 0;
+    row.max_runup = t.max_runup;
+    row.max_drawdown = t.max_drawdown;
+    row.qty = t.qty;
+    row.commission = t.commission;
+    row.entry_bar_index = t.entry_bar_index;
+    row.exit_bar_index = t.exit_bar_index;
+    row.open_at_end = t.open_at_end ? 1 : 0;
+    return row;
+}
+
 // The four metric blocks of a report, computed from explicit values and no
 // engine or host pointer, so one computation serves both readers of a presented
 // report: BacktestEngine::fill_metrics_section, right after present_report, and

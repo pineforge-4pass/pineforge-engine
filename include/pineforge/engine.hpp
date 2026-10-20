@@ -2354,6 +2354,9 @@ private:
     void stage_report_sink_equity_point(const pf_equity_point_t& point) const;
     void stage_report_sink_equity_tail(const ReportC* out) const;
     void compute_report_sink_metrics(ReportC* out, std::int64_t equity_count) const;
+    void compute_report_sink_trade_metrics(ReportC* out,
+                                           const TradeC* open_rows, int count) const;
+    void write_report_sink_trades(const TradeC* open_rows, int count) const;
     void fill_report_sink_metrics_section(ReportC* out) const;
     template<class Write> void report_sink_record(Write write) const;
     bool stream_report_sink_trace(const TraceEntryC& entry);
@@ -2409,6 +2412,9 @@ protected:
     void fold_trade_percent_prefix(const Trade& trade);
     // The streaming owner clears this prefix with the run's closed rows.
     void reset_trade_percent_prefix();
+    // A sink hook receives only range-end rows. Re-summing an edited tail
+    // starts with this closed-row left fold, never a separately summed tail.
+    double report_closed_net_profit() const;
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
