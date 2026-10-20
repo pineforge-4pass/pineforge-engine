@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "0e7a0abe34d6f07606b81a19df81f00d2fc85ff770a3b7c90651f2d0f9a64ec5"
+    "catalogSha256": "17c693b6647930fe63e4239e062aa5410ad313764aa89a31ce43b701de3cc272"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -25,7 +25,15 @@
             "kind": "integer",
             "optional": true
           },
+          "claimed_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
           "high_water_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "needed_bytes_lower_bound": {
             "kind": "integer",
             "optional": true
           },
@@ -40,10 +48,28 @@
               "sink_io",
               "sink_peer_closed"
             ]
+          },
+          "store": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "curve",
+              "position_tail",
+              "cohort",
+              "exit_rank",
+              "sequence_index",
+              "sequence_index_idx",
+              "erased_minima",
+              "erased_minima_idx",
+              "partial_cycles",
+              "partial_cycles_idx",
+              "successor_roots",
+              "unknown"
+            ]
           }
         },
         "class": "engine_fault",
-        "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io) and a closed sink peer (sink_peer_closed). high_water_bytes and arena_bytes are byte counts meaningful with arena_exhausted. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
+        "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io) and a closed sink peer (sink_peer_closed). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, store identifies the requesting scratch user, and needed_bytes_lower_bound is the least additional arena bytes needed to satisfy the failed request. Other reasons carry no sizes. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
         "english": [
           "report sink open failed",
           "report sink write failed",

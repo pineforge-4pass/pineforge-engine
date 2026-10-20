@@ -430,12 +430,21 @@ class CatalogDiff(unittest.TestCase):
         self.assertEqual(entry["since"], "1.7.0")
         self.assertEqual(entry["args"], {
             "arena_bytes": {"kind": "integer", "optional": True},
+            "claimed_bytes": {"kind": "integer", "optional": True},
             "high_water_bytes": {"kind": "integer", "optional": True},
+            "needed_bytes_lower_bound": {"kind": "integer", "optional": True},
             "reason": {
                 "kind": "vocab",
                 "optional": True,
                 "values": ["arena_exhausted", "arena_io", "arena_backing", "scratch_io",
                            "sink_io", "sink_peer_closed"],
+            },
+            "store": {
+                "kind": "vocab",
+                "optional": True,
+                "values": ["curve", "position_tail", "cohort", "exit_rank", "sequence_index",
+                           "sequence_index_idx", "erased_minima", "erased_minima_idx",
+                           "partial_cycles", "partial_cycles_idx", "successor_roots", "unknown"],
             },
         })
         self.assertEqual(entry["english"], [
