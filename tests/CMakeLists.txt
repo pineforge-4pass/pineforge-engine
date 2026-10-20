@@ -7227,6 +7227,26 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
 endif()
 # --- CR-150 core-cr150-l6b2 end ---
 
+# --- CR-150 core-cr150-l9b begin ---
+# CR-150 L9B: native named-sink summary rows, after every line pin. The Python
+# row is registered in cr150.d/core-cr150-l9b.cmake. These rows read the real
+# L6B1 and outputs-fixture modules from their ENVIRONMENT, which a lane file may
+# not set, so they are registered here once both modules are declared. The
+# row exists only where both modules do: it never runs without them.
+# The opt-in corpus row (PINEFORGE_L9B_CORPUS_CASES) needs real lab probes that
+# only the supervisor can supply, so it is left out of this registration.
+if(TARGET report_sink_l6b1_strategy AND TARGET outputs_fixture_strategy
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_test(NAME test_run_json_sink_summary_l9b_native
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_summary.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_sink_summary_l9b_native APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9B_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9B_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
+# --- CR-150 core-cr150-l9b end ---
+
 # --- CR-150 core-cr150-l19f begin ---
 # CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
 # --- CR-150 core-cr150-l19f end ---

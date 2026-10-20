@@ -2004,7 +2004,7 @@ def _new_harness_report_sink(lib, state):
     run_json._bind_report_sink(lib)
     if int(lib.pf_report_sink_version()) != 1:
         raise RuntimeError("strategy library has an incompatible report sink ABI")
-    return run_json._TemporaryReportSink(lib, state)
+    return run_json._ReportSink(lib, state)
 
 
 def _harness_sink_equity_count(lib, state) -> int:
