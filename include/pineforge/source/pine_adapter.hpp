@@ -38,6 +38,7 @@ using SourceId = std::string;
 
 class PineStrategyHost;
 class PineScheduler;
+namespace detail { class PositionTailSpill; }
 
 // R5 lane V19-E: v4 folds the adapter's live state -- the placement rows it
 // still holds, compact records of the erased ones, the pending queues -- and
@@ -1822,6 +1823,17 @@ private:
     friend class PendingIntentView;
     friend class PineStrategyHost;
     friend class PineScheduler;
+    // L8c calls this once for [trades_.base(), global_end), in forward
+    // order, before retiring that prefix. scratch_directory is L6b-4's
+    // already-resolved directory. This is the only dependency binding.
+    void preserve_position_tail_before_seal(
+        std::size_t global_end, const std::string& scratch_directory);
+
+    // Physical storage of immutable, already-hashed closed rows, not a
+    // second logical state. The closed-row digest and position-open mark
+    // reconstruct its reachable sequence. File offsets/cache are excluded
+    // so the sealed/resident partition cannot change continuation hashes.
+    std::shared_ptr<detail::PositionTailSpill> position_tail_spill_;
     struct CohortFacts {
         native_order::CohortHandle handle{};
         OriginRoster origins;
@@ -2577,7 +2589,7 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
-    pineforge::detail::IdPairStore<std::int64_t> consumed_partial_exit_cycles_;
+    pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
