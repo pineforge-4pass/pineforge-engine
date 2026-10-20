@@ -438,6 +438,43 @@ class WiringTests(TempCase):
         self.assertEqual(gate.check_wiring(ROOT), [])
         self.assertEqual(self.findings(), [])
 
+    def arm_findings(self, job, runner, extra=''):
+        return self.findings(**{'.github/workflows/flat-peak.yml': [(
+            f'  {job}:\n    runs-on: {gate.FLAT_PEAK_RUNNER}\n',
+            f'  {job}:\n    runs-on: {runner}\n' + extra)]})
+
+    def test_both_arms_on_the_pool_without_a_timeout_pass(self):
+        for job in ('flat-peak-mem', 'flat-peak-census'):
+            for runner in ('["self-hosted","pf-ci","pf-ci-x64-16"]',
+                           '["self-hosted","pf-ci","pf-ci-release"]'):
+                with self.subTest(job=job, runner=runner):
+                    self.assertEqual(self.arm_findings(job, runner), [])
+
+    def test_an_arm_with_a_time_limit_is_refused(self):
+        for job in ('flat-peak-mem', 'flat-peak-census'):
+            with self.subTest(job=job):
+                found = self.arm_findings(job, gate.FLAT_PEAK_RUNNER,
+                                          '    timeout-minutes: 360\n')
+                self.assertIn(f'flat-peak.yml job {job}: the owner rule forbids time limits', found)
+
+    def test_an_arm_on_a_hosted_runner_is_refused(self):
+        for job in ('flat-peak-mem', 'flat-peak-census'):
+            for runner in ('ubuntu-24.04', 'macos-26', 'windows-2025', 'linux-latest'):
+                with self.subTest(job=job, runner=runner):
+                    found = self.arm_findings(job, runner)
+                    self.assertTrue(any(f'job {job} must run on the pf-ci pool' in finding
+                                        for finding in found), found)
+
+    def test_an_arm_outside_the_pf_ci_pool_is_refused(self):
+        for job in ('flat-peak-mem', 'flat-peak-census'):
+            for runner in ('["self-hosted","pf-ci-x64-16"]',
+                           '["pf-ci","pf-ci-x64-16"]',
+                           '["self-hosted","pf-ci","unknown"]'):
+                with self.subTest(job=job, runner=runner):
+                    found = self.arm_findings(job, runner)
+                    self.assertTrue(any(f'job {job} must run on the pf-ci pool' in finding
+                                        for finding in found), found)
+
     def test_ci_without_the_gate_job_is_refused(self):
         found = self.findings(**{'.github/workflows/ci.yml': [('\n  flat-peak:\n', '\n  flat-peak-renamed:\n')]})
         self.assertIn('ci.yml must call the flat-peak gate (job flat-peak)', found)

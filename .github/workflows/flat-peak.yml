@@ -19,13 +19,22 @@ name: Flat-peak memory gate
 # decided. scripts/ci_flat_peak_gate.py check-wiring (a ci_preflight stage)
 # holds that, and a registered row set that is empty or wrong fails the arm.
 #
-# Both jobs ride the standard Linux runner, as every workflow outside the three
-# a CI run starts must (scripts/ci_preflight.py), and carry the platform's own
-# 360-minute maximum, the only hang catcher (owner rule, 2026-10-12).
+# Both jobs use the caller's pool class: pf-ci-x64-16 by default, pf-ci-release
+# for release.yml. The gate carries no timeout (owner rule #827).
 
 on:
   workflow_call:
+    inputs:
+      runner_labels:
+        description: 'JSON runner labels for the engine gate pool'
+        type: string
+        default: '["self-hosted","pf-ci","pf-ci-x64-16"]'
   workflow_dispatch:
+    inputs:
+      runner_labels:
+        description: 'JSON runner labels for the engine gate pool'
+        type: string
+        default: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 
 permissions:
   contents: read
@@ -38,8 +47,7 @@ env:
 
 jobs:
   flat-peak-mem:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
     steps:
       # The gate configures with PINEFORGE_VERSION_SOURCE=FILE: no tags, no
       # history.
@@ -81,8 +89,7 @@ jobs:
           if-no-files-found: warn
 
   flat-peak-census:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
     steps:
       # Credentials stay persisted, exactly as the corpus parity jobs: the
       # submodule clone and `git lfs pull` below go out over https and that is

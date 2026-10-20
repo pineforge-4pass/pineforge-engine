@@ -51,6 +51,7 @@ TRUSTED_EVENT = ("github.event_name == 'push' || github.event_name == 'schedule'
                  "github.event.pull_request.head.repo.full_name == github.repository)")
 LINUX_RUNNER = '${{ (' + TRUSTED_EVENT + ") && 'pf-linux-x64-16' || 'ubuntu-24.04' }}"
 MATRIX_RUNNER = '${{ (' + TRUSTED_EVENT + ') && matrix.larger_runner || matrix.os }}'
+FLAT_PEAK_RUNNER = '${{ fromJSON(inputs.runner_labels) }}'
 # The build job's whole strategy, exactly (comments and blank lines aside): an
 # include entry more -- a leg whose os is a larger runner, or one that
 # overrides a larger_runner -- is a finding.
@@ -84,12 +85,14 @@ CURL_CACHE_SAVE = ("${{ inputs.cold-cache != 'true' && steps.curl-build.outcome 
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
+FLAT_PEAK = 'ci_flat_peak_gate.py'
 PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # Every job with a runner in the workflows a CI run starts: its runs-on, its
 # timeout-minutes, exactly, and the command that must carry the core count.
-# Every one of them is the platform's own 360-minute job maximum, the only
+# The existing pins keep the platform's own 360-minute job maximum, the only
 # hang catcher left (owner rule, 2026-10-12: no time limit of this repository
-# may fail a run for slowness); docs/ci.md says so.
+# may fail a run for slowness). Flat-peak follows owner #827: None requires
+# timeout-minutes to be absent.
 JOB_RUNNERS = {
     'ci.yml': {'changes': ('ubuntu-24.04', 360, None),
                'preflight': (LINUX_RUNNER, 360, None),
@@ -101,12 +104,17 @@ JOB_RUNNERS = {
                          'native-live-gate': ('ubuntu-24.04', 360, None)},
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
+    'flat-peak.yml': {'flat-peak-mem': (FLAT_PEAK_RUNNER, None, FLAT_PEAK),
+                      'flat-peak-census': (FLAT_PEAK_RUNNER, None, FLAT_PEAK)},
 }
-# Every other workflow keeps its jobs on these. release.yml is exempt by name,
+# Other workflows keep their legacy standard runners or use our pool classes.
+# release.yml is exempt by name,
 # while its on: block names only events no fork can raise (a push, the
 # schedule, a dispatch; a dispatch alone today); any other workflow file is
 # checked, whatever starts it.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
+POOL_CLASSES = frozenset(('pf-ci-crj', 'pf-ci-x64', 'pf-ci-x64-16',
+                          'pf-ci-release', 'pf-ci-arm64'))
 TRUSTED_ONLY_WORKFLOWS = ('release.yml',)
 TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
@@ -148,9 +156,10 @@ _JOB_HEADER = re.compile(r'^  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(?:#.*)?$', re.MUL
 _JOBS_KEY = re.compile(r'^jobs:[ \t]*(?:#.*)?$', re.MULTILINE)
 _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
 # --jobs and every abbreviation argparse accepts for it in ci_verify.py, and a
-# call of ci_verify itself, as a script or a module.
+# call of ci_verify or ci_flat_peak_gate, as a script or a module.
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
 _VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
+_FLAT_PEAK_CALL = re.compile(r'\bci_flat_peak_gate\.py\b|-m\s+ci_flat_peak_gate\b')
 
 
 def _jobs_text(workflow: str) -> str | None:
@@ -255,11 +264,12 @@ def _sized(text: str, command: str | None) -> bool:
     """Whether a job's work runs at the runner's core count.
 
     Counted over the whole job, in order, so no line, block or chaining form
-    matters: every ci_verify call carries one core-count --jobs before the next
+    matters: every verifier/gate call carries one core-count --jobs before the next
     call, no other --jobs spelling appears, and every JOBS and parity-script
     mention is part of the one parity command.
     """
-    marks = sorted([(match.start(), 'C') for match in _VERIFY_CALL.finditer(text)]
+    call_pattern = _FLAT_PEAK_CALL if command == FLAT_PEAK else _VERIFY_CALL
+    marks = sorted([(match.start(), 'C') for match in call_pattern.finditer(text)]
                    + [(match.start(), 'F' if text.startswith(
                        (f'--jobs {CORES}', f'--jobs={CORES}'), match.start()) else 'U')
                       for match in _JOBS_FLAG.finditer(text)])
@@ -268,7 +278,7 @@ def _sized(text: str, command: str | None) -> bool:
     return (re.fullmatch(r'(?:CF)*', calls) is not None
             and len(re.findall(r'\bJOBS\s*[:=]', text)) == parity
             and text.count(PARITY) == parity
-            and (command != VERIFY or bool(calls))
+            and (command not in (VERIFY, FLAT_PEAK) or bool(calls))
             and (command != PARITY or parity > 0))
 
 
@@ -292,6 +302,24 @@ def _events(workflow: str) -> set[str] | None:
     if not keys or not all(events):
         return None
     return {event.group(1) for event in events}
+
+
+def pool_runner(value: str) -> bool:
+    """A literal pool array (flow or folded block), with exactly one known class."""
+    if value.startswith('[') and value.endswith(']'):
+        parts = value[1:-1].split(',')
+    elif value.startswith('- '):
+        parts = re.split(r'\s+-\s+', value[2:])
+    else:
+        return False
+    labels = []
+    for part in parts:
+        label = re.fullmatch(r'([\'\"]?)([A-Za-z0-9_-]+)\1', part.strip())
+        if label is None:
+            return False
+        labels.append(label.group(2))
+    return (len(labels) == 3 and {'self-hosted', 'pf-ci'} <= set(labels)
+            and len(set(labels) & POOL_CLASSES) == 1)
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
@@ -318,14 +346,18 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 elif not uses and len(runs_on) != 1:
                     findings.append(f'{name} job {job} has a runs-on the runner contract '
                                     'cannot read')
-                elif any(value not in STANDARD_RUNNERS for value in runs_on):
+                elif any(value not in STANDARD_RUNNERS and not pool_runner(value)
+                         for value in runs_on):
                     findings.append(f'{name} job {job} must stay on a standard runner '
                                     f'({" or ".join(STANDARD_RUNNERS)})')
                 continue
             runner, minutes, command = pinned[job]
             if runs_on != [runner]:
                 findings.append(f'{name} job {job} must run on {runner}')
-            if _job_values(body, 'timeout-minutes') != [str(minutes)]:
+            if minutes is None:
+                if _job_values(body, 'timeout-minutes'):
+                    findings.append(f'{name} job {job}: the owner rule forbids time limits')
+            elif _job_values(body, 'timeout-minutes') != [str(minutes)]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
             # A job on 16 cores that still asks for 4 wastes the runner it pays for.
             if not _sized(_counted_text(body), command):

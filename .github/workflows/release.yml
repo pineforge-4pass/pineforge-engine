@@ -88,6 +88,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/flat-peak.yml
+    with:
+      runner_labels: '["self-hosted","pf-ci","pf-ci-release"]'
 
   release:
     needs: flat-peak-gate

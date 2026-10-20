@@ -38,6 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ci_verify import ctest_list_count, ctest_list_names, ctest_rows  # noqa: E402
+from ci_preflight import FLAT_PEAK_RUNNER, _job_values, pool_runner  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -423,7 +424,19 @@ def check_wiring(root: Path) -> list[str]:
         findings.append('flat-peak.yml must be callable (workflow_call)')
     findings += tolerance_findings('flat-peak.yml', flat)
     jobs = job_blocks(flat)
+    runner_input = re.search(r'^      runner_labels:\n((?:^        .*\n)*)', flat, re.MULTILINE)
+    defaults = _job_values(runner_input.group(1), 'default') if runner_input else []
     for arm, job in (('mem', 'flat-peak-mem'), ('census', 'flat-peak-census')):
+        body = '\n'.join(jobs.get(job, []))
+        runners = _job_values(body, 'runs-on')
+        if runners == [FLAT_PEAK_RUNNER]:
+            runners = defaults
+        if len(runners) != 1 or not pool_runner(runners[0]):
+            findings.append(f'flat-peak.yml job {job} must run on the pf-ci pool, '
+                            'never a GitHub-hosted label')
+        if any(re.match(r'\s+(?:-\s+)?["\']?timeout-minutes["\']?\s*:', line)
+               for line in jobs.get(job, [])):
+            findings.append(f'flat-peak.yml job {job}: the owner rule forbids time limits')
         command = f'{GATE_COMMAND} {arm} '
         steps = [step for step in step_blocks(jobs.get(job, []))
                  if any(command in line for line in step)]
@@ -437,8 +450,6 @@ def check_wiring(root: Path) -> list[str]:
         if any(token in run[0] for token in ('|', ';', '&&')):
             findings.append(f'flat-peak.yml job {job}: the {arm} command must stand alone '
                             '(a pipe or a chain can hide its status)')
-        if not any(line.strip().startswith('timeout-minutes') for line in jobs.get(job, [])):
-            findings.append(f'flat-peak.yml job {job} must carry the platform time limit')
 
     # ci.yml: the MAIN tier runs it, a pull request does not.
     block = job_blocks(ci).get('flat-peak')

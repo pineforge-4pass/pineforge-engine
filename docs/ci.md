@@ -921,9 +921,11 @@ Where it runs:
 
 - MAIN: the `flat-peak` job of `ci.yml` calls the reusable workflow
   `.github/workflows/flat-peak.yml` (jobs `flat-peak-mem` and
-  `flat-peak-census`, the standard `ubuntu-24.04` runner, the 360-minute
-  platform maximum) on a push to main and on a manual dispatch. A regression
-  fails the job and so the run. The job stays out of the advisory `build`
+  `flat-peak-census`) on a push to main and on a manual dispatch. Both arms
+  default to the pool class `["self-hosted","pf-ci","pf-ci-x64-16"]`;
+  `release.yml` passes the `runner_labels` input as
+  `'["self-hosted","pf-ci","pf-ci-release"]'`. The gate carries no timeout. A
+  regression fails the job and so the run. The job stays out of the advisory `build`
   aggregate: that aggregate accepts only success or a docs-only skip from each
   lane it names, and this lane is skipped on every pull request.
 - RELEASE: the `flat-peak-gate` job of `release.yml` calls the same workflow,

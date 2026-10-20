@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import ci_preflight
 import ci_verify
 from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER, NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
@@ -252,6 +254,8 @@ class PreflightFailures(unittest.TestCase):
             (4, 'corpus-parity-subset', 'timeout-minutes: 360', 'timeout-minutes: 10',
              'corpus-parity.yml job corpus-parity-subset must allow 360'),
             # Four jobs asked of a 16-core runner.
+            (0, 'kernel-only', 'ci_verify.py', 'ci_flat_peak_gate.py',
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'build', f'--jobs {CORES}', '--jobs 4', 'ci.yml job build must size'),
             (0, 'sanitizers', f'--jobs {CORES}', '--jobs 4', 'ci.yml job sanitizers must size'),
             (0, 'kernel-only', f'--jobs {CORES}', '--jobs "$(nproc)"', 'ci.yml job kernel-only must size'),
@@ -588,13 +592,71 @@ class PreflightFailures(unittest.TestCase):
         self.assertTrue(any('lint.yml job lint must stay on a standard runner' in line for line in
                             ci_workflow_findings(*original, others=dict(others, **{'lint.yml': decoy}))))
 
-    def test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum(self):
+    def test_unhidden_jobs_accept_known_pool_classes(self):
+        original, others = self.ci_sources(), self.other_sources()
+        workflow = ('name: lint\non: [pull_request]\njobs:\n  lint:\n'
+                    '    runs-on: {runner}\n    steps:\n      - run: "true"\n')
+        for pool in ('pf-ci-crj', 'pf-ci-x64', 'pf-ci-x64-16', 'pf-ci-release', 'pf-ci-arm64'):
+            for runner in (f'["self-hosted","pf-ci","{pool}"]',
+                           f"['pf-ci', '{pool}', 'self-hosted']",
+                           f'\n      - self-hosted\n      - pf-ci\n      - {pool}'):
+                with self.subTest(pool=pool, runner=runner):
+                    changed = dict(others, **{'lint.yml': workflow.format(runner=runner)})
+                    self.assertEqual(ci_workflow_findings(*original, others=changed), [])
+
+    def test_unhidden_jobs_refuse_hosted_or_unknown_pool_labels(self):
+        original, others = self.ci_sources(), self.other_sources()
+        workflow = ('name: lint\non: [pull_request]\njobs:\n  lint:\n'
+                    '    runs-on: {runner}\n    steps:\n      - run: "true"\n')
+        for runner in ('["self-hosted","pf-ci","unknown"]',
+                       '["self-hosted","pf-ci-x64-16"]',
+                       '["pf-ci","pf-ci-x64-16"]',
+                       '["self-hosted","pf-ci","ubuntu-24.04"]',
+                       '["self-hosted","pf-ci","macos-26"]',
+                       '["self-hosted","pf-ci","windows-2025"]',
+                       '["self-hosted","pf-ci","linux-latest"]',
+                       '["self-hosted","pf-ci","pf-ci-x64-16","ubuntu-latest"]'):
+            with self.subTest(runner=runner):
+                changed = dict(others, **{'lint.yml': workflow.format(runner=runner)})
+                found = ci_workflow_findings(*original, others=changed)
+                self.assertTrue(any('lint.yml job lint must stay on a standard runner' in line
+                                    for line in found), found)
+
+    def test_flat_peak_arms_pin_the_input_and_forbid_time_limits(self):
+        original, others = self.ci_sources(), self.other_sources()
+        runner = '${{ fromJSON(inputs.runner_labels) }}'
+        self.assertEqual(set(JOB_RUNNERS['flat-peak.yml']), {'flat-peak-mem', 'flat-peak-census'})
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        for job in ('flat-peak-mem', 'flat-peak-census'):
+            self.assertEqual(JOB_RUNNERS['flat-peak.yml'][job], (runner, None, 'ci_flat_peak_gate.py'))
+            for before, after, message in (
+                    (runner, 'ubuntu-24.04', f'job {job} must run on {runner}'),
+                    (runner, '${{ inputs.runner_labels }}', f'job {job} must run on {runner}'),
+                    ('    steps:\n', '    timeout-minutes: 360\n    steps:\n',
+                     f'job {job}: the owner rule forbids time limits'),
+                    ('    steps:\n', '    timeout-minutes: 0\n    steps:\n',
+                     f'job {job}: the owner rule forbids time limits'),
+                    ('    steps:\n', '    "timeout-minutes":\n    steps:\n',
+                     f'job {job}: the owner rule forbids time limits'),
+                    (f'--jobs {CORES}', '--jobs 4', f'job {job} must size its parallelism to the runner')):
+                with self.subTest(job=job, after=after):
+                    changed = dict(others, **{'flat-peak.yml': in_job(
+                        others['flat-peak.yml'], job, before, after)})
+                    found = ci_workflow_findings(*original, others=changed)
+                    self.assertIn(f'flat-peak.yml {message}', found)
+            with self.subTest(job=job, missing=True):
+                changed = dict(others, **{'flat-peak.yml': others['flat-peak.yml'].replace(
+                    f'  {job}:\n', f'  {job}-renamed:\n', 1)})
+                self.assertIn(f'flat-peak.yml is missing job {job}',
+                              ci_workflow_findings(*original, others=changed))
+
+    def test_no_stage_has_a_timeout_and_jobs_keep_their_pinned_time_policy(self):
         # Owner rule, 2026-10-12: no stage of this preflight is run under a
         # timeout of its own any more (its verifier-tests stage has taken
         # longer than the old 2400 s bound on slow hosts), and every pinned
-        # job limit is GitHub's own 360-minute maximum -- the only hang
+        # legacy job limit is GitHub's own 360-minute maximum -- the only hang
         # catcher left, and deliberately the same for a five-second job and
-        # the full verifier.
+        # the full verifier. Flat-peak follows owner #827 and has no timeout.
         self.assertFalse(hasattr(ci_preflight, 'STAGE_TIMEOUT_SECONDS'))
         source = (ROOT / 'scripts/ci_preflight.py').read_text()
         stage_call = re.search(r'result = subprocess\.run\(argv, cwd=source[^\n]*\)',
@@ -604,7 +666,10 @@ class PreflightFailures(unittest.TestCase):
         for workflow, jobs in JOB_RUNNERS.items():
             for job, (_, minutes, _) in jobs.items():
                 with self.subTest(workflow=workflow, job=job):
-                    self.assertEqual(minutes, 360)
+                    if workflow == 'flat-peak.yml':
+                        self.assertIsNone(minutes)
+                    else:
+                        self.assertEqual(minutes, 360)
 
     def contract_stage(self, mutation):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""
