@@ -37,9 +37,8 @@ void expect_rejected(const RunFailureArgs& args) {
     assert(args_json(value) == "{}");
 }
 
-// ScratchIoError is final and its current constructor takes only errno and
-// operation, with {} arguments. Use the same public bases locally to exercise
-// a carried reason without changing that production raiser in this lane.
+// Exercise carried payloads through the public bases without changing a
+// production raiser in this catalog lane.
 class SinkFailureWithArgs final : public std::system_error, public pineforge::RunFailureInfo {
 public:
     explicit SinkFailureWithArgs(const RunFailureArgs& args)
@@ -55,6 +54,7 @@ void reason_rows() {
         "scratch_io",
         "sink_io",
         "sink_peer_closed",
+        "sink_exhausted",
     };
     for (const char* reason : reasons) {
         const RunFailureArgs args{{"reason", reason}};
@@ -163,15 +163,52 @@ void arena_counters() {
     expect_rejected({{"undeclared", bytes}});
 }
 
+void sink_counters() {
+    // The finalizer stops at the first byte beyond its planned cap. Counts
+    // beyond 32 bits retain their integer kind and canonical JSON key order.
+    constexpr std::int64_t cap = INT64_C(1) << 32;
+    constexpr std::int64_t read = cap + 1;
+    const RunFailureArgs args{
+        {"sink_bytes", read}, {"reason", "sink_exhausted"}, {"cap_bytes", cap},
+    };
+    const std::string expected = "{\"cap_bytes\":" + std::to_string(cap)
+        + ",\"reason\":\"sink_exhausted\",\"sink_bytes\":" + std::to_string(read) + "}";
+    expect_sink_failure(
+        pineforge::make_run_failure(RunFailureCode::report_sink_failed, args), expected);
+    bool caught = false;
+    try {
+        throw SinkFailureWithArgs(args);
+    } catch (const std::exception& error) {
+        caught = true;
+        expect_sink_failure(pineforge::classify_run_failure(error), expected);
+    }
+    assert(caught);
+
+    expect_sink_failure(pineforge::make_run_failure(
+        RunFailureCode::report_sink_failed, {{"cap_bytes", cap}}),
+        "{\"cap_bytes\":" + std::to_string(cap) + "}");
+    expect_sink_failure(pineforge::make_run_failure(
+        RunFailureCode::report_sink_failed, {{"sink_bytes", read}}),
+        "{\"sink_bytes\":" + std::to_string(read) + "}");
+    expect_rejected({{"reason", "sink_exhausted"}, {"cap_bytes", std::to_string(cap)}});
+    expect_rejected({{"cap_bytes", static_cast<double>(cap)}});
+    expect_rejected({{"cap_bytes", false}});
+    expect_rejected({{"cap_bytes", nullptr}});
+    expect_rejected({{"reason", "sink_exhausted"}, {"sink_bytes", std::to_string(read)}});
+    expect_rejected({{"sink_bytes", static_cast<double>(read)}});
+    expect_rejected({{"sink_bytes", true}});
+    expect_rejected({{"sink_bytes", nullptr}});
+}
+
 void existing_scratch_error() {
-    // The real existing exception must still classify with empty arguments.
+    // W1 wires the real legacy-file raiser to this required A7 reason.
     bool caught = false;
     try {
         throw pineforge::detail::ScratchIoError(EIO, "scratch write");
     } catch (const std::system_error& error) {
         caught = true;
         assert(error.code().value() == EIO);
-        expect_sink_failure(pineforge::classify_run_failure(error), "{}");
+        expect_sink_failure(pineforge::classify_run_failure(error), "{\"reason\":\"scratch_io\"}");
     }
     assert(caught);
 }
@@ -186,6 +223,7 @@ int main() {
         pineforge::make_run_failure(RunFailureCode::report_sink_failed, {}), "{}");
     reason_rows();
     arena_counters();
+    sink_counters();
     existing_scratch_error();
     std::puts("report sink failure catalog: registry, arguments and classifier checked");
     return 0;

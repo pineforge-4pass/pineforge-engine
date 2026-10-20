@@ -430,6 +430,7 @@ class CatalogDiff(unittest.TestCase):
         self.assertEqual(entry["since"], "1.7.0")
         self.assertEqual(entry["args"], {
             "arena_bytes": {"kind": "integer", "optional": True},
+            "cap_bytes": {"kind": "integer", "optional": True},
             "claimed_bytes": {"kind": "integer", "optional": True},
             "high_water_bytes": {"kind": "integer", "optional": True},
             "needed_bytes_lower_bound": {"kind": "integer", "optional": True},
@@ -437,8 +438,9 @@ class CatalogDiff(unittest.TestCase):
                 "kind": "vocab",
                 "optional": True,
                 "values": ["arena_exhausted", "arena_io", "arena_backing", "scratch_io",
-                           "sink_io", "sink_peer_closed"],
+                           "sink_io", "sink_peer_closed", "sink_exhausted"],
             },
+            "sink_bytes": {"kind": "integer", "optional": True},
             "store": {
                 "kind": "vocab",
                 "optional": True,
