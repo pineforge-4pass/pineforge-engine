@@ -1004,6 +1004,38 @@ class PreflightFailures(unittest.TestCase):
                 route = 'a hosted job' if name == 'docs.yml' else 'an isolated release job'
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
+    def test_release_dry_run_never_reaches_the_hub_dispatch(self):
+        # Owner, the 1.6.2 dry cut: the hub's receivers are disabled, so a
+        # rehearsal that reached notify-hub would dispatch into nothing. The
+        # job-level guard is the only thing between a dry run and that call.
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        finding = ('release.yml job notify-hub must carry '
+                   'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+        self.assertEqual(ci_preflight._jobs(release)['notify-hub'].count(
+            '    if: ${{ !inputs.dry_run }}\n'), 1)
+        for after in ('', '    if: ${{ always() }}\n',
+                      '    if: ${{ inputs.dry_run }}\n',
+                      '    if: ${{ !inputs.dry_run || inputs.dry_run }}\n',
+                      "    if: '!inputs.dry_run'\n"):
+            with self.subTest(after=after):
+                changed = in_job(release, 'notify-hub',
+                                 '    if: ${{ !inputs.dry_run }}\n', after)
+                findings = ci_workflow_findings(
+                    *original, others=dict(others, **{'release.yml': changed}))
+                self.assertIn(finding, findings)
+        # The guard reads a declared input: dropping or retyping it must fail.
+        declaration = 'release.yml must declare dry_run as a boolean dispatch input'
+        for before, after in (('      dry_run:\n', '      dry_run_disabled:\n'),
+                              ('        type: boolean\n', '        type: string\n'),
+                              ('        type: boolean\n', '        type: choice\n')):
+            with self.subTest(declaration=after):
+                changed = in_job(release, None, before, after)
+                findings = ci_workflow_findings(
+                    *original, others=dict(others, **{'release.yml': changed}))
+                self.assertIn(declaration, findings)
+
     def test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum(self):
         # Owner rule, 2026-10-12: no stage of this preflight is run under a
         # timeout of its own any more (its verifier-tests stage has taken

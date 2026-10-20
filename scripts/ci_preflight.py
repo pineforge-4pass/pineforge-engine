@@ -464,6 +464,26 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         if _job_block(prebuilt, 'strategy') != _code(RELEASE_STRATEGY):
             findings.append('release.yml prebuilt must use exactly the isolated Linux x64 '
                             'and hosted ARM/macOS matrix')
+        # The workflow's only fan-out is notify-hub's dispatch to the release
+        # hub; a rehearsal must never reach it (owner, the 1.6.2 dry cut: the
+        # hub's receivers are disabled, so a real dispatch would be lost).
+        notify = _jobs(workflows['release.yml']).get('notify-hub', '')
+        if _job_values(notify, 'if') != ['${{ !inputs.dry_run }}']:
+            findings.append('release.yml job notify-hub must carry '
+                            'if: ${{ !inputs.dry_run }} so a dry run dispatches nothing')
+        # The guard reads a dispatch input: a workflow that dropped or
+        # retyped that declaration would not be the one this contract pins.
+        dispatch = workflows['release.yml'].split('\n  workflow_dispatch:\n', 1)
+        dispatch = dispatch[1].split('\npermissions:', 1)[0] if len(dispatch) == 2 else ''
+        lines = dispatch.split('\n')
+        start = next((index for index, line in enumerate(lines) if line == '      dry_run:'), None)
+        block = []
+        for follow in (lines[start + 1:] if start is not None else []):
+            if follow.strip() and _indent(follow) <= 6:
+                break
+            block.append(follow)
+        if not any(line.strip() == 'type: boolean' for line in block):
+            findings.append('release.yml must declare dry_run as a boolean dispatch input')
     return findings
 
 
