@@ -1203,8 +1203,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 107)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 87)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 110)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 90)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))

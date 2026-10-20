@@ -404,7 +404,7 @@ not include the rehash overlap and must not replace indexPeak in sizing.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`src/engine_report.cpp:796`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:12675`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:12714`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
@@ -456,7 +456,7 @@ feed/copy inventory makes the entire OHLCV term unbounded/unknown.
 The finalizer receives the sink, not the arena. Its spool bound includes
 the header, all records, trailer and LF bytes. It is not its private heap
 bound. The hard successful-line ceiling is 1,048,576 including LF:
-`src/report_sink_writer.cpp:21` and `src/report_sink_writer.cpp:29`.
+`max_line` at `src/report_sink_writer.cpp:24` and `check_line` at `src/report_sink_writer.cpp:31`.
 The ceiling is already enforced by the writer; this calculator adds no
 new run-capacity gate.
 
@@ -477,7 +477,7 @@ nX = S*tracePerBar + traceFixed            if trace else 0
 nH = S*hashesPerBar + hashesFixed          if hashes else 0
 ```
 
-K is at most one by `src/report_sink_writer.cpp:517`. The compiler can
+K is at most one by the `count_k` guard at `src/report_sink_writer.cpp:583`. The compiler can
 tighten other counts only with a proof; finite E/T does not bound event
 or trace calls made inside an unknown loop.
 
@@ -486,17 +486,17 @@ characters, and f64 conservatively uses <=64 characters: the formatter
 `f64` at `src/report_sink_writer.cpp:162` builds scientific output with a fixed
 buffer then performs bounded exponent relayout. Each input string byte
 becomes at most six JSON bytes, plus two quotes; see
-`src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:
+`escaped_string` at `src/report_sink_writer.cpp:210`. Counting delimiters and the LF gives:
 
 | Tag | Maximum line bytes, before taking the hard ceiling | Builder |
 | --- | --- | --- |
-| E | 154 | `src/report_sink_writer.cpp:379` |
-| T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:398` |
-| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:486` |
-| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:499` |
-| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:513` |
-| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:523` |
-| H | 25 | `src/report_sink_writer.cpp:531` |
+| E | 154 | `write_e` at `src/report_sink_writer.cpp:432` |
+| T | 675 + 12*L + 6*commentBytes | `write_t` at `src/report_sink_writer.cpp:451` |
+| O | 60 + 65*seriesSlots | `write_o` at `src/report_sink_writer.cpp:553` |
+| V | 239 + 6*messageBytes | `write_v` at `src/report_sink_writer.cpp:566` |
+| K | 6 + 65*constantSlots | `write_k` at `src/report_sink_writer.cpp:580` |
+| X | 110 + 6*traceNameBytes | `write_x` at `src/report_sink_writer.cpp:590` |
+| H | 25 | `write_h` at `src/report_sink_writer.cpp:598` |
 
 For variable-width rows use min(expression,1048576). Missing comment,
 message or trace-name byte proofs use the existing full-line ceiling,
