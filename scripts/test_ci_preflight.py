@@ -1294,6 +1294,83 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(summary['stages'][1]['startedAt'], running['startedAt'])
 
 
+class ActionlintRunnerLabels(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.tree = Path(directory.name)
+        shutil.copytree(ROOT / 'scripts', self.tree / 'scripts',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        shutil.copytree(ROOT / '.github/workflows', self.tree / '.github/workflows')
+        self.config = self.tree / '.github/actionlint.yaml'
+        shutil.copyfile(ROOT / '.github/actionlint.yaml', self.config)
+
+    def runner_labels(self, tree=None):
+        tree = self.tree if tree is None else tree
+        # Exercise the actual preflight stage, including config reads and
+        # workflow discovery, without requiring actionlint in CTest hosts.
+        argv = {entry[0]: entry[1] for entry in check_commands(tree)}['actionlint-runner-labels']
+        result = subprocess.run(argv, cwd=tree, capture_output=True, text=True)
+        return result.returncode, result.stdout + result.stderr
+
+    def test_actionlint_runner_labels_accepts_real_tree(self):
+        code, output = self.runner_labels(ROOT)
+        self.assertEqual(code, 0, output)
+        self.assertIn('all literal self-hosted labels declared', output)
+
+    def test_actionlint_runner_labels_accepts_all_pfrel_runner_labels(self):
+        workflow = self.tree / '.github/workflows/pfrel-labels.yml'
+        workflow.write_text(
+            'on: workflow_dispatch\njobs:\n  labels:\n'
+            '    runs-on: ["self-hosted", "pf-ci", "pf-ci-release", '
+            '"pf-ci-release-arm64", "pf-ci-x64", "pf-ci-x64-16"]\n'
+            '    steps:\n      - run: "true"\n')
+        code, output = self.runner_labels()
+        self.assertEqual(code, 0, output)
+
+    def test_actionlint_runner_labels_requires_config(self):
+        self.config.unlink()
+        code, output = self.runner_labels()
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('.github/actionlint.yaml: cannot read config:', output)
+        self.assertIn('No such file or directory', output)
+
+    def test_actionlint_runner_labels_rejects_removed_label(self):
+        original = self.config.read_text()
+        changed = original.replace('    - pf-ci-release\n', '', 1)
+        self.assertNotEqual(changed, original)
+        self.config.write_text(changed)
+        code, output = self.runner_labels()
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('label "pf-ci-release" is not declared in .github/actionlint.yaml', output)
+        self.assertIn('release.yml job release:', output)
+        self.assertIn('promote-baseline.yml job promote:', output)
+
+    def test_actionlint_runner_labels_rejects_new_literal_label(self):
+        for suffix in ('.yml', '.yaml'):
+            with self.subTest(suffix=suffix):
+                workflow = self.tree / f'.github/workflows/undeclared{suffix}'
+                workflow.write_text(
+                    'on: workflow_dispatch\njobs:\n  undeclared:\n'
+                    '    runs-on: ["self-hosted", "pf-ci-undeclared"]\n'
+                    '    steps:\n      - run: "true"\n')
+                code, output = self.runner_labels()
+                self.assertNotEqual(code, 0, output)
+                self.assertIn('label "pf-ci-undeclared" is not declared in '
+                              '.github/actionlint.yaml', output)
+                self.assertIn(workflow.name + ' job undeclared:', output)
+                workflow.unlink()
+
+    def test_actionlint_runner_labels_rejects_unparseable_config(self):
+        for config in ('self-hosted-runner: [\n',
+                       'self-hosted-runner:\n  labels: pf-ci\n'):
+            with self.subTest(config=config):
+                self.config.write_text(config)
+                code, output = self.runner_labels()
+                self.assertNotEqual(code, 0, output)
+                self.assertIn('.github/actionlint.yaml: cannot parse config:', output)
+
+
 class PinnedLiveCurl(unittest.TestCase):
     def test_all_live_profiles_use_the_shared_pinned_dependency(self):
         kernel = _jobs((ROOT / CI_SOURCES[0]).read_text())['kernel-only']

@@ -776,6 +776,54 @@ def docs_workflow_self_test(workflow: str) -> int:
     return 0
 
 
+_LITERAL_RUNNER_LABEL = r'''(?:"[^"\n]+"|'[^'\n]+'|[A-Za-z0-9_.-]+)'''
+
+
+def actionlint_runner_label_findings(source: Path) -> list[str]:
+    """Check the repo's simple block-list config without a YAML dependency.
+
+    Unsupported config shapes fail closed; actionlint in workflow-lint also
+    parses this same required file with its full YAML/schema parser.
+    """
+    config_name = '.github/actionlint.yaml'
+    try:
+        config = (source / config_name).read_text()
+    except (OSError, UnicodeError) as error:
+        return [f'{config_name}: cannot read config: {error}']
+    lines = [re.sub(r'\s+#.*$', '', line).rstrip() for line in _code(config)]
+    entries = [re.fullmatch(r'    - (' + _LITERAL_RUNNER_LABEL + r')', line)
+               for line in lines[2:]]
+    if (lines[:2] != ['self-hosted-runner:', '  labels:']
+            or not entries or not all(entries)):
+        return [f'{config_name}: cannot parse config: expected self-hosted-runner.labels '
+                'as a block list of literal labels']
+    declared = {entry.group(1).strip('\'"') for entry in entries}
+    findings = []
+    for path in sorted((source / '.github/workflows').glob('*')):
+        if path.suffix not in ('.yml', '.yaml'):
+            continue
+        workflow = path.read_text()
+        if _unparsed(workflow):
+            findings.append(f'{path.name}: cannot parse jobs for literal runner labels')
+            continue
+        for job, body in _jobs(workflow).items():
+            for value in _job_values(body, 'runs-on'):
+                if not value.startswith('['):
+                    continue
+                if not re.fullmatch(r'\[\s*' + _LITERAL_RUNNER_LABEL
+                                    + r'(?:\s*,\s*' + _LITERAL_RUNNER_LABEL
+                                    + r')*\s*,?\s*\]', value):
+                    findings.append(f'{path.name} job {job}: cannot parse literal runs-on array')
+                    continue
+                labels = {token.strip('\'"') for token in re.findall(_LITERAL_RUNNER_LABEL, value)
+                          if '${{' not in token}
+                if 'self-hosted' in labels:
+                    for label in sorted(labels - declared):
+                        findings.append(f'{path.name} job {job}: label "{label}" is not declared '
+                                        f'in {config_name}')
+    return findings
+
+
 RUN_JSON_TESTS = 'run_json_*_test.py'
 
 
@@ -793,18 +841,22 @@ def run_json_harness_command(source: Path) -> list[str]:
 def check_commands(source: Path, output: Path | None = None,
                    *, env: dict[str, str] | None = None) -> list[tuple]:
     output_dir = (source / 'build-ci-preflight') if output is None else output
+    workflows = sorted(str(path) for path in (source / '.github/workflows').glob('*')
+                       if path.suffix in ('.yml', '.yaml'))
     class_args = (['--class-tier', 'fast']
                   if verifier_class_tier(os.environ if env is None else env) == 'fast'
                   else [])
     return [
         ('shellcheck-version', ['shellcheck', '--version']),
+        ('actionlint-runner-labels',
+         [sys.executable, str(source / 'scripts/ci_preflight.py'),
+          '--check-actionlint-runner-labels']),
+        # Require the config explicitly: absent/malformed config and undeclared
+        # literal self-hosted labels are actionlint findings, including in new
+        # workflows. A missing workflows directory must not lint another tree.
         ('workflow-lint', ['actionlint', '-color',
-                           str(source / '.github/workflows/ci.yml'),
-                           str(source / '.github/workflows/native-live.yml'),
-                           str(source / '.github/workflows/corpus-parity.yml'),
-                           str(source / '.github/workflows/docs.yml'),
-                           str(source / '.github/workflows/promote-baseline.yml'),
-                           str(source / '.github/workflows/release.yml')]),
+                           '-config-file', str(source / '.github/actionlint.yaml'),
+                           *(workflows or [str(source / '.github/workflows/*.yml')])]),
         ('ci-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
                                   '--check-ci-workflow']),
         ('docs-workflow-contract', [sys.executable, str(source / 'scripts/ci_preflight.py'),
@@ -993,7 +1045,15 @@ def main() -> int:
     parser.add_argument('--check-docs-workflow', action='store_true')
     parser.add_argument('--self-test-docs-workflow', action='store_true')
     parser.add_argument('--check-ci-workflow', action='store_true')
+    parser.add_argument('--check-actionlint-runner-labels', action='store_true')
     args = parser.parse_args()
+    if args.check_actionlint_runner_labels:
+        findings = actionlint_runner_label_findings(ROOT)
+        for finding in findings:
+            print(finding)
+        if not findings:
+            print('actionlint runner labels: all literal self-hosted labels declared')
+        return 1 if findings else 0
     if args.check_ci_workflow:
         workflows = ROOT / '.github/workflows'
         named = ('ci.yml', 'native-live.yml', 'promote-baseline.yml', 'corpus-parity.yml',

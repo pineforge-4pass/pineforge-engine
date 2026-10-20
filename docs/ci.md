@@ -15,6 +15,9 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 `run-json-harness-tests` stage runs every `docker/run_json_*_test.py` under it
 and fails, never skips, without it.
 
+Actionlint only accepts declared custom self-hosted runner labels; preflight
+checks the declarations in `.github/actionlint.yaml`.
+
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
