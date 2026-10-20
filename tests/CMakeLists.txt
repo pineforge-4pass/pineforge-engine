@@ -7305,3 +7305,12 @@ if(UNIX)
     target_link_libraries(test_report_sink_summary PRIVATE Threads::Threads)
 endif()
 # --- CR-150 core-cr150-l22q end ---
+
+# --- CR-150 core-cr150-l22s begin ---
+if(UNIX)
+    target_link_libraries(test_scratch_arena_threads PRIVATE Threads::Threads)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_scratch_arena PRIVATE "-Wl,--wrap=pread" "-Wl,--wrap=fstat" "-Wl,--wrap=mmap")
+endif()
+# --- CR-150 core-cr150-l22s end ---
