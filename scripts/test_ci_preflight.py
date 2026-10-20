@@ -15,6 +15,8 @@ from unittest import mock
 
 import ci_preflight
 import ci_verify
+from ci_verifier_classes import select_test_ids, verifier_class_tier
+from run_unittest_shards import discover_test_ids
 from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LIGHT_LABELS, LIGHT_RUNNER,
                           LINUX_LABELS, LINUX_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
@@ -22,9 +24,11 @@ from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LIGHT_LABELS, LIGH
                           ci_workflow_findings, native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
+PR_SLOW_FLAG = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
 KERNEL_VERIFY = ('run: python3 scripts/ci_verify.py kernel --build-dir build-kernel '
                  '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache '
-                 '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"')
+                 '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
+                 + PR_SLOW_FLAG)
 # ci_workflow_findings' arguments, in order.
 CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt',
@@ -96,7 +100,8 @@ class PreflightFailures(unittest.TestCase):
             (0, '        id: classify\n', '        id: classify\n        continue-on-error: true\n'),
             (0, '  changes:\n', '  classify:\n'),
             (0, '  sanitizers:\n', '  sanitizers:\n    needs: preflight\n'),
-            (0, "matrix.build_type == 'Debug' && '--exclude-label slow'", "'--exclude-label slow'"),
+            (0, "github.event_name == 'pull_request' && '--exclude-label slow'",
+                "github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow'"),
             (0, "github.event_name == 'pull_request' && '--exclude-label slow'", "'--exclude-label slow'"),
             (0, "exclude_slow: ${{ github.event_name == 'pull_request' }}", 'exclude_slow: true'),
             (1, '        default: false', '        default: true'),
@@ -143,6 +148,140 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn(before, changed[index])
                 changed[index] = changed[index].replace(before, after, 1)
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
+
+    def test_slow_exclusion_is_exactly_pr_matrix_kernel_and_sanitizers(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        flag = PR_SLOW_FLAG
+        for job in ('build', 'kernel-only', 'sanitizers'):
+            mutations = [
+                '', flag + ' ' + flag,
+                flag.replace('slow', 'slwo'),
+                flag.replace('slow', 'other'),
+                flag.replace("&& '--exclude-label", "&& matrix.build_type == 'Debug' && '--exclude-label"),
+                flag.replace("&& '--exclude-label", "&& matrix.build_type == 'Release' && '--exclude-label"),
+                "'--exclude-label slow'",
+                # Keeping the text on an unrelated step does not prove that
+                # the verifier itself receives the exclusion.
+                f'\n      - run: echo "{flag}"',
+            ]
+            mutations += [flag.replace("'pull_request'", repr(event))
+                          for event in ('push', 'workflow_dispatch', 'schedule', 'release')]
+            for after in mutations:
+                with self.subTest(job=job, after=after):
+                    changed = original.copy()
+                    changed[0] = in_job(changed[0], job, flag, after)
+                    self.assertIn(f'{job} must exclude exactly slow on PRs only, once',
+                                  ci_workflow_findings(*changed))
+        # A fourth excluding job, or a parity subset with any exclusion, fails.
+        # `preflight` is a steps job; `corpus-parity-subset` is a reusable-workflow
+        # call (`uses:` + `with:`, no `steps:`), so the flag goes into its `with:`.
+        for job, before, after in (
+                ('preflight', '    steps:\n',
+                 f'    steps:\n      - run: python3 scripts/ci_verify.py debug {flag}\n'),
+                ('corpus-parity-subset', '      mode: subset\n',
+                 f'      mode: subset\n      note: {flag}\n')):
+            with self.subTest(job=job):
+                changed = original.copy()
+                changed[0] = in_job(changed[0], job, before, after)
+                findings = ci_workflow_findings(*changed)
+                self.assertIn(f'{job} must keep its full population', findings)
+                self.assertIn('CI must carry exactly three PR-only slow exclusion flags', findings)
+
+    def assert_full_event_populations(self, ci, release):
+        jobs = _jobs(ci)
+        # These exact PR-only expressions evaluate to empty on every other
+        # event. Any additional flag, including a push-only expression, fails.
+        self.assertEqual({job for job, body in jobs.items() if '--exclude-label' in body},
+                         {'build', 'kernel-only', 'sanitizers'})
+        for body in jobs.values():
+            self.assertNotIn('--exclude-label', body.replace(PR_SLOW_FLAG, ''))
+        self.assertNotIn('--exclude-label', release)
+        self.assertNotIn('--class-tier', release)
+        # Read the real workflow and CMake registration, rather than deriving
+        # expectations from the same selector that constructs the commands.
+        self.assertIn("exclude_slow: ${{ github.event_name == 'pull_request' }}",
+                      jobs['native-live'])
+        cmake = (ROOT / 'tests/CMakeLists.txt').read_text()
+        row = re.search(r'add_test\(NAME test_ci_verify\s+(.*?)\)', cmake, re.DOTALL)
+        self.assertIsNotNone(row)
+        self.assertIn('scripts/test_ci_verify.py', row.group(1))
+        self.assertNotIn('--class-tier', row.group(1))
+        for profile in ('release', 'debug', 'kernel', 'sanitizers', 'native',
+                        'live-sanitizers', 'live-tsan'):
+            cfg = ci_verify.build_config([profile])
+            self.assertEqual(ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False), [
+                'ctest', '--test-dir', str(cfg.build_dir), '--output-on-failure',
+                '--no-tests=error', '--parallel', '1', '--timeout', '0'])
+        discovered = set(discover_test_ids(ROOT / 'scripts/test_ci_verify.py'))
+        self.assertTrue(discovered)
+        for event in ('push', 'workflow_dispatch', 'schedule', 'release', ''):
+            for slow_answer in ('false', 'true', ''):
+                with self.subTest(event=event, slow_answer=slow_answer):
+                    env = {'GITHUB_EVENT_NAME': event, 'PINEFORGE_VERIFIER_SLOW': slow_answer}
+                    self.assertEqual(verifier_class_tier(env), 'all')
+                    self.assertEqual(set(select_test_ids(sorted(discovered),
+                                                         verifier_class_tier(env))), discovered)
+                    plan = {name: argv for name, argv in check_commands(ROOT, env=env)}
+                    self.assertEqual(plan['verifier-tests'], [
+                        sys.executable, str(ROOT / 'scripts/run_unittest_shards.py'),
+                        str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
+                        str(ROOT / 'build-ci-preflight/verifier-tests-shards')])
+
+    def test_main_and_release_keep_every_row_and_verifier_class(self):
+        ci = self.ci_sources()[0]
+        release = (ROOT / '.github/workflows/release.yml').read_text()
+        self.assert_full_event_populations(ci, release)
+        # A push path carrying an exclusion must break this coverage control.
+        for job in ('build', 'kernel-only', 'sanitizers'):
+            for flag in ("${{ github.event_name == 'push' && '--exclude-label slow' || '' }}",
+                         '--exclude-label slow'):
+                with self.subTest(job=job, flag=flag):
+                    changed = in_job(ci, job, PR_SLOW_FLAG, PR_SLOW_FLAG + ' ' + flag)
+                    with self.assertRaises(AssertionError):
+                        self.assert_full_event_populations(changed, release)
+                    self.assertNotEqual(ci_workflow_findings(
+                        changed, *self.ci_sources()[1:]), [])
+        with self.assertRaises(AssertionError):
+            self.assert_full_event_populations(
+                ci, in_job(release, 'release', '    steps:\n',
+                           '    steps:\n      - run: python3 scripts/ci_verify.py release --exclude-label slow\n'))
+
+    def test_verifier_stage_defers_slow_only_for_an_explicit_pr_answer(self):
+        base = [sys.executable, str(ROOT / 'scripts/run_unittest_shards.py'),
+                str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
+                str(ROOT / 'build-ci-preflight/verifier-tests-shards')]
+        for answer, expected in (('false', base + ['--class-tier', 'fast']),
+                                 ('true', base), ('', base), ('unknown', base)):
+            with self.subTest(answer=answer):
+                env = {'GITHUB_EVENT_NAME': 'pull_request', 'PINEFORGE_VERIFIER_SLOW': answer}
+                plan = {name: argv for name, argv in check_commands(ROOT, env=env)}
+                self.assertEqual(plan['verifier-tests'], expected)
+        plan = {name: argv for name, argv in check_commands(
+            ROOT, env={'GITHUB_EVENT_NAME': 'pull_request'})}
+        self.assertEqual(plan['verifier-tests'], base)
+
+    def test_verifier_classification_wiring_fails_closed(self):
+        original, others = self.ci_sources(), self.other_sources()
+        mutations = (
+            ('changes', '      verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}',
+             "      verifier_slow: 'false'"),
+            ('changes', 'git show HEAD^1:scripts/ci_verifier_paths.py',
+             'git show HEAD:scripts/ci_verifier_paths.py'),
+            ('changes', 'python3 "$RUNNER_TEMP/ci_verifier_paths.py"',
+             'python3 scripts/ci_verifier_paths.py'),
+            ('changes', 'echo "verifier_slow=true"', 'echo "verifier_slow=false"'),
+            ('preflight', ci_preflight.PREFLIGHT_VERIFIER_SLOW, "'false'"),
+            ('preflight', ci_preflight.PREFLIGHT_VERIFIER_SLOW,
+             ci_preflight.PREFLIGHT_VERIFIER_SLOW.replace("|| 'true'", "|| 'false'")),
+            ('preflight', '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight',
+             '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --class-tier fast'),
+        )
+        for job, before, after in mutations:
+            with self.subTest(job=job, after=after):
+                changed = original.copy()
+                changed[0] = in_job(changed[0], job, before, after)
+                self.assertNotEqual(ci_workflow_findings(*changed, others=others), [])
 
     def test_ci_contract_pins_spot_runners_time_limits_and_parallelism(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -399,7 +538,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_ci_contract_pins_the_docs_only_skip(self):
         """Each proof job waits for changes alone and skips only its docs-only
-        answer; changes and preflight start at once on every run."""
+        answer; preflight also waits for the class decision and always runs."""
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         skip = f'    if: {DOCS_ONLY_SKIP}\n'
@@ -421,10 +560,14 @@ class PreflightFailures(unittest.TestCase):
                 (job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
                  refused)]
         mutations += [
-            ('preflight', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    needs: changes\n',
-             'preflight must start at once'),
-            ('preflight', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n' + skip,
-             'preflight must start at once'),
+            ('preflight', '    needs: changes\n', '',
+             'preflight must follow changes alone'),
+            ('preflight', '    needs: changes\n', '    needs: build\n',
+             'preflight must follow changes alone'),
+            ('preflight', '    if: ${{ !cancelled() }}\n', skip,
+             'preflight must follow changes alone'),
+            ('preflight', '    if: ${{ !cancelled() }}\n', '',
+             'preflight must follow changes alone'),
             ('changes', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    needs: preflight\n',
              'changes must start at once'),
             ('changes', '    timeout-minutes: 360\n',
@@ -580,7 +723,7 @@ class PreflightFailures(unittest.TestCase):
                  "&& '--exclude-label slow' || '' }}  # was --jobs 4\n"),
                 (0, 'kernel-only', verify,
                  'run: |\n          python3 scripts/ci_verify.py kernel --build-dir build-kernel \\\n'
-                 f'            --jobs {CORES} --ccache'),
+                 f'            --jobs {CORES} --ccache {PR_SLOW_FLAG}'),
                 (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
                  f'run: |\n          JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'),
                 (5, 'build', '    runs-on: ubuntu-latest\n', '    "runs-on": ubuntu-latest\n'),
@@ -600,7 +743,7 @@ class PreflightFailures(unittest.TestCase):
                  '      - name: Verify (kernel), no longer --jobs 4\n'),
                 (0, 'kernel-only', KERNEL_VERIFY,
                  'uses: nick-fields/retry@v3\n        with:\n          command: python3 scripts/ci_verify.py '
-                 f'kernel --build-dir build-kernel --jobs {CORES} --ccache'),
+                 f'kernel --build-dir build-kernel --jobs {CORES} --ccache {PR_SLOW_FLAG}'),
                 (2, 'promote', '    runs-on: ubuntu-latest\n', '    runs-on: ubuntu-latest  # hosted\n'),
                 (0, None, '\n  preflight:\n', '\n  preflight:  # the fast gate\n'))
         # Each edit alone, then every one that composes (a line one edit

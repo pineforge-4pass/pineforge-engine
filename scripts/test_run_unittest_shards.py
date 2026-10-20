@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 import ci_preflight  # noqa: E402
+import ci_verifier_classes as verifier_classes  # noqa: E402
 import run_unittest_shards as shards_runner  # noqa: E402
 
 SCRIPT = ROOT / 'scripts' / 'run_unittest_shards.py'
@@ -98,6 +99,89 @@ class UnittestShardsTests(unittest.TestCase):
             text=True,
             env=env,
         )
+
+    def test_verifier_classes_are_an_exhaustive_disjoint_partition(self) -> None:
+        ids = shards_runner.discover_test_ids(ROOT / 'scripts/test_ci_verify.py')
+        discovered = {test_id.rsplit('.', 2)[-2] for test_id in ids}
+        self.assertEqual(discovered, {
+            'ConfigValidation', 'RowFloorConfig', 'ProfileOptions',
+            'RunnerSanitizerCoverage', 'RuntimeBudgetLanes', 'CopyCacheIdentity',
+            'HistoricalProviderPinTable', 'HistoricalProviderPins',
+            'CAbiRuntimeInventory', 'ReceiptReuse', 'GitObjectDiscovery',
+            'DriverOrderingAndAggregation', 'RowFloorDriver', 'PrivateFixtureFloors',
+            'PrExclusionWithFixturesAbsent', 'LiveProfilesWithFixturesAbsent',
+            'FloorDocsPointAtTheTable', 'ExamplesAssertLive', 'StaleBinaries',
+            'ReceiptRecipe', 'DiagnosticsCollection', 'CTestDeadlines',
+        })
+        self.assertEqual(verifier_classes.FAST_CLASSES & verifier_classes.SLOW_CLASSES, set())
+        self.assertEqual(verifier_classes.SLOW_CLASSES, {
+            'ReceiptReuse', 'DriverOrderingAndAggregation', 'RowFloorDriver',
+            'PrivateFixtureFloors', 'PrExclusionWithFixturesAbsent',
+            'LiveProfilesWithFixturesAbsent', 'ExamplesAssertLive',
+            'StaleBinaries', 'ReceiptRecipe',
+        })
+        self.assertEqual(verifier_classes.FAST_CLASSES | verifier_classes.SLOW_CLASSES, discovered)
+        verifier_classes.validate_class_partition(discovered)
+        with self.assertRaisesRegex(ValueError, 'unclassified=.*Unclassified'):
+            verifier_classes.validate_class_partition(discovered | {'Unclassified'})
+        with mock.patch.object(verifier_classes, 'FAST_CLASSES',
+                               verifier_classes.FAST_CLASSES - {'ConfigValidation'}):
+            with self.assertRaisesRegex(ValueError, 'unclassified=.*ConfigValidation'):
+                verifier_classes.validate_class_partition(discovered)
+        with mock.patch.object(verifier_classes, 'FAST_CLASSES',
+                               verifier_classes.FAST_CLASSES | {'ReceiptReuse'}):
+            with self.assertRaisesRegex(ValueError, 'overlap=.*ReceiptReuse'):
+                verifier_classes.validate_class_partition(discovered)
+        with self.assertRaisesRegex(ValueError, 'stale=.*ReceiptReuse'):
+            verifier_classes.validate_class_partition(discovered - {'ReceiptReuse'})
+
+    def test_fast_selection_defers_only_named_slow_classes_and_keeps_unknown(self) -> None:
+        ids = ['fixture.ConfigValidation.test_config',
+               'fixture.DriverOrderingAndAggregation.test_driver',
+               'fixture.ReceiptReuse.test_receipt',
+               'fixture.Unclassified.test_new']
+        self.assertEqual(verifier_classes.select_test_ids(ids, 'fast'), [
+            'fixture.ConfigValidation.test_config', 'fixture.Unclassified.test_new'])
+        self.assertEqual(verifier_classes.select_test_ids(ids), ids)
+        with self.assertRaisesRegex(ValueError, 'unknown verifier class tier'):
+            verifier_classes.select_test_ids(ids, 'typo')
+
+    def test_class_tier_cli_runs_the_selected_methods_in_real_shards(self) -> None:
+        # BetaTests is the deferred control; AlphaTests is unclassified and
+        # must still execute. Its deliberate failure proves it actually ran.
+        with mock.patch.object(verifier_classes, 'SLOW_CLASSES', frozenset({'BetaTests'})):
+            output = io.StringIO()
+            with redirect_stdout(output), redirect_stderr(output):
+                code = shards_runner.run_shards(self.module_path, shard_count=2, class_tier='fast')
+            self.assertEqual(code, 0, output.getvalue())
+            self.assertIn('fake_suite.AlphaTests.test_one', output.getvalue())
+            self.assertNotIn('fake_suite.BetaTests.test_four', output.getvalue())
+            with mock.patch.dict(os.environ, {'FAKE_FAIL_TARGET': 'test_three'}), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertNotEqual(shards_runner.run_shards(
+                    self.module_path, shard_count=2, class_tier='fast'), 0)
+            # The default ALL path must run even the deferred class.
+            with mock.patch.dict(os.environ, {'FAKE_FAIL_TARGET': 'test_four'}), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                self.assertNotEqual(shards_runner.run_shards(self.module_path, shard_count=2), 0)
+        result = self.run_cli(str(self.module_path), '--class-tier', 'fast', '--shards', '2')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('class tier fast: selected 5 of 5', result.stdout)
+        self.assertIn('fake_suite.BetaTests.test_four', result.stdout + result.stderr)
+        # Also exercise the CLI's actual named SLOW population without a mock.
+        self.module_path.write_text(FAKE_MODULE_SOURCE.replace('BetaTests', 'ReceiptReuse'),
+                                    encoding='utf-8')
+        result = self.run_cli(str(self.module_path), '--class-tier', 'fast', '--shards', '2',
+                              extra_env={'FAKE_FAIL_TARGET': 'test_four'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('class tier fast: selected 3 of 5', result.stdout)
+        self.assertNotIn('fake_suite.ReceiptReuse.test_four', result.stdout + result.stderr)
+        result = self.run_cli(str(self.module_path), '--class-tier', 'all', '--shards', '2',
+                              extra_env={'FAKE_FAIL_TARGET': 'test_four'})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('fake_suite.ReceiptReuse.test_four', result.stdout + result.stderr)
+        result = self.run_cli(str(self.module_path), '--class-tier', 'typo')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_default_shard_count_uses_sched_getaffinity_else_cpu_count_and_caps_at_16(self) -> None:
         self.assertEqual(shards_runner.default_shard_count(32), 16)
@@ -548,7 +632,7 @@ class UnittestShardsTests(unittest.TestCase):
 
     def test_ci_preflight_wires_verifier_tests_with_log_dir_and_registers_this_test_file(self) -> None:
         out_dir = self.root / 'custom-preflight-out'
-        commands = {entry[0]: entry[1] for entry in ci_preflight.check_commands(ROOT, out_dir)}
+        commands = {entry[0]: entry[1] for entry in ci_preflight.check_commands(ROOT, out_dir, env={})}
         self.assertIn('verifier-tests', commands)
         verifier_argv = commands['verifier-tests']
         self.assertEqual(
@@ -561,7 +645,7 @@ class UnittestShardsTests(unittest.TestCase):
                 str(out_dir / 'verifier-tests-shards'),
             ],
         )
-        default_commands = {entry[0]: entry[1] for entry in ci_preflight.check_commands(ROOT)}
+        default_commands = {entry[0]: entry[1] for entry in ci_preflight.check_commands(ROOT, env={})}
         self.assertEqual(
             default_commands['verifier-tests'],
             [
@@ -574,6 +658,7 @@ class UnittestShardsTests(unittest.TestCase):
         )
         registered_scripts = {Path(argv[-1]).name for argv in commands.values() if argv}
         self.assertIn('test_run_unittest_shards.py', registered_scripts)
+        self.assertIn('test_ci_verifier_paths.py', registered_scripts)
 
 
 if __name__ == '__main__':

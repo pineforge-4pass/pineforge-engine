@@ -24,6 +24,8 @@ import unittest
 
 sys.dont_write_bytecode = True
 
+from ci_verifier_classes import select_test_ids
+
 ROOT = Path(__file__).resolve().parents[1]
 
 _RAN_RE = re.compile(r'^Ran (\d+) tests? in ', re.MULTILINE)
@@ -227,6 +229,7 @@ def run_shards(
     *,
     log_dir: Path | str | None = None,
     shards_override: Sequence[Sequence[str]] | None = None,
+    class_tier: str = 'all',
 ) -> int:
     """Discover, partition, and run unittest shards in parallel subprocesses.
 
@@ -241,11 +244,17 @@ def run_shards(
         return 2
 
     try:
-        full_ids = discover_test_ids(path)
+        discovered_ids = discover_test_ids(path)
+        full_ids = select_test_ids(discovered_ids, class_tier)
+        if not full_ids:
+            raise ValueError(f'class tier {class_tier} selected no tests')
     except Exception as exc:
         print(f'unittest-shards: discovery failed: {exc}', file=sys.stderr, flush=True)
         return 1
 
+    if class_tier != 'all':
+        print(f'unittest-shards: class tier {class_tier}: selected {len(full_ids)} '
+              f'of {len(discovered_ids)} discovered tests', flush=True)
     shards = (
         [list(shard) for shard in shards_override]
         if shards_override is not None
@@ -457,12 +466,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help='Directory where each shard writes its live output file (shard-XX.log).',
     )
+    parser.add_argument('--class-tier', choices=('all', 'fast'), default='all',
+                        help='Verifier tier: fast defers only named SLOW classes; '
+                             'unclassified classes still run (default: all).')
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    return run_shards(args.module, shard_count=args.shards, log_dir=args.log_dir)
+    return run_shards(args.module, shard_count=args.shards, log_dir=args.log_dir,
+                      class_tier=args.class_tier)
 
 
 if __name__ == '__main__':

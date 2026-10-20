@@ -134,7 +134,11 @@ Only the native cell accepts the caller's existing PR-only slow-label exclusion.
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or
 `compat/pine/`, so a lane whose native witnesses shared a TU with an adapter
-twin would leave the kernel-only gate without any failure. The campaign's
+twin would leave the kernel-only gate without any failure. On a pull request
+the kernel-only leg excludes the `slow` rows, so that leg is gated by the
+registration floor and the selection identity described below, and the run
+floor binds the push and dispatch runs, which run the whole kernel set
+([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The campaign's
 per-profile row floors live in ONE table in `scripts/ci_verify.py`,
 `PRIVATE_FIXTURE_PROFILE_FLOORS`, which states for each of `release` and
 `kernel` the profile's full overlay-present population and how many pinned
@@ -183,14 +187,15 @@ and records
 that left the selection or could not start, a lost
 registration below the PR registration floor, unreadable enumeration, or
 missing label fails; with the overlay present every skip fails, as before.
-The PR registration floors after lane FIX-E1E2 are 773
-for Debug and sanitizers and 782 for native (653 and 662 at the INT24 base,
-plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
-thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
-INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four,
-TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
-kernel floors are the table's own numbers above (603 and 306 rows absent, 910
-and 337 with the overlay present); full runs do not exclude a label.
+The PR registration floors are the keys of `EXCLUDED_REGISTERED_MIN` in
+`scripts/ci_verify.py`, one for each profile whose pull-request leg excludes
+the label; their values are in
+[PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where).
+The full-run release and kernel floors are the table's own numbers above (603
+and 306 rows absent, 910 and 337 with the overlay present). A pull request's
+release and kernel legs exclude the label and are held to the registration
+floor instead; the full runs on push and dispatch exclude no label and are
+held to these run floors.
 
 CR-196 splits the ownership manifest controls into four CTest shards,
 `test_selected_window_ownership_manifest_controls_shard_1of4` through
@@ -722,14 +727,15 @@ as diagnostics.
 
 Superseded pull-request runs are canceled. Main/post-merge and manual CI runs
 use distinct concurrency groups and remain uncanceled. A PR that changes more
-than documentation runs preflight, both Release jobs, kernel-only and the
-parity subset with their full sets;
-both Debug jobs, sanitizers and native-live run the registered set excluding
-the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`. The first 27 were
+than documentation runs preflight and the parity subset with its full set;
+both Release jobs, both Debug jobs, kernel-only, sanitizers and the native cell
+of native-live run the registered set excluding
+the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`
+([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
-over 30 seconds in either Debug run. Preflight starts at once, and the proof
-jobs start alongside it as soon as the few-second `changes` job has decided
-whether the change is documentation only. The advisory `build`
+over 30 seconds in either Debug run. Preflight and the proof jobs start as soon
+as the few-second `changes` job has decided whether the change is
+documentation only and which verifier classes a pull request needs. The advisory `build`
 aggregate succeeds only if every job succeeds, or was skipped for a
 documentation-only change. INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
 legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
@@ -771,6 +777,80 @@ for the tree; every other case exits green without promoting.
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
 the broader population running.
+
+### PR tier versus MAIN/RELEASE: what is excluded where
+
+Decision D1 moves the slow work out of the pull-request tier and keeps all of
+it on push to `main`. Only the `pull_request` event changes. Push,
+`workflow_dispatch` and the maintainers' full verification keep every CTest row
+and every verifier class, so coverage is unchanged and only the time at which a
+regression is first seen moves. `release.yml` is unchanged.
+
+| Event | Release jobs | `kernel-only` | Debug jobs, `sanitizers`, native cell | Verifier classes in `preflight` |
+|---|---|---|---|---|
+| pull request | exclude `slow` | exclude `slow` | exclude `slow` | FAST always; SLOW only when a path the verifier reads changed or the diff cannot be read |
+| push to `main`, `workflow_dispatch` | every row | every row | every row | every class |
+
+The label `slow` is `PINEFORGE_PR_SLOW_TESTS` in `tests/CMakeLists.txt`: 29
+rows, among them `test_ci_verify`, the serial run of
+`scripts/test_ci_verify.py`, which dominates a full Release or kernel job.
+Debug, `sanitizers` and the native cell of `native-live` already excluded it on
+a pull request; D1 adds both Release jobs and `kernel-only`. A row a profile
+does not register carries no label there, and the kernel profile registers
+fewer of the 29 than Release does. `live-sanitizers`, `live-tsan` and the
+parity subset are unchanged.
+
+The verifier's own self-test is split by TestCase class. A class is FAST only
+when its measured total in the serial run log is under 5 s and its passing
+runtime is measured (one exception, by decision: `HistoricalProviderPins` is
+skipped without the private overlay, so it has no passing runtime, and is FAST
+because it is skipped there); every other class is SLOW, and a class in neither
+list runs. On a pull request the `verifier-tests` stage of `preflight` runs the FAST
+classes always. It runs the SLOW classes only when `scripts/ci_verifier_paths.py`,
+the one place the path list lives, reports that the change touches a path the
+verifier reads (`include/pineforge`, `src/c_abi.cpp`, `tests/`, `runner/`, the
+workflows and the CI scripts among them); an unknown or unreadable diff
+runs the SLOW classes. Push to `main` and `workflow_dispatch` run every class.
+The CTest row `test_ci_verify` stays in the `slow` population: the pull-request
+legs exclude it by label and every full run executes it.
+
+A pull-request leg that excludes the label is held to a registration floor in
+place of the run floor: the registered rows must be at least the larger of
+that profile's `EXCLUDED_REGISTERED_MIN` key and its overlay-aware run floor,
+the selection must remove some rows and leave some, and, with the overlay
+absent, the rows that ran plus the pinned skips must equal the selection with
+no other skip (the `--exclude-label` branch of `enforce_test_floor` in
+`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 876 for `debug`, 867
+for `sanitizers` and 963 for `native`, and with D1 895 for `release` and 337
+for `kernel`. The two new keys are derived, not measured. `release` is the
+registered count in the sampled public pull-request runs (957) less the 62 rows
+by which the Debug key sits below the Debug registry in the same runs (938 less
+876); that also equals its own registry at the vintage of the other keys. The
+same offset would give 309 for `kernel`, 17 rows below the kernel registry at
+that vintage (326), so `kernel` takes `KERNEL_MIN_TESTS` (337): 34 below the 371
+registered in every sampled pull-request and push run. The lab job's `ctest -N`
+confirms both or moves them. The
+run floors in the table above (910 and 337 with the overlay present, 603 and
+306 absent) are not read on an excluded run; push, dispatch and every other
+full run still enforce them.
+
+A regression in an excluded row, or in a SLOW class that a pull request did not
+trigger, is first seen by the push-to-main run for the merge commit, and by the
+maintainers' full verification where it runs the row; the pull request does not
+see it. That delay is not zero. In the one hosted push run sampled
+(`39126947405`) the Release job took 1876 s, `kernel-only` 3022 s, Debug 3416
+s, `sanitizers` 2707 s and the native cell 3132 s; the older
+`pf-linux-x64-16` runners' medians over five runs were 1815, 1812, 1770, 2050
+and 1838 s, and a push run on the current pool has not been measured. The
+pull-request wall time under D1 is to be measured on real PR runs, typical and
+tail; it is not claimed as met against the owner's 15-minute target.
+
+**Rule for the deferred rows (L6 condition, 10-20).** Every row and class this
+section excludes from a pull request still runs on the merge commit. A red
+result on `main` in an excluded row or class (the Release and kernel-only
+`slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
+author or the release owner fixes or reverts the change within the hour; the
+red is not carried into a release.
 
 ### Documentation-only changes
 
@@ -839,7 +919,8 @@ and a `changes` job that fails or never answers.
 Each proof job waits for `changes` alone, a few seconds once the light ci-spot
 class or its hosted fallback takes it, and skips only when `changes` succeeded
 and answered documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
-needs.changes.outputs.docs_only != 'true')`. `preflight` waits for nothing.
+needs.changes.outputs.docs_only != 'true')`. `preflight` waits for `changes`
+alone, runs even if `changes` fails (`!cancelled()`), and then runs every verifier class.
 The advisory `build` aggregate passes a proof job that succeeded, or one that
 was skipped under that same answer. A proof job skipped for any other reason
 fails it, and so does any `preflight` result but success. A skipped matrix is
@@ -894,6 +975,12 @@ imply a wall time above 35 min even after excluding the rows. The 25 min
 target needs a measured sanitizer build improvement; the current job logs do
 not separate compile from link time or report a ccache hit rate, so CI-LITE
 does not assume a build optimization without evidence.
+
+That model predates decision D1. It keeps Release and kernel at their full
+durations on a pull request, which they no longer have there: both now exclude
+the `slow` rows ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)).
+The pull-request wall time under that policy is to be measured on real PR
+runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
@@ -1003,8 +1090,8 @@ exactly one core-count `--jobs` (counted over the whole job, however its
 commands are chained, blocked or carried, with the flag and its value on one
 line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
 line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py` holds
-the mutations. The same stage pins the documentation-only skip: `changes` and
-`preflight` wait for nothing and run on every event, the classification step
+the mutations. The same stage pins the documentation-only skip: `changes` waits for
+nothing and `preflight` waits for `changes` alone and runs on every event, the classification step
 is pinned verbatim, each proof job needs `changes` alone and carries the one
 skip condition, and the `build` aggregate reads every result and the answer. No
 job of `ci.yml`, `native-live.yml` or `corpus-parity.yml`, nor any of their
@@ -1056,9 +1143,9 @@ measurements on the new runners.
 | Job | Limit (min) | Measured basis |
 | --- | --- | --- |
 | `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); the native-live aggregate job names a stop at the platform's 360-minute maximum `HANG (re-run)` in its log; the check still fails. |
-| `build` | 360 (was 75) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
+| `build` | 360 (was 75) | A Release leg runs its full population on push and dispatch events; a pull request's Release legs, a fork's included, exclude the `slow` rows like its Debug legs, and that pull-request time is to be measured on real PR runs. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
 | `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
-| `kernel-only` | 360 (was 60) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
+| `kernel-only` | 360 (was 60) | Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
 | `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
 | `native-live (live-sanitizers)` | 360 (was 45; verification step 35) | The same three main runs spent 15.10–16.33 min in this profile after native. Its old per-row 900 s and stage 1200 s deadlines are gone; the verifier supplies no replacement, and the platform's job maximum catches a hang. |
 | `native-live (live-tsan)` | 360 (was 45; verification step 35) | The old shared 60-min job left only 9.20, 4.67 and 2.67 min for TSan before cancellation. Matching passing PR profiles took 10.87, 10.93 and 7.70 min. Its old 900/1200-s row/stage bounds are gone like live-sanitizers'; the verifier supplies no replacement. |
