@@ -184,6 +184,8 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-26]
         build_type: [Release, Debug]
+        # D3: PRs keep macOS Release; every other event keeps macOS Debug too.
+        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-26","build_type":"Debug"}]' || '[]') }}
         include:
           - os: ubuntu-24.04
             runner: >-
@@ -467,6 +469,8 @@ jobs:
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
             "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT"
+          # The matrix result covers only the selected cells: the PR exclusion
+          # creates no skipped cell to excuse. Every existing cell must pass.
           # A proof lane passes by succeeding, or by having been skipped after
           # the changes job succeeded and answered docs-only. A lane skipped
           # for any other reason fails, and preflight must always succeed.

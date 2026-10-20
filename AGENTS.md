@@ -9,8 +9,8 @@ Both C++ unit tests and full corpus verification must pass.
 The merge ruleset requires `pineforge/verify` and `pineforge/parity` commit
 statuses on the PR head's exact tree. The maintainers post them from their own (private)
 verification tooling after full verification on their x86-64 build hosts and a
-parity verdict; an outside contributor cannot post them. GitHub Actions is advisory: PR Release, Debug, kernel-only, sanitizers and native jobs
-exclude the measured `slow` CTest rows; push-to-main and manual CI dispatch
+parity verdict; an outside contributor cannot post them. GitHub Actions is advisory: PRs run Ubuntu Release/Debug and macOS Release; macOS Debug stays on non-PR events.
+PR Release, Ubuntu Debug, kernel-only, sanitizers and native jobs exclude the measured `slow` CTest rows; push-to-main and manual CI dispatch
 run every row, and a documentation-only change runs preflight alone. The commands below run the full sets.
 
 ```bash

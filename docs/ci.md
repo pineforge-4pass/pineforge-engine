@@ -728,7 +728,7 @@ as diagnostics.
 Superseded pull-request runs are canceled. Main/post-merge and manual CI runs
 use distinct concurrency groups and remain uncanceled. A PR that changes more
 than documentation runs preflight and the parity subset with its full set;
-both Release jobs, both Debug jobs, kernel-only, sanitizers and the native cell
+both Release jobs, Ubuntu Debug, kernel-only, sanitizers and the native cell
 of native-live run the registered set excluding
 the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`
 ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The first 27 were
@@ -786,10 +786,21 @@ it on push to `main`. Only the `pull_request` event changes. Push,
 and every verifier class, so coverage is unchanged and only the time at which a
 regression is first seen moves. `release.yml` is unchanged.
 
-| Event | Release jobs | `kernel-only` | Debug jobs, `sanitizers`, native cell | Verifier classes in `preflight` |
-|---|---|---|---|---|
-| pull request | exclude `slow` | exclude `slow` | exclude `slow` | FAST always; SLOW only when a path the verifier reads changed or the diff cannot be read |
-| push to `main`, `workflow_dispatch` | every row | every row | every row | every class |
+Decision D3 keeps Ubuntu Release/Debug and macOS Release on pull requests and
+defers macOS Debug to non-PR events. The PR's own
+`build (macos-26, Release)` must be green and still enforces the Release
+registration floor of 895 rows (L6 condition 2). An expression-driven matrix
+`exclude` removes only macOS Debug on `pull_request` and returns an empty list
+on every other event; the routing `include` entries and leg names stay the same.
+`ci.yml` currently starts on push to `main`, `pull_request` and
+`workflow_dispatch`; the matrix also keeps all four legs for `schedule` and
+`release` event contexts, without adding those triggers or changing `release.yml`.
+
+| Event | `build` matrix | Release jobs | `kernel-only` | Debug jobs, `sanitizers`, native cell | Verifier classes in `preflight` |
+|---|---|---|---|---|---|
+| pull request | Ubuntu Release/Debug and macOS Release (three legs) | exclude `slow` | exclude `slow` | Ubuntu Debug, `sanitizers` and native exclude `slow`; macOS Debug is absent | FAST always; SLOW only when a path the verifier reads changed or the diff cannot be read |
+| push to `main`, `workflow_dispatch` | Ubuntu and macOS Release/Debug (four legs) | every row | every row | every row | every class |
+| other non-PR contexts (`schedule`, `release` if triggered) | Ubuntu and macOS Release/Debug (four legs) | every row | every row | every row | every class |
 
 The label `slow` is `PINEFORGE_PR_SLOW_TESTS` in `tests/CMakeLists.txt`: 29
 rows, among them `test_ci_verify`, the serial run of
@@ -851,12 +862,14 @@ result on `main` in an excluded row or class (the Release and kernel-only
 `slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
 author or the release owner fixes or reverts the change within the hour; the
 red is not carried into a release.
+D3 also defers the macOS Debug leg: a red result there on the merge commit
+blocks the next release cut under the same fix-or-revert rule.
 
 ### Documentation-only changes
 
 A pull request or a push to `main` whose change is documentation only runs
-`preflight` and the documentation build and skips every proof job: the four
-`build` legs, both macOS legs among them, `sanitizers`, `kernel-only`,
+`preflight` and the documentation build and skips every proof job: `build`
+(three legs on a pull request, four on `main`), `sanitizers`, `kernel-only`,
 `native-live` and `corpus-parity-subset`. Every other check that reads the
 pages is a `preflight` stage: `doc-anchors`, `doc-lint`, `doc-reverts`,
 `doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
@@ -925,7 +938,11 @@ The advisory `build` aggregate passes a proof job that succeeded, or one that
 was skipped under that same answer. A proof job skipped for any other reason
 fails it, and so does any `preflight` result but success. A skipped matrix is
 never expanded, so a documentation-only run shows one skipped `build` check
-under its unexpanded name instead of the four legs.
+under its unexpanded name instead of the event's three or four legs.
+The aggregate reads `needs.build.result` for the selected matrix cells; D3's
+excluded cell is never created and contributes no skipped result. Every cell
+that exists must succeed: failure, cancellation or an unexpected skip still
+fails the aggregate, with no missing-leg exception on push or any other event.
 
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
@@ -979,6 +996,7 @@ does not assume a build optimization without evidence.
 That model predates decision D1. It keeps Release and kernel at their full
 durations on a pull request, which they no longer have there: both now exclude
 the `slow` rows ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)).
+It also predates D3 and includes macOS Debug, which D3 defers from pull requests.
 The pull-request wall time under that policy is to be measured on real PR
 runs, and this page does not claim either target as met.
 
@@ -1050,10 +1068,12 @@ requests, `pull_request_target`, `workflow_run` and every unlisted event fall
 back to `ubuntu-24.04`. A reusable workflow sees its caller's `github`
 context, so native and corpus jobs keep the same fallback through CI.
 
-The `build` matrix retains its four legs and their `build (<image>, <type>)`
-names. Its routing-only `include` entries carry the engine fragment for
+The `build` matrix has three legs on pull requests and four on every other
+event, retaining their `build (<image>, <type>)` names. Its routing-only
+`include` entries carry the engine fragment for
 Linux and `macos-26` for macOS, selected with `runs-on: ${{ matrix.runner }}`.
-The two hosted macOS legs stay on `macos-26` (M1, 3 cores, 7 GB). The shared
+The hosted macOS Release leg and non-PR macOS Debug leg stay on `macos-26`
+(M1, 3 cores, 7 GB). The shared
 build job sets the engine label string once; hosted macOS legs ignore it.
 Release's separate matrix stays entirely hosted and sets no pool labels.
 Promotion stays hosted for both target and dispatch triggers.
@@ -1143,7 +1163,7 @@ measurements on the new runners.
 | Job | Limit (min) | Measured basis |
 | --- | --- | --- |
 | `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); the native-live aggregate job names a stop at the platform's 360-minute maximum `HANG (re-run)` in its log; the check still fails. |
-| `build` | 360 (was 75) | A Release leg runs its full population on push and dispatch events; a pull request's Release legs, a fork's included, exclude the `slow` rows like its Debug legs, and that pull-request time is to be measured on real PR runs. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
+| `build` | 360 (was 75) | Pull requests run Ubuntu Release/Debug and macOS Release; every non-PR event retains all four legs. A Release leg runs its full population on push and dispatch events; a pull request's Release legs, a fork's included, exclude the `slow` rows like its Ubuntu Debug leg, and that pull-request time is to be measured on real PR runs. The following measurements predate D3 and include macOS Debug on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
 | `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
 | `kernel-only` | 360 (was 60) | Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
 | `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
