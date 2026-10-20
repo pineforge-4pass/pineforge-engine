@@ -5,7 +5,7 @@
 #include "engine_value_invalid.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
-
+#include "report_sink_writer.hpp"
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/timeframe.hpp>
@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -1530,7 +1531,7 @@ void NativeExecutionConsumer::terminal_success(BacktestEngine& engine,
         seen.phase = kEpochCapturing;
         {
             const EpochDispatchScope dispatch(epoch);
-            capture_presentation(engine);
+            if (!capture_selected_sink(engine)) capture_presentation(engine);
         }
         // The barrier is released. Abort and first cause first (check_abort
         // answers false for either), then the reentry latch, which is consumed
@@ -1706,6 +1707,11 @@ bool NativeExecutionConsumer::admit_public_begin(BacktestEngine& engine, const c
         present_refusal(engine, not_ready_text);
         return false;
     }
+    if (detached_bar_views_) {
+        present_refusal(engine, "native Ready bar binding was detached",
+                        RunFailureCode::engine_invariant);
+        return false;
+    }
     return true;
 }
 
@@ -1759,6 +1765,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
     try {
         host->prepare_native_begin(args);
     } catch (const std::exception& e) {
+        pending_bar_views_ = {};
         preparing_begin_ = false;
         // A provider's begin-time validation is a public-entry refusal.  It
         // has not started a native run or consumed an identity, so preserve a
@@ -1767,6 +1774,7 @@ bool NativeExecutionConsumer::prepare_public_begin(
         render_exception(engine, e);
         return false;
     } catch (...) {
+        pending_bar_views_ = {};
         preparing_begin_ = false;
         render_unclassified(engine, "native pre-begin provider exception");
         return false;
@@ -1893,6 +1901,48 @@ void NativeExecutionConsumer::refuse_source_mutation(const char* operation) {
                              (operation ? operation : ""));
 }
 
+void NativeExecutionConsumer::stage_instrument_feed_views(
+        const NativeInstrumentFeedView* const* views, std::size_t count) {
+    if (count != 0 && views == nullptr)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "nonempty feed view table is null");
+    std::vector<std::optional<NativeInstrumentFeedView>> descriptors(count);
+    std::vector<const NativeInstrumentFeedView*> slots(count, nullptr);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (views[i] == nullptr) continue;
+        descriptors[i] = *views[i];
+        slots[i] = &*descriptors[i];
+    }
+    pending_bar_views_.descriptors.swap(descriptors);
+    pending_bar_views_.slots.swap(slots);
+}
+
+void NativeExecutionConsumer::stage_lower_path_source(
+        std::unique_ptr<NativeLowerPathSource> source) noexcept {
+    pending_bar_views_.lower_path = std::move(source);
+}
+
+NativeBarViews NativeExecutionConsumer::bar_views() const noexcept {
+    if (!std::holds_alternative<NativeReady>(state_) && !running()) return {};
+    return active_bar_views_.context();
+}
+
+void NativeExecutionConsumer::detach_bar_views() noexcept {
+    detached_bar_views_ = detached_bar_views_ || active_bar_views_.borrowed();
+    // Keep only borrowed row counts in the copied descriptors. Their data
+    // pointers and table are inaccessible after detachment; owned counts stay
+    // in the retained spec. Component digests already include these counts.
+    for (auto& descriptor : active_bar_views_.descriptors) {
+        if (!descriptor) continue;
+        descriptor->bars.data = nullptr;
+        descriptor->close_ms = nullptr;
+    }
+    active_bar_views_.slots.clear();
+    active_bar_views_.lower_path.reset();
+    active_bar_views_.lower_segment = {nullptr, 0};
+    pending_bar_views_ = {};
+}
+
 bool NativeExecutionConsumer::stage_account_currency_fx_series(
         const std::vector<std::int64_t>& timestamps, const std::vector<double>& rates) {
     if (timestamps.size() != rates.size()) return false;
@@ -1926,13 +1976,14 @@ bool NativeExecutionConsumer::stage_account_currency_fx_series(
 const NativeExecutionConsumer::SpecBarDigests& NativeExecutionConsumer::spec_bar_digests(
         const NativeRunSpec& spec) const noexcept {
     if (!spec_bar_digests_) {
-        SpecBarDigests digests;
-        digests.intrabar = native_intrabar_path_digest(spec.intrabar);
+        SpecBarDigests digests = bound_bar_components_.value_or(SpecBarDigests{});
+        if (!bound_bar_components_)
+            digests.intrabar = native_intrabar_path_digest(spec.intrabar);
         if (!spec.subscriptions.empty())
             digests.subscriptions = native_timeframe_subscriptions_digest(spec.subscriptions);
         if (spec.auxiliary_feed)
             digests.auxiliary = native_auxiliary_feed_digest(*spec.auxiliary_feed);
-        if (!spec.instrument_feeds.empty())
+        if (!bound_bar_components_ && !spec.instrument_feeds.empty())
             digests.instruments = native_instrument_feeds_digest(spec.instrument_feeds);
         spec_bar_digests_ = digests;
     }
@@ -1958,7 +2009,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     // committed event, group-effect receipt and cohort receipt is folded.
     if (event_records_.count != requests_.history_end()
         || group_receipts_.count != requests_.group_effect_receipt_count()
-        || cohort_receipts_.count != requests_.cohort_receipts().size()) {
+        || cohort_receipts_.count != requests_.cohort_receipt_count()) {
         std::abort();
     }
 #endif
@@ -2647,6 +2698,13 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
 NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine,
                                                           const NativeRunSpec* borrowed,
                                                           NativeRunSpec* owned) {
+    // Every exit consumes pending, including a phase refusal or a digest
+    // exception. The active binding is changed only at the Applied commit.
+    struct DiscardPending {
+        BarViewBinding& pending;
+        ~DiscardPending() { pending = {}; }
+    } discard{pending_bar_views_};
+    const NativeBarViews views = pending_bar_views_.context();
     NativeSetupResult result;
     const NativeRunSpec* prior_spec = nullptr;
     // A refusal for the host's phase judges no field: it is WrongPhase at
@@ -2682,7 +2740,7 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
     }
     std::optional<NativeRunSpec> copied;
     NativeRunSpec& candidate = owned != nullptr ? *owned : copied.emplace(*borrowed);
-    const auto validation = normalize_native_run_spec(candidate);
+    const auto validation = native_bar_views_v1::normalize_native_run_spec(candidate, views);
     result.validation = validation;
     if (!validation) {
         fail(engine, NativeFailure{NativeFailureCode::InvalidSpecification,
@@ -2710,6 +2768,13 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
             return result;
         }
     }
+    SpecBarDigests components;
+    components.intrabar = native_bar_views_v1::native_intrabar_path_digest(
+        candidate.intrabar, views.lower_path);
+    if (!candidate.instrument_feeds.empty())
+        components.instruments = native_bar_views_v1::native_instrument_feeds_digest(
+            candidate.instrument_feeds, views);
+    const std::size_t lower_count = views.lower_path == nullptr ? 0 : views.lower_path->count();
     auto parsed_session = native_calendar::parse_session(candidate.session, candidate.timezone);
     if (!parsed_session) {
         fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
@@ -2751,6 +2816,10 @@ NativeSetupResult NativeExecutionConsumer::configure_spec(BacktestEngine& engine
     // persists across a completed/aborted handle and is reapplied by the next
     // provider begin, so it must survive that provider's configure call.
     if (!staged_ingress_fx_) staged_fx_curve_.reset();
+    active_bar_views_ = std::move(pending_bar_views_);
+    active_bar_views_.lower_count = lower_count;
+    bound_bar_components_ = components;
+    detached_bar_views_ = false;
     forget_spec_digests();
     leave_running();
     state_ = NativeReady{std::move(candidate)};
@@ -2836,14 +2905,21 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     engine.reset_run_state();
+    engine.reset_trade_percent_prefix();
+    closed_trade_prefix_ = {};
+    closed_trade_seal_bar_.reset();
+    closed_trade_report_.reset();
+    for (std::size_t index = 0; index < sealed_exit_phase_basis_.size(); ++index)
+        sealed_exit_phase_basis_[index] = index;
+    exit_phases_restarted_ = false;
     // The rows are this attempt's from here on, whether it completes or fails.
     rows_current_ = batch_current_ = true;
     // The generation is admitted here: after the reset and the last refusal,
     // before the first host callback of the run.
     admit_selected_generation(engine);
-    // RULING A48: one generic capability, wired once per run. A host that
-    // declares ownership supplies the closing-row magnitudes; the kernel then
-    // keeps no excursion model of its own for this run.
+    engine.begin_report_sink();
+    // RULING A48: the host's closing-row excursion capability is wired once
+    // per run; the kernel then keeps no excursion model of its own.
     if (auto* excursion_owner = native_host(engine)) {
         if (excursion_owner->owns_lot_excursions()) {
             engine.lot_excursion_hook_ =
@@ -2934,7 +3010,12 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     closed_rows_digest_ = BrokerStateHashSink{}.h;
     closed_rows_digested_ = 0;
     closed_rows_final_ = 0;
-    closed_row_prefix_.clear();
+    if (streams_closed_rows(engine)) {
+        std::vector<std::uint64_t>().swap(closed_row_prefix_);
+        closed_trade_report_ = std::make_unique<ClosedTradeReport>(engine.initial_capital_);
+    } else {
+        closed_row_prefix_.clear();
+    }
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;
@@ -3150,7 +3231,9 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
     const auto* spec = spec_ptr();
     if (!spec || spec->intrabar.is_none() || spec->intrabar.synthesized_path()) return true;
     const auto& lower = *spec->intrabar.lower();
-    if (!intrabar_tf_ || lower.bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    const auto* source = active_bar_views_.lower_path.get();
+    const auto count = source ? active_bar_views_.lower_count : lower.bars.size();
+    if (!intrabar_tf_ || count > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         present_refusal(engine, "native intrabar path timeframe or bar count is invalid",
                         RunFailureCode::run_options_rejected, {{"option", "intrabar_path"}});
         return false;
@@ -3171,6 +3254,47 @@ bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
     }();
     path_spec.input_tf = lower.tf;
     path_spec.script_tf = lower.tf;
+    if (source != nullptr) {
+        // Each batch repeats its predecessor's final row. Every structural,
+        // calendar and adjacent-pair judgement is therefore the vector's.
+        // The noexcept visitor transports exceptions back out of the walk.
+        struct Chunks {
+            const NativeRunSpec& spec;
+            std::array<Bar, 256> buffer{};
+            int used = 0;
+            std::size_t seen = 0, expected;
+            bool valid = true;
+            std::exception_ptr exception;
+            bool judge() noexcept {
+                try {
+                    valid = static_cast<bool>(preflight_native_inputs(
+                        spec, used == 0 ? nullptr : buffer.data(), used, NativeInputPolicy::Batch));
+                } catch (...) { exception = std::current_exception(); return false; }
+                return valid;
+            }
+        } chunks{path_spec, {}, 0, 0, count, true, {}};
+        const bool complete = source->for_each([](void* context, const Bar& bar) noexcept {
+            auto& chunk = *static_cast<Chunks*>(context);
+            if (chunk.seen == chunk.expected) return false;
+            ++chunk.seen;
+            chunk.buffer[static_cast<std::size_t>(chunk.used++)] = bar;
+            if (chunk.used != static_cast<int>(chunk.buffer.size())) return true;
+            if (!chunk.judge()) return false;
+            chunk.buffer[0] = chunk.buffer.back();
+            chunk.used = 1;
+            return true;
+        }, &chunks);
+        if (chunks.exception) std::rethrow_exception(chunks.exception);
+        if (chunks.valid && (!complete || chunks.seen != count))
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "lower source count and preflight walk disagree");
+        if (chunks.valid) (void)chunks.judge();
+        if (chunks.exception) std::rethrow_exception(chunks.exception);
+        if (chunks.valid) return true;
+        present_refusal(engine, "native intrabar path failed validation",
+                        RunFailureCode::run_options_rejected, {{"option", "intrabar_path"}});
+        return false;
+    }
     const auto result = preflight_native_inputs(
         path_spec, lower.bars.empty() ? nullptr : lower.bars.data(),
         static_cast<int>(lower.bars.size()), NativeInputPolicy::Batch);
@@ -3258,14 +3382,11 @@ NativeEventRetention NativeExecutionConsumer::retention() const noexcept {
     return spec ? spec->event_retention : NativeEventRetention::Window;
 }
 
-// The journal window closes at every script-bar boundary (and, under the
-// stress switch, at every driver point). A host that acknowledged keeps what
-// it has not read; a host that never did is served by its callbacks, so the
-// window closes on everything. Either way it stops ahead of the oldest
-// applied notification still queued -- the kernel's own reader, including the
-// one being delivered -- and the core stops ahead of any live deferred
-// group-adjustment chain (retire_history). Every event is folded into the
-// event-record digest at its commit, so a retirement never outruns it.
+// Close the window at each script bar (each driver point under stress), up to
+// the host's acknowledgement, or everything for a callback-only host. Queued
+// applied notifications, including the current one, pin their causes; the core
+// also pins live deferred chains. Event and group-receipt folds run at commit,
+// before this retires either journal rows or their group-effect keys.
 void NativeExecutionConsumer::retire_journal() noexcept {
     if (retention() != NativeEventRetention::Window || failed()) return;
     uint64_t through = events_acknowledged_ ? acknowledged_through_
@@ -3275,6 +3396,9 @@ void NativeExecutionConsumer::retire_journal() noexcept {
         through = std::min(through, notification.ordinal - 1);
     }
     requests_.retire_history(through);
+#ifndef NDEBUG
+    if (group_receipts_.count != requests_.group_effect_receipt_count()) std::abort();
+#endif
 }
 
 void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double price) {
@@ -8322,25 +8446,25 @@ NativeExecutionConsumer::certify_cycle(int64_t ms) const {
         }
     }
     try {
+        const std::size_t day_span_bound = native_calendar::session_day_span_bound(calendar_);
+        for (CertifiedCycle& slot : certified_cycles_) slot.spans.reserve(day_span_bound);
         auto certificate = native_calendar::cycle_certificate(calendar_, ms, calendar_memo_);
-        CertifiedCycle entry;
-        if (certificate) {
-            entry.certified = true;
-            entry.origin_ms = certificate->origin_ms;
-            entry.next_origin_ms = certificate->next_origin_ms;
-            entry.ordinal = certificate->ordinal;
-            entry.bucket_ms = native_calendar::fixed_bucket_ms(script_tf_);
-            entry.spans = std::move(certificate->spans);
-        } else {
-            constexpr int64_t kDayMs = 86'400'000;
-            entry.origin_ms = ms;
-            entry.next_origin_ms = ms <= std::numeric_limits<int64_t>::max() - kDayMs
-                ? ms + kDayMs : std::numeric_limits<int64_t>::max();
-        }
         CertifiedCycle& kept = certified_cycles_[certified_cycle_next_];
+        kept.certified = false;  // a half-written entry is read the exact way
+        if (certificate) {
+            kept.spans.assign(certificate->spans.begin(), certificate->spans.end());
+            kept.ordinal = certificate->ordinal;
+            kept.bucket_ms = native_calendar::fixed_bucket_ms(script_tf_);
+            kept.origin_ms = certificate->origin_ms;
+            kept.next_origin_ms = certificate->next_origin_ms;
+            kept.certified = true;
+        } else {
+            kept.origin_ms = ms;
+            kept.next_origin_ms = ms <= std::numeric_limits<int64_t>::max() - kMsPerDay
+                ? ms + kMsPerDay : std::numeric_limits<int64_t>::max();
+        }
         certified_cycle_last_ = certified_cycle_next_;
         certified_cycle_next_ = (certified_cycle_next_ + 1) % certified_cycles_.size();
-        kept = std::move(entry);
         return kept.certified ? &kept : nullptr;
     } catch (...) {
         return nullptr;
@@ -8565,11 +8689,30 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         // find the first by binary search and walk to the window's end. A
         // scan of the whole feed for every script bar made the run quadratic
         // in its length.
-        auto candidate = std::lower_bound(
-            lower->bars.begin(), lower->bars.end(), begin,
-            [](const Bar& bar, int64_t time) { return bar.timestamp < time; });
-        for (; candidate != lower->bars.end() && candidate->timestamp < end; ++candidate) {
-            sub_bars.push_back(&*candidate);
+        if (active_bar_views_.lower_path != nullptr) {
+            NativeBarView segment{nullptr, 0};
+            try {
+                segment = active_bar_views_.lower_path->segment(begin, end);
+            } catch (const std::bad_alloc&) {
+                throw;
+            } catch (...) {
+                throw coded<std::runtime_error>(RunFailureCode::run_options_rejected,
+                                                {{"option", "intrabar_path"}},
+                                                "native lower source segment failed");
+            }
+            if (segment.size > static_cast<std::size_t>(std::numeric_limits<int>::max())
+                || (segment.size != 0 && segment.data == nullptr))
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                              "native lower source returned an invalid segment");
+            active_bar_views_.lower_segment = segment;
+            for (std::size_t i = 0; i < segment.size; ++i) sub_bars.push_back(segment.data + i);
+        } else {
+            auto candidate = std::lower_bound(
+                lower->bars.begin(), lower->bars.end(), begin,
+                [](const Bar& bar, int64_t time) { return bar.timestamp < time; });
+            for (; candidate != lower->bars.end() && candidate->timestamp < end; ++candidate) {
+                sub_bars.push_back(&*candidate);
+            }
         }
         // The generic lower-feed path follows the legacy pump's fallback: a
         // script bar with no assigned lower bars walks its own OHLC path.
@@ -8845,6 +8988,7 @@ void NativeExecutionConsumer::record_script_report_point(
     if (spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks)
         engine.update_equity_extremes();
     if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
+    engine.retire_report_sink_hashes();
     engine.record_equity_point(script_open_ms);
     engine.last_script_continuation_hash_ = continuation_hash();
     engine.last_script_continuation_valid_ = true;
@@ -8852,7 +8996,6 @@ void NativeExecutionConsumer::record_script_report_point(
         engine.broker_state_hashes_.push_back(engine.broker_state_hash());
     }
 }
-
 // The same fold and the same append, at an instant only the host can name
 // (NativeReportPolicy::KernelRecordedAtHostMarks). A host whose report
 // cadence is its own — a source adapter that publishes a script bar to its
@@ -8875,10 +9018,10 @@ bool NativeExecutionConsumer::mark_script_report_point(
 // mark cadence is the host's needs, because there the two are never apart.
 void NativeExecutionConsumer::record_report_point(
         BacktestEngine& engine, int64_t report_ts) const {
+    engine.retire_report_sink_hashes();
     engine.update_equity_extremes();
     engine.record_equity_point(report_ts);
 }
-
 // The generic mark-to-market producer both report shapes share. One row per
 // open physical lot at `mark_price`, built by the same non-mutating builder a
 // full close uses and appended to the engine's range-end row space; the summed
@@ -8922,14 +9065,11 @@ bool NativeExecutionConsumer::script_bucket_completions(
     if (!spec) return false;
     completes.assign(n, 0U);
     boundary_completes.assign(n, 0U);
-    TimeframeAggregator aggregator(spec->script_tf, spec->input_tf, spec->timezone,
-                                   spec->session);
+    ScriptBucketCursor cursor(*spec);
     for (std::size_t i = 0; i < n; ++i) {
-        const AggregatedBar aggregate = aggregator.feed(bars[i]);
-        completes[i] = aggregate.is_complete ? 1U : 0U;
-        boundary_completes[i] = aggregate.is_complete
-            && tf_change(aggregate.bar.timestamp, bars[i].timestamp, spec->script_tf,
-                         spec->timezone, spec->session) ? 1U : 0U;
+        const auto flags = cursor.next(bars[i]);
+        completes[i] = flags.complete;
+        boundary_completes[i] = flags.boundary;
     }
     return true;
 }
@@ -8951,8 +9091,8 @@ void NativeExecutionConsumer::record_open_position_report_rows(BacktestEngine& e
     if (!std::isfinite(engine.current_bar_.close)) return;
     (void)append_open_position_report_rows(
         engine, engine.bar_fill_price(engine.current_bar_.close),
-        engine.equity_curve_.empty() ? engine.current_bar_.timestamp
-                                     : engine.equity_curve_.back().time_ms,
+        engine.last_equity_point() ? engine.last_equity_point()->time_ms
+                                   : engine.current_bar_.timestamp,
         engine.bar_index_, engine.active_account_currency_fx());
 }
 
@@ -9258,7 +9398,8 @@ void NativeExecutionConsumer::clear_timeframe_subscriptions(BacktestEngine& engi
     }
     subscription_states_base_ = 0;
     subscriptions_.clear();
-    input_next_ms_.clear();
+    subscription_input_bars_ = nullptr;
+    subscription_input_n_ = 0;
     engine.security_input_tf_.clear();
     engine.security_next_input_ms_ = 0;
 }
@@ -9272,8 +9413,10 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
     // this scope.
     struct WiringScope {
         bool& flag;
-        ~WiringScope() { flag = false; }
-    } wiring{wiring_subscriptions_};
+        const Bar*& bars;
+        int& n;
+        ~WiringScope() { flag = false; bars = nullptr; n = 0; }
+    } wiring{wiring_subscriptions_, subscription_input_bars_, subscription_input_n_};
     wiring_subscriptions_ = true;
     clear_timeframe_subscriptions(engine);
     if (spec.auxiliary_feed) {
@@ -9301,6 +9444,8 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
         return false;
     }
     if (input_bars == nullptr || n_input < 0) n_input = 0;
+    subscription_input_bars_ = input_bars;
+    subscription_input_n_ = n_input;
     // A stream resolves its series over the warmup input exactly as a batch of
     // those same bars does -- including the last one, whose successor a batch
     // does not know either -- and then continues the same aggregators live.
@@ -9310,10 +9455,6 @@ bool NativeExecutionConsumer::begin_timeframe_subscriptions(
     // historical-resolution mode; the realtime bar has nothing to look into).
     subscription_warmup_inputs_ = is_stream ? n_input : -1;
     try {
-        input_next_ms_.assign(static_cast<std::size_t>(n_input), 0);
-        for (int i = 0; i + 1 < n_input; ++i) {
-            input_next_ms_[static_cast<std::size_t>(i)] = input_bars[i + 1].timestamp;
-        }
         engine.security_input_tf_ = spec.input_tf;
         engine.security_next_input_ms_ = 0;
         // Evaluator states the host registered for itself keep their sec_ids:
@@ -9465,9 +9606,9 @@ NativeSetupResult NativeExecutionConsumer::declare_timeframe_subscriptions(
         result.validation = {NativeRunSpecError::WrongPhase, NativeRunSpecField::None};
         return result;
     }
-    result.validation = validate_native_timeframe_subscriptions(
+    result.validation = native_bar_views_v1::validate_native_timeframe_subscriptions(
         declared, running->spec.input_tf, running->spec.timeframe_undetected,
-        running->spec.auxiliary_feed, running->spec.instrument_feeds);
+        running->spec.auxiliary_feed, running->spec.instrument_feeds, bar_views());
     if (!result.validation) return result;
     running->spec.subscriptions = std::move(declared);
     forget_spec_digests();
@@ -9490,9 +9631,9 @@ NativeSetupResult NativeExecutionConsumer::declare_auxiliary_feed(
         result.validation = {NativeRunSpecError::WrongPhase, NativeRunSpecField::None};
         return result;
     }
-    result.validation = validate_native_timeframe_subscriptions(
+    result.validation = native_bar_views_v1::validate_native_timeframe_subscriptions(
         running->spec.subscriptions, running->spec.input_tf,
-        running->spec.timeframe_undetected, declared, running->spec.instrument_feeds);
+        running->spec.timeframe_undetected, declared, running->spec.instrument_feeds, bar_views());
     if (!result.validation) return result;
     running->spec.auxiliary_feed = std::move(declared);
     forget_spec_digests();
@@ -9703,8 +9844,7 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
             first_index = i;
             first_ms = input_bars[i].timestamp;
         }
-        engine.security_next_input_ms_ =
-            input_next_ms_[static_cast<std::size_t>(i)];
+        engine.security_next_input_ms_ = subscription_next_input_ms(i);
         const std::int64_t before = state.eval_complete_count;
         engine.feed_security_eval_state(state, input_bars[i]);
         if (state.eval_complete_count <= before) continue;
@@ -9808,10 +9948,7 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
             subscription.bucket_first_index = index;
             subscription.bucket_first_ms = bar.timestamp;
         }
-        engine.security_next_input_ms_ =
-            (index >= 0 && static_cast<std::size_t>(index) < input_next_ms_.size())
-                ? input_next_ms_[static_cast<std::size_t>(index)]
-                : 0;
+        engine.security_next_input_ms_ = subscription_next_input_ms(index);
         const std::int64_t before = state.eval_complete_count;
         engine.feed_security_eval_state(state, bar);
         engine.security_next_input_ms_ = 0;
@@ -9938,7 +10075,11 @@ bool NativeExecutionConsumer::pump_instrument_subscription(
         render(engine, "native instrument series lost its feed");
         return false;
     }
-    const NativeInstrumentFeed& feed = spec->instrument_feeds[subscription.instrument_feed];
+    const auto context = bar_views();
+    const auto* slot = context.instrument_feed_count == 0
+        ? nullptr : context.instrument_feeds[subscription.instrument_feed];
+    const auto feed = native_instrument_feed_view(
+        spec->instrument_feeds[subscription.instrument_feed], slot);
     // The input's own calendar interval. A raw label partition presents every
     // input as a zero-length interval (timestamp_partition), which states no
     // close to judge a feed bar against, so the rule reads the interval the
@@ -9952,29 +10093,29 @@ bool NativeExecutionConsumer::pump_instrument_subscription(
             horizon = *resolved;
         }
     }
-    const std::size_t total = feed.bars.size();
+    const std::size_t total = feed.bars.size;
     bool delivered = false;
     while (subscription.instrument_cursor < total) {
         const std::size_t at = subscription.instrument_cursor;
         const bool visible = subscription.lookahead
-            ? feed.bars[at].timestamp <= horizon.open_ms
+            ? feed.bars.data[at].timestamp <= horizon.open_ms
             : feed.close_ms[at] <= horizon.last_traded_close_ms;
         if (!visible) break;
         ++subscription.instrument_cursor;
         delivered = true;
         // The pull accessor answers with this bar for the whole callback.
-        subscription.latest = feed.bars[at];
+        subscription.latest = feed.bars.data[at];
         NativeTimeframeBarContext context;
         context.subscription = subscription.index;
-        context.interval.open_ms = feed.bars[at].timestamp;
-        context.interval.eligible_open_ms = feed.bars[at].timestamp;
+        context.interval.open_ms = feed.bars.data[at].timestamp;
+        context.interval.eligible_open_ms = feed.bars.data[at].timestamp;
         context.interval.last_traded_close_ms = feed.close_ms[at];
         context.interval.next_period_open_ms = feed.close_ms[at];
         context.interval.next_input_open_ms =
-            at + 1 < total ? feed.bars[at + 1].timestamp : feed.close_ms[at];
+            at + 1 < total ? feed.bars.data[at + 1].timestamp : feed.close_ms[at];
         context.completion = NativeCompletionKind::Confirmed;
         context.delivered_at_ms = bar.timestamp;
-        if (!invoke_timeframe_callback(engine, feed.bars[at], context)) return false;
+        if (!invoke_timeframe_callback(engine, feed.bars.data[at], context)) return false;
     }
     // gaps: the subscription contract's rule, on the pull side. An instrument
     // series has no evaluator of the kernel's to clear on the push side; its
@@ -10203,11 +10344,15 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             consumer.pump_bars_ = input;
             consumer.pump_n_ = count;
             consumer.pumped_last_index_ = -1;
+            consumer.subscription_input_bars_ = input;
+            consumer.subscription_input_n_ = count;
         }
         ~PumpView() {
             consumer.pump_bars_ = nullptr;
             consumer.pump_n_ = 0;
             consumer.pumped_last_index_ = -1;
+            consumer.subscription_input_bars_ = nullptr;
+            consumer.subscription_input_n_ = 0;
         }
     } view(*this, bars, n);
     // A batch knows its length, so the two logs it appends to -- the driver
@@ -10335,8 +10480,8 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
     }
     (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
-
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
@@ -10371,13 +10516,13 @@ void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars
         fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
-
 void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      const Bar* input_bars, int n_input,
                                      const std::string& input_tf,
                                      const std::string& script_tf,
                                      bool bar_magnifier, int magnifier_samples,
                                      MagnifierDistribution magnifier_dist) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
@@ -10425,7 +10570,6 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
         fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
-
 void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const Bar* input_bars, int n_input,
                                        const std::string& input_tf, const std::string& script_tf,
@@ -10434,6 +10578,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const void* overrides,
                                        bool bar_magnifier, int magnifier_samples,
                                        MagnifierDistribution magnifier_dist) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine);
     const EntryExitGuard exit_scope(*this, engine, false);
     if (refuse_dispatch_reentry()) return;
     const AttemptScope attempt(*this);
@@ -10476,21 +10621,21 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
         fail_unclassified(engine, NativeFailureOperation::Input);
     }
 }
-
 bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
+    const BacktestEngine::ReportSinkCallScope sink_call(engine, true);
     const EntryExitGuard exit_scope(*this, engine, true);
     if (refuse_dispatch_reentry()) return false;
     const AttemptScope attempt(*this);
-    // The latest attempt is minted before any check below, so a refusal over a
-    // live stream is a later attempt of its own (owner_serial stays the live
-    // generation's).
+    // Sink streams are outside v1; refuse before staging or touching the file.
     if (!mint_attempt(engine, exit_scope.nested())) return false;
-    // Preserve the live stream before asking the provider to stage/configure a
-    // new run.  The legacy route diagnoses this state first; in particular,
-    // no warmup copy, adapter reset, or broker/spec mutation may occur.
+    if (engine.report_sink_state_.enabled) {
+        render(engine, "report sink does not support streaming", RunFailureCode::run_mode_unsupported,
+               {{"feature", "stream_report_sink"}});
+        return false;
+    }
     if (engine.stream_phase_ == BacktestEngine::StreamPhase::REALTIME) {
         render(engine, "stream is already realtime");
         return false;
@@ -10517,6 +10662,11 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
     args.warmup_n = n_warmup;
     if (!prepare_public_begin(engine, args)) return false;
     if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
+    if (active_bar_views_.lower_path) {
+        present_refusal(engine, "native lower source cannot begin a stream",
+                        RunFailureCode::engine_invariant);
+        return false;
+    }
     clear_rendered(engine);
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
@@ -11686,11 +11836,8 @@ void NativeExecutionConsumer::acknowledge_events(uint64_t through_ordinal) noexc
     acknowledged_through_ = std::max(acknowledged_through_, bounded);
 }
 
-// After every install: the terminal-receipt watermark over the events it
-// committed, then the v19 running digests the continuation folds -- each
-// committed event's compact record and each new group-effect receipt, folded
-// once, here, while the rows are the journal's tail. Positions are absolute
-// (EventRange, history_end), so a retired journal prefix moves none of them.
+// At every install, fold the terminal watermark, compact event records and new
+// group receipts once, before retirement. Event and receipt indices are absolute.
 void NativeExecutionConsumer::note_committed_events(
         const native_order::EventRange& events) noexcept {
     const std::size_t end = std::min(requests_.history_end(), events.first_index + events.count);
@@ -11743,6 +11890,9 @@ void NativeExecutionConsumer::note_committed_events(
     event_records_.count = requests_.history_end();
     chain_roots_.h = roots.h;
     chain_roots_.count = root_count;
+#ifndef NDEBUG
+    if (group_receipts_.count < requests_.group_effect_receipt_base()) std::abort();
+#endif
     const std::size_t receipts = requests_.group_effect_receipt_count();
     if (group_receipts_.count < receipts) {
         StateFold f;
@@ -11779,7 +11929,12 @@ void fold_closed_row(BrokerStateHashSink& f, const Trade& row) noexcept {
 }  // namespace
 
 uint64_t NativeExecutionConsumer::closed_rows_digest(
-        const std::vector<Trade>& rows) const {
+        const TradeLedger& rows) const {
+    if (rows.base() != closed_trade_prefix_.base
+        || closed_rows_digested_ < rows.base()
+        || closed_rows_final_ < rows.base())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "closed-row digest precedes the sealed prefix");
     const std::size_t final_rows = std::min(closed_rows_final_, rows.size());
     if (closed_rows_digested_ > final_rows) rewind_closed_rows(final_rows);
     BrokerStateHashSink f;
@@ -11796,18 +11951,27 @@ uint64_t NativeExecutionConsumer::closed_rows_digest(
     return f.h;
 }
 
-void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const noexcept {
+void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const {
+    const std::size_t base = closed_trade_prefix_.base;
+    if (first < base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "closed-row rewind precedes the sealed prefix");
     if (first >= closed_rows_digested_) return;
     closed_rows_digested_ = first;
-    closed_row_prefix_.resize(first);
-    closed_rows_digest_ = first == 0 ? BrokerStateHashSink{}.h : closed_row_prefix_.back();
+    closed_row_prefix_.resize(first - base);
+    closed_rows_digest_ = first == base ? closed_trade_prefix_.rows_digest
+                                       : closed_row_prefix_.back();
 }
 
 bool NativeExecutionConsumer::closed_rows_digest_holds(
-        const std::vector<Trade>& rows) const noexcept {
-    if (closed_rows_digested_ > rows.size()) return false;
+        const TradeLedger& rows) const noexcept {
+    const std::size_t base = closed_trade_prefix_.base;
+    if (rows.base() != base || closed_rows_digested_ < base
+        || closed_rows_digested_ > rows.size()
+        || closed_row_prefix_.size() != closed_rows_digested_ - base) return false;
     BrokerStateHashSink f;
-    for (std::size_t index = 0; index < closed_rows_digested_; ++index) {
+    f.h = closed_trade_prefix_.rows_digest;
+    for (std::size_t index = base; index < closed_rows_digested_; ++index) {
         fold_closed_row(f, rows[index]);
     }
     return f.h == closed_rows_digest_;
@@ -11815,8 +11979,8 @@ bool NativeExecutionConsumer::closed_rows_digest_holds(
 
 void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) const noexcept {
 #ifndef NDEBUG
-    // Debug builds re-fold, at the run's end, every closed row the running
-    // digest has taken: a host that amended a folded field of a final row
+    // Debug builds re-fold the resident rows from base, seeded with the
+    // immutable prefix digest: an amendment of a final row
     // without naming it aborts here instead of answering a digest no fresh
     // fold reproduces. Rows removed from the end are forgotten first, as a
     // read would.
@@ -11828,18 +11992,24 @@ void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) c
 #endif
 }
 
-// After every roster command: the cohort receipt it appended, folded once.
+// After every roster command: fold its receipt once, then retire its row
+// under Window retention. Full/Commands keep their explicit history readback.
 void NativeExecutionConsumer::note_cohort_receipts() noexcept {
     const auto& receipts = requests_.cohort_receipts();
-    if (cohort_receipts_.count >= receipts.size()) return;
+    const std::size_t base = requests_.cohort_receipt_base();
+    const std::size_t total = requests_.cohort_receipt_count();
+#ifndef NDEBUG
+    if (cohort_receipts_.count < base || cohort_receipts_.count > total) std::abort();
+#endif
     StateFold f;
     f.run_base = requests_.identity().run_number;
     f.h = cohort_receipts_.h;
-    for (std::size_t index = cohort_receipts_.count; index < receipts.size(); ++index) {
-        hash_cohort_receipt(f, receipts[index]);
+    for (std::size_t index = cohort_receipts_.count; index < total; ++index) {
+        hash_cohort_receipt(f, receipts[index - base]);
     }
     cohort_receipts_.h = f.h;
-    cohort_receipts_.count = receipts.size();
+    cohort_receipts_.count = total;
+    if (retention() == NativeEventRetention::Window) requests_.retire_cohort_receipts(total);
 }
 
 void NativeExecutionConsumer::reject_inherited_on_bar(BacktestEngine& engine) {
@@ -12266,7 +12436,7 @@ void NativeExecutionConsumer::drop_presentation() noexcept {
     presentation_ = ReportC{};
     presentation_metric_equity_len_ = 0;
     presentation_metric_observations_ = 0;
-    presentation_ready_ = false;
+    presentation_ready_ = presentation_sink_equity_written_ = false;
     selected_results_open_ = false;
 }
 
@@ -12309,7 +12479,8 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
     int64_t metric_equity_len = 0;
     int64_t metric_observations = 0;
     try {
-        engine.fill_trades_section(&local);
+        if (streams_closed_rows(engine)) fill_streamed_trades(engine, &local);
+        else engine.fill_trades_section(&local);
 
         local.input_bars_processed = engine.diag_input_bars_processed_;
         local.script_bars_processed = engine.diag_script_bars_processed_;
@@ -12325,6 +12496,10 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
             const int64_t window_start = selected_epoch_.admitted_window.start_ms;
             const int64_t window_end = selected_epoch_.admitted_window.end_ms;
             const std::vector<pf_equity_point_t>& recorded = engine.equity_curve_;
+            if (closed_trade_report_
+                && closed_trade_report_->first_entry_time < window_start)
+                refuse_selected_capture(
+                    "native selected report: a trade was entered before the window start");
             // No position, fill or account change may precede T: a trade row
             // (closed, or the range-end row of an open lot) or an open lot
             // entered before the window is a carry-in.
@@ -12385,7 +12560,11 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
                 local.equity_curve = nullptr;
             }
         }
-        engine.present_report(&local);
+        if (selected_epoch_.admitted_selected) {
+            engine.present_report(&local);
+        } else {
+            engine.present_report_equity_tail(&local);
+        }
     } catch (...) {
         BacktestEngine::free_report(&local);
         throw;
@@ -12443,7 +12622,12 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
     const auto& slot = engine.execution_consumer_slot_;
     const auto* consumer = static_cast<const NativeExecutionConsumer*>(slot.ptr.get());
     if (slot.native) {
-        if (consumer == nullptr || !consumer->observed_epoch_sealed()) return false;
+        if (consumer == nullptr) return false;
+        if (!consumer->observed_epoch_sealed()) {
+            if (!consumer->streams_closed_rows(engine)) return false;
+            consumer->fill_streamed_report(engine, out);
+            return true;
+        }
     } else if (!selected_query_closed(engine)) {
         return false;
     }
@@ -12452,17 +12636,17 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
         return true;
     }
 
-    // The capture's scalars come across by value; every array pointer starts
-    // null, so what a throw frees below is only what this call allocated and
-    // never the capture's own. The two arrays the capture owns are copied; the
-    // others are the suffix's to build, as fill_report builds them after
-    // present_report.
+    // The capture's scalars come across by value; array pointers start null,
+    // so a throw frees only storage this call allocated. A sink's E records
+    // already exist; its metrics read the captured curve without another copy.
+    // Sink-off reads copy both arrays, and the suffix builds the other arrays.
+    // present_report is never called at read.
     const ReportC& captured = consumer->presentation_;
-    // Two equity lengths, as OFF has them: the presented one
-    // (captured.equity_curve_len, whatever present_report left, published as it
-    // stands) and the metrics' own, the engine vector's size from before that
-    // call, kept beside the capture. OFF's buffer holds the second and a reader
-    // may take either, so the copy covers the larger.
+    const bool sink_equity = consumer->selected_sink_equity_written(engine);
+    // The presentation may publish a different length than metrics use.
+    // Sink-off storage covers their maximum; a sink reads the capture's
+    // metric storage directly. The captured lengths keep their preexisting
+    // roles even when a custom presentation shrinks the published curve.
     const int64_t metric_equity_len = consumer->presentation_metric_equity_len_;
     const int64_t equity_storage_len = std::max(captured.equity_curve_len, metric_equity_len);
     ReportC local = captured;
@@ -12477,12 +12661,12 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
             local.trades = new TradeC[captured.trades_len];
             std::copy(captured.trades, captured.trades + captured.trades_len, local.trades);
         }
-        if (captured.equity_curve != nullptr && equity_storage_len > 0) {
+        if (captured.equity_curve != nullptr && equity_storage_len > 0 && !sink_equity) {
             local.equity_curve = new pf_equity_point_t[equity_storage_len];
             std::copy(captured.equity_curve, captured.equity_curve + equity_storage_len,
                       local.equity_curve);
         }
-
+        const auto* metric_curve = sink_equity ? captured.equity_curve : local.equity_curve;
         // The suffix, in fill_report's order. The metrics get the original
         // length, as fill_metrics_section passes its `n`: never the presented
         // length, script_bars_processed, or the engine's vector read now.
@@ -12494,7 +12678,7 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
             // input's close, undefined (NaN) while the window has none. The
             // trade blocks and every other equity formula are the ordinary ones.
             internal::compute_report_metrics(local.metrics, local.trades, local.trades_len,
-                                             local.equity_curve, metric_equity_len,
+                                             metric_curve, metric_equity_len,
                                              local.net_profit, engine.initial_capital_,
                                              engine.chart_timezone_,
                                              consumer->selected_first_open_,
@@ -12508,9 +12692,12 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
                                              engine.chart_timezone_, engine.first_bar_open_,
                                              engine.current_bar_.close, engine.bars_in_market_);
         }
+        if (consumer->streams_closed_rows(engine)) {
+            consumer->finish_streamed_trade_metrics(&local);
+            consumer->finish_streamed_trades(engine, &local);
+        }
         engine.fill_security_diag_section(&local);
         engine.fill_trace_section(&local);
-
         const int64_t hn = (int64_t)engine.broker_state_hashes_.size();
         local.broker_state_hash_len = hn;
         local.broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
@@ -12522,6 +12709,7 @@ bool NativeExecutionConsumer::fill_selected_report(const BacktestEngine& engine,
         BacktestEngine::free_report(&local);
         throw;
     }
+    if (sink_equity) local.equity_curve_len = 0;
     *out = local;
     return true;
 }
@@ -12717,6 +12905,417 @@ int native_selected_window_counts_v1(const BacktestEngine* engine,
     return NativeExecutionConsumer::selected_window_counts_v1(engine, out);
 }
 
+// CR-150 L6b-2: report-tail helpers share the consumer's engine epoch.
+// Keep them in this scope so their definitions have the header's ABI owner.
+
+pf_equity_point_t* BacktestEngine::last_equity_point() noexcept {
+    return equity_curve_.empty() ? nullptr : &equity_curve_.back();
+}
+
+const pf_equity_point_t* BacktestEngine::last_equity_point() const noexcept {
+    return equity_curve_.empty() ? nullptr : &equity_curve_.back();
+}
+
+bool BacktestEngine::prepare_equity_point() {
+    const auto* held = last_equity_point();
+    auto& sink = report_sink_state_;
+    if (!held || !sink.enabled || !sink.writer) return held == nullptr;
+    // L17a owns the selected-window anchor/filter/latches and final capture.
+    // Its capture emits the selected curve after presentation. Keep this
+    // ordinary hold-back writer from leaking any pre-T observation.
+    pf_selected_window_config_v1 window{};
+    if (NativeExecutionConsumer::selected_window_admitted(*this, &window)) return false;
+    try {
+        sink.writer->write_e(*held);
+        ++sink.receipt.count_e;
+    } catch (const report_sink::WriterError& error) {
+        sink.writer.reset();
+        const auto code = error.reason() == report_sink::WriterFailure::io
+            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
+        throw coded<std::runtime_error>(code, {}, error.what());
+    }
+    return false;
+}
+
+void BacktestEngine::fold_report_equity_extreme(double equity) {
+    if (report_sink_state_.enabled) {
+        auto& prefix = report_sink_state_.equity_prefix;
+        prefix[0] = max_equity_;
+        prefix[1] = min_equity_;
+        prefix[2] = max_drawdown_;
+        prefix[3] = max_runup_;
+    }
+    fold_equity_extreme(equity);
+}
+
+void BacktestEngine::refold_equity_tail() {
+    if (report_sink_state_.enabled && last_equity_point()) {
+        const auto& prefix = report_sink_state_.equity_prefix;
+        max_equity_ = prefix[0];
+        min_equity_ = prefix[1];
+        max_drawdown_ = prefix[2];
+        max_runup_ = prefix[3];
+        fold_equity_extreme(last_equity_point()->equity);
+#ifndef NDEBUG
+        const double incremental[] = {max_equity_, min_equity_, max_drawdown_, max_runup_};
+        // L6b-4 changes this reference walk to the scratch curve. Keep the
+        // existing array as its oracle until that read side is available.
+        max_equity_ = initial_capital_;
+        min_equity_ = initial_capital_;
+        max_drawdown_ = 0.0;
+        max_runup_ = 0.0;
+        for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+        const double reference[] = {max_equity_, min_equity_, max_drawdown_, max_runup_};
+        if (std::memcmp(incremental, reference, sizeof incremental) != 0)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "report sink tail fold differs from full equity walk");
+#endif
+        return;
+    }
+    max_equity_ = initial_capital_;
+    min_equity_ = initial_capital_;
+    max_drawdown_ = 0.0;
+    max_runup_ = 0.0;
+    for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+}
+
+void BacktestEngine::present_report_equity_tail(ReportC* out) const {
+    if (!report_sink_state_.enabled || out->equity_curve_len == 0) {
+        present_report(out);
+        return;
+    }
+    auto* const curve = out->equity_curve;
+    const auto count = out->equity_curve_len;
+    pf_equity_point_t presented = curve[count - 1];
+    out->equity_curve = &presented;
+    out->equity_curve_len = 1;
+    try {
+        present_report(out);
+    } catch (...) {
+        out->equity_curve = curve;
+        out->equity_curve_len = count;
+        throw;
+    }
+    // Only the report's owned copy receives presentation edits. The engine
+    // point, its prefix and its four extrema retain their execution values.
+    curve[count - 1] = presented;
+    out->equity_curve = curve;
+    out->equity_curve_len = count;
+}
+
+// CR-150 L17A: L6b-1 still owns the full recorded curve. Walk its FINAL values
+// at capture through the same O(1) latch/writer boundary that the hold-back
+// release will feed when L6b-2 and L17B are integrated. Nothing below records
+// provisional values or mutates the engine's point through a presentation.
+
+bool NativeExecutionConsumer::selected_sink_equity_written(
+        const BacktestEngine& engine) const noexcept {
+    return presentation_sink_equity_written_ && engine.report_sink_state_.enabled
+        && engine.report_sink_state_.writer != nullptr;
+}
+
+bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
+    auto& sink = engine.report_sink_state_;
+    if (!selected_epoch_.admitted_selected || !sink.enabled) return false;
+    if (!sink.writer || sink.receipt.complete)
+        refuse_selected_capture("native selected report: no active report sink at capture");
+    try {
+        // Preserve the existing pre-hook refusal order, the single virtual
+        // presentation, and its independent array ownership. These are the
+        // L6b-1 metrics inputs; L17B replaces them with the scratch point source.
+        capture_presentation(engine);
+        const auto& window = selected_epoch_.admitted_window;
+        report::SelectedReportStream stream(window.start_ms, window.end_ms,
+                                            engine.initial_capital_);
+        for (int i = 0; i < presentation_.trades_len; ++i)
+            stream.note_trade(presentation_.trades[i].entry_time);
+        for (const auto& lot : engine.pyramid_entries_)
+            stream.note_open_lot(lot.time);
+
+        std::int64_t selected_index = 1; // the synthetic anchor is not an observation
+        for (const auto& recorded : engine.equity_curve_) {
+            pf_equity_point_t final_point = recorded;
+            bool publish = false;
+            if (recorded.time_ms >= window.start_ms && recorded.time_ms < window.end_ms) {
+                // The pre-hook count check proved this storage exists, even
+                // when a custom hook leaves its presented length behind.
+                if (selected_index >= presentation_metric_equity_len_)
+                    refuse_selected_capture("native selected report: missing captured observation");
+                final_point = presentation_.equity_curve[selected_index];
+                publish = selected_index < presentation_.equity_curve_len;
+                ++selected_index;
+            }
+            // Every value supplied here is final: range-end edits already ran
+            // on recorded, and present_report edited only the captured copy.
+            stream.write_point(*sink.writer, final_point, publish);
+            sink.receipt.count_e = stream.equity_count();
+        }
+        stream.finish(*sink.writer, selected_epoch_.counts.window_script_bars,
+                      presentation_.equity_curve_len > 0);
+        sink.receipt.count_e = stream.equity_count();
+        presentation_sink_equity_written_ = true;
+        // L6b-1 finishes T and the trailer at the successful report fill. An
+        // observer fault after this capture therefore cannot publish a trailer.
+    } catch (const report_sink::WriterError& error) {
+        sink.writer.reset();
+        const auto code = error.reason() == report_sink::WriterFailure::io
+            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
+        throw coded<std::runtime_error>(code, {}, error.what());
+    } catch (...) {
+        sink.writer.reset();
+        throw;
+    }
+    return true;
+}
+
+namespace {
+// The existing report/wire projection, shared by seal-time and final-tail
+// publication. Identity strings stay on Trade and are consumed by write_t.
+template<class Result, class Row>
+Result closed_trade_record(const Row& row) {
+    Result result{};
+    result.entry_time = row.entry_time;
+    result.exit_time = row.exit_time;
+    result.entry_price = row.entry_price;
+    result.exit_price = row.exit_price;
+    result.pnl = row.pnl;
+    result.pnl_pct = row.pnl_pct;
+    result.is_long = row.is_long ? 1 : 0;
+    result.max_runup = row.max_runup;
+    result.max_drawdown = row.max_drawdown;
+    result.qty = row.qty;
+    result.commission = row.commission;
+    result.entry_bar_index = row.entry_bar_index;
+    result.exit_bar_index = row.exit_bar_index;
+    result.open_at_end = row.open_at_end ? 1 : 0;
+    return result;
+}
+} // namespace
+
+bool NativeExecutionConsumer::streams_closed_rows(const BacktestEngine& engine) const noexcept {
+    return engine.report_sink_state_.enabled
+        && engine.report_sink_state_.trade_history_streamable;
+}
+
+std::size_t NativeExecutionConsumer::closed_rows_sealable(
+        const TradeLedger& rows, std::size_t phase_final, std::uint64_t money_folded,
+        std::int64_t script_bar_open, std::optional<std::uint64_t> mutable_entry) const {
+    const std::size_t base = rows.base();
+    if (closed_rows_final_ < base || phase_final < base || money_folded < base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade seal fold mark precedes the resident base");
+    std::size_t tail = rows.size();
+    if (tail > base) {
+        --tail;
+        while (tail > base && rows[tail - 1].exit_time == rows.back().exit_time) --tail;
+    }
+    const std::size_t keep_from = tail > base ? tail - 1 : base;
+    const auto limit = std::min<std::uint64_t>(
+        std::min({keep_from, closed_rows_final_, phase_final}), money_folded);
+    std::size_t next = base;
+    for (; next < limit; ++next) {
+        const Trade& row = rows[next];
+        if (row.exit_time >= script_bar_open
+            || (mutable_entry && row.entry_incarnation == *mutable_entry)) break;
+    }
+    return next;
+}
+
+void NativeExecutionConsumer::fold_sealed_exit_phase(std::uint8_t phase) {
+    if (phase > static_cast<std::uint8_t>(NativePathPhase::Close))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "sealed exit phase is outside NativePathPhase");
+    for (auto& seed : sealed_exit_phase_basis_) {
+        BrokerStateHashSink f;
+        f.h = seed;
+        f.u(phase);
+        seed = f.h;
+    }
+}
+
+std::uint64_t NativeExecutionConsumer::replay_sealed_exit_phases(
+        std::uint64_t seed) const noexcept {
+    const auto residue = static_cast<std::size_t>(seed % 8);
+    // For F = the prefix's exact byte fold, F(r + 8*q) = F(r) +
+    // q*(F(8)-F(0)) modulo 2^64. Every XOR operand is <8; multiplying
+    // and XORing therefore preserve this relation, on either byte order.
+    return sealed_exit_phase_basis_[residue]
+        + (seed / 8) * (sealed_exit_phase_basis_[8] - sealed_exit_phase_basis_[0]);
+}
+
+void NativeExecutionConsumer::write_streamed_trade(
+        const BacktestEngine& engine, std::size_t global, const TradeC& row) const {
+    auto& sink = engine.report_sink_state_;
+    if (!sink.writer || sink.receipt.complete
+        || global > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        || sink.receipt.count_t != static_cast<std::int64_t>(global))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade sink cursor does not match the global row");
+    const auto wire = closed_trade_record<pf_trade_t>(row);
+    const Trade& identity = engine.get_report_trade(static_cast<int>(global));
+    try {
+        sink.writer->write_t(static_cast<std::int64_t>(global) + 1, wire,
+            identity.entry_incarnation, engine.closed_trade_close_cause(static_cast<int>(global)),
+            identity.entry_id, identity.exit_id, identity.exit_comment);
+        ++sink.receipt.count_t;
+    } catch (const report_sink::WriterError& error) {
+        sink.writer.reset();
+        const auto code = error.reason() == report_sink::WriterFailure::io
+            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
+        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        auto& mutable_engine = const_cast<BacktestEngine&>(engine);
+        mutable_engine.last_run_status_ = 1;
+        note_run_failure(mutable_engine, failure.what(), classify_run_failure(failure));
+        throw failure;
+    }
+}
+
+void NativeExecutionConsumer::seal_closed_rows(
+        BacktestEngine& engine, std::size_t global_end, std::uint64_t exit_phase_digest,
+        double source_gains, double source_losses) {
+    const std::size_t base = closed_trade_prefix_.base;
+    if (!streams_closed_rows(engine) || !closed_trade_report_
+        || engine.trades_.base() != base || global_end < base
+        || global_end > engine.trades_.size() || global_end > closed_rows_final_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade seal is outside the final resident prefix");
+    if (global_end == base) return;
+    // Materialize the digest before any row disappears, including in Release.
+    // Debug's notification folds and final re-walk use this same prefix seed.
+    (void)closed_rows_digest(engine.trades_);
+    const std::uint64_t rows_digest = closed_row_prefix_.at(global_end - base - 1);
+    // A failed write leaves every row resident and all report folds at the
+    // old base. The poisoned sink cannot acquire a successful trailer.
+    for (std::size_t index = base; index < global_end; ++index)
+        write_streamed_trade(engine, index, closed_trade_record<TradeC>(engine.trades_[index]));
+    for (std::size_t index = base; index < global_end; ++index) {
+        const Trade& row = engine.trades_[index];
+        const auto record = closed_trade_record<TradeC>(row);
+        closed_trade_report_->all.fold(record);
+        closed_trade_report_->longs.fold(record);
+        closed_trade_report_->shorts.fold(record);
+        closed_trade_report_->first_entry_time =
+            std::min(closed_trade_report_->first_entry_time, row.entry_time);
+        closed_trade_prefix_.pnl += row.pnl;
+        engine.fold_trade_percent_prefix(row);
+    }
+    engine.trades_.seal(global_end);
+    closed_row_prefix_.erase(closed_row_prefix_.begin(),
+                              closed_row_prefix_.begin() + (global_end - base));
+    closed_trade_prefix_.base = global_end;
+    closed_trade_prefix_.rows_digest = rows_digest;
+    closed_trade_prefix_.exit_phase_digest = exit_phase_digest;
+    closed_trade_prefix_.source_gains = source_gains;
+    closed_trade_prefix_.source_losses = source_losses;
+}
+
+void NativeExecutionConsumer::fill_streamed_trades(
+        const BacktestEngine& engine, ReportC* out) const {
+    const std::size_t base = engine.trades_.base();
+    const std::size_t closed = engine.trades_.size();
+    const std::size_t total = closed + engine.range_end_trades_.size();
+    if (base != closed_trade_prefix_.base
+        || total > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "streamed trade report has an invalid row window");
+    out->total_trades = static_cast<int>(total);
+    out->trades_len = static_cast<int>(total - base);
+    out->trades = out->trades_len > 0 ? new TradeC[out->trades_len] : nullptr;
+    out->net_profit = closed_trade_prefix_.pnl;
+    for (std::size_t global = base; global < total; ++global) {
+        const Trade& row = global < closed ? engine.trades_[global]
+                                          : engine.range_end_trades_[global - closed];
+        out->trades[global - base] = closed_trade_record<TradeC>(row);
+        out->net_profit += row.pnl;
+    }
+}
+
+void NativeExecutionConsumer::finish_streamed_trade_metrics(ReportC* out) const {
+    if (!closed_trade_report_) return; // a refused begin never sealed a row
+    // Finish copies after present_report has re-marked the range-end rows.
+    // The prefix and every suffix addition retain the original fold order.
+    auto all = closed_trade_report_->all;
+    auto longs = closed_trade_report_->longs;
+    auto shorts = closed_trade_report_->shorts;
+    for (int index = 0; index < out->trades_len; ++index) {
+        all.fold(out->trades[index]);
+        longs.fold(out->trades[index]);
+        shorts.fold(out->trades[index]);
+    }
+    out->metrics.all = all.finish();
+    out->metrics.longs = longs.finish();
+    out->metrics.shorts = shorts.finish();
+}
+
+void NativeExecutionConsumer::finish_streamed_trades(
+        const BacktestEngine& engine, ReportC* out) const {
+    const auto& sink = engine.report_sink_state_;
+    if (sink.writer && !sink.receipt.complete && engine.last_run_status_ == 0
+        && engine.last_error_.empty() && state_kind() == NativeLifecycleKind::Completed) {
+        for (int index = 0; index < out->trades_len; ++index)
+            write_streamed_trade(engine, closed_trade_prefix_.base
+                + static_cast<std::size_t>(index), out->trades[index]);
+    }
+    // The existing sink finalizer now owns E/output/hash/trailer only. T has
+    // already consumed the sealed prefix followed by this presented tail.
+    delete[] out->trades;
+    out->trades = nullptr;
+    out->trades_len = 0;
+}
+
+void NativeExecutionConsumer::fill_streamed_report(
+        const BacktestEngine& engine, ReportC* out) const {
+    ReportC local{};
+    try {
+        fill_streamed_trades(engine, &local);
+        local.input_bars_processed = engine.diag_input_bars_processed_;
+        local.script_bars_processed = engine.diag_script_bars_processed_;
+        local.magnifier_sub_bars_total = engine.diag_magnifier_sub_bars_processed_;
+        local.magnifier_sample_ticks_total = engine.diag_magnifier_sample_ticks_processed_;
+        local.input_tf_seconds = tf_to_seconds(engine.input_tf_);
+        local.script_tf_seconds = engine.script_tf_seconds_;
+        local.script_tf_ratio = engine.diag_script_tf_ratio_;
+        local.needs_aggregation = engine.diag_needs_aggregation_ ? 1 : 0;
+        local.bar_magnifier_enabled = engine.bar_magnifier_enabled_ ? 1 : 0;
+        engine.fill_metrics_section(&local);
+        finish_streamed_trade_metrics(&local);
+        engine.fill_security_diag_section(&local);
+        engine.fill_trace_section(&local);
+        // Hashes already use L6b-3's sink cursor. Their final resident suffix
+        // is written by finish_report_sink and need not be copied here.
+        finish_streamed_trades(engine, &local);
+    } catch (...) {
+        BacktestEngine::free_report(&local);
+        throw;
+    }
+    *out = local;
+}
+
+ScriptBucketCursor::ScriptBucketCursor(const NativeRunSpec& spec)
+    : script_tf_(spec.script_tf), input_tf_(spec.input_tf), timezone_(spec.timezone),
+      session_(spec.session), aggregator_(script_tf_, input_tf_, timezone_, session_) {}
+
+ScriptBucketCursor::Flags ScriptBucketCursor::next(const Bar& bar) {
+    const AggregatedBar aggregate = aggregator_.feed(bar);
+    last_.complete = aggregate.is_complete ? 1U : 0U;
+    last_.boundary = aggregate.is_complete
+        && tf_change(aggregate.bar.timestamp, bar.timestamp, script_tf_, timezone_, session_)
+            ? 1U : 0U;
+    ++position_;
+    return last_;
+}
+
+void ScriptBucketCursor::reset() {
+    aggregator_ = TimeframeAggregator(script_tf_, input_tf_, timezone_, session_);
+    position_ = 0;
+    last_ = Flags{};
+}
+
+std::int64_t NativeExecutionConsumer::subscription_next_input_ms(int index) const noexcept {
+    return subscription_input_bars_ && index >= 0 && index < subscription_input_n_ - 1
+        ? subscription_input_bars_[index + 1].timestamp : 0;
+}
+
 }  // inline namespace engine_script_run_v19
 
 // The portable run-spec digest lives here, in the one translation unit that
@@ -12735,4 +13334,23 @@ uint64_t native_run_spec_digest(const NativeRunSpec& spec) noexcept {
 }
 
 }  // inline namespace native_run_spec_v3
+
+inline namespace native_bar_views_v1 {
+
+std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarViews& views) {
+    NativeExecutionConsumer::SpecBarDigests digests;
+    digests.intrabar = native_bar_views_v1::native_intrabar_path_digest(spec.intrabar, views.lower_path);
+    if (!spec.subscriptions.empty())
+        digests.subscriptions = native_timeframe_subscriptions_digest(spec.subscriptions);
+    if (spec.auxiliary_feed)
+        digests.auxiliary = native_auxiliary_feed_digest(*spec.auxiliary_feed);
+    if (!spec.instrument_feeds.empty())
+        digests.instruments = native_bar_views_v1::native_instrument_feeds_digest(spec.instrument_feeds, views);
+    Fnv f;
+    f.run_base = spec.identity.run_number;
+    hash_spec(f, spec, &digests);
+    return f.h;
+}
+
+} // inline namespace native_bar_views_v1
 }  // namespace pineforge

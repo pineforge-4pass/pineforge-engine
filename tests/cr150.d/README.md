@@ -1,0 +1,6 @@
+Each CR-150 lane has one file named `<lane>.cmake` holding that lane's `list(APPEND TEST_SOURCES ...)` and `pineforge_add_unit_test(...)` lines in the same one-line-per-item form; files are included in sorted name order by the shared include loop at the end of the plain registrations in `tests/CMakeLists.txt`, and a lane must never edit another lane's file.
+For `set_tests_properties(...)`, only the property keys `LABELS`, `SKIP_RETURN_CODE`, `TIMEOUT`, `RUN_SERIAL`, and `DEPENDS` are allowed; `set_target_properties(...)` is forbidden.
+
+After the include loop, only zero or more `# --- CR-150 <lane> begin ---` / `# --- CR-150 <lane> end ---` blocks may appear before end of file; each block must be matched, nonnested, unique, and named with the exact stem of an existing `tests/cr150.d/<lane>.cmake` file.
+A fence may register and modify only targets or tests created by that same lane's file or fence, with balanced `if()` / `elseif()` / `else()` / `endif()` blocks; directory or global commands, unknown commands, and writes to other lanes' targets or tests are forbidden.
+The only reads of other lanes' targets permitted in a fence are literal `$<TARGET_FILE:x>` expressions and `if(TARGET x)` conditions; plain registrations need no fence, while even a single extra target-definition line such as L19b's must be fenced.

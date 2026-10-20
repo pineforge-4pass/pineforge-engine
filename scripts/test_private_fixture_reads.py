@@ -242,6 +242,8 @@ class TamperTree:
         (self.root / 'scripts').mkdir(parents=True)
         shutil.copy(REPO / 'tests' / 'CMakeLists.txt', self.root / 'tests')
         shutil.copy(REPO / 'runner' / 'CMakeLists.txt', self.root / 'runner')
+        shutil.copytree(REPO / 'tests' / 'cr150.d',
+                        self.root / 'tests' / 'cr150.d')
         # the sweep resolves a row's Python driver against the tree root, so
         # the tamper tree carries the scripts a real row names (the sweep
         # fails when a named driver is absent -- that is what it now checks)
@@ -479,6 +481,128 @@ add_test(NAME e2e_fb2c_pop_front_flow
         self.assertIn('list(LENGTH e2e_fb2c_never_set e2e_fb2c_len) -- '
                       'e2e_fb2c_len left unknown', result.stdout)
         self.assertIn('list() inputs not tracked: 1', result.stdout)
+
+    # A lane registration is swept at its own file:line, with the including
+    # tests/ source directory. The same registration with public data is clean.
+    def test_cr150_lane_private_path_is_red_and_public_is_green(self):
+        lane = self.tree.root / 'tests' / 'cr150.d' / 'e2e-path.cmake'
+        private_path = f'{REMOVED_EXAMPLE}/bars.csv'
+        relative_path = private_path[len('tests/'):]
+        lane.write_text(f'''add_test(
+    NAME test_e2e_cr150_lane_path
+    COMMAND ${{CMAKE_COMMAND}} -E echo ${{CMAKE_CURRENT_SOURCE_DIR}}/{relative_path}
+)
+''')
+        red = run_sweep(self.tree.root)
+        self.assertEqual(1, red.returncode, red.stdout + red.stderr)
+        self.assertIn('tests/cr150.d/e2e-path.cmake:1:', red.stdout)
+        self.assertIn(f'test_e2e_cr150_lane_path names the removed path {private_path} '
+                      'without being a pinned private-fixture row', red.stdout)
+
+        lane.write_text(lane.read_text().replace(relative_path, 'cr150_public/bars.csv'))
+        green = run_sweep(self.tree.root)
+        self.assertEqual(0, green.returncode, green.stdout + green.stderr)
+        self.assertIn('unpinned rows naming removed data: 0', green.stdout)
+
+    def test_unreadable_cr150_lane_exits_2(self):
+        lane = self.tree.root / 'tests' / 'cr150.d' / 'e2e-unreadable.cmake'
+        # A dangling symlink is unreadable even when the lab runs as root.
+        lane.symlink_to('missing-lane')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('tests/cr150.d/e2e-unreadable.cmake', result.stdout)
+        self.assertIn('cannot read', result.stdout)
+
+    def test_cr150_lane_order_and_including_scope_at_include_site(self):
+        glob = 'file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")'
+        private_path = f'{REMOVED_EXAMPLE}/bars.csv'
+        self.tree.edit('tests/CMakeLists.txt', glob,
+                       f'list(APPEND e2e_cr150_path {private_path})\n' + glob)
+        self.tree.append('tests/CMakeLists.txt', f'''
+list(REMOVE_ITEM e2e_cr150_path {private_path})
+list(APPEND e2e_cr150_path tests/cr150_public/bars.csv)
+''')
+        # Create in reverse order; the walk and its file inventory must sort.
+        for suffix in ('z-last', 'a-first'):
+            lane = self.tree.root / 'tests' / 'cr150.d' / f'e2e-{suffix}.cmake'
+            lane.write_text(f'''add_test(NAME test_e2e_cr150_{suffix.replace('-', '_')}
+    COMMAND ${{CMAKE_COMMAND}} -E echo ${{e2e_cr150_path}})
+''')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        for suffix in ('a_first', 'z_last'):
+            self.assertIn(f'test_e2e_cr150_{suffix} names the removed path {private_path}',
+                          result.stdout)
+        inventory = next(line for line in result.stdout.splitlines()
+                         if line.startswith('CMake files read: '))
+        self.assertLess(inventory.index('e2e-a-first.cmake'),
+                        inventory.index('e2e-z-last.cmake'))
+
+    def test_cr150_sort_requires_the_exact_configure_depends_lane_glob(self):
+        cmake = self.tree.root / 'tests' / 'CMakeLists.txt'
+        original = cmake.read_text()
+        glob = 'file(GLOB CR150_LANE_CMAKE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/*.cmake")'
+        self.assertIn(glob, original)
+        for replacement in ('# deliberately absent lane glob',
+                            glob.replace(' CONFIGURE_DEPENDS', ''),
+                            glob.replace('cr150.d/*.cmake', 'other.d/*.cmake')):
+            with self.subTest(glob=replacement):
+                cmake.write_text(original.replace(glob, replacement, 1))
+                result = run_sweep(self.tree.root)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn('list(SORT) is not a subcommand this sweep models',
+                              result.stdout)
+
+    # GET makes the sort order observable: dropping SORT makes ascending
+    # miss the private path, and makes descending report that path instead.
+    def test_seen_sort_order_reaches_the_registered_row(self):
+        cmake = self.tree.root / 'tests' / 'CMakeLists.txt'
+        original = cmake.read_text()
+        private_path = f'{REMOVED_EXAMPLE}/bars.csv'
+        public_path = 'tests/zz_cr150_public/bars.csv'
+        for option, first, second, expected in (
+                ('', public_path, private_path, 1),
+                (' ORDER DESCENDING', private_path, public_path, 0)):
+            with self.subTest(order=option or 'default ascending'):
+                cmake.write_text(original + f'''
+list(APPEND e2e_cr150_sort {first})
+list(APPEND e2e_cr150_sort {second})
+list(SORT e2e_cr150_sort{option})
+list(GET e2e_cr150_sort 0 e2e_cr150_first)
+add_test(NAME test_e2e_cr150_sorted
+    COMMAND ${{CMAKE_COMMAND}} -E echo ${{e2e_cr150_first}})
+''')
+                result = run_sweep(self.tree.root)
+                self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+                diagnostic = f'test_e2e_cr150_sorted names the removed path {private_path}'
+                if expected == 1:
+                    self.assertIn(diagnostic, result.stdout)
+                else:
+                    self.assertNotIn(diagnostic, result.stdout)
+                    self.assertIn('unpinned rows naming removed data: 0', result.stdout)
+
+    def test_seen_sort_rejects_options_outside_the_model(self):
+        cmake = self.tree.root / 'tests' / 'CMakeLists.txt'
+        original = cmake.read_text()
+        for option in ('ORDER ASCENDING', 'ORDER SIDEWAYS', 'COMPARE NATURAL'):
+            with self.subTest(option=option):
+                cmake.write_text(original + f'''
+list(APPEND e2e_cr150_sort tests/cr150_public/bars.csv)
+list(SORT e2e_cr150_sort {option})
+''')
+                result = run_sweep(self.tree.root)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn('list(SORT)', result.stdout)
+
+    def test_untracked_sort_in_a_function_template_exits_2(self):
+        self.tree.append('tests/CMakeLists.txt', '''
+function(e2e_cr150_template)
+    list(SORT e2e_cr150_never_seen)
+endfunction()
+''')
+        result = run_sweep(self.tree.root)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('list(SORT) is not a subcommand this sweep models', result.stdout)
 
 
 class KernelPythonSweepControls(unittest.TestCase):

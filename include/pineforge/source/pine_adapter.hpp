@@ -11,6 +11,9 @@
 #include <pineforge/compat/pine/order_priority.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
 #include <pineforge/source/market_admission.hpp>
+#include <pineforge/detail/disk_resident_id_table.hpp>
+#include <pineforge/detail/id_pair_store.hpp>
+#include <pineforge/detail/adapter_exposure_storage.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -637,6 +640,9 @@ public:
     PlacementTable(PlacementTable&&) noexcept = default;
     PlacementTable& operator=(PlacementTable&&) noexcept = default;
 
+    void set_auxiliary_tables_directory(const std::string& directory);
+    void fixture_use_memory_auxiliary_tables();
+    std::uint64_t auxiliary_disk_bytes() const noexcept;
     std::size_t size() const noexcept { return size_; }
     std::size_t max_size() const noexcept { return window_.max_size(); }
     // Largest incarnation ever inserted, erased rows included. Incarnations
@@ -661,7 +667,7 @@ public:
         erased_rows_ = 0;
         erased_digest_ = kFoldBasis;
         sequence_index_.clear();
-        unfolded_.clear();
+        std::vector<std::uint64_t>().swap(unfolded_);
         erased_minima_.clear();
         erased_foreign_ids_.clear();
 #if PINEFORGE_PLACEMENT_AUDIT
@@ -774,6 +780,7 @@ public:
             place(incarnation, std::move(node));
         } catch (...) {
             unfolded_.pop_back();
+            if (unfolded_.empty()) std::vector<std::uint64_t>().swap(unfolded_);
             throw;
         }
         ++size_;
@@ -786,7 +793,7 @@ public:
     void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
         at(incarnation) = std::move(snapshot);
         sequence_index_.clear();
-        unfolded_.clear();
+        std::vector<std::uint64_t>().swap(unfolded_);
         for (const auto& row : *this) unfolded_.push_back(row.first);
     }
 
@@ -796,6 +803,14 @@ public:
     bool erase(std::uint64_t incarnation) {
         std::unique_ptr<PlacementSnapshot> node = take(incarnation);
         if (!node) return false;
+        // A row that leaves before the next command-sequence lookup no longer
+        // belongs in the pending index fold. Release the allocation when the
+        // pending set becomes empty; retained rows stay the only live ids.
+        const auto pending_end = std::remove(unfolded_.begin(), unfolded_.end(), incarnation);
+        if (pending_end != unfolded_.end()) {
+            unfolded_.erase(pending_end, unfolded_.end());
+            if (unfolded_.empty()) std::vector<std::uint64_t>().swap(unfolded_);
+        }
         remember_erased(*node);
         --size_;
         ++erased_rows_;
@@ -843,11 +858,11 @@ private:
     static constexpr std::size_t kSpareNodes = 64;
     static constexpr std::uint64_t kFoldBasis = 1469598103934665603ULL;
 
-    struct SequenceMinima {
-        std::uint64_t any = std::numeric_limits<std::uint64_t>::max();
-        std::unordered_map<std::string, std::uint64_t> by_from_entry;
-    };
-    using Minima = std::unordered_map<std::string, SequenceMinima>;
+    // Single keys hold the minimum over any from_entry; pair keys hold the
+    // exact (source_id, from_entry) minimum. Their separate key domains keep
+    // an empty from_entry distinct from the any-entry summary. Neither the
+    // directory nor old keys consume per-id RAM.
+    using Minima = pineforge::detail::IdPairStore<std::uint64_t>;
 
     // A reused node takes its new row in one assignment.
     static void overwrite(PlacementSnapshot& node, PlacementSnapshot&& row) {
@@ -861,11 +876,11 @@ private:
     }
 
     static void fold_sequence(Minima& index, const PlacementSnapshot& row) {
-        auto& minima = index[row.source_id];
-        minima.any = std::min(minima.any, row.command_sequence);
-        const auto inserted = minima.by_from_entry.emplace(row.from_entry, row.command_sequence);
-        if (!inserted.second)
-            inserted.first->second = std::min(inserted.first->second, row.command_sequence);
+        // Keep both original minima, including an explicitly present
+        // UINT64_MAX: command_sequence_for uses the same fallback for it.
+        // Recurring pairs update their old disk records in place.
+        index.min_assign(row.source_id, row.command_sequence);
+        index.min_assign(row.source_id, row.from_entry, row.command_sequence);
     }
 
     PlacementSnapshot* locate(std::uint64_t incarnation) const noexcept {
@@ -927,11 +942,11 @@ private:
     std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
 };
 
-// Append-only roster of the opening requests a source id ever accepted, in
-// acceptance order. Over a long run it holds every historical entry, while
-// the pending-origin and live-exposure queries only concern the few handles
-// still live; the per-incarnation position index lets those queries visit
-// just their positions, in roster order, instead of the whole history.
+// Acceptance-ordered opening roster. size()/digest() describe all accepted
+// members; members()/iteration expose the retained window [base(), size()).
+// The adapter retires a released prefix once no live placement names it.
+// Global positions never change. Indexing outside the retained window is
+// an engine_invariant, including historical positions below base().
 class OriginRoster {
 public:
     using const_iterator = std::vector<native_order::RequestHandle>::const_iterator;
@@ -940,7 +955,7 @@ public:
 
     void push_back(const native_order::RequestHandle& handle) {
         auto& positions = positions_[handle.incarnation];
-        positions.push_back(items_.size());
+        positions.push_back(size());
         try {
             items_.push_back(handle);
         } catch (...) {
@@ -953,23 +968,24 @@ public:
     // R5 lane V19-E: a running digest of the members' incarnations, each
     // folded once, when it was appended (the v4 extension fold's view).
     std::uint64_t digest() const noexcept { return digest_; }
-    const native_order::RequestHandle& operator[](std::size_t index) const { return items_[index]; }
-    const native_order::RequestHandle& back() const { return items_.back(); }
-    bool empty() const noexcept { return items_.empty(); }
-    std::size_t size() const noexcept { return items_.size(); }
+    static OriginRoster from_retired(std::size_t count, std::uint64_t digest);
+    const native_order::RequestHandle& operator[](std::size_t global) const;
+    const native_order::RequestHandle& back() const { return (*this)[size() - 1]; }
+    bool empty() const noexcept { return size() == 0; }
+    std::size_t size() const noexcept { return base_ + items_.size(); }
     const_iterator begin() const noexcept { return items_.begin(); }
     const_iterator end() const noexcept { return items_.end(); }
     const_reverse_iterator rbegin() const noexcept { return items_.rbegin(); }
     const_reverse_iterator rend() const noexcept { return items_.rend(); }
-
-    // Ascending roster positions of the entries equal to `handle`.
+    std::size_t base() const noexcept { return base_; }
+    // Ascending global positions of retained entries equal to `handle`.
     void append_positions_of(const native_order::RequestHandle& handle,
-                             std::vector<std::size_t>& out) const {
-        const auto found = positions_.find(handle.incarnation);
-        if (found == positions_.end()) return;
-        for (const auto position : found->second)
-            if (items_[position] == handle) out.push_back(position);
-    }
+                             std::vector<std::size_t>& out) const;
+    // Retire [base(), global); the adapter proves release and reachability.
+    void retire_before(std::size_t global);
+    // size()/digest() survive retirement; references and iterators may move.
+    // empty() describes the logical history, members().empty() the window.
+
     // Ascending roster positions of the entries carrying `incarnation`, or
     // null when none does. Allocation-free.
     const std::vector<std::size_t>* positions_of(std::uint64_t incarnation) const noexcept {
@@ -979,7 +995,7 @@ public:
 
 private:
     std::vector<native_order::RequestHandle> items_;
-    // Derived lookup over items_ (never next-decision state).
+    std::size_t base_ = 0; // Storage offset; size() already hashes the total.
     std::unordered_map<std::uint64_t, std::vector<std::size_t>> positions_;
     std::uint64_t digest_ = 1469598103934665603ULL;
 };
@@ -1052,8 +1068,9 @@ class BracketRoster {
     };
 
 public:
-    // Every member in roster order: the settled prefix, then the working tail
-    // with each parked run in its place.
+    // Every materialized member in roster order after the settled prefix,
+    // with each parked run in its place. The settled prefix is represented by
+    // its count and digest rather than by historical handle bytes.
     class const_iterator {
     public:
         using iterator_category = std::forward_iterator_tag;
@@ -1075,8 +1092,7 @@ public:
             return before;
         }
         bool operator==(const const_iterator& other) const noexcept {
-            return owner_ == other.owner_ && settled_ == other.settled_
-                && offset_ == other.offset_ && hot_ == other.hot_ && run_ == other.run_
+            return owner_ == other.owner_ && hot_ == other.hot_ && run_ == other.run_
                 && in_run_ == other.in_run_ && run_offset_ == other.run_offset_;
         }
         bool operator!=(const const_iterator& other) const noexcept { return !(*this == other); }
@@ -1085,8 +1101,6 @@ public:
         friend class BracketRoster;
         const_iterator(const BracketRoster* owner, bool at_end) : owner_(owner) {
             if (at_end) {
-                settled_ = owner->settled_count_;
-                offset_ = owner->settled_.size();
                 hot_ = owner->hot_.size();
                 run_ = owner->parked_.size();
                 return;
@@ -1097,10 +1111,7 @@ public:
             return run_ < owner_->parked_.size() && owner_->parked_[run_].at == hot_;
         }
         void load() {
-            if (settled_ < owner_->settled_count_) {
-                previous_ = get(owner_->settled_, offset_, previous_);
-                current_ = native_order::RequestHandle{owner_->run_, previous_};
-            } else if (in_parked()) {
+            if (in_parked()) {
                 run_previous_ = get(owner_->parked_[run_].bytes, run_offset_, run_previous_);
                 current_ = native_order::RequestHandle{owner_->run_, run_previous_};
             } else if (hot_ < owner_->hot_.size()) {
@@ -1108,9 +1119,7 @@ public:
             }
         }
         void advance() {
-            if (settled_ < owner_->settled_count_) {
-                ++settled_;
-            } else if (in_parked()) {
+            if (in_parked()) {
                 if (++in_run_ == owner_->parked_[run_].count) {
                     ++run_;
                     in_run_ = 0;
@@ -1124,13 +1133,10 @@ public:
         }
 
         const BracketRoster* owner_ = nullptr;
-        std::size_t settled_ = 0;
-        std::size_t offset_ = 0;
         std::size_t hot_ = 0;
         std::size_t run_ = 0;
         std::size_t in_run_ = 0;
         std::size_t run_offset_ = 0;
-        std::uint64_t previous_ = 0;
         std::uint64_t run_previous_ = 0;
         native_order::RequestHandle current_{};
     };
@@ -1140,10 +1146,11 @@ public:
         hot_.push_back(handle);
         ++count;
     }
-    // Every member, materialized (the bracket cancel's roster).
+    // Every materialized member after the settled prefix (the bracket
+    // cancel's roster). `size()` still includes the settled prefix count.
     std::vector<native_order::RequestHandle> members() const {
         std::vector<native_order::RequestHandle> out;
-        out.reserve(size());
+        out.reserve(size() - settled_count_);
         for (const auto& handle : *this) out.push_back(handle);
         return out;
     }
@@ -1181,7 +1188,7 @@ public:
             if (moved == hot_.size()) break;
             const auto& handle = hot_[moved];
             if (!erased(handle.incarnation) || !claims(handle)) break;
-            put(settled_, settled_last_, handle.incarnation);
+            settled_last_ = handle.incarnation;
             ++settled_count_;
             settled_digest_ = fold(settled_digest_, handle.incarnation);
             uncount(handle.incarnation);
@@ -1255,6 +1262,9 @@ public:
     // its running digest -- with every parked run's place, count and digest
     // folded after it while any is parked (R5 lane V19-D).
     std::size_t settled_count() const noexcept { return settled_count_; }
+    // The run identity is enough to reproduce a settled member's non-working
+    // cancel outcome after its incarnation bytes have been dropped.
+    native_order::RunIdentity run_identity() const noexcept { return run_; }
     std::uint64_t settled_digest() const noexcept {
         std::uint64_t digest = settled_digest_;
         for (const auto& run : parked_) {
@@ -1351,16 +1361,17 @@ private:
         std::uint64_t previous = 0;
         for (std::size_t index = 0; index < run.count; ++index) {
             previous = get(run.bytes, offset, previous);
-            put(settled_, settled_last_, previous);
+            settled_last_ = previous;
             settled_digest_ = fold(settled_digest_, previous);
         }
         settled_count_ += run.count;
         parked_count_ -= run.count;
     }
 
-    // The settled prefix: incarnations of run_, as zigzag varint deltas.
+    // The settled prefix is represented by its last incarnation, count and
+    // running digest. Its historical varint bytes are intentionally dropped;
+    // walks begin at the parked runs and working tail below it.
     native_order::RunIdentity run_{};
-    std::vector<std::uint8_t> settled_;
     std::uint64_t settled_last_ = 0;
     std::size_t settled_count_ = 0;
     std::uint64_t settled_digest_ = kDigestBasis;
@@ -1527,6 +1538,10 @@ public:
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
+    void set_id_tables_directory(const std::string& directory); // All L19l tables, after reset.
+    void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
+    void fixture_use_memory_auxiliary_tables();
+    std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
 
     // `instrument_feeds`, when given, is moved into the spec's instrument
     // feeds (and back into it if the projection throws).
@@ -1774,7 +1789,7 @@ public:
         const NativeDecisionContext&) const noexcept;
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
-                                            const SourceId& from_entry = {}) const noexcept;
+                                            const SourceId& from_entry = {}) const;
     bool is_open_phase_exit(std::size_t trade_index) const noexcept;
     // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
     // slot start + i takes the phase of the trade previously at indices[i].
@@ -1811,6 +1826,10 @@ private:
         native_order::CohortHandle handle{};
         OriginRoster origins;
         std::vector<native_order::RequestHandle> opened;
+        struct Record {
+            std::uint64_t handle; std::int64_t cycle;
+            std::uint64_t origin_count, origin_digest, erased_sides;
+        };
         // Live source exposure by opening provenance.  This is source-layer
         // bookkeeping only: the generic core still resolves cohort authority
         // at every candidate.  It lets a command snapshot an existing id's
@@ -1818,12 +1837,15 @@ private:
         // reduce that cohort.
         std::unordered_map<std::uint64_t, double> live_units_by_origin;
         std::int64_t cycle = 0;
+        Record retired_record() const noexcept;
+        static CohortFacts restore_record(const Record&);
+        bool spillable() const noexcept;
         // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
         // in `origins` whose placement rows were erased, so a question about
         // every origin the cohort ever accepted still covers them.
         std::uint8_t erased_opening_sides = 0;
     };
-
+    using CohortTable = ::pineforge::detail::DiskResidentIdTable<CohortFacts>;
     struct PendingBracketLeg {
         native_order::Request request;
         PlacementSnapshot snapshot;
@@ -2019,8 +2041,8 @@ private:
     // (pine_adapter.cpp explains the rule); run at every bar open.
     void erase_retired_rows(const NativeDecisionContext&);
     // R5 lane V19-FIX: takes out of the kernel's cohort rosters every origin
-    // that can no longer be bound (pine_adapter.cpp explains the rule); run
-    // at every bar open.
+    // that can no longer be bound, before retiring the adapter's prefix.
+    void retire_origin_prefixes();
     void release_closed_cohort_origins();
     bool lifecycle_readable(const PlacementSnapshot&) const noexcept;
     // Writes one trade's exit phase, refolding when the write lands below the
@@ -2030,7 +2052,7 @@ private:
     double cohort_exposure_for(const SourceId&) const noexcept;
     // The units an exit's from_entry holds; none when it names no entry.
     std::optional<double> from_entry_units(const SourceId&) const noexcept;
-    bool from_entry_filled_this_cycle(const SourceId&) const noexcept;
+    bool from_entry_filled_this_cycle(const SourceId&) const;
     double percent_commission_live_equity(double) const noexcept;
     // The same equity at an explicit account-currency rate: the rate an
     // execution converts at, which its terms facts carry
@@ -2392,7 +2414,7 @@ private:
     bool follows_same_bar_declined_reversal(
         const PlacementSnapshot&, const NativePrecommitView&) const;
     bool bracket_belongs_to_reversal(
-        const PlacementSnapshot&, const PlacementSnapshot&) const noexcept;
+        const PlacementSnapshot&, const PlacementSnapshot&) const;
     void suspend_brackets_for_reversal(
         const PlacementSnapshot&, const exit_legs::Frame&, double open_price);
     void suspend_declined_reversal_brackets(
@@ -2515,8 +2537,8 @@ private:
     std::uint64_t source_command_sequence_ = 0;
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
-    std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
-    std::vector<SourceId> cohort_order_;
+    CohortTable cohorts_by_id_;
+    CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
@@ -2555,7 +2577,7 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
-    std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
+    pineforge::detail::IdPairStore<std::int64_t> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
@@ -2737,7 +2759,7 @@ private:
     // and the most keys it ever held counting one transient key per live
     // strategy.close / close_all order -- and, for the alternative the tapes
     // leave open, per live strategy.order market order too.
-    std::vector<SourceId> exit_rank_keys_;
+    ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_;
     std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
     std::uint32_t exit_rank_peak_ = 0;
     std::uint32_t exit_rank_alt_peak_ = 0;
@@ -2748,11 +2770,11 @@ private:
     // folded once into exit_phase_digest_; a write below the mark refolds.
     std::size_t exit_phase_final_ = 0;
     std::uint64_t exit_phase_digest_ = 1469598103934665603ULL;
-    // R5 lane V19-E: the admission journal's events as the v4 fold reads them:
-    // a running digest over its first admission_events_folded_ events (the
-    // last of them carrying sequence admission_events_last_), extended over
-    // the events appended since, refolded when one arrived before them or one
-    // was removed.
+    // The v4 admission fold uses global event counts. Its retired prefix is
+    // the restart point; the window may still change within a command/bar.
+    // Folding at each script-bar end keeps recording-off runs bounded too.
+    // admission_events_last_ validates the boundary without indexing a row
+    // below the journal's retired prefix.
     mutable std::size_t admission_events_folded_ = 0;
     mutable std::uint64_t admission_events_last_ = 0;
     mutable std::uint64_t admission_events_digest_ = 1469598103934665603ULL;
@@ -2814,10 +2836,10 @@ private:
         std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> candidates;
         std::vector<std::uint64_t> candidate_names;
         std::vector<std::uint64_t> first_reissues;
+        std::vector<const PlacementSnapshot*> origin_pins; // Rebuilt each sweep; not state.
         std::vector<std::uint64_t> doomed;
-        // R5 lane V19-D: the legs K1's cycle clause alone holds (incarnation,
-        // row, the high water the superseded test has read them through,
-        // whether it answers for them), and those it answers for (sorted).
+        // CR-150 L19G: K1 legs that supersession can release (incarnation,
+        // row, read-through high water, released flag); released incarnations sorted.
         struct HeldLeg {
             std::uint64_t incarnation = 0;
             const PlacementSnapshot* row = nullptr;
@@ -2853,6 +2875,7 @@ private:
             candidates.clear();
             candidate_names.clear();
             first_reissues.clear();
+            origin_pins.clear();
             doomed.clear();
             held.clear();
             released.clear();
@@ -2894,6 +2917,9 @@ private:
                                       double price) const;
     // Item 3: a flat market-and-priced pair at a process_orders_on_close close.
     bool fill_pooc_close_pair(double raw_close, const NativeDecisionContext& context);
+    void finish_admission_bar();
+    void on_bar_close_policy(const Bar&, const NativeDecisionContext&);
+    void fold_admission_events() const;
 };
 
 namespace detail {

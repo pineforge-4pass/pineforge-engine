@@ -3,7 +3,8 @@
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
-
+#include <pineforge/native_bar_views.hpp>
+#include <pineforge/metrics_stream.hpp>
 #include "native_calendar_memo.hpp"
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
@@ -362,11 +363,44 @@ public:
     // definition for the finality rule. closed_rows_digest_holds re-folds the
     // rows the digest has taken and answers whether they still match: the
     // Debug check a run's end makes, and a witness's probe.
-    uint64_t closed_rows_digest(const std::vector<Trade>& rows) const;
-    bool closed_rows_digest_holds(const std::vector<Trade>& rows) const noexcept;
+    uint64_t closed_rows_digest(const TradeLedger& rows) const;
+    bool closed_rows_digest_holds(const TradeLedger& rows) const noexcept;
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
-    void closed_rows_amended(std::size_t first) noexcept { rewind_closed_rows(first); }
+    void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }
+    // L8c: these are storage-boundary seeds of folds already represented by
+    // the logical closed-row sequence, not additional decision/hash inputs.
+    // The source host supplies the phase/money seeds because it owns those
+    // folds; the consumer owns the digest, report folds and sink writer.
+    struct ClosedTradePrefix {
+        std::size_t base = 0;
+        std::uint64_t rows_digest = 1469598103934665603ULL;
+        std::uint64_t exit_phase_digest = 1469598103934665603ULL;
+        double source_gains = 0.0;
+        double source_losses = 0.0;
+        double pnl = 0.0;
+    };
+    bool streams_closed_rows(const BacktestEngine& engine) const noexcept;
+    bool begin_closed_row_seal(std::int64_t script_bar_open) noexcept {
+        if (closed_trade_seal_bar_ && *closed_trade_seal_bar_ == script_bar_open) return false;
+        closed_trade_seal_bar_ = script_bar_open;
+        return true;
+    }
+    std::size_t closed_rows_final() const noexcept { return closed_rows_final_; }
+    const ClosedTradePrefix& closed_trade_prefix() const noexcept { return closed_trade_prefix_; }
+    std::size_t closed_rows_sealable(const TradeLedger& rows, std::size_t phase_final,
+        std::uint64_t money_folded, std::int64_t script_bar_open,
+        std::optional<std::uint64_t> mutable_entry) const;
+    // The caller has proved all five seal conditions and exit-phase finality.
+    // L18 spills every reachable row BEFORE this call retires its storage.
+    void seal_closed_rows(BacktestEngine& engine, std::size_t global_end,
+                          std::uint64_t exit_phase_digest,
+                          double source_gains, double source_losses);
+    void fold_sealed_exit_phase(std::uint8_t phase);
+    std::uint64_t replay_sealed_exit_phases(std::uint64_t seed) const noexcept;
+    void restart_exit_phases() noexcept { exit_phases_restarted_ = closed_trade_prefix_.base != 0; }
+    void finish_exit_phase_restart() noexcept { exit_phases_restarted_ = false; }
+    bool exit_phases_restarted() const noexcept { return exit_phases_restarted_; }
     uint64_t terminal_receipt_high_water() const noexcept {
         return terminal_receipt_high_water_;
     }
@@ -1647,7 +1681,13 @@ private:
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
     void verify_closed_rows(const BacktestEngine& engine) const noexcept;
-    void rewind_closed_rows(std::size_t first) const noexcept;
+    void rewind_closed_rows(std::size_t first) const;
+    void fill_streamed_trades(const BacktestEngine& engine, ReportC* out) const;
+    void finish_streamed_trade_metrics(ReportC* out) const;
+    void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
+                               const TradeC& row) const;
+    void finish_streamed_trades(const BacktestEngine& engine, ReportC* out) const;
+    void fill_streamed_report(const BacktestEngine& engine, ReportC* out) const;
     uint64_t spec_digest(const NativeRunSpec& spec, uint64_t run_base) const noexcept;
     void forget_spec_digests() const noexcept;
 
@@ -1694,6 +1734,29 @@ private:
     native_calendar::Timeframe script_tf_{};
     std::optional<native_calendar::Timeframe> intrabar_tf_;
     native_calendar::TimeframeCompatibility pairing_{};
+    // Representation-only bindings: continuation identity folds their logical
+    // content through bound_bar_components_, never pointer addresses or tags.
+    struct BarViewBinding {
+        std::vector<std::optional<NativeInstrumentFeedView>> descriptors;
+        std::vector<const NativeInstrumentFeedView*> slots;
+        std::unique_ptr<NativeLowerPathSource> lower_path;
+        NativeBarView lower_segment{nullptr, 0};
+        std::size_t lower_count = 0; // represented by the lower component digest
+        NativeBarViews context() const noexcept {
+            return {slots.empty() ? nullptr : slots.data(), slots.size(),
+                    lower_path.get(), lower_segment};
+        }
+        bool borrowed() const noexcept {
+            if (lower_path) return true;
+            for (const auto* slot : slots) if (slot != nullptr) return true;
+            return false;
+        }
+    };
+    BarViewBinding pending_bar_views_;
+    BarViewBinding active_bar_views_;
+    std::optional<SpecBarDigests> bound_bar_components_;
+    bool detached_bar_views_ = false;
+    void detach_bar_views() noexcept;
     std::optional<NativeFxCurve> staged_fx_curve_;
     bool staged_ingress_fx_ = false;
     bool in_callback_ = false;
@@ -1731,12 +1794,12 @@ private:
     // Declared higher-timeframe series: empty for every spec that declares
     // none, which is the whole source-projected population.
     std::vector<TimeframeSubscription> subscriptions_{};
-    // Owned copy of the historical input's forward look, input_next_ms_[i]
-    // being input bar i+1's timestamp (0 for the last, and for every live
-    // stream input, whose successor nobody has yet). The calendar aggregators
-    // need it to complete a D/W/M bucket on the period's actual last bar;
-    // allocated only for a run that declares a subscription.
-    std::vector<std::int64_t> input_next_ms_{};
+    // Borrowed during subscription setup and pumping; cleared at each exit.
+    // Transport, never continuation state. Live inputs have no successor.
+    const Bar* subscription_input_bars_ = nullptr;
+    int subscription_input_n_ = 0;
+    std::int64_t subscription_next_input_ms(int index) const noexcept;
+
     // How many of the inputs the declared series were resolved over at begin
     // are warmup, i.e. where a stream's historical phase ends and its live
     // phase starts. -1 for a batch run, whose every input is historical.
@@ -1768,7 +1831,7 @@ private:
     bool begin_is_stream_ = false;
     // The input array pump_batch is consuming, borrowed for that call alone:
     // the bars a script bar's session-day facts read before and after it
-    // (present_session_day). Input, not state -- like input_next_ms_ below.
+    // (present_session_day). Input, not state, like the subscription view.
     const Bar* pump_bars_ = nullptr;
     int pump_n_ = 0;
     // The last script bar present_session_day read off the pumped array: its
@@ -1910,8 +1973,28 @@ private:
     mutable std::size_t closed_rows_digested_ = 0;
     std::size_t closed_rows_final_ = 0;
     // The digest after each digested row, so an amendment (closed_rows_amended)
-    // rewinds to the row before it in O(1): one word per closed row.
+    // rewinds to the row before it in O(1): one word per resident final row.
+    // Index zero stores the digest after global row closed_trade_prefix_.base.
     mutable std::vector<std::uint64_t> closed_row_prefix_;
+    ClosedTradePrefix closed_trade_prefix_;
+    std::optional<std::int64_t> closed_trade_seal_bar_;
+    struct ClosedTradeReport {
+        explicit ClosedTradeReport(double capital)
+            : all(metrics::TradeFilter::ALL, capital),
+              longs(metrics::TradeFilter::LONG, capital),
+              shorts(metrics::TradeFilter::SHORT, capital) {}
+        metrics::TradeStatsAccumulator all, longs, shorts;
+        // Selected carry-in validation must still inspect sealed entry times.
+        std::int64_t first_entry_time = std::numeric_limits<std::int64_t>::max();
+    };
+    std::unique_ptr<ClosedTradeReport> closed_trade_report_;
+    // A phase is 0..4. Its u64 fold XORs only the low three bits; on each
+    // residue modulo 8 the whole prefix is affine in the remaining bits.
+    // Nine basis seeds replay that prefix for ANY incoming hash, preserving
+    // the pre-refold hash's historical (0, initial_digest, all phases) shape
+    // without keeping a phase per sealed row or changing a hash constant.
+    std::array<std::uint64_t, 9> sealed_exit_phase_basis_{{0, 1, 2, 3, 4, 5, 6, 7, 8}};
+    bool exit_phases_restarted_ = false;
     // A host-owned margin verdict is part of the continuation only when the
     // generic spec actually exposes an initial-margin gate.  Source specs do
     // not set that gate, preserving their established fingerprint while the
@@ -2070,11 +2153,11 @@ public:
     static bool refuse_report_in_dispatch(const BacktestEngine& engine,
                                           ReportC* out) noexcept;
 
-    // The selected-window report, asked by BacktestEngine::fill_report right
-    // after its rows_are_current gate. False when the caller must fill the report
-    // exactly as before: an OFF engine, a selected run still admitted-open, and a
-    // handle whose latest generation was admitted with neither a window nor an
-    // observer. True when the generation behind the engine is closed -- a
+    // The report router, asked by BacktestEngine::fill_report right after its
+    // rows_are_current gate. A streamable sink uses its prefix/resident-tail
+    // path even before a capture seals. Other reads return false for an OFF
+    // engine, an admitted-open selected run, or a generation without a window
+    // or observer. Remaining reads return true for a closed generation -- a
     // selected window that has sealed, or a generation admitted with an observer
     // (a window or not) that has sealed -- with `*out` written whole: the empty
     // report (every array NULL, every count zero, never freed) unless the
@@ -2262,13 +2345,14 @@ private:
     // it is destroyed after the AttemptScope and every pump and callback frame
     // have unwound. The constructor records, before the entry runs anything,
     // whether the handle is tracked, whether this call is nested under an
-    // attempt, a begin, a callback, an input or a dispatch (meaningful for a
-    // tracked handle only), and std::uncaught_exceptions(). `allow_live` lets a
+    // attempt, a begin, a callback, an input or a dispatch, and (for a tracked
+    // handle) std::uncaught_exceptions(). `allow_live` lets a
     // NORMAL return that leaves the run Running keep its generation open: true
     // for stream_begin and the pushes and the time advance, false for the batch
     // runs and stream_end. The destructor is noexcept and renders, dispatches,
-    // allocates and moves a NativeRunSpec never. It does nothing for an untracked
-    // handle or a nested call. Otherwise it closes an epoch that is STILL
+    // allocates and moves a NativeRunSpec never. Its selected-epoch half does
+    // nothing for an untracked handle or nested call; outer run exits always
+    // detach borrowed bar bindings. Otherwise it closes an epoch that is STILL
     // Executing or Capturing (close_open_epoch_at_exit) and leaves a Sealed or
     // Results one alone, so a refused attempt that merely latched NativeFailed
     // before admission never rewrites an earlier generation.
@@ -2286,13 +2370,19 @@ private:
                        bool allow_live) noexcept
             : c_(c), engine_(engine), tracked_(c.selected_epoch_tracked()),
               uncaught_(tracked_ ? std::uncaught_exceptions() : 0),
-              nested_(tracked_ && (c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
-                                   || c.processing_input_ || c.selected_epoch_.dispatching)),
+              nested_(c.in_attempt_call_ || c.preparing_begin_ || c.in_callback_
+                         || c.processing_input_ || c.selected_epoch_.dispatching),
               allow_live_(allow_live) {}
         ~EntryExitGuard() {
-            if (!tracked_ || nested_) return;
-            c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
-                                        allow_live_);
+            if (nested_) return;
+            if (tracked_)
+                c_.close_open_epoch_at_exit(engine_, std::uncaught_exceptions() > uncaught_,
+                                            allow_live_);
+            if (!allow_live_ || !c_.running()) {
+                if (c_.batch_input_release_)
+                    c_.batch_input_release_(c_.batch_input_owner_);
+                c_.detach_bar_views();
+            }
         }
         EntryExitGuard(const EntryExitGuard&) = delete;
         EntryExitGuard& operator=(const EntryExitGuard&) = delete;
@@ -2396,6 +2486,57 @@ private:
     };
     std::optional<CalcGroup> calc_group_;
     bool calc_slot_at(std::int64_t at_ms, native_calc::Slot& slot) const;
+
+    // Transport lifetime only, not broker state: the attached host releases
+    // its borrowed begin array at the outer public exit. Neither address nor
+    // callback identity affects matching or the consumed-prefix hash. They
+    // remain installed for the host lifetime; nested entries never call them.
+    void* batch_input_owner_ = nullptr;
+    void (*batch_input_release_)(void*) noexcept = nullptr;
+
+    // CR-150 L17A: selected E records have already been emitted at capture.
+    // Output bookkeeping, like presentation_ready_: not hashed and never read
+    // by a broker decision, a continuation fold or the source adapter. Reset
+    // with the presentation; appended so every pre-existing member keeps its
+    // offset. The L6b-1 array remains the metrics source until L17B supplies the
+    // scratch curve; no second per-read equity allocation is needed with a sink.
+    bool presentation_sink_equity_written_ = false;
+    bool capture_selected_sink(BacktestEngine& engine);
+    bool selected_sink_equity_written(const BacktestEngine& engine) const noexcept;
+public:
+    void set_batch_input_release(void* owner, void (*release)(void*) noexcept) noexcept {
+        batch_input_owner_ = owner;
+        batch_input_release_ = release;
+    }
+
+    // Projection judges the host's pending context without publishing it via
+    // bar_views(), which is active-only. No installed host surface changes.
+    NativeRunSpecValidation normalize_projected_spec(NativeRunSpec& spec) const noexcept {
+        return native_bar_views_v1::normalize_native_run_spec(spec, pending_bar_views_.context());
+    }
+
+    // CR-150 V1/V2, CORE-TOP rev 6 amendment (10-18 19:24), changes 1-2:
+    // staging only replaces pending descriptors/source. It never judges the
+    // lifecycle or changes active state; only an applied configure binds and
+    // judges pending data against candidate metadata. Refused configure or
+    // unwound begin preparation discards it. No Ready restaging; all existing
+    // lifecycle outcomes remain configure's responsibility.
+    // Copy nullable descriptors/table, never bar/close arrays. Descriptor
+    // allocation throws std::bad_alloc with the prior pending slot preserved.
+    // Nonzero count with a null table throws coded engine_invariant.
+    void stage_instrument_feed_views(const NativeInstrumentFeedView* const* views,
+                                     std::size_t count);
+    // Transfer exclusive ownership to the pending slot; null clears it and
+    // replacement destroys its old pending source, without touching active
+    // bindings. Binding checks source metadata through the normalizer. A
+    // lower-path source bound at stream_begin is engine_invariant.
+    void stage_lower_path_source(std::unique_ptr<NativeLowerPathSource> source) noexcept;
+    // Allocation-free query of the active binding in Ready/Running: bound
+    // descriptors/source and the kernel's current segment. Empty when nothing
+    // is bound and after detachment; the pending slot is never visible.
+    // Borrowed pointers expire on replacement/detachment/destruction. A Ready
+    // binding already detached is engine_invariant at admit_public_begin.
+    NativeBarViews bar_views() const noexcept;
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
@@ -2405,6 +2546,32 @@ inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer)
 inline const NativeExecutionConsumer& as_native_consumer(const IExecutionConsumer& consumer) {
     return static_cast<const NativeExecutionConsumer&>(consumer);
 }
+
+// A forward walk of the kernel's script-bucket preview. Independent cursors
+// let a scheduler consume inputs while a state hash follows a shorter prefix.
+// The configuration and current aggregator are O(1); no input flags are held.
+class ScriptBucketCursor {
+public:
+    struct Flags {
+        unsigned char complete = 1U;
+        unsigned char boundary = 0U;
+    };
+
+    explicit ScriptBucketCursor(const NativeRunSpec&);
+    Flags next(const Bar&);
+    void reset();
+    std::size_t position() const noexcept { return position_; }
+    Flags last() const noexcept { return last_; }
+
+private:
+    std::string script_tf_;
+    std::string input_tf_;
+    std::string timezone_;
+    std::string session_;
+    TimeframeAggregator aggregator_;
+    std::size_t position_ = 0;
+    Flags last_{};
+};
 
 }  // inline namespace engine_script_run_v19
 }  // namespace pineforge
