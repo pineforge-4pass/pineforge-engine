@@ -11,7 +11,12 @@ statuses on the PR head's exact tree. The maintainers post them from their own (
 verification tooling after full verification on their x86-64 build hosts and a
 parity verdict; an outside contributor cannot post them. GitHub Actions is advisory: PRs run Ubuntu Release/Debug and macOS Release; macOS Debug stays on non-PR events.
 PR Release, Ubuntu Debug, kernel-only, sanitizers and native jobs exclude the measured `slow` CTest rows; push-to-main and manual CI dispatch
-run every row, and a documentation-only change runs preflight alone. The commands below run the full sets.
+run every row, and a documentation-only change runs preflight alone among verification jobs.
+CI/native start with the canon `authz` job and every other job needs it. Heavy
+Linux lanes use `["self-hosted","pf-ci","pf-ci-x64-16"]`, light jobs use
+`["self-hosted","pf-ci","pf-ci-x64"]`, with no hosted fallback; macOS is the
+exception. Both aggregates always run and refuse non-success authz first.
+See `docs/ci.md` for the class table and docs-only exception. The commands below run the full sets.
 
 ```bash
 # Fast workflow/source checks first (requires actionlint 1.7.12 + ShellCheck).
@@ -140,7 +145,7 @@ The `PineForge strict CI base` ruleset requires `pineforge/verify` (full
 `ci_verify.py` profiles on the PR head's exact tree) and `pineforge/parity`
 (no parity regression, or no engine behaviour change). The maintainers'
 private verification tooling posts both commit statuses; GitHub Actions does not post them.
-Its PR jobs provide faster advisory feedback and a documentation-only change runs preflight alone; otherwise push-to-main and manual
+Its PR jobs provide faster advisory feedback and a documentation-only change runs preflight alone among verification jobs; otherwise push-to-main and manual
 dispatch run the full CI profiles. A campaign PASS verdict still binds the
 exact engine and codegen HEADs for baseline promotion.
 

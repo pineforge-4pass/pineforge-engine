@@ -22,7 +22,7 @@ This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
 `build-ci-preflight/`. The compilation lanes start alongside preflight, as
-soon as the few-second `changes` job has classified the change, and a
+soon as `authz` has passed and `changes` has classified the change. A
 documentation-only change skips them
 ([Documentation-only changes](#documentation-only-changes)).
 It does not compile the engine or replace any complete verification profile.
@@ -88,8 +88,8 @@ its configuration no longer matches.
 
 Run Release, Debug and sanitizer profiles sequentially in one checkout, or use
 separate worktrees for parallel runs. Their tutorial targets write shared `.so`
-files under `tutorial/`, even with separate build directories. Hosted CI jobs
-already use separate checkouts.
+files under `tutorial/`, even with separate build directories. CI jobs already
+use separate checkouts.
 
 ```sh
 python3 scripts/ci_verify.py debug --jobs 4
@@ -905,7 +905,7 @@ including the sitemap. Both footer
 variants already include a visible link to <https://pineforge.dev> on every
 page rendered by the theme, including source listings.
 
-The first job of `ci.yml`, `changes`, decides with
+The first job of `ci.yml` is `authz`. The `changes` job needs it and decides with
 [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
 documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
 unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a
@@ -933,20 +933,27 @@ that creates the branch, is forced or carries more than one commit, a merge
 that is not the pull request head's, a commit git cannot read, an empty change,
 and a `changes` job that fails or never answers.
 
-Each proof job waits for `changes` alone, a few seconds once the light ci-spot
-class or its hosted fallback takes it, and skips only when `changes` succeeded
-and answered documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
-needs.changes.outputs.docs_only != 'true')`. `preflight` waits for `changes`
-alone, runs even if `changes` fails (`!cancelled()`), and then runs every verifier class.
-The advisory `build` aggregate passes a proof job that succeeded, or one that
-was skipped under that same answer. A proof job skipped for any other reason
-fails it, and so does any `preflight` result but success. A skipped matrix is
-never expanded, so a documentation-only run shows one skipped `build` check
-under its unexpanded name instead of the event's three or four legs.
+Each proof job needs both `authz` and `changes`. After successful authz,
+preflight and proof jobs run alongside each other even if classification
+fails; that failure still fails the aggregate. Only a successful docs-only
+answer excuses skipped proof jobs. The job conditions use `always()` with
+an explicit authz-success guard, so cancellation is not a skip condition.
+Checkout and repository-code steps carry the same authz guard.
+
+The `build` aggregate always runs, refuses any non-success authz result in
+its first step, and requires authz, classification and preflight success.
+It accepts a skipped proof job only for a classified docs-only change;
+failure and cancellation always fail it. A skipped matrix is not expanded,
+so a documentation-only run shows one skipped `build` check under its
+unexpanded name instead of the four legs. Required-check configuration must
+retain this aggregate to enforce that exception.
+
 The aggregate reads `needs.build.result` for the selected matrix cells; D3's
 excluded cell is never created and contributes no skipped result. Every cell
 that exists must succeed: failure, cancellation or an unexpected skip still
 fails the aggregate, with no missing-leg exception on push or any other event.
+The unexpanded docs-only check represents three selected legs on a pull
+request and four on every other event.
 
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
@@ -1006,18 +1013,38 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-The ci-spot pool is live as of 2026-10-18 (bulletin #613, L6, 22:34).
-Credential-free Linux x64 jobs use the fragments in `pf-ci-spot`'s
-`workflows/engine-x64-16.yml` and `workflows/public.yml` at commit
-`b240f6d7` (bulletin #635), with these exact label arrays and an
-`ubuntu-24.04` hosted fallback:
+`ci.yml` and `native-live.yml` follow the frozen org `ci-labels.md` canon
+(SHA-256 `ac875205d8bdae2d7e0c23aca438118a0e9da2efb297de4e6b2cd80e7416f5b3`).
+Their Linux jobs resolve to these arrays on every event, including pull
+requests, with no hosted fallback:
 
-| Jobs | Fragment and labels | Pool machine |
+| Jobs | Resolved `runs-on` | Canon class |
 | --- | --- | --- |
-| Linux `build` legs, `sanitizers`, `kernel-only`, all three `native-live` profiles, both corpus-parity jobs | `engine-x64-16.yml`: `["self-hosted","pf-ci","pf-ci-x64-16"]` | e2-standard-16, 16 vCPU, 64 GB, 100 GB disk; engine only |
-| `changes`, `preflight`, both aggregate jobs | `public.yml`: `["self-hosted","pf-ci","pf-ci-x64"]` | e2-standard-4, 4 vCPU, 16 GB, 30 GB disk |
+| `preflight`, Ubuntu Release and Debug, `sanitizers`, `kernel-only`, all three native profiles | `["self-hosted","pf-ci","pf-ci-x64-16"]` | Heavy engine gates, 16 vCPU |
+| Both `authz` jobs, `changes`, `build-gate`, `native-live-gate` | `["self-hosted","pf-ci","pf-ci-x64"]` | Light pool class, 4 vCPU |
+| Both macOS build legs | `["macos-26"]` | The canon's hosted macOS exception |
 
-LB-435 prepares release routing to `["self-hosted","pf-ci","pf-ci-release"]`,
+The frozen canon keeps light jobs on `pf-ci-x64` until the Cloud Run class
+is announced live. Its default for eligible jobs after that announcement is
+`["self-hosted","pf-ci","pf-ci-crj"]` (8 vCPU / 32 GiB); Docker-daemon jobs
+use `pf-ci-x64`, and heavier jobs use `pf-ci-x64-16`. It reserves
+`["self-hosted","pf-ci","pf-ci-release"]` for isolated release credentials
+and artifact provenance, never pull requests, and
+`["self-hosted","pf-ci","pf-ci-arm64"]` for required Linux ARM work.
+
+Each scoped workflow starts with the verbatim canon `authz` job: no checkout,
+`permissions: {}`, no explicit timeout. It admits our events and same-repository,
+non-fork PRs by members, collaborators, or the PR-only bot allowlist
+`dependabot[bot] pineforge-app[bot]`; other same-repository authors must have
+admin, maintain or write permission from the canon's metadata lookup. The
+canon's `GH_TOKEN: ${{ github.token }}` is used only for that read-only lookup.
+Every other job directly needs `authz` and inherits `contents: read`; build
+jobs have no secret, App-token, environment or OIDC-write reference and all
+checkouts disable credential persistence. `ci.yml` has no PR path or branch
+filter. The reusable native workflow inherits the caller's PR event and
+performs its own authz check.
+
+LB-435 moves release routing to `["self-hosted","pf-ci","pf-ci-release"]`,
 replacing the hosted-only release ruling of 2026-10-19. The isolated class
 serves release/deploy/publish jobs that reference `secrets.*`, request
 `id-token`, name an `environment` or mint an App token, and jobs that build
@@ -1039,56 +1066,59 @@ to `["self-hosted","pf-ci","pf-ci-release"]` for its GitHub App secrets and
 inherited `id-token: write` permission. This named exception retains its
 closed `pull_request_target` and manual dispatch triggers; only its
 `runs-on` line changes in the workflow.
-Push this prepared migration only after both CORE-TOP gates: laneboss posts
-**"pf-ci-release live"** and the owner answers **REL-HOSTED**. Until then a
-job on that label with no runners only waits, and nothing is pushed.
 
 Other jobs in workflows triggered by `pull_request` or `pull_request_target`
 do not move to the release class. Docs `build` stays on `ubuntu-latest` because
 `docs.yml` accepts `pull_request`, even though its Cloudflare deployment step
 skips that event. That workflow is left intact.
 
-This follow-up rewords the pool-allocation, release/deploy routing and
-fallback sentences introduced by `28fe3466a` and carried into `f9bee2220`.
-The earlier `1fe46216` fragment revision supplied the Dependabot guard
-(bulletins #614/#615); `b240f6d7` keeps that guard and updates the fallback.
+Both aggregates use `if: always()` and first refuse unless authz succeeded,
+before any checkout or repository code. The native aggregate then requires
+every profile to succeed. The caller's `build` aggregate requires every
+needed job to succeed, except the existing classified docs-only proof skips.
+The repository's fork-workflow setting and dispatcher identity gate remain
+the canon's first lock; the workflow authz check supplies the readable verdict.
+A fork must not be allowed to replace authz and obtain a runner.
 
-This replaces the temporary standard-runner stopgap recorded by `3484a7c40`
-and squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner
-costs exceeded US$3,000. The runner-selection and timing sentences being
-reworded originated in `d0935605c` (#290), and the documentation-only runner
-sentence in `133f57148` (#308). The platform job limits from `2394ba2fc`
-(#373) remain in force.
+The four build names and PR-only `--exclude-label slow` policy are unchanged.
+The routing-only matrix includes contain JSON label arrays, decoded by
+`runs-on: ${{ fromJSON(matrix.runner) }}`. Each non-authz pool job also sets
+its matching job-level string `PF_CI_LABELS`; hosted macOS ignores that string.
+Parallelism remains `--jobs "$(getconf _NPROCESSORS_ONLN)"`.
 
-Each job using these two CI fragments uses the expression verbatim and sets its
-matching array as a job-level **string** `PF_CI_LABELS`, merged into any
-existing job environment. The engine build fragment is:
+The dispatcher's actor allowlist follows the frozen canon `ci-labels.md` at
+line 192: members, collaborators, `dependabot[bot]` on same-repository pull
+requests, and `pineforge-app[bot]`; the dispatcher's own rerun App is admitted
+only on its recorded-rerun path. The CI/native fragments do not extend this
+actor allowlist.
 
-```yaml
-runs-on: >-
-  ${{ github.event_name != 'pull_request_target' &&
-      github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-      contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-      (github.event_name != 'pull_request' ||
-       (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-      fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
-env:
-  PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
-```
+The pre-job hook requires each pool job's `PF_CI_LABELS` to match its runner
+labels. `authz` is canon-verbatim and has no `PF_CI_LABELS`; whether the pool
+hook accepts it is settled by the first pool run.
 
-The public fragment has the same expression with `pf-ci-x64` in both places.
-Pushes, manual dispatches, schedules, releases and same-repository pull
-requests whose head repository has `fork == false` take the pool when neither
-`github.actor` nor `github.triggering_actor` is `dependabot[bot]`. Dependabot
-runs and re-runs stay hosted through that guard. Fork pull
-requests, `pull_request_target`, `workflow_run` and every unlisted event fall
-back to `ubuntu-24.04`. A reusable workflow sees its caller's `github`
-context, so native and corpus jobs keep the same fallback through CI.
+`scripts/ci_preflight.py` pins the runner arrays, matrix, exact canon authz
+step digest, every authz dependency, read-only permissions and both refuse-first
+aggregates. Its mutation tests write altered workflow files and read them back
+before checking hosted regressions, missing authz dependencies and lost refusal
+steps. Under owner #827 (2026-10-20), no job or step may declare
+`timeout-minutes`, authz included. GitHub's own 6 h platform maximum is the
+only bound; no step, stage or row deadline is added.
+
+`corpus-parity.yml` and documentation deployment retain their existing routing
+and separate pins. Baseline promotion and release use #461's separate release
+pins; this CI/native migration does not certify those workflows against the
+new canon. The legacy corpus runner expression
+is pinned separately so it cannot become the CI/native default. This replaces
+the CI/native fallback policy documented by `28fe3466a` and `f9bee2220`, using
+the `b240f6d7` fragments after `1fe46216`. The temporary runner stopgap was
+`3484a7c40` / `693fd9e68`; the earlier runner and docs-only descriptions were
+`d0935605c` and `133f57148`. The platform maxima from `2394ba2fc` remain.
 
 The `build` matrix has three legs on pull requests and four on every other
 event, retaining their `build (<image>, <type>)` names. Its routing-only
-`include` entries carry the engine fragment for
-Linux and `macos-26` for macOS, selected with `runs-on: ${{ matrix.runner }}`.
+`include` entries carry the JSON label arrays
+`["self-hosted","pf-ci","pf-ci-x64-16"]` for Linux and `["macos-26"]` for macOS,
+selected with `runs-on: ${{ fromJSON(matrix.runner) }}`.
 The hosted macOS Release leg and non-PR macOS Debug leg stay on `macos-26`
 (M1, 3 cores, 7 GB). The shared
 build job sets the engine label string once; hosted macOS legs ignore it.
@@ -1097,51 +1127,40 @@ hosted ARM/macOS labels and sets no `PF_CI_LABELS`.
 Promotion uses `pf-ci-release` for both closed `pull_request_target` and
 `workflow_dispatch` triggers.
 
-The dispatcher's actor allowlist is `luisleo526`, `pineforge-app[bot]` and
-`github-actions[bot]` (chain triggers only). Dependabot-specific jobs stay
-hosted; this repository currently has no Dependabot configuration or such job.
-The fragments do not extend that actor allowlist. The dispatcher accepts
-`pf-ci` plus exactly one class, with optional `self-hosted`, `linux` and that
-class's architecture and no duplicate labels. The pre-job hook for those CI
-fragments also requires the matching `PF_CI_LABELS` string. ARM pool dispatch
-is disabled, so ARM stays hosted.
+Owner ruling of 2026-10-20, CI-HOSTED = B: all CI runs on our own machines,
+credentialed jobs included. Credential-free jobs run on the `pf-ci` pool;
+jobs that carry production credentials run on the separate `pf-ci-release`
+class (protected refs, one job per VM), never on the shared pool. Only macOS
+jobs stay on GitHub runners. The earlier CR-171 hosted exception is VOID.
 
-Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
-`check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
-parallelism follow the runner: 16 on the build pool class and the available
-core count on hosted fallbacks (3 on the CI macOS image). A documentation-only
-change starts preflight alone among the verification jobs.
+Owner ruling of 2026-10-20, REL-HOSTED = B: there is no hosted exception for
+the release workflow either; the release cut runs on `pf-ci-release`.
 
-`scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
-limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included. It pins the hosted PR deployment job in `docs.yml`,
-the isolated jobs in `release.yml` and `promote-baseline.yml`, and the complete
-release matrix with its hosted ARM/macOS exceptions. The `release.yml` pin
-requires readable `workflow_dispatch`-only triggers, refusing both PR events.
-The named promotion exception requires its existing `pull_request_target`
-and `workflow_dispatch` event set and retains the closed-PR promotion checks.
-Both workflows require exact runner values without a fallback and carry no
-`PF_CI_LABELS`; unlisted credential-bearing jobs retain the existing hosted
-guard, while other Linux x64 jobs use one of the two current CI fragments and
-its matching job-level `PF_CI_LABELS`. The contract refuses
-`pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and any `larger_runner`
-key in every workflow. A credential-bearing job on a PR pool, a restored hosted
-label on a moved release job, a PR trigger on `release.yml`, a `pull_request`
-trigger or changed event set on promotion, an old
-`ubuntu-latest` fragment fallback, a missing, duplicate, non-string or
-mismatched pool `PF_CI_LABELS`, a changed build or release matrix, a call to a
-workflow outside `.github/workflows/`, a changed time limit, a `ci_verify.py` call without
-exactly one core-count `--jobs` (counted over the whole job, however its
-commands are chained, blocked or carried, with the flag and its value on one
-line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
-line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py` holds
-the mutations. The same stage pins the documentation-only skip: `changes` waits for
-nothing and `preflight` waits for `changes` alone and runs on every event, the classification step
-is pinned verbatim, each proof job needs `changes` alone and carries the one
-skip condition, and the `build` aggregate reads every result and the answer. No
-job of `ci.yml`, `native-live.yml` or `corpus-parity.yml`, nor any of their
-steps, may continue on error: that would report success to the aggregate
-however it ended.
+As of 2026-10-21, #461 has merged as main `03b2406dd`: the old hosted pins
+for the engine's release and promote jobs are gone. `scripts/ci_preflight.py:135-139`
+and `scripts/ci_preflight.py:474-481` pin those jobs to `pf-ci-release`, with
+the release `prebuilt` job selecting its pinned matrix. `HOSTED_JOB_RUNNERS`
+at `scripts/ci_preflight.py:130-132` now lists only docs `build` on
+`ubuntu-latest`. The existing guard for unlisted credential-bearing jobs
+still requires standard hosted routing (`scripts/ci_preflight.py:482-497`),
+and the release matrix retains its hosted ARM/macOS legs
+(`scripts/ci_preflight.py:77-89`). The remaining hosted Linux routes have yet to
+be migrated under the owner rulings above.
+
+The `release.yml` pin requires readable `workflow_dispatch`-only triggers,
+refusing both PR events. The named promotion exception requires its existing
+`pull_request_target` and `workflow_dispatch` event set and retains the
+closed-PR promotion checks. Both workflows require exact runner values without
+a fallback and carry no `PF_CI_LABELS`.
+
+The temporary standard-runner stopgap was recorded by `3484a7c40` and
+squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner costs
+exceeded US$3,000.
+
+The contract refuses `pf-linux-x64-16`, any `*-xlarge` or `*-large` label, and
+any `larger_runner` key in every workflow. No job of `ci.yml`, `native-live.yml`
+or `corpus-parity.yml`, nor any of their steps, may continue on error: that
+would report success to the aggregate however it ended.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
@@ -1167,7 +1186,8 @@ row set with `TIMEOUT 3600 must be positive and less than stage deadline
 1800 s stage bound (exit 124). Under owner #827 (2026-10-20), this repository
 declares no time limits: no required-check job, stage, row, step, profile or
 matrix entry may declare one, and GitHub's own 6 h platform maximum is the only
-bound. The native-live aggregate job names a stop at that maximum
+bound. The new authz jobs also inherit it without an explicit timeout.
+The native-live aggregate job names a stop at that maximum
 `HANG (re-run)` in its log; the check still fails. Exit-code, signal,
 missing-summary and diagnostic failures still fail. Historically, `test_ci_verify` alone took up to 1288 s
 at 0d76a099 (Ubuntu Debug), most of the 30-minute stage it then had, and a
@@ -1183,7 +1203,7 @@ main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
 and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. The
 maintainers' x86-64 verification-host timings at 8 to 12 jobs remain separate
 measurements; the standard-runner timings describe the former hosted policy
-and provide historical context for the ci-spot fallback. Pool timings await
+and provide historical context for the former runner policy. Pool timings await
 measurements on the new runners.
 
 | Job | Platform maximum (min; no declared limit) | Measured basis |
