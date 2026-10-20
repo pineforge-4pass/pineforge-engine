@@ -552,7 +552,7 @@ public:
     double signed_units() const noexcept {
         return position_qty_ * (position_side_ == PositionSide::SHORT ? -1.0 : 1.0);
     }
-#if !defined(PINEFORGE_R4_HARVEST) && !defined(PINEFORGE_R4D_HARVEST)
+#ifndef PINEFORGE_R4D_HARVEST
     // The lane's own witness (absent from the 577315a headers, which is this
     // unit's fail-before diagnostic): how many relative legs ran on the
     // kernel's anchored bracket legs.
@@ -970,7 +970,7 @@ Observed observe(Shape shape, Mode mode) {
     } else {
         probe.run(bars.data(), static_cast<int>(bars.size()));
     }
-#if !defined(PINEFORGE_R4_HARVEST) && !defined(PINEFORGE_R4D_HARVEST)
+#ifndef PINEFORGE_R4D_HARVEST
     out.anchored = probe.anchored().anchored;
     out.adopted = probe.anchored().adopted;
     out.withdrawn = probe.anchored().withdrawn;

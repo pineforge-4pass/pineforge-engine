@@ -1621,7 +1621,7 @@ class SelectedRunTests(unittest.TestCase):
 
     def test_a_malformed_actual_anchor_is_refused_even_when_the_capital_is_unresolved(self):
         plan = full_plan()
-        # CR-202: the canonical-result guard types a nonfinite anchor as R
+        # The canonical-result guard types a nonfinite anchor as R
         # before selected-window consistency checks or serialization.
         for anchor in (float("nan"), float("inf"), float("-inf")):
             for unresolved in (False, True):

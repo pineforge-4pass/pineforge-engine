@@ -129,6 +129,7 @@ class ReportLib(selected.FakeLib):
         report.metrics.equity.sharpe_monthly = 0.5
         if self.short_span_metrics:
             report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
+            report.metrics.equity.sharpe_bar = report.metrics.equity.sortino_bar = float("nan")
         if self.metric is not None:
             block, name = self.metric
             setattr(getattr(report.metrics, block), name, self.bad_value)
@@ -425,7 +426,7 @@ def test_failure_line_preserves_fields_outside_monthly_report_aliases(code, fiel
 
 def test_run_json_annualization_policy_equals_the_native_policy_list():
     # docker/report_annualization.def is what the C++ metric walk includes;
-    # run_json.py ships alone and keeps its own copy of the same two facts.
+    # run_json.py ships alone and copies the span threshold and four-field set.
     import re
     text = (Path(run_json.__file__).with_name("report_annualization.def")
             .read_text(encoding="utf-8"))
@@ -433,6 +434,8 @@ def test_run_json_annualization_policy_equals_the_native_policy_list():
     fields = re.findall(r"^PF_SHORT_SPAN_ANNUALIZED_FIELD\(([a-z_]+)\)$", text, re.M)
     assert [int(s) for s in spans] == [run_json.MIN_ANNUALIZATION_SPAN_MS]
     assert tuple(fields) == run_json.SHORT_SPAN_ANNUALIZED_FIELDS
+    assert run_json.SHORT_SPAN_ANNUALIZED_FIELDS == (
+        "cagr", "calmar", "sharpe_bar", "sortino_bar")
     # Every other non-comment line is refused: the list stays a closed policy.
     others = [line for line in text.splitlines()
               if line.strip() and not line.startswith("//")
@@ -448,9 +451,13 @@ def test_sub_day_annualization_completes_in_report_routes(harness, mode):
     assert (result.status, result.stderr) == (0, "")
     assert document["metrics"]["equity"]["cagr"] is None
     assert document["metrics"]["equity"]["calmar"] is None
+    assert document["metrics"]["equity"]["sharpe_bar"] is None
+    assert document["metrics"]["equity"]["sortino_bar"] is None
     assert document["diagnostics"]["annualization"] == {
         "cagr": "span_too_short_to_annualize",
         "calmar": "span_too_short_to_annualize",
+        "sharpe_bar": "span_too_short_to_annualize",
+        "sortino_bar": "span_too_short_to_annualize",
     }
     assert result.records[-1]["phase"] == "completed"
 
@@ -458,6 +465,7 @@ def test_sub_day_annualization_completes_in_report_routes(harness, mode):
 @pytest.mark.parametrize("first_mark_is_capital", (True, False))
 @pytest.mark.parametrize("span_ms,capital,final_equity,has_reason", (
     (7 * 60_000, 10_000.0, 10_800.0, True),
+    (7 * 60_000, 10_000.0, 10_000.0, True),
     (86_399_999, 1.0, 1e300, True),
     (86_400_000, 10_000.0, 10_800.0, False),
     (7 * 60_000, 0.0, 10_800.0, False),
@@ -477,6 +485,10 @@ def test_annualization_reason_on_wire(span_ms, capital, final_equity, has_reason
     report.equity_curve = curve
     report.equity_curve_len = 2
     report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
+    report.metrics.equity.sharpe_bar = report.metrics.equity.sortino_bar = float("nan")
+    # Calendar-month ratios are already absent with fewer than two monthly
+    # returns; that domain never receives the span-annualization reason.
+    report.metrics.equity.sharpe_monthly = report.metrics.equity.sortino_monthly = float("nan")
     # compute_trade_stats' existing domain: null iff initial_capital <= 0,
     # even for an empty trade list. Do not infer capital from the first mark.
     report.metrics.all.net_profit_pct = 0.0 if capital > 0 else float("nan")
@@ -490,10 +502,16 @@ def test_annualization_reason_on_wire(span_ms, capital, final_equity, has_reason
     wire = json.loads(json.dumps(document, allow_nan=False))
     assert wire["metrics"]["equity"]["cagr"] is None
     assert wire["metrics"]["equity"]["calmar"] is None
+    assert wire["metrics"]["equity"]["sharpe_bar"] is None
+    assert wire["metrics"]["equity"]["sortino_bar"] is None
+    assert wire["metrics"]["equity"]["sharpe_tv"] is None
+    assert wire["metrics"]["equity"]["sortino_tv"] is None
     if has_reason:
         assert wire["diagnostics"]["annualization"] == {
             "cagr": "span_too_short_to_annualize",
             "calmar": "span_too_short_to_annualize",
+            "sharpe_bar": "span_too_short_to_annualize",
+            "sortino_bar": "span_too_short_to_annualize",
         }
     else:
         assert "annualization" not in wire["diagnostics"]

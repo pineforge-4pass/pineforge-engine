@@ -23,6 +23,8 @@ inline void apply_short_span_absence(pf_equity_stats_t& reference,
             || static_cast<std::uint64_t>(last) - static_cast<std::uint64_t>(first) < day_ms) {
             reference.cagr = std::numeric_limits<double>::quiet_NaN();
             reference.calmar = std::numeric_limits<double>::quiet_NaN();
+            reference.sharpe_bar = std::numeric_limits<double>::quiet_NaN();
+            reference.sortino_bar = std::numeric_limits<double>::quiet_NaN();
         }
     }
 }
@@ -33,6 +35,8 @@ inline void apply_short_span_absence(pf_equity_stats_t& reference,
 inline const char* annualization_overflow(const pf_equity_stats_t& reference) {
     if (std::isinf(reference.cagr)) return "metrics.equity.cagr";
     if (std::isinf(reference.calmar)) return "metrics.equity.calmar";
+    if (std::isinf(reference.sharpe_bar)) return "metrics.equity.sharpe_bar";
+    if (std::isinf(reference.sortino_bar)) return "metrics.equity.sortino_bar";
     return nullptr;
 }
 

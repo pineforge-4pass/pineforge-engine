@@ -33,7 +33,7 @@ template<class Value>
 inline Json report_result_number(Value value, const char* field,
                                  bool nullable = false, const char* prefix = nullptr) {
     if constexpr (!std::is_integral_v<Value>) {
-        if (nullable && std::isnan(value)) return Json{};
+        if (nullable && std::isnan(value)) return report_number(value);
         pineforge::report::finite_value(value, field, prefix);
     }
     return report_number(value);

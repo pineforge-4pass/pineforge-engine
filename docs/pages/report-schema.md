@@ -131,9 +131,11 @@ currency, net of entry fees — already scaled by `qty` and the point value.
 
 In JSON reports, each trade's `entry_price`, `exit_price`, `qty`, `pnl`,
 `pnl_pct`, `max_runup`, `max_drawdown` and `commission`, and the summary's
-`net_pnl`, `avg_trade`, `best_trade`, `worst_trade` and `max_drawdown`, must be
-finite or the run fails with `report_result_invalid`, `field` naming the
-corresponding `trades.<leaf>` or `summary.<leaf>` and `reason` equal to `nonfinite`.
+`win_rate_pct`, `net_pnl`, `avg_trade`, `best_trade`, `worst_trade` and
+`max_drawdown`, and each equity-curve point's `equity` and `open_profit`, must
+be finite or the run fails with `report_result_invalid`, `field` naming the
+corresponding `trades.<leaf>`, `summary.<leaf>`, `equity_curve.equity` or
+`equity_curve.open_profit` and `reason` equal to `nonfinite`.
 In ordinary mode without `--run-phase-fd`, a non-finite double elsewhere in the
 report document fails with `report_result_invalid`, `field` equal to
 `report.document` and `reason` equal to `nonfinite`.
@@ -261,23 +263,94 @@ this schema has to change (`scripts/test_report_schema_keys.py` pins the
 loss, `avg_win` with no winning trades, `sharpe_monthly` with fewer than two
 monthly returns or zero deviation, `calmar` with zero drawdown. A `0.0`
 in the report is always a real computed zero. See the per-field doxygen
-in `<pineforge/pineforge.h>` for the exact rule on every field.
+in `<pineforge/pineforge.h>` for the existing field domains; the rule below
+is authoritative for the sub-day case, which that doxygen does not describe.
 
-For `cagr` and `calmar`, a measured span under one day is a defined absence:
-both serialize as null, with `span_too_short_to_annualize` under
-`diagnostics.annualization.cagr` and `diagnostics.annualization.calmar`.
-The span is the last equity-curve point's `time_ms` minus the first point's,
-on the UTC epoch-millisecond bar clock, using an unsigned difference before
-conversion to double. The threshold is strictly less than 86,400,000 ms;
+Report arithmetic that produces a nonfinite value, including overflow, fails with `report_result_invalid` and reason `nonfinite`.
+The engine checks computed values before they can become a metric absence.
+
+For `cagr`, `calmar`, `sharpe_bar` and `sortino_bar`, a measured span under
+one day is a defined absence: all four serialize as null, with
+`span_too_short_to_annualize` under `diagnostics.annualization.cagr`,
+`diagnostics.annualization.calmar`, `diagnostics.annualization.sharpe_bar` and
+`diagnostics.annualization.sortino_bar`.
+
+The exact public paths, native members and reason keys are:
+
+| Field (public wire key) | Path | C ABI field | Span rule | Reason key path | Reason value |
+| --- | --- | --- | --- | --- | --- |
+| `cagr` | `metrics.equity.cagr` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::cagr` | `null` when `0 < span_ms < 86 400 000`; exactly one day annualizes when otherwise defined. | `diagnostics.annualization.cagr` | `span_too_short_to_annualize` |
+| `calmar` | `metrics.equity.calmar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::calmar` | `null` when `0 < span_ms < 86 400 000`; exactly one day annualizes when otherwise defined. | `diagnostics.annualization.calmar` | `span_too_short_to_annualize` |
+| `sharpe_bar` | `metrics.equity.sharpe_bar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::sharpe_bar` | `null` when `0 < span_ms < 86 400 000`; exactly one day annualizes when otherwise defined. | `diagnostics.annualization.sharpe_bar` | `span_too_short_to_annualize` |
+| `sortino_bar` | `metrics.equity.sortino_bar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::sortino_bar` | `null` when `0 < span_ms < 86 400 000`; exactly one day annualizes when otherwise defined. | `diagnostics.annualization.sortino_bar` | `span_too_short_to_annualize` |
+| `sharpe_tv`, `sortino_tv` (not in the set) | `metrics.equity.sharpe_tv`, `metrics.equity.sortino_tv` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::sharpe_monthly`, `pf_equity_stats_t::sortino_monthly` | Calendar-month returns with fixed sqrt(12), independent of `span_ms`; existing null domain. | None. | None; no short-span reason. |
+
+No other field receives the short-span annualization reason.
+In native `ReportC` and C ABI `pf_report_t`, these members are inside
+`metrics.equity`; a defined absence is a NaN and carries no reason. The
+separate runner JSON uses `metrics.equity.cagr`, `metrics.equity.calmar`,
+`metrics.equity.sharpe_bar` and `metrics.equity.sortino_bar` for the four
+policy fields, encoding an absence as the string `"NaN"` with no reason.
+Its monthly keys are `metrics.equity.sharpe_monthly` and
+`metrics.equity.sortino_monthly`, with the same string encoding for an absence.
+
+The span is `span_ms = equity_curve[-1].time_ms - equity_curve[0].time_ms`:
+the last equity-curve point's `time_ms` minus the first point's, using the
+script-bar OPEN timestamps in UTC epoch milliseconds and an unsigned
+difference before conversion to double. The clock is independent of elapsed
+wall time and the chart timezone. In selected-window mode, point 0 is the
+anchor at the requested start T, so the span starts at T even if the first
+window bar is later. The threshold is `0 < span_ms < 86 400 000`, strictly
+less than one day;
 exactly one day annualizes. Empty curves, nonpositive spans, nonpositive
 capital and nonpositive final equity keep their existing absences without
 this reason. The reason object is present only when the short-span rule
-applies and is outside the canonical result digest.
+applies and is outside the canonical result digest, which still has exactly
+135 scalar leaves. It includes only policy fields that are null. The writer
+requires a nonempty curve, non-null finite `metrics.all.net_profit_pct` as
+the positive-initial-capital witness, and positive finite final equity.
+Calmar carries this reason even with zero drawdown; both bar ratios carry it
+even on a flat curve with an otherwise undefined ratio.
+The writer does not test whether the span is the only cause of a null:
+`calmar`, `sharpe_bar` and `sortino_bar` still receive the reason when another
+absence condition overlaps, because the short-span rule also makes them null.
+If no policy field qualifies, `diagnostics.annualization` is absent.
+
+For a sub-day run in this reason domain, the relevant JSON members are:
+
+```json
+{
+  "metrics": {
+    "equity": {
+      "cagr": null,
+      "calmar": null,
+      "sharpe_bar": null,
+      "sortino_bar": null
+    }
+  },
+  "diagnostics": {
+    "annualization": {
+      "cagr": "span_too_short_to_annualize",
+      "calmar": "span_too_short_to_annualize",
+      "sharpe_bar": "span_too_short_to_annualize",
+      "sortino_bar": "span_too_short_to_annualize"
+    }
+  }
+}
+```
+
+The domain test precedes the CAGR ratio or power and the per-bar annualization
+arithmetic, so overflow in those suppressed constructions is never evaluated
+on a sub-day span. At or above one day, any computed nonfinite result remains
+the typed failure `report_result_invalid`, reason `nonfinite`, naming the
+exact field, for example `metrics.equity.cagr`.
 
 `sharpe_bar` / `sortino_bar` retain their observed-density construction on
-every span, and `sharpe_tv` / `sortino_tv` retain calendar-month resampling
-with sqrt(12). Their overflow, any other metric overflow, and CAGR/Calmar
-overflow on spans of at least one day fail with `report_result_invalid` and
+spans of at least one day, and `sharpe_tv` / `sortino_tv` retain calendar-month
+resampling with fixed sqrt(12), independent of the measured span. The monthly
+pair is already null on sub-day spans and receives no extra reason. Any
+overflow outside the four-field set, and overflow within it on spans of at
+least one day, fail with `report_result_invalid` and
 reason `nonfinite`, naming the exact field. An executed trade or equity mark
 must be finite. See the [revision 3.1 clarification](../design/selected-window-wire-v1.3-revision-3.1.md)
 for the field set and wire placement.

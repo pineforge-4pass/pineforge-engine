@@ -298,7 +298,8 @@ python3 -I -B tests/ownership/test_manifest_checker.py --shard 1/4
 
 `--shard I/N` requires integers with `1 <= I <= N` and selects
 `sorted(loader case ids)[I-1::N]`, passes those ids to unittest by name and
-exits non-zero unless it ran exactly the number of tests it selected. Each
+exits non-zero unless it ran exactly the number of tests it selected
+(10, 10, 10 and 10 for shards 1 to 4 of 4: 9 cases plus the guard in each). Each
 shard also runs the cheap `test_shards_partition_every_case_exactly_once`
 guard: for each shard count from 1 through 8 it rebuilds
 the assignment from the loader's ids with index residues (the same loader

@@ -113,8 +113,9 @@ void BacktestEngine::fill_report(ReportC* out) const try {
 void BacktestEngine::fill_trades_section(ReportC* out) const {
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();
-    out->total_trades = n;
-    out->trades_len = n;
+    out->total_trades = 0;
+    out->trades_len = 0;
+    out->net_profit = 0.0;
 
     if (n > 0) {
         out->trades = new TradeC[n];
@@ -138,13 +139,14 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->trades[i].entry_bar_index = t.entry_bar_index;
             out->trades[i].exit_bar_index = t.exit_bar_index;
             out->trades[i].open_at_end = t.open_at_end ? 1 : 0;
+            // A partial report keeps each fully initialized row, including
+            // this one if only the following aggregate overflows.
+            out->trades_len = out->total_trades = i + 1;
             net_profit = report::finite_value(net_profit + t.pnl, "summary.net_pnl");
+            out->net_profit = net_profit;
         }
-
-        out->net_profit = net_profit;
     } else {
         out->trades = nullptr;
-        out->net_profit = 0.0;
     }
 }
 

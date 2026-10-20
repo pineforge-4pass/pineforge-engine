@@ -181,7 +181,7 @@ summary of it.
   `KernelRecordedAtHostMarks` records the same series at the host's own marks.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under
   `KernelRecorded`. Under `HostRecorded` an unrecorded curve still degenerates —
-  `compute_equity_stats` answers its defined empty-curve metrics (`src/engine_metrics.cpp:228`,
+  `compute_equity_stats` answers its defined empty-curve metrics with no error (`src/engine_metrics.cpp:228`,
   consumed by `fill_metrics_section`, `src/engine_report.cpp:203`) — which is why the policy exists.
 - **Reproducibility.** Two digests, one wrapping the other. `native_continuation_hash()`
   (`native_host.hpp:1376`) returns the consumer's event/continuation hash. **A digest names

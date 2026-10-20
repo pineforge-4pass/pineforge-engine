@@ -1,6 +1,5 @@
-// Report overflow is R(nonfinite), except revision 3.1's sub-day CAGR/Calmar.
-// Expectations authored before the guards. Run the same TU against the base
-// archive for the red receipt; this lane does not compile or execute tests.
+// Report overflow is R(nonfinite), except revision 3.1's sub-day
+// cagr, calmar, sharpe_bar and sortino_bar defined absences.
 #include <pineforge/metrics.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -107,7 +106,14 @@ void report_trade_assembly() {
         nonfinite("report_net_profit_sum", "summary.net_pnl", [&] {
             ReportC out{};
             try { host.read(out); }
-            catch (...) { BacktestEngine::free_report(&out); throw; }
+            catch (...) {
+                CHECK(out.total_trades == 2 && out.trades_len == 2);
+                CHECK(out.trades != nullptr);
+                if (out.trades && out.trades_len == 2)
+                    CHECK(out.trades[0].pnl == 1e308 && out.trades[1].pnl == 1e308);
+                BacktestEngine::free_report(&out);
+                throw;
+            }
             BacktestEngine::free_report(&out);
         });
     }
@@ -120,6 +126,24 @@ void report_trade_assembly() {
         try { corrupted.read(out); }
         catch (...) { BacktestEngine::free_report(&out); throw; }
         BacktestEngine::free_report(&out);
+    });
+    ReportRowsHost prefix;
+    prefix.append(trade(3));
+    prefix.append(bad, true);
+    nonfinite("report_trade_invariant_keeps_initialized_prefix", "trades.max_runup", [&] {
+        ReportC partial{};
+        try {
+            prefix.read(partial);
+        } catch (...) {
+            CHECK(partial.total_trades == 1 && partial.trades_len == 1);
+            CHECK(partial.net_profit == 3);
+            CHECK(partial.trades != nullptr);
+            if (partial.trades && partial.trades_len == 1)
+                CHECK(partial.trades[0].pnl == 3 && partial.trades[0].qty == 0.5);
+            BacktestEngine::free_report(&partial);
+            throw;
+        }
+        BacktestEngine::free_report(&partial);
     });
     row = "report_trade_assembly_finite";
     ReportRowsHost finite;
@@ -277,9 +301,14 @@ void equity_arithmetic() {
     nonfinite("bar_variance", "metrics.equity.sharpe_bar", [] {
         (void)equity({1, 1e200, 1}, 1, kDay);
     });
-    nonfinite("sub_day_bar_variance", "metrics.equity.sharpe_bar", [] {
-        (void)equity({1, 1e200, 1}, 1, 60'000);
-    });
+    row = "sub_day_bar_variance";
+    try {
+        const auto got = equity({1, 1e200, 1}, 1, 60'000);
+        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
+        CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
+    } catch (const std::exception&) {
+        CHECK(false);  // The ruled domain must be checked before variance.
+    }
     nonfinite("bar_return_ratio", "metrics.equity.sharpe_bar", [] {
         (void)equity({1e-308, 1e308, 1e-308}, 1e-308, kDay);
     });
@@ -292,15 +321,20 @@ void equity_arithmetic() {
             values.push_back(1e306);
             values.push_back(1);
         }
-        // All 401 points are in January: the monthly helper has no returns.
-        (void)equity(values, 1, 1);
+        // Exactly one day, all 401 points in January: no monthly returns.
+        (void)equity(values, 1, kDay / 400);
     });
     nonfinite("bar_downside_square", "metrics.equity.sortino_bar", [] {
         (void)equity({1, -1e200, 1, -1e200}, 1, kDay);
     });
-    nonfinite("sub_day_bar_downside_square", "metrics.equity.sortino_bar", [] {
-        (void)equity({1, -1e200, 1, -1e200}, 1, 60'000);
-    });
+    row = "sub_day_bar_downside_square";
+    try {
+        const auto got = equity({1, -1e200, 1, -1e200}, 1, 60'000);
+        CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
+        CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
+    } catch (const std::exception&) {
+        CHECK(false);  // The ruled domain must be checked before downside.
+    }
 }
 
 void annualization_span_rule() {
@@ -309,21 +343,24 @@ void annualization_span_rule() {
         {kTime, 10000, 0}, {kTime + 60'000, 9900, 0},
         {kTime + 7 * 60'000, 10800, 0},
     };
-    // The frozen walk supplies all thirteen unchanged fields. Only the two
+    // The frozen walk supplies all eleven unchanged fields. Only the four
     // ruled fields have a different domain; the reference itself stays frozen.
     auto want = equity_stats_reference::compute_equity_stats(
         curve, 3, 10000, "UTC", 100, 108, 1, 800);
     CHECK(std::isinf(want.cagr) && std::isinf(want.calmar));
+    CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
     want.cagr = kNaN;
     want.calmar = kNaN;
+    want.sharpe_bar = kNaN;
+    want.sortino_bar = kNaN;
     try {
         const auto got = metrics::compute_equity_stats(
             curve, 3, 10000, "UTC", 100, 108, 1, 800);
         CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
         CHECK(equity_stats_reference::first_difference(got, want) == nullptr);
-        CHECK(std::isfinite(got.sharpe_bar) && std::isfinite(got.sortino_bar));
+        CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
     } catch (const std::exception&) {
-        CHECK(false);  // Red on the strict tree: the sub-day pow throws.
+        CHECK(false);
     }
     // Monthly ratios remain their existing defined absence (one month).
     CHECK(std::isnan(want.sharpe_monthly) && std::isnan(want.sortino_monthly));
@@ -355,6 +392,42 @@ void annualization_span_rule() {
     row = "sub_day_flat_curve";
     const auto flat = equity({10000, 10000}, 10000, 7 * 60'000);
     CHECK(std::isnan(flat.cagr) && std::isnan(flat.calmar));
+}
+
+void bar_ratio_span_boundary() {
+    // The frozen walk defines both ratios on this down/up curve. The input
+    // span alone decides whether revision 3.1 replaces the four fields.
+    const std::int64_t spans[] = {7 * 60'000, kDay - 1, kDay};
+    for (const std::int64_t span : spans) {
+        row = span < kDay ? "sub_day_finite_bar_ratios" : "one_day_finite_bar_ratios";
+        const pf_equity_point_t curve[] = {
+            {kTime, 10000, 0}, {kTime + span / 2, 9900, 0},
+            {kTime + span, 10020, 0},
+        };
+        auto want = equity_stats_reference::compute_equity_stats(
+            curve, 3, 10000, "UTC", 1, 1, 0, 20);
+        CHECK(std::isfinite(want.sharpe_bar) && std::isfinite(want.sortino_bar));
+        if (span < kDay) {
+            want.cagr = kNaN;
+            want.calmar = kNaN;
+            want.sharpe_bar = kNaN;
+            want.sortino_bar = kNaN;
+        }
+        try {
+            const auto got = metrics::compute_equity_stats(
+                curve, 3, 10000, "UTC", 1, 1, 0, 20);
+            CHECK(equity_stats_reference::first_difference(got, want) == nullptr);
+            if (span < kDay) {
+                CHECK(std::isnan(got.cagr) && std::isnan(got.calmar));
+                CHECK(std::isnan(got.sharpe_bar) && std::isnan(got.sortino_bar));
+            } else {
+                CHECK(std::isfinite(got.cagr) && std::isfinite(got.calmar));
+                CHECK(std::isfinite(got.sharpe_bar) && std::isfinite(got.sortino_bar));
+            }
+        } catch (const std::exception&) {
+            CHECK(false);
+        }
+    }
 }
 
 class ShortSpanReportHost final : public NativeStrategyHost {
@@ -400,14 +473,20 @@ void short_span_real_report() {
         }
         CHECK(report.net_profit == 800);
         CHECK(std::isnan(report.metrics.equity.cagr) && std::isnan(report.metrics.equity.calmar));
-        // ReportC mirrors pf_report_t member for member (src/native_c_host.cpp
-        // reinterprets between them at the C boundary); the size check keeps
-        // the cast honest if either side changes.
+        CHECK(std::isnan(report.metrics.equity.sharpe_bar)
+              && std::isnan(report.metrics.equity.sortino_bar));
+        const auto reference = equity_stats_reference::compute_equity_stats(
+            report.equity_curve, report.equity_curve_len, 10000, "UTC", 100, 900, 0, 800);
+        CHECK(std::isfinite(reference.sharpe_bar) && std::isfinite(reference.sortino_bar));
+        // ReportC mirrors pf_report_t member for member at the C boundary;
+        // this size check keeps the cast honest if either side changes.
         static_assert(sizeof(ReportC) == sizeof(pf_report_t),
                       "ReportC and pf_report_t must stay layout twins");
         const auto wire = live::native_report_json(reinterpret_cast<const pf_report_t&>(report));
-        CHECK(wire.at("metrics").at("equity").at("cagr").kind == live::Json::Kind::Null);
-        CHECK(wire.at("metrics").at("equity").at("calmar").kind == live::Json::Kind::Null);
+        for (const char* field : {"cagr", "calmar", "sharpe_bar", "sortino_bar"}) {
+            const auto& value = wire.at("metrics").at("equity").at(field);
+            CHECK(value.kind == live::Json::Kind::String && value.value == "NaN");
+        }
     } catch (const std::exception&) {
         CHECK(false);
     }
@@ -595,7 +674,8 @@ void producer_boundaries() {
     row = "runner_defined_absence";
     pf_equity_stats_t absent{};
     absent.cagr = kNaN;  // The producer's explicit out-of-domain sentinel.
-    CHECK(live::report_equity_stats(absent).at("cagr").kind == live::Json::Kind::Null);
+    const auto value = live::report_equity_stats(absent).at("cagr");
+    CHECK(value.kind == live::Json::Kind::String && value.value == "NaN");
     // Recorded script trace values have their separate nonfinite wire convention.
     CHECK(live::report_number(kNaN).value == "NaN");
 }
@@ -607,6 +687,7 @@ int main() {
     trade_arithmetic();
     equity_arithmetic();
     annualization_span_rule();
+    bar_ratio_span_boundary();
     short_span_real_report();
     defined_absences_and_finite_values();
     producer_boundaries();

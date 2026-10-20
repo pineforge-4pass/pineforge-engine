@@ -3568,11 +3568,11 @@ def _num(x, *, report_metric=False):
 EQUITY_REPORT_KEYS = {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino_tv"}
 
 
-# Revision 3.1 policy. docker/report_annualization.def holds the same two
-# facts for the C++ metric walk; run_json.py ships as a single file, so it
-# keeps its own copy and tests/test_run_json_nonfinite_report.py pins the two.
+# Revision 3.1 policy. docker/report_annualization.def holds the same span
+# threshold and four fields for the C++ metric walk; run_json.py ships alone,
+# so tests/test_run_json_nonfinite_report.py pins this copy to the native list.
 MIN_ANNUALIZATION_SPAN_MS = 86_400_000
-SHORT_SPAN_ANNUALIZED_FIELDS = ("cagr", "calmar")
+SHORT_SPAN_ANNUALIZED_FIELDS = ("cagr", "calmar", "sharpe_bar", "sortino_bar")
 
 
 def _annualization_diagnostics(curve, metrics):
@@ -3580,6 +3580,9 @@ def _annualization_diagnostics(curve, metrics):
 
     net_profit_pct's existing domain witnesses positive initial capital even
     when the first equity mark differs from it or provenance is unresolved.
+    With positive initial capital and final equity, a null sharpe_bar or
+    sortino_bar on a positive sub-day span always carries the reason: the
+    kernel rule makes both null, even when a flat curve is null anyway.
     Python's integer subtraction is exact across the full int64 timestamp
     domain; convert the difference to double just as the kernel does.
     """
