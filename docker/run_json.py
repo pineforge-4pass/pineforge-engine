@@ -168,7 +168,7 @@ import tempfile
 import time
 import traceback
 import types
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -4076,7 +4076,7 @@ _RUN_REQUEST_OPTIONS = frozenset({
     "so", "ohlcv", "inputs", "overrides", "input_tf", "script_tf", "bar_magnifier",
     "magnifier_samples", "magnifier_dist", "generated_cpp", "transpiled", "syminfo",
     "trade_start_ms", "chart_tz", "magnifier_volume_weighted", "bench", "warmup",
-    "repeats", "symbol_feeds", "ohlcv_bin", "verify_bin",
+    "repeats", "symbol_feeds", "ohlcv_bin", "verify_bin", "report_sink", "run_id", "spill_dir",
 })
 
 
@@ -4548,6 +4548,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         legacy trade-start gate, which selected mode refuses); freed again if it fails."""
         nonlocal syminfo_applied
         st = create_strategy(lib, checked)
+        sink = None
         try:
             apply_settings(lib, st, inputs, overrides, checked)
             if args.syminfo:
@@ -4561,12 +4562,17 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
+            sink = _new_report_sink(lib, st, args)
         except BaseException:
-            lib.strategy_free(st)
+            try:
+                lib.strategy_free(st)
+            finally:
+                if sink is not None:
+                    sink.close()
             raise
-        return st
+        return st, sink
 
-    state = _make_state()
+    state, sink = _make_state()
     _release_copied_feeds(symbol_feeds)
     report = ReportC()
     binding = None
@@ -4601,9 +4607,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             raise _engine_invariant(
                 f"the engine reports input_tf_seconds {int(report.input_tf_seconds)}, the "
                 f"request's input timeframe is {request.input_tf_seconds} seconds")
-        if int(report.equity_curve_len) != plan["window_script_bars"] + 1:
+        if sink is not None:
+            sink.verify(lib, state, report)
+        equity_points = sink.counts["E"] if sink is not None else int(report.equity_curve_len)
+        if equity_points != plan["window_script_bars"] + 1:
             raise _engine_invariant(
-                f"the engine's selected curve has {int(report.equity_curve_len)} points, the "
+                f"the engine's selected curve has {equity_points} points, the "
                 f"plan says {plan['window_script_bars'] + 1}")
         # The report spells the evaluated first and last bar as UTC dates (fmt_utc).
         for ts in (plan["fed_first_data_ms"], plan["fed_last_data_ms"]):
@@ -4635,9 +4644,12 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             applied_runtime["syminfo"] = syminfo_applied
         if symbol_feeds:
             applied_runtime["symbol_feeds"] = symbol_feeds_record(symbol_feeds)
+        output_files = binary_inputs.enter_context(ExitStack()) if sink is not None else None
         outputs_block = None
         if args.outputs:
-            outputs_block = build_outputs_block(make_outputs_reader(lib, state))
+            outputs_block = (
+                _sink_outputs_block(lib, state, sink, output_files, summary_only=sink.named)
+                if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
             applied_runtime["outputs"] = True
         # ONE R object, placed in all three required places (the third is
         # fingerprint.provenance.runtime, which is applied_runtime itself).
@@ -4645,14 +4657,17 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         incarnation_accessor = getattr(lib, "strategy_closed_trade_entry_incarnation", None)
         trade_entry_incarnations = (
             [int(incarnation_accessor(state, i)) for i in range(report.trades_len)]
-            if incarnation_accessor is not None else None)
-        out = build_report_dict(
+            if sink is None and incarnation_accessor is not None else None)
+        builder = _build_sink_report if sink is not None else build_report_dict
+        out = builder(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
-            elapsed, inputs, overrides, applied_runtime, trade_entry_incarnations)
-        _validate_report_result(out)
+            elapsed, inputs, overrides, applied_runtime,
+            sink if sink is not None else trade_entry_incarnations)
+        if sink is None:
+            _validate_report_result(out)
         out["report_window"] = window
-        out["report_shape"] = swr.report_shape_full(len(out["equity_curve"]),
-                                                    len(out["trades"]))
+        out["report_shape"] = swr.report_shape_full(
+            equity_points, sink.counts["T"] if sink is not None else len(out["trades"]))
         if outputs_block is not None:
             out["outputs"] = outputs_block
         # The selected fingerprint MUST exist, as version 2. There is no best-effort null here
@@ -4683,15 +4698,30 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         # R in all three places, the v2 fingerprint over the same bytes, and the anchor of the
         # native curve at the strategy's initial capital: all checked before serialization.
         swr.check_report_placements(out, window)
-        swr.check_selected_curve(out["equity_curve"], request.start_ms,
-                                 plan["window_script_bars"],
-                                 provenance["strategy"].get("initial_capital"))
+        initial_capital = provenance["strategy"].get("initial_capital")
+        if sink is not None:
+            # verify() checked every record and the receipt. The engine's
+            # selected latches own the window observations; only the anchor
+            # and trailer count are needed here, including the M = 0 case.
+            with closing(sink.records("E")) as points:
+                anchor = next(points, None)
+                swr.check_selected_sink_curve(
+                    anchor.as_dict() if anchor is not None else None, equity_points,
+                    request.start_ms, plan["window_script_bars"], initial_capital)
+        else:
+            swr.check_selected_curve(out["equity_curve"], request.start_ms,
+                                     plan["window_script_bars"], initial_capital)
         # 6. Serialization begins; the timing is known now and is outside the provenance.
         _advance(phases, "serialization")
         out["diagnostics"]["phase_timing"] = phases.writer.phase_timing()
-        buffer = io.StringIO()
-        json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
-        buffer.write("\n")
+        if sink is not None:
+            buffer = _prepare_stream_report(out, binary_inputs, sink.directory)
+        else:
+            buffer = io.StringIO()
+            json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
+            buffer.write("\n")
+        if output_files is not None:
+            output_files.close()  # surface column close failures before stdout
     except Exception as error:
         # Once the engine has acknowledged result_assembly (the REAL writer phase), an
         # unclassified failure is report_post_execution_failed{phase, reason}; typed faults,
@@ -4708,11 +4738,10 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
             abi.clear(state)
         except Exception:
             pass
-        lib.report_free(ctypes.byref(report))
-        lib.strategy_free(state)
+        _free_sink_run(lib, state, report, sink)
         if detach_error is not None and sys.exc_info()[1] is None:
             raise _typed_failure(detach_error) or detach_error
-    status = _write_report(buffer.getvalue(), phases)
+    status = _write_report(buffer if sink is not None else buffer.getvalue(), phases)
     if status:
         return status
     try:
@@ -4885,6 +4914,13 @@ def _main(argv, binary_inputs) -> int:
                     help="pf_bar_t/v1 binary chart (or the symbol index chart); alternative to --ohlcv.")
     ap.add_argument("--verify-bin", choices=("full", "sidecar"), default="full",
                     help="Binary verification: full checks SHA-256; sidecar checks metadata. Both check order.")
+    ap.add_argument("--report-sink", type=Path, default=None, metavar="PATH",
+                    help="Write the body run's pf-report-sink/v1 file to PATH and emit summary JSON.")
+    ap.add_argument("--run-id", default="",
+                    help="Caller run identifier copied into the report sink header (default empty).")
+    ap.add_argument("--spill-dir", type=Path, default=None, metavar="DIR",
+                    help="Writable directory for engine scratch and unlinked report temporaries; "
+                         "defaults to the system temporary directory.")
     # Selected-window mode (selected-window/v1; see the section above main). All of these are
     # absent from an ordinary command line, which then behaves exactly as before.
     ap.add_argument("--report-policy", default=None,
@@ -4940,6 +4976,7 @@ def _main(argv, binary_inputs) -> int:
         return _capabilities_main(args)
     if args.ohlcv is not None and args.ohlcv_bin is not None:
         raise _request_invalid("error: --ohlcv and --ohlcv-bin are mutually exclusive", "ohlcv_bin")
+    _validate_sink_options(args)
     selected = _selected_requested(args)
     if selected and args.ohlcv_bin is not None:
         raise _request_invalid("error: selected-window mode requires a CSV chart", "ohlcv_bin")
@@ -4996,7 +5033,7 @@ def _main(argv, binary_inputs) -> int:
     # --symbol-feeds).
     symbol_feeds = None
 
-    def _make_state():
+    def _make_state(*, body=False):
         """Create + fully configure a fresh strategy state — everything EXCEPT the
         timed run_backtest_full call. Mirrors scripts/run_strategy.py's setup so the
         engine behaves identically to the ctypes validation harness. The handle is
@@ -5021,7 +5058,7 @@ def _main(argv, binary_inputs) -> int:
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
-            sink = _new_report_sink(lib, st, args)
+            sink = _new_report_sink(lib, st, args, body=body)
         except BaseException:
             try:
                 lib.strategy_free(st)
@@ -5078,7 +5115,7 @@ def _main(argv, binary_inputs) -> int:
     # --- Body run: one configured run for trades / metrics / diagnostics. ---
     report = ReportC()
     binding = None
-    state, sink = _make_state()
+    state, sink = _make_state(body=True)
     try:
         # The last state owns CSV copies. Borrowed binary views stay alive
         # through native cleanup and the outer input stack's cleanup.
@@ -5134,7 +5171,7 @@ def _main(argv, binary_inputs) -> int:
         outputs_block = None
         if args.outputs:
             outputs_block = (
-                _sink_outputs_block(lib, state, sink, output_files)
+                _sink_outputs_block(lib, state, sink, output_files, summary_only=sink.named)
                 if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
             applied_runtime["outputs"] = True
         incarnation_accessor = getattr(
@@ -5236,7 +5273,7 @@ def _main(argv, binary_inputs) -> int:
     return 0
 
 
-# --- CR-150 L9A: full JSON from the fixed v1 report sink -----------------------
+# --- CR-150 L9A/L9B: full and summary JSON from the fixed v1 report sink -------
 
 class ReportSinkC(ctypes.Structure):
     """Exact pf_report_sink_v1; the setter copies all three strings."""
@@ -5267,50 +5304,75 @@ def _bind_report_sink(lib) -> None:
             function.restype, function.argtypes = restype, argtypes
 
 
-def _new_report_sink(lib, state, args):
+def _validate_sink_options(args):
+    # A refused value keeps the generic "arguments" option; an argparse refusal names the flag.
+    # Reject C-string truncation and non-UTF-8 argv before loading a library.
+    for name in ("report_sink", "run_id", "spill_dir"):
+        value = getattr(args, name)
+        if value is None:
+            continue
+        text = os.fspath(value)
+        label = "--" + name.replace("_", "-")
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            raise _request_invalid(f"error: {label} must hold UTF-8 text", "arguments") from None
+        if "\0" in text:
+            raise _request_invalid(f"error: {label} must not contain NUL", "arguments")
+
+
+def _new_report_sink(lib, state, args, *, body=True):
     names = ("pf_report_sink_version", "strategy_set_report_sink_v1",
              "strategy_report_sink_receipt_v1")
     present = [hasattr(lib, name) for name in names]
     if not any(present):
+        if getattr(args, "report_sink", None) is not None:
+            raise StrategyLibraryError("the strategy library has no report sink API",
+                                       {"reason": "symbol_missing"})
         return None  # old modules keep their existing report ABI
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
-    # The named-sink CLI is L9B. These attributes also give L9B/L9S one
-    # directory for the engine's scratch and every Python temporary.
-    return _TemporaryReportSink(lib, state, directory=getattr(args, "spill_dir", None),
-                                run_id=getattr(args, "run_id", ""))
+    # Only the body run may create/truncate the caller's sink. Bench states
+    # use their own temporary paths, unlinked at close.
+    return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
+                       run_id=getattr(args, "run_id", ""),
+                       path=getattr(args, "report_sink", None) if body else None)
 
 
-class _TemporaryReportSink:
-    """A named, owner-only (0600) temporary file, addressed by its real path.
+class _ReportSink:
+    """A caller-owned path or an owner-only (0600) temporary sink file.
 
-    The engine opens the path itself with its existing path-only API
-    (O_WRONLY | O_CREAT | O_TRUNC, no O_EXCL: src/report_sink_writer.cpp), so
-    the empty file created here is accepted and truncated by it. Every reader
-    opens the same path again and so owns its offset. No descriptor path
-    (/proc/self/fd, /dev/fd) is used: Darwin's /dev/fd/N is a dup that shares
-    the file offset. No named sink, new wire format or public fd API is
-    introduced. close() unlinks the file and may be called again, unless
-    ``keep`` is set (the harness's test-only artifact switch). Keep the owner
-    open until both report_free and strategy_free have returned.
+    Temporary sinks use mkstemp and give the engine a real path through its
+    existing path-only ABI. The writer accepts and truncates the empty file
+    (O_WRONLY | O_CREAT | O_TRUNC, no O_EXCL: src/report_sink_writer.cpp).
+    Every reader opens the path again and owns its offset; Darwin's /dev/fd
+    would share an offset instead. close() unlinks only temporary sinks,
+    unless ``keep`` is set by the harness's test-only artifact switch.
+    Keep the owner open until report_free and strategy_free have returned.
+    A named file is created/truncated by the engine and persists for its caller.
     """
 
-    def __init__(self, lib, state, *, directory=None, run_id=""):
+    def __init__(self, lib, state, *, directory=None, run_id="", path=None):
         self.directory = os.fspath(directory) if directory is not None else tempfile.gettempdir()
         self.header, self.counts, self.sha256 = {}, {}, ""
+        self.named, self.run_id = path is not None, run_id
         self.keep, self.closed = False, False
+        if self.named:
+            self.path = os.fspath(path)
+        else:
+            try:
+                handle, path = tempfile.mkstemp(prefix="pineforge-report-sink-", suffix=".sink",
+                                                dir=self.directory)
+            except OSError as error:
+                raise RunFailure("report sink open failed", "report_sink_failed") from error
+            self.path = os.path.abspath(path)
         try:
-            handle, path = tempfile.mkstemp(prefix="pineforge-report-sink-", suffix=".sink",
-                                            dir=self.directory)
-        except OSError as error:
-            raise RunFailure("report sink open failed", "report_sink_failed") from error
-        self.path = os.path.abspath(path)
-        try:
-            os.close(handle)  # the engine and every reader open the path themselves
+            if not self.named:
+                os.close(handle)  # the engine and every reader open the path themselves
             descriptor = ReportSinkC(ctypes.sizeof(ReportSinkC), 1, os.fsencode(self.path),
                                      run_id.encode("utf-8"), os.fsencode(self.directory))
             if lib.strategy_set_report_sink_v1(state, ctypes.byref(descriptor)) != 0:
-                raise _engine_invariant("the fresh strategy refused its temporary report sink")
+                raise _engine_invariant("the fresh strategy refused its report sink")
         except BaseException:
             self.close()
             raise
@@ -5324,6 +5386,8 @@ class _TemporaryReportSink:
                 self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
         except SinkFormatError as error:
             raise _engine_invariant(f"the engine's report sink is invalid: {error}") from error
+        if self.header["run_id"] != self.run_id:
+            raise _engine_invariant("the report sink run id differs from the request")
         receipt = ReportSinkReceiptC()
         receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
         if lib.strategy_report_sink_receipt_v1(state, ctypes.byref(receipt)) != 0 or receipt.complete != 1:
@@ -5348,12 +5412,16 @@ class _TemporaryReportSink:
 
     def close(self):
         if not self.closed:
-            if not self.keep:
+            if not self.named and not self.keep:
                 try:
                     os.unlink(self.path)
                 except FileNotFoundError:
                     pass
             self.closed = True
+
+
+# The harness uses the temporary-only spelling with no caller-owned path.
+_TemporaryReportSink = _ReportSink
 
 
 def _free_sink_run(lib, state, report, sink):
@@ -5517,6 +5585,22 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
                             applied_inputs, applied_overrides, applied_runtime)
     out["summary"] = _sink_summary(report, sink)
     _validate_report_result(out)  # trades are still []; the pre-pass checked every T
+    if sink.named:
+        reference = {
+            "path": sink.path,
+            "schema": sink.header["schema"],
+            "version": sink.header["version"],
+            "run_id": sink.header["run_id"],
+            "counts": sink.counts,
+            "sha256": sink.sha256,
+        }
+        # Insert the reference at the old trades position; all other small
+        # keys retain the frozen producer's order and values.
+        return {
+            ("report_sink" if key == "trades" else key):
+                (reference if key == "trades" else value)
+            for key, value in out.items() if key != "equity_curve"
+        }
     out["trades"] = _JSONRecordArray(lambda: (_sink_trade(row) for row in sink.records("T")))
     out["equity_curve"] = _JSONRecordArray(lambda: (row.as_dict() for row in sink.records("E")))
     return out
@@ -5602,11 +5686,13 @@ def _legacy_streamed_outputs_block(lib, state):
     return block
 
 
-def _sink_outputs_block(lib, state, sink, resources):
+def _sink_outputs_block(lib, state, sink, resources, *, summary_only=False):
     # L6b-1 declares O/V/K but L6b-3 writes them. Until that dependency lands,
     # its existing output readers are authoritative. Once K is emitted even
     # an empty output run takes the streamed path below.
     if not any(sink.counts.get(tag, 0) for tag in "OVK"):
+        if summary_only:
+            raise _engine_invariant("the report sink is missing its output records")
         return _legacy_streamed_outputs_block(lib, state)
     if sink.counts.get("K") != 1:
         raise _engine_invariant("the report sink must contain one output constants record")
@@ -5616,6 +5702,9 @@ def _sink_outputs_block(lib, state, sink, resources):
         constants = tuple(float("nan") if value is None else value for value in record.values)
     raw_manifest = _outputs_manifest(lib, state)
     block = _outputs_metadata(raw_manifest, slots, constants)
+    if summary_only:
+        return {key: block[key] for key in (
+            "schema_version", "message_format", "manifest_sha256", "manifest", "constants", "hlines")}
     entries = sorted(_manifest_entries(block["manifest"], "series", ("slot", "output")),
                      key=lambda entry: entry["slot"])
     outputs = {entry["index"]: entry for entry in
