@@ -1822,6 +1822,8 @@ private:
     friend class PendingIntentView;
     friend class PineStrategyHost;
     friend class PineScheduler;
+    friend void ::pineforge::detail::bind_tree_scratch_tables(
+        PineExecutionAdapter&, const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
     struct CohortFacts {
         native_order::CohortHandle handle{};
         OriginRoster origins;
@@ -2031,6 +2033,7 @@ private:
 
     NativeStrategyHost& require_host() const;
     bool modeled_input() const;
+    void require_cohort_ticket(const SourceId* prospective = nullptr) const;
     native_order::CohortHandle cohort_for(const SourceId& id);
     std::optional<native_order::RequestHandle> submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
@@ -2763,6 +2766,8 @@ private:
     std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
     std::uint32_t exit_rank_peak_ = 0;
     std::uint32_t exit_rank_alt_peak_ = 0;
+    void require_tree_precommit(const NativePrecommitView&) const;
+    void require_exit_rank_key(const SourceId&) const;
     void note_exit_rank_key(const SourceId&);
     void note_exit_rank_transients();
     // R5 lane V19-E: the exit phases of the trades before exit_phase_final_
