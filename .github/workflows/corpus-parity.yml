@@ -100,7 +100,6 @@ jobs:
     # 16.3-26.2 min on the standard runner; 360 minutes is the platform maximum,
     # the only hang catcher (owner rule,
     # 2026-10-12: no bound of our own may fail a run for slowness).
-    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,7 +183,6 @@ jobs:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 1.8-4.7 min on the standard runner; 360 minutes is the platform
     # maximum, the only hang catcher (owner rule, 2026-10-12).
-    timeout-minutes: 360
     steps:
       # Credentials stay persisted, exactly as the nightly job above: the
       # submodule clone and `git lfs pull` below go out over https and the
