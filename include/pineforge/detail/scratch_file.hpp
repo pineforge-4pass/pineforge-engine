@@ -86,7 +86,7 @@ public:
     // ftruncate users. Does not shrink or open the file. Arena mode claims
     // chunks without a sizing syscall; file mode uses fstat + ftruncate.
     void ensure_size(std::uint64_t bytes) {
-        check_extent(bytes, 0);
+        check_extent(bytes, 0, arena_ != nullptr);
         if (!opened()) throw std::logic_error("scratch growth before open");
         if (arena_) {
             arena_->ensure_size(region_, bytes);
@@ -101,13 +101,14 @@ public:
         while (result != 0 && errno == EINTR);
         if (result != 0) throw ScratchIoError(errno, "scratch resize");
     }
-    static void check_extent(std::uint64_t offset, std::size_t length) {
+    static void check_extent(std::uint64_t offset, std::size_t length, bool arena = false) {
         const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         if (offset > maximum || length > maximum - offset)
-            throw ScratchIoError(EFBIG, "scratch offset exhausted");
+            throw ScratchIoError(EFBIG, "scratch offset exhausted",
+                                arena ? RunFailureArgs{{"reason", "arena_io"}} : RunFailureArgs{});
     }
     void write(std::uint64_t offset, const void* data, std::size_t length) {
-        check_extent(offset, length);
+        check_extent(offset, length, arena_ != nullptr);
         if (arena_) {
             arena_->write(region_, offset, data, length);
             return;
@@ -125,7 +126,7 @@ public:
         }
     }
     void read(std::uint64_t offset, void* data, std::size_t length) const {
-        check_extent(offset, length);
+        check_extent(offset, length, arena_ != nullptr);
         if (arena_) {
             arena_->read(region_, offset, data, length);
             return;

@@ -78,8 +78,9 @@ void shared_allocator(ScratchArenaBackend backend) {
         while (allocation == EINTR);
         require(allocation == 0, "preallocate shared regular arena");
         errno = 0;
-        require(::fcntl(backing.fd, F_GET_SEALS) == -1 && errno == EINVAL,
-                "thread fixture uses the disk backend without seals");
+        const int seals = ::fcntl(backing.fd, F_GET_SEALS);
+        require((seals == -1 && errno == EINVAL) || seals == F_SEAL_SEAL,
+                "thread fixture uses regular backing on disk or tmpfs with sealing disabled");
     } else {
         require(::ftruncate(backing.fd, static_cast<off_t>(arena_bytes)) == 0,
                 "size shared memfd before sealing");

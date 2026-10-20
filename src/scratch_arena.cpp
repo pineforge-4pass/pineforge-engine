@@ -27,23 +27,24 @@
 namespace pineforge::detail {
 namespace {
 
-[[noreturn]] void arena_error(int error, const char* operation) {
-    if (error == EFBIG || error == EPERM)
-        throw ScratchIoError(EFBIG, "scratch arena exhausted");
-    throw ScratchIoError(error, operation);
+[[noreturn]] void arena_error(int error, const char* operation,
+                             const char* reason = "arena_io") {
+    // Syscall errno is not a capacity verdict. Only the allocator emits
+    // arena_exhausted, with its locked counter snapshot.
+    throw ScratchIoError(error, operation, {{"reason", reason}});
 }
 
 std::uint64_t decimal(const char* text, const char* operation) {
-    if (!text || !*text) throw ScratchIoError(EINVAL, operation);
+    if (!text || !*text) arena_error(EINVAL, operation, "arena_backing");
     std::uint64_t value = 0;
     for (const char* at = text; *at; ++at) {
-        if (*at < '0' || *at > '9') throw ScratchIoError(EINVAL, operation);
+        if (*at < '0' || *at > '9') arena_error(EINVAL, operation, "arena_backing");
         const auto digit = static_cast<std::uint64_t>(*at - '0');
         if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10)
-            throw ScratchIoError(EFBIG, operation);
+            arena_error(EFBIG, operation, "arena_backing");
         value = value * 10 + digit;
     }
-    if (value == 0) throw ScratchIoError(EINVAL, operation);
+    if (value == 0) arena_error(EINVAL, operation, "arena_backing");
     return value;
 }
 
@@ -59,34 +60,38 @@ int duplicate_fd(int fd) {
     int result;
     do { result = ::fcntl(fd, F_DUPFD_CLOEXEC, 0); }
     while (result < 0 && errno == EINTR);
-    if (result < 0) arena_error(errno, "scratch arena duplicate");
+    if (result < 0) arena_error(errno, "scratch arena duplicate", "arena_backing");
     return result;
 }
 
 void validate_backing_size(int fd, std::uint64_t bytes, int mismatch_error,
-                           const char* operation) {
+                           const char* operation, const char* reason = "arena_io") {
     struct stat status{};
     int result;
     do { result = ::fstat(fd, &status); } while (result != 0 && errno == EINTR);
-    if (result != 0) arena_error(errno, operation);
+    if (result != 0) arena_error(errno, operation, reason);
     if (!S_ISREG(status.st_mode) || status.st_size < 0
         || static_cast<std::uint64_t>(status.st_size) != bytes)
-        throw ScratchIoError(mismatch_error, operation);
+        arena_error(mismatch_error, operation, reason);
 }
 
 ScratchArenaBackend validate_backing(int fd, std::uint64_t bytes) {
-    validate_backing_size(fd, bytes, EINVAL, "scratch arena backing");
+    validate_backing_size(fd, bytes, EINVAL, "scratch arena backing", "arena_backing");
 
 #if defined(__linux__)
     int seals;
     do { seals = ::fcntl(fd, F_GET_SEALS); } while (seals < 0 && errno == EINTR);
     if (seals >= 0) {
         constexpr int required = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+        // Ordinary tmpfs/shmem files have sealing disabled. Fstat has
+        // already checked type and size; paths (including "(deleted)")
+        // play no part in classifying either regular-file shape.
+        if (seals == F_SEAL_SEAL) return ScratchArenaBackend::regular_file;
         if ((seals & required) != required)
-            throw ScratchIoError(EINVAL, "scratch arena seals");
+            arena_error(EINVAL, "scratch arena seals", "arena_backing");
         return ScratchArenaBackend::sealed_memfd;
     }
-    if (errno != EINVAL) arena_error(errno, "scratch arena seals");
+    if (errno != EINVAL) arena_error(errno, "scratch arena seals", "arena_backing");
 #endif
     return ScratchArenaBackend::regular_file;
 }
@@ -118,30 +123,31 @@ struct ScratchArena::Impl {
         const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         const auto chunks = bytes / kChunkBytes;
         if (bytes > maximum || chunks > std::numeric_limits<std::uint32_t>::max())
-            throw ScratchIoError(EFBIG, "scratch arena size");
-        if (chunks == 0) throw ScratchIoError(EINVAL, "scratch arena size");
+            arena_error(EFBIG, "scratch arena size", "arena_backing");
+        if (chunks == 0) arena_error(EINVAL, "scratch arena size", "arena_backing");
         counters.backend = validate_backing(fd.value, bytes);
 
         const long page_result = ::sysconf(_SC_PAGESIZE);
-        if (page_result <= 0) throw ScratchIoError(EINVAL, "scratch arena page size");
+        if (page_result <= 0) arena_error(EINVAL, "scratch arena page size", "arena_backing");
         const auto page = static_cast<std::uint64_t>(page_result);
         if (page > kChunkBytes || kChunkBytes % page != 0)
-            throw ScratchIoError(EINVAL, "scratch arena page size");
+            arena_error(EINVAL, "scratch arena page size", "arena_backing");
         const char* configured = std::getenv("PF_SCRATCH_WINDOW_BYTES");
         const auto requested = configured
             ? decimal(configured, "scratch arena window size") : kDefaultWindowBytes;
         const auto cap = requested - requested % page;
-        if (cap == 0) throw ScratchIoError(EINVAL, "scratch arena window size");
+        if (cap == 0) arena_error(EINVAL, "scratch arena window size", "arena_backing");
         window_bytes = static_cast<std::size_t>(std::min(cap, kChunkBytes));
         const auto windows_per_chunk = (kChunkBytes + window_bytes - 1) / window_bytes;
         const auto slots = std::min(cap / window_bytes, chunks * windows_per_chunk);
         if (slots > windows.max_size() || (chunks + 63) / 64 > free_bits.max_size())
-            throw ScratchIoError(EFBIG, "scratch arena metadata size");
+            arena_error(EFBIG, "scratch arena metadata size", "arena_backing");
         windows.resize(static_cast<std::size_t>(slots));
         free_bits.assign(static_cast<std::size_t>((chunks + 63) / 64),
                          std::numeric_limits<std::uint64_t>::max());
         if (chunks % 64 != 0)
             free_bits.back() = (std::uint64_t{1} << (chunks % 64)) - 1;
+        counters.bytes_supplied = bytes;
         counters.bytes_total = chunks * kChunkBytes;
         counters.chunks_total = counters.chunks_free = chunks;
     }
@@ -190,9 +196,19 @@ struct ScratchArena::Impl {
         return windows.front();
     }
 
+    [[noreturn]] void exhausted() const {
+        // Called only with mutex held. The snapshot survives unwinding,
+        // region release and detach; consumers need no English matching.
+        throw ScratchIoError(EFBIG, "scratch arena exhausted",
+            {{"reason", "arena_exhausted"}, {"high_water_bytes", counters.high_water},
+             {"arena_bytes", supplied_bytes}});
+    }
+
     std::uint32_t claim_chunk() {
         if (counters.chunks_free == 0)
-            throw ScratchIoError(EFBIG, "scratch arena exhausted");
+            exhausted();
+        // search_word always starts at the lowest possibly free word;
+        // release_chunk lowers it regardless of punching/unmapping results.
         while (free_bits[search_word] == 0) ++search_word;
         auto& word = free_bits[search_word];
         unsigned bit = 0;
@@ -241,9 +257,9 @@ struct ScratchArena::Impl {
         const auto old_count = region.chunks.size();
         if (target > counters.chunks_total
             || target - old_count > counters.chunks_free)
-            throw ScratchIoError(EFBIG, "scratch arena exhausted");
+            exhausted();
         if (target > region.chunks.max_size())
-            throw ScratchIoError(EFBIG, "scratch arena chunk table size");
+            arena_error(EFBIG, "scratch arena chunk table size");
         if (target > region.chunks.capacity()) {
             // Amortized table growth: at most two entries of capacity per
             // live chunk. No window/LRU/bitmap allocation on the I/O path.
@@ -252,9 +268,9 @@ struct ScratchArena::Impl {
                 std::min(counters.chunks_total, capacity + std::max<std::uint64_t>(capacity, 1)));
             try { region.chunks.reserve(static_cast<std::size_t>(next)); }
             catch (const std::bad_alloc&) {
-                throw ScratchIoError(ENOMEM, "scratch arena chunk table");
+                arena_error(ENOMEM, "scratch arena chunk table");
             } catch (const std::length_error&) {
-                throw ScratchIoError(EFBIG, "scratch arena chunk table size");
+                arena_error(EFBIG, "scratch arena chunk table size");
             }
         }
         try {
@@ -300,9 +316,9 @@ void ScratchArena::attach(int fd, std::uint64_t bytes) {
             arena_error(errno, "scratch arena ignore SIGXFSZ");
         singleton_ = std::move(candidate);
     } catch (const std::bad_alloc&) {
-        throw ScratchIoError(ENOMEM, "scratch arena metadata");
+        arena_error(ENOMEM, "scratch arena metadata", "arena_backing");
     } catch (const std::length_error&) {
-        throw ScratchIoError(EFBIG, "scratch arena metadata size");
+        arena_error(EFBIG, "scratch arena metadata size", "arena_backing");
     }
 }
 
@@ -310,7 +326,7 @@ void ScratchArena::attach_from_environment() {
     const char* fd = std::getenv("PF_SCRATCH_ARENA_FD");
     if (!fd) return;
     if (decimal(fd, "scratch arena environment fd") != kInheritedFd)
-        throw ScratchIoError(EINVAL, "scratch arena environment fd");
+        arena_error(EINVAL, "scratch arena environment fd", "arena_backing");
     const auto bytes = decimal(std::getenv("PF_SCRATCH_ARENA_BYTES"),
                                "scratch arena environment bytes");
     attach(kInheritedFd, bytes);
@@ -356,7 +372,7 @@ void ScratchArena::ensure_size(Region& region, std::uint64_t bytes) {
 void ScratchArena::write(Region& region, std::uint64_t offset,
                          const void* data, std::size_t length) {
     if (length == 0) return;
-    if (!data) throw ScratchIoError(EFAULT, "scratch arena write");
+    if (!data) arena_error(EFAULT, "scratch arena write");
     const std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->grow(region, offset + length);
     const auto* source = static_cast<const unsigned char*>(data);
@@ -377,10 +393,10 @@ void ScratchArena::write(Region& region, std::uint64_t offset,
 void ScratchArena::read(const Region& region, std::uint64_t offset,
                         void* data, std::size_t length) const {
     if (length == 0) return;
-    if (!data) throw ScratchIoError(EFAULT, "scratch arena read");
+    if (!data) arena_error(EFAULT, "scratch arena read");
     const std::lock_guard<std::mutex> lock(impl_->mutex);
     if (offset > region.size || length > region.size - offset)
-        throw ScratchIoError(EIO, "scratch read");
+        arena_error(EIO, "scratch read");
     auto* destination = static_cast<unsigned char*>(data);
     std::size_t received = 0;
     while (received < length) {

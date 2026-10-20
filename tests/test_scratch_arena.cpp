@@ -4,7 +4,9 @@
 #endif
 
 #include "global_allocation_replacement.hpp"
+#include "../src/report_sink_writer.hpp"
 
+#include <pineforge/pineforge.h>
 #include <pineforge/detail/disk_id_table.hpp>
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_file.hpp>
@@ -18,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <random>
@@ -33,6 +36,9 @@
 #include <vector>
 
 #if defined(__linux__)
+#include <linux/magic.h>
+#include <sys/vfs.h>
+
 // Linker wrapping stays in this test executable; production has no fault
 // hooks. One-shot faults also prove that a short read is not retried.
 namespace scratch_syscalls {
@@ -110,17 +116,68 @@ void require(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
 }
 
+std::string failure_args(const pineforge::RunFailureValue& failure) {
+    return failure.args ? *failure.args : "{}";
+}
+
+std::string exhaustion_args(std::uint64_t high_water, std::uint64_t arena_bytes) {
+    return "{\"arena_bytes\":" + std::to_string(arena_bytes)
+        + ",\"high_water_bytes\":" + std::to_string(high_water)
+        + ",\"reason\":\"arena_exhausted\"}";
+}
+
 template<class F>
-void expect_io(F&& operation, int error, const char* message = nullptr) {
+void expect_io(F&& operation, int error, const char* message = nullptr,
+               const char* reason = nullptr) {
     bool caught = false;
     try { operation(); }
     catch (const ScratchIoError& failure) {
         caught = failure.code().value() == error
             && pineforge::classify_run_failure(failure).code
                 == pineforge::RunFailureCode::report_sink_failed
-            && (!message || std::strstr(failure.what(), message));
+            && (!message || std::strstr(failure.what(), message))
+            && (!reason || failure_args(pineforge::classify_run_failure(failure))
+                == std::string("{\"reason\":\"") + reason + "\"}");
     }
-    require(caught, "ScratchIoError preserves errno, message and report_sink_failed");
+    require(caught, "ScratchIoError preserves errno, message, code and typed reason");
+}
+
+template<class F>
+void expect_backing(F&& operation, int error, const char* message = nullptr) {
+    expect_io(std::forward<F>(operation), error, message, "arena_backing");
+}
+
+template<class F>
+void expect_exhaustion(F&& operation, std::uint64_t high_water, std::uint64_t arena_bytes) {
+    bool caught = false;
+    try { operation(); }
+    catch (const ScratchIoError& failure) {
+        const auto typed = pineforge::classify_run_failure(failure);
+        caught = failure.code().value() == EFBIG
+            && typed.code == pineforge::RunFailureCode::report_sink_failed
+            && failure_args(typed) == exhaustion_args(high_water, arena_bytes);
+    }
+    require(caught, "capacity refusal carries arena_exhausted and both exact byte counts");
+}
+
+void check_report_arena_stats(std::uint64_t high_water, std::uint64_t arena_bytes) {
+    std::uint64_t observed_high = UINT64_MAX, observed_size = UINT64_MAX;
+    require(pf_report_scratch_arena_stats(&observed_high, &observed_size) == 0
+                && observed_high == high_water && observed_size == arena_bytes,
+            "C ABI returns diagnostic high-water and the supplied size, including tail");
+}
+
+void report_arena_stats_contract() {
+    check_report_arena_stats(0, 0);
+    std::uint64_t sentinel = 37;
+    require(pf_report_scratch_arena_stats(nullptr, &sentinel) == -1 && sentinel == 37,
+            "NULL high-water pointer leaves the other output unchanged");
+    require(pf_report_scratch_arena_stats(&sentinel, nullptr) == -1 && sentinel == 37,
+            "NULL size pointer leaves the other output unchanged");
+    require(pf_report_scratch_arena_stats(nullptr, nullptr) == -1,
+            "two NULL output pointers are refused");
+    require(pf_report_scratch_arena_stats(&sentinel, &sentinel) == -1 && sentinel == 37,
+            "aliased output pointers are refused unchanged");
 }
 
 template<class F>
@@ -193,8 +250,8 @@ struct TemporaryDirectory {
 
 Backing regular_backing(std::uint64_t bytes, bool dirty = false,
                          const char* parent = ".") {
-    // Keep the disk fixture on the build filesystem, not a possibly tmpfs
-    // /tmp. An ext4-style backend must answer F_GET_SEALS with EINVAL.
+    // Use the build filesystem. Disk files answer EINVAL; a build directory
+    // on tmpfs answers F_SEAL_SEAL. Both are regular-file arena shapes.
     TemporaryDirectory directory(parent);
     std::string name = directory.path + "/arena-XXXXXX";
     Backing backing(::mkstemp(name.data()), bytes);
@@ -205,8 +262,9 @@ Backing regular_backing(std::uint64_t bytes, bool dirty = false,
     while (allocation == EINTR);
     require(allocation == 0, "parent preallocates all regular arena blocks");
     errno = 0;
-    require(::fcntl(backing.fd, F_GET_SEALS) == -1 && errno == EINVAL,
-            "regular arena fixture requires a disk filesystem with no seals");
+    const int seals = ::fcntl(backing.fd, F_GET_SEALS);
+    require((seals == -1 && errno == EINVAL) || seals == F_SEAL_SEAL,
+            "regular arena fixture has no sealing support or sealing is disabled");
 #else
     require(::ftruncate(backing.fd, static_cast<off_t>(bytes)) == 0,
             "parent sizes regular backing");
@@ -248,8 +306,11 @@ Backing arena_backing(ScratchArenaBackend backend, std::uint64_t bytes, bool dir
 }
 
 void check_backend(const Backing& backing) {
-    require(ScratchArena::attached()->stats().backend == backing.backend,
+    const auto stats = ScratchArena::attached()->stats();
+    require(stats.backend == backing.backend,
             "stats reports the backend chosen from the real descriptor");
+    require(stats.bytes_supplied == backing.bytes, "stats retain the exact wrapper size");
+    check_report_arena_stats(stats.high_water, backing.bytes);
 }
 
 struct Attachment {
@@ -271,6 +332,7 @@ void check_stats(std::uint64_t cap, std::uint64_t chunks) {
                 "free and live chunks partition the arena");
         require(stats.high_water >= stats.bytes_used && stats.high_water <= stats.bytes_total,
                 "allocation high-water bounds current use");
+        check_report_arena_stats(stats.high_water, stats.bytes_supplied);
         require(stats.windows_mapped_bytes <= cap, "all mapped windows obey the cap");
     } else {
         require(cap == 0, "file replay did not attach an arena implicitly");
@@ -396,39 +458,39 @@ void file_contract() {
 
 void invalid_backing_and_environment(ScratchArenaBackend backend) {
     auto backing = arena_backing(backend, 4 * kChunk);
-    expect_io([&] { ScratchArena::attach(backing.fd, backing.bytes - 1); }, EINVAL);
-    expect_io([&] { ScratchArena::attach(backing.fd, backing.bytes + 1); }, EINVAL);
-    expect_io([&] { ScratchArena::attach(backing.fd, 0); }, EINVAL);
-    expect_io([&] { ScratchArena::attach(-1, backing.bytes); }, EBADF);
+    expect_backing([&] { ScratchArena::attach(backing.fd, backing.bytes - 1); }, EINVAL);
+    expect_backing([&] { ScratchArena::attach(backing.fd, backing.bytes + 1); }, EINVAL);
+    expect_backing([&] { ScratchArena::attach(backing.fd, 0); }, EINVAL);
+    expect_backing([&] { ScratchArena::attach(-1, backing.bytes); }, EBADF);
     int descriptors[2]{};
     require(::pipe(descriptors) == 0, "create non-regular descriptor");
     Backing pipe_read(descriptors[0], 4 * kChunk);
     Backing pipe_write(descriptors[1], 4 * kChunk);
-    expect_io([&] { ScratchArena::attach(pipe_read.fd, pipe_read.bytes); }, EINVAL);
+    expect_backing([&] { ScratchArena::attach(pipe_read.fd, pipe_read.bytes); }, EINVAL);
     require(!ScratchArena::attached(), "invalid backing never publishes an attachment");
     {
         Environment cap("PF_SCRATCH_WINDOW_BYTES", "1");
-        expect_io([&] { ScratchArena::attach(backing.fd, backing.bytes); }, EINVAL);
+        expect_backing([&] { ScratchArena::attach(backing.fd, backing.bytes); }, EINVAL);
     }
     for (const char* invalid : {"", "-1", "+5", " 5", "5x", "4", "2147483648"}) {
         Environment fd("PF_SCRATCH_ARENA_FD", invalid);
         Environment bytes("PF_SCRATCH_ARENA_BYTES", "4194304");
-        expect_io([] { ScratchArena::attach_from_environment(); }, EINVAL);
+        expect_backing([] { ScratchArena::attach_from_environment(); }, EINVAL);
     }
     for (const char* invalid : {"", "-1", " 1", "1x", "0"}) {
         Environment fd("PF_SCRATCH_ARENA_FD", "5");
         Environment bytes("PF_SCRATCH_ARENA_BYTES", invalid);
-        expect_io([] { ScratchArena::attach_from_environment(); }, EINVAL);
+        expect_backing([] { ScratchArena::attach_from_environment(); }, EINVAL);
     }
     {
         Environment fd("PF_SCRATCH_ARENA_FD", "5");
         Environment bytes("PF_SCRATCH_ARENA_BYTES", nullptr);
-        expect_io([] { ScratchArena::attach_from_environment(); }, EINVAL);
+        expect_backing([] { ScratchArena::attach_from_environment(); }, EINVAL);
     }
     {
         Environment fd("PF_SCRATCH_ARENA_FD", "5");
         Environment bytes("PF_SCRATCH_ARENA_BYTES", "18446744073709551616");
-        expect_io([] { ScratchArena::attach_from_environment(); }, EFBIG);
+        expect_backing([] { ScratchArena::attach_from_environment(); }, EFBIG);
     }
     {
         Environment fd("PF_SCRATCH_ARENA_FD", nullptr);
@@ -468,8 +530,8 @@ void interleave_exhaustion_and_reuse(const Backing& backing, std::uint64_t cap) 
     check_stats(cap, 4);
     require(ScratchArena::attached()->stats().chunks_free == 0, "model fills every chunk");
     const std::uint8_t byte = 0x5d;
-    expect_io([&] { extra.write(0, &byte, 1); }, EFBIG, "scratch arena exhausted");
-    expect_io([&] { first.ensure_size(3 * kChunk); }, EFBIG, "scratch arena exhausted");
+    expect_exhaustion([&] { extra.write(0, &byte, 1); }, 4 * kChunk, backing.bytes);
+    expect_exhaustion([&] { first.ensure_size(3 * kChunk); }, 4 * kChunk, backing.bytes);
     check_stats(cap, 4);
     compare(first, reference[0]);
     compare(second, reference[1]);
@@ -490,6 +552,164 @@ void interleave_exhaustion_and_reuse(const Backing& backing, std::uint64_t cap) 
     const auto stats = ScratchArena::attached()->stats();
     require(stats.windows_mapped_bytes == 0 && stats.high_water == backing.bytes,
             "release unmaps windows and retains independently reached high-water");
+}
+
+struct ExhaustionReplay {
+    std::size_t failing_operation;
+    std::uint64_t high_water;
+    pineforge::RunFailureValue failure;
+};
+
+ExhaustionReplay exhaustion_replay(ScratchArenaBackend backend, std::uint64_t cap) {
+    const auto configured_cap = std::to_string(cap);
+    Environment windows("PF_SCRATCH_WINDOW_BYTES", configured_cap.c_str());
+    auto backing = arena_backing(backend, 6 * kChunk + 149, true);
+    Attachment attachment(backing);
+    std::array<ScratchFile, 3> files;
+    std::array<std::vector<std::uint8_t>, 3> contents;
+    std::array<std::vector<std::size_t>, 3> ownership;
+    // Independent physical-chunk model: count distinct ids ever assigned,
+    // rather than reading the arena's high-water as an expected value.
+    const auto chunk_count = static_cast<std::size_t>(backing.bytes / kChunk);
+    std::vector<bool> busy(chunk_count), ever_claimed(chunk_count);
+    const auto model_high_water = [&] {
+        return static_cast<std::uint64_t>(std::count(ever_claimed.begin(),
+                                                   ever_claimed.end(), true)) * kChunk;
+    };
+    const auto check_model = [&] {
+        check_stats(cap, static_cast<std::uint64_t>(std::count(busy.begin(), busy.end(), true)));
+        require(ScratchArena::attached()->stats().high_water == model_high_water(),
+                "high-water equals independently counted distinct chunks times 1 MiB");
+        check_report_arena_stats(model_high_water(), backing.bytes);
+    };
+    enum class Kind { write, reserve, read, clear };
+    struct Operation {
+        Kind kind;
+        std::size_t file;
+        std::uint64_t offset;
+        std::size_t length;
+    };
+    const Operation script[]{
+        {Kind::write,   0, kChunk - 3,       7},
+        {Kind::write,   1, 0,               11},
+        {Kind::reserve, 2, kChunk + 19,      0},
+        {Kind::read,    0, kChunk - 3,       7},
+        {Kind::clear,   0, 0,                0},
+        {Kind::reserve, 1, 2 * kChunk + 31,  0},
+        {Kind::write,   2, kChunk - 5,      17},
+        {Kind::clear,   1, 0,                0},
+        {Kind::write,   0, 3 * kChunk - 7,  19},
+        {Kind::write,   2, 0,               97},
+        {Kind::clear,   0, 0,                0},
+        {Kind::reserve, 1, 2 * kChunk + 5,   0},
+        {Kind::write,   2, 2 * kChunk - 4,   9},
+        {Kind::read,    1, kChunk - 9,      31},
+        {Kind::clear,   1, 0,                0},
+        {Kind::reserve, 0, 2 * kChunk,       0},
+        // Two chunks needed, one free: an atomic refusal, with live use
+        // below a previously reached peak. Neither counter can be faked
+        // from the requested size or the current number of live chunks.
+        {Kind::write,   1, kChunk - 3,       7},
+    };
+    check_model();
+    for (std::size_t index = 0; index < std::size(script); ++index) {
+        const auto& operation = script[index];
+        auto& file = files[operation.file];
+        auto& reference = contents[operation.file];
+        auto& owned = ownership[operation.file];
+        if (operation.kind == Kind::clear) {
+            file.clear();
+            for (const auto chunk : owned) busy[chunk] = false;
+            owned.clear();
+            reference.clear();
+            check_model();
+            continue;
+        }
+        file.open("deterministic-arena-script");
+        const auto requested = operation.kind == Kind::write
+            ? operation.offset + operation.length
+            : operation.kind == Kind::reserve ? operation.offset : reference.size();
+        const auto size = std::max<std::uint64_t>(reference.size(), requested);
+        const auto target = static_cast<std::size_t>(size / kChunk + (size % kChunk != 0));
+        const bool model_exhausted = target - owned.size()
+            > static_cast<std::size_t>(std::count(busy.begin(), busy.end(), false));
+        std::vector<std::uint8_t> payload(operation.length);
+        for (std::size_t i = 0; i < payload.size(); ++i)
+            payload[i] = static_cast<std::uint8_t>(index * 29 + i * 17);
+        try {
+            switch (operation.kind) {
+            case Kind::write:
+                file.write(operation.offset, payload.data(), payload.size());
+                break;
+            case Kind::reserve:
+                file.ensure_size(operation.offset);
+                break;
+            case Kind::read:
+                file.read(operation.offset, payload.data(), payload.size());
+                require(std::equal(payload.begin(), payload.end(),
+                                   reference.begin() + static_cast<std::ptrdiff_t>(operation.offset)),
+                        "scripted reads match the independent byte model");
+                break;
+            case Kind::clear:
+                break; // Handled above, including reference ownership.
+            }
+        } catch (const ScratchIoError& error) {
+            const auto failure = pineforge::classify_run_failure(error);
+            require(model_exhausted && error.code().value() == EFBIG
+                        && failure.code == pineforge::RunFailureCode::report_sink_failed
+                        && failure_args(failure) == exhaustion_args(model_high_water(), backing.bytes),
+                    "the model predicts the failing operation, reason and exact snapshot");
+            check_model(); // Failed multi-chunk grow claimed nothing.
+            for (std::size_t i = 0; i < files.size(); ++i) {
+                if (!files[i].opened()) continue;
+                std::vector<std::uint8_t> observed(contents[i].size());
+                files[i].read(0, observed.data(), observed.size());
+                require(observed == contents[i], "exhaustion preserves every store's bytes");
+                files[i].clear();
+            }
+            check_stats(cap, 0);
+            check_report_arena_stats(model_high_water(), backing.bytes);
+            return {index, model_high_water(), failure};
+        }
+        require(!model_exhausted, "the real allocator must refuse where the model exhausts");
+        while (owned.size() < target) {
+            const auto free = std::find(busy.begin(), busy.end(), false);
+            require(free != busy.end(), "reference model has space for every accepted claim");
+            const auto chunk = static_cast<std::size_t>(std::distance(busy.begin(), free));
+            busy[chunk] = ever_claimed[chunk] = true;
+            owned.push_back(chunk);
+        }
+        reference.resize(static_cast<std::size_t>(size));
+        if (operation.kind == Kind::write)
+            std::copy(payload.begin(), payload.end(),
+                      reference.begin() + static_cast<std::ptrdiff_t>(operation.offset));
+        check_model();
+    }
+    throw std::runtime_error("the deterministic script never reached its required exhaustion");
+}
+
+void deterministic_exhaustion(ScratchArenaBackend backend) {
+    const auto first = exhaustion_replay(backend, 65536);
+    for (const auto cap : {UINT64_C(65536), 2 * kChunk, 2 * kChunk}) {
+        const auto repeated = exhaustion_replay(backend, cap);
+        require(repeated.failing_operation == first.failing_operation
+                    && repeated.high_water == first.high_water
+                    && repeated.failure.code == first.failure.code
+                    && failure_args(repeated.failure) == failure_args(first.failure),
+                "repeat and different-window replays fail at the same index with identical diagnostics");
+    }
+    // The exception's copy of the counts remains valid after every region
+    // has been cleared and its attachment has been destroyed.
+    require(failure_args(first.failure) == exhaustion_args(first.high_water, 6 * kChunk + 149),
+            "exhaustion detail survives teardown without querying a detached arena");
+    check_report_arena_stats(0, 0);
+    auto small = arena_backing(backend, 2 * kChunk + 37);
+    Attachment attachment(small);
+    ScratchFile file;
+    file.open("oversized-first-claim");
+    expect_exhaustion([&] { file.ensure_size(3 * kChunk); }, 0, small.bytes);
+    check_stats(ScratchArena::kDefaultWindowBytes, 0);
+    check_report_arena_stats(0, small.bytes);
 }
 
 void arena_replay_and_sparse_reuse(ScratchArenaBackend backend, ReplayResult expected) {
@@ -515,11 +735,13 @@ void arena_replay_and_sparse_reuse(ScratchArenaBackend backend, ReplayResult exp
         std::vector<std::uint8_t> observed(expected_zero.size(), 0xff);
         file.read(0, observed.data(), observed.size());
         require(observed == expected_zero, "new region never trusts dirty backing");
-        expect_io([&] { file.read(kChunk + 57, observed.data(), 1); }, EIO);
+        expect_io([&] { file.read(kChunk + 57, observed.data(), 1); },
+                  EIO, nullptr, "arena_io");
         const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         file.write(maximum, nullptr, 0);
         file.read(maximum, nullptr, 0);
-        expect_io([&] { file.write(maximum, observed.data(), 1); }, EFBIG);
+        expect_io([&] { file.write(maximum, observed.data(), 1); },
+                  EFBIG, "scratch offset exhausted", "arena_io");
         check_stats(65536, 2);
     }
     auto small = arena_backing(backend, 4 * kChunk);
@@ -586,7 +808,8 @@ void partial_subwindows(ScratchArenaBackend backend) {
         // linker-wrapped faults and jailed helper proof.
         require(::ftruncate(backing.fd, static_cast<off_t>(2 * kChunk - 1)) == 0,
                 "inject a short regular backing after allocation");
-        expect_io([&] { file.read(2 * kChunk - 2, observed.data(), 2); }, EIO, "scratch read");
+        expect_io([&] { file.read(2 * kChunk - 2, observed.data(), 2); },
+                  EIO, "scratch read", "arena_io");
     }
 }
 
@@ -664,34 +887,113 @@ void disk_id_table_uses_facade(ScratchArenaBackend backend) {
 
 #if defined(__linux__)
 void seal_validation() {
+    {
+        auto unsealed = memfd_backing(4 * kChunk, 0);
+        expect_backing([&] { ScratchArena::attach(unsealed.fd, unsealed.bytes); },
+                       EINVAL, "scratch arena seals");
+        require(!ScratchArena::attached(), "ALLOW_SEALING memfd with zero seals is refused");
+    }
     for (const int omitted : {F_SEAL_GROW, F_SEAL_SHRINK, F_SEAL_SEAL}) {
         auto backing = memfd_backing(4 * kChunk, kRequiredSeals & ~omitted);
-        expect_io([&] { ScratchArena::attach(backing.fd, backing.bytes); }, EINVAL,
-                  "scratch arena seals");
+        expect_backing([&] { ScratchArena::attach(backing.fd, backing.bytes); }, EINVAL,
+                       "scratch arena seals");
         require(!ScratchArena::attached(), "missing seal leaves no partial attachment");
     }
     auto unsealable = Backing(::memfd_create("pineforge-unsealable", MFD_CLOEXEC), 4 * kChunk);
     require(::ftruncate(unsealable.fd, static_cast<off_t>(unsealable.bytes)) == 0,
             "size memfd created without ALLOW_SEALING");
-    expect_io([&] { ScratchArena::attach(unsealable.fd, unsealable.bytes); }, EINVAL);
-    // The new contract treats every successful F_GET_SEALS as seal-capable,
-    // including ordinary tmpfs files. An incomplete mask must be refused.
-    struct stat status{};
-    if (::stat("/dev/shm", &status) == 0 && S_ISDIR(status.st_mode)
-        && ::access("/dev/shm", W_OK | X_OK) == 0) {
-        TemporaryDirectory directory("/dev/shm");
-        std::string name = directory.path + "/unsealed-XXXXXX";
-        Backing regular(::mkstemp(name.data()), 4 * kChunk);
-        require(::unlink(name.c_str()) == 0, "unlink seal-capable tmpfs fixture");
+    require(::fcntl(unsealable.fd, F_GET_SEALS) == F_SEAL_SEAL,
+            "memfd without ALLOW_SEALING has sealing disabled");
+    // No path/type-name heuristic: exactly SEAL also selects regular_file
+    // for an unsealable memfd, as it does for an ordinary shmem file.
+    Attachment attachment(unsealable);
+}
+
+void tmpfs_regular_backing() {
+    const char* temporary = std::getenv("TMPDIR");
+    for (const char* parent : {"/dev/shm", ".", temporary && *temporary ? temporary : "/tmp"}) {
+        struct statfs filesystem{};
+        if (::statfs(parent, &filesystem) != 0) {
+            require(errno == ENOENT || errno == ENOTDIR || errno == EACCES || errno == EPERM,
+                    "unexpected failure inspecting a tmpfs candidate");
+            continue;
+        }
+        if (filesystem.f_type != TMPFS_MAGIC || ::access(parent, W_OK | X_OK) != 0) continue;
+        std::string name = std::string(parent) + "/pineforge-arena-tmpfs-XXXXXX";
+        const int fd = ::mkstemp(name.data());
+        if (fd < 0) {
+            require(errno == EACCES || errno == EPERM || errno == EROFS,
+                    "writable tmpfs fixture creation must succeed");
+            continue;
+        }
+        Backing regular(fd, 4 * kChunk);
+        require(::unlink(name.c_str()) == 0, "unlink ordinary tmpfs fixture");
         require(::ftruncate(regular.fd, static_cast<off_t>(regular.bytes)) == 0,
-                "size seal-capable tmpfs fixture");
-        const int seals = ::fcntl(regular.fd, F_GET_SEALS);
-        require(seals >= 0 && (seals & kRequiredSeals) != kRequiredSeals,
-                "tmpfs witness answers F_GET_SEALS with incomplete seals");
-        expect_io([&] { ScratchArena::attach(regular.fd, regular.bytes); }, EINVAL,
-                  "scratch arena seals");
-        require(!ScratchArena::attached(), "seal-capable regular file fails closed");
+                "size ordinary tmpfs fixture");
+        require(::fcntl(regular.fd, F_GET_SEALS) == F_SEAL_SEAL,
+                "ordinary tmpfs file answers F_GET_SEALS with exactly SEAL");
+        Attachment attachment(regular);
+        ScratchFile file;
+        file.open("accepted-tmpfs-file");
+        const std::uint8_t expected = 0x97;
+        file.write(kChunk + 7, &expected, 1);
+        std::uint8_t observed = 0;
+        file.read(kChunk + 7, &observed, 1);
+        require(observed == expected, "tmpfs regular-file arena is usable");
+        return;
     }
+    std::fputs("SKIP tmpfs regular-file arena witness: no writable tmpfs path among "
+               "/dev/shm, the test directory and TMPDIR (or /tmp)\n", stderr);
+}
+
+void anonymous_regular_backing() {
+    TemporaryDirectory directory(".");
+    Backing backing(::open(directory.path.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600),
+                    4 * kChunk);
+    int allocation;
+    do { allocation = ::posix_fallocate(backing.fd, 0, static_cast<off_t>(backing.bytes)); }
+    while (allocation == EINTR);
+    require(allocation == 0, "preallocate the O_TMPFILE disk-arena shape");
+    Attachment attachment(backing);
+    ScratchFile file;
+    file.open("accepted-anonymous-file");
+    file.ensure_size(kChunk + 7);
+    std::array<std::uint8_t, 17> observed{};
+    observed.fill(0xff);
+    file.read(kChunk - 10, observed.data(), observed.size());
+    require(std::all_of(observed.begin(), observed.end(), [](std::uint8_t byte) { return byte == 0; }),
+            "anonymous regular-file backing is accepted without inspecting a deleted path");
+}
+
+void finalizer_epipe(ScratchArenaBackend backend) {
+    auto backing = arena_backing(backend, 2 * kChunk);
+    Attachment attachment(backing);
+    struct IgnoreSigpipe {
+        struct sigaction previous{};
+        IgnoreSigpipe() {
+            struct sigaction ignored{};
+            ignored.sa_handler = SIG_IGN;
+            ::sigemptyset(&ignored.sa_mask);
+            require(::sigaction(SIGPIPE, &ignored, &previous) == 0, "ignore SIGPIPE for EPIPE witness");
+        }
+        ~IgnoreSigpipe() { ::sigaction(SIGPIPE, &previous, nullptr); }
+    } ignore;
+    int descriptors[2]{};
+    require(::pipe(descriptors) == 0, "create finalizer pipe");
+    Backing reader(descriptors[0], 0), writer_fd(descriptors[1], 0);
+    const auto path = std::string("/proc/self/fd/") + std::to_string(writer_fd.fd);
+    const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1, path.c_str(), "", "."};
+    pineforge::report_sink::LineWriter writer(descriptor);
+    writer.write_header({false, false, false, 0, 0}); // Buffered until the trailer flush.
+    require(::close(std::exchange(reader.fd, -1)) == 0, "close pipe reader before finalization");
+    bool caught = false;
+    try { (void)writer.write_trailer(); }
+    catch (const pineforge::report_sink::WriterError& error) {
+        caught = error.reason() == pineforge::report_sink::WriterFailure::io
+            && error.error_number() == EPIPE;
+    }
+    require(caught, "finalizer EPIPE retains its sink I/O reason with either arena backend");
+    check_report_arena_stats(0, backing.bytes);
 }
 
 void jail_limits(std::uint64_t arena_bytes) {
@@ -773,7 +1075,8 @@ void syscall_refusals(const Backing& backing) {
         const auto reads = scratch_syscalls::reads;
         const auto stats = scratch_syscalls::stats;
         scratch_syscalls::next_read = fault;
-        expect_io([&] { file.read(17, observed.data(), observed.size()); }, EIO, "scratch read");
+        expect_io([&] { file.read(17, observed.data(), observed.size()); },
+                  EIO, "scratch read", "arena_io");
         require(scratch_syscalls::reads == reads + 1 && scratch_syscalls::stats == stats + 1,
                 "each short pread rechecks size and refuses without retrying a readable tail");
         file.read(17, observed.data(), observed.size());
@@ -786,23 +1089,26 @@ void syscall_refusals(const Backing& backing) {
     require(scratch_syscalls::reads == reads + 2 && observed == payload,
             "EINTR retries the real read and preserves bytes on either backend");
     for (const int error : {EFBIG, EPERM, EIO}) {
-        const int expected = error == EPERM ? EFBIG : error;
         scratch_syscalls::read_error = error;
         scratch_syscalls::next_read = scratch_syscalls::ReadFault::failure;
-        expect_io([&] { file.read(17, observed.data(), observed.size()); }, expected);
+        expect_io([&] { file.read(17, observed.data(), observed.size()); },
+                  error, nullptr, "arena_io");
         const auto stats = scratch_syscalls::stats;
         scratch_syscalls::next_read = scratch_syscalls::ReadFault::short_read;
         scratch_syscalls::next_stat_error = error;
-        expect_io([&] { file.read(17, observed.data(), observed.size()); }, expected);
+        expect_io([&] { file.read(17, observed.data(), observed.size()); },
+                  error, nullptr, "arena_io");
         require(scratch_syscalls::stats == stats + 1,
                 "short-read revalidation errors retain the typed refusal");
         const auto maps = scratch_syscalls::maps;
         scratch_syscalls::next_stat_error = error;
-        expect_io([&] { file.write(kChunk + 17, payload.data(), payload.size()); }, expected);
+        expect_io([&] { file.write(kChunk + 17, payload.data(), payload.size()); },
+                  error, nullptr, "arena_io");
         require(scratch_syscalls::maps == maps,
                 "a failed size check refuses before any new mmap");
         scratch_syscalls::next_map_error = error;
-        expect_io([&] { file.write(kChunk + 17, payload.data(), payload.size()); }, expected);
+        expect_io([&] { file.write(kChunk + 17, payload.data(), payload.size()); },
+                  error, nullptr, "arena_io");
         require(scratch_syscalls::maps == maps + 1,
                 "mapping syscall failures use the same typed refusal");
         check_stats(65536, 2);
@@ -837,24 +1143,26 @@ void regular_shrink_refusals(const Backing& backing) {
                 "helper changed the real shared backing's size");
         const auto maps = scratch_syscalls::maps;
         expect_io([&] { file.write(2 * kChunk, payload.data(), payload.size()); },
-                  EIO, "scratch arena map size");
+                  EIO, "scratch arena map size", "arena_io");
         expect_io([&] { file.write(0, payload.data(), payload.size()); },
-                  EIO, "scratch arena map size");
+                  EIO, "scratch arena map size", "arena_io");
         require(scratch_syscalls::maps == maps,
                 "the next operation refuses new windows both beyond and within the new size");
         std::array<std::uint8_t, 2> observed{};
         const auto stats = scratch_syscalls::stats;
         const auto reads = scratch_syscalls::reads;
         expect_io([&] { file.read(2 * kChunk - 2, observed.data(), observed.size()); },
-                  EIO, "scratch read");
+                  EIO, "scratch read", "arena_io");
         require(observed[0] == payload[0] && scratch_syscalls::reads == reads + 1
                     && scratch_syscalls::stats == stats + 1,
                 "real positive short read copies its prefix, rechecks size and refuses");
         const auto eof_stats = scratch_syscalls::stats;
-        expect_io([&] { file.read(2 * kChunk, observed.data(), 1); }, EIO, "scratch read");
+        expect_io([&] { file.read(2 * kChunk, observed.data(), 1); },
+                  EIO, "scratch read", "arena_io");
         require(scratch_syscalls::stats == eof_stats + 1,
                 "zero-byte backing read also rechecks size");
-        expect_io([&] { file.ensure_size(4 * kChunk); }, EIO, "scratch arena map size");
+        expect_io([&] { file.ensure_size(4 * kChunk); },
+                  EIO, "scratch arena map size", "arena_io");
         check_stats(65536, 3); // Failed zeroing returns its newly claimed chunk.
     }
     check_stats(65536, 0);
@@ -876,12 +1184,12 @@ void backend_under_jail(ScratchArenaBackend backend, ReplayResult expected) {
     child([&] {
         jail_limits(large.bytes);
         Environment cap("PF_SCRATCH_WINDOW_BYTES", "2097275"); // 2 MiB + 123; page-rounded cap
-        expect_io([&] { ScratchArena::attach(large.fd, large.bytes - 1); }, EINVAL);
-        expect_io([&] { ScratchArena::attach(large.fd, large.bytes + 1); }, EINVAL);
+        expect_backing([&] { ScratchArena::attach(large.fd, large.bytes - 1); }, EINVAL);
+        expect_backing([&] { ScratchArena::attach(large.fd, large.bytes + 1); }, EINVAL);
         int descriptors[2]{};
         require(::pipe(descriptors) == 0, "create non-regular fd in jailed validation");
         Backing pipe_read(descriptors[0], large.bytes), pipe_write(descriptors[1], large.bytes);
-        expect_io([&] { ScratchArena::attach(pipe_read.fd, pipe_read.bytes); }, EINVAL);
+        expect_backing([&] { ScratchArena::attach(pipe_read.fd, pipe_read.bytes); }, EINVAL);
         environment_fd_attach(large);
         const std::uint8_t byte = 0x6f;
         errno = 0;
@@ -926,6 +1234,7 @@ int main() {
         Environment bytes("PF_SCRATCH_ARENA_BYTES", nullptr);
         Environment cap("PF_SCRATCH_WINDOW_BYTES", nullptr);
         require(!ScratchArena::attached(), "test starts without process attachment");
+        report_arena_stats_contract();
         file_contract();
         ReplayResult expected{};
         {
@@ -937,20 +1246,25 @@ int main() {
         }
 #if defined(__linux__)
         seal_validation();
+        tmpfs_regular_backing();
+        anonymous_regular_backing();
 #endif
         for (const auto backend : kBackends) {
             invalid_backing_and_environment(backend);
+            deterministic_exhaustion(backend);
             arena_replay_and_sparse_reuse(backend, expected);
             default_cap_and_no_allocation(backend);
             partial_subwindows(backend);
             moves_lifetime_and_backend_selection(backend);
             disk_id_table_uses_facade(backend);
 #if defined(__linux__)
+            finalizer_epipe(backend);
             backend_under_jail(backend, expected);
 #endif
         }
         require(!ScratchArena::attached(), "all fixture regions and arenas were released");
-        std::puts("test_scratch_arena: reference, bounds, lifetime and backing checks passed");
+        check_report_arena_stats(0, 0);
+        std::puts("test_scratch_arena: reference, reasons, high-water, determinism and backing checks passed");
         return 0;
     } catch (const std::exception& failure) {
         std::fprintf(stderr, "test_scratch_arena: %s\n", failure.what());

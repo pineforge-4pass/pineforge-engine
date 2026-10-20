@@ -14,9 +14,9 @@ namespace pineforge::detail {
 // failure together, so callers keep their existing std::system_error catch.
 class ScratchIoError final : public std::system_error, public RunFailureInfo {
 public:
-    ScratchIoError(int error, const char* operation)
+    ScratchIoError(int error, const char* operation, const RunFailureArgs& args = {})
         : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
+          RunFailureInfo(RunFailureCode::report_sink_failed, args) {}
 };
 
 enum class ScratchArenaBackend : std::uint8_t {
@@ -32,6 +32,7 @@ struct ScratchArenaStats {
     std::uint64_t windows_mapped_bytes = 0; // Current mappings, not dirty bytes.
     std::uint64_t high_water = 0;           // Peak bytes_used since attach.
     ScratchArenaBackend backend = ScratchArenaBackend::regular_file;
+    std::uint64_t bytes_supplied = 0;       // Exact size given, including tail.
 };
 
 class ScratchFile;
@@ -44,8 +45,9 @@ class ScratchFile;
 // The wrapper owns sizing: this class never grows, shrinks, writes with
 // write/pwrite, or changes seals on the backing fd. It owns a CLOEXEC dup;
 // the caller keeps ownership of the supplied fd. Both backends require
-// S_ISREG and exactly the supplied size. On Linux, F_GET_SEALS success
-// requires GROW|SHRINK|SEAL; EINVAL selects an unsealed regular file.
+// S_ISREG and exactly the supplied size. On Linux, F_GET_SEALS returning
+// exactly SEAL (sealing disabled) or EINVAL selects a regular file;
+// GROW|SHRINK|SEAL selects sealed_memfd. All other seal masks are refused.
 // The wrapper preallocates regular files in a root-owned 0700 directory,
 // mode 0600, and passes O_RDWR. New mappings and short preads recheck size.
 // The one unrecoverable case is SIGBUS after a concurrent shrink invalidates
@@ -57,6 +59,14 @@ class ScratchFile;
 // Successful attach deliberately sets process-wide SIGXFSZ to SIG_IGN, and
 // detach does not restore it: a later EFBIG must be a typed refusal instead
 // of killing the strategy child under RLIMIT_FSIZE=0.
+//
+// Capacity is checked under the allocator lock, before mapping or claiming
+// any chunk for a grow. Lowest-free-chunk reuse depends only on prior claims
+// and releases, never on LRU state, mapping addresses or hole-punch success.
+// A single-threaded operation script therefore exhausts at the same operation
+// index for a given arena size, across window caps, absent other I/O/resource
+// failures. Concurrent regions share the same capacity bound, but scheduling
+// decides which operation reaches it; no per-thread failing-index guarantee.
 class ScratchArena final {
 public:
     static constexpr std::uint64_t kChunkBytes = 1024ULL * 1024ULL;
