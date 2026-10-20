@@ -233,6 +233,7 @@ Build the generated strategy module with the repository recipe (or
 | --- | --- |
 | [Strategy lifecycle](@ref lifecycle) | Handle ownership, run reuse and report freeing. |
 | [Configuration](@ref configuration) | Inputs, `strategy()` overrides, the bar magnifier, trace recording and the trade-start gate. |
+| [Scratch tables](@ref scratch_tables) | Disk or bounded memory, the default admission policy, jailed host/HPO setup, typed resource failures and planned jail proof. |
 | [Report schema](@ref report_schema) | `pf_report_t` field by field, including the equity curve. |
 | [Run-failure codes](@ref run_failure_codes) | The stable code and typed arguments beside a failed run's text: the getters, the rules, every code, and the catalog and per-release diff each release publishes. |
 | [Trading metrics reference](@ref metrics) | Every `pf_metrics_t` field: units, NaN rules, validation status. |

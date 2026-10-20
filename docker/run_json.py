@@ -146,6 +146,12 @@ fingerprint.provenance.runtime.report_window. --validate-window-only prints
 --so LIB --capabilities-json prints this runtime's capabilities. --run-phase-fd N
 sends the phase records (selected and ordinary runs). Without any of these options a
 run is the ordinary run described above, byte for byte.
+
+--profile jailed (or PINEFORGE_RUN_JSON_PROFILE=jailed, read once at host
+startup) installs bounded-memory scratch tables on every fresh handle and
+keeps the report sink OFF. It requires strategy_set_scratch_tables_v1; an
+older library is a typed incompatibility. The default profile is unjailed.
+See docs/pages/scratch-tables.md for the policy tier and remaining jail work.
 """
 from __future__ import annotations
 
@@ -2734,6 +2740,8 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     ]
     lib.run_backtest_full.restype = None
 
+    _bind_scratch_tables(lib)  # optional unless the host selects the jailed profile
+
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
@@ -2822,6 +2830,51 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
+
+
+class ScratchTablesC(ctypes.Structure):
+    """Exact pf_scratch_tables_v1: four uint32 fields, then eleven uint64 maxima."""
+    _fields_ = [(name, ctypes.c_uint32) for name in
+                ("struct_size", "version", "backend", "reserved")] + [
+        (name, ctypes.c_uint64) for name in
+        ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")]
+
+
+def _bind_scratch_tables(lib) -> None:
+    if hasattr(lib, "strategy_set_scratch_tables_v1"):
+        lib.strategy_set_scratch_tables_v1.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ScratchTablesC)]
+        lib.strategy_set_scratch_tables_v1.restype = ctypes.c_int
+
+
+def default_scratch_manifest(bars: int | None) -> ScratchTablesC:
+    """Host mirror of detail/scratch_defaults.hpp's P0 POLICY, not a measured bound.
+
+    None means a stream without a declared lifetime bar count. Each call makes
+    a fresh descriptor; the setter copies it and each run owns fresh occupancy.
+    """
+    if bars is None:
+        roots = 65536
+    else:
+        if bars < 0 or bars > ((1 << 64) - 1) // 2:
+            raise RunFailure("default scratch replacement reserve overflow",
+                             "scratch_capacity_exceeded", {"resource": "layout"})
+        roots = 2 * bars
+    return ScratchTablesC(
+        ctypes.sizeof(ScratchTablesC), 1, 1, 0,  # bounded_memory
+        0, 0,  # q is removed; retain its ABI fields with zero capacity
+        8192, 3145728, 4096, 2101248, 4096, 1048576, 27, 6912, roots)
+
+
+def apply_scratch_tables(lib, state, manifest: ScratchTablesC) -> None:
+    """Install this run/trial's admission before its first execution; no fallback."""
+    setter = getattr(lib, "strategy_set_scratch_tables_v1", None)
+    if setter is None:
+        raise StrategyLibraryError(
+            "bounded-memory execution requires strategy_set_scratch_tables_v1",
+            {"reason": "setter_missing"})
+    if setter(state, ctypes.byref(manifest)) != 0:
+        raise _engine_invariant("the fresh strategy refused its scratch-table manifest")
 
 
 def _bind_outputs(lib) -> None:
@@ -4561,6 +4614,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
+            if args.profile == "jailed":
+                apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
         except BaseException:
             lib.strategy_free(st)
             raise
@@ -4820,6 +4875,8 @@ def _legacy_abbreviations(argv, legacy_long, all_long):
 
 
 def _main(argv, binary_inputs) -> int:
+    # Host startup only: freeze the profile before any library/handle/run.
+    environment_profile = os.environ.get("PINEFORGE_RUN_JSON_PROFILE", "unjailed")
     ap = _ArgumentParser(description=__doc__,
                          formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--so",        type=Path, default=None, help="strategy.so path")
@@ -4917,13 +4974,21 @@ def _main(argv, binary_inputs) -> int:
                          "does not offer.")
     ap.add_argument("--results-digest", default=None,
                     help="Refused: this build offers no results digest.")
+    # Preserve selected-window prefixes too: --p formerly meant --preroll-bars.
+    pre_profile_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
+    ap.add_argument("--profile", choices=("unjailed", "jailed"), default=environment_profile,
+                    help="Host profile (default: PINEFORGE_RUN_JSON_PROFILE or unjailed). "
+                         "jailed requires bounded scratch tables and keeps the report sink OFF.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
+    argv = _legacy_abbreviations(argv, pre_profile_long, all_long)
     if not argv:
         # With no request, both the library and chart are missing. Preserve
         # the legacy aggregate refusal now that --ohlcv has alternatives.
         ap.error("the following arguments are required: --so, --ohlcv")
     args = ap.parse_args(argv)
+    if args.profile not in ("unjailed", "jailed"):
+        raise _request_invalid("PINEFORGE_RUN_JSON_PROFILE must be unjailed or jailed", "arguments")
 
     # Validate both required inputs together: chart data may now come from
     # CSV, binary, or the index. Checking only --so inside argparse would hide
@@ -5021,7 +5086,10 @@ def _main(argv, binary_inputs) -> int:
                 lib.strategy_set_magnifier_volume_weighted(st, 1)
             if args.outputs:
                 enable_outputs(lib, st)
-            sink = _new_report_sink(lib, st, args)
+            if args.profile == "jailed":
+                apply_scratch_tables(lib, st, default_scratch_manifest(n))
+            else:
+                sink = _new_report_sink(lib, st, args)
         except BaseException:
             try:
                 lib.strategy_free(st)
@@ -5055,7 +5123,7 @@ def _main(argv, binary_inputs) -> int:
             rep = ReportC(); st, sink = _make_state()
             try:
                 _run(st, rep)
-                if sink is not None:
+                if sink is not None or args.profile == "jailed":
                     _check_bench_run(lib, st)
             finally:
                 _free_sink_run(lib, st, rep, sink)
@@ -5064,7 +5132,7 @@ def _main(argv, binary_inputs) -> int:
             rep = ReportC(); st, sink = _make_state()
             try:
                 t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
-                if sink is not None:
+                if sink is not None or args.profile == "jailed":
                     _check_bench_run(lib, st)
                 samples_ns.append(t1 - t0)
             finally:
@@ -5268,6 +5336,8 @@ def _bind_report_sink(lib) -> None:
 
 
 def _new_report_sink(lib, state, args):
+    if getattr(args, "profile", "unjailed") == "jailed":
+        return None
     names = ("pf_report_sink_version", "strategy_set_report_sink_v1",
              "strategy_report_sink_receipt_v1")
     present = [hasattr(lib, name) for name in names]
