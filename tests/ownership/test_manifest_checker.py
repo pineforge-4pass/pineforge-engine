@@ -45,7 +45,7 @@ def emitted_schema(root: Path) -> dict:
     classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC"}
     functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict",
                  "_annualization_diagnostics", "_annualization_block"}
-    assigned = {"EQUITY_REPORT_KEYS", "MIN_ANNUALIZATION_SPAN_MS", "SHORT_SPAN_ANNUALIZED_FIELDS"}
+    assigned = {"EQUITY_REPORT_KEYS", "MIN_ANNUALIZATION_SPAN_MS"}
     selected = [ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
     found = set()
     for node in tree.body:
