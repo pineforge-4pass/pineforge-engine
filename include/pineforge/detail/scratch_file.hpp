@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -11,23 +11,18 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
 #include <utility>
 
 namespace pineforge::detail {
 
-// Keep the errno and std::system_error contract of the successor-root file,
-// and carry the run's typed scratch-I/O failure through the ordinary catcher.
-class ScratchIoError final : public std::system_error, public RunFailureInfo {
-public:
-    ScratchIoError(int error, const char* operation)
-        : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
-};
-
-// Run-owned, anonymous, close-on-exec scratch. All reads/writes are positional;
-// no shared cursor, global descriptor, mapping, or growing userspace buffer.
+// Single-thread-owned positional scratch. open() selects the explicitly
+// attached arena, or the original mkstemp/unlink/pwrite/pread backend.
+// Sparse growth reads as zero in both modes, including reused arena chunks;
+// reads beyond the logical end still fail with EIO. No implicit attachment
+// or RAM fallback. clear() releases the region and its mapped windows.
 class ScratchFile {
 public:
     ScratchFile() = default;
@@ -39,22 +34,47 @@ public:
             clear();
             fd_ = std::exchange(other.fd_, -1);
             directory_ = std::move(other.directory_);
+            arena_ = std::exchange(other.arena_, nullptr);
+            region_ = std::move(other.region_);
+            other.region_.size = 0;
         }
         return *this;
     }
     ~ScratchFile() { clear(); }
 
+    // Optional diagnostic identity; set before open(), including lazy opens.
+    // Default unknown, retained by clear/reopen and moves; file mode ignores
+    // it. ScratchFile remains noncopyable; owners cloning a store reapply it.
+    // CR150-CX's ports label cohort (cohorts_by_id_), exit_rank
+    // (exit_rank_keys_), sequence_index / erased_minima (IdPairStore data)
+    // and their *_idx files, partial_cycles (consumed_partial_exit_cycles_
+    // data) and partial_cycles_idx, and native_order's successor_roots.
+    // l22p labels curve (equity scratch shared by SpillCurve/read windows)
+    // and position_tail (L18's separate spill). Rehash replacement files
+    // inherit their index label before open(); prefixes are never identities.
+    void set_store(ScratchStore store) noexcept { region_.store = store; }
+
     void set_directory(const std::string& value) {
+        if (arena_) return;
         if (fd_ >= 0 && directory_ != value)
             throw std::logic_error("scratch directory changed after spill");
         directory_ = value;
     }
     void clear() noexcept {
+        if (arena_) arena_->release_region(region_);
+        arena_ = nullptr;
         if (fd_ >= 0) ::close(fd_);
         fd_ = -1;
     }
+    bool opened() const noexcept { return fd_ >= 0 || arena_ != nullptr; }
+    bool arena_backed() const noexcept { return arena_ != nullptr; }
     void open(const char* prefix) {
-        if (fd_ >= 0) return;
+        if (opened()) return;
+        if (auto* arena = ScratchArena::attached()) {
+            arena->open_region(region_);
+            arena_ = arena;
+            return;
+        }
         const char* temporary = std::getenv("TMPDIR");
         std::string name = directory_.empty()
             ? (temporary && *temporary ? temporary : "/tmp") : directory_;
@@ -75,13 +95,37 @@ public:
         }
         fd_ = opened;
     }
-    static void check_extent(std::uint64_t offset, std::size_t length) {
+    // Monotone, zero-filled growth, for sparse hash indexes and similar
+    // ftruncate users. Does not shrink or open the file. Arena mode claims
+    // chunks without a sizing syscall; file mode uses fstat + ftruncate.
+    void ensure_size(std::uint64_t bytes) {
+        check_extent(bytes, 0, arena_ != nullptr);
+        if (!opened()) throw std::logic_error("scratch growth before open");
+        if (arena_) {
+            arena_->ensure_size(region_, bytes);
+            return;
+        }
+        struct stat status{};
+        int result;
+        do { result = ::fstat(fd_, &status); } while (result != 0 && errno == EINTR);
+        if (result != 0) throw ScratchIoError(errno, "scratch size");
+        if (status.st_size >= static_cast<off_t>(bytes)) return;
+        do { result = ::ftruncate(fd_, static_cast<off_t>(bytes)); }
+        while (result != 0 && errno == EINTR);
+        if (result != 0) throw ScratchIoError(errno, "scratch resize");
+    }
+    static void check_extent(std::uint64_t offset, std::size_t length, bool arena = false) {
         const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         if (offset > maximum || length > maximum - offset)
-            throw ScratchIoError(EFBIG, "scratch offset exhausted");
+            throw ScratchIoError(EFBIG, "scratch offset exhausted",
+                                {{"reason", arena ? "arena_io" : "scratch_io"}});
     }
     void write(std::uint64_t offset, const void* data, std::size_t length) {
-        check_extent(offset, length);
+        check_extent(offset, length, arena_ != nullptr);
+        if (arena_) {
+            arena_->write(region_, offset, data, length);
+            return;
+        }
         const auto* bytes = static_cast<const unsigned char*>(data);
         std::size_t written = 0;
         while (written < length) {
@@ -95,7 +139,11 @@ public:
         }
     }
     void read(std::uint64_t offset, void* data, std::size_t length) const {
-        check_extent(offset, length);
+        check_extent(offset, length, arena_ != nullptr);
+        if (arena_) {
+            arena_->read(region_, offset, data, length);
+            return;
+        }
         auto* bytes = static_cast<unsigned char*>(data);
         std::size_t received = 0;
         while (received < length) {
@@ -112,5 +160,7 @@ public:
 private:
     int fd_ = -1;
     std::string directory_;
+    ScratchArena* arena_ = nullptr;
+    ScratchArena::Region region_;
 };
 } // namespace pineforge::detail
