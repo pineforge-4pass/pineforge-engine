@@ -102,22 +102,21 @@ CURL_CACHE_SAVE = ("${{ inputs.cold-cache != 'true' && steps.curl-build.outcome 
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
 VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
 PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
-# Every job with a runner in the workflows a CI run starts: its runs-on, its
-# timeout-minutes, exactly, and the command that must carry the core count.
-# Every one of them is the platform's own 360-minute job maximum, the only
-# hang catcher left (owner rule, 2026-10-12: no time limit of this repository
-# may fail a run for slowness); docs/ci.md says so.
+# Every job with a runner in the workflows a CI run starts: its runs-on and
+# the command that must carry the core count. No job or step may declare
+# timeout-minutes: owner #827 removed every declaration on 2026-10-20.
+# GitHub's own 6 h platform maximum is the only bound; docs/ci.md says so.
 JOB_RUNNERS = {
-    'ci.yml': {'changes': (LIGHT_RUNNER, 360, None),
-               'preflight': (LIGHT_RUNNER, 360, None),
-               'build': (MATRIX_RUNNER, 360, VERIFY),
-               'sanitizers': (LINUX_RUNNER, 360, VERIFY),
-               'kernel-only': (LINUX_RUNNER, 360, VERIFY),
-               'build-gate': (LIGHT_RUNNER, 360, None)},
-    'native-live.yml': {'native-live': (LINUX_RUNNER, 360, VERIFY),
-                         'native-live-gate': (LIGHT_RUNNER, 360, None)},
-    'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
-                          'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
+    'ci.yml': {'changes': (LIGHT_RUNNER, None),
+               'preflight': (LIGHT_RUNNER, None),
+               'build': (MATRIX_RUNNER, VERIFY),
+               'sanitizers': (LINUX_RUNNER, VERIFY),
+               'kernel-only': (LINUX_RUNNER, VERIFY),
+               'build-gate': (LIGHT_RUNNER, None)},
+    'native-live.yml': {'native-live': (LINUX_RUNNER, VERIFY),
+                         'native-live-gate': (LIGHT_RUNNER, None)},
+    'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, PARITY),
+                          'corpus-parity-subset': (LINUX_RUNNER, PARITY)},
 }
 # The docs deployment accepts pull_request, so retains its exact hosted routing.
 # L6's 15:40 addendum separately moves baseline promotion to pf-ci-release.
@@ -448,9 +447,13 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                     findings.append(f'{name} job {job} must set job env PF_CI_LABELS to {labels} exactly once')
             if job not in timed:
                 continue
-            _, minutes, command = timed[job]
-            if _job_values(body, 'timeout-minutes') != [str(minutes)]:
-                findings.append(f'{name} job {job} must allow {minutes} minutes')
+            _, command = timed[job]
+            if (_job_values(body, 'timeout-minutes')
+                    or any(_step_values(step, 'timeout-minutes')
+                           or _key_value(step.splitlines()[0].lstrip()[2:],
+                                         'timeout-minutes') is not None
+                           for step in _steps(body))):
+                findings.append(f'{name} job {job} must declare no timeout-minutes (owner #827)')
             # Keep parallelism tied to the runner's available cores.
             if not _sized(_counted_text(body), command):
                 findings.append(f'{name} job {job} must size its parallelism to the runner')

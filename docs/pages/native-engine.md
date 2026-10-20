@@ -2099,7 +2099,7 @@ per script calculation — after the callback returns, and after the
 with the **script interval's open**, at the same instant as that
 calculation's extremes fold, so the curve is identical with and without an
 intrabar path and a re-walk of it reproduces the scalars above bit for bit
-(`compute_equity_stats`, `engine_metrics.cpp:203`, "MUST mirror
+(`compute_equity_stats`, `engine_metrics.cpp:222`, "MUST mirror
 update_equity_extremes"). The result is one point per script bar, a finite
 drawdown/run-up walk, and metrics computed over a real series.
 

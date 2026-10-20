@@ -595,7 +595,7 @@ def _established_number(value: Any) -> Optional[float]:
 
 def _finite_actual(value: Any) -> bool:
     """Whether value, as the engine produced it, is a finite number: an int or a float that is
-    not a bool, not None (the report writes a non-finite double as null), not text, and not NaN
+    not a bool, not None (executed curve marks must be finite), not text, and not NaN
     or an infinity. Nothing is converted or read from text."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
@@ -619,7 +619,9 @@ def check_selected_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
     with the capital is skipped. No capital is guessed or written back, and every other check
     above, the finiteness of the actual anchor equity included, is made in both cases. When the
     provenance does establish a finite capital (a number or text spelling one), the anchor
-    equity must equal it, or the run is an engine invariant failure."""
+    equity must equal it, or the run is an engine invariant failure. The anchor is also the
+    initial capital the report writer recomputes the compounded cagr from, with or without an
+    established capital (run_json._annualization_diagnostics, window_anchor)."""
     if len(curve) != window_script_bars + 1:
         raise _invariant(f"the selected curve has {len(curve)} points, the plan says "
                          f"{window_script_bars + 1}")
