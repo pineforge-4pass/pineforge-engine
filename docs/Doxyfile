@@ -132,6 +132,7 @@ INPUT                  = groups.dox \
                          pages/run-failure-codes.md \
                          pages/metrics.md \
                          pages/configuration.md \
+                         pages/scratch-tables.md \
                          pages/magnifier.md \
                          pages/timeframes.md \
                          pages/mtf.md \
