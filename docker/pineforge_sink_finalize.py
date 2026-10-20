@@ -2,7 +2,9 @@
 """Trusted, bounded-memory finalizer for pf-report-sink/v1.
 
 Invocation (the launcher and this Python module take the same arguments):
-  pineforge-sink-finalize --in-fd N --out PATH|- [--run-id ID]
+  pineforge-sink-finalize --in-fd N --out - --max-bytes B --receipt-fd M
+      [--run-id ID]
+  pineforge-sink-finalize --in-fd N --out PATH [--run-id ID]
       [--spool-dir DIR] [--max-bytes B] [--receipt-fd M]
   python3 docker/pineforge_sink_finalize.py <the same arguments>
 
@@ -15,8 +17,12 @@ No particular cwd is needed; wrappers should pass absolute paths for file mode.
 With --out -, binary stdout carries the exact verified lines in input order,
 in one pass, with no spool or filesystem writes. This mode supports a jail
 with RLIMIT_FSIZE=0 and --no-fork. --spool-dir is ignored in this mode.
+--max-bytes B is REQUIRED and must be positive to bound the jailed sink
+stream; missing or non-positive B is a usage error (2), with no receipt.
+The wrapper supplies its planned whole-sink bound U as B. File mode keeps
+--max-bytes optional and accepts a nonnegative B.
 PROVISIONAL OUTPUT CONTRACT: stdout bytes are PROVISIONAL until exit 0.
-On exit 3/4/5/6/7 the consumer MUST discard everything received. The receipt
+On exit 3/4/5/6/7/8 the consumer MUST discard everything received. The receipt
 is written ONLY after the last stdout byte and a successful stdout flush.
 A stdout flush failure has no receipt. A broken stdout (EPIPE) is exit 5.
 --receipt-fd M must differ from stdout (fd 1); the default receipt fd is a
@@ -52,6 +58,15 @@ in stream length, not a universal numeric Python RSS limit.
 The 64 MiB regression test requires peak child RSS below 20 MiB for its
 16 KiB records, including the interpreter and imports.
 
+With --max-bytes B, both modes read at most B+1 input bytes. Exactly B
+bytes with a valid trailer and EOF succeed. Overflow stops at byte B+1
+and exits 8, without forwarding that byte. In stdout mode the reader sees
+all first B bytes before the separate one-byte overflow probe, so the
+same input and cap give the same stop point and verified prefix counts,
+independent of read chunk sizes. File-mode overflow counts are zero,
+because spool verification has not started. Earlier grammar, line or I/O
+failures can still stop the run before the cap.
+
 One compact JSON line goes to stdout in file mode, or exclusively to M
 when supplied (required with --out -).
 Keys, in order: complete, count_e, count_t, count_o, count_v, count_k,
@@ -61,7 +76,12 @@ includes the header, trailer and LFs; sha256 is the strict reader's logical
 digest of all bytes BEFORE the trailer, including the header and LFs.
 Failure receipts have complete=false and sha256="", with the byte count
 actually read and any counts folded by the reader before refusal. Usage
-errors have no receipt. Diagnostics go only to stderr, except when M=2
+errors have no receipt. ONLY the exit-8 receipt adds reason="sink_exhausted"
+after the counts and cap_bytes=B immediately after sink_bytes=B+1; every
+other receipt keeps the keys, order and encoding above. The wrapper maps
+exit 8 plus this receipt to report_sink_failed, reason=sink_exhausted,
+class engine_fault: refunded; COMPUTE re-places with 2x U.
+Diagnostics go only to stderr, except when M=2
 reserves stderr exclusively for the receipt. A receipt write failure also
 removes PATH and returns 5; the receiver must require exit 0.
 
@@ -70,9 +90,10 @@ Exit codes:
   2  usage error
   3  malformed stream: JSON/schema/line rule, run-id mismatch, or E/T/O/K order
   4  verification failure: trailer grammar, counts, SHA-256, or extra bytes
-  5  input/output I/O failure (including receipt/rename), or --max-bytes cap
+  5  input/output I/O failure (including receipt/rename)
   6  EOF without a trailer, including empty input/final fragments
   7  internal error
+  8  sink_exhausted: stream exceeds --max-bytes at byte B+1
 
 An unterminated final fragment is incomplete (6); a malformed LF-terminated
 JSON line is 3. Transport size and line limits are checked first, so an
@@ -154,12 +175,15 @@ class _Receipt:
         self.counts = {tag: 0 for tag in _TAGS}
         self.sink_bytes = 0
         self.sha256 = ""
+        self.cap_bytes = None
 
     def document(self, complete: bool) -> dict:
         return {
             "complete": complete,
             **{"count_" + tag.lower(): self.counts.get(tag, 0) for tag in _TAGS},
+            **({"reason": "sink_exhausted"} if self.cap_bytes is not None else {}),
             "sink_bytes": self.sink_bytes,
+            **({"cap_bytes": self.cap_bytes} if self.cap_bytes is not None else {}),
             "sha256": self.sha256 if complete else "",
             "finalizer_version": FINALIZER_VERSION,
         }
@@ -205,11 +229,14 @@ class _StreamInput(io.RawIOBase):
     def readinto(self, buffer) -> int:
         size = min(len(buffer), CHUNK_BYTES)
         if self.max_bytes is not None:
-            size = min(size, self.max_bytes - self.receipt.sink_bytes + 1)
+            # Deliver the entire allowed prefix before probing byte B+1.
+            # Discarding an overflowing chunk here would make reader counts
+            # depend on how the pipe split its reads.
+            size = min(size, max(1, self.max_bytes - self.receipt.sink_bytes))
         chunk = os.read(self.fd, size)
         self.receipt.sink_bytes += len(chunk)
         if self.max_bytes is not None and self.receipt.sink_bytes > self.max_bytes:
-            raise _Failure(5, "stream exceeds --max-bytes")
+            raise _Failure(8, "stream exceeds --max-bytes")
         self.line_bytes = _line_bound(chunk, self.line_bytes)
         buffer[:len(chunk)] = chunk
         return len(chunk)
@@ -227,7 +254,7 @@ def _receive(in_fd: int, spool_fd: int, receipt: _Receipt, max_bytes: int | None
             return
         receipt.sink_bytes += len(chunk)
         if max_bytes is not None and receipt.sink_bytes > max_bytes:
-            raise _Failure(5, "stream exceeds --max-bytes")
+            raise _Failure(8, "stream exceeds --max-bytes")
         line_bytes = _line_bound(chunk, line_bytes)
         _write_all(spool_fd, chunk)
 
@@ -315,12 +342,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--in-fd", type=_descriptor, required=True, metavar="N",
                         help="inherited blocking stream read descriptor")
     parser.add_argument("--out", type=Path, required=True, metavar="PATH|-",
-                        help="final sink path, or - for provisional binary stdout (requires --receipt-fd)")
+                        help="final sink path, or - for provisional binary stdout (requires --receipt-fd and positive --max-bytes)")
     parser.add_argument("--run-id", metavar="ID", help="require this exact header run_id")
     parser.add_argument("--spool-dir", type=Path, metavar="DIR",
                         help="private spool directory (default: output directory; ignored with --out -)")
-    parser.add_argument("--max-bytes", type=_nonnegative, metavar="B",
-                        help="hard input byte cap (default: none)")
+    parser.add_argument("--max-bytes", type=int, metavar="B",
+                        help="hard input byte cap (required and positive with --out -; optional and nonnegative in file mode)")
     parser.add_argument("--receipt-fd", type=_descriptor, default=1, metavar="M",
                         help="receipt write descriptor (default: stdout, fd 1)")
     return parser
@@ -348,8 +375,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.in_fd == args.receipt_fd:
         parser.error("--in-fd and --receipt-fd must be different descriptors")
     stdout_mode = args.out == Path("-")
+    if stdout_mode and (args.max_bytes is None or args.max_bytes <= 0):
+        parser.error("--out - requires a positive --max-bytes to bound the jailed sink stream")
     if stdout_mode and args.receipt_fd == 1:
         parser.error("--out - requires --receipt-fd different from stdout (fd 1)")
+    if args.max_bytes is not None and args.max_bytes < 0:
+        parser.error("--max-bytes must be a nonnegative integer")
     out = None if stdout_mode else os.path.abspath(args.out)
     receipt = _Receipt()
     spool = None
@@ -410,6 +441,9 @@ def main(argv: list[str] | None = None) -> int:
             _diagnostic(f"stdout flush internal error: {error}", args.receipt_fd)
             return 7
     try:
+        # Cleanup can replace an overflow with an I/O failure. Only the
+        # final exit-8 outcome gets the exhaustion-specific receipt keys.
+        receipt.cap_bytes = args.max_bytes if status == 8 else None
         line = json.dumps(receipt.document(status == 0), separators=(",", ":"), allow_nan=False)
         _write_all(args.receipt_fd, line.encode("ascii") + b"\n")
     except OSError as error:
