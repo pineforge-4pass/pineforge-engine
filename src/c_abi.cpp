@@ -36,7 +36,9 @@
  *     strategy_execution_observation_v1, pf_selected_window_version, pf_report_sink_version,
  *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
  *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
- *     strategy_report_sink_summary_v1, pf_report_scratch_arena_stats — the
+ *     strategy_report_sink_summary_v1, pf_report_scratch_arena_stats,
+ *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
+ *     pf_run_abort_restore_sigterm_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -64,6 +66,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <signal.h>
+#include "run_abort.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
@@ -81,6 +85,14 @@ int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_c
 }
 
 namespace {
+
+volatile sig_atomic_t run_sigterm_stop = 0;
+struct sigaction previous_sigterm {};
+bool sigterm_installed = false;
+
+void run_sigterm_handler(int) noexcept {
+    run_sigterm_stop = 1;
+}
 
 template <typename Fn>
 void pf_cabi_void(Fn&& fn) noexcept {
@@ -335,7 +347,38 @@ static_assert(static_cast<int>(pineforge::MagnifierDistribution::BACK_LOADED)  =
  * STRATEGY by the codegen (in emit_top.py::_emit_extern_c).
  * ─────────────────────────────────────────────────────────────────── */
 
+namespace pineforge {
+bool run_sigterm_requested() noexcept {
+    return sigterm_installed && run_sigterm_stop != 0;
+}
+} // namespace pineforge
+
 extern "C" {
+
+PF_API int pf_run_abort_install_sigterm_v1(void) {
+    // The caller blocks SIGTERM across installation. Repeated installation
+    // must not clear a cancellation that already arrived.
+    if (sigterm_installed) return 0;
+    struct sigaction action {};
+    action.sa_handler = run_sigterm_handler;
+    action.sa_flags = SA_RESTART;
+    if (::sigemptyset(&action.sa_mask) != 0) return -1;
+    run_sigterm_stop = 0;
+    if (::sigaction(SIGTERM, &action, &previous_sigterm) != 0) return -1;
+    sigterm_installed = true;
+    return 0;
+}
+
+PF_API int pf_run_abort_requested_v1(void) {
+    return pineforge::run_sigterm_requested() ? 1 : 0;
+}
+
+PF_API int pf_run_abort_restore_sigterm_v1(void) {
+    if (!sigterm_installed) return 0;
+    if (::sigaction(SIGTERM, &previous_sigterm, nullptr) != 0) return -1;
+    sigterm_installed = false;
+    return 0;
+}
 
 /* trade_index is a REPORT row index: pf_report_t::trades is trades_ followed
  * by range_end_trades_ (fill_trades_section, engine_report.cpp), so the

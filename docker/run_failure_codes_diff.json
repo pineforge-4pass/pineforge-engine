@@ -14,7 +14,15 @@
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
-  "metadataChanges": [],
+  "metadataChanges": [
+    {
+      "path": "kinds.boolean",
+      "beforePresent": false,
+      "afterPresent": true,
+      "before": null,
+      "after": "A JSON boolean."
+    }
+  ],
   "added": [
     {
       "code": "report_sink_failed",
@@ -115,6 +123,39 @@
             "order",
             "timeframe_invalid"
           ]
+        }
+      ]
+    },
+    {
+      "code": "run_aborted",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.bars_count",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "path": "args.strategy_started",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "boolean",
+            "optional": true
+          }
+        },
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "The run was aborted on request.",
+          "after": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. The existing engine_fault/retryable policy is retained pending a ruling: PROPOSED cancelled, retryable false; RETURN TO CORE-TOP for the class ruling."
         }
       ]
     },

@@ -6,6 +6,7 @@
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
 #include "report_sink_writer.hpp"
+#include "run_abort.hpp"
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/timeframe.hpp>
@@ -1814,6 +1815,31 @@ void NativeExecutionConsumer::latch_abort(BacktestEngine& engine,
     }
 }
 
+bool NativeExecutionConsumer::check_sigterm_abort(BacktestEngine& engine,
+                                                 bool strategy_started) {
+    if (failed()) return false;
+    if (!run_sigterm_requested()) return true;
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    const auto* finished = std::get_if<NativeCompleted>(&state_);
+    if ((!running || running->phase != NativeRunPhase::Batch)
+        && (!finished || finished->completion != NativeCompletion::BatchComplete)) return true;
+    // The existing runner's bars_processed population is input bars. This
+    // counter advances at the end of contribute_input, after all work that
+    // this input drove, including any completed script calculation/matching.
+    const std::int64_t completed = engine.diag_input_bars_processed_;
+    auto& sink = engine.report_sink_state_;
+    if (sink.writer) sink.writer->abandon();
+    latch_abort(engine, NativeFailureOperation::Input, 0);
+    // SIGTERM is a typed invocation outcome even for a Quiet native host.
+    render(engine, "native run aborted", RunFailureCode::run_aborted,
+           {{"bars_count", completed}, {"strategy_started", strategy_started}});
+    return false;
+}
+
+bool NativeExecutionConsumer::abort_before_sink_trailer(BacktestEngine& engine) {
+    return !bound(engine).check_sigterm_abort(engine, true);
+}
+
 void NativeExecutionConsumer::latch_projection_mismatch(BacktestEngine& engine,
                                                         NativeFailureOperation operation,
                                                         uint64_t ordinal) {
@@ -3054,6 +3080,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     state_ = NativeRunning{std::move(ready->spec), phase};
     cache_running_policy();
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
+    if (phase == NativeRunPhase::Batch && !check_sigterm_abort(engine, false)) return false;
     // The host's opaque state is dropped here: after the final pre-host check has
     // passed and before the run-begin callback, so state the host adopts from
     // on_native_run_begin or later survives this run. A begin that returns before
@@ -10448,6 +10475,9 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
     {
         PumpScope pump(*this);
         for (int i = 0; i < n; ++i) {
+            // Between inputs, even a pending aggregate is at a stable boundary:
+            // its previous input has finished and no callback is in flight.
+            if (!check_sigterm_abort(engine, true)) return;
             if (i != 0 && !check_abort(engine, NativeFailureOperation::Input)) return;
             if (!consume_confirmed_input(engine, bars[i], i, i + 1 == n)) {
                 if (!failed()) {
@@ -10456,6 +10486,12 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
                 }
                 return;
             }
+            // Q7 bar boundary: consume_confirmed_input has returned with
+            // processing_input_ false, cursors/counts advanced, and the whole
+            // work this input drove (path, callbacks, close match, report point
+            // and journal retirement) finished. A pending aggregate is valid
+            // continuation state, with none of its callbacks in flight.
+            if (!check_sigterm_abort(engine, true)) return;
             if (!check_abort(engine, NativeFailureOperation::Input)) return;
             presize_logs(static_cast<std::size_t>(i) + 1);
         }
@@ -10478,6 +10514,9 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             return;
         }
     }
+    // The final natural/session seal has also returned. Any unfinished bucket
+    // has consumed all supplied inputs and would not calculate in this batch.
+    if (!check_sigterm_abort(engine, true)) return;
     (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {

@@ -7314,3 +7314,26 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_options(test_scratch_arena PRIVATE "-Wl,--wrap=pread" "-Wl,--wrap=fstat" "-Wl,--wrap=mmap")
 endif()
 # --- CR-150 core-cr150-l22s end ---
+
+# --- CR-150 core-cr150-q7 begin ---
+if(UNIX)
+    target_link_libraries(test_run_sigterm_abort PRIVATE Threads::Threads)
+endif()
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_sigterm_abort_strategy MODULE run_sigterm_abort_strategy.cpp)
+    target_link_libraries(run_sigterm_abort_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(run_sigterm_abort_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(run_sigterm_abort_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(run_sigterm_abort_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(run_sigterm_abort_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_sigterm_abort")
+    add_test(NAME test_run_sigterm_abort_python
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_sigterm_abort.py
+            --module $<TARGET_FILE:run_sigterm_abort_strategy>)
+endif()
+# --- CR-150 core-cr150-q7 end ---

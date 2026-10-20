@@ -1107,9 +1107,18 @@
    "since": "1.5.0"
   },
   "run_aborted": {
-   "args": {},
+   "args": {
+    "bars_count": {
+     "kind": "integer",
+     "optional": true
+    },
+    "strategy_started": {
+     "kind": "boolean",
+     "optional": true
+    }
+   },
    "class": "engine_fault",
-   "description": "The run was aborted on request.",
+   "description": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. The existing engine_fault/retryable policy is retained pending a ruling: PROPOSED cancelled, retryable false; RETURN TO CORE-TOP for the class ruling.",
    "english": [
     "native run aborted"
    ],
@@ -2056,6 +2065,7 @@
   }
  },
  "kinds": {
+  "boolean": "A JSON boolean.",
   "identifier": "A name the compiled strategy spells as a literal (a built-in, an argument).",
   "integer": "A JSON integer.",
   "keyword": "A fixed keyword.",

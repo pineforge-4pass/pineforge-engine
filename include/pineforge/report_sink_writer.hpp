@@ -108,6 +108,11 @@ public:
     /// (3.7:881-888). No destructor-generated success trailer is promised.
     Trailer write_trailer();
 
+    /// At a completed-bar boundary, flush the last complete records and
+    /// permanently abandon this stream without a trailer or a receipt.
+    /// Does not close a borrowed fd; its owner closes it after native cleanup.
+    void abandon();
+
     // L6b-3 additions implementing the existing v1 descriptors. INT64_MIN
     // represents a null output time. Spans are consumed during the call.
     void write_o(std::int64_t row, std::int64_t open_ms, std::int64_t close_ms,
