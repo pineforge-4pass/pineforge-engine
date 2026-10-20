@@ -829,6 +829,55 @@ PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out);
 /** @defgroup pf_live Live-runtime surface (ABI v4)
  *  Default-off flags and read-only accessors used by pineforge-live. None of
  *  them changes a historical run unless enabled. @{ */
+
+#define PINEFORGE_HAS_SCRATCH_TABLES_V1 1
+
+/** Storage policy for the nine historical scratch-table regions. */
+typedef enum pf_scratch_table_backend_e {
+    PF_SCRATCH_TABLE_DISK_SCRATCH = 0,
+    PF_SCRATCH_TABLE_BOUNDED_MEMORY = 1
+} pf_scratch_table_backend_t;
+
+/** Version 1 scratch-table admission maxima, in keys/rows and key bytes.
+ *  Set struct_size = sizeof(pf_scratch_tables_v1), version = 1, reserved = 0.
+ *  Each K/B pair includes all distinct ever-stored keys, including erased
+ *  keys. U/B_U cover all cohort IDs, V/B_V all exit-rank IDs (V <= 27), and R
+ *  all rooted successors, including internally generated replacements.
+ *  Counts and UTF-8/binary key-byte totals are admitted maxima supplied by
+ *  the host, not estimates inferred from the number of bars.
+ *  Bounded mode reserves one fixed slab before run preparation; exceeding
+ *  the manifest fails the run with scratch_capacity_exceeded. The layout
+ *  and every offset must fit uint64_t, size_t and off_t. Allocation failure
+ *  remains out_of_memory. This policy is independent of the report sink. */
+typedef struct pf_scratch_tables_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    uint32_t backend;
+    uint32_t reserved;
+    uint64_t K_q;
+    uint64_t B_q;
+    uint64_t K_e;
+    uint64_t B_e;
+    uint64_t K_c;
+    uint64_t B_c;
+    uint64_t U;
+    uint64_t B_U;
+    uint64_t V;
+    uint64_t B_V;
+    uint64_t R;
+} pf_scratch_tables_v1;
+
+/** Copy scratch-table configuration while idle; NULL restores disk defaults.
+ *  Never retains a pointer into the caller's descriptor. Returns 0 on
+ *  success, -1 for a null handle or invalid size/version/backend/reserved/V,
+ *  -2 during a stream, and -3 during a batch run (including begin callbacks).
+ *  A refusal preserves the installed configuration and active run ownership.
+ *  Finite streams must supply maxima for their complete admitted lifetime.
+ *  The embedding host owns SIGXFSZ policy for disk scratch on file-size-
+ *  limited systems; this library never changes process signal disposition. */
+PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s,
+                                         const pf_scratch_tables_v1* config);
+
 /** Request cooperative abort of the run in progress (see c_abi.cpp). */
 PF_API void strategy_request_abort(pf_strategy_t s);
 /** 0 = completed, 1 = NOT_COMPLETED (aborted), -1 = @p s is NULL. */

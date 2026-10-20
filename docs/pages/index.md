@@ -137,9 +137,9 @@ directly, so a Pine-layer symbol reaching one is a link error.
 
 The counts below describe the current API, including recorded outputs and the report sink; recorded outputs are not part of 1.4.0.
 
-The public C surface is **149 `PF_API` declarations** across the six installed headers that declare any:
+The public C surface is **150 `PF_API` declarations** across the six installed headers that declare any:
 
-- `<pineforge/pineforge.h>` — **95**: 75 of the 84 runtime implementations (the other nine are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) plus twenty
+- `<pineforge/pineforge.h>` — **96**: 76 of the 85 runtime implementations (the other nine are declared in `execution_observer.h`, `selected_window.h` and `report_sink.h`) plus twenty
   per-strategy generated exports (`strategy_declares_bar_magnifier` only in a
   script that declares `use_bar_magnifier = true`, the three recorded-outputs exports only in a module that records outputs). This is what a compiled
   strategy `.so` exports and what a harness calls. Older modules lack the six
@@ -150,7 +150,7 @@ The public C surface is **149 `PF_API` declarations** across the six installed h
   execute, read the book, read the lots. Additive: no symbol, struct or
   behaviour of the first set changes.
 - `<pineforge/execution_observer.h>`, `<pineforge/selected_window.h>` and `<pineforge/report_sink.h>` —
-  three each: the nine of the 84 runtime implementations that `pineforge.h`
+  three each: the nine of the 85 runtime implementations that `pineforge.h`
   does not declare: each header's version reader and its setter/query pair
   for execution observation, selected-window counts or the report-sink
   receipt.

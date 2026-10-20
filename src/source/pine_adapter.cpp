@@ -28258,3 +28258,26 @@ std::uint64_t PineExecutionAdapter::fixture_auxiliary_disk_bytes() const noexcep
 }
 
 } // namespace pineforge::source
+
+#include <pineforge/detail/scratch_tables.hpp>
+#include <pineforge/run_failure.hpp>
+
+namespace pineforge::detail {
+
+// The tree and IdPair lanes fill their respective backend-owned seams;
+// the foundation's begin calls and public declarations remain unchanged.
+void bind_tree_scratch_tables(source::PineExecutionAdapter&,
+                              const std::shared_ptr<ScratchSlab>& slab) {
+    if (slab)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "bounded tree scratch binding is not installed");
+}
+
+void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
+                                 const std::shared_ptr<ScratchSlab>& slab) {
+    if (slab)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "bounded IdPair scratch binding is not installed");
+}
+
+} // namespace pineforge::detail

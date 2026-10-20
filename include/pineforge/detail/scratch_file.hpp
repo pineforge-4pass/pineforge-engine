@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_errors.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -16,15 +16,6 @@
 #include <utility>
 
 namespace pineforge::detail {
-
-// Keep the errno and std::system_error contract of the successor-root file,
-// and carry the run's typed scratch-I/O failure through the ordinary catcher.
-class ScratchIoError final : public std::system_error, public RunFailureInfo {
-public:
-    ScratchIoError(int error, const char* operation)
-        : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
-};
 
 // Run-owned, anonymous, close-on-exec scratch. All reads/writes are positional;
 // no shared cursor, global descriptor, mapping, or growing userspace buffer.

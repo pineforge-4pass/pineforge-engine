@@ -45,13 +45,13 @@
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink_writer.hpp>
+#include <pineforge/detail/scratch_slab.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
 // These internal C++ capabilities change no public C POD or C signature.
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
 namespace pineforge {
-
 enum class PositionSide { FLAT, LONG, SHORT };
 
 // One physical emulator lot entry/exit, in actual execution order. A reversal
@@ -2292,6 +2292,24 @@ private:
     // value. Private, so no host writes it (R5 lane K-ULP4).
     double native_quantity_tolerance_ = 0.0;
 
+    // Physical scratch policy and run ownership, independent of the report
+    // sink. Neither participates in trading decisions or durable hash leaves;
+    // the logical tables keep their existing folds. Copies retain only policy.
+    detail::ScratchTableConfig scratch_table_config_{};
+    struct ScratchTableRun {
+        std::shared_ptr<detail::ScratchSlab> slab;
+        ScratchTableRun() = default;
+        ScratchTableRun(const ScratchTableRun&) noexcept {}
+        ScratchTableRun& operator=(const ScratchTableRun& other) noexcept {
+            if (this != &other) slab.reset();
+            return *this;
+        }
+        ScratchTableRun(ScratchTableRun&&) noexcept = default;
+        ScratchTableRun& operator=(ScratchTableRun&&) noexcept = default;
+    };
+    ScratchTableRun scratch_table_run_;
+    void prepare_scratch_table_run(const detail::ScratchTableConfig& config);
+
     // Reporting configuration and run-local output ownership. Copies retain
     // configuration, never a writer, receipt, or an active-call barrier.
     struct ReportSinkState {
@@ -2354,6 +2372,32 @@ private:
     void retire_report_sink_hashes();
 
 public:
+    // The C descriptor is copied only after the lifecycle/shape checks. The
+    // existing idle barrier covers begin callbacks even when the sink is OFF.
+    int set_scratch_tables_v1(const pf_scratch_tables_v1* descriptor) {
+        if (descriptor && (descriptor->struct_size != sizeof(*descriptor)
+            || descriptor->version != 1 || descriptor->reserved != 0
+            || descriptor->backend > static_cast<std::uint32_t>(
+                detail::ScratchTableBackend::bounded_memory)
+            || descriptor->V > 27)) return -1;
+        const int status = report_sink_setter_status();
+        if (status != 0) return status;
+        detail::ScratchTableConfig next;
+        if (descriptor) {
+            next.backend = static_cast<detail::ScratchTableBackend>(descriptor->backend);
+            next.manifest = {descriptor->K_q, descriptor->B_q,
+                             descriptor->K_e, descriptor->B_e,
+                             descriptor->K_c, descriptor->B_c,
+                             descriptor->U, descriptor->B_U,
+                             descriptor->V, descriptor->B_V, descriptor->R};
+        }
+        scratch_table_config_ = next;
+        return 0;
+    }
+    const detail::ScratchTableConfig& scratch_table_config() const noexcept {
+        return scratch_table_config_;
+    }
+
     // The additive C ABI delegates here; receipt queries never bind a consumer.
     int set_report_sink_v1(const pf_report_sink_v1* sink);
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
@@ -2363,6 +2407,12 @@ public:
     bool trade_history_streamable() const { return report_sink_state_.trade_history_streamable; }
 
 protected:
+    // Begin-only source binder input. Backends copy the owner, not this
+    // reference; no byte pointer is exposed to a strategy or a hot callback.
+    const std::shared_ptr<detail::ScratchSlab>& scratch_tables_for_run() const noexcept {
+        return scratch_table_run_.slab;
+    }
+
     // L6b-2: the last point remains editable until its successor is recorded.
     // The array remains the metric/capture source until L6b-4/L7c/L17 land.
     pf_equity_point_t* last_equity_point() noexcept;

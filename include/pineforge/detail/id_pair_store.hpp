@@ -32,7 +32,7 @@ class IdPairStoreError final : public std::system_error, public RunFailureInfo {
 public:
     IdPairStoreError(int error, const char* operation)
         : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
+          RunFailureInfo(RunFailureCode::scratch_io_failed, {}) {}
 };
 
 class IdPairScratchFile {

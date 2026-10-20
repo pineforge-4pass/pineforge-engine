@@ -263,8 +263,8 @@ void directory_failure_is_a_typed_run_failure() {
     const auto bars = tape(4);
     disk.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     require(!disk.last_error().empty(), "configured scratch failure ends the run");
-    require(run_failure_value_of(disk).code == RunFailureCode::report_sink_failed,
-            "scratch IO failure is report_sink_failed at the public run boundary");
+    require(run_failure_value_of(disk).code == RunFailureCode::scratch_io_failed,
+            "scratch IO failure is scratch_io_failed at the public run boundary");
 }
 
 void fixture_backend_requires_reset_after_use() {
@@ -339,7 +339,7 @@ void placement_directory_failure_is_part_c_error() {
         (void)table.command_sequence_for(row.source_id, row.from_entry);
     } catch (const detail::IdPairStoreError& error) {
         failed = error.code().value() == ENOENT
-            && classify_run_failure(error).code == RunFailureCode::report_sink_failed;
+            && classify_run_failure(error).code == RunFailureCode::scratch_io_failed;
     }
     require(failed, "part C's placement minima preserve the typed missing-directory error");
     require(table.size() == 1 && table.auxiliary_disk_bytes() == 0,

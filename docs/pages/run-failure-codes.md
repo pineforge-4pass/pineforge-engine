@@ -104,7 +104,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `engine_fault` | A PineForge bug; terminal. |
 | `input` | The run request's own data or options; terminal. |
 | `no_data` | PineForge lacks data the script reads; terminal. |
-| `resource` | Machine memory; retryable, capped. |
+| `resource` | Machine memory or scratch storage; retryability is specified per code. |
 | `strategy` | The script or its own declaration; terminal. |
 | `strategy_limit` | A TradingView or PineForge resource cap the script reached; terminal. |
 | `symbol_feeds` | Other symbols' bars installed through the symbol-feed setters; terminal. |
@@ -152,6 +152,8 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 22 values) | The harness command line or one of its JSON options is invalid. |
+| `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
+| `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write scratch-table storage. The run has no successful completion. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
 | `setting_rejected` | `input` | no | `entrypoint` (vocab, 4 values, optional), `input` (pine_source, optional), `reason` (vocab, 21 values, optional) | A run setting (an input or a strategy() override) was refused. |
 | `setting_unsupported` | `unsupported` | no | none | A setting this compiled strategy cannot honour. |

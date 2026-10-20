@@ -6072,3 +6072,19 @@ void WorkingRequestCore::retire_group_effect_receipts() noexcept {
 
 }  // inline namespace native_order_v7
 }  // namespace pineforge::native_order
+
+#include <pineforge/detail/scratch_tables.hpp>
+#include <pineforge/run_failure.hpp>
+
+namespace pineforge::detail {
+
+// The roots lane fills this backend-owned seam; the foundation's common
+// begin call and public declaration remain unchanged.
+void bind_successor_root_scratch_tables(native_order::WorkingRequestCore&,
+                                        const std::shared_ptr<ScratchSlab>& slab) {
+    if (slab)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "bounded successor-root scratch binding is not installed");
+}
+
+} // namespace pineforge::detail
