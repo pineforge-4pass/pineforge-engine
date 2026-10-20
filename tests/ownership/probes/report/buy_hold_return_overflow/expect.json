@@ -1,0 +1,12 @@
+{
+  "outcome": "failed",
+  "code": "report_result_invalid",
+  "args": {
+    "field": "metrics.equity.buy_hold_return",
+    "reason": "nonfinite"
+  },
+  "min_trades": 0,
+  "label": "R",
+  "pinned_by": "revision 3 Appendix A lines 74,83,93; Appendix D line 200; revision 2 section 8 report_result_invalid",
+  "native_boundary_control": "tests/test_metrics_overflow.cpp"
+}
