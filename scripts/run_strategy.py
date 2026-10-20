@@ -27,6 +27,22 @@ Usage examples
     # Don't overwrite engine_trades.csv if it already exists
     python scripts/run_strategy.py corpus/basic/greedy --no-overwrite
 
+    # Read trades from a verified v1 report sink; keep the same CSV bytes.
+    # Every probe prints one machine-greppable canary line,
+    #   sink_canary: probe=<id> bytes=<n> records=<n> trades=<n> equity=<n> ok
+    # (probe id = the strategy directory's basename); a sink that is absent,
+    # empty or short prints the same fields with "FAIL <reason>" and fails
+    # the probe.
+    PINEFORGE_REPORT_SINK=1 python scripts/run_strategy.py corpus/basic/greedy
+
+    # Test-only: keep the sink file of chosen probes as a sweep artifact.
+    # The value is "all" or comma-separated probe ids; a sweep that wants five
+    # artifacts names the first five probes of its own order. Each kept file
+    # is announced as "sink_kept: probe=<id> path=<file>" and lives in
+    # $TMPDIR; without the variable every sink file is unlinked at close.
+    PINEFORGE_REPORT_SINK=1 PINEFORGE_KEEP_REPORT_SINK=greedy \\
+        python scripts/run_strategy.py corpus/basic/greedy
+
     # All strategies (matches `bash scripts/run_corpus.sh`)
     for d in corpus/*/*/; do python scripts/run_strategy.py "$d"; done
 
@@ -58,7 +74,9 @@ import os
 import re
 import struct
 import sys
+import tempfile
 import time
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -1965,6 +1983,223 @@ def _with_run_failure_code(error: Exception, lib, state) -> Exception:
 # The text of a failed run that reported neither a text nor a code
 # (strategy_last_run_status 1 alone), as docker/run_json.py spells it.
 RUN_STATUS_FAILED_TEXT = "the run did not complete and the engine reported no error"
+REPORT_SINK_ENV = "PINEFORGE_REPORT_SINK"
+# Test-only artifact switch of sink mode (_keep_report_sink): the sink file is
+# otherwise unlinked at close.
+KEEP_REPORT_SINK_ENV = "PINEFORGE_KEEP_REPORT_SINK"
+
+
+def _new_harness_report_sink(lib, state):
+    """Reuse run_json's v1 bindings, temporary owner and receipt verification."""
+    docker_dir = str(REPO_ROOT / "docker")
+    if docker_dir not in sys.path:
+        sys.path.insert(0, docker_dir)
+    import run_json
+
+    required = ("pf_report_sink_version", "strategy_set_report_sink_v1",
+                "strategy_report_sink_receipt_v1")
+    if any(not hasattr(lib, name) for name in required):
+        raise RuntimeError(
+            f"{REPORT_SINK_ENV}=1 requires the report sink ABI; rebuild the strategy library")
+    run_json._bind_report_sink(lib)
+    if int(lib.pf_report_sink_version()) != 1:
+        raise RuntimeError("strategy library has an incompatible report sink ABI")
+    return run_json._TemporaryReportSink(lib, state)
+
+
+def _harness_sink_equity_count(lib, state) -> int:
+    """Save the engine's E count while its handle is live, not from the sink."""
+    from run_json import ReportSinkReceiptC
+
+    receipt = ReportSinkReceiptC()
+    receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
+    if (lib.strategy_report_sink_receipt_v1(state, ctypes.byref(receipt)) != 0
+            or receipt.complete != 1 or receipt.count_e < 0):
+        raise RuntimeError("the engine's report sink equity receipt is incomplete")
+    return int(receipt.count_e)
+
+
+def _harness_sink_trade(record) -> dict:
+    trade = record.as_dict()
+    del trade["n"]
+    trade["is_long"] = trade.pop("side") == "long"
+    return trade
+
+
+class _SinkRows:
+    """Repeatable rows backed by the verified sink, with no retained history."""
+
+    def __init__(self, sink, tag, decode, window=None):
+        self.sink, self.tag, self.decode, self.window = sink, tag, decode, window
+        self._length = sink.counts.get(tag, 0) if window is None else None
+
+    def __iter__(self):
+        time_key = "timestamp" if self.tag == "X" else "entry_time"
+        count = 0
+        for record in self.sink.records(self.tag):
+            row = self.decode(record)
+            if (self.window is None
+                    or self.window[0] <= int(row[time_key]) <= self.window[1]):
+                count += 1
+                yield row
+        self._length = count
+
+    def __len__(self):
+        if self._length is None:
+            self._length = sum(1 for _ in self)
+        return self._length
+
+    def __getitem__(self, index):
+        if not isinstance(index, int):
+            raise TypeError("sink rows support integer indexing only")
+        if index < 0:
+            index += len(self)
+        for position, row in enumerate(self):
+            if position == index:
+                return row
+        raise IndexError("sink row index out of range")
+
+
+class _SinkReport(dict):
+    """A report whose row views remain valid until close(), or context exit."""
+
+    def __init__(self, values, sink, receipt_count_e: int):
+        super().__init__(values)
+        self.sink = sink
+        self.receipt_count_e = receipt_count_e
+
+    def close(self):
+        self.sink.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+
+class _SinkTraceNames:
+    """First-use trace names, deduplicated on disk rather than in a set."""
+
+    def __init__(self, sink):
+        self.sink = sink
+
+    def __iter__(self):
+        with tempfile.TemporaryFile("w+", encoding="ascii", newline="\n") as names:
+            for record in self.sink.records("X"):
+                name = record.as_dict()["name"]
+                wire = json.dumps(name) + "\n"
+                names.seek(0)
+                if not any(line == wire for line in names):
+                    names.seek(0, os.SEEK_END)
+                    names.write(wire)
+                    yield name
+
+
+def _report_from_sink(report, sink, receipt_count_e: int) -> dict:
+    if any((report.trades, report.trades_len,
+            report.equity_curve, report.equity_curve_len,
+            report.trace, report.trace_len,
+            report.broker_state_hash, report.broker_state_hash_len)):
+        raise RuntimeError("a report with a sink must contain summary scalars only")
+    # This reads scalars and any remaining native trace-name table only.
+    result = _SinkReport(_report_to_dict(report), sink, receipt_count_e)
+    count = 0
+    for record in sink.records("T"):
+        count += 1
+        trade = record.as_dict()
+        if trade["n"] != count:
+            raise RuntimeError("the report sink trade rows are out of report order")
+        for field in ("entry_price", "exit_price", "qty", "pnl", "pnl_pct",
+                      "max_runup", "max_drawdown", "commission"):
+            if trade[field] is None:
+                raise RuntimeError(f"non-finite report sink trade field: {field}")
+    result["trades"] = _SinkRows(sink, "T", _harness_sink_trade)
+    result["trace"] = _SinkRows(sink, "X", lambda record: record.as_dict())
+    if not result["trace_names"] and sink.counts.get("X", 0):
+        # X carries the name itself. Preserve first-use order when the native
+        # summary omits the trace-name table along with its trace array.
+        result["trace_names"] = _SinkTraceNames(sink)
+    result["broker_state_hash"] = _SinkRows(
+        sink, "H", lambda record: int(record.values[0], 16))
+    result["equity_curve_time_ms"] = _SinkRows(
+        sink, "E", lambda record: record.values[0])
+    return result
+
+
+def _probe_id(strategy_dir: Path) -> str:
+    """The name a probe goes by in the sweep's lines: its directory's
+    basename (the slug PINEFORGE_REQUESTS_ROOT uses), without whitespace so
+    the canary line splits on spaces."""
+    return "_".join(strategy_dir.name.split()) or "-"
+
+
+def _keep_report_sink(probe: str, environ=None) -> bool:
+    """Test-only artifact switch: does this probe keep its sink file at close?
+
+    ``PINEFORGE_KEEP_REPORT_SINK=all`` keeps every probe's file; any other
+    non-empty value is a comma-separated list of probe ids (_probe_id) and
+    keeps exactly those probes' files. Probes run as separate processes and
+    nothing is counted across them, so a sweep that wants five artifacts
+    names the first five probes of its own order. Unset or empty: no file is
+    kept, and close() unlinks every sink as it always does.
+    """
+    value = (os.environ if environ is None else environ).get(
+        KEEP_REPORT_SINK_ENV, "").strip()
+    return bool(value) and (
+        value == "all" or probe in {part.strip() for part in value.split(",")})
+
+
+def _sink_canary(probe: str, report: _SinkReport) -> None:
+    """Prove this probe read a real, non-empty, complete sink, in one line.
+
+    Prints ``sink_canary: probe=<id> bytes=<n> records=<n> trades=<n>
+    equity=<n> ok`` on stdout. ``bytes`` is the sink's size now; ``records``
+    and ``equity`` are the T and E rows a fresh strict reader (own offset,
+    whole-file SHA-256 check) decodes now. T must equal ReportC.total_trades;
+    E must equal receipt.count_e saved from the live engine, independently
+    of the sink. Summary-only ReportC.equity_curve_len is zero with a sink.
+    No E == script_bars_processed relation is asserted.
+
+    This is Strategy.run's ordinary/observed sink path. Native selected
+    windows have an anchor and separate E publication rules; Strategy.run
+    does not admit them, and their E-to-bars relation is deliberately
+    skipped here. CSV emit-window filtering leaves the full sink intact.
+    A missing, non-regular, empty, unreadable or short sink prints these
+    same fields with ``FAIL <reason>`` and raises RuntimeError. A run that
+    never installed a sink prints no canary, so the sweep must match exactly
+    one successful line to each probe it ran. Call before close() unlinks.
+    """
+    sink, trades = report.sink, int(report["total_trades"])
+    size = records = equity = 0
+    reason = None
+    try:
+        size = os.stat(sink.path).st_size
+        if not os.path.isfile(sink.path):
+            reason = "the sink path is not a regular file"
+        elif size <= 0:
+            reason = "the sink file is empty"
+        else:
+            counts = {"T": 0, "E": 0}
+            for record in sink.records():
+                if record.tag in counts:
+                    counts[record.tag] += 1
+            # Publish counts only after the strict pass checked its trailer.
+            records, equity = counts["T"], counts["E"]
+            if records != trades:
+                reason = f"{records} T records decoded for {trades} trades"
+            elif equity != report.receipt_count_e:
+                reason = (f"{equity} E records decoded for "
+                          f"{report.receipt_count_e} engine equity points")
+    except Exception as error:
+        reason = f"the sink cannot be read back: {error}"
+    verdict = "ok" if reason is None else "FAIL " + " ".join(str(reason).split())
+    print(f"sink_canary: probe={probe} bytes={size} records={records} "
+          f"trades={trades} equity={equity} {verdict}")
+    if sink.keep:
+        print(f"sink_kept: probe={probe} path={sink.path}")
+    if reason is not None:
+        raise RuntimeError(f"sink canary failed for probe {probe}: {reason}")
 
 
 def _run_failure_text(lib, state) -> str | None:
@@ -2484,6 +2719,16 @@ class Strategy:
         Read-only: the run itself is unchanged. Omitted (not an empty list)
         when the .so predates the exports; ``derived`` / ``position`` are
         omitted when it predates only the task-8 accessors.
+
+        With ``PINEFORGE_REPORT_SINK=1``, require the v1 sink ABI and return
+        a context-managed dict whose trades, trace, broker hashes and equity
+        timestamps are repeatable disk-backed views. Use ``with strat.run(...)
+        as report:`` or call ``report.close()`` after consuming these views.
+        The CLI closes each report, including a discarded emit-window rerun.
+        ``on_report`` still sees the native report, which has summary scalars
+        only in this mode. The sink is a named owner-only temporary file that
+        every view re-opens by its real path (own offset), the same on Linux
+        and macOS; close() unlinks it.
         """
         source_feed_sha256 = None
         if preloaded_bars is not None:
@@ -2557,7 +2802,11 @@ class Strategy:
 
         state = self.lib.strategy_create(params_json)
         report = ReportC()
+        sink = None
+        result_ready = False
         try:
+            if os.environ.get(REPORT_SINK_ENV) == "1":
+                sink = _new_harness_report_sink(self.lib, state)
             # Strategy-property overrides (commission/slippage/pyramiding/...)
             # via the per-strategy ``strategy_set_override`` export. Keys and
             # value grammar: codegen emit_top.py set_strategy_override —
@@ -2741,7 +2990,12 @@ class Strategy:
                 ), self.lib, state)
             if on_report is not None:
                 on_report(report)
-            result = _report_to_dict(report)
+            if sink is not None:
+                sink.verify(self.lib, state, report)
+                result = _report_from_sink(
+                    report, sink, _harness_sink_equity_count(self.lib, state))
+            else:
+                result = _report_to_dict(report)
             incarnation_accessor = getattr(
                 self.lib, "strategy_closed_trade_entry_incarnation", None)
             # ABI v4 (task 9): entry_id / exit_id / exit_comment / close_cause
@@ -2756,7 +3010,9 @@ class Strategy:
                 self.lib, "strategy_closed_trade_exit_comment", None)
             close_cause_accessor = getattr(
                 self.lib, "strategy_closed_trade_close_cause", None)
-            for i, trade in enumerate(result["trades"]):
+            # T already owns this metadata, including rows retired by the
+            # ledger. Accessors are only meaningful for the array path.
+            for i, trade in enumerate(result["trades"] if sink is None else ()):
                 trade["entry_incarnation"] = (
                     int(incarnation_accessor(state, i))
                     if incarnation_accessor is not None else 0
@@ -2813,19 +3069,36 @@ class Strategy:
                     "applied": _report_terminal_quote_applied(result, report_terminal_quote,
                                                                script_tf or input_tf or ""),
                 }
+            result_ready = True
             return result
         finally:
-            self.lib.report_free(ctypes.byref(report))
-            self.lib.strategy_free(state)
+            cleanup_ok = False
+            try:
+                try:
+                    self.lib.report_free(ctypes.byref(report))
+                finally:
+                    self.lib.strategy_free(state)
+                cleanup_ok = True
+            finally:
+                # A successful result owns the file until its consumer
+                # finishes. On every failure, native cleanup precedes it.
+                if sink is not None and not (result_ready and cleanup_ok):
+                    sink.close()
 
 
 def _report_terminal_quote_applied(report: dict, quote: tuple, script_tf: str) -> bool:
-    rows = [row for row in report["trades"] if row.get("open_at_end")]
     times = report["equity_curve_time_ms"]
-    return bool(60 < _tf_seconds(script_tf) < 86400
-                and report["bar_magnifier_enabled"] and rows and times
-                and times[-1] == int(quote[0])
-                and all(row["exit_time"] == int(quote[0]) for row in rows))
+    if not (60 < _tf_seconds(script_tf) < 86400
+            and report["bar_magnifier_enabled"] and times
+            and times[-1] == int(quote[0])):
+        return False
+    found = False
+    for row in report["trades"]:
+        if row.get("open_at_end"):
+            found = True
+            if row["exit_time"] != int(quote[0]):
+                return False
+    return found
 
 
 def _with_tail_bar(bars, n: int, tail: tuple):
@@ -3085,7 +3358,8 @@ def _load_window_ms(csv_path: Path) -> tuple[int, int]:
     return first, last
 
 
-def _filter_trades_to_window(trades: list[dict], window: tuple[int, int] | None) -> list[dict]:
+def _filter_trades_to_window(trades: list[dict] | _SinkRows,
+                             window: tuple[int, int] | None) -> list[dict] | _SinkRows:
     """Keep trades whose entry (fill) time lies inside ``window`` (inclusive).
 
     main() hands it the REPORT window. With a TV tape in use that is
@@ -3101,6 +3375,8 @@ def _filter_trades_to_window(trades: list[dict], window: tuple[int, int] | None)
     gates."""
     if window is None:
         return trades
+    if isinstance(trades, _SinkRows):
+        return _SinkRows(trades.sink, trades.tag, trades.decode, window)
     start_ms, end_ms = window
     return [
         t for t in trades
@@ -3108,7 +3384,7 @@ def _filter_trades_to_window(trades: list[dict], window: tuple[int, int] | None)
     ]
 
 
-def _entered_before_tv(trades: list[dict], report_start_ms: int) -> int | None:
+def _entered_before_tv(trades: list[dict] | _SinkRows, report_start_ms: int) -> int | None:
     """The earliest entry the engine filled before ``report_start_ms`` (TV's
     first entry less one bar interval), or None when it filled none.
 
@@ -3120,13 +3396,16 @@ def _entered_before_tv(trades: list[dict], report_start_ms: int) -> int | None:
     differently) -- and its position and P&L would carry into the trades
     that are reported, so main() runs such a probe again from the signal
     bar, as before. Reported rows start at ``report_start_ms`` either way."""
-    early = [int(t["entry_time"]) for t in trades if int(t["entry_time"]) < report_start_ms]
-    return min(early) if early else None
+    return min((int(t["entry_time"]) for t in trades
+                if int(t["entry_time"]) < report_start_ms), default=None)
 
 
-def _filter_trace_to_window(trace: list[dict], window: tuple[int, int] | None) -> list[dict]:
+def _filter_trace_to_window(trace: list[dict] | _SinkRows,
+                            window: tuple[int, int] | None) -> list[dict] | _SinkRows:
     if window is None:
         return trace
+    if isinstance(trace, _SinkRows):
+        return _SinkRows(trace.sink, trace.tag, trace.decode, window)
     start_ms, end_ms = window
     return [
         e for e in trace
@@ -3451,9 +3730,73 @@ def format_trade_qty(qty: float) -> str:
 # the tape's own mark of the same lot — the date-only tape's Signal "Open".
 ENGINE_RANGE_END_COLUMN = "Engine range-end"
 ENGINE_RANGE_END_OPEN = "open"
+_ENGINE_TRADES_HEADER = [
+    "Trade #", "Type", "Date and time", "Price", "Qty",
+    "Net PnL", "Net PnL %",
+    "Favorable excursion USD", "Adverse excursion USD",
+    "Cumulative PnL", "Engine entry incarnation",
+    ENGINE_RANGE_END_COLUMN,
+]
 
 
-def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
+def _engine_trade_csv_rows(n, trade, cumulative):
+    direction = "long" if trade["is_long"] else "short"
+    # TV convention: adverse excursion is negative (or zero).
+    adverse = -trade["max_drawdown"] or 0.0
+    for side, time_key, price_key in (
+        (f"Exit {direction}", "exit_time", "exit_price"),
+        (f"Entry {direction}", "entry_time", "entry_price"),
+    ):
+        yield [
+            n, side,
+            _fmt_time_utc(trade[time_key]),
+            f"{trade[price_key]:.6f}",
+            format_trade_qty(float(trade["qty"])),
+            f"{trade['pnl']:.6f}",
+            f"{trade['pnl_pct']:.4f}",
+            f"{trade['max_runup']:.6f}",
+            f"{adverse:.6f}",
+            f"{cumulative:.6f}",
+            str(int(trade.get("entry_incarnation", 0)))
+            if (side.startswith("Entry")
+                and int(trade.get("entry_incarnation", 0)) > 0) else "",
+            ENGINE_RANGE_END_OPEN
+            if (side.startswith("Exit") and trade.get("open_at_end")) else "",
+        ]
+
+
+def _write_sink_engine_trades_csv(trades, path):
+    """Fold forward, then emit formatted trade pairs backward in O(1) RAM.
+
+    Store the *formatted* cumulative PnL of each kept trade. Subtracting PnL
+    while walking backward would change floating-point rounding. The fixed
+    width offset/length index and CSV pairs live only in temporary files.
+    Exhausting the verified reader and staging every row precedes opening
+    the destination, so a corrupt/truncated sink cannot publish a CSV.
+    """
+    index_record = struct.Struct("<QQ")
+    with tempfile.TemporaryFile("w+b") as rows, tempfile.TemporaryFile("w+b") as offsets:
+        running = 0.0
+        count = 0
+        for count, trade in enumerate(trades, 1):
+            running += trade["pnl"]
+            text = io.StringIO(newline="")
+            csv.writer(text).writerows(_engine_trade_csv_rows(count, trade, running))
+            pair = text.getvalue().encode("ascii")
+            offsets.write(index_record.pack(rows.tell(), len(pair)))
+            rows.write(pair)
+        rows.flush()
+        offsets.flush()
+        with path.open("w", newline="") as destination:
+            csv.writer(destination).writerow(_ENGINE_TRADES_HEADER)
+            for index in range(count - 1, -1, -1):
+                offsets.seek(index * index_record.size)
+                offset, size = index_record.unpack(offsets.read(index_record.size))
+                rows.seek(offset)
+                destination.write(rows.read(size).decode("ascii"))
+
+
+def write_engine_trades_csv(trades: list[dict] | _SinkRows, path: Path) -> None:
     """Emit one row per trade *side* (exit then entry) in reverse-chronological
     order — byte-for-byte alignable with TradingView's `trades.csv` export.
 
@@ -3483,6 +3826,9 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
     engines before it wrote, project the cell as ``rangeEnd`` (blank ->
     null, "open" -> "open") and reject any other spelling, so the column
     is a bump of that contract on both sides, not a free addition."""
+    if isinstance(trades, _SinkRows):
+        _write_sink_engine_trades_csv(trades, path)
+        return
     cum_pnls: dict[int, float] = {}
     running = 0.0
     for n, t in enumerate(trades, 1):
@@ -3491,38 +3837,9 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
 
     with path.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow([
-            "Trade #", "Type", "Date and time", "Price", "Qty",
-            "Net PnL", "Net PnL %",
-            "Favorable excursion USD", "Adverse excursion USD",
-            "Cumulative PnL", "Engine entry incarnation",
-            ENGINE_RANGE_END_COLUMN,
-        ])
+        w.writerow(_ENGINE_TRADES_HEADER)
         for n, t in reversed(list(enumerate(trades, 1))):
-            direction = "long" if t["is_long"] else "short"
-            cum = cum_pnls[n]
-            # TV convention: adverse excursion is negative (or zero).
-            adverse = -t["max_drawdown"] or 0.0
-            for side, time_key, price_key in (
-                (f"Exit {direction}", "exit_time", "exit_price"),
-                (f"Entry {direction}", "entry_time", "entry_price"),
-            ):
-                w.writerow([
-                    n, side,
-                    _fmt_time_utc(t[time_key]),
-                    f"{t[price_key]:.6f}",
-                    format_trade_qty(float(t["qty"])),
-                    f"{t['pnl']:.6f}",
-                    f"{t['pnl_pct']:.4f}",
-                    f"{t['max_runup']:.6f}",
-                    f"{adverse:.6f}",
-                    f"{cum:.6f}",
-                    str(int(t.get("entry_incarnation", 0)))
-                    if (side.startswith("Entry")
-                        and int(t.get("entry_incarnation", 0)) > 0) else "",
-                    ENGINE_RANGE_END_OPEN
-                    if (side.startswith("Exit") and t.get("open_at_end")) else "",
-                ])
+            w.writerows(_engine_trade_csv_rows(n, t, cum_pnls[n]))
 
 
 
@@ -4263,6 +4580,11 @@ def main() -> int:
                          "$PINEFORGE_RELEASE_IMAGE or ghcr .../pineforge-release:latest).")
     args = ap.parse_args()
 
+    with ExitStack() as resources:
+        return _main_run(args, resources)
+
+
+def _main_run(args, resources) -> int:
     strategy_dir = args.strategy_dir.resolve()
     out_path = (args.output.resolve() if args.output
                 else strategy_dir / "engine_trades.csv")
@@ -4483,15 +4805,18 @@ def main() -> int:
             print(f"  magnifier: {plan.status}: {plan.detail}")
 
         def run_engine(start_ms):
-            return strat.run(run_ohlcv, params=params,
-                             trace_enabled=args.trace_json is not None,
-                             trade_start_time_ms=start_ms,
-                             realtime_tail_horizon=args.realtime_tail,
-                             probe_suppress_tail=args.probe_suppress_tail,
-                             path_order=args.path_order,
-                             broker_state_hash_recording=args.broker_state_hash,
-                             dump_book=args.dump_book is not None,
-                             **run_kwargs)
+            result = strat.run(run_ohlcv, params=params,
+                               trace_enabled=args.trace_json is not None,
+                               trade_start_time_ms=start_ms,
+                               realtime_tail_horizon=args.realtime_tail,
+                               probe_suppress_tail=args.probe_suppress_tail,
+                               path_order=args.path_order,
+                               broker_state_hash_recording=args.broker_state_hash,
+                               dump_book=args.dump_book is not None,
+                               **run_kwargs)
+            if isinstance(result, _SinkReport):
+                resources.callback(result.close)
+            return result
     report = run_engine(trade_start_ms)
     if (signal_start_ms is not None and trade_start_ms is not None
             and trade_start_ms < signal_start_ms and report_window is not None):
@@ -4506,6 +4831,11 @@ def main() -> int:
             trade_start_ms = signal_start_ms
             emit_window = (signal_start_ms, emit_window[1])
             report = run_engine(trade_start_ms)
+    if isinstance(report, _SinkReport):
+        # The final report only: a discarded rerun's sink is always unlinked.
+        # Set before the outputs, so a probe that fails after this point still
+        # leaves its file when the switch names it.
+        report.sink.keep = _keep_report_sink(_probe_id(strategy_dir))
     if run_kwargs.get("report_terminal_quote") is not None:
         quote_result = report.get("report_terminal_quote") or {}
         quote_status = "APPLIED" if quote_result.get("applied") else "INERT"
@@ -4522,14 +4852,22 @@ def main() -> int:
         trace_to_write = _filter_trace_to_window(report["trace"], emit_window)
         args.trace_json.parent.mkdir(parents=True, exist_ok=True)
         with args.trace_json.open("w", encoding="utf-8") as f:
-            json.dump({
+            document = {
                 "strategy": str(strategy_dir),
                 "ohlcv": str(run_ohlcv),
                 "emit_window": None if emit_window is None else {"start_ms": emit_window[0], "end_ms": emit_window[1]},
                 "report_start_ms": None if report_window is None else report_window[0],
                 "trace_names": report["trace_names"],
                 "trace": trace_to_write,
-            }, f)
+            }
+            if isinstance(trace_to_write, _SinkRows):
+                from run_json import _JSONRecordArray
+                document["trace"] = _JSONRecordArray(lambda: iter(trace_to_write))
+                document["trace_names"] = _JSONRecordArray(
+                    lambda: iter(report["trace_names"]))
+                _dump_harness_sink_json(document, f)
+            else:
+                json.dump(document, f)
     if args.realtime_tail is not None:
         # Receipt: a consumer (scripts/live_flags_lane.py) asserts this line
         # is present in a flagged run's stdout so a future regression that
@@ -4570,18 +4908,30 @@ def main() -> int:
         # JSON-Number, so no consumer can silently truncate a uint64 to
         # a JS-safe double). Invariant (Strategy.run/_report_to_dict):
         # len(bsh_values) == len(bsh_times) whenever recording was on.
-        entries = [
-            {"time_ms": bsh_times[i], "hash": format(bsh_values[i], "016x")}
-            for i in range(len(bsh_values))
-        ]
+        if len(bsh_times) != len(bsh_values):
+            raise RuntimeError("broker-state hashes and equity timestamps differ in length")
+        entry_count = len(bsh_values)
+        def entries_iter():
+            # With a sink, two readers are live here at once (E and H): each
+            # _SinkRows pass opens its own SinkReader on the sink's real path,
+            # so their offsets are independent on every platform.
+            return ({"time_ms": timestamp, "hash": format(value, "016x")}
+                    for timestamp, value in zip(bsh_times, bsh_values))
         with bsh_path.open("w", encoding="utf-8") as f:
-            json.dump({
+            document = {
                 "strategy": str(strategy_dir),
                 "ohlcv": str(run_ohlcv),
                 "script_bars_processed": report["script_bars_processed"],
-                "entries": entries,
-            }, f)
-        print(f"  broker-state-hash: wrote {len(entries)} entries to {bsh_path}")
+                "entries": None,
+            }
+            if isinstance(bsh_values, _SinkRows):
+                from run_json import _JSONRecordArray
+                document["entries"] = _JSONRecordArray(entries_iter)
+                _dump_harness_sink_json(document, f)
+            else:
+                document["entries"] = list(entries_iter())
+                json.dump(document, f)
+        print(f"  broker-state-hash: wrote {entry_count} entries to {bsh_path}")
     if args.dump_book is not None:
         # strat is None only under --runner docker, which sys.exit's above
         # when --dump-book is set. A .so predating the exports still runs
@@ -4650,6 +5000,12 @@ def main() -> int:
             print(f"  fingerprint -> {args.fingerprint_json} ({fp['digest']})")
         except Exception as e:
             print(f"  fingerprint: skipped ({e})", file=sys.stderr)
+    if isinstance(report, _SinkReport):
+        # Every output is written; the sink is still open (the ExitStack
+        # closes it after this function returns), so the canary can still
+        # stat and re-read the file. A failure here fails the probe before
+        # the summary line below can read like a success.
+        _sink_canary(_probe_id(strategy_dir), report)
     elapsed = time.time() - started
 
     try:
@@ -4666,6 +5022,28 @@ def main() -> int:
         f"{elapsed:.2f}s -> {out_path.name}"
     )
     return 0
+
+
+def _dump_harness_sink_json(document, destination):
+    """Stream diagnostic arrays with json.dump's existing default whitespace."""
+    from run_json import _JSONRecordArray
+
+    destination.write("{")
+    for index, (key, value) in enumerate(document.items()):
+        if index:
+            destination.write(", ")
+        destination.write(json.dumps(key))
+        destination.write(": ")
+        if isinstance(value, _JSONRecordArray):
+            destination.write("[")
+            for row_index, row in enumerate(value.records()):
+                if row_index:
+                    destination.write(", ")
+                json.dump(row, destination)
+            destination.write("]")
+        else:
+            json.dump(value, destination)
+    destination.write("}")
 
 
 if __name__ == "__main__":
