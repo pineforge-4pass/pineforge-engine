@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "3b3917e74a8fce3025b650bbe5ce2c0a7f7577241c15b25ce08a44c6b20ed40c"
+    "catalogSha256": "d11f90b7a7725e951730fc0f3d37a448cc69eb2f592dd8c1835e5fab3d21c3eb"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -155,7 +155,7 @@
           "beforePresent": true,
           "afterPresent": true,
           "before": "The run was aborted on request.",
-          "after": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. The existing engine_fault/retryable policy is retained pending a ruling: PROPOSED cancelled, retryable false; RETURN TO CORE-TOP for the class ruling."
+          "after": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used)."
         }
       ]
     },
