@@ -6073,13 +6073,13 @@ void WorkingRequestCore::retire_group_effect_receipts() noexcept {
 }  // inline namespace native_order_v7
 }  // namespace pineforge::native_order
 
-#include <pineforge/detail/scratch_tables.hpp>
+#include "scratch_table_binders.hpp"
 #include <pineforge/run_failure.hpp>
 
 namespace pineforge::detail {
 
 // The roots lane fills this backend-owned seam; the foundation's common
-// begin call and public declaration remain unchanged.
+// begin call and binder declaration remain unchanged.
 void bind_successor_root_scratch_tables(native_order::WorkingRequestCore&,
                                         const std::shared_ptr<ScratchSlab>& slab) {
     if (slab)

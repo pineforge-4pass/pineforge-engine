@@ -28259,13 +28259,13 @@ std::uint64_t PineExecutionAdapter::fixture_auxiliary_disk_bytes() const noexcep
 
 } // namespace pineforge::source
 
-#include <pineforge/detail/scratch_tables.hpp>
+#include "../scratch_table_binders.hpp"
 #include <pineforge/run_failure.hpp>
 
 namespace pineforge::detail {
 
 // The tree and IdPair lanes fill their respective backend-owned seams;
-// the foundation's begin calls and public declarations remain unchanged.
+// the foundation's begin calls and binder declarations remain unchanged.
 void bind_tree_scratch_tables(source::PineExecutionAdapter&,
                               const std::shared_ptr<ScratchSlab>& slab) {
     if (slab)

@@ -8,6 +8,7 @@
 #include "../engine_internal.hpp"
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
+#include "../scratch_table_binders.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"

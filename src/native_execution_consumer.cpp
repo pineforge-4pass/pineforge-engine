@@ -2,7 +2,7 @@
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
-#include "engine_value_invalid.hpp"
+#include "scratch_table_binders.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
 #include "report_sink_writer.hpp"
@@ -13316,6 +13316,28 @@ std::int64_t NativeExecutionConsumer::subscription_next_input_ms(int index) cons
         ? subscription_input_bars_[index + 1].timestamp : 0;
 }
 
+// Called only after the consumer's read-only lifecycle/reentry guards and
+// before its first cache or provider mutation. The caller snapshots policy
+// once; this helper never reads configuration or an environment variable.
+// Old backend bindings retain their owner until reset/readers retire.
+void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig& config) {
+    std::shared_ptr<detail::ScratchSlab> next;
+    switch (config.backend) {
+    case detail::ScratchTableBackend::disk_scratch:
+        break;
+    case detail::ScratchTableBackend::bounded_memory:
+        // Check arithmetic before even the shared-owner metadata allocation.
+        // The constructor rechecks standalone callers and zeroes the backing
+        // allocation before publication. bad_alloc remains out_of_memory.
+        (void)detail::compute_layout(config.manifest);
+        next = std::make_shared<detail::ScratchSlab>(config.manifest);
+        break;
+    default:
+        throw detail::ScratchCapacityError(detail::ScratchResource::layout);
+    }
+    scratch_table_run_.slab = std::move(next);
+}
+
 }  // inline namespace engine_script_run_v19
 
 // The portable run-spec digest lives here, in the one translation unit that
@@ -13354,29 +13376,3 @@ std::uint64_t native_run_spec_digest(const NativeRunSpec& spec, const NativeBarV
 
 } // inline namespace native_bar_views_v1
 }  // namespace pineforge
-
-namespace pineforge {
-
-// Called only after the consumer's read-only lifecycle/reentry guards and
-// before its first cache or provider mutation. The caller snapshots policy
-// once; this helper never reads configuration or an environment variable.
-// Old backend bindings retain their owner until reset/readers retire.
-void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig& config) {
-    std::shared_ptr<detail::ScratchSlab> next;
-    switch (config.backend) {
-    case detail::ScratchTableBackend::disk_scratch:
-        break;
-    case detail::ScratchTableBackend::bounded_memory:
-        // Check arithmetic before even the shared-owner metadata allocation.
-        // The constructor rechecks standalone callers and zeroes the backing
-        // allocation before publication. bad_alloc remains out_of_memory.
-        (void)detail::compute_layout(config.manifest);
-        next = std::make_shared<detail::ScratchSlab>(config.manifest);
-        break;
-    default:
-        throw detail::ScratchCapacityError(detail::ScratchResource::layout);
-    }
-    scratch_table_run_.slab = std::move(next);
-}
-
-} // namespace pineforge
