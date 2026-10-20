@@ -1,7 +1,7 @@
 {
   "schema": "pineforge-arena-bound-vectors/v1",
   "arithmetic": "unsigned 64-bit checked integers; TypeScript BigInt; JSON integers decoded losslessly",
-  "provenance": "Hand calculations in docs/design/arena-bound.md. Expected values have not been harvested from a run or the Python function.",
+  "provenance": "All eight vectors recomputed by hand from the formulas in docs/design/arena-bound.md for round 3; old/new arithmetic is recorded in ci-diagnostics/core-cr150-l22u/REPORT.md. Expected values have not been harvested from a run or the Python function. Only arena, ohlcv and finalizerStream affect the top-level verdict; childPrivate is informational.",
   "vectors": [
     {
       "name": "empty-run-common-empty-id",
@@ -32,7 +32,7 @@
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
         "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
-      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream", "childPrivate"], "reason": "no certified finite bound for: ohlcv, finalizerStream, childPrivate"},
+      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream"], "reason": "no certified finite bound for: ohlcv, finalizerStream"},
       "logicalBytes": 2286
     },
     {
@@ -64,7 +64,7 @@
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
         "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
-      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream", "childPrivate"], "reason": "no certified finite bound for: ohlcv, finalizerStream, childPrivate"},
+      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream"], "reason": "no certified finite bound for: ohlcv, finalizerStream"},
       "logicalBytes": 817754
     },
     {
@@ -96,7 +96,7 @@
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
         "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
-      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream", "childPrivate"], "reason": "no certified finite bound for: ohlcv, finalizerStream, childPrivate"},
+      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream"], "reason": "no certified finite bound for: ohlcv, finalizerStream"},
       "logicalBytes": 832632494
     },
     {
@@ -128,7 +128,7 @@
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
         "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
-      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream", "childPrivate"], "reason": "no certified finite bound for: ohlcv, finalizerStream, childPrivate"},
+      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream"], "reason": "no certified finite bound for: ohlcv, finalizerStream"},
       "logicalBytes": 14696
     },
     {
@@ -160,7 +160,7 @@
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
         "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
-      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream", "childPrivate"], "reason": "no certified finite bound for: ohlcv, finalizerStream, childPrivate"},
+      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream"], "reason": "no certified finite bound for: ohlcv, finalizerStream"},
       "logicalBytes": 4238
     },
     {
@@ -192,7 +192,7 @@
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
         "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
-      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream", "childPrivate"], "reason": "no certified finite bound for: ohlcv, finalizerStream, childPrivate"},
+      }, "unbounded": true, "unboundedTerms": ["ohlcv", "finalizerStream"], "reason": "no certified finite bound for: ohlcv, finalizerStream"},
       "logicalBytes": 25168110
     },
     {
@@ -222,11 +222,6 @@
           "trace": 1, "tracePerBar": 1, "traceFixed": 1,
           "hashes": 1, "hashesPerBar": 1, "hashesFixed": 0,
           "commentBytes": 3, "messageBytes": 4, "traceNameBytes": 5
-        },
-        "childPrivate": {
-          "rssBytes": 4096, "asBytes": 8192, "measured": false,
-          "rssCertified": true, "asCertified": true,
-          "source": "hand toy private-memory proof; not an engine measurement"
         }
       },
       "expected": {"terms": {"arena": {
@@ -258,14 +253,7 @@
             "maxLineBytes": {"E": 154, "T": 717, "O": 190, "K": 71, "V": 263, "X": 140, "H": 25}
           }
         },
-        "childPrivate": {
-          "rssBytes": 4096, "asBytes": 8192, "unbounded": false, "measured": false,
-          "derivation": {
-            "formula": "supplied private RSS/AS proofs; measured applies to RSS only",
-            "sources": ["hand toy private-memory proof; not an engine measurement"],
-            "rssCertified": true, "asCertified": true
-          }
-        }
+        "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
       }, "unbounded": false, "unboundedTerms": [], "reason": ""},
       "logicalBytes": 4238
     },
@@ -295,7 +283,7 @@
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
         "childPrivate": {"rssBytes": null, "asBytes": null, "measured": false, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing applicable private RSS proof and private address-space proof"]}}
-      }, "unbounded": true, "unboundedTerms": ["arena", "ohlcv", "finalizerStream", "childPrivate"], "reason": "no certified finite bound for: arena, ohlcv, finalizerStream, childPrivate"}
+      }, "unbounded": true, "unboundedTerms": ["arena", "ohlcv", "finalizerStream"], "reason": "no certified finite bound for: arena, ohlcv, finalizerStream"}
     }
   ]
 }

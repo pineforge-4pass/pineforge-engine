@@ -11,6 +11,8 @@ FACTS producer is still required for general Pine strategies. The engine does
 not currently emit that record. The local corpus checkout is empty. See
 [the census](arena-bound-corpus-census.md) for the exact known population and
 the distinction between unbounded and unclassified.
+Today no run has the facts needed for certified tightening; the bound
+tightens nothing yet.
 
 ## One function and its exact result
 
@@ -49,13 +51,18 @@ arena_bound(facts) -> {
     }
   },
   unbounded: boolean,
-  unboundedTerms: ["arena"?, "ohlcv"?, "finalizerStream"?, "childPrivate"?],
+  unboundedTerms: ["arena"?, "ohlcv"?, "finalizerStream"?],
   reason: string
 }
 ```
 
-`unboundedTerms` uses the displayed order and contains every term whose own
-flag is true. `reason` is empty when every term has a certified finite value.
+`unboundedTerms` uses the displayed order and contains only the sizing terms
+arena, ohlcv and finalizerStream whose own flags are true. The top-level
+`unbounded` is true exactly when that list is nonempty; `reason` is empty
+when all three sizing terms have certified finite values.
+`terms.childPrivate.unbounded` is computed and reported independently as an
+informational flag. It never enters `unboundedTerms`, the top-level verdict
+or its reason, even when private RSS/AS is unknown.
 The arena retains A5's `arenaBytes` and `inputs` names inside `terms.arena`;
 `bytes` is an equal alias to accommodate the wider interface's spelling.
 Each derivation names the formula and the pre-start evidence supplied with
@@ -71,12 +78,19 @@ machine's memory. A source with a computed ID is not automatically
 mathematically unbounded: finite bars and a proved formatting/loop bound can
 make both its population and byte lengths finite.
 
-APP routes any true top-level flag to its largest rung and disk backend, as
-the owner requires. It must retain the named unresolved terms in its plan.
-That routing decision does not prove that an arbitrarily chosen finite disk
-arena suffices for a mathematically unbounded computation. No such disk-size
-guess is returned here. Resolving that case without capacity refusal requires
-an owner/runtime policy: **RETURN TO CORE-TOP**.
+For 1.7.0, COMPUTE starts attempt 0 with its default arena. A certified bound
+only tightens attempt 0 where the required facts exist. A true top-level
+`unbounded` means **no tightening available**: retain the named unresolved
+sizing terms and use the default attempt-0 arena and the escalation ladder.
+This applies equally to missing proofs, proved unbounded growth and finite
+bounds outside the representation range.
+
+A typed `arena_exhausted` re-places the run on the next rung of COMPUTE's
+trusted ladder, with escalation cap 2. Arena exhaustion is never charged to
+the user and raises an alert. The child's private allocations are capped by
+its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
+`memory_limit`, charged to the user. The calculator reports facts and
+verdicts; COMPUTE owns the default, ladder and re-placement policy.
 
 ## Facts and the producer's proof obligations
 
@@ -125,7 +139,7 @@ E = W + 1                if selected == 1
 | Kbar, K0 | Pair-key opportunities per script bar / fixed contribution. |
 | C, J | Arena chunk bytes / entry-rank key count min(D,27). |
 | U_bound | Complete finalizer input/spool bytes, including open-at-end rows. |
-| P_rss, P_as | Child private resident / address-space terms; each needs its own proof. |
+| P_rss, P_as | Informational child private resident / address-space terms; certifying either requires its own proof. Neither affects sizing routing. |
 
 The fixed terms can encode a tighter whole-run proof, for example a strategy
 which permanently stops issuing after 500 closed slices. They cannot encode
@@ -209,6 +223,101 @@ The compiler owner must additionally bind imported library closures, the
 target/compiler profile and any external request/environment identity not
 already in the resolved plan. **That producer and external provenance
 integration remain RETURN TO CORE-TOP.**
+
+## Compiler facts the bound needs
+
+This is the precise sidecar handoff for the codegen lane. Emit
+`arena-facts.json` beside the final `generated.cpp`, after typed effect
+analysis and source-to-native lowering. The transpiler is outside this
+engine checkout; the emitting stages below name responsibilities for that
+owner, not existing transpiler file locations.
+
+The root, `sha256`, `scope` and `strategy` are JSON objects. `uint64` below
+means a JSON integer in [0,18446744073709551615], decoded losslessly;
+booleans, floats and numeric strings are invalid for those fields.
+`flag` means a JSON integer 0 or 1. A digest is a lowercase 64-character
+SHA-256 string. `source` is a nonempty string identifying the pre-start
+proof artifact/source spans. Each path starts at the sidecar root; `[]`
+denotes every array element. Multiple paths in a cell are separate fields
+of the stated type.
+
+| Fact name | JSON type | Field path in arena-facts.json | Where codegen would emit it | Cost note per group |
+| --- | --- | --- | --- | --- |
+| Schema version | string, exactly `pineforge-arena-facts/v1` | `$.schema` | Final sidecar writer | Envelope: hash final artifacts and engine closure once; exact-plan scope also hashes input bytes/settings. |
+| Trusted producer identity | nonempty string | `$.producer` | Trusted compiler build identity, at sidecar write | — |
+| Generated artifact digest | digest | `$.sha256["generated.cpp"]` | After generated.cpp is finalized | — |
+| Pine source digest or explicit absence | digest or null | `$.sha256["strategy.pine"]` | Resolved source-input closure; null only if absent | — |
+| Input parameters digest or explicit absence | digest or null | `$.sha256["inputs.json"]` | Resolved parameter specialization; null only if absent | — |
+| Runtime/header/CMake closure digest | digest | `$.engineSha256` | Lowering target receipt using `engine_fingerprint` | — |
+| Proof scope | string, `all-data` or `plan` | `$.scope.kind` | After deciding which input/run settings the proof specializes on | — |
+| Exact plan digest | digest; required only for `kind=plan` | `$.scope.sha256` | Host-assisted plan resolution using `plan_fingerprint` | — |
+| Control-flow verdict | string, `bounded`, `unbounded` or `unknown` | `$.strategy.controlFlow.status` | Typed reachable call graph, loop ranges and recursion analysis | Control flow: analyze the typed effect graph; unsupported paths produce unknown without executing the strategy. |
+| Control-flow evidence | nonempty string | `$.strategy.controlFlow.source` | Same proof pass, including source spans | — |
+| Unknown/unbounded explanation | nonempty string; required unless bounded | `$.strategy.controlFlow.reason` | Failed proof obligation or proof of unbounded emitting growth | — |
+| Applied-fill coefficients F, F0 | uint64 each | `$.strategy.fills.perBar`; `$.strategy.fills.fixed` | After callback/loop expansion and broker execution lowering, including old resting orders, COOF, magnifier and risk/margin fills | Fills: propagate whole-run effects and lot/row multiplicity; declaration or call-site counts alone cannot supply them. |
+| Closed slices per applied execution H | uint64 | `$.strategy.fills.rowsPerFill` | Physical-lot plus source row-expansion proof | — |
+| Additional closed rows Z | uint64 | `$.strategy.fills.fixedRows` | Lowering's rows outside the applied-fill contribution | — |
+| Fill evidence | nonempty string | `$.strategy.fills.source` | Proof artifact for F/F0/H/Z, including explicit zero proofs | — |
+| Literal ID components | array of strings | `$.strategy.ids.literals` | Complete source and adapter-generated ID closure; empty is added by the calculator | IDs: collect literals and propagate computed string populations/UTF-8 byte maxima through typed value ranges. |
+| Fresh ID coefficients I, I0 | uint64 each | `$.strategy.ids.freshPerBar`; `$.strategy.ids.fixedFresh` | Bounded loops, arrays, method/function returns and generated-ID rules across every store domain | — |
+| Component byte maximum L | uint64 | `$.strategy.ids.maxBytes` | UTF-8 string-range proof including generated prefixes/suffixes and decimal tokens | — |
+| ID evidence | nonempty string | `$.strategy.ids.source` | Literal/computed operands and generated-component proof artifact | — |
+| Pair-domain proof mode | string, `cartesian` or `opportunities` | `$.strategy.pairKeys.mode` | Pair-store effect analysis after lowering | Pair keys: Cartesian mode reuses D; a tighter opportunity proof must also count unsuccessful and erased attempts. |
+| Key-opportunity coefficients Kbar, K0 | uint64 each; required in opportunities mode | `$.strategy.pairKeys.perBar`; `$.strategy.pairKeys.fixed` | Count opportunities for each sequence/erased/consumed domain, including attempts without an accepted order | — |
+| Pair evidence | nonempty string | `$.strategy.pairKeys.source` | Complete-domain or opportunity proof artifact | — |
+| Successor-root coefficients Rbar, R0 | uint64 each | `$.strategy.successors.perBar`; `$.strategy.successors.fixed` | Native placement/replacement effect pass; include unfilled issued definitions, exclude kept-handle repricing only with proof | Successors: count lowered issued-root effects independently of fills and trades. |
+| Successor evidence | nonempty string | `$.strategy.successors.source` | Root-issuance proof artifact | — |
+| Open-at-end rows | uint64 | `$.stream.openAtEndRows` | Report lowering's terminal open-row proof | Stream: reuse typed effect counts for the whole run; missing optional string maxima use the existing line ceiling. |
+| Output, trace and hash flags | flag each | `$.stream.outputs`; `$.stream.trace`; `$.stream.hashes` | Resolved report configuration; specialize/bind request-dependent flags | — |
+| O row coefficients | uint64 each; required when outputs=1 | `$.stream.outputRowsPerBar`; `$.stream.outputRowsFixed` | Output-writer schedule after callbacks and loops | — |
+| V row coefficients | uint64 each; required when outputs=1 | `$.stream.eventsPerBar`; `$.stream.eventsFixed` | Event effects after function/loop/callback expansion | — |
+| X row coefficients | uint64 each; required when trace=1 | `$.stream.tracePerBar`; `$.stream.traceFixed` | Trace effects after function/loop/callback expansion | — |
+| H row coefficients | uint64 each; required when hashes=1 | `$.stream.hashesPerBar`; `$.stream.hashesFixed` | Complete hash-writer schedule | — |
+| Series and constant slot maxima | uint64 each; required when outputs=1 | `$.stream.seriesSlots`; `$.stream.constantSlots` | Final output descriptor layout | — |
+| Optional string byte maxima | uint64 or null each; may be omitted | `$.stream.commentBytes`; `$.stream.messageBytes`; `$.stream.traceNameBytes` | UTF-8 range proof for comments, event messages and trace names | — |
+| Stream evidence | nonempty string | `$.stream.source` | Output/terminal-row proof artifact bound to run flags | — |
+| Physical feed inventory | array of objects | `$.ohlcv.feeds` | Host-assisted data-plan emission for primary/script/magnifier/extra feeds | OHLCV: enumerate buffer capacities/copies and page-round each mapping; static codegen alone cannot know host allocations. |
+| Host page bytes | positive uint64 | `$.ohlcv.pageBytes` | Host allocation/mapping plan receipt | — |
+| Allocated bar capacity | uint64 | `$.ohlcv.feeds[].bars` | Physical allocation capacity, including conversion/retained copies | — |
+| Separate value columns | uint64 | `$.ohlcv.feeds[].columns` | Per-feed physical column inventory | — |
+| Separate close-time array | flag | `$.ohlcv.feeds[].closeTimes` | Per-feed physical close-array inventory | — |
+| Bar-buffer layout overhead | uint64 | `$.ohlcv.feeds[].overheadBytes` | Bar-file header/padding layout | — |
+| Resident and address-space copy counts | uint64 each | `$.ohlcv.feeds[].residentCopies`; `$.ohlcv.feeds[].asCopies` | Wrapper sharing/mapping proof; count each AS mapping | — |
+| OHLCV evidence | nonempty string | `$.ohlcv.source` | Complete host feed/allocation receipt | — |
+| Informational private RSS and AS | uint64 or null each | `$.childPrivate.rssBytes`; `$.childPrivate.asBytes` | Optional host/compiler private-state receipt; omit the group if unavailable | Private diagnostics: independent RSS/AS evidence is optional for sizing; child RLIMIT_AS enforces the strategy's memory limit. |
+| RSS observation provenance | boolean | `$.childPrivate.measured` | RSS receipt only; false when no RSS measurement applies | — |
+| Independent private certifications | boolean each | `$.childPrivate.rssCertified`; `$.childPrivate.asCertified` | Independent applicable proofs; an RSS observation cannot certify AS | — |
+| Private evidence | nonempty string | `$.childPrivate.source` | Private runtime/strategy-state receipt | — |
+
+For a bounded strategy, every listed strategy numeric field is required,
+except pair opportunity fields in cartesian mode. A genuine proved zero
+is emitted as zero. Missing/unsupported strategy proofs use
+`controlFlow.status="unknown"` with source/reason, never invented numeric
+values. `stream`, `ohlcv` and `childPrivate` are optional root objects;
+omitting either of the first two leaves its sizing term unknown.
+Omitting childPrivate leaves only its informational flag true. Within a
+present private group, measured and both certification booleans are
+required; missing/null RSS/AS stays unknown.
+
+The proof trace named by each `.source` must cover the typed reachable
+order sites, literal/computed ID operands, weighted nested trip bounds,
+array/UDT dispatch, finite recursion depths, callback/magnifier schedules,
+implicit broker effects and generated ID byte rules relevant to that
+group. These are proof artifacts behind the table's fields, not additional
+counts the calculator guesses. Imported libraries, compiler/target profile
+and external request/environment identities must be bound by that trusted
+proof where relevant. The current reader checks the three artifact hashes,
+engine closure and plan scope; it does not validate a new external-identity
+schema. Until the producer and that integration exist, such cases remain
+unknown.
+
+`data` is supplied by the resolved host plan at `bound_probe`, not read from
+the sidecar: `scriptBars` and `windowBars` are uint64 with windowBars <=
+scriptBars, `selected` is a flag, `source` is nonempty, and `planSha256` is
+the digest required to match an exact-plan scope. Codegen emits the
+coefficients; the host supplies S/W/selection and the applicable allocation
+inventory. A census may check proof availability with synthetic dimensions,
+but those dimensions never certify a real request size.
 
 ## Storage derivation
 
@@ -412,7 +521,9 @@ regions.
 (boolean), rssCertified/asCertified (booleans), and source. `measured`
 describes the RSS observation only. It never claims an AS measurement.
 The term is unbounded if either value is unknown or either certification
-flag is false.
+flag is false. This flag is informational: it does not affect the top-level
+verdict, its reason or `unboundedTerms`. Private growth is capped by the
+child's `RLIMIT_AS` and a breach is the strategy's typed `memory_limit`.
 
 CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident
 constant**, referring to Q2 at 15:43. That is a historical measurement,
@@ -420,17 +531,20 @@ not a source-derived upper bound for this merged tree or arbitrary
 compiled strategy state. No P_as measurement was supplied. The calculator
 therefore installs neither value by default. A supplied historical RSS
 can be displayed with measured=true, rssCertified=false and asBytes=null;
-the term remains unbounded. A vector with 4096/8192 private bytes tests
-only arithmetic/flag transport under a hypothetical trusted proof; those
-numbers are explicitly not real engine coefficients.
+the informational term remains unbounded. The formula tests also use
+4096/8192 private bytes to check arithmetic/flag transport under a
+hypothetical trusted proof; those numbers are not real engine coefficients.
+The all-terms hand vector omits that toy proof and has a bounded top-level
+verdict with private RSS/AS still null.
 
 An applicable private proof must account for the native/Python runtime,
 strategy-owned state and allocation peaks, fixed sink/curve batches,
 mapped-window reservation, arena bitmap and region-index capacities,
 stacks, libraries and any separate AS mappings. RSS observations cannot
 be substituted for that inventory or copied into P_as.
-**RETURN TO CORE-TOP:** obtain the applicable post-port measurements and
-an AS/strategy-private bound before claiming a fully finite invocation.
+An applicable post-port RSS/AS proof is needed only to claim certified
+finite private diagnostics. Its absence leaves the informational flag true
+and does not prevent tightening when the three sizing terms are certified.
 
 ## Worked values and the hand vectors
 
@@ -476,8 +590,15 @@ The eight JSON vectors were calculated by hand:
 | Rehash at 33 | D=32,Q=1,L=1,E=1; both 128-slot rehash peaks are 3072; B=14696; arena=15 MiB. |
 | Unicode | D=2,Q=4,L=2,T=2,R=2,E=2; B=48+64+197+125+520+2048+180+1024+32=4238. |
 | Million points | B=24*1048576+2286=25168110; ceil=25 MiB; arena=39 MiB=40894464. Half supplies 19 complete chunks, below the actual 24 MiB curve. |
-| All terms | Same Unicode arena. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. |
-| Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. Other absent term proofs remain separately named. |
+| All terms | Same Unicode arena. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
+| Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena and escalation apply. |
+
+All eight vectors were recomputed by hand for the three-term verdict.
+The first six retain their arena/logical byte values and have
+`unboundedTerms=["ohlcv","finalizerStream"]`; their absent private proof
+continues to set only its own flag. In the all-terms vector, removing the
+old toy private proof isolates unknown childPrivate: the former four-term
+rule would flag that input, while the three-term verdict is bounded.
 
 ### TypeScript arithmetic
 
@@ -542,7 +663,12 @@ guards as trade/partial/pyramid evidence.
 The full mode enumerates every source-marked validation directory plus
 every parity-baseline probe, uses the same manifest reader before each
 run, and drives the canonical run_strategy CLI. Missing proofs are printed
-and cause incomplete coverage to fail. Every measured run prints actual,
+and cause incomplete proof coverage to fail. The
+`RETURN TO CORE-TOP: no corpus probe has a certified FACTS record` guard is
+retained: this lab harness must not pass without any certified arena to
+compare with actual usage. It is a certification failure, not a production
+admission or sizing decision. Production still uses the default attempt-0
+arena and escalation ladder without a bound. Every measured run prints actual,
 bound and actual/bound; the minimum ratio identifies worst conservatism.
 No measured worst ratios exist yet. A 15 MiB allowance for a one-chunk
 curve can be 15x over actual; the fixture's deliberately loose fill/lot

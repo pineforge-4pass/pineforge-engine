@@ -425,11 +425,14 @@ def _private_term(record) -> dict:
 
 
 def arena_bound(facts: Mapping) -> dict:
-    """One A5-WIDER call; each independently sized term has its own verdict.
+    """One A5-WIDER call; only arena/OHLCV/stream affect the sizing verdict.
 
     A measured RSS observation is not a private-memory bound. An unmeasured AS
-    term is never filled in from RSS. See the exact interface and TS BigInt
-    formulas in docs/design/arena-bound.md.
+    term is never filled in from RSS. childPrivate and its unbounded flag are
+    informational: RLIMIT_AS caps the child, with typed memory_limit charged
+    to the strategy. An unbounded sizing term means no attempt-0 tightening;
+    COMPUTE uses its default arena and trusted escalation ladder. See the
+    exact interface and TS BigInt formulas in docs/design/arena-bound.md.
     """
     facts = _object(facts, "facts")
     try:
@@ -456,7 +459,8 @@ def arena_bound(facts: Mapping) -> dict:
                       else {"rssBytes": None, "asBytes": None, "measured": False})
             prefix = "PLATFORM_RANGE" if isinstance(error, BoundOverflow) else "UNCERTIFIED"
             terms[name] = _unavailable_term(f"{prefix}: {error}", **fields)
-    missing = [name for name, term in terms.items() if term["unbounded"]]
+    missing = [name for name in ("arena", "ohlcv", "finalizerStream")
+               if terms[name]["unbounded"]]
     return {
         "terms": terms, "unbounded": bool(missing), "unboundedTerms": missing,
         "reason": "no certified finite bound for: " + ", ".join(missing) if missing else "",

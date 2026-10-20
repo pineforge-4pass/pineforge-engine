@@ -3,8 +3,11 @@
 Read-only census for CR-150 L22u / A6 and A5-WIDER. No certifier, test,
 compiler, repository script or network operation was executed.
 
-The engine HEAD inspected is
+The original census inspected engine HEAD
 `c229f6b20e1facacce0fcbe3062743075eba0b39`.
+Round 3 updates the sizing policy at lane HEAD
+`d7d8bd309e2eccd1a42d04363f75e5fd2d075a52`; the lane's `corpus/` is still
+empty, and no probe has been newly classified.
 Its corpus gitlink is **e99bbd9db257740d9c77db37a8567616627130bf**.
 The submodule URL is
 `https://github.com/pineforge-4pass/pineforge-corpus.git`, path `corpus/`.
@@ -32,21 +35,36 @@ lab harness takes the union, rather than allowing missing directories to
 shrink its denominator.
 
 The API's routing flag is different from a mathematical proof. With the
-currently unavailable facts, each known probe has all four names in
+currently unavailable facts, each known probe has the three sizing names in
 `unboundedTerms`:
 
-| Term | Flagged unbounded/unknown for routing | Proved unbounded | UNCLASSIFIED |
+| Sizing term | Flagged unbounded/unknown | Proved unbounded | UNCLASSIFIED |
 | --- | ---: | ---: | ---: |
 | arena | 312 | 0 | 312 |
 | ohlcv | 312 | 0 | 312 |
 | finalizerStream | 312 | 0 | 312 |
+
+All 312 known probes therefore have no tightening available. COMPUTE uses
+the default attempt-0 arena and its trusted escalation ladder: a typed
+`arena_exhausted` re-places the run on the next rung, escalation cap 2,
+never charged to the user, with an alert. Today no run has the facts needed
+for certified tightening; the bound tightens nothing yet.
+
+| Informational term | Own unbounded/unknown flag | Proved unbounded | UNCLASSIFIED |
+| --- | ---: | ---: | ---: |
 | childPrivate | 312 | 0 | 312 |
+
+The childPrivate flag remains reported but never enters `unboundedTerms`,
+the top-level `unbounded` or its reason. The child is capped by `RLIMIT_AS`;
+growth beyond that cap is the strategy's typed `memory_limit`, charged to
+the user.
 
 OHLCV counts, mappings and feeds cannot be read from an empty submodule.
 The child private AS term is additionally unmeasured, and the brief's
 44.4–46.2 MB historical RSS observation is not an applicable private-memory
-certificate. Thus even a later finite arena proof does not automatically
-make an entire invocation bounded.
+certificate. A later finite arena proof still needs applicable OHLCV and
+finalizer-stream facts for the three-term verdict to become bounded.
+Unknown private diagnostics do not prevent that verdict or tightening.
 
 ## Reproducible rule
 
@@ -66,11 +84,14 @@ For each source-marked probe:
    Other nonconstant loops, recursion, computed IDs and missing lowering
    proofs are UNCLASSIFIED until proved; none is counted as bounded.
 3. Finite compiled/data proofs produce T,D,Q,L,R,E and the arena size.
-   Extra feeds, output/trace/hash counts and private RSS/AS proofs are
-   classified independently, and each missing proof names its term.
+   Extra feeds and output/trace/hash counts are classified independently;
+   their missing proofs name sizing terms. Private RSS/AS remains a
+   separate informational term with its own flag.
 4. Print bounded/unbounded/unclassified counts, the explicit unbounded
-   probe list, and counts for each name in unboundedTerms. Missing input
-   or unclassified coverage makes the full lab test fail.
+   probe list, counts for the three names in unboundedTerms, and a separate
+   informational childPrivate flag count. Missing input or unclassified
+   coverage makes the certification harness fail; production uses the
+   default attempt-0 arena and escalation.
 
 The source inventory is deliberately not a complete Pine type/dataflow
 analyzer. No trusted general finite-proof producer currently exists in
@@ -78,18 +99,44 @@ this engine tree. Completing that compiler/lowering integration and
 reading the pinned sources is **RETURN TO CORE-TOP**, not an authorization
 to invent a census number.
 
-Linux lab reproduction, after the pinned corpus is available locally:
+The hard failure
+`RETURN TO CORE-TOP: no corpus probe has a certified FACTS record` is
+retained in `corpus_run`. It guards a lab proof that compares actual arena
+usage to a certified value. Passing without any certified run would claim
+evidence that does not exist. This guard does not implement production
+admission or routing and does not contradict the default arena and
+escalation policy.
+
+## Re-run on a populated checkout (reading only)
+
+Use an already populated checkout with corpus HEAD
+`e99bbd9db257740d9c77db37a8567616627130bf`, its validation sources and any
+trusted sidecars. From the engine root, the owner can run:
 
 ```bash
+git -C corpus log -1 --format=%H
+ls corpus/validation
 python3 -B tests/test_arena_bound.py --census-only --corpus corpus
-ctest --test-dir build-arena -R '^test_arena_bound_corpus$' -V
 ```
 
-The first command only reads sources/sidecars and prints classifications.
-It exits nonzero on unclassified entries. The second performs the real
-arena-attached runs and writes census/measurements under
-`build-arena/arena-bound/`; it does not pass an all-unknown census.
-Neither command was run by this edit-only lane.
+Check the first output against the pinned corpus SHA above. The census-only
+command reads the union of the parity-baseline names and actual
+source-marked validation directories. It verifies present sidecar
+fingerprints/scope, inventories sources when no sidecar exists, and prints
+each classification, all three classification totals, the explicit proved
+unbounded list, the three sizing-term flag counts and the separate private
+flag count. Its synthetic one-bar dimensions check proof availability only;
+they are not certified request sizes.
+
+With `-B`, this mode writes no bytecode, sidecars, source files, reports,
+measurements or census artifact. It does not build, run strategies or
+materialize feeds; no network or checkout update is involved. Exit 1 means
+at least one entry is UNCLASSIFIED, so keep those entries unknown. Exit 0
+means all entries were classified; the separate counts still distinguish
+bounded from proved unbounded. A proof-availability census is not executed
+arena or parity evidence. Real Linux lab verification is described in
+[arena-bound.md](arena-bound.md#lab-verification-and-remaining-integration).
+No command in this reproduction block was executed by this edit-only lane.
 
 ## Every known probe
 
@@ -97,7 +144,8 @@ All IDs in this table are relative to **corpus/validation/**.
 Fact code **A** means: Pine source, generated source and inputs/FACTS
 sidecar unavailable in the empty checkout. Reason **A/M** means no source
 classification is possible and missing-term set
-M={arena,ohlcv,finalizerStream,childPrivate}. “Unknown” is not “yes”.
+M={arena,ohlcv,finalizerStream}. The childPrivate diagnostics are also
+unknown for every row, separately from M. “Unknown” is not “yes”.
 
 | Probe ID | Facts | Bounded? | Reason / missing terms |
 | --- | --- | --- | --- |

@@ -63,6 +63,10 @@ class FormulaTests(unittest.TestCase):
                 self.assertEqual(set(arena["inputs"]), set("TDQLRE"))
                 self.assertEqual(set(actual),
                                  {"terms", "unbounded", "unboundedTerms", "reason"})
+                self.assertEqual(set(actual["terms"]),
+                                 {"arena", "ohlcv", "finalizerStream", "childPrivate"})
+                self.assertNotIn("childPrivate", actual["unboundedTerms"])
+                self.assertNotIn("childPrivate", actual["reason"])
                 self.assertEqual(arena["bytes"], arena["arenaBytes"])
                 if not arena["unbounded"]:
                     self.assertEqual(sum(per_user_bytes(arena["inputs"]).values()),
@@ -200,17 +204,72 @@ class FormulaTests(unittest.TestCase):
         self.assertEqual(recursion["recursiveFunctions"], ["first", "second"])
 
     def test_rss_measurement_does_not_invent_an_as_bound(self):
-        facts = copy.deepcopy(self.vectors[0]["facts"])
+        vector = next(row for row in self.vectors
+                      if row["name"] == "all-terms-and-separate-feed-pages")
+        facts = copy.deepcopy(vector["facts"])
         facts["childPrivate"] = {
             "rssBytes": 46_200_000, "asBytes": None, "measured": True,
             "rssCertified": False, "asCertified": False,
             "source": "pre-flat RSS observation; not an applicable bound",
         }
-        term = arena_bound(facts)["terms"]["childPrivate"]
+        result = arena_bound(facts)
+        term = result["terms"]["childPrivate"]
         self.assertEqual(term["rssBytes"], 46_200_000)
         self.assertIsNone(term["asBytes"])
         self.assertTrue(term["measured"])
         self.assertTrue(term["unbounded"])
+        self.assertFalse(result["unbounded"])
+        self.assertEqual(result["unboundedTerms"], [])
+        self.assertEqual(result["reason"], "")
+
+    def test_private_proof_flags_and_overflow_are_informational(self):
+        vector = next(row for row in self.vectors
+                      if row["name"] == "all-terms-and-separate-feed-pages")
+        # This vector has finite arena/OHLCV/stream and no private proof.
+        missing = arena_bound(vector["facts"])
+        self.assertTrue(missing["terms"]["childPrivate"]["unbounded"])
+        self.assertIsNone(missing["terms"]["childPrivate"]["rssBytes"])
+        self.assertIsNone(missing["terms"]["childPrivate"]["asBytes"])
+        self.assertFalse(missing["terms"]["childPrivate"]["measured"])
+        self.assertFalse(missing["unbounded"])
+        self.assertEqual(missing["unboundedTerms"], [])
+        self.assertEqual(missing["reason"], "")
+        toy = {"rssBytes": 4096, "asBytes": 8192, "measured": False,
+               "rssCertified": True, "asCertified": True,
+               "source": "hand toy private-memory proof; not an engine measurement"}
+        for changes, private_unbounded in (
+                ({}, False),
+                ({"rssCertified": False}, True),
+                ({"asCertified": False}, True),
+                ({"rssBytes": None}, True),
+                ({"asBytes": None}, True),
+                ({"asBytes": MAX_U64 + 1}, True)):
+            with self.subTest(changes=changes):
+                facts = copy.deepcopy(vector["facts"])
+                facts["childPrivate"] = {**toy, **changes}
+                result = arena_bound(facts)
+                self.assertEqual(result["terms"]["childPrivate"]["unbounded"],
+                                 private_unbounded)
+                self.assertFalse(result["unbounded"])
+                self.assertEqual(result["unboundedTerms"], [])
+                self.assertEqual(result["reason"], "")
+
+    def test_each_sizing_term_still_controls_the_top_level_verdict(self):
+        vector = next(row for row in self.vectors
+                      if row["name"] == "all-terms-and-separate-feed-pages")
+        for term in ("arena", "ohlcv", "finalizerStream"):
+            with self.subTest(term=term):
+                facts = copy.deepcopy(vector["facts"])
+                if term == "arena":
+                    # T/E/L remain certified, so the stream stays finite.
+                    del facts["strategy"]["successors"]["perBar"]
+                else:
+                    del facts["ohlcv" if term == "ohlcv" else "stream"]
+                result = arena_bound(facts)
+                self.assertTrue(result["terms"]["childPrivate"]["unbounded"])
+                self.assertTrue(result["unbounded"])
+                self.assertEqual(result["unboundedTerms"], [term])
+                self.assertEqual(result["reason"], "no certified finite bound for: " + term)
 
     def test_stream_line_ceiling_and_missing_count_are_different(self):
         vector = next(row for row in self.vectors
@@ -471,7 +530,8 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                 self.fixture_trades = int(report.get("total_trades", 0))
                 row = {"probe": probe.name, "actual": actual, "arenaBytes": certified,
                        "inputs": bound["inputs"],
-                       "unboundedTerms": all_terms["unboundedTerms"]}
+                       "unboundedTerms": all_terms["unboundedTerms"],
+                       "childPrivate": all_terms["terms"]["childPrivate"]}
                 measurements.append(row)
                 print(f"arena_bound: probe={probe.name} actual={actual} bound={certified} "
                       f"actual/bound={actual}/{certified} "
@@ -630,14 +690,17 @@ def corpus_census(corpus: Path) -> tuple[list[Path], list[dict]]:
                          "source": "census proof-availability validation"},
             })
             unbounded_terms = result["unboundedTerms"]
+            private_unbounded = result["terms"]["childPrivate"]["unbounded"]
             if verdict == "BOUNDED" and result["terms"]["arena"]["unbounded"]:
                 verdict = "UNCLASSIFIED"
                 reason = result["terms"]["arena"].get("reason", "missing arena proof")
         except (OSError, ValueError) as error:
             verdict, reason = "UNCLASSIFIED", str(error)
-            unbounded_terms = ["arena", "ohlcv", "finalizerStream", "childPrivate"]
+            unbounded_terms = ["arena", "ohlcv", "finalizerStream"]
+            private_unbounded = True
         entries.append({"probe": name, "classification": verdict, "reason": reason,
-                        "unboundedTerms": unbounded_terms})
+                        "unboundedTerms": unbounded_terms,
+                        "childPrivateUnbounded": private_unbounded})
         print(f"arena_census: {name} {verdict} {reason}", flush=True)
     counts = {kind: sum(row["classification"] == kind for row in entries)
               for kind in ("BOUNDED", "UNBOUNDED", "UNCLASSIFIED")}
@@ -647,8 +710,11 @@ def corpus_census(corpus: Path) -> tuple[list[Path], list[dict]]:
         flush=True)
     print("arena_census_unbounded_term_counts: " + json.dumps({
         term: sum(term in row["unboundedTerms"] for row in entries)
-        for term in ("arena", "ohlcv", "finalizerStream", "childPrivate")
+        for term in ("arena", "ohlcv", "finalizerStream")
     }, sort_keys=True), flush=True)
+    print("arena_census_child_private_unbounded_count: " +
+          str(sum(row["childPrivateUnbounded"] for row in entries)) +
+          " (informational)", flush=True)
     return [corpus / row["probe"] for row in entries
             if row["classification"] == "BOUNDED"], entries
 
@@ -660,6 +726,9 @@ def corpus_run(build: Path, corpus: Path, work: Path, arena_directory: Path,
     unclassified = [row["probe"] for row in census if row["classification"] == "UNCLASSIFIED"]
     # Run every classifiable probe even if the eventual coverage verdict is
     # incomplete. No missing sidecar is a successful skip.
+    # This is a bound-proof guard, not production admission/routing. COMPUTE
+    # uses its default attempt-0 arena and escalation when facts are missing.
+    # A guessed arena here could not prove actual <= certified bound.
     check(probes, "RETURN TO CORE-TOP: no corpus probe has a certified FACTS record")
     expected_pin = subprocess.check_output(
         ["git", "rev-parse", "HEAD:corpus"], cwd=ROOT, text=True).strip()
@@ -693,8 +762,11 @@ def corpus_run(build: Path, corpus: Path, work: Path, arena_directory: Path,
         by_probe.setdefault(row["probe"], set()).update(row["unboundedTerms"])
     print("arena_corpus_actual_plan_unbounded_term_counts: " + json.dumps({
         term: sum(term in flags for flags in by_probe.values())
-        for term in ("arena", "ohlcv", "finalizerStream", "childPrivate")
+        for term in ("arena", "ohlcv", "finalizerStream")
     }, sort_keys=True), flush=True)
+    print("arena_corpus_actual_plan_child_private_unbounded_count: " +
+          str(len({row["probe"] for row in rows if row["childPrivate"]["unbounded"]})) +
+          " (informational)", flush=True)
     check(not unclassified,
           "RETURN TO CORE-TOP: incomplete corpus certification: " + ", ".join(unclassified))
     return rows
