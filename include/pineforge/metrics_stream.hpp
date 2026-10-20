@@ -9,6 +9,7 @@
 #include <memory>
 
 namespace pineforge {
+namespace detail { class ScratchFile; }
 namespace metrics {
 
 PF_STATIC_ASSERT(sizeof(pf_equity_point_t) == 24);
@@ -64,19 +65,23 @@ private:
 /// exactly the 24-byte binary pf_equity_point_t: time_ms, equity, open_profit.
 /// This describes either a region or a separate file without choosing the
 /// curve/position-tail placement that DESIGN leaves open (3.8:908).
-/// The engine owns descriptor and its lifetime; a reader borrows the region.
+/// Production regions borrow scratch and its lifetime, with descriptor=-1.
+/// The descriptor form remains available for existing external file readers;
+/// it is used only when scratch is null. Neither form owns its backing.
 struct ScratchCurveRegion {
     int descriptor;
     std::int64_t byte_offset;
     std::int64_t point_count;
+    const detail::ScratchFile* scratch = nullptr;
 };
 
 struct ScratchCurveReader; // positional reader contract: spill_curve_reader.hpp
 
 /// Scratch point source (3.3:535-546; 3.8:904-909). Read exact binary doubles
-/// with pread into ONE 64 KiB window; never mmap the scratch or parse sink
-/// text. Index i refers to byte_offset + 24*i. The descriptor and region
-/// remain valid during the walk. State/cache is opaque and O(1) in bars.
+/// through positional scratch I/O into ONE 64 KiB window; never map a curve
+/// in the reader or parse sink text. Index i refers to byte_offset + 24*i.
+/// The borrowed backing remains valid during the walk. State/cache is
+/// opaque and O(1) in bars.
 ///
 /// Required access pattern is first point, last point, then forward passes;
 /// each pass may restart at index 0. This is not a destructive input stream.
