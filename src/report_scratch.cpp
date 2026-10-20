@@ -32,7 +32,7 @@ class ScratchIoError final : public std::system_error, public RunFailureInfo {
 public:
     ScratchIoError(int error_number, const char* operation)
         : std::system_error(error_number, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
+          RunFailureInfo(RunFailureCode::report_sink_failed, {{"reason", "scratch_io"}}) {}
 };
 
 [[noreturn]] void fail_io(int error_number, const char* operation) {

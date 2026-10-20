@@ -5,11 +5,13 @@
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
 #include "selected_report_view.hpp"
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <unordered_set>
@@ -743,7 +745,10 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
         next.enabled = true;
         next.fd = descriptor->fd;
         next.run_id = descriptor->run_id ? descriptor->run_id : "";
-        // No path parent or scratch directory exists for a borrowed stream.
+        // A borrowed stream has no path parent. Until the report-curve arena
+        // port lands, unjailed file-mode scratch uses its usual directory.
+        const char* temporary = std::getenv("TMPDIR");
+        next.scratch_dir = temporary && *temporary ? temporary : "/tmp";
     }
     report_sink_state_ = std::move(next);
     return 0;
@@ -795,6 +800,7 @@ void BacktestEngine::begin_report_sink() {
     sink.summary = {};
     sink.output_base = 0;
     if (!sink.enabled) return;
+    detail::ScratchArena::attach_from_environment();
     // The new run owns these histories. Drop capacity left by a previous
     // sink-off run before callbacks, even if outputs are disabled this time.
     std::vector<uint64_t>().swap(broker_state_hashes_);
@@ -836,9 +842,7 @@ void BacktestEngine::begin_report_sink() {
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        throw coded<std::runtime_error>(code, {}, error.what());
+        throw coded<std::runtime_error>(error.run_failure(), error.what());
     }
 }
 
@@ -908,9 +912,7 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         *out = {};
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         note_run_failure(engine, failure.what(), classify_run_failure(failure));
         throw failure;
     } catch (const std::exception& error) {
@@ -1046,9 +1048,7 @@ void BacktestEngine::report_sink_record(Write write) const {
     try {
         write();
     } catch (const report_sink::WriterError& error) {
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
         note_run_failure(engine, failure.what(), classify_run_failure(failure));

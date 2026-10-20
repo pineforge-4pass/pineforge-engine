@@ -14,7 +14,8 @@ namespace pineforge::detail {
 // failure together, so callers keep their existing std::system_error catch.
 class ScratchIoError final : public std::system_error, public RunFailureInfo {
 public:
-    ScratchIoError(int error, const char* operation, const RunFailureArgs& args = {})
+    ScratchIoError(int error, const char* operation,
+                   const RunFailureArgs& args = {{"reason", "scratch_io"}})
         : std::system_error(error, std::generic_category(), operation),
           RunFailureInfo(RunFailureCode::report_sink_failed, args) {}
 };

@@ -13203,9 +13203,7 @@ bool BacktestEngine::prepare_equity_point() {
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        throw coded<std::runtime_error>(code, {}, error.what());
+        throw coded<std::runtime_error>(error.run_failure(), error.what());
     } catch (...) {
         sink.writer.reset();
         throw;
@@ -13375,9 +13373,7 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         // observer fault after this capture therefore cannot publish a trailer.
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        throw coded<std::runtime_error>(code, {}, error.what());
+        throw coded<std::runtime_error>(error.run_failure(), error.what());
     } catch (...) {
         sink.writer.reset();
         throw;
@@ -13497,9 +13493,7 @@ void NativeExecutionConsumer::write_streamed_trade(
         ++sink.receipt.count_t;
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         auto& mutable_engine = const_cast<BacktestEngine&>(engine);
         mutable_engine.last_run_status_ = 1;
         note_run_failure(mutable_engine, failure.what(), classify_run_failure(failure));

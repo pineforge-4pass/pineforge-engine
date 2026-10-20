@@ -220,10 +220,19 @@ struct ScratchArena::Impl {
         // bytes_used counts all stores' currently claimed chunks, not the
         // historical peak. Demand is this grow's additional whole chunks,
         // before any claims, without subtracting the arena's free chunks.
+        constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        const auto size_arg = [maximum](std::uint64_t bytes) {
+            return static_cast<std::int64_t>(std::min(bytes, maximum));
+        };
+        needed_chunks = std::max<std::uint64_t>(needed_chunks, 1);
+        // Saturate BEFORE multiplication: ceil(off_t::max / chunk) * chunk
+        // is 2^63, outside the signed failure-argument transport.
+        const auto needed_bytes = needed_chunks > maximum / kChunkBytes
+            ? maximum : needed_chunks * kChunkBytes;
         throw ScratchIoError(EFBIG, "scratch arena exhausted",
-            {{"reason", "arena_exhausted"}, {"high_water_bytes", counters.high_water},
-             {"arena_bytes", supplied_bytes}, {"claimed_bytes", counters.bytes_used},
-             {"needed_bytes_lower_bound", std::max<std::uint64_t>(needed_chunks, 1) * kChunkBytes},
+            {{"reason", "arena_exhausted"}, {"high_water_bytes", size_arg(counters.high_water)},
+             {"arena_bytes", size_arg(supplied_bytes)}, {"claimed_bytes", size_arg(counters.bytes_used)},
+             {"needed_bytes_lower_bound", size_arg(needed_bytes)},
              {"store", store_name(store)}});
     }
 

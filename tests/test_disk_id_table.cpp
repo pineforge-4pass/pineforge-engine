@@ -157,7 +157,9 @@ template<class F> void io_failure(F action) {
     try { action(); }
     catch (const std::system_error& error) {
         failed = pineforge::classify_run_failure(error).code
-            == pineforge::RunFailureCode::report_sink_failed;
+            == pineforge::RunFailureCode::report_sink_failed
+            && pineforge::classify_run_failure(error).args
+            && *pineforge::classify_run_failure(error).args == "{\"reason\":\"scratch_io\"}";
     }
     require(failed, "I/O error must carry report_sink_failed");
 }

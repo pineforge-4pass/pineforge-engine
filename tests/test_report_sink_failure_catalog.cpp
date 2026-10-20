@@ -37,9 +37,7 @@ void expect_rejected(const RunFailureArgs& args) {
     assert(args_json(value) == "{}");
 }
 
-// ScratchIoError is final and its current constructor takes only errno and
-// operation, with {} arguments. Use the same public bases locally to exercise
-// a carried reason without changing that production raiser in this lane.
+// Keep arbitrary registry-shape coverage separate from real I/O raiser tests.
 class SinkFailureWithArgs final : public std::system_error, public pineforge::RunFailureInfo {
 public:
     explicit SinkFailureWithArgs(const RunFailureArgs& args)
@@ -164,14 +162,14 @@ void arena_counters() {
 }
 
 void existing_scratch_error() {
-    // The real existing exception must still classify with empty arguments.
+    // File-mode errors default to a reason-only payload.
     bool caught = false;
     try {
         throw pineforge::detail::ScratchIoError(EIO, "scratch write");
     } catch (const std::system_error& error) {
         caught = true;
         assert(error.code().value() == EIO);
-        expect_sink_failure(pineforge::classify_run_failure(error), "{}");
+        expect_sink_failure(pineforge::classify_run_failure(error), "{\"reason\":\"scratch_io\"}");
     }
     assert(caught);
 }

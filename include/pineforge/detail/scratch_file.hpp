@@ -67,6 +67,7 @@ public:
         fd_ = -1;
     }
     bool opened() const noexcept { return fd_ >= 0 || arena_ != nullptr; }
+    bool arena_backed() const noexcept { return arena_ != nullptr; }
     void open(const char* prefix) {
         if (opened()) return;
         if (auto* arena = ScratchArena::attached()) {
@@ -117,7 +118,7 @@ public:
         const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
         if (offset > maximum || length > maximum - offset)
             throw ScratchIoError(EFBIG, "scratch offset exhausted",
-                                arena ? RunFailureArgs{{"reason", "arena_io"}} : RunFailureArgs{});
+                                {{"reason", arena ? "arena_io" : "scratch_io"}});
     }
     void write(std::uint64_t offset, const void* data, std::size_t length) {
         check_extent(offset, length, arena_ != nullptr);

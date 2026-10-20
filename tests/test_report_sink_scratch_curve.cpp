@@ -674,6 +674,8 @@ void scratch_failure(const TestRoot& root, const std::string& name,
     require(recorded == "report_sink_failed",
             "scratch failure is not the typed report_sink_failed (code '" + recorded
             + "', text '" + host.last_error() + "')");
+    require(std::string(pineforge::run_failure_args_of(host)) == "{\"reason\":\"scratch_io\"}",
+            "scratch create failure keeps its reason through the run boundary without sizes");
     // Not the sink file's own I/O error: the text is the scratch file's (ScratchIoError).
     require(host.last_error().find("report scratch create") != std::string::npos,
             "the typed failure is not the scratch file's: '" + host.last_error() + "'");

@@ -46,6 +46,8 @@ public:
         }
         return *this;
     }
+    void set_store(ScratchStore store) noexcept { file_.set_store(store); }
+    bool arena_backed() const noexcept { return file_.arena_backed(); }
     void set_directory(const std::string& directory) { file_.set_directory(directory); }
     void clear() noexcept {
         file_.clear();
@@ -105,10 +107,12 @@ public:
             at = left ? row.left : row.right;
         }
         constexpr std::size_t header = sizeof(Links) + sizeof(Value);
-        ScratchFile::check_extent(end_, header);
-        ScratchFile::check_extent(end_ + header, key.size());
+        const bool arena = file_.opened() ? file_.arena_backed() : ScratchArena::attached() != nullptr;
+        ScratchFile::check_extent(end_, header, arena);
+        ScratchFile::check_extent(end_ + header, key.size(), arena);
         if (size_ == std::numeric_limits<std::uint64_t>::max())
-            throw ScratchIoError(EFBIG, "scratch id count exhausted");
+            throw ScratchIoError(EFBIG, "scratch id count exhausted",
+                                 {{"reason", arena ? "arena_io" : "scratch_io"}});
         file_.open("pineforge-ids");
         at = end_;
         Links row;
@@ -149,6 +153,10 @@ public:
     }
 
 private:
+    [[noreturn]] void io_error(int error, const char* operation) const {
+        throw ScratchIoError(error, operation,
+                             {{"reason", file_.arena_backed() ? "arena_io" : "scratch_io"}});
+    }
     Offset leftmost(Offset at) const {
         while (at != 0) {
             const auto row = links(at);
@@ -159,7 +167,7 @@ private:
     }
     void validate(Offset at) const {
         if (at == 0 || at >= end_ || end_ - at < sizeof(Links) + sizeof(Value))
-            throw ScratchIoError(EIO, "scratch id invalid offset");
+            io_error(EIO, "scratch id invalid offset");
     }
     Links links(Offset at) const {
         validate(at);
@@ -167,13 +175,13 @@ private:
         file_.read(at, &row, sizeof row);
         if (row.height == 0 || row.height > 128
             || row.key_size > end_ - at - sizeof(Links) - sizeof(Value))
-            throw ScratchIoError(EIO, "scratch id invalid node");
+            io_error(EIO, "scratch id invalid node");
         return row;
     }
     void put_links(Offset at, const Links& row) { file_.write(at, &row, sizeof row); }
     std::string read_key(Offset at, const Links& row) const {
         if (row.key_size > std::string{}.max_size())
-            throw ScratchIoError(EFBIG, "scratch id key too long");
+            io_error(EFBIG, "scratch id key too long");
         std::string key(static_cast<std::size_t>(row.key_size), '\0');
         file_.read(at + sizeof(Links) + sizeof(Value), key.data(), key.size());
         return key;
