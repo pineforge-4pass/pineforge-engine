@@ -155,7 +155,7 @@ The carried declaration fields are visible in
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset, as the comment at `src/source/pine_adapter.cpp:2858` states. Do not assume this caps strategy.order or use it as an unconditional H. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset, as the comment at `src/source/pine_adapter.cpp:2863` states. Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard through the native cadence at `src/source/pine_adapter.cpp:2829`; the literal is declared at `include/pineforge/source/pine_adapter.hpp:63`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the comment at `include/pineforge/native_run_spec.hpp:686`. The actual counter check is `src/native_execution_consumer.cpp:7723`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
