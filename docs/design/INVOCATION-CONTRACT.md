@@ -1032,13 +1032,23 @@ about a later W1/port merge:
   schema, reader cap, verified-count reconciliation, upload pipeline
   and memory/storage overlap. Do not infer a numeric Python RSS bound
   from 64-KiB I/O buffers or a one-MiB wire-line ceiling.
-- **Abort/progress:** the proposed SIGTERM cooperative handler, completed
-  bars/start witnesses and fd-6 progress slot are not this invocation's
-  emitted interface. No fd 6 is added to the keep-set and no proposed
-  failure keys appear in the table. **DECISION FOR COMPUTE/APP:** the
-  cancellation/progress interface and ownership. Existing catalog
-  run_aborted has empty args (`docker/run_failure_codes.json:1109`);
-  its name does not implement that signal path.
+- **Abort (ruled 10-20 19:30/19:31):** the cooperative SIGTERM handler IS
+  this invocation's interface. The child stops at the next completed INPUT
+  bar, closes the sink at fd 4 without a trailer, emits one typed
+  `run_aborted` line carrying `bars_count` and `strategy_started` (with
+  `bars.count` and `strategy_started` top-level mirrors) and exits 1
+  (`core/cr150-q7`). There is no `cancelled` class: the abort path has
+  exactly two internal callers — the orchestrator's hand-off at the service
+  limit, which restarts the run on CJ2 under the same run id, and an
+  operator stop — and the abort line carries no retry semantics of its own;
+  APP decides a retry from which caller stopped the run. `bars.count`
+  counts completed INPUT bars and on the abort path is diagnostic only,
+  never billed.
+- **Abort/progress:** no live-counter progress slot exists. fd 6 is not
+  used and is not added to the keep-set (CORE-TOP 19:31, L6's ruling: with
+  no user cancel nothing needs live bars). The catalog `run_aborted` entry
+  gains the two optional arguments and a `boolean` kind (`core/cr150-q7`);
+  no other proposed failure key appears in the table.
 - **Facts and placement:** the compiler/lowering facts producer,
   applicable private RSS/AS evidence, default arena/U, trusted rung
   sizes, post-escalation behavior, disk rollout/quotas, service headroom
