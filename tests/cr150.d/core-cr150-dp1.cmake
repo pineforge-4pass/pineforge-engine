@@ -1,0 +1,8 @@
+if(UNIX)
+    list(APPEND TEST_SOURCES test_disk_id_tables_arena)
+    pineforge_add_unit_test(test_disk_id_tables_arena)
+endif()
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_adapter_id_tables_arena)
+    pineforge_add_unit_test(test_adapter_id_tables_arena)
+endif()

@@ -110,6 +110,11 @@ public:
         if (size_ == std::numeric_limits<std::uint64_t>::max())
             throw ScratchIoError(EFBIG, "scratch id count exhausted");
         file_.open("pineforge-ids");
+        // Reserve the complete row before its separate header/value/key
+        // writes. Arena exhaustion must not strand a partially claimed row.
+        // Growth is exact and monotone; rotations and updates reuse slots.
+        const Offset next_end = end_ + header + key.size();
+        file_.ensure_size(next_end);
         at = end_;
         Links row;
         row.parent = parent;
@@ -120,7 +125,7 @@ public:
         // All data bytes exist before linking the row into the logical table.
         // Any partial link/rotation I/O error fails the run; it is never
         // converted to a successful absent lookup or retried as another id.
-        end_ += header + key.size();
+        end_ = next_end;
         if (parent != 0) {
             auto old = links(parent);
             (left ? old.left : old.right) = at;

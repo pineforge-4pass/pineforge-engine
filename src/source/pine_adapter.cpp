@@ -2555,6 +2555,12 @@ void PineExecutionAdapter::reset_for_run() {
     entry_attempts_on_bar_ = 0;
     cap.reset_run();
     refresh_pending_view();
+    // Every table is empty here, before prepare_native_begin projects the
+    // run or permits its first source id. Storage paths carry no broker state.
+    if (host_) {
+        if (const auto* directory = host_->report_sink_scratch_directory())
+            set_id_tables_directory(*directory);
+    }
 }
 
 // The configuration's conjuncts of the margin and admission scopes, formed

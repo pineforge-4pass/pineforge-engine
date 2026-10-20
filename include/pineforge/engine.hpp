@@ -2392,6 +2392,13 @@ protected:
     void fold_trade_percent_prefix(const Trade& trade);
     // The streaming owner clears this prefix with the run's closed rows.
     void reset_trade_percent_prefix();
+
+public:
+    // Run storage borrows the installed sink's copied scratch directory.
+    // With no sink, preserve the caller's explicit binding or default path.
+    const std::string* report_sink_scratch_directory() const noexcept {
+        return report_sink_state_.enabled ? &report_sink_state_.scratch_dir : nullptr;
+    }
 };
 
 } // inline namespace engine_script_run_v19
