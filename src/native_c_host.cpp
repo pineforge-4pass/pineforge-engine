@@ -3460,6 +3460,7 @@ PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
         auto* host = host_of(s);
         if (!host) return PF_NATIVE_E_HANDLE;
         if (n < 0 || (n > 0 && !bars)) return c_refuse(host, PF_NATIVE_E_ARGUMENT);
+        if (out) *out = pf_report_t{};
         /* OK answers a run THIS call carried to Completed. A call the engine
          * refuses without beginning (a Completed handle nothing re-armed, a
          * Failed or not-yet-Ready handle, a refused bar array or run option)
@@ -3473,7 +3474,47 @@ PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
          * begin. */
         const std::uint64_t high_water = host->native_consumed_high_water();
         host->run(reinterpret_cast<const Bar*>(bars), n);
-        if (out) host->fill_report(reinterpret_cast<pineforge::ReportC*>(out));
+        if (out) {
+            // A failed execution may have a partial curve whose report metrics
+            // overflow. fill_report rethrows that execution's earlier typed
+            // failure, not R. Preserve its run-failed status rather than routing
+            // the rethrow through guarded()'s generic E_STATE exception case.
+            const bool failed = host->native_state().kind == pineforge::NativeLifecycleKind::Failed;
+            const auto earlier = pineforge::run_failure_value_of(*host);
+            pineforge::ReportC local{};
+            static_assert(sizeof(local) == sizeof(*out), "native report layouts must match");
+            std::unique_ptr<pineforge::ReportC, decltype(&pineforge::BacktestEngine::free_report)>
+                cleanup(&local, &pineforge::BacktestEngine::free_report);
+            try {
+                host->fill_report(&local);
+            } catch (const std::exception& error) {
+                const auto carried = pineforge::classify_run_failure(error);
+                if (!failed && carried.code == pineforge::RunFailureCode::report_result_invalid) {
+                    // A completed execution with an invalid report answers
+                    // E_STATE with the recorded R and an empty, freeable out.
+                    // cleanup releases every allocation made before the throw.
+                    pineforge::note_run_failure(*host, error.what(), carried);
+                    return PF_NATIVE_E_STATE;
+                }
+                if (!failed || host->last_error().empty()
+                    || earlier.code == pineforge::RunFailureCode::none
+                    || dynamic_cast<const pineforge::RunFailureInfo*>(&error) == nullptr
+                    || carried.code != earlier.code || carried.args != earlier.args
+                    || host->last_error() != error.what()) {
+                    throw;
+                }
+                // native_c_api.h promises partial rows when execution began
+                // and failed. Publish the zero-initialized local, whose trade
+                // length names only initialized rows; later arrays stay null.
+                // The caller may have supplied an uninitialized out: overwrite
+                // it without reading or freeing its previous contents.
+                std::memcpy(out, &local, sizeof(local));
+                (void)cleanup.release();
+                return PF_NATIVE_E_RUN_FAILED;
+            }
+            std::memcpy(out, &local, sizeof(local));
+            (void)cleanup.release();
+        }
         return host->native_state().kind == pineforge::NativeLifecycleKind::Completed
                 && host->native_consumed_high_water() > high_water
             ? PF_NATIVE_OK

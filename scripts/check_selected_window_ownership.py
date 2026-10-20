@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 import sys
@@ -418,6 +419,26 @@ def py_values(node, domains):
     raise InputError("unresolved Python producer argument")
 
 
+def metric_result_fields(tree, validator):
+    # The loop labels producer-owned descriptor keys. Resolve its domain from
+    # the live ctypes/alias declarations, independently of manifest paths.
+    text = ast.unparse(validator)
+    if not all(part in text for part in (
+            "for block in ('all', 'longs', 'shorts', 'equity'):",
+            "for name, value in out['metrics'][block].items():",
+            "metric_field = f'metrics.{block}.{name}'")):
+        raise InputError("unrecognized metric result guard; update the independent reconstruction")
+    aliases = ast.literal_eval(py_assignments(tree)["EQUITY_REPORT_KEYS"])
+    paths = set()
+    for block, kind in ctypes_fields(tree, "MetricsC"):
+        for name, ctype in ctypes_fields(tree, kind):
+            if ctype != "ctypes.c_double":
+                continue  # Native integer counters cannot hold a nonfinite double.
+            key = aliases.get(name, name) if kind == "EquityStatsC" else name
+            paths.add(f"metrics.{block}.{key}")
+    return paths
+
+
 def python_producers(root, findings):
     rows = []
     for path in sorted((root / "docker").glob("*.py")):
@@ -429,6 +450,8 @@ def python_producers(root, findings):
         phases = ast.literal_eval(assignments.get("_POST_BOUNDARY_PHASES", ast.Tuple(elts=[], ctx=ast.Load())))
         for function in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             domains = py_domains(function)
+            if path.name == "run_json.py" and function.name == "_validate_report_result":
+                domains["metric_field"] = metric_result_fields(tree, function)
             domains["phase"].update(phases)
             grouped, post_reasons, post_phases = defaultdict(list), set(), set()
             for node in ast.walk(function):
@@ -888,7 +911,7 @@ def reconstruct_schema(root, findings):
     # serializer is a new reconstruction obligation, not an automatic pass.
     stats_text = ast.unparse(stats)
     if not all(fragment in stats_text for fragment in
-               ("s._fields_", "keys.get(name, name)", "_num(v) if ctype is ctypes.c_double else int(v)",
+               ("s._fields_", "keys.get(name, name)", "_num(v, report_metric=True) if ctype is ctypes.c_double else int(v)",
                 "EQUITY_REPORT_KEYS if isinstance(s, EquityStatsC) else {}")):
         raise InputError("unrecognized _stats_dict serializer; update the independent reconstruction")
     builder = function(tree, "build_report_dict")
@@ -1025,7 +1048,40 @@ def check(root, manifest):
     check_descriptors(doc, cpp_files, findings)
     reconstructed = reconstruct_schema(root, findings)
     check_schema(doc, reconstructed, findings)
+    check_probe_pins(root, doc, findings)
     return sorted(findings.lines)
+
+
+def check_probe_pins(root, doc, findings):
+    # Earlier probe groups predate the hash registry. All report probes enter
+    # this registry; discovery is from disk, never a hard-coded probe name.
+    rows = doc.get("probes")
+    if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or set(row) != {"id", "sha256"}
+            or not isinstance(row["id"], str)
+            or not re.fullmatch(r"report/[a-z0-9_]+", row["id"]) for row in rows):
+        raise InputError("probes must be a list of report probe ids and sha256 objects")
+    registered = unique_rows(rows, "id", "duplicate-probe", findings)
+    directory = root / "tests/ownership/probes"
+    discovered = {path.parent.relative_to(directory).as_posix()
+                  for path in (directory / "report").glob("*/probe.pine")}
+    for name in sorted(discovered - registered.keys()):
+        findings.add("probe-pins", f"unregistered {name}")
+    for name in sorted(registered.keys() - discovered):
+        findings.add("probe-pins", f"stale {name}")
+    required = {"probe.pine", "bars.csv", "syminfo.json", "run.json", "expect.json", "NOTES.md"}
+    for name, probe in registered.items():
+        hashes = probe["sha256"]
+        if not isinstance(hashes, dict) or set(hashes) != required:
+            findings.add("probe-pins", f"{name}: pinned file set differs")
+            continue
+        for file, expected in hashes.items():
+            path = directory / name / file
+            if not path.is_file():
+                findings.add("probe-pins", f"{name}: missing {file}")
+            elif (not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                  or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
+                findings.add("probe-pins", f"{name}: {file} sha256 differs")
 
 
 def main(argv=None):
