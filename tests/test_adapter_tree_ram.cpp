@@ -568,18 +568,34 @@ void isolated_cohort_leaves_match_with_retired_and_live_facts() {
 
 class CorruptCohortHost final : public TreeHost {
 public:
-    CorruptCohortHost() : TreeHost(owner(true, 1, 3, 0, 0)) {}
+    explicit CorruptCohortHost(std::optional<std::uint64_t> reference)
+        : TreeHost(owner(true, 1, 3, 0, 0)), reference_(reference) {}
     void on_source_bar(const Bar&) override {
         if (pine_bar_index() != 0) return;
         bind_trees();
         strategy_exit("orphan-x", "old", 200.0, 0.5);
-        const auto before = source_hash(); // The empty row is spilled after the walk.
+        // all_sorted's range pins its first row during iterator advancement;
+        // the single empty cohort therefore stays resident after this walk.
+        (void)source_hash();
+        const auto spills_before = operations.orphan_spills;
+        // A missing-id close uses openings_for -> find -> spill without
+        // restoring "old" or creating another cohort. It also records a
+        // dropped close, so the clean control supplies the matching hash.
+        strategy_close("missing");
+        require(operations.orphan_spills == spills_before + 1,
+                "missing-id close spills the resident empty cohort");
         require(slab()->region(ScratchResource::cohort).logical_extent == 100,
                 "one old key uses 1+96+3 bytes");
         // First packed node is at 1; its 56-byte Links precede the handle.
         std::uint64_t handle = 0;
         slab()->read_at(ScratchResource::cohort, 57, &handle, sizeof handle);
         require(handle != 0, "real cohort record has a kernel-issued handle");
+        if (!reference_) {
+            clean_hash = source_hash();
+            checked = true;
+            return;
+        }
+        const auto before = *reference_;
         const std::uint64_t invalid = 0;
         slab()->write_at(ScratchResource::cohort, 57, &invalid, sizeof invalid);
         bool io = false;
@@ -594,12 +610,19 @@ public:
         checked = true;
     }
     bool checked = false;
+    std::optional<std::uint64_t> clean_hash;
+private:
+    const std::optional<std::uint64_t> reference_;
 };
 
 void corrupt_cohort_keeps_the_scratch_io_code() {
-    CorruptCohortHost host;
     const auto bars = flat_tape(2);
-    host.run(bars.data(), static_cast<int>(bars.size()));
+    CorruptCohortHost control(std::nullopt);
+    { ProbeScope scope(control.operations); control.run(bars.data(), static_cast<int>(bars.size())); }
+    require(control.last_error().empty() && control.checked && control.clean_hash.has_value(),
+            "clean corrupt-record control completed");
+    CorruptCohortHost host(*control.clean_hash);
+    { ProbeScope scope(host.operations); host.run(bars.data(), static_cast<int>(bars.size())); }
     require(host.last_error().empty() && host.checked, "corrupt-record witness completed");
 }
 
