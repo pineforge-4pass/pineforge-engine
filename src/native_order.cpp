@@ -2,7 +2,7 @@
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
-#include <fcntl.h>
+#include <pineforge/detail/scratch_file.hpp>
 #include <system_error>
 #include <unistd.h>
 #include "native_matching.hpp" // Price grids share the matcher's value-only geometry.
@@ -5906,6 +5906,11 @@ static_assert(std::variant_size_v<ExecutionScope> == 3);
 // Only physical storage changes: note_committed_events still folds every
 // (successor, root) pair and its total into chain_roots_, in the same order.
 struct WorkingRequestCore::SuccessorRootIndex {
+    struct IoError final : std::system_error, ::pineforge::RunFailureInfo {
+        IoError(const std::error_code& error, const char* operation)
+            : std::system_error(error, operation),
+              RunFailureInfo(::pineforge::RunFailureCode::report_sink_failed, {}) {}
+    };
     struct Row {
         uint64_t successor = 0;
         uint64_t root = 0;
@@ -5919,45 +5924,32 @@ struct WorkingRequestCore::SuccessorRootIndex {
     std::array<Row, kTailRows> tail{};
     std::size_t tail_size = 0;
     uint64_t disk_rows = 0;
-    int fd = -1;
-    std::string directory;
+    ::pineforge::detail::ScratchFile file_;
 
     SuccessorRootIndex() = default;
     SuccessorRootIndex(const SuccessorRootIndex&) = delete;
     SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
-    ~SuccessorRootIndex() { if (fd >= 0) ::close(fd); }
+    ~SuccessorRootIndex() = default;
 
     void set_directory(const std::string& value) {
-        if (fd >= 0 && directory != value) {
+        try {
+            file_.set_directory(value);
+        } catch (const std::logic_error&) {
             throw std::logic_error("native successor roots directory changed after spill");
         }
-        directory = value;
     }
 
     void open_file() {
-        if (fd >= 0) return;
-        const char* temporary = std::getenv("TMPDIR");
-        std::string name = directory.empty()
-                ? (temporary && *temporary ? temporary : "/tmp") : directory;
-        if (name.back() != '/') name += '/';
-        name += "pineforge-roots-XXXXXX";
-        const int opened = ::mkstemp(name.data());
-        if (opened < 0) {
-            throw std::system_error(errno, std::generic_category(), "native successor roots create");
-        }
+        if (file_.opened()) return;
         // Unlink before publishing the descriptor: an opened scratch file
         // has no directory entry. mkstemp creates it with mode 0600.
-        if (::unlink(name.c_str()) != 0) {
-            const int error = errno;
-            ::close(opened);
-            throw std::system_error(error, std::generic_category(), "native successor roots unlink");
+        // ScratchFile owns that file-mode setup and the configured directory;
+        // an attached arena selects a region without creating a regular file.
+        try {
+            file_.open("pineforge-roots");
+        } catch (const ::pineforge::detail::ScratchIoError& error) {
+            throw IoError(error.code(), "native successor roots create");
         }
-        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
-            const int error = errno;
-            ::close(opened);
-            throw std::system_error(error, std::generic_category(), "native successor roots cloexec");
-        }
-        fd = opened;
     }
 
     void prepare_append() {
@@ -5967,19 +5959,12 @@ struct WorkingRequestCore::SuccessorRootIndex {
             throw std::overflow_error("native successor roots file offset exhausted");
         }
         open_file();
-        const off_t offset = static_cast<off_t>(disk_rows * sizeof(Row));
-        const auto* bytes = reinterpret_cast<const unsigned char*>(tail.data());
+        const uint64_t offset = disk_rows * sizeof(Row);
         const std::size_t length = tail_size * sizeof(Row);
-        std::size_t written = 0;
-        while (written < length) {
-            const ssize_t count = ::pwrite(fd, bytes + written, length - written,
-                                           offset + static_cast<off_t>(written));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) {
-                const int error = count < 0 ? errno : EIO;
-                throw std::system_error(error, std::generic_category(), "native successor roots write");
-            }
-            written += static_cast<std::size_t>(count);
+        try {
+            file_.write(offset, tail.data(), length);
+        } catch (const ::pineforge::detail::ScratchIoError& error) {
+            throw IoError(error.code(), "native successor roots write");
         }
         // Publish only a complete batch. A short/error write leaves the
         // authoritative tail intact; retry overwrites the same file offset.
@@ -5995,20 +5980,13 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     Row read(uint64_t index) const {
-        assert(fd >= 0 && index < disk_rows);
+        assert(file_.opened() && index < disk_rows);
         Row row;
-        auto* bytes = reinterpret_cast<unsigned char*>(&row);
-        const off_t offset = static_cast<off_t>(index * sizeof(Row));
-        std::size_t received = 0;
-        while (received < sizeof(Row)) {
-            const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
-                                          offset + static_cast<off_t>(received));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) {
-                const int error = count < 0 ? errno : EIO;
-                throw std::system_error(error, std::generic_category(), "native successor roots read");
-            }
-            received += static_cast<std::size_t>(count);
+        const uint64_t offset = index * sizeof(Row);
+        try {
+            file_.read(offset, &row, sizeof(Row));
+        } catch (const ::pineforge::detail::ScratchIoError& error) {
+            throw IoError(error.code(), "native successor roots read");
         }
         if (row.root == 0 || row.root >= row.successor) {
             throw std::system_error(EIO, std::generic_category(), "native successor roots invalid row");
