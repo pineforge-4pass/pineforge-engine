@@ -1771,6 +1771,7 @@ void TimeframeAggregator::set_native_periods(std::vector<int64_t> stamps,
                                              CalendarPeriod feed_period) {
     native_stamps_.clear();
     native_group_open_.clear();
+    native_source_.reset();
     native_last_bound_ = 0;
     if (mode_ != Mode::CALENDAR || stamps.empty()
         || stamps.size() != trade_instants.size()) {
@@ -1806,6 +1807,27 @@ void TimeframeAggregator::set_native_periods(std::vector<int64_t> stamps,
     native_stamps_ = std::move(stamps);
 }
 
+bool TimeframeAggregator::set_native_period_source(std::shared_ptr<PeriodSource> source) {
+    native_stamps_.clear();
+    native_group_open_.clear();
+    native_source_.reset();
+    native_last_bound_ = 0;
+    if (mode_ != Mode::CALENDAR || cal_period_ != CalendarPeriod::DAY || !source) {
+        return false;
+    }
+    // A DAY partition's group open is the stamp itself, and the last period
+    // reaches at least its nominal close (set_native_periods' last bound).
+    native_last_bound_ = session_period_close_ms(
+        source->last_stamp(), anchor_tz_, anchor_session_, CalendarPeriod::DAY);
+    native_source_ = std::move(source);
+    return true;
+}
+
+std::size_t TimeframeAggregator::native_period_stamps_held() const {
+    if (native_source_) return native_source_->stamps_held();
+    return native_stamps_.size() + native_group_open_.size();
+}
+
 void TimeframeAggregator::set_native_day_opens(std::vector<int64_t> late_opens) {
     native_late_opens_.clear();
     if (mode_ != Mode::RATIO || target_seconds_ <= 0) return;
@@ -1823,12 +1845,20 @@ int TimeframeAggregator::native_index(int64_t ms) const {
     return static_cast<int>(it - native_stamps_.begin()) - 1;
 }
 
+bool TimeframeAggregator::native_source_period(int64_t ms, int64_t& stamp) const {
+    bool last = false;
+    if (!native_source_->stamp_at(ms, stamp, last)) return false;
+    // The final period reaches at least its nominal close (native_index's
+    // last bound): an instant at or after both keeps the nominal calendar.
+    return !(last && ms >= native_last_bound_);
+}
+
 bool TimeframeAggregator::period_changes(int64_t prev_ms, int64_t curr_ms) const {
     if (mode_ == Mode::RATIO && !native_late_opens_.empty()) {
         return bucket_open_ms(prev_ms) != bucket_open_ms(curr_ms);
     }
     if (mode_ != Mode::CALENDAR) return false;
-    if (native_stamps_.empty()) {
+    if (native_stamps_.empty() && !native_source_) {
         return crosses_boundary(prev_ms, curr_ms, cal_period_, anchor_tz_,
                                 anchor_session_);
     }
@@ -1841,6 +1871,8 @@ int64_t TimeframeAggregator::bucket_open_ms(int64_t ms) const {
             // The native period's W / M group open (its stamp for DAY) when
             // a native feed installed the partition; nominal before the
             // first stamp and without one.
+            int64_t generated = 0;
+            if (native_source_ && native_source_period(ms, generated)) return generated;
             const int k = native_index(ms);
             if (k >= 0) return native_group_open_[static_cast<std::size_t>(k)];
             return session_period_open_ms(ms, anchor_tz_, anchor_session_,
@@ -1876,6 +1908,8 @@ int64_t TimeframeAggregator::bar_label_ms(int64_t ms) const {
             // native partition the day stamp IS the native stamp of the
             // period holding `ms` (the Sun 17:00 CT stamp of a merged
             // Labor-Day bar, through Tuesday).
+            int64_t generated = 0;
+            if (native_source_ && native_source_period(ms, generated)) return generated;
             const int k = native_index(ms);
             if (k >= 0) return native_stamps_[static_cast<std::size_t>(k)];
             return session_period_open_ms(ms, anchor_tz_, anchor_session_,

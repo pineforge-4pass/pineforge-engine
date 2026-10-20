@@ -694,6 +694,18 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
  *  @{
  */
 
+/** Read process-wide scratch-arena diagnostics, outside canonical report bytes.
+ *  Writes the peak bytes of simultaneously claimed chunks since attachment
+ *  and the exact supplied backing size (including any unallocatable tail).
+ *  Returns 0; with no arena attached both values are 0. Returns -1 with both
+ *  outputs unchanged if either pointer is NULL, the pointers alias, or the
+ *  snapshot cannot be read. Never throws or changes a strategy's last error.
+ *  Query after report finalization and before arena detach. The counters
+ *  belong to the attachment, not a strategy or repeat; detach resets them.
+ *  No pf_report_t, sink receipt, trailer or broker-state hash layout changes. */
+PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes,
+                                       uint64_t* arena_bytes);
+
 /** Return the physical entry incarnation for one closed-trade row.
  *
  *  Partial-close/FIFO fragments emitted from the same physical entry share

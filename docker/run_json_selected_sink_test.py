@@ -1,0 +1,7 @@
+"""Preflight entry for the CR-150 L9S selected report regression tests."""
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+
+from test_run_json_selected_sink import *  # noqa: F401,F403,E402

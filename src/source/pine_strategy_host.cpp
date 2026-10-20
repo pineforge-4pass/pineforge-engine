@@ -4,7 +4,7 @@
 #include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
-
+#include "multi_day_periods.hpp"
 #include "../engine_internal.hpp"
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
@@ -1559,94 +1559,6 @@ int multi_day_count(const std::string& tf) {
     return parsed->count() >= 2 ? parsed->count() : 0;
 }
 
-// TradingView's N-day bars (lane TAIL-A, lab tv pf-taila-ndgrid-*, tests/
-// fixtures/multi_day_buckets): N consecutive trading dates of the symbol,
-// counted from the first trading date of each calendar year, the year's last
-// bar cut at its end. The trading dates are the session calendar's: every
-// day on a 24x7 symbol, every weekday on OANDA's (a holiday included: the
-// 8D bar of EURUSD opens on 2025-12-25, a date its chart has no bar of), the
-// exchange's sessions on a stock, an index or a future (NYSE:F's 8D bars skip
-// Good Friday). The run knows an exchange's sessions from the bars it holds,
-// the chart's and the auxiliary feed's; a date outside them counts when it is
-// a weekday. Returns each bar's open -- its first trading date's daily bar on
-// a daily chart (NSE's Muhurat session opens its 8D bar at 13:45 IST), that
-// date's day stamp otherwise -- from the bar holding the first held date
-// through the year after the last; empty when the session does not parse or
-// nothing is held.
-std::vector<std::int64_t> tradingview_multi_day_stamps(
-        int days, const Bar* chart, int n_chart, bool daily_chart, const std::vector<Bar>& aux,
-        const std::string& tz, const std::string& session, bool exchange_calendar) {
-    namespace cal = native_calendar;
-    const auto calendar = cal::parse_session(session, tz);
-    if (!calendar || days < 2) return {};
-    // Trading date (days since 1970-01-01) -> its bar's open.
-    std::map<std::int64_t, std::int64_t> held;
-    std::optional<cal::NativeSessionDay> cycle;
-    const auto hold = [&](std::int64_t ts, bool own_open) {
-        cycle = cal::session_day_at(*calendar, session_covered_instant_ms(ts, tz, session));
-        if (cycle && held.find(cycle->ordinal) == held.end()) {
-            held.emplace(cycle->ordinal,
-                         own_open ? ts : session_period_open_ms(ts, tz, session, CalendarPeriod::DAY));
-        }
-    };
-    // An intraday bar trades inside its session day: one inside the day the
-    // bar before it resolved is not resolved again.
-    for (int i = 0; i < n_chart; ++i) {
-        if (daily_chart || !cycle || !cycle->holds(chart[i].timestamp))
-            hold(chart[i].timestamp, daily_chart);
-    }
-    cycle.reset();
-    for (const Bar& bar : aux) {
-        if (!cycle || !cycle->holds(bar.timestamp)) hold(bar.timestamp, false);
-    }
-    if (held.empty()) return {};
-    const std::int64_t first = held.begin()->first;
-    const std::int64_t last = held.rbegin()->first;
-    const bool every_day = session.empty() || session == "24x7";
-    const auto trades = [&](std::int64_t d) {
-        if (exchange_calendar && d >= first && d <= last) return held.count(d) > 0;
-        const std::int64_t weekday = ((d % 7) + 7 + 4) % 7;  // 0 Sunday; 1970-01-01 a Thursday
-        return every_day || (weekday >= 1 && weekday <= 5);
-    };
-    // The bar-opening dates of every year from the first held date's through
-    // the year after the last's, whose first trading date opens a bar.
-    std::vector<std::int64_t> opens;
-    const std::int64_t first_year = cal::native_civil_date(first).year;
-    const std::int64_t last_year = cal::native_civil_date(last).year + 1;
-    for (std::int64_t year = first_year; year <= last_year; ++year) {
-        const std::int64_t end = cal::native_civil_days(year + 1, 1, 1);
-        std::int64_t count = 0;
-        for (std::int64_t d = cal::native_civil_days(year, 1, 1); d < end; ++d) {
-            if (!trades(d)) continue;
-            if (count++ % days == 0) opens.push_back(d);
-        }
-    }
-    auto begin = std::upper_bound(opens.begin(), opens.end(), first);
-    if (begin == opens.begin()) return {};
-    --begin;
-    // Through the next year's bars too, on the weekday rule: a stream's bars
-    // after the held ones.
-    std::vector<std::int64_t> stamps;
-    for (auto it = begin; it != opens.end(); ++it) {
-        const auto found = held.find(*it);
-        if (found != held.end()) {
-            stamps.push_back(found->second);
-            continue;
-        }
-        // A trading date no bar holds: the stamp of the session day holding
-        // its local noon.
-        const cal::NativeCivilDate date = cal::native_civil_date(*it);
-        const auto noon = cal::resolve_civil(tz.empty() ? "UTC" : tz, static_cast<int>(date.year),
-                                             date.month, date.day, 12, 0);
-        if (!noon) return {};
-        stamps.push_back(session_period_open_ms(noon->epoch_ms, tz, session, CalendarPeriod::DAY));
-    }
-    for (std::size_t k = 1; k < stamps.size(); ++k) {
-        if (stamps[k] <= stamps[k - 1]) return {};
-    }
-    return stamps;
-}
-
 }  // namespace
 
 void source::PineStrategyHost::scheduler_prepare_security_sequence(
@@ -1671,31 +1583,33 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
     init_security_eval_states_for_run(security_input_tf_);
     prepare_native_security_feeds(
         bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
-    // An N-day request's bars are TradingView's (tradingview_multi_day_stamps),
+    // An N-day request's bars are TradingView's (make_multi_day_period_source),
     // its aggregator's period partition: the calendar aggregator split them
-    // into single days.
-    std::map<int, std::vector<std::int64_t>> multi_day;
+    // into single days. The partition is generated from the chart's and the
+    // auxiliary feed's bars as the run asks for it, never stored: it reads
+    // them until the next prepare rebuilds this aggregator.
     for (auto& state : security_eval_states_) {
         const int days = multi_day_count(state.tf);
         if (days == 0 || state.aggregator.calendar_period() != CalendarPeriod::DAY
             || state.aggregator.has_native_periods()) {
             continue;
         }
-        auto found = multi_day.find(days);
-        if (found == multi_day.end()) {
-            static const std::vector<Bar> kNoAux;
-            const std::vector<Bar>* aux = &kNoAux;
+        MultiDayFeeds feeds;
+        feeds.days = days;
+        feeds.chart = bars.data();
+        feeds.n_chart = static_cast<int>(bars.size());
+        feeds.daily_chart = tf_to_seconds(input_tf_) == 86400;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-            if (aux_security_feed_enabled()) aux = &aux_security_bars_;
-#endif
-            found = multi_day.emplace(days, tradingview_multi_day_stamps(
-                days, bars.data(), static_cast<int>(bars.size()),
-                tf_to_seconds(input_tf_) == 86400, *aux,
-                syminfo_.timezone, syminfo_.session,
-                session_template_knows_early_close())).first;
+        if (aux_security_feed_enabled()) {
+            feeds.aux = aux_security_bars_.data();
+            feeds.n_aux = aux_security_bars_.size();
         }
-        if (!found->second.empty())
-            state.aggregator.set_native_periods(found->second, found->second, CalendarPeriod::DAY);
+#endif
+        feeds.tz = syminfo_.timezone;
+        feeds.session = syminfo_.session;
+        feeds.exchange_calendar = session_template_knows_early_close();
+        if (auto partition = make_multi_day_period_source(feeds))
+            state.aggregator.set_native_period_source(std::move(partition));
     }
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     if (aux_security_feed_enabled()) {
@@ -1817,7 +1731,7 @@ bool source::PineStrategyHost::same_symbol_sites_routable(
         }
         if (otc_daily_pins && (state.tf == "D" || state.tf == "1D")) return false;
         // TradingView's N-day bars restart every year and count the symbol's
-        // trading dates (tradingview_multi_day_stamps); the kernel's are a
+        // trading dates (make_multi_day_period_source); the kernel's are a
         // fixed grid of calendar days.
         if (multi_day_count(state.tf) != 0) return false;
         NativeTimeframeSubscription subscription;
@@ -1994,7 +1908,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
         row.pnl_pct = mark.pnl_pct;
         row.commission = mark.commission;
     }
-    out->net_profit = as_native_consumer(execution_consumer()).closed_trade_prefix().pnl;
+    out->net_profit = out->total_trades == out->trades_len ? 0.0 : report_closed_net_profit();
     for (int index = 0; index < out->trades_len; ++index) out->net_profit += out->trades[index].pnl;
     last.time_ms = report_quote_time_ms_;
     last.equity = initial_capital_ + out->net_profit;
@@ -2453,6 +2367,10 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
             // seal below retires storage, including older-time barriers.
         }
         if (next > base) {
+            // L18: spill the position tail of the whole prefix, in forward row
+            // order, before the seal retires its storage; a throw seals nothing.
+            adapter_.preserve_position_tail_before_seal(
+                next, consumer.report_scratch_directory(*this));
             consumer.seal_closed_rows(*this, next, prefix.exit_phase_digest,
                                       prefix.source_gains, prefix.source_losses);
             for (std::size_t offset = 0; offset < next - base; ++offset)

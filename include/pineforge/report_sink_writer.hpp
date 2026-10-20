@@ -49,7 +49,7 @@ std::string f64(double value);
 /// raw UTF-8; a byte not starting a valid UTF-8 sequence becomes U+FFFD.
 std::string escaped_string(std::string_view utf8);
 
-/// Checked 64 KiB buffered path writer (3.7:786-888), with opaque state.
+/// Checked 64 KiB buffered path/borrowed-fd writer, with opaque state.
 /// Every line is one compact JSON value plus LF, UTF-8 without BOM, at most
 /// 1 MiB including LF. No whitespace outside strings, blank lines or CR.
 /// Integers are base 10 without leading zeros/+ or exponents, within
@@ -68,9 +68,13 @@ public:
     /// Descriptor strings are copied, as required by 6:1307. This is a
     /// declaration of configuration; run-begin work belongs to write_header.
     explicit LineWriter(const pf_report_sink_v1& sink);
+    /// Adopt without duplicating/closing fd; see report_sink.h for ownership,
+    /// FIFO SIGPIPE handling and sequential stream/back-pressure guarantees.
+    explicit LineWriter(const pf_report_sink_fd_v1& sink);
     ~LineWriter();
 
-    /// Create/truncate the path and emit, in order, schema, version, run_id,
+    /// Open the owned path, or validate the borrowed stream fd without
+    /// creating anything, and emit, in order, schema, version, run_id,
     /// engine, records (3.7:795-809, 881-883). schema="pf-report-sink",
     /// version=1, run_id from the descriptor (NULL => ""), engine is
     /// PINEFORGE_VERSION_STRING. Each descriptor has type,fields,types,units.

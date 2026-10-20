@@ -35,7 +35,8 @@
  *     pf_execution_observer_version, strategy_set_execution_observer_v1,
  *     strategy_execution_observation_v1, pf_selected_window_version, pf_report_sink_version,
  *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
- *     strategy_set_report_sink_v1, strategy_report_sink_receipt_v1 — the
+ *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
+ *     strategy_report_sink_summary_v1, pf_report_scratch_arena_stats — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -52,6 +53,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
@@ -1324,6 +1326,19 @@ extern "C" {
 
 PF_API uint32_t pf_report_sink_version(void) { return 1; }
 
+PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes, uint64_t* arena_bytes) {
+    if (!high_water_bytes || !arena_bytes || high_water_bytes == arena_bytes) return -1;
+    try {
+        const auto* arena = pineforge::detail::ScratchArena::attached();
+        const auto stats = arena ? arena->stats() : pineforge::detail::ScratchArenaStats{};
+        *high_water_bytes = stats.high_water;
+        *arena_bytes = stats.bytes_supplied;
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
 PF_API int strategy_set_report_sink_v1(pf_strategy_t s, const pf_report_sink_v1* sink) {
     return pf_cabi_int(s, [&] {
         if (!s) return -1;
@@ -1334,6 +1349,22 @@ PF_API int strategy_set_report_sink_v1(pf_strategy_t s, const pf_report_sink_v1*
 PF_API int strategy_report_sink_receipt_v1(pf_strategy_t s, pf_report_sink_receipt_v1* out) {
     if (!s) return -1;
     return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_receipt_v1(out);
+}
+
+PF_API int strategy_report_sink_summary_v1(pf_strategy_t s, pf_report_sink_summary_v1* out) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_summary_v1(out);
+}
+
+} // extern "C"
+
+extern "C" {
+
+PF_API int strategy_set_report_sink_fd_v1(pf_strategy_t s, const pf_report_sink_fd_v1* sink) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_report_sink_fd_v1(sink);
+    });
 }
 
 } // extern "C"
