@@ -2,6 +2,7 @@
 // Frozen batch-C lacks WriterError::run_failure() and DiskIdTable::set_store.
 // Compile fail-before and behavioral red/green evidence belong to the lab.
 #include "report_sink_failure_fixture.hpp"
+#include "scratch_descriptor_fixture.hpp"
 #include "../src/report_scratch.hpp"
 #include "../src/report_sink_writer.hpp"
 
@@ -83,7 +84,8 @@ void report_scratch_failures() {
     // The failed flush retains the complete pending batch for a later retry.
     const auto region = curve.region();
     require(region.point_count == 1, "retry flush lost the original pending point");
-    require(::ftruncate(region.descriptor, 0) == 0, "truncate real report scratch for EOF");
+    const int descriptor = scratch_fixture::descriptor(region);
+    require(::ftruncate(descriptor, 0) == 0, "truncate real report scratch for EOF");
     pf_equity_point_t point{};
     expect_io([&] { rs::read_scratch_points(region, 0, &point, 1); }, EIO, "scratch_io");
     pineforge::metrics::SpillCurve metrics(region);
@@ -193,20 +195,24 @@ void begin_peer_translator() {
     expect_engine_failure(host, reason_args("sink_peer_closed"));
 }
 
-void begin_arena_backing_translator() {
-    // Exercise the common path/fd startup before either opens scratch. A bad
-    // inherited-fd declaration must remain an arena cause at the run getter.
+void setter_arena_backing_refusal() {
+    // Both setters must reject the malformed inherited-fd declaration before
+    // opening scratch or starting a run, preserving its full arena cause.
     Environment invalid_fd("PF_SCRATCH_ARENA_FD", "not-a-decimal-fd");
     Directory directory;
     Socket socket;
     for (const bool fd_sink : {false, true}) {
         Host host;
-        if (fd_sink) install_fd(host, socket.writer.value);
-        else install_path(host, directory.file("refused-before-open"), directory.path);
-        run(host, tape(2));
+        expect_io([&] {
+            if (fd_sink) install_fd(host, socket.writer.value);
+            else install_path(host, directory.file("refused-before-open"), directory.path);
+        }, EINVAL, "arena_backing");
         require(host.callbacks == 0 && !detail::ScratchArena::attached(),
                 "backing configuration must fail before scratch and callbacks");
-        expect_engine_failure(host, reason_args("arena_backing"));
+        pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
+        require(host.report_sink_receipt_v1(&receipt) == 0 && !receipt.complete
+                    && receipt.sha256_hex[0] == '\0',
+                "refused sink setter must not complete its sink");
     }
 }
 
@@ -367,7 +373,7 @@ int main() {
         writer_origins();
         begin_open_translator();
         begin_peer_translator();
-        begin_arena_backing_translator();
+        setter_arena_backing_refusal();
         callback_writer_translator();
         held_equity_translator();
         selected_presentation_translator();
