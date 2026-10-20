@@ -4459,6 +4459,8 @@ def _capabilities_main(args) -> int:
     if (sys.byteorder == "little" and ctypes.sizeof(BarC) == 48
             and all(hasattr(lib, name) for name in (*_SYMBOL_FEED_SETTERS, "strategy_set_symbol_feed_borrowed_v1"))):
         document["capabilities"]["bars_bin_version"] = 1
+    # Selected-window mode still requires a CSV chart.
+    document["capabilities"]["selected_window_bars_bin_version"] = 0
     return _write_report(json.dumps(document, separators=(",", ":"), allow_nan=False) + "\n")
 
 

@@ -451,6 +451,7 @@ def test_binary_capability_requires_the_borrowed_runtime(monkeypatch, borrowed):
                                          library=Library(borrowed=borrowed))
     assert status == 0
     assert document["capabilities"].get("bars_bin_version") == (1 if borrowed else None)
+    assert document["capabilities"]["selected_window_bars_bin_version"] == 0
     assert not library.calls  # load_strategy is the stand-in; no construction/run
 
 
