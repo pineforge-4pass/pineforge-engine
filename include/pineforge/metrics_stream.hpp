@@ -71,6 +71,8 @@ struct ScratchCurveRegion {
     std::int64_t point_count;
 };
 
+struct ScratchCurveReader; // positional reader contract: spill_curve_reader.hpp
+
 /// Scratch point source (3.3:535-546; 3.8:904-909). Read exact binary doubles
 /// with pread into ONE 64 KiB window; never mmap the scratch or parse sink
 /// text. Index i refers to byte_offset + 24*i. The descriptor and region
@@ -84,6 +86,9 @@ struct ScratchCurveRegion {
 class SpillCurve {
 public:
     explicit SpillCurve(const ScratchCurveRegion& region);
+    /// Alternate read boundary for scratch adapters and file-like test readers.
+    /// Copies the reader descriptor; its context must outlive this source.
+    explicit SpillCurve(const ScratchCurveReader& reader);
     ~SpillCurve();
     std::int64_t size() const;
     pf_equity_point_t operator[](std::int64_t index) const;

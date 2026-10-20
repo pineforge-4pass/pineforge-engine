@@ -505,14 +505,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(intraday_relabel_ordinals.begin(), intraday_relabel_ordinals.end());
     f.u(intraday_relabel_ordinals.size());
     for (const auto ordinal : intraday_relabel_ordinals) f.u(ordinal);
-    std::vector<std::string> consumed_partial_keys;
-    consumed_partial_keys.reserve(consumed_partial_exit_cycles_.size());
-    for (const auto& row : consumed_partial_exit_cycles_) consumed_partial_keys.push_back(row.first);
-    std::sort(consumed_partial_keys.begin(), consumed_partial_keys.end());
-    f.u(consumed_partial_keys.size());
-    for (const auto& key : consumed_partial_keys) {
-        f.s(key); f.i(consumed_partial_exit_cycles_.at(key));
-    }
+    consumed_partial_exit_cycles_.fold_sorted(f);
     std::vector<std::uint64_t> shadowed_openings(
         bracket_shadowed_openings_.begin(), bracket_shadowed_openings_.end());
     std::sort(shadowed_openings.begin(), shadowed_openings.end());
