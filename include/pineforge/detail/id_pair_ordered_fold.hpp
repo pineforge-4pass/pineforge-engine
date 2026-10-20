@@ -47,8 +47,9 @@ private:
 static_assert(sizeof(BrokerStateByteFold) == 2056, "exact fold has 257 words");
 
 // A map file must not impose a lower key-count ceiling than the existing
-// hash index. Its largest power-of-two slot array has 2^(off_t_bits-6)
-// slots, at half load: at most (OFF_MAX/64)+1 distinct rows. Segment large
+// hash index. Its largest power-of-two slot array has 2^(B-6) slots, where B
+// is the number of value bits of off_t, at half load: at most (OFF_MAX/64)+1
+// distinct rows. Segment large
 // records across a FIXED descriptor array covering that entire population.
 // Normal runs open just one segment of each file. No resident directory
 // grows with keys; no fold-specific capacity/exhaustion error is introduced.
