@@ -149,6 +149,61 @@ class PreflightFailures(unittest.TestCase):
                 changed[index] = changed[index].replace(before, after, 1)
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
 
+    def test_build_matrix_excludes_only_macos_debug_on_pull_requests(self):
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        condition = "github.event_name == 'pull_request'"
+        excluded = '[{"os":"macos-26","build_type":"Debug"}]'
+        exclusion = (f"        exclude: ${{{{ fromJSON({condition} && "
+                     f"'{excluded}' || '[]') }}}}\n")
+        self.assertIn(exclusion, _jobs(original[0])['build'])
+        mutations = [
+            # (a) The old four-leg PR matrix, or an empty exclusion, restores
+            # macOS Debug on PRs.
+            ('macOS Debug restored on PR', exclusion, ''),
+            ('empty PR exclusion', exclusion, exclusion.replace(excluded, '[]')),
+            # (b) An unconditional exclusion loses coverage on every full event.
+            ('unconditional exclusion', exclusion,
+             f"        exclude: ${{{{ fromJSON('{excluded}') }}}}\n"),
+            ('inverted event condition', exclusion,
+             exclusion.replace(condition, "github.event_name != 'pull_request'")),
+            # Dropping an axis also loses full-event coverage.
+            ('macOS axis removed', '        os: [ubuntu-24.04, macos-26]\n',
+             '        os: [ubuntu-24.04]\n'),
+            ('Debug axis removed', '        build_type: [Release, Debug]\n',
+             '        build_type: [Release]\n'),
+        ]
+        for event in ('push', 'workflow_dispatch', 'schedule', 'release'):
+            mutations.append((
+                f'macOS Debug removed on {event}', exclusion,
+                exclusion.replace(condition, f"({condition} || github.event_name == '{event}')")))
+        # (c) Every other PR cell stays. (d) macOS Release in particular must
+        # still provide the PR's own Release registration-floor proof.
+        for os_name, build_type in (('ubuntu-24.04', 'Release'),
+                                    ('ubuntu-24.04', 'Debug'),
+                                    ('macos-26', 'Release')):
+            removed = json.dumps([{'os': os_name, 'build_type': build_type}], separators=(',', ':'))
+            mutations.extend((
+                (f'{os_name} {build_type} excluded instead', exclusion,
+                 exclusion.replace(excluded, removed)),
+                (f'{os_name} {build_type} excluded too', exclusion,
+                 exclusion.replace(excluded, excluded[:-1] + ',' + removed[1:])),
+            ))
+        include = '          - os: macos-26\n            runner: macos-26\n'
+        mutations.append((
+            'macOS Debug reintroduced by include', include,
+            include + '          - os: macos-26\n            build_type: Debug\n'
+            '            runner: macos-26\n'))
+        for reason, before, after in mutations:
+            with self.subTest(reason=reason):
+                changed = original.copy()
+                changed[0] = in_job(changed[0], 'build', before, after)
+                self.assertNotEqual(changed[0], original[0])
+                self.assertIn(
+                    'ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types, '
+                    'excluding only macOS Debug on pull_request',
+                    ci_workflow_findings(*changed, others=others))
+
     def test_slow_exclusion_is_exactly_pr_matrix_kernel_and_sanitizers(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
@@ -322,7 +377,7 @@ class PreflightFailures(unittest.TestCase):
             (0, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
              'ci.yml job native-live calls a workflow the runner contract cannot see'),
-            # Only the routing includes may extend the unchanged four build legs.
+            # The routing includes and PR-only macOS Debug exclusion are exact.
             (0, 'build', 'os: [ubuntu-24.04, macos-26]', 'os: [ubuntu-24.04, macos-26-large]',
              'ci.yml build must use exactly the ci-spot Linux'),
             (0, 'build', '        build_type: [Release, Debug]\n',
@@ -608,6 +663,51 @@ class PreflightFailures(unittest.TestCase):
                 changed = original.copy()
                 changed[0] = in_job(changed[0], job, before, after)
                 self.assertEqual(ci_workflow_findings(*changed, others=others), [])
+
+    def test_build_gate_rejects_missing_matrix_exceptions_on_push(self):
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        passed = ('          passed() { [[ "$1" == "success" || '
+                  '( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }\n')
+        mutations = (
+            # (e) Neither an empty result nor a skipped matrix on push is the
+            # PR's absent cell; accepting either must fail the exact gate pin.
+            (passed, passed.replace('|| (', '|| -z "$1" || (')),
+            (passed, passed.replace('|| (', '|| "$1" == "skipped" || (')),
+            ('passed "$BUILD_RESULT"',
+             '( passed "$BUILD_RESULT" || [[ "$GITHUB_EVENT_NAME" == "push" ]] )'),
+            ('          BUILD_RESULT: ${{ needs.build.result }}\n',
+             "          BUILD_RESULT: ${{ needs.build.result || 'success' }}\n"),
+            ('          docs_only=false\n', '          docs_only=true\n'),
+            ('            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"\n',
+             '            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"\n'
+             '          true\n'),
+        )
+        for before, after in mutations:
+            with self.subTest(after=after):
+                changed = original.copy()
+                changed[0] = in_job(changed[0], 'build-gate', before, after)
+                self.assertNotEqual(changed[0], original[0])
+                self.assertIn(
+                    'build-gate must keep the exact result policy: success or a classified docs-only skip',
+                    ci_workflow_findings(*changed, others=others))
+
+    def test_build_aggregate_requires_matrix_success_on_pr_and_full_events(self):
+        script = job_script(self.ci_sources()[0], 'build-gate')
+        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+               'CHANGES_RESULT': 'success', 'DOCS_ONLY': 'false',
+               'PREFLIGHT_RESULT': 'success',
+               **{variable: 'success' for variable in PROOF_JOBS.values()}}
+        for event in ('pull_request', 'push', 'workflow_dispatch', 'schedule', 'release'):
+            for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
+                with self.subTest(event=event, matrix=outcome):
+                    result = subprocess.run(
+                        ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+                        env={**env, 'GITHUB_EVENT_NAME': event, 'BUILD_RESULT': outcome},
+                        capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0 if outcome == 'success' else 1,
+                                     result.stdout + result.stderr)
+                    self.assertIn(f'matrix: {outcome}\n', result.stdout)
 
     def test_the_build_aggregate_passes_a_docs_only_skip_and_nothing_else(self):
         """Run the aggregate's own shell over every outcome of every lane: a
