@@ -3649,10 +3649,15 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // it -- no longer holds a row per bar either.
 void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& context) {
     // The previous bars' trades are final: their exit phases fold once.
-    for (; exit_phase_final_ < trade_exit_phase_.size(); ++exit_phase_final_) {
+    const std::size_t phase_base = detail::run_consumer(require_host()).closed_trade_prefix().base;
+    if (exit_phase_final_ < phase_base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "exit-phase fold precedes the sealed prefix");
+    for (; exit_phase_final_ < phase_base + trade_exit_phase_.size(); ++exit_phase_final_) {
         exit_phase_digest_ = fold_exit_phase(exit_phase_digest_,
-                                             trade_exit_phase_[exit_phase_final_]);
+                                             trade_exit_phase_.at(exit_phase_final_ - phase_base));
     }
+    detail::run_consumer(require_host()).finish_exit_phase_restart();
     const bool retain_rows = detail::retain_retired_rows();
     // Every live handle has a row; nothing beyond them means nothing retired.
     if (placement_.size() <= live_handles_.size()) return;
@@ -3710,9 +3715,9 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             && value.projection_created_bar >= interval) {
             return true;
         }
-        // K5
+        // K5: last_broker_open_ms_ is still the prior script bar's open (on_bar_open updates it after this sweep).
         return (value.family == PineOrderFamily::Entry || value.family == PineOrderFamily::Order)
-            && value.projection_created_bar >= interval - 1;
+            && value.placement_script_open_ms >= last_broker_open_ms_;
     };
     // Dormant askable-origin legs can be superseded too. A non-dormant
     // askable-origin leg still answers the consumed-leg question and stays.
@@ -3725,8 +3730,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     };
     auto& held = sweep.held;
     bool unpinned = false;
-    // Test each row's own pins first: K5 can keep a long input/script split's
-    // entry rows, all visited at each bar open, without an askable-origin search.
+    // K5 ages in script-bar space even when a chart gathers finer input;
+    // only the current and previous script bars keep their retired commands.
     auto askable_cursor = askable_origins.begin();
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         const bool cycle_held = held_by_cycle(value);
@@ -6318,21 +6323,33 @@ std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
 }
 
 bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const noexcept {
-    return trade_index < trade_exit_phase_.size()
-        && trade_exit_phase_[trade_index] == static_cast<std::uint8_t>(NativePathPhase::Open);
+    const std::size_t base = host_ ? detail::run_consumer(*host_).closed_trade_prefix().base : 0;
+    // This frozen noexcept query is called only on the protected tail group.
+    // A broken seal proof is loud here as well as in the ledger itself.
+    if (trade_index < base) std::abort();
+    return trade_index - base < trade_exit_phase_.size()
+        && trade_exit_phase_[trade_index - base] == static_cast<std::uint8_t>(NativePathPhase::Open);
 }
 
 void PineExecutionAdapter::permute_exit_phases(std::size_t start,
                                                const std::vector<std::size_t>& indices) {
     const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
+    const std::size_t base = host_ ? detail::run_consumer(*host_).closed_trade_prefix().base : 0;
+    if (start < base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "exit-phase permutation precedes the sealed prefix");
     std::vector<std::uint8_t> permuted;
     permuted.reserve(indices.size());
     for (const std::size_t index : indices) {
-        permuted.push_back(index < trade_exit_phase_.size() ? trade_exit_phase_[index] : none);
+        if (index < base)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "exit-phase read precedes the sealed prefix");
+        permuted.push_back(index - base < trade_exit_phase_.size()
+            ? trade_exit_phase_[index - base] : none);
     }
     for (std::size_t i = 0; i < permuted.size(); ++i) {
         const std::size_t target = start + i;
-        if (target >= trade_exit_phase_.size() && permuted[i] == none) continue;
+        if (target - base >= trade_exit_phase_.size() && permuted[i] == none) continue;
         set_exit_phase(target, permuted[i]);
     }
 }
@@ -6455,14 +6472,21 @@ bool PineExecutionAdapter::other_exit_reaches(double price, bool closing_long,
 }
 
 void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t phase) {
-    if (trade_index >= trade_exit_phase_.size())
-        trade_exit_phase_.resize(trade_index + 1, static_cast<std::uint8_t>(NativePathPhase::None));
-    if (trade_index < exit_phase_final_ && trade_exit_phase_[trade_index] != phase) {
+    const auto prefix = host_ ? detail::run_consumer(*host_).closed_trade_prefix()
+                             : NativeExecutionConsumer::ClosedTradePrefix{};
+    if (trade_index < prefix.base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "exit-phase write precedes the sealed prefix");
+    const std::size_t offset = trade_index - prefix.base;
+    if (offset >= trade_exit_phase_.size())
+        trade_exit_phase_.resize(offset + 1, static_cast<std::uint8_t>(NativePathPhase::None));
+    if (trade_index < exit_phase_final_ && trade_exit_phase_[offset] != phase) {
         // A final phase rewritten: fold the prefix afresh at the next mark.
-        exit_phase_final_ = 0;
-        exit_phase_digest_ = 1469598103934665603ULL;
+        exit_phase_final_ = prefix.base;
+        exit_phase_digest_ = prefix.exit_phase_digest;
+        if (host_) detail::run_consumer(*host_).restart_exit_phases();
     }
-    trade_exit_phase_[trade_index] = phase;
+    trade_exit_phase_[offset] = phase;
 }
 
 void PineExecutionAdapter::observe_terminal_receipts() {
@@ -18073,9 +18097,13 @@ bool PineExecutionAdapter::submit_margin_call_units(
 void PineExecutionAdapter::fold_source_money_through(const PineStrategyHost& pine,
                                                      std::uint64_t count) {
     if (count < source_money_folded_) {
-        source_gains_ = 0.0;
-        source_losses_ = 0.0;
-        source_money_folded_ = 0;
+        const auto& prefix = detail::run_consumer(pine).closed_trade_prefix();
+        if (count < prefix.base)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "source-money rewind precedes the sealed prefix");
+        source_gains_ = prefix.source_gains;
+        source_losses_ = prefix.source_losses;
+        source_money_folded_ = prefix.base;
     }
     for (; source_money_folded_ < count; ++source_money_folded_) {
         const double profit = pine.closed_trade(source_money_folded_).pnl;
