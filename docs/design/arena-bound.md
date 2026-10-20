@@ -157,7 +157,7 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 | --- | --- |
 | pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset, as the `max_open_lots` comment and surrounding projection at `src/source/pine_adapter.cpp:2862-2866` state. Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:2834`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:64`. The native point budget is a callback bound, not a total fill bound. |
-| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7723`. |
+| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7750`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
 | process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2823`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
@@ -404,7 +404,7 @@ not include the rehash overlap and must not replace indexPeak in sizing.
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
 writer (`src/engine_report.cpp:833`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:12675`).
+instead of copying its prefix (`src/native_execution_consumer.cpp:12714`).
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
@@ -477,7 +477,7 @@ nX = S*tracePerBar + traceFixed            if trace else 0
 nH = S*hashesPerBar + hashesFixed          if hashes else 0
 ```
 
-K is at most one by `src/report_sink_writer.cpp:517`. The compiler can
+K is at most one by `src/report_sink_writer.cpp:531`. The compiler can
 tighten other counts only with a proof; finite E/T does not bound event
 or trace calls made inside an unknown loop.
 
@@ -492,11 +492,11 @@ becomes at most six JSON bytes, plus two quotes; see
 | --- | --- | --- |
 | E | 154 | `src/report_sink_writer.cpp:379` |
 | T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:398` |
-| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:486` |
-| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:499` |
-| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:513` |
-| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:523` |
-| H | 25 | `src/report_sink_writer.cpp:531` |
+| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:500` |
+| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:513` |
+| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:527` |
+| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:537` |
+| H | 25 | `src/report_sink_writer.cpp:545` |
 
 For variable-width rows use min(expression,1048576). Missing comment,
 message or trace-name byte proofs use the existing full-line ceiling,

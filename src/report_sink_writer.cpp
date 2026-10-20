@@ -478,6 +478,20 @@ void LineWriter::write_t(std::int64_t n, const pf_trade_t& trade,
     }
 }
 
+void LineWriter::abandon() {
+    auto& state = *state_;
+    try {
+        state.require_writing();
+        // line() can cross the fixed buffer boundary. Flush its retained
+        // suffix here so EOF follows LF, never a partially emitted record.
+        state.flush();
+        state.fail();
+    } catch (...) {
+        state.fail();
+        throw;
+    }
+}
+
 Trailer LineWriter::write_trailer() {
     auto& state = *state_;
     if (state.phase == State::Phase::complete) return state.trailer;

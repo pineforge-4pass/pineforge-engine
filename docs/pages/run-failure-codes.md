@@ -40,7 +40,8 @@ if (code != NULL && code[0] != '\0') {
   `engine_unclassified_error`, never `""`.
 - #strategy_get_last_error_args answers the arguments as one canonical JSON
   object: UTF-8, keys sorted, no whitespace; an `integer` argument is a JSON
-  integer, a `number` the shortest round-trip double, a `nullable_string` a
+  integer, a `number` the shortest round-trip double, a `boolean` a JSON
+  `true` or `false`, a `nullable_string` a
   JSON string or `null`, a `scalar` a JSON string, integer, finite number,
   `true`, `false` or `null` (a boolean or a null is never written as a
   string), every other kind a JSON string. It is `"{}"` for a code without
@@ -78,6 +79,9 @@ codes it tested the text alone, so a script stopped by an empty
   symbol or timeframe, the bar a failure happened on and any text a script
   built are not arguments, so a failing run cannot carry results out through
   them.
+- **Cancellation progress is engine-owned.** Q7's `run_aborted` witnesses
+  are the count of fully completed input bars and a boolean start witness.
+  They are produced by the run boundary, never read from script output.
 - **Validation is central.** An undeclared argument, a wrong kind, a value
   outside an argument's closed list or a missing required argument turns the
   failure into `engine_invariant`, its English kept: a wrong call cannot mint
@@ -148,7 +152,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `request_timeframe_unsupported` | `unsupported` | no | `input_tf` (timeframe, optional), `reason` (vocab, 7 values), `script_tf` (timeframe, optional) | A request timeframe cannot be served for this run's chart timeframe. |
 | `request_unsupported` | `unsupported` | no | `line` (integer, optional), `reason` (vocab, 2 values) | A request shape PineForge does not support. |
 | `results_digest_unsupported` | `unsupported` | no | `requested` (string) | The runner does not support the requested results digest. The first selected-window build declares no digest. |
-| `run_aborted` | `engine_fault` | yes | none | The run was aborted on request. |
+| `run_aborted` | `engine_fault` | yes | `bars_count` (integer, optional), `strategy_started` (boolean, optional) | The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. The existing engine_fault/retryable policy is retained pending a ruling: PROPOSED cancelled, retryable false; RETURN TO CORE-TOP for the class ruling. |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
 | `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
@@ -187,6 +191,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 
 | Kind | Its value |
 | --- | --- |
+| `boolean` | A JSON boolean. |
 | `identifier` | A name the compiled strategy spells as a literal (a built-in, an argument). |
 | `integer` | A JSON integer. |
 | `keyword` | A fixed keyword. |

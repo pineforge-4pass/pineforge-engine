@@ -1629,6 +1629,10 @@ private:
         return false;
     }
     void latch_abort(BacktestEngine& engine, NativeFailureOperation operation, uint64_t ordinal);
+    // SIGTERM is deliberately absent from the mid-bar abort checks above.
+    // Called before the first host callback, between completed input bars,
+    // or after all supplied inputs and the batch's natural final seal return.
+    bool check_sigterm_abort(BacktestEngine& engine, bool strategy_started);
     void latch_projection_mismatch(BacktestEngine& engine, NativeFailureOperation operation,
                                    uint64_t ordinal);
     // One pump: a batch's whole input loop, or one public stream input. While
@@ -2191,6 +2195,9 @@ public:
     // the ledger; the returned storage is never attached to a caller's report.
     static bool report_sink_open_trades(const BacktestEngine& engine,
                                         const TradeC*& rows, int& count) noexcept;
+    // Final completed-bar boundary, before a success trailer commits the sink.
+    // True means the invocation was aborted and the writer was abandoned.
+    static bool abort_before_sink_trailer(BacktestEngine& engine);
     // Explicit ordinary-curve reconstruction for internal array consumers.
     // Sink removal refuses while scratch is live and never invokes this bridge.
     static void restore_report_sink_equity_curve(BacktestEngine& engine);

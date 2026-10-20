@@ -1107,9 +1107,18 @@
    "since": "1.5.0"
   },
   "run_aborted": {
-   "args": {},
+   "args": {
+    "bars_count": {
+     "kind": "integer",
+     "optional": true
+    },
+    "strategy_started": {
+     "kind": "boolean",
+     "optional": true
+    }
+   },
    "class": "engine_fault",
-   "description": "The run was aborted on request.",
+   "description": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used).",
    "english": [
     "native run aborted"
    ],
@@ -2098,6 +2107,7 @@
   }
  },
  "kinds": {
+  "boolean": "A JSON boolean.",
   "identifier": "A name the compiled strategy spells as a literal (a built-in, an argument).",
   "integer": "A JSON integer.",
   "keyword": "A fixed keyword.",

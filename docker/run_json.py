@@ -122,6 +122,9 @@ docker/run_failure_codes.json and "args" its typed arguments. The engine's code
 is read only from strategy_get_last_error_code and its args from
 strategy_get_last_error_args. For report_sink_failed, reason, high_water_bytes
 and arena_bytes are also copied from args to the top level whenever present.
+For run_aborted, args.bars_count is mirrored as bars.count and the boolean
+args.strategy_started is mirrored as strategy_started. SIGTERM is observed
+after a completed input bar; fd 4 closes without a trailer before this line.
 A run failure from a library without the code
 getter prints a line without "code" and "args": the earlier
 {"engine":"pineforge","error":"<text>"} line byte for byte, or, for a run status
@@ -172,6 +175,7 @@ import math
 import mmap
 import os
 import re
+import signal
 import stat
 import struct
 import sys
@@ -2187,6 +2191,74 @@ class StrategyLibraryError(RunFailure, RuntimeError):
         super().__init__(text, "strategy_library_incompatible", code_args)
 
 
+class _SigtermAbort:
+    """Block startup SIGTERM until the native flag-only handler can own it.
+
+    Python callbacks cannot interrupt a ctypes run at a bar boundary. No
+    Python signal handler is installed: a pending startup signal stays in the
+    kernel until attach(), or is reported before the strategy starts.
+    """
+
+    def __init__(self):
+        self.lib = None
+        self.started = False
+        self.mask = (signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+                     if hasattr(signal, "pthread_sigmask") else None)
+
+    def requested(self):
+        if self.lib is not None:
+            return bool(self.lib.pf_run_abort_requested_v1())
+        return self.mask is not None and signal.SIGTERM in signal.sigpending()
+
+    @staticmethod
+    def failure():
+        return RunFailure("native run aborted", "run_aborted",
+                          {"bars_count": 0, "strategy_started": False})
+
+    def check_before_start(self):
+        if self.requested():
+            raise self.failure()
+
+    def attach(self, lib):
+        self.check_before_start()
+        names = ("pf_run_abort_install_sigterm_v1", "pf_run_abort_requested_v1",
+                 "pf_run_abort_restore_sigterm_v1")
+        present = [hasattr(lib, name) for name in names]
+        if not any(present):
+            # Libraries predating this opt-in API retain their signal behavior.
+            if self.mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, self.mask)
+            return
+        if not all(present) or self.mask is None:
+            raise StrategyLibraryError("the strategy library has an incomplete SIGTERM API",
+                                       {"reason": "symbol_missing"})
+        for name in names:
+            function = getattr(lib, name)
+            function.argtypes, function.restype = [], ctypes.c_int
+        if lib.pf_run_abort_install_sigterm_v1() != 0:
+            raise _engine_invariant("the invocation SIGTERM handler could not be installed")
+        self.lib = lib
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+        self.check_before_start()
+
+    def begin_call(self):
+        self.check_before_start()
+        self.started = True
+
+    def close(self):
+        if self.mask is None:
+            return
+        # Keep the native handler through cleanup AND the single stdout line.
+        # Consume blocked repeats before restoring an embedding caller's mask.
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        if self.lib is not None and self.lib.pf_run_abort_restore_sigterm_v1() != 0:
+            raise RuntimeError("the invocation SIGTERM handler could not be restored")
+        while signal.SIGTERM in signal.sigpending():
+            signal.sigwait({signal.SIGTERM})
+        signal.pthread_sigmask(signal.SIG_SETMASK, self.mask)
+        self.mask = None
+
+
 def _cut_utf8(text: str, limit: int) -> str:
     """text cut to at most limit bytes of UTF-8, on a character boundary (a lone
     surrogate counts as its three bytes and survives)."""
@@ -2229,12 +2301,20 @@ def failure_line(text, code=None, code_args=None) -> str:
              if isinstance(value, str) else value)
             for name, value in (code_args or {}).items()}
         doc.update({name: doc["args"][name] for name in mirrors if name in doc["args"]})
+        if code == "run_aborted":
+            if "bars_count" in doc["args"]:
+                doc["bars"] = {"count": doc["args"]["bars_count"]}
+            if "strategy_started" in doc["args"]:
+                doc["strategy_started"] = doc["args"]["strategy_started"]
     line = _dump_line(doc)
     if len(line) > ERROR_LINE_MAX:
         if code is not None and len(_dump_line({**doc, "error": ""})) > ERROR_LINE_MAX:
             doc["args"] = {}  # arguments no registry could hold: the code stays
             for name in mirrors:
                 doc.pop(name, None)
+            if code == "run_aborted":
+                doc.pop("bars", None)
+                doc.pop("strategy_started", None)
         low, high = 0, len(doc["error"].encode("utf-8", "surrogatepass"))
         while low < high:  # the longest cut whose line fits
             mid = (low + high + 1) // 2
@@ -4602,6 +4682,9 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
     # 5. Execution begins before the strategy library loads.
     _advance(phases, "execution")
     lib = load_strategy(args.so)
+    abort = getattr(binary_inputs, "_sigterm_abort", None)
+    if abort is not None:
+        abort.attach(lib)
     checked = uses_checked_settings(lib)
     if args.outputs:
         require_outputs(lib)
@@ -4650,6 +4733,8 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         abi.configure(state, request.start_ms, request.end_ms)
         binding = _observer_binding(lib, state, phases.writer)
         binding.attach()
+        if abort is not None:
+            abort.begin_call()
         lib.run_backtest_full(
             state, retained, fed_count,
             input_tf, script_tf,
@@ -4880,13 +4965,21 @@ def main(argv=None) -> int:
     tokens = sys.argv[1:] if argv is None else argv
     if tokens and tokens[0] == "csv2bin":
         return _csv2bin_main(tokens[1:])
+    abort = _SigtermAbort()
     try:
         with ExitStack() as binary_inputs:
+            binary_inputs._sigterm_abort = abort
             return _main(argv, binary_inputs)
     except RunFailure as failure:
+        if not abort.started and abort.requested():
+            failure = abort.failure()
         write_failure(str(failure), failure.code, failure.code_args)
         return failure.exit_status
     except Exception as error:
+        if not abort.started and abort.requested():
+            failure = abort.failure()
+            write_failure(str(failure), failure.code, failure.code_args)
+            return 1
         typed = _typed_failure(error)
         if typed is not None:
             write_failure(str(typed), typed.code, typed.code_args)
@@ -4895,6 +4988,8 @@ def main(argv=None) -> int:
         write_failure(f"harness internal error: {type(error).__name__}: {error}",
                       "harness_internal_error")
         return 1
+    finally:
+        abort.close()
 
 
 def _legacy_abbreviations(argv, legacy_long, all_long):
@@ -5074,6 +5169,18 @@ def _main(argv, binary_inputs) -> int:
     if args.ohlcv is not None and args.ohlcv_bin is not None:
         raise _request_invalid("error: --ohlcv and --ohlcv-bin are mutually exclusive", "ohlcv_bin")
     _validate_sink_options(args)
+    abort = getattr(binary_inputs, "_sigterm_abort", None)
+    if args.report_sink_fd is not None:
+        args._sink_fd_owner = _InheritedSinkFd(args.report_sink_fd)
+        def close_startup_sink():
+            # Jailed admission refusals retain caller ownership until the
+            # sink is installed. A startup SIGTERM still gives fd 4 EOF
+            # before the abort line, even before library/strategy creation.
+            if args.profile != "jailed" or (abort is not None and abort.requested()):
+                args._sink_fd_owner.close()
+        binary_inputs.callback(close_startup_sink)
+    if abort is not None:
+        abort.check_before_start()
     selected = _selected_requested(args)
     if selected and args.ohlcv_bin is not None:
         raise _request_invalid("error: selected-window mode requires a CSV chart", "ohlcv_bin")
@@ -5116,6 +5223,8 @@ def _main(argv, binary_inputs) -> int:
 
     _advance(phases, "execution")
     lib = load_strategy(args.so)
+    if abort is not None:
+        abort.attach(lib)
     checked = uses_checked_settings(lib)
     if args.outputs:
         require_outputs(lib)
@@ -5168,6 +5277,8 @@ def _main(argv, binary_inputs) -> int:
         return st, sink
 
     def _run(st, rep):
+        if abort is not None:
+            abort.begin_call()
         lib.run_backtest_full(
             st, chart["bars"], n,
             input_tf, script_tf,
@@ -5502,7 +5613,8 @@ def _new_report_sink(lib, state, args, *, body=True):
         if int(lib.pf_report_sink_version()) != 1:
             raise _engine_invariant("the strategy library has an incompatible report sink ABI")
         return _FdReportSink(lib, state, fd=args.report_sink_fd,
-                             run_id=getattr(args, "run_id", ""))
+                             run_id=getattr(args, "run_id", ""),
+                             owner=getattr(args, "_sink_fd_owner", None))
     if jailed:
         return None
     names = ("pf_report_sink_version", "strategy_set_report_sink_v1",
@@ -5522,13 +5634,31 @@ def _new_report_sink(lib, state, args, *, body=True):
                        path=getattr(args, "report_sink", None) if body else None)
 
 
+class _InheritedSinkFd:
+    """One close attempt shared by startup and native-state cleanup."""
+
+    def __init__(self, fd):
+        self.fd = fd
+
+    def close(self):
+        if self.fd is not None:
+            fd, self.fd = self.fd, None
+            try:
+                os.close(fd)
+            except OSError as error:
+                # Never retry a descriptor that the OS may already have reused.
+                if error.errno != errno.EBADF:
+                    raise
+
+
 class _FdReportSink:
     """Own the inherited endpoint; never create a path or consume its stream."""
 
     fd_mode, named = True, True
 
-    def __init__(self, lib, state, *, fd, run_id):
+    def __init__(self, lib, state, *, fd, run_id, owner=None):
         self.fd = fd
+        self._owner = owner if owner is not None else _InheritedSinkFd(fd)
         self.run_id = run_id
         self.counts = {}
         self.summary = None
@@ -5574,13 +5704,8 @@ class _FdReportSink:
 
     def close(self):
         if self.fd is not None:
-            fd, self.fd = self.fd, None
-            try:
-                os.close(fd)
-            except OSError as error:
-                # No retry: a reused descriptor must never be closed a second time.
-                if error.errno != errno.EBADF:
-                    raise
+            self.fd = None
+            self._owner.close()
 
 
 class _ReportSink:

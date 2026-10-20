@@ -907,6 +907,11 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             if (summary.count_t != sink.receipt.count_t)
                 throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                     "report summary count differs from the sink trade count");
+            // The last input bar is already complete. A SIGTERM received
+            // during report assembly still abandons a whole-record prefix,
+            // before any success trailer or complete receipt is published.
+            if (NativeExecutionConsumer::abort_before_sink_trailer(
+                    const_cast<BacktestEngine&>(*this))) return;
             const auto trailer = sink.writer->write_trailer();
             sink.receipt.count_e = trailer.count_e;
             sink.receipt.count_t = trailer.count_t;
