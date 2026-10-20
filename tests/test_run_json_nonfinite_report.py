@@ -52,7 +52,7 @@ TRADE_FIELDS = (
     "trades.pnl_pct", "trades.max_runup", "trades.max_drawdown", "trades.commission",
 )
 SUMMARY_FIELDS = (
-    "summary.net_pnl", "summary.avg_trade", "summary.best_trade",
+    "summary.win_rate_pct", "summary.net_pnl", "summary.avg_trade", "summary.best_trade",
     "summary.worst_trade", "summary.max_drawdown",
 )
 BAD_VALUES = (
@@ -81,14 +81,23 @@ class ReportLib(selected.FakeLib):
     """Only the execution stand-in: owns the backing arrays until cleanup."""
 
     def __init__(self, plan, events, *, trade_field=None, bad_value=None,
-                 net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None):
-        super().__init__(plan, events)
+                 net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None,
+                 failure_field=None, short_span_metrics=False):
+        engine_failure = None
+        if failure_field is not None:
+            engine_failure = (
+                RESULT_INVALID, "The report producer generated an invalid canonical result.")
+        super().__init__(plan, events, engine_failure=engine_failure)
+        if failure_field is not None:
+            self.strategy_get_last_error_args = lambda state: json.dumps(
+                {"field": failure_field, "reason": NONFINITE_REASON}).encode()
         self.trade_field = trade_field
         self.bad_value = bad_value
         self.net_profit = net_profit
         self.pnls = pnls
         self.metric = metric
         self.curve_value = curve_value
+        self.short_span_metrics = short_span_metrics
         self._trades = None
 
     def _run(self, *args):
@@ -118,6 +127,9 @@ class ReportLib(selected.FakeLib):
         report.net_profit = self.net_profit
         report.metrics.all.profit_factor = 2.0
         report.metrics.equity.sharpe_monthly = 0.5
+        if self.short_span_metrics:
+            report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
+            report.metrics.equity.sharpe_bar = report.metrics.equity.sortino_bar = float("nan")
         if self.metric is not None:
             block, name = self.metric
             setattr(getattr(report.metrics, block), name, self.bad_value)
@@ -226,7 +238,9 @@ def assert_failure(result, code, args, *, serialization=False, phase_fd=True, mo
 @pytest.mark.parametrize("bad", BAD_VALUES)
 def test_trade_leaf_nonfinite(harness, mode, field, bad):
     result = harness.run(mode, trade_field=field.split(".")[1], bad_value=bad)
-    assert len(result.built) == 1  # the REAL report builder ran
+    # PnL is consumed during summary assembly and now fails before the real
+    # builder can return. Other leaves fail in canonical-result validation.
+    assert len(result.built) == (0 if field == "trades.pnl" else 1)
     assert_failure(result, RESULT_INVALID, {"field": field, "reason": NONFINITE_REASON}, mode=mode)
 
 
@@ -268,7 +282,7 @@ def test_ordinary_typed_leaf_failure_without_phase_fd(harness, bad):
 @pytest.mark.parametrize("bad", BAD_VALUES)
 def test_writer_backstop(harness, mode, bad):
     def poison(document):
-        document["elapsed_seconds"] = bad  # outside all 13 canonical leaves
+        document["elapsed_seconds"] = bad  # outside the canonical result leaves
 
     result = harness.run(mode, inject=poison)
     assert_failure(result, POST_EXECUTION_FAILED,
@@ -346,23 +360,229 @@ def test_validation_document_writer_backstop(harness, bad):
     (("shorts", "profit_factor"), "profit_factor"),
     (("equity", "sharpe_monthly"), "sharpe_tv"),
 ), ids=("all", "longs", "shorts", "equity"))
-@pytest.mark.parametrize("bad", BAD_VALUES)
-def test_metric_nonfinite_stays_null(harness, mode, metric, key, bad):
-    result = harness.run(mode, metric=metric, bad_value=bad)
+def test_metric_defined_nan_stays_null(harness, mode, metric, key):
+    # Only a native producer's defined absence can reach this representation.
+    # Computed NaN and infinities are rejected by test_metrics_overflow.cpp.
+    result = harness.run(mode, metric=metric, bad_value=float("nan"))
     document = strict_line(result.stdout)
     assert (result.status, result.stderr) == (0, "")
     assert document["metrics"][metric[0]][key] is None
     assert [record["phase"] for record in result.records][-1] == "completed"
 
 
+# Exercise every floating report metric, including both monthly public aliases.
+METRIC_FIELDS = [
+    (block, name, {"sharpe_monthly": "sharpe_tv", "sortino_monthly": "sortino_tv"}.get(name, name))
+    for block, struct in (("all", run_json.TradeStatsC), ("longs", run_json.TradeStatsC),
+                          ("shorts", run_json.TradeStatsC), ("equity", run_json.EquityStatsC))
+    for name, kind in struct._fields_ if kind is ctypes.c_double
+]
+
+
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("bad", BAD_VALUES)
-def test_equity_nonfinite_stays_null(harness, mode, bad):
-    result = harness.run(mode, curve_value=bad)
+@pytest.mark.parametrize("block,name,key", METRIC_FIELDS)
+@pytest.mark.parametrize("bad", (float("inf"), float("-inf")))
+def test_metric_overflow_is_typed(harness, mode, block, name, key, bad):
+    assert len(METRIC_FIELDS) == 87
+    result = harness.run(mode, metric=(block, name), bad_value=bad)
+    assert_failure(result, RESULT_INVALID,
+                   {"field": f"metrics.{block}.{key}", "reason": NONFINITE_REASON}, mode=mode)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("phase_fd", (True, False), ids=("phase-fd", "no-phase-fd"))
+@pytest.mark.parametrize("field,key", (
+    ("sharpe_monthly", "sharpe_tv"),
+    ("sortino_monthly", "sortino_tv"),
+    ("sharpe_tv", "sharpe_tv"),
+    ("sortino_tv", "sortino_tv"),
+), ids=("native-sharpe", "native-sortino", "public-sharpe", "public-sortino"))
+def test_engine_monthly_overflow_field_uses_public_wire_key(harness, mode, phase_fd, field, key):
+    # Model the typed kernel failure through the real getters and main()
+    # forwarding path, rather than poisoning a returned report metric.
+    result = harness.run(mode, phase_fd=phase_fd, failure_field=f"metrics.equity.{field}")
+    assert result.built == []
+    assert_failure(result, RESULT_INVALID,
+                   {"field": f"metrics.equity.{key}", "reason": NONFINITE_REASON},
+                   mode=mode, phase_fd=phase_fd)
+    assert strict_line(result.stdout)["error"] == (
+        "The report producer generated an invalid canonical result.")
+
+
+@pytest.mark.parametrize("code,field", (
+    (RESULT_INVALID, "metrics.equity.sharpe_bar"),
+    (RESULT_INVALID, "metrics.equity.buy_hold_return"),
+    (RESULT_INVALID, "metrics.all.sharpe_monthly"),
+    (RESULT_INVALID, "metrics.equity.sharpe_monthly.extra"),
+    (RESULT_INVALID, "sharpe_monthly"),
+    ("engine_command_value_invalid", "metrics.equity.sharpe_monthly"),
+))
+def test_failure_line_preserves_fields_outside_monthly_report_aliases(code, field):
+    args = {"field": field, "reason": NONFINITE_REASON}
+    document = strict_line(run_json.failure_line("engine fault", code, args))
+    assert document == {"engine": "pineforge", "error": "engine fault",
+                        "code": code, "args": args}
+
+
+def test_run_json_annualization_policy_equals_the_native_policy_list():
+    # docker/report_annualization.def is what the C++ metric walk includes;
+    # run_json.py ships alone and copies the span threshold and four-field set.
+    import re
+    text = (Path(run_json.__file__).with_name("report_annualization.def")
+            .read_text(encoding="utf-8"))
+    spans = re.findall(r"^PF_ANNUALIZATION_SPAN_MS\((\d+)\)$", text, re.M)
+    fields = re.findall(r"^PF_SHORT_SPAN_ANNUALIZED_FIELD\(([a-z_]+)\)$", text, re.M)
+    assert [int(s) for s in spans] == [run_json.MIN_ANNUALIZATION_SPAN_MS]
+    assert tuple(fields) == run_json.SHORT_SPAN_ANNUALIZED_FIELDS
+    assert run_json.SHORT_SPAN_ANNUALIZED_FIELDS == (
+        "cagr", "calmar", "sharpe_bar", "sortino_bar")
+    # Every other non-comment line is refused: the list stays a closed policy.
+    others = [line for line in text.splitlines()
+              if line.strip() and not line.startswith("//")
+              and not line.startswith(("PF_ANNUALIZATION_SPAN_MS(",
+                                       "PF_SHORT_SPAN_ANNUALIZED_FIELD("))]
+    assert others == []
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_sub_day_annualization_completes_in_report_routes(harness, mode):
+    result = harness.run(mode, short_span_metrics=True)
     document = strict_line(result.stdout)
     assert (result.status, result.stderr) == (0, "")
-    assert document["equity_curve"][-1]["equity"] is None
-    assert document["equity_curve"][-1]["open_profit"] is None
+    assert document["metrics"]["equity"]["cagr"] is None
+    assert document["metrics"]["equity"]["calmar"] is None
+    assert document["metrics"]["equity"]["sharpe_bar"] is None
+    assert document["metrics"]["equity"]["sortino_bar"] is None
+    assert document["diagnostics"]["annualization"] == {
+        "cagr": "span_too_short_to_annualize",
+        "calmar": "span_too_short_to_annualize",
+        "sharpe_bar": "span_too_short_to_annualize",
+        "sortino_bar": "span_too_short_to_annualize",
+    }
+    assert result.records[-1]["phase"] == "completed"
+
+
+@pytest.mark.parametrize("first_mark_is_capital", (True, False))
+@pytest.mark.parametrize("span_ms,capital,final_equity,has_reason", (
+    (7 * 60_000, 10_000.0, 10_800.0, True),
+    (7 * 60_000, 10_000.0, 10_000.0, True),
+    (86_399_999, 1.0, 1e300, True),
+    (86_400_000, 10_000.0, 10_800.0, False),
+    (7 * 60_000, 0.0, 10_800.0, False),
+    (7 * 60_000, -1.0, 10_800.0, False),
+    (7 * 60_000, 10_000.0, 0.0, False),
+    (0, 10_000.0, 10_800.0, False),
+    (-1, 10_000.0, 10_800.0, False),
+))
+def test_annualization_reason_on_wire(span_ms, capital, final_equity, has_reason,
+                                     first_mark_is_capital):
+    # Native NaN absence is supplied by the producer stand-in, as in the other
+    # wire tests. The C++ rows separately prove the real metric computation.
+    report = run_json.ReportC()
+    curve = (run_json.EquityPointC * 2)(
+        run_json.EquityPointC(selected.T, capital if first_mark_is_capital else 100.0, 0),
+        run_json.EquityPointC(selected.T + span_ms, final_equity, 0))
+    report.equity_curve = curve
+    report.equity_curve_len = 2
+    report.metrics.equity.cagr = report.metrics.equity.calmar = float("nan")
+    report.metrics.equity.sharpe_bar = report.metrics.equity.sortino_bar = float("nan")
+    # Calendar-month ratios are already absent with fewer than two monthly
+    # returns; that domain never receives the span-annualization reason.
+    report.metrics.equity.sharpe_monthly = report.metrics.equity.sortino_monthly = float("nan")
+    # compute_trade_stats' existing domain: null iff initial_capital <= 0,
+    # even for an empty trade list. Do not infer capital from the first mark.
+    report.metrics.all.net_profit_pct = 0.0 if capital > 0 else float("nan")
+    trades = (run_json.TradeC * 1)()
+    report.trades = trades
+    report.trades_len = report.total_trades = 1
+    document = run_json.build_report_dict(
+        report, Path("annualization.csv"), 2, selected.T, selected.T + span_ms,
+        0.0, {}, {}, {"chart_tz": "America/New_York"})
+    run_json._validate_report_result(document)
+    wire = json.loads(json.dumps(document, allow_nan=False))
+    assert wire["metrics"]["equity"]["cagr"] is None
+    assert wire["metrics"]["equity"]["calmar"] is None
+    assert wire["metrics"]["equity"]["sharpe_bar"] is None
+    assert wire["metrics"]["equity"]["sortino_bar"] is None
+    assert wire["metrics"]["equity"]["sharpe_tv"] is None
+    assert wire["metrics"]["equity"]["sortino_tv"] is None
+    if has_reason:
+        assert wire["diagnostics"]["annualization"] == {
+            "cagr": "span_too_short_to_annualize",
+            "calmar": "span_too_short_to_annualize",
+            "sharpe_bar": "span_too_short_to_annualize",
+            "sortino_bar": "span_too_short_to_annualize",
+        }
+    else:
+        assert "annualization" not in wire["diagnostics"]
+    # Appendix A's scalar leaf expansion stays exactly 135. This tests the
+    # metric/summary names independently of the producer's descriptors.
+    trade_keys = {
+        "num_trades", "num_wins", "num_losses", "num_even", "percent_profitable",
+        "net_profit", "net_profit_pct", "gross_profit", "gross_profit_pct",
+        "gross_loss", "gross_loss_pct", "profit_factor", "avg_trade", "avg_trade_pct",
+        "avg_win", "avg_win_pct", "avg_loss", "avg_loss_pct", "ratio_avg_win_avg_loss",
+        "largest_win", "largest_win_pct", "largest_loss", "largest_loss_pct",
+        "commission_paid", "max_consecutive_wins", "max_consecutive_losses",
+        "expectancy", "avg_bars_in_trade", "avg_bars_in_wins", "avg_bars_in_losses",
+    }
+    equity_keys = {
+        "max_equity_drawdown", "max_equity_drawdown_pct", "max_equity_runup",
+        "max_equity_runup_pct", "buy_hold_return", "buy_hold_return_pct",
+        "sharpe_tv", "sortino_tv", "sharpe_bar", "sortino_bar", "cagr", "calmar",
+        "recovery_factor", "time_in_market_pct", "open_pl",
+    }
+    summary_keys = {
+        "total_trades", "wins", "losses", "bars_processed", "win_rate_pct",
+        "net_pnl", "avg_trade", "best_trade", "worst_trade", "max_drawdown",
+    }
+    assert set(wire["metrics"]) == {"all", "longs", "shorts", "equity"}
+    for side in ("all", "longs", "shorts"):
+        assert set(wire["metrics"][side]) == trade_keys
+    assert set(wire["metrics"]["equity"]) == equity_keys
+    assert set(wire["summary"]) == summary_keys
+    trade_row_keys = {
+        "n", "side", "entry_time", "exit_time", "entry_price", "exit_price",
+        "qty", "pnl", "pnl_pct", "max_runup", "max_drawdown", "commission",
+        "entry_bar_index", "exit_bar_index", "open_at_end", "entry_incarnation",
+    }
+    assert set(wire["trades"][0]) == trade_row_keys
+    assert all(set(point) == {"time_ms", "equity", "open_profit"}
+               for point in wire["equity_curve"])
+    # version + summary + 3 trade blocks + equity + trade-row fields + curve:
+    assert (1 + len(summary_keys) + 3 * len(trade_keys) + len(equity_keys)
+            + len(trade_row_keys) + 3) == 135
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("bad", BAD_VALUES)
+def test_executed_equity_nonfinite_is_typed(harness, mode, bad):
+    result = harness.run(mode, curve_value=bad)
+    assert_failure(result, RESULT_INVALID,
+                   {"field": "equity_curve.equity", "reason": NONFINITE_REASON}, mode=mode)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("pnls,net_profit", (
+    ((1e308, 1e308, -1e308), 1e308),
+    ((1e308, -1e308, -1e308), -1e308),
+), ids=("sum", "peak-difference"))
+def test_cumulative_summary_overflow_cannot_hide_in_min_max(harness, mode, pnls, net_profit):
+    # Every trade and supplied net profit are finite. cum and cum-peak used
+    # to overflow, then min/max silently discarded the resulting NaN.
+    result = harness.run(mode, pnls=pnls, net_profit=net_profit)
+    assert_failure(result, RESULT_INVALID,
+                   {"field": "summary.max_drawdown", "reason": NONFINITE_REASON}, mode=mode)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_open_profit_nonfinite_is_typed(harness, mode):
+    def poison(document):
+        document["equity_curve"][-1]["open_profit"] = float("inf")
+
+    result = harness.run(mode, inject=poison)
+    assert_failure(result, RESULT_INVALID,
+                   {"field": "equity_curve.open_profit", "reason": NONFINITE_REASON}, mode=mode)
 
 
 @pytest.mark.parametrize("token", ("NaN", "Infinity", "-Infinity", "1e9999"))

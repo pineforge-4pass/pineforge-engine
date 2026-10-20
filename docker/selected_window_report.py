@@ -595,7 +595,7 @@ def _established_number(value: Any) -> Optional[float]:
 
 def _finite_actual(value: Any) -> bool:
     """Whether value, as the engine produced it, is a finite number: an int or a float that is
-    not a bool, not None (the report writes a non-finite double as null), not text, and not NaN
+    not a bool, not None (executed curve marks must be finite), not text, and not NaN
     or an infinity. Nothing is converted or read from text."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False

@@ -318,7 +318,10 @@ static void test_equity_stats_drawdown_walk() {
     CHECK(std::fabs(e.max_equity_runup - 200.0) < 1e-12);
     CHECK(std::fabs(e.max_equity_runup_pct - 200.0 / 9.0) < 1e-9);
     CHECK(std::fabs(e.recovery_factor - 100.0 / 300.0) < 1e-12);
-    CHECK(!std::isnan(e.cagr));
+    CHECK(std::isnan(e.cagr));             // revision 3.1: three milliseconds
+    CHECK(std::isnan(e.calmar));
+    CHECK(std::isnan(e.sharpe_bar));
+    CHECK(std::isnan(e.sortino_bar));
     CHECK(std::isnan(e.sharpe_monthly));   // single month bucket -> <2 returns
 }
 
