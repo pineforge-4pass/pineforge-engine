@@ -7372,3 +7372,23 @@ if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
             --module $<TARGET_FILE:run_sigterm_abort_strategy>)
 endif()
 # --- CR-150 core-cr150-q7 end ---
+
+# --- CR-150 core-cr150-o1w-contract begin ---
+# Real legacy provider, with an explicit old export surface. The Linux lab
+# exercises negotiation even after new runtime report exports are introduced.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT APPLE
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(o1_report_legacy_provider MODULE test_o1_report_contract.cpp)
+    target_compile_definitions(o1_report_legacy_provider PRIVATE PINEFORGE_O1_LEGACY_PROVIDER=1)
+    target_link_libraries(o1_report_legacy_provider PRIVATE pineforge)
+    target_link_options(o1_report_legacy_provider PRIVATE
+        "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive"
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/o1_report_contract/legacy.exports")
+    target_compile_options(o1_report_legacy_provider PRIVATE -ffp-contract=off)
+    add_test(NAME test_o1_report_mode_unsupported
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_o1_report_mode_unsupported.py
+            --module $<TARGET_FILE:o1_report_legacy_provider>
+            --runner ${PROJECT_SOURCE_DIR}/docker/run_json.py
+            --fixture ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/o1_report_contract/summary_only.json)
+endif()
+# --- CR-150 core-cr150-o1w-contract end ---

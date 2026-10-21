@@ -365,12 +365,15 @@ typedef struct pf_trace_entry_s {
 
 typedef struct pf_report_s {
     /* Trades */
-    int             total_trades;       /**< Closed-trade count (== trades_len), including
+    int             total_trades;       /**< Logical closed-trade count, including
                                          *   the range-end close of a position still open
-                                         *   after the final bar; with a sink trades_len is 0. */
+                                         *   after the final bar. Equals trades_len on the
+                                         *   owning-array route; with a sink trades_len is 0.
+                                         *   The opt-in report envelope declares capture
+                                         *   separately in <pineforge/report_mode.h>. */
     pf_trade_t*     trades;             /**< Heap array of closed trades; script-driven exits
                                          *   first, then the range-end rows (open_at_end=1). */
-    int             trades_len;         /**< Length of #trades. */
+    int             trades_len;         /**< Resident length of #trades, not the logical total. */
     double          net_profit;         /**< Sum of all closed-trade PnL. */
 
     /* Bar processing counts */
@@ -414,7 +417,9 @@ typedef struct pf_report_s {
      * On a completed KernelRecorded run len == script_bars_processed; a
      * Failed or Aborted run can expose a shorter prefix (check
      * strategy_get_last_error), and metrics describe that prefix. NOTE int64_t
-     * length (ctypes: c_int64). With a report sink: NULL / 0 length. */
+     * length (ctypes: c_int64). With a report sink: NULL / 0 length.
+     * The opt-in <pineforge/report_mode.h> envelope exposes logical point
+     * count and capture flags separately; this field is resident length. */
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;
     /* Per-script-bar broker-state hash when recording is on and report

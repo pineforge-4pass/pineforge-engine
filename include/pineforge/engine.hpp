@@ -44,6 +44,8 @@
 #define PINEFORGE_NO_STRATEGY_DECLS
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
+#include <pineforge/report_mode.h>
+#include <pineforge/report_pages.hpp>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
@@ -298,6 +300,27 @@ struct ReportC {
     uint64_t* broker_state_hash;
     int64_t   broker_state_hash_len;
 };
+
+// O1 report envelope v1. Data and method declarations do not advertise
+// runtime support; the legacy ReportC layout remains ABI 4.
+enum class ReportMode : std::uint32_t {
+    FULL = PF_REPORT_MODE_FULL,
+    SUMMARY_ONLY = PF_REPORT_MODE_SUMMARY_ONLY,
+    STREAMED = PF_REPORT_MODE_STREAMED
+};
+
+struct ReportEnvelopeV1 {
+    pf_report_metadata_v1 metadata;
+    ReportC report;
+};
+
+static_assert(sizeof(ReportC) == sizeof(pf_report_t),
+              "legacy C and C++ report sizes must match");
+static_assert(offsetof(ReportEnvelopeV1, report)
+                  == offsetof(pf_report_envelope_v1, report),
+              "versioned report payload offsets must match");
+static_assert(sizeof(ReportEnvelopeV1) == sizeof(pf_report_envelope_v1),
+              "versioned C and C++ report sizes must match");
 
 using ExitLegLifecycle = exit_legs::Lifecycle;
 
@@ -1860,6 +1883,36 @@ public:
 
     void fill_report(ReportC* out) const;
     static void free_report(ReportC* report);
+
+    // Declarations only; implementation belongs to the O1 runtime lanes.
+    // Select before execution; inspect the PF_REPORT_MODE_* return status.
+    // Rejection is atomic. SUMMARY_ONLY must never fall back to FULL.
+    int set_report_mode_v1(ReportMode mode);
+    // Initialize metadata.struct_size/version before reading. A successful
+    // read copies a frozen report without replay or outward side effects.
+    // Release the owned payload with free_report(&out->report).
+    int fill_report_envelope_v1(ReportEnvelopeV1* out) const;
+
+    // O1 reader declarations only. Returned unique_ptr values own fixed-size
+    // reader adapters, never a row/curve array or a resident page. Adapters
+    // borrow this engine until its next execution/config mutation/destruction;
+    // detached row/point/caller-buffer values survive adapter/page retirement.
+    // Successful acquisition is non-null, including for a captured empty
+    // sequence; absence/unavailability is an error, never a null sentinel.
+    // Exact semantic completed rows exclude report-only range-end rows and
+    // are readable in every mode at a committed script callback boundary.
+    std::unique_ptr<const report::TradeSourceV1> completed_trade_source_v1() const;
+    // Final report order includes range-end rows; equity includes the selected
+    // anchor. FULL/STREAMED sources read captured output through bounded pages.
+    // SUMMARY_ONLY throws std::logic_error for these two omitted sequences,
+    // never a fictitious empty source or an implicit FULL materialization.
+    // An uncaptured/disabled equity source also throws in FULL/STREAMED.
+    // Reading a report source/tail before validated completion also throws.
+    std::unique_ptr<const report::TradeSourceV1> report_trade_source_v1() const;
+    std::unique_ptr<const report::EquityPointSourceV1> report_equity_source_v1() const;
+    // Single final presented point, by value, in every mode. An empty logical
+    // curve has present=false; this never changes the sequence capture flags.
+    report::HeldEquityPointV1 held_report_equity_point_v1() const;
 
     // Returns the error message captured by the most recent run() if it
     // failed, or an empty string if the run completed normally. Cleared at
