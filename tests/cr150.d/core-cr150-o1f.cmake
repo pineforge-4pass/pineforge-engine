@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_scratch_facts)
+pineforge_add_unit_test(test_scratch_facts)
