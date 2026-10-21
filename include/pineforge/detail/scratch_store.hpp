@@ -21,7 +21,8 @@ inline constexpr std::size_t scratch_min_page_size = 512;
 // semantics). It must not throw, allocate with population, mutate the store,
 // retain sources, depend on addresses or consult mutable external state. A
 // non-ok status aborts the calling store operation: lower_bound returns it
-// unchanged, put and erase report programming_error.
+// unchanged; put and erase report programming_error unless a backing call
+// inside the operation returned io_error, which they preserve.
 struct ScratchKeyOrder {
     std::uint64_t id = 0; // nonzero caller-owned schema/ordering version
     void* context = nullptr;
@@ -65,9 +66,10 @@ class ScratchStore final : public ScratchReadback {
 public:
     // backing/context are borrowed through destruction; no implicit backing
     // creation or medium selection. create_empty requires an empty backing;
-    // reopen requires a previously successful commit with matching page size
-    // and ordering id. Cache/slot counts may differ on reopen. Supported
-    // geometry is exactly page_count>=2, a power-of-two page_size>=512 equal
+    // reopen requires the same live backing object, a previously successful
+    // commit and matching page size and ordering id. Cache/slot counts may
+    // differ on reopen. Supported geometry is exactly page_count>=2, a
+    // power-of-two page_size>=512 equal
     // to the backing page size, journal_slots>=1 and index_slots>=1, with a
     // nonzero order id and a comparator. A definition may bound page_size and
     // page_count from above and must say so; the reference definition refuses
@@ -113,18 +115,22 @@ public:
     // by one; committed and erased handles are never recycled. Sources are borrowed for this
     // call only, may be larger than cache and must not read this store. result
     // changes ONLY on success. Filling any resident slot spills to backing,
-    // never refuses, implicitly commits, grows RAM, or throws. ANY unserviceable
-    // put returns programming_error (including exhausted backing, backing I/O
-    // failure, input/comparison failure, a call outside a transaction or
-    // handle domain exhaustion); no run failure is prescribed. A failure inside
-    // a transaction makes it rollback-only; partial new bytes cannot damage
-    // the pre-begin state. Discard outputs from aborted puts.
+    // never refuses, implicitly commits, grows RAM, or throws. A backing call
+    // that returns io_error makes put return io_error, including a medium
+    // failure or a per-run extent-growth byte-cap overrun. Exhausted backing,
+    // input/comparison failure, a call outside a transaction and handle-domain
+    // exhaustion return programming_error; no run failure is prescribed for
+    // that status. A failure inside a transaction makes it rollback-only;
+    // partial new bytes cannot damage the pre-begin state. Discard outputs
+    // from aborted puts.
     ScratchStatus put(const ScratchByteSource& key, const ScratchByteSource& value,
                       ScratchHandle& result) noexcept;
 
     // Requires begin. An absent handle (including scratch_no_handle) => not_found
-    // with no edit and no rollback-only effect. A call outside a transaction
-    // or any other failure => programming_error, which in a transaction makes
+    // with no edit and no rollback-only effect. A backing call that returns
+    // io_error makes erase return io_error, including a medium failure or a
+    // per-run extent-growth byte-cap overrun. A call outside a transaction or
+    // any other failure => programming_error. A failure in a transaction makes
     // it rollback-only. The state of the transaction is judged first: outside
     // a transaction, or in a rollback-only one, even an absent handle gets
     // programming_error.
@@ -136,10 +142,12 @@ public:
     // state is published, so ok means the publication itself reached the
     // medium. Requires an active transaction that is not rollback-only (else
     // programming_error, no effect). Failed mutation/commit leaves an active,
-    // rollback-only transaction and reports the failing backing call's status;
-    // a failed backing call is never retried by the store. No implicit commit
-    // in destructor: abandoning a transaction and reopening yields the last
-    // successful commit.
+    // rollback-only transaction. A failed commit reports the failing backing
+    // call's status; a failed backing call is never retried by the store. No
+    // implicit commit in destructor: abandoning a transaction and reopening on
+    // the same live backing yields the last successful commit if destruction's
+    // rollback succeeds. Otherwise discard the backing; reopen never replays
+    // the journal.
     ScratchStatus commit(ScratchDurability durability) noexcept;
 
     // Restore ALL pre-begin logical bytes, handles, count, allocation state and
