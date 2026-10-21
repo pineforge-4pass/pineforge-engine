@@ -355,7 +355,8 @@ void ended_sources(std::size_t population) {
     auto& placements = adapter.*access(Placements{});
     auto& live = adapter.*access(Live{});
     for (std::size_t i = 0; i < population; ++i) {
-        auto& cohort = cohorts["owner-" + std::to_string(i)];
+        auto& cohort = cohorts.emplace(
+            "owner-" + std::to_string(i), decltype(cohorts.begin()->second){}).first->second;
         cohort.opened.push_back(handle(i + 1));
         cohort.live_units_by_origin[i + 1] = 1.0;
         source::PlacementSnapshot pending;

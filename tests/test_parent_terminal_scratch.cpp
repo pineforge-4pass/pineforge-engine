@@ -26,6 +26,7 @@ struct NativeExecutionConsumerProbe {
     static native_order::WorkingRequestCore& core(NativeExecutionConsumer& c) {
         return c.requests_;
     }
+    static bool failed(const NativeExecutionConsumer& c) noexcept { return c.failed(); }
     static void note_setup(NativeExecutionConsumer& c) {
         c.note_install(native_order::EventRange{0, c.requests_.history_end()});
     }
@@ -330,8 +331,8 @@ void exercise(std::size_t population, Shape shape, bool direct) {
         static_cast<unsigned long long>(census.max_lookup_reads),
         static_cast<unsigned long long>(scratch.resident));
 #endif
-    CHECK(!consumer.failed());
-    CHECK(!oracle.failed());
+    CHECK(!Probe::failed(consumer));
+    CHECK(!Probe::failed(oracle));
     CHECK(consumer.request_core().live().empty());
     CHECK(consumer.request_core().history_end() - before == population);
     std::size_t drained = 0;
@@ -359,7 +360,7 @@ void exercise(std::size_t population, Shape shape, bool direct) {
     const auto finished_hash = consumer.continuation_hash();
     const auto finished_history = consumer.request_core().history_end();
     Probe::drain(consumer, actual, seeds);
-    CHECK(!consumer.failed());
+    CHECK(!Probe::failed(consumer));
     CHECK(consumer.continuation_hash() == finished_hash);
     CHECK(consumer.request_core().history_end() == finished_history);
 #ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
@@ -391,7 +392,7 @@ void invalid_cause(bool direct) {
     seeds.front().first.ordinal = reference_seeds.front().first.ordinal = 0;
     Probe::reference(oracle, expected, reference_seeds);
     Probe::drain(consumer, actual, seeds);
-    CHECK(consumer.failed() && oracle.failed());
+    CHECK(Probe::failed(consumer) && Probe::failed(oracle));
     CHECK(consumer.request_core().live().size() == 64);
     CHECK(full_fold::core_value(consumer.request_core())
           == full_fold::core_value(oracle.request_core()));
