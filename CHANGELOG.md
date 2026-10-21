@@ -7,6 +7,11 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+## 1.6.2 — 2026-10-21
+
+**[1.6.2](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.2)**,
+paired with [pineforge-codegen 1.6.2](https://github.com/pineforge-4pass/pineforge-codegen-oss/releases/tag/v1.6.2).
+
 - **Ownership manifest controls run in four CTest shards (CR-196).** The same
   loader-discovered cases keep every assertion and the 180-second timeout per
   row; a cheap guard checks complete, disjoint assignment for shard counts
