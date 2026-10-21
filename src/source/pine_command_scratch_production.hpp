@@ -18,8 +18,8 @@ pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
 // PINEFORGE_COMMAND_SCRATCH_DIR, defaulting to /tmp when unset or empty. There
 // is no fallback when the selected directory fails. The unique file is unlinked
 // before returning and its close-on-exec descriptor is closed on destruction.
-// Zero page size, nonmultiples of sysconf(_SC_PAGESIZE), and sizes beyond off_t
-// throw std::invalid_argument. OS setup failures throw std::system_error.
+// Zero page size and sizes beyond off_t throw std::invalid_argument.
+// OS setup failures throw std::system_error.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size);
 

@@ -151,15 +151,9 @@ pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size) {
     if (page_size == 0) throw std::invalid_argument("command scratch page size is zero");
-    errno = 0;
-    const long platform_page = ::sysconf(_SC_PAGESIZE);
-    if (platform_page <= 0)
-        throw std::system_error(errno ? errno : EINVAL, std::generic_category(),
-                                "command scratch platform page size");
-    if (page_size % static_cast<std::size_t>(platform_page) != 0
-        || static_cast<std::uintmax_t>(page_size)
+    if (static_cast<std::uintmax_t>(page_size)
             > static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max()))
-        throw std::invalid_argument("command scratch page size is not a representable page multiple");
+        throw std::invalid_argument("command scratch page size is not representable in off_t");
     return std::make_unique<CommandScratchFile>(page_size, command_scratch_observer);
 }
 

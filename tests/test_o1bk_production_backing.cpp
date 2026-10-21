@@ -169,10 +169,12 @@ int created_descriptor(const std::vector<int>& before) {
     return created;
 }
 
-void sparse_extent_and_durability(std::size_t platform_page) {
+void sparse_extent_and_durability(std::size_t page_size) {
     for (const std::size_t multiple : {std::size_t{1}, std::size_t{3}}) {
-        const auto page = platform_page * multiple;
+        const auto page = page_size * multiple;
+        const auto before = open_descriptors();
         auto backing = make_command_scratch_backing(page);
+        const int fd = created_descriptor(before);
         require(backing && backing->kind() == ScratchBackingKind::disk,
                 "factory must select the production disk backing");
         require(backing->page_size() == page && backing->page_count() == 0,
@@ -187,6 +189,10 @@ void sparse_extent_and_durability(std::size_t platform_page) {
             require_status(backing->write_page(ids[i], bytes(images[i])), ScratchStatus::ok,
                            "write page 0, 7 or 4095 beyond the prior extent");
             require(backing->page_count() == ids[i] + 1, "extent advances to written page plus one");
+            struct stat file{};
+            require(::fstat(fd, &file) == 0
+                    && file.st_size == static_cast<off_t>(page * (ids[i] + 1)),
+                    "OS file extent uses the requested page size without rounding");
         }
         for (const auto durability : {ScratchDurability::buffered, ScratchDurability::data,
                                       ScratchDurability::full}) {
@@ -195,6 +201,11 @@ void sparse_extent_and_durability(std::size_t platform_page) {
                 require_status(backing->read_page(ids[i], buffer(out)), ScratchStatus::ok,
                                "read page 0, 7 or 4095 after sync");
                 require(out == images[i], "every written page round trips byte-exact after sync");
+                std::fill(out.begin(), out.end(), std::byte{0x5a});
+                require(::pread(fd, out.data(), page, static_cast<off_t>(page * ids[i]))
+                            == static_cast<ssize_t>(page),
+                        "OS read at the requested page offset returns a whole page");
+                require(out == images[i], "OS file stores each page at its requested byte offset");
             }
         }
         for (const ScratchPageId hole : {ScratchPageId{1}, ScratchPageId{6},
@@ -318,15 +329,18 @@ void observer_registration_and_charges(std::size_t page) {
     require_charge(second, 1, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
 }
 
-void invalid_page_geometry(std::size_t page) {
-    for (const std::size_t invalid : {std::size_t{0}, page - 1, page + 1}) {
+void invalid_page_geometry() {
+    const auto offset_limit = static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max());
+    require(offset_limit < static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max()),
+            "test size_t must represent a page size above off_t max");
+    for (const std::size_t invalid : {std::size_t{0}, static_cast<std::size_t>(offset_limit + 1)}) {
         bool rejected = false;
         try {
             auto backing = make_command_scratch_backing(invalid);
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        require(rejected, "zero or nonmultiple page size must throw invalid_argument");
+        require(rejected, "zero or page size above off_t max must throw invalid_argument");
     }
 }
 
@@ -385,31 +399,33 @@ int main() {
     try {
         const long platform_page = ::sysconf(_SC_PAGESIZE);
         require(platform_page > 1, "query platform page size");
-        const auto page = static_cast<std::size_t>(platform_page);
-        require(page <= std::numeric_limits<std::size_t>::max() / (3 * 4096),
-                "test geometry must fit size_t");
         TemporaryDirectory directory;
         DirectorySelection selection(directory.path);
         const auto initial = set_command_scratch_io_observer({});
         require(initial.context == nullptr && initial.charge == nullptr, "observer registration defaults empty");
         int failures = 0;
-        const auto run = [&](const char* name, auto test) {
-            try {
-                test();
-                require_empty_directory(directory.path);
-                std::printf("PASS %s\n", name);
-            } catch (const std::exception& error) {
-                std::fprintf(stderr, "FAIL %s: %s\n", name, error.what());
-                ++failures;
-            }
-        };
-        run("invalid_page_geometry", [&] { invalid_page_geometry(page); });
-        run("sparse_extent_and_durability", [&] { sparse_extent_and_durability(page); });
-        run("exclusive_backings", [&] { exclusive_backings(page); });
-        run("anonymous_file_lifecycle", [&] { anonymous_file_lifecycle(page, directory.path); });
-        run("observer_registration_and_charges", [&] { observer_registration_and_charges(page); });
-        run("selected_directory_failure", [&] { selected_directory_failure(page, directory.path); });
-        run("short_reads_and_syscall_errors", [&] { short_reads_and_syscall_errors(page); });
+        for (const std::size_t page : {std::size_t{512}, static_cast<std::size_t>(platform_page),
+                                      std::size_t{1536}}) {
+            require(page <= std::numeric_limits<std::size_t>::max() / (3 * 4096),
+                    "test geometry must fit size_t");
+            const auto run = [&](const char* name, auto test) {
+                try {
+                    test();
+                    require_empty_directory(directory.path);
+                    std::printf("PASS %s page_size=%zu\n", name, page);
+                } catch (const std::exception& error) {
+                    std::fprintf(stderr, "FAIL %s page_size=%zu: %s\n", name, page, error.what());
+                    ++failures;
+                }
+            };
+            run("invalid_page_geometry", [&] { invalid_page_geometry(); });
+            run("sparse_extent_and_durability", [&] { sparse_extent_and_durability(page); });
+            run("exclusive_backings", [&] { exclusive_backings(page); });
+            run("anonymous_file_lifecycle", [&] { anonymous_file_lifecycle(page, directory.path); });
+            run("observer_registration_and_charges", [&] { observer_registration_and_charges(page); });
+            run("selected_directory_failure", [&] { selected_directory_failure(page, directory.path); });
+            run("short_reads_and_syscall_errors", [&] { short_reads_and_syscall_errors(page); });
+        }
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAIL test_o1bk_production_backing setup: %s\n", error.what());
