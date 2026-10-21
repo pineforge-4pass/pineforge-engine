@@ -181,17 +181,35 @@ anchor is never fixed: its missing claim is an edit to the sentence.
 
 Exit status
 -----------
-0 only when no anchor is BAD on any scanned page.
+0 only when every strict failure is an exact, still-missing baseline entry,
+no baseline entry is stale, and the baseline file can be read and parsed.
+
+Baseline ratchet
+----------------
+``scripts/doc_anchor_baseline.txt`` records the pre-existing ``SYMMISS``
+anchors, not whole files. Each non-comment, nonblank line has four
+whitespace-separated fields: ``doc:line cited:line-or-range claim date``.
+Quote a claim containing spaces or literal quotes as one shell-style field.
+The key is the exact doc path and line, cited path, citation digits as written
+(including a range), and whitespace-normalised claim. Nothing is added or
+removed automatically. A strict miss without a key fails; an entry without
+a current strict miss also fails and must be removed. Other verdicts cannot
+be baselined. Explicit page arguments limit the stale-entry audit to those
+pages; the default published-set audit checks every baseline entry, including
+entries for pages that have disappeared.
 """
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import re
+import shlex
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+BASELINE = Path('scripts/doc_anchor_baseline.txt')
 
 #: The published set.  These are the pages a reader is pointed at, and the only
 #: files ``--fix`` may rewrite.
@@ -286,10 +304,13 @@ class Anchor:
 
     def __init__(self, page: Path, start: int, end: int, doc_line: int,
                  path: str, first: int, last: int, digits: tuple[int, int],
-                 symbol: str | None, span: str | None, mode: str = 'word') -> None:
+                 symbol: str | None, span: str | None, mode: str = 'word', *,
+                 citation: str | None = None) -> None:
         self.page = page
         self.start, self.end, self.doc_line = start, end, doc_line
         self.path, self.first, self.last = path, first, last
+        self.citation = (citation if citation is not None else str(first)
+                         + (f'-{last}' if last != first else ''))
         self.digits = digits          # (offset, length) of the ``line`` or ``a-b`` text
         self.symbol, self.span, self.mode = symbol, span, mode
         self.qualifier = qualifier_of(span) if symbol and span else None
@@ -309,7 +330,7 @@ class Anchor:
 
     @property
     def text(self) -> str:
-        return f'{self.path + ":" if self.path else ":"}{self.first}' + (f'-{self.last}' if self.last != self.first else '')
+        return f'{self.path}:{self.citation}'
 
     @property
     def length(self) -> int:
@@ -529,7 +550,8 @@ def collect(page: Path, text: str) -> list[Anchor]:
             symbol, span, mode = None, None, 'word'
         anchor = Anchor(page, match.start(), match.end(), doc_line(match.start()),
                         match.group('path'), first, last,
-                        (digit_start, match.end() - digit_start), symbol, span, mode)
+                        (digit_start, match.end() - digit_start), symbol, span, mode,
+                        citation=text[digit_start:match.end()])
         anchor.pins, anchor.content_hash = pins, (pins[-1] if pins else None)
         anchor.borrowed = borrowed
         anchor.context = text[scope_start(text, claim_end):match.start()]
@@ -560,7 +582,7 @@ def collect(page: Path, text: str) -> list[Anchor]:
         anchor = Anchor(page, match.start(), match.end(), line,
                         prior[-1].path if prior else '', first, last,
                         (match.start() + 1, match.end() - match.start() - 1),
-                        symbol, span, mode)
+                        symbol, span, mode, citation=text[match.start() + 1:match.end()])
         anchor.pins, anchor.content_hash = pins, (pins[-1] if pins else None)
         anchor.borrowed = borrowed
         anchor.context = text[scope_start(text, claim_end):match.start()]
@@ -901,6 +923,61 @@ def apply_fixes(path: Path, text: str, fixed: list[Anchor]) -> str:
     return text
 
 
+BaselineKey = tuple[str, int, str, str, str]
+
+
+@dataclass(frozen=True)
+class BaselineEntry:
+    key: BaselineKey
+    line: int
+    text: str
+
+
+def baseline_key(anchor: Anchor, root: Path) -> BaselineKey:
+    claim = ' '.join((anchor.symbol or anchor.fragment or '').split())
+    return (anchor.page.relative_to(root).as_posix(), anchor.doc_line,
+            anchor.path, anchor.citation, claim)
+
+
+def read_baseline(path: Path) -> tuple[dict[BaselineKey, BaselineEntry], list[str]]:
+    """Read only: missing, unreadable, malformed and duplicate entries fail."""
+    entries: dict[BaselineKey, BaselineEntry] = {}
+    errors: list[str] = []
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except (OSError, UnicodeError) as error:
+        return entries, [f'{path}: cannot read baseline: {error}']
+    for number, raw in enumerate(lines, 1):
+        text = raw.strip()
+        if not text or text.startswith('#'):
+            continue
+        try:
+            fields = shlex.split(text)
+            if len(fields) != 4:
+                raise ValueError('expected four fields: doc:line cited:line-or-range claim date')
+            doc, cited, claim, added = fields
+            doc_match = ANCHOR_RE.fullmatch(doc)
+            cited_match = ANCHOR_RE.fullmatch(cited)
+            if (not doc_match or doc_match.group('b') is not None
+                    or int(doc_match.group('a')) < 1):
+                raise ValueError('expected a doc path and positive doc line')
+            if (not cited_match or int(cited_match.group('a')) < 1
+                    or int(cited_match.group('b') or cited_match.group('a'))
+                    < int(cited_match.group('a'))):
+                raise ValueError('expected a cited path and positive line or ordered range')
+            claim = ' '.join(claim.split())
+            if not claim or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', added):
+                raise ValueError('expected a claim and YYYY-MM-DD date')
+            key = (doc_match.group('path'), int(doc_match.group('a')),
+                   cited_match.group('path'), cited.split(':', 1)[1], claim)
+            if key in entries:
+                raise ValueError(f'duplicate entry (first at line {entries[key].line})')
+            entries[key] = BaselineEntry(key, number, raw)
+        except ValueError as error:
+            errors.append(f'{path}:{number}: {error}: {raw}')
+    return entries, errors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Check the documentation\'s file:line anchors.')
     parser.add_argument('pages', nargs='*', help='pages to check (default: the published set)')
@@ -913,7 +990,10 @@ def main(argv: list[str] | None = None) -> int:
 
     root = args.root.resolve()
     tree = Tree(root)
-    totals = {'anchors': 0, 'ok': 0, 'bad': 0, 'nofile': 0, 'noline': 0}
+    baseline_path = root / BASELINE
+    baseline, baseline_errors = read_baseline(baseline_path)
+    used_baseline: set[BaselineKey] = set()
+    totals = {'anchors': 0, 'ok': 0, 'bad': 0, 'nofile': 0, 'noline': 0, 'baselined': 0}
     rows, bad_all, fixed_all = [], [], []
 
     for page in pages(root, args.pages):
@@ -933,11 +1013,18 @@ def main(argv: list[str] | None = None) -> int:
                 for anchor in fixable:
                     anchor.verdict, anchor.detail = 'FIXED', anchor.detail
                 bad = [a for a in bad if not a._fix]
+        # Judge strictly first. Only this exact SYMMISS may leave the bad list;
+        # pins, scope, line bounds and every other verdict retain precedence.
+        baselined = [a for a in bad if a.verdict == 'SYMMISS'
+                     and baseline_key(a, root) in baseline]
+        used_baseline.update(baseline_key(a, root) for a in baselined)
+        bad = [a for a in bad if a not in baselined]
         rel = str(page.relative_to(root))
         counts = {'anchors': len(anchors), 'bad': len(bad),
                   'nofile': sum(1 for a in bad if a.verdict == 'NOFILE'),
-                  'noline': sum(1 for a in bad if a.verdict == 'NOLINE')}
-        counts['ok'] = counts['anchors'] - counts['bad']
+                  'noline': sum(1 for a in bad if a.verdict == 'NOLINE'),
+                  'baselined': len(baselined)}
+        counts['ok'] = counts['anchors'] - counts['bad'] - counts['baselined']
         rows.append((rel, counts))
         for key in totals:
             totals[key] += counts[key]
@@ -948,16 +1035,23 @@ def main(argv: list[str] | None = None) -> int:
                          else f'`{anchor.fragment}` (fragment)' if anchor.fragment
                          else '(no symbol)')
                 print(f'{rel}:{anchor.doc_line}  {anchor.verdict:<8} {anchor.text:<52} '
-                      f'{claim:<34} {anchor.suggestion or ""}')
+                      f'{claim:<34} {anchor.suggestion or ""}'
+                      + (f'  (baselined at {BASELINE}:'
+                         f'{baseline[baseline_key(anchor, root)].line}; still missing)'
+                         if anchor in baselined else ''))
 
+    scanned = {rel for rel, _ in rows}
+    stale = [entry for key, entry in baseline.items() if key not in used_baseline
+             and (not args.pages or key[0] in scanned)]
     width = max((len(r) for r, _ in rows), default=4)
-    print(f'{"page":<{width}} {"anchors":>8} {"ok":>5} {"bad":>5} {"nofile":>7} {"noline":>7}')
+    print(f'{"page":<{width}} {"anchors":>8} {"ok":>5} {"bad":>5} {"nofile":>7} '
+          f'{"noline":>7} {"baselined":>9}')
     for rel, counts in rows:
         if counts['anchors']:
             print(f'{rel:<{width}} {counts["anchors"]:>8} {counts["ok"]:>5} {counts["bad"]:>5} '
-                  f'{counts["nofile"]:>7} {counts["noline"]:>7}')
+                  f'{counts["nofile"]:>7} {counts["noline"]:>7} {counts["baselined"]:>9}')
     print(f'{"TOTAL":<{width}} {totals["anchors"]:>8} {totals["ok"]:>5} {totals["bad"]:>5} '
-          f'{totals["nofile"]:>7} {totals["noline"]:>7}')
+          f'{totals["nofile"]:>7} {totals["noline"]:>7} {totals["baselined"]:>9}')
 
     if fixed_all:
         print(f'\nre-anchored {len(fixed_all)}:')
@@ -972,9 +1066,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f'  {anchor.page.relative_to(root)}:{anchor.doc_line}  {anchor.text}  '
                   f'[{anchor.verdict}] {anchor.detail}'
                   + (f'  -> {anchor.suggestion}' if anchor.suggestion else ''))
-        return 1
-    print('\nevery documentation anchor resolves to its symbol')
-    return 0
+    for entry in stale:
+        print(f'\n{baseline_path}:{entry.line}  [STALEBASELINE] {entry.text}')
+        print('  entry no longer misses and must be removed')
+    for error in baseline_errors:
+        print(f'\n[BASELINEERROR] {error}')
+    failed = bool(bad_all or stale or baseline_errors)
+    if not failed:
+        if totals['baselined']:
+            print(f'\nstrict checks passed with {totals["baselined"]} baseline misses still present')
+        else:
+            print('\nevery documentation anchor resolves to its symbol')
+    print(f'anchors judged={totals["anchors"]}, ok={totals["ok"]}, '
+          f'bad-strict-not-baselined={totals["bad"]}, '
+          f'baselined-and-still-missing={totals["baselined"]}, '
+          f'baseline entries stale={len(stale)}')
+    return int(failed)
 
 
 if __name__ == '__main__':
