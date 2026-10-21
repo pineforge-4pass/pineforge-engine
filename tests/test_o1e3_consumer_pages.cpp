@@ -79,7 +79,7 @@ void event_readback_rows(int width) {
     CHECK(outcome.completed);
     CHECK(outcome.applied > 0 && outcome.accepted >= width);
 
-    auto& consumer = as_native_consumer(host.execution_consumer());
+    const auto& consumer = NativeExecutionConsumer::bound(host);
     // The oracle: the owning compatibility readback, walked in place.
     const auto expected = host.native_events(0);
     event_rows::Fold reference;
@@ -202,7 +202,7 @@ void matcher_rows(int width) {
     CHECK(with.applied == without.applied);
     CHECK(with.unordered == 0);
 
-    auto& consumer = as_native_consumer(reused.execution_consumer());
+    const auto& consumer = NativeExecutionConsumer::bound(reused);
     // Every applied fill was delivered exactly once (E11's queue): the drain
     // delivered what the kernel committed, whatever its length.
     CHECK(static_cast<std::uint64_t>(with.applied) == consumer.applied_event_count());
@@ -253,6 +253,9 @@ public:
         spilled_at_open = inventory.spilled_rows;
         inline_bytes_at_open = inventory.inline_bytes;
     }
+
+    // This fixture issues at PreOpen; bar-close calculations issue no commands.
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
 
     void on_native_applied(const no::ExecutionAppliedEvent&, const NativeDecisionContext&) override {
         ++applied;

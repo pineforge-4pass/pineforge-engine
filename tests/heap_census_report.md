@@ -77,7 +77,7 @@ include/pineforge/source/pine_adapter.hpp:935; the per-id cohort members in
 include/pineforge/source/pine_adapter.hpp:2518 and :2519; `trade_exit_phase_` in
 include/pineforge/source/pine_adapter.hpp:2734; `exit_rank_keys_` in
 include/pineforge/source/pine_adapter.hpp:2740; `cohorts_` in
-include/pineforge/native_order.hpp:2318; N-day stamp arrays in
+include/pineforge/native_order.hpp:2368; N-day stamp arrays in
 include/pineforge/timeframe.hpp:555 and :556.
 
 ## Q9 bytes per additional distinct entry id

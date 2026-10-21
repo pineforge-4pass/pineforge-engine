@@ -1681,7 +1681,7 @@ NativeMetricsView native_metrics() const;                          // S: net_pro
 ### A.2 L3 — sizing, fractional reduce, sibling reservation (F P1, P7 + O G2 + S P2, P3)
 
 ```cpp
-// native_order.hpp — native_order_v6; OrderIntent grows 5 -> 6 (static_assert native_order.hpp:2505)
+// native_order.hpp — native_order_v6; OrderIntent grows 5 -> 6 (static_assert native_order.hpp:2555)
 struct CashValue      { double cash = 0.0; };         // account currency
 struct EquityFraction { double fraction = 0.0; };     // of marked equity at the sizing point (0.10 = 10 %)
 using SizeBasis = std::variant<CashValue, EquityFraction>;

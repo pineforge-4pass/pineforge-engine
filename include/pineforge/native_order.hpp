@@ -2229,6 +2229,7 @@ private:
     struct InstanceBinding {
         uint64_t generation = 1;
         bool expired = false;
+        std::shared_ptr<detail::PageStore> cohort_receipt_spill;
     };
     struct MutationPlan {
         std::weak_ptr<InstanceBinding> instance;
@@ -2368,11 +2369,11 @@ private:
     // E06: the newest receipts, the fixed resident staging of the retained
     // window (at most kCohortReceiptStaging rows; older rows are spilled).
     std::vector<CohortReceipt> cohort_receipts_;
-    // The rows that left the staging, oldest first. Created at the first spill
-    // and never sized by the run: the window's length is the file's. A
-    // shared_ptr, like successor_roots_, so this public header keeps a
-    // forward-declared private type (the page store is defined in src/).
-    std::shared_ptr<detail::PageStore> cohort_receipt_spill_;
+    // Receipt pages live in the existing heap-owned instance binding, keeping
+    // the core's data layout unchanged. A moved-from core has no spill store.
+    detail::PageStore* cohort_receipt_spill() const noexcept {
+        return instance_ ? instance_->cohort_receipt_spill.get() : nullptr;
+    }
     // Storage cursor only: the consumer hashes the lifetime count and every
     // receipt, independently of how many of their rows have been retired.
     std::size_t cohort_receipts_base_ = 0;
