@@ -368,7 +368,19 @@ void equal_run(const Api& api, const std::string& path, bool selected, bool obse
     api.run(streamed, bars.data(), static_cast<int>(bars.size()), &after);
     assert(receipt(api, streamed).complete == 1 && receipt(api, streamed).count_t == 0);
     api.free(&after);
-    assert(api.set(streamed, nullptr) == 0 && receipt(api, streamed).complete == 0);
+    // An ordinary or observer-only run keeps its curve on scratch, so the sink
+    // cannot be removed: the typed setter refusal -3 changes nothing and the
+    // receipt of the finished run stays complete. A selected run has no ordinary
+    // scratch owner: removal is accepted (0) and clears the receipt, unless the
+    // run sealed trade rows, which refuses it the same way (-3, receipt kept).
+    // Either way the status and the receipt must agree, nothing in between.
+    const int removed = api.set(streamed, nullptr);
+    if (selected) {
+        assert((removed == 0 && receipt(api, streamed).complete == 0)
+            || (removed == -3 && receipt(api, streamed).complete == 1));
+    } else {
+        assert(removed == -3 && receipt(api, streamed).complete == 1);
+    }
     api.destroy(streamed); api.destroy(baseline);
     assert(!observer || callbacks == 3);
 }

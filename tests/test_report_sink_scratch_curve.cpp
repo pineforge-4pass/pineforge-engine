@@ -1,7 +1,7 @@
-// CR-150 L6b-4, fix round 1: the engine WRITE side of the scratch curve.
+// CR-150 L6b-4, fix rounds 1-2: the engine WRITE side and sink removal.
 //
 // The accepted library (src/report_scratch.*) is proved by test_report_scratch;
-// no production code constructs a ScratchCurveWriter. DESIGN 3.2/3.8: with a
+// this fixture proves its engine integration. DESIGN 3.2/3.8: with a
 // sink installed, record_equity_point releases the previously held point to the
 // E record AND to the engine's scratch curve, and BacktestEngine::equity_curve_
 // keeps only the held tail. Real native host fixture, the form of
@@ -23,11 +23,16 @@
 //       shorter tape starts a new curve).
 //   (c) sink-off behaviour is unchanged: one point per script bar labelled with
 //       its open, the whole curve published, no scratch owner or file, the same
-//       on a handle whose sink was removed; a replaced sink keeps the completed
-//       run's report computable and a removed one restores its whole curve;
+//       on a handle whose sink was removed before running; a replaced sink keeps
+//       the completed run's report computable;
 //       sink-on report, hash and run facts equal the sink-off ones.
 //   (d) a scratch_dir the engine cannot use fails the run with report_sink_failed,
 //       never a silent RAM fallback.
+//   (e) removal after an ordinary or observer-only run refuses with -3 and
+//       retains the scratch-backed summary. On short and 4x tapes, engine
+//       size/capacity and counted report-array peak/capacity stay at the same
+//       tape's held-tail bound, including temporary allocations during removal
+//       and repeated fills. The sink-off oracle is the growing positive control.
 //
 // The scratch curve is observed through the protected accessor
 // BacktestEngine::report_sink_equity_scratch_region() (include/pineforge/engine.hpp):
@@ -39,6 +44,10 @@
 // accessor does not exist, so the first diagnostic is the compile error at
 // CurveProbe::probe_scratch(). With it stubbed to an empty region, the first
 // failing assertion is (a).
+// Fix2 fail-before on 6f036c8ff5 (not run here): the first attempted removal
+// restores the whole engine curve, failing (e)'s size/capacity sample before
+// the status assertion; an observer also allocates a full captured array.
+#include <pineforge/execution_observer.h>
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/pineforge.h>
@@ -59,13 +68,111 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
+
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observer_v1*) noexcept;
+}
+}
+
+// Count actual new[] storage, including arrays freed before fill_report
+// returns. In the flat memory cases there are no trades, outputs, security
+// diagnostics, trace or hash recording: the report/capture curve is the only
+// array. Scalar new (vectors and the fixed pread window) remains separate.
+// Every array allocation/deallocation form uses the matched scalar aligned
+// allocator, including sized/nothrow forms, so sanitizers see one allocator.
+namespace report_arrays {
+
+struct Counts {
+    std::size_t live_bytes = 0;
+    std::size_t peak_bytes = 0;
+    std::size_t capacity_bytes = 0;
+    std::size_t allocations = 0;
+};
+
+Counts* active = nullptr;
+
+struct Header {
+    void* base;
+    std::size_t size;
+    std::size_t alignment;
+    Counts* owner;
+};
+
+void* take(std::size_t size, std::size_t alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
+    alignment = std::max(alignment, std::size_t(__STDCPP_DEFAULT_NEW_ALIGNMENT__));
+    const std::size_t prefix = (sizeof(Header) + alignment - 1) / alignment * alignment;
+    if (size > std::numeric_limits<std::size_t>::max() - prefix) throw std::bad_alloc();
+    void* base = ::operator new(prefix + size, std::align_val_t(alignment));
+    auto* block = static_cast<unsigned char*>(base) + prefix;
+    const Header header{base, size, alignment, active};
+    std::memcpy(block - sizeof(Header), &header, sizeof header);
+    if (active) {
+        active->live_bytes += size;
+        active->peak_bytes = std::max(active->peak_bytes, active->live_bytes);
+        active->capacity_bytes = std::max(active->capacity_bytes, size);
+        ++active->allocations;
+    }
+    return block;
+}
+
+void give(void* memory) noexcept {
+    if (!memory) return;
+    Header header{};
+    std::memcpy(&header, static_cast<unsigned char*>(memory) - sizeof(Header), sizeof header);
+    if (header.owner) header.owner->live_bytes -= header.size;
+    ::operator delete(header.base, std::align_val_t(header.alignment));
+}
+
+void* take_nothrow(std::size_t size,
+                   std::size_t alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__) noexcept {
+    try {
+        return take(size, alignment);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+struct Scope {
+    Counts* previous;
+    explicit Scope(Counts& counts) : previous(active) { active = &counts; }
+    ~Scope() { active = previous; }
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
+};
+
+}  // namespace report_arrays
+
+void* operator new[](std::size_t size) { return report_arrays::take(size); }
+void* operator new[](std::size_t size, std::align_val_t alignment) {
+    return report_arrays::take(size, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    return report_arrays::take_nothrow(size);
+}
+void* operator new[](std::size_t size, std::align_val_t alignment,
+                     const std::nothrow_t&) noexcept {
+    return report_arrays::take_nothrow(size, static_cast<std::size_t>(alignment));
+}
+void operator delete[](void* memory) noexcept { report_arrays::give(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { report_arrays::give(memory); }
+void operator delete[](void* memory, std::align_val_t) noexcept { report_arrays::give(memory); }
+void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept {
+    report_arrays::give(memory);
+}
+void operator delete[](void* memory, const std::nothrow_t&) noexcept { report_arrays::give(memory); }
+void operator delete[](void* memory, std::align_val_t, const std::nothrow_t&) noexcept {
+    report_arrays::give(memory);
+}
 
 namespace {
 
@@ -120,6 +227,7 @@ public:
     std::int64_t probe_calculations = 0;
     std::size_t probe_peak_size = 0;
     std::size_t probe_peak_capacity = 0;
+    mutable std::size_t probe_presentations = 0;
 
     // Run facts a bounded curve must not disturb: the four running extremes, the
     // buy&hold basis and the bars-in-market counter. Compared bit for bit.
@@ -132,6 +240,7 @@ public:
         probe_calculations = 0;
         probe_peak_size = 0;
         probe_peak_capacity = 0;
+        probe_presentations = 0;
     }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         const std::int64_t k = probe_calculations++;
@@ -148,6 +257,7 @@ public:
     // DESIGN 3.2: presentation edits only the report's own copy of the last
     // point, never the engine's held point or its scratch prefix.
     void present_report(ReportC* report) const override {
+        ++probe_presentations;
         if (probe_present && report->equity_curve_len > 0) {
             pf_equity_point_t& last = report->equity_curve[report->equity_curve_len - 1];
             last = presented(last);
@@ -170,7 +280,8 @@ public:
     }
     // The engine's scratch curve: its execution prefix, without the held point
     // even after fill. Flushes pending writes and borrows the engine-owned
-    // descriptor, which lives until the handle dies. {-1, 0, 0} with no sink.
+    // descriptor, which lives until the next run or handle destruction.
+    // {-1, 0, 0} without an ordinary scratch owner.
     pineforge::metrics::ScratchCurveRegion probe_scratch() const {
         return report_sink_equity_scratch_region();
     }
@@ -214,6 +325,19 @@ NativeRunSpec spec(std::uint64_t run_number) {
 void configure(CurveProbe& host, std::uint64_t run_number) {
     require(host.configure_native(spec(run_number)).status == NativeSetupStatus::Applied,
             "native configure refused");
+}
+
+int observed(void* context, const pf_execution_boundary_v1* boundary,
+             pf_boundary_receipt_v1* out) {
+    ++*static_cast<int*>(context);
+    *out = {sizeof(*out), 1, boundary->run_generation, 0, 0, 0, 0};
+    return 0;
+}
+
+void observe(CurveProbe& host, int& calls) {
+    const pf_execution_observer_v1 observer{sizeof observer, 1, &calls, observed};
+    require(pineforge::native_set_execution_observer_v1(&host, &observer) == 0,
+            "observer install refused");
 }
 
 void install(BacktestEngine& host, const std::string& path, const char* scratch_dir) {
@@ -364,14 +488,16 @@ void check_sink_off_curve(const CurveProbe& host, const Filled& filled,
 // The reference: a sink-off run of the tape, kept alive for its in-memory curve.
 struct Oracle {
     std::vector<Bar> feed;
+    int observer_calls = 0;
     CurveProbe host;
     std::unique_ptr<Filled> report;
 
-    Oracle(std::int64_t bars, bool trade, bool present) : feed(tape(bars)) {
+    Oracle(std::int64_t bars, bool trade, bool present, bool observer = false) : feed(tape(bars)) {
         host.probe_trade = trade;
         host.probe_present = present;
         const int anonymous_before = anonymous_files();
         configure(host, 1);
+        if (observer) observe(host, observer_calls);
         run_tape(host, feed);
         report = std::make_unique<Filled>(host);
         require(anonymous_files() == anonymous_before,
@@ -553,6 +679,179 @@ void sink_on_run(CurveProbe& on, const Oracle& oracle, std::uint64_t run_number,
             "repeated fill changed the scratch curve");
 }
 
+struct RemovalPeaks {
+    Peaks engine;
+    std::size_t report_peak = 0;
+    std::size_t report_capacity = 0;
+    std::size_t off_report_peak = 0;
+    std::size_t off_report_capacity = 0;
+};
+
+// (e) Count the owned report/capture arrays, not only the public lengths:
+// finish_report_sink frees its temporary array before the caller sees it.
+// Counts outlive their hosts, including the observer's retained capture.
+RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
+                             std::int64_t bars, bool observer) {
+    scenario = "(e) " + name;
+    report_arrays::Counts off_arrays;
+    std::unique_ptr<Oracle> oracle;
+    {
+        const report_arrays::Scope count(off_arrays);
+        oracle = std::make_unique<Oracle>(bars, false, true, observer);
+    }
+    report_arrays::Counts arrays;
+    int observer_calls = 0;
+    CurveProbe on;
+    on.probe_trade = false;  // no other report arrays enter the allocation census
+    on.probe_present = true;
+    configure(on, 1);
+    if (observer) observe(on, observer_calls);
+    const std::string path = root.out() + "/" + name + ".ndjson";
+    install(on, path, root.scratch().c_str());
+    {
+        const report_arrays::Scope count(arrays);
+        run_tape(on, oracle->feed);
+    }
+    const std::size_t held_size = on.probe_size();
+    const std::size_t held_capacity = on.probe_capacity();
+    const std::size_t held_bytes = held_size * sizeof(pf_equity_point_t);
+    require(held_size > 0 && held_size < oracle->curve().size(),
+            "removal fixture has no bounded held tail");
+    RemovalPeaks peaks;
+    peaks.engine.size = std::max(on.probe_peak_size, held_size);
+    peaks.engine.capacity = std::max(on.probe_peak_capacity, held_capacity);
+    const auto sample = [&] {
+        peaks.engine.size = std::max(peaks.engine.size, on.probe_size());
+        peaks.engine.capacity = std::max(peaks.engine.capacity, on.probe_capacity());
+        require(peaks.engine.size == held_size && peaks.engine.capacity == held_capacity,
+                "sink removal or report fill rehydrated equity_curve_");
+        require(arrays.peak_bytes <= held_bytes && arrays.capacity_bytes <= held_bytes,
+                "sink removal or report fill allocated more than the counted report tail");
+    };
+    const auto refuse_removal = [&] {
+        const auto before = receipt(on);
+        const auto before_scratch = on.probe_scratch();
+        const std::size_t allocations_before = arrays.allocations;
+        int status;
+        {
+            const report_arrays::Scope count(arrays);
+            status = on.set_report_sink_v1(nullptr);
+        }
+        sample();  // memory assertions precede the typed refusal assertion
+        require(arrays.allocations == allocations_before,
+                "sink removal allocated another curve array");
+        require(status == -3, "live ordinary scratch removal did not return typed setter refusal -3");
+        const auto after = receipt(on);
+        require(std::memcmp(&before, &after, sizeof before) == 0,
+                "refused removal changed the installed sink's receipt");
+        const auto after_scratch = on.probe_scratch();
+        require(after_scratch.descriptor == before_scratch.descriptor
+                    && after_scratch.point_count == before_scratch.point_count,
+                "refused removal dropped or changed the scratch owner");
+        check_private_file(after_scratch);
+        require(on.last_run_status() == 0 && on.last_error().empty(),
+                "ordinary setter refusal rewrote the successful run outcome");
+    };
+    const auto check_report = [&](const ReportC& report) {
+        const ReportC& want = oracle->report->report;
+        require(report.equity_curve == nullptr && report.equity_curve_len == 0,
+                "refused removal stopped returning a summary report");
+        require(std::memcmp(&report.metrics, &want.metrics, sizeof want.metrics) == 0
+                    && report.net_profit == want.net_profit
+                    && report.total_trades == want.total_trades
+                    && report.script_bars_processed == want.script_bars_processed,
+                "report after refused removal differs from the sink-off oracle");
+    };
+
+    // Before the first fill too: the ordinary tail is not staged yet, whereas
+    // an observer-only run already owns its captured one-point presentation.
+    refuse_removal();
+    {
+        const report_arrays::Scope count(arrays);
+        const Filled first(on);
+        check_report(first.report);
+        sample();
+    }
+    require(arrays.peak_bytes == held_bytes && arrays.capacity_bytes == held_bytes,
+            "the census did not observe the report's counted held-tail allocation");
+    const std::string bytes = read_file(path);
+    const std::size_t presentations_before = on.probe_presentations;
+    const int callbacks_before = observer_calls;
+    const auto completed = receipt(on);
+    require(completed.complete != 0
+                && completed.count_e == static_cast<std::int64_t>(oracle->curve().size()),
+            "removal fixture never completed its ordinary sink");
+
+    // The completed generation remains readable after another refused detach.
+    refuse_removal();
+    {
+        const report_arrays::Scope count(arrays);
+        const Filled again(on);
+        check_report(again.report);
+        sample();
+    }
+    {
+        const report_arrays::Scope count(arrays);
+        const Filled again(on);
+        check_report(again.report);
+        sample();
+    }
+    require(arrays.peak_bytes == held_bytes && arrays.capacity_bytes == held_bytes,
+            "report-array peak or capacity changed after refused removal");
+    require(arrays.live_bytes == (observer ? held_bytes : 0),
+            "report fill retained an extra curve array");
+    if (observer) {
+        require(observer_calls > 0 && observer_calls == oracle->observer_calls
+                    && observer_calls == callbacks_before
+                    && on.probe_presentations == presentations_before,
+                "observer-only run did not reuse its sealed capture");
+    }
+    std::string points;
+    const ReportC& want = oracle->report->report;
+    for (std::int64_t i = 0; i < want.equity_curve_len; ++i)
+        points += equity_record(want.equity_curve[i]);
+    require(equity_lines(bytes) == points && read_file(path) == bytes,
+            "refused removal or repeated reads changed the oracle's E records");
+    require(check_scratch_prefix(on.probe_scratch(), oracle->curve(), "after refused removal")
+                + static_cast<std::int64_t>(held_size) == completed.count_e,
+            "scratch no longer holds the oracle's execution prefix");
+    require(on.broker_state_hash() == oracle->host.broker_state_hash()
+                && same_facts(on.probe_facts(), oracle->host.probe_facts()),
+            "refused removal changed the broker hash or run facts");
+    peaks.engine.final_size = on.probe_size();
+    peaks.report_peak = arrays.peak_bytes / sizeof(pf_equity_point_t);
+    peaks.report_capacity = arrays.capacity_bytes / sizeof(pf_equity_point_t);
+    peaks.off_report_peak = off_arrays.peak_bytes / sizeof(pf_equity_point_t);
+    peaks.off_report_capacity = off_arrays.capacity_bytes / sizeof(pf_equity_point_t);
+    require(peaks.off_report_capacity == oracle->curve().size(),
+            "array census does not see the sink-off report's full curve");
+    return peaks;
+}
+
+void bounded_removal(const TestRoot& root) {
+    const std::int64_t short_bars = batch + 41;
+    const std::int64_t long_bars = 4 * short_bars;
+    const bool modes[] = {false, true};
+    for (bool observer : modes) {
+        const std::string name = observer ? "removal-observer" : "removal-ordinary";
+        const RemovalPeaks small = measure_removal(root, name + "-short", short_bars, observer);
+        const RemovalPeaks large = measure_removal(root, name + "-long", long_bars, observer);
+        require(large.engine.size == small.engine.size
+                    && large.engine.capacity == small.engine.capacity
+                    && large.report_peak == small.report_peak
+                    && large.report_capacity == small.report_capacity,
+                "engine or report-array peak/capacity after removal grows on the 4x tape");
+        require(large.engine.size < static_cast<std::size_t>(short_bars)
+                    && large.engine.capacity < static_cast<std::size_t>(short_bars)
+                    && large.report_peak < static_cast<std::size_t>(short_bars)
+                    && large.report_capacity < static_cast<std::size_t>(short_bars),
+                "removal keeps a curve comparable to the shorter tape's bar count");
+        require(large.off_report_peak > small.off_report_peak
+                    && large.off_report_capacity > small.off_report_capacity,
+                "array census does not see the sink-off positive control grow");
+    }
+}
+
 struct Plan {
     std::string name;
     std::int64_t bars;
@@ -580,8 +879,8 @@ void prove_curve(const TestRoot& root, const Plan& plan) {
             "the scratch curve outlives its handle");
 }
 
-// (b)+(c) One handle: sink on, the sink replaced, a shorter tape, the sink
-// removed, a sink-off run, the sink back on.
+// (b)+(c) Replacing a sink preserves metrics; removal after a scratch-backed
+// run refuses. A handle with its sink removed before running stays sink-off.
 void reuse_cycle(const TestRoot& root) {
     scenario = "reuse: oracles";
     const Oracle big(batch + 41, true, false);
@@ -607,46 +906,47 @@ void reuse_cycle(const TestRoot& root) {
     // The shorter tape must start a new scratch curve, not extend the old one.
     scenario = "reuse: sink on, shorter tape on the same handle";
     sink_on_run(on, small, 2, second, root.scratch(), true);
-    // The sink removed, the handle is a plain sink-off host again: the report
-    // of the completed run is the whole curve once more, equal to the oracle's.
-    scenario = "reuse: sink removed after a completed run";
-    require(on.set_report_sink_v1(nullptr) == 0, "sink removal refused");
+    // A completed scratch-backed generation cannot be converted to an array.
+    scenario = "reuse: sink removal refused after a completed run";
+    require(on.set_report_sink_v1(nullptr) == -3, "live scratch removal was not refused");
     {
-        const Filled restored(on);
-        check_sink_off_curve(on, restored, small.feed, true);
-        require(on.probe_curve().size() == small.curve().size()
-                    && std::memcmp(on.probe_curve().data(), small.curve().data(),
-                                   small.curve().size() * sizeof(pf_equity_point_t)) == 0,
-                "the curve restored on sink removal differs from the oracle");
-        require(std::memcmp(&restored.report.metrics, &small.report->report.metrics,
-                            sizeof restored.report.metrics) == 0,
-                "the report after sink removal differs from the sink-off oracle's");
+        const Filled retained(on);
+        require(retained.report.equity_curve == nullptr && retained.report.equity_curve_len == 0,
+                "refused removal exposed a full curve array");
+        require(std::memcmp(&retained.report.metrics, &small.report->report.metrics,
+                            sizeof retained.report.metrics) == 0,
+                "the report after refused removal differs from the sink-off oracle's");
     }
-    // A new run on it is an ordinary sink-off run.
+    // Removal is still accepted without a scratch owner. Such a handle can
+    // run sink-off, then opt back in and drop its full-curve capacity.
+    CurveProbe off;
+    const std::string off_path = root.out() + "/reuse-off.ndjson";
+    install(off, off_path, root.scratch().c_str());
+    require(off.set_report_sink_v1(nullptr) == 0, "sink removal before a run refused");
     scenario = "reuse: sink-off run on the same handle";
-    configure(on, 3);
-    run_tape(on, big.feed);
+    configure(off, 3);
+    run_tape(off, big.feed);
     {
-        const Filled off(on);
-        check_sink_off_curve(on, off, big.feed, true);
-        require(on.probe_curve().size() == big.curve().size()
-                    && std::memcmp(on.probe_curve().data(), big.curve().data(),
+        const Filled filled(off);
+        check_sink_off_curve(off, filled, big.feed, true);
+        require(off.probe_curve().size() == big.curve().size()
+                    && std::memcmp(off.probe_curve().data(), big.curve().data(),
                                    big.curve().size() * sizeof(pf_equity_point_t)) == 0,
                 "sink-off curve on a reused handle differs from the oracle");
-        require(std::memcmp(&off.report.metrics, &big.report->report.metrics,
-                            sizeof off.report.metrics) == 0,
+        require(std::memcmp(&filled.report.metrics, &big.report->report.metrics,
+                            sizeof filled.report.metrics) == 0,
                 "sink-off metrics on a reused handle differ from the oracle");
     }
     // Back on, after a run that left capacity for the whole long curve behind:
     // the new sink-on run must not keep it (same as a fresh sink-on host).
     scenario = "reuse: sink back on after a sink-off run";
-    install(on, first, root.scratch().c_str());
-    sink_on_run(on, small, 4, first, root.scratch(), true);
+    install(off, off_path, root.scratch().c_str());
+    sink_on_run(off, small, 4, off_path, root.scratch(), true);
     const Peaks fresh = measure(root, "reuse-fresh", 257, true);
-    if (on.probe_peak_size > fresh.size || on.probe_peak_capacity > fresh.capacity)
+    if (off.probe_peak_size > fresh.size || off.probe_peak_capacity > fresh.capacity)
         fail_test("a sink-on run on a handle that ran sink-off keeps the old curve's storage: peak size "
-                  + std::to_string(on.probe_peak_size) + ", peak capacity "
-                  + std::to_string(on.probe_peak_capacity) + " vs "
+                  + std::to_string(off.probe_peak_size) + ", peak capacity "
+                  + std::to_string(off.probe_peak_capacity) + " vs "
                   + std::to_string(fresh.size) + " and " + std::to_string(fresh.capacity)
                   + " on a fresh host");
 }
@@ -714,6 +1014,7 @@ int main() {
         const TestRoot root;
         kept = root.path;
         bounded_curve(root);
+        bounded_removal(root);
         // Tapes at the edges of the hold-back (1-3 points) and of the scratch batch
         // (the first mid-run flush needs batch + 2 bars), a tape whose scratch is
         // first observed after the fill, a flat curve and a presentation edit.
@@ -733,11 +1034,12 @@ int main() {
         reuse_cycle(root);
         scratch_failures(root);
         root.remove_all();
-        std::puts("L6b-4 fix1: bounded equity_curve_, scratch curve equal to the sink-off curve, "
-                  "sink-off unchanged, typed scratch failures: passed");
+        std::puts("L6b-4 fix2: bounded equity_curve_ and removal report arrays, "
+                  "scratch curve equal to the sink-off curve, "
+                  "sink-off unchanged, typed removal and scratch failures: passed");
         return 0;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "L6b-4 fix1: %s (files kept in %s)\n", error.what(), kept.c_str());
+        std::fprintf(stderr, "L6b-4 fix2: %s (files kept in %s)\n", error.what(), kept.c_str());
         return 1;
     }
 }

@@ -700,6 +700,12 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
         || descriptor->version != 1 || !descriptor->path || !*descriptor->path)) return -1;
     const int status = report_sink_setter_status();
     if (status != 0) return status;
+    // A scratch-backed generation cannot become an array report on removal.
+    // Keep its sink and metric source intact, including an observer capture.
+    // A nonzero ledger base likewise requires the streamed report: its sealed
+    // rows are gone from RAM. A new begin clears size/base to zero, lifting
+    // this guard; the scratch-owner guard still applies to ordinary runs.
+    if (!descriptor && (report_sink_state_.equity_scratch || trades_.base() > 0)) return -3;
     // Construct the full replacement first. Allocation failure cannot erase
     // an installed sink, its receipt or its copied strings.
     ReportSinkState next;
@@ -716,16 +722,11 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
         }
     }
     if (report_sink_state_.equity_scratch) {
-        if (next.enabled) {
-            // Replacing next-run configuration must not discard the current
-            // generation's record-time curve and validation latches.
-            next.equity_scratch = std::move(report_sink_state_.equity_scratch);
-            next.equity_tail_stored = report_sink_state_.equity_tail_stored;
-            next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
-        } else {
-            // Removing the sink restores the existing array-report contract.
-            NativeExecutionConsumer::restore_report_sink_equity_curve(*this);
-        }
+        // Replacing next-run configuration must not discard the current
+        // generation's record-time curve and selected validation latches.
+        next.equity_scratch = std::move(report_sink_state_.equity_scratch);
+        next.equity_tail_stored = report_sink_state_.equity_tail_stored;
+        next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
     }
     report_sink_state_ = std::move(next);
     return 0;
@@ -745,6 +746,12 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
     if (report_sink_setter_status() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "trade history policy cannot change during a run");
+    // Refuse before changing policy: ordinary reports need the sealed rows
+    // that are gone from RAM. A new begin clears size/base to zero and allows
+    // the policy to change again, without reading those rows back.
+    if (!streamable && trades_.base() > 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "trade history policy cannot retain sealed trade rows");
     report_sink_state_.trade_history_streamable = streamable;
 }
 

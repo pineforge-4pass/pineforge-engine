@@ -12449,7 +12449,6 @@ void NativeExecutionConsumer::drop_presentation() noexcept {
     presentation_open_trades_.reset();
     presentation_open_trades_len_ = 0;
     presentation_sink_trades_ = false;
-    presentation_equity_tail_ = {};
     presentation_metric_equity_len_ = 0;
     presentation_metric_observations_ = 0;
     presentation_metric_curve_.reset();
@@ -12498,7 +12497,6 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
     const bool sink_trades = engine.report_sink_state_.enabled;
     TradeC* open_storage = nullptr;
     int open_count = 0;
-    pf_equity_point_t ordinary_tail{};
     std::array<pf_equity_point_t, kSelectedPresentationWindowPoints> tail{};
     std::unique_ptr<report_sink::ScratchCurveWriter> metric_curve;
     try {
@@ -12704,11 +12702,6 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
             if (local.trades != open_storage || local.trades_len != open_count)
                 refuse_selected_capture(
                     "native sink report: presentation changed its open-lot view");
-            if (!sink_window && engine.report_sink_state_.equity_scratch) {
-                if (local.equity_curve_len > 0) ordinary_tail = local.equity_curve[0];
-                delete[] local.equity_curve;
-                local.equity_curve = nullptr;
-            }
         }
     } catch (...) {
         if (sink_trades) local.trades = open_storage;
@@ -12721,7 +12714,6 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
         presentation_open_trades_.reset(local.trades);
         presentation_open_trades_len_ = local.trades_len;
         presentation_sink_trades_ = true;
-        presentation_equity_tail_ = ordinary_tail;
         local.trades = nullptr;
         local.trades_len = 0;
     }
@@ -13162,11 +13154,13 @@ void NativeExecutionConsumer::restore_report_sink_equity_curve(BacktestEngine& e
         if (count > 0) {
             captured_curve = std::make_unique<pf_equity_point_t[]>(static_cast<std::size_t>(count));
             std::copy(restored.begin(), restored.end(), captured_curve.get());
-            captured_curve[count - 1] = consumer->presentation_equity_tail_;
+            // The bounded observer capture owns its presented tail directly.
+            captured_curve[count - 1] = consumer->presentation_.equity_curve[
+                consumer->presentation_.equity_curve_len - 1];
         }
     }
     // All allocations and reads succeeded. Publish both arrays atomically
-    // with respect to exceptions; the setter then retires the scratch owner.
+    // with respect to exceptions.
     engine.equity_curve_.swap(restored);
     if (captured) {
         delete[] consumer->presentation_.equity_curve;

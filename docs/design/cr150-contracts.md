@@ -210,7 +210,7 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
 | Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9621-9624`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9646-9648` | 361-363 |
 | Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3009-3015` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2788-2789`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13668-13673` | 364-365 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2788-2789`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13662-13667` | 364-365 |
 | Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:236-246`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:294-301` | 366-367 |
 | Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1184-1190` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
@@ -261,6 +261,17 @@ points, including any hidden suffix. Sink OFF keeps the full array unchanged.
 At capture, the existing admitted selected-window flag chooses the presentation
 once; subsequent report reads reuse that capture.
 
+Ordinary sink removal (`set_report_sink_v1(NULL)`) returns the typed setter
+refusal `-3` while that run's scratch curve is live and keeps the sink,
+scratch-backed summary report and bounded observer capture unchanged;
+the scratch is dropped at the next run begin or handle destruction without
+restoring a curve array.
+Sealed trade rows (`TradeLedger::base() > 0`) also refuse sink removal with `-3`
+and `set_trade_history_streamable(false)` with `coded<std::logic_error>(engine_invariant)`
+before any state change, preserving the sink, receipt and report without rehydrating
+rows until a new run begin clears size/base to 0 (ordinary scratch ownership still
+independently refuses removal).
+
 On the sink path, both ordinary and selected `present_report` hooks receive
 only the open-at-end trade rows, in the same lot order as the suffix of the
 sink-OFF array. `trades_len` is this open-lot count; `total_trades` still includes
@@ -273,31 +284,33 @@ row at a time, followed by that same edited view; neither capture nor read
 allocates a closed-history `TradeC[]`. Sink OFF keeps the full array and is
 byte-identical.
 
-The sink's `presentation_` stores scalar report values with null trade and
-equity pointers. The independent open-lot view is retained only to preserve
+The sink's `presentation_` stores scalar report values with a null trade
+pointer; an ordinary observer capture also owns one presented equity point.
+The independent open-lot view is retained only to preserve
 the hook's edits across reads and explicit sink removal; its size depends on
-open lots, never closed trades. An ordinary capture keeps its presented equity
-tail as one value. With a resident base of zero, removing the sink explicitly
-requests full report arrays again, without dispatching a captured hook a second
-time. After sealing, an array read refuses with `engine_invariant`: retired
-rows remain in the sink and cannot be recovered from resident storage.
+open lots, never closed trades. A completed selected capture owns its metric
+scratch separately. With a resident base of zero and no ordinary scratch owner,
+removing the sink explicitly requests full report arrays again, without
+dispatching a captured hook a second time. After sealing, removal is refused
+before any state change: retired rows remain in the sink and cannot be
+recovered from resident storage.
 
 L17c/d and L8c use one report path. `fill_trades_section`
 (`src/engine_report.cpp:112-169`) keeps the logical global count and copies only
 open rows for a sink. `report_closed_net_profit`
 (`src/engine_report.cpp:171-184`) starts at `ClosedTradePrefix::pnl` and adds the
 resident suffix in order. `finish_streamed_trade_metrics`
-(`src/native_execution_consumer.cpp:13561-13583`) finishes copies of the sealed
+(`src/native_execution_consumer.cpp:13555-13577`) finishes copies of the sealed
 accumulators over resident closed rows, then the presented open rows. The
 source host's terminal-quote presentation continues that same closed-row PnL
 fold before adding its edited open rows (`net_profit`
 `src/source/pine_strategy_host.cpp:1913-1914`).
 
 Selected carry-in validation includes the minimum entry time folded at seal
-(`first_entry_time` `src/native_execution_consumer.cpp:12525-12528`), so a
+(`first_entry_time` `src/native_execution_consumer.cpp:12523-12526`), so a
 window starting after a sealed entry refuses with the existing typed
 `engine_invariant`. Validation never indexes a retired row. `write_report_sink_trades`
-(`src/engine_report.cpp:894-927`) resumes at the global T cursor: sealed rows
+(`src/engine_report.cpp:901-934`) resumes at the global T cursor: sealed rows
 already in the sink are emitted exactly once, followed by the resident suffix
 and open rows. The sink remains the complete row report.
 

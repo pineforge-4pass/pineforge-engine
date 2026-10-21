@@ -289,6 +289,37 @@ void compare_summary(const ReportC& reference, const ReportC& actual) {
             && reference.script_bars_processed == actual.script_bars_processed,
             "report diagnostics changed");
 }
+// Compare every published summary field by its bytes, including NaN payloads.
+// ReportC has padding and pointer members, so do not memcmp its object storage.
+std::string summary_bytes(const ReportC& report) {
+    require(report.trades == nullptr && report.trades_len == 0
+            && report.equity_curve == nullptr && report.equity_curve_len == 0
+            && report.broker_state_hash == nullptr && report.broker_state_hash_len == 0
+            && report.trace == nullptr && report.trace_len == 0
+            && report.trace_names == nullptr && report.trace_names_len == 0
+            && report.security_diag == nullptr && report.security_diag_len == 0,
+            "setter fixture stopped returning a summary-only report");
+    std::string bytes;
+    const auto append = [&](const auto& value) {
+        bytes.append(reinterpret_cast<const char*>(&value), sizeof value);
+    };
+    append(report.total_trades);
+    append(report.net_profit);
+    append(report.input_bars_processed);
+    append(report.script_bars_processed);
+    append(report.security_feeds_total);
+    append(report.security_eval_complete_total);
+    append(report.security_eval_partial_total);
+    append(report.magnifier_sub_bars_total);
+    append(report.magnifier_sample_ticks_total);
+    append(report.input_tf_seconds);
+    append(report.script_tf_seconds);
+    append(report.script_tf_ratio);
+    append(report.needs_aggregation);
+    append(report.bar_magnifier_enabled);
+    append(report.metrics);
+    return bytes;
+}
 void expected_records(const Strategy& host, const ReportC& report, const std::string& path) {
     report_sink::LineWriter writer({sizeof(pf_report_sink_v1), 1, path.c_str(), "L8c", nullptr});
     writer.write_header({false, false, false, 0, 0});
@@ -501,11 +532,39 @@ void sealed_sink_capture_and_read(Directory& directory) {
         streamed.fill_report(&again.value);
         compare_summary(actual.value, again.value);
         require(read(path) == bytes, "repeated read duplicated the sealed prefix or suffix");
-        require(streamed.set_report_sink_v1(nullptr) == 0, "sink removal failed");
-        Report unavailable;
-        invariant([&] { streamed.fill_report(&unavailable.value); });
-        require(unavailable.value.trades == nullptr,
-                "array refusal allocated rows before noticing the sealed base");
+        const auto report_before = summary_bytes(again.value);
+        const auto receipt_before = receipt(streamed);
+        const auto size_before = streamed.ledger().size();
+        const auto state_before = streamed.consumer().state_kind();
+        const auto phase_before = streamed.consumer().state_phase();
+        const int status_before = streamed.last_run_status();
+        const auto error_before = latched_error(streamed);
+        // set_report_sink_v1 refuses before replacing the sink when
+        // trades_.base() > 0: retired rows cannot become report arrays again.
+        require(streamed.set_report_sink_v1(nullptr) == -3,
+                "sealed sink removal did not return typed refusal -3");
+        const auto receipt_after = receipt(streamed);
+        require(std::memcmp(&receipt_before, &receipt_after, sizeof receipt_before) == 0,
+                "refused sealed removal changed the receipt");
+        require(streamed.consumer().state_kind() == state_before
+                && streamed.consumer().state_phase() == phase_before
+                && streamed.last_run_status() == status_before
+                && latched_error(streamed) == error_before,
+                "refused sealed removal changed the run state");
+        Report after;
+        streamed.fill_report(&after.value);
+        compare_summary(expected.value, after.value);
+        require(summary_bytes(after.value) == report_before,
+                "refused sealed removal changed the summary or its arrays");
+        require(streamed.ledger().base() == base && streamed.ledger().size() == size_before
+                && streamed.consumer().closed_trade_prefix().base == base
+                && streamed.trade_history_streamable()
+                && streamed.consumer().streams_closed_rows(streamed),
+                "refused sealed removal changed the ledger or streaming policy");
+        const auto receipt_after_read = receipt(streamed);
+        require(std::memcmp(&receipt_before, &receipt_after_read, sizeof receipt_before) == 0,
+                "report after refused sealed removal changed the receipt");
+        require(read(path) == bytes, "refused sealed removal or report read changed sink bytes");
     }
 }
 
@@ -652,6 +711,126 @@ void restarts_and_reuse(Directory& directory) {
     require(records(read(path), 'T') == records(read(directory.files.back()), 'T'),
             "reused host leaked its previous trade prefix");
 }
+
+// Run the two setter cases independently so both failures appear on the base.
+// Selected runs have no ordinary scratch owner: their removal refusal must
+// come from real sealed rows, rather than the already-installed L6b-4 guard.
+// Red on 0677bf54f8 (read-only prediction): selected removal returns 0;
+// policy=false returns normally in every mode instead of a coded refusal.
+void sealed_setter_refusal(Directory& directory, const Options& options, bool remove_sink) {
+    constexpr int count = 146;
+    Strategy baseline(options), streamed(options), retained(options, false);
+    const auto path = directory.file(), retained_path = directory.file();
+    install(streamed, path);
+    install(retained, retained_path);
+    for (auto* host : {&baseline, &streamed, &retained}) {
+        configure_observation(*host, options, count);
+        host->execute(tape(count));
+        require(host->last_error().empty(),
+                "setter fixture run failed: " + latched_error(*host) + " [" + host->progress() + "]");
+    }
+    const auto base = streamed.ledger().base(), size = streamed.ledger().size();
+    require(base > 0, "setter fixture did not seal production rows: " + streamed.progress());
+    require(streamed.consumer().closed_trade_prefix().base == base,
+            "consumer sealed base differs from the ledger");
+    require(baseline.ledger().base() == 0 && retained.ledger().base() == 0,
+            "setter reference hosts unexpectedly sealed rows");
+    compare_observations(baseline, streamed);
+    compare_observations(baseline, retained);
+    Report expected, kept, before;
+    baseline.fill_report(&expected.value);
+    retained.fill_report(&kept.value);
+    streamed.fill_report(&before.value);
+    compare_summary(expected.value, before.value);
+    compare_summary(expected.value, kept.value);
+    const auto report_before = summary_bytes(before.value);
+    const auto receipt_before = receipt(streamed);
+    const auto bytes_before = read(path), retained_bytes = read(retained_path);
+    const auto error_before = latched_error(streamed);
+    require(receipt_before.complete == 1
+            && receipt_before.count_t == expected.value.total_trades,
+            "setter fixture lacks a complete all-row sink");
+    for (char tag : {'E', 'T', 'H', 'X'}) {
+        const auto actual = records(bytes_before, tag), reference = records(retained_bytes, tag);
+        require(actual == reference,
+                std::string("setter fixture ") + tag + " records differ from retained host: "
+                    + first_difference(actual, reference));
+    }
+
+    if (remove_sink) {
+        const int status = streamed.set_report_sink_v1(nullptr);
+        require(status == -3, "sealed sink removal did not return typed refusal: status="
+                    + std::to_string(status) + " " + latched_error(streamed));
+    } else {
+        bool refused = false;
+        try {
+            streamed.set_trade_history_streamable(false);
+        } catch (const coded<std::logic_error>& error) {
+            const auto failure = classify_run_failure(error);
+            const std::string detail = std::string("error=\"") + error.what()
+                + "\" code=" + run_failure_code_name(failure.code);
+            std::fprintf(stderr, "L8c: policy refusal %s %s\n",
+                         describe(options, count).c_str(), detail.c_str());
+            require(failure.code == RunFailureCode::engine_invariant,
+                    "sealed policy refusal has the wrong code: " + detail);
+            require(std::string(error.what()).find("sealed") != std::string::npos,
+                    "policy refusal does not name sealed rows: " + detail);
+            refused = true;
+        }
+        require(refused, "sealed policy change returned without a coded logic_error: "
+                    + latched_error(streamed));
+    }
+    require(streamed.trade_history_streamable()
+            && streamed.consumer().streams_closed_rows(streamed),
+            "refused setter changed the installed sink or streaming policy");
+    require(latched_error(streamed) == error_before, "refused setter changed the run's failure record");
+    const auto receipt_after = receipt(streamed);
+    require(std::memcmp(&receipt_before, &receipt_after, sizeof receipt_before) == 0,
+            "refused setter changed the receipt before any report read");
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        Report after;
+        streamed.fill_report(&after.value);
+        require(summary_bytes(after.value) == report_before,
+                "report fields changed byte for byte after refused setter");
+        require(read(path) == bytes_before, "refused setter or fill changed sink bytes");
+        const auto after_receipt = receipt(streamed);
+        require(std::memcmp(&receipt_before, &after_receipt, sizeof receipt_before) == 0,
+                "report after refused setter changed the receipt");
+        require(streamed.ledger().base() == base && streamed.ledger().size() == size,
+                "refused setter or report read restored sealed rows or changed the ledger");
+    }
+    // The true policy remains allowed, as does replacement with a valid sink.
+    streamed.set_trade_history_streamable(true);
+    install(streamed, directory.file());
+
+    // A real new begin resets the ledger, not a test-only clear. Use a short
+    // selected run so the independent ordinary scratch-owner guard is absent.
+    Options fresh_options;
+    fresh_options.selected = true;
+    const auto fresh_bars = tape(1);
+    for (auto* host : {&baseline, &streamed, &retained}) {
+        configure_observation(*host, fresh_options, static_cast<int>(fresh_bars.size()));
+        host->execute(fresh_bars);
+        require(host->last_error().empty(),
+                "setter reuse run failed: " + latched_error(*host) + " [" + host->progress() + "]");
+        require(host->ledger().base() == 0 && host->ledger().size() == 0
+                && host->consumer().closed_trade_prefix().base == 0,
+                "new begin did not leave a fresh ledger: " + host->progress());
+        host->set_trade_history_streamable(false);
+        require(!host->trade_history_streamable(), "fresh-ledger policy change was not accepted");
+    }
+    const int status = streamed.set_report_sink_v1(nullptr);
+    require(status == 0, "fresh-ledger sink removal refused: status=" + std::to_string(status));
+    const auto absent = receipt(streamed), sink_off = receipt(baseline);
+    require(std::memcmp(&absent, &sink_off, sizeof absent) == 0,
+            "accepted sink removal differs from sink-off receipt");
+    Report next_expected, next_actual, next_kept;
+    baseline.fill_report(&next_expected.value);
+    retained.fill_report(&next_kept.value);
+    streamed.fill_report(&next_actual.value);
+    compare_summary(next_expected.value, next_actual.value);
+    compare_summary(next_expected.value, next_kept.value);
+}
 } // namespace
 
 int main() {
@@ -665,7 +844,8 @@ int main() {
             action();
         } catch (const std::exception& error) {
             ++failures;
-            std::fprintf(stderr, "L8c: FAILED %s: %s\n", step, error.what());
+            std::fprintf(stderr, "L8c: FAILED %s: %s code=%s\n", step, error.what(),
+                         run_failure_code_name(classify_run_failure(error).code));
         }
     };
     try {
@@ -713,6 +893,18 @@ int main() {
         options.abort = true;
         run();
         attempt("restarts_and_reuse", [&] { restarts_and_reuse(directory); });
+        Options selected_setter, observed_setter;
+        selected_setter.selected = true;
+        observed_setter.observed = true;
+        for (const auto& setter_options : {Options{}, selected_setter, observed_setter}) {
+            for (const bool remove_sink : {true, false}) {
+                const auto step = std::string(remove_sink ? "sealed_sink_removal " : "sealed_policy ")
+                    + describe(setter_options, 146);
+                attempt(step.c_str(), [&] {
+                    sealed_setter_refusal(directory, setter_options, remove_sink);
+                });
+            }
+        }
     } catch (const std::exception& error) {
         std::fprintf(stderr, "L8c: %s\n", error.what());
         return 1;

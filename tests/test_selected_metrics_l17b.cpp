@@ -1697,15 +1697,43 @@ CaptureStorage trade_capture_and_read_storage(
     CHECK(written.count_e == array.value.equity_curve_len);
     compare_trade_records(baseline, array.value, path);
     const auto bytes_before = read(path);
-    Report third, restored;
+    Report third, after_removal;
     streamed.fill_report(&third.value);
     CHECK(read(path) == bytes_before);
     CHECK(same_metrics(summary.value.metrics, third.value.metrics));
     const int hooks_before_removal = streamed.presentations;
-    CHECK(streamed.set_report_sink_v1(nullptr) == 0);
-    streamed.fill_report(&restored.value);
-    compare_trades(array.value, restored.value);
-    CHECK(same_metrics(array.value.metrics, restored.value.metrics));
+    if (selected) {
+        CHECK(streamed.set_report_sink_v1(nullptr) == 0);
+        streamed.fill_report(&after_removal.value);
+        compare_trades(array.value, after_removal.value);
+    } else {
+        const auto receipt_before_removal = receipt(streamed);
+        const auto state_before_removal = streamed.native_state();
+        const int status_before_removal = streamed.last_run_status();
+        const auto error_before_removal = streamed.last_error();
+        // Ordinary and observer captures keep report_sink_state_.equity_scratch:
+        // set_report_sink_v1 must refuse before replacing it or restoring arrays.
+        CHECK(streamed.set_report_sink_v1(nullptr) == -3);
+        const auto receipt_after_removal = receipt(streamed);
+        CHECK(std::memcmp(&receipt_before_removal, &receipt_after_removal,
+                          sizeof receipt_before_removal) == 0);
+        CHECK(streamed.native_state().kind == state_before_removal.kind);
+        CHECK(streamed.native_state().phase == state_before_removal.phase);
+        CHECK(streamed.last_run_status() == status_before_removal);
+        CHECK(streamed.last_error() == error_before_removal);
+        streamed.fill_report(&after_removal.value);
+        CHECK(after_removal.value.trades == nullptr && after_removal.value.trades_len == 0);
+        CHECK(after_removal.value.equity_curve == nullptr
+              && after_removal.value.equity_curve_len == 0);
+        CHECK(after_removal.value.total_trades == summary.value.total_trades);
+        CHECK(std::memcmp(&after_removal.value.net_profit, &summary.value.net_profit,
+                          sizeof summary.value.net_profit) == 0);
+        const auto receipt_after_read = receipt(streamed);
+        CHECK(std::memcmp(&receipt_before_removal, &receipt_after_read,
+                          sizeof receipt_before_removal) == 0);
+        CHECK(read(path) == bytes_before);
+    }
+    CHECK(same_metrics(array.value.metrics, after_removal.value.metrics));
     CHECK(streamed.presentations == hooks_before_removal + (selected || observed ? 0 : 1));
     if (selected || observed) {
         // Installing a sink after the array capture borrows its immutable

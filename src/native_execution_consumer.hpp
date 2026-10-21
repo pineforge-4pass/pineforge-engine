@@ -2178,8 +2178,8 @@ public:
     // the ledger; the returned storage is never attached to a caller's report.
     static bool report_sink_open_trades(const BacktestEngine& engine,
                                         const TradeC*& rows, int& count) noexcept;
-    // Removing an ordinary sink restores the current run's array storage,
-    // including an observer capture, before its scratch owner is destroyed.
+    // Explicit ordinary-curve reconstruction for internal array consumers.
+    // Sink removal refuses while scratch is live and never invokes this bridge.
     static void restore_report_sink_equity_curve(BacktestEngine& engine);
 
     // The private bridges behind the four C accessors of
@@ -2275,14 +2275,14 @@ private:
     // flags. The destructor calls it, and the selected lifecycle will at
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
-    // Sink captures keep scalars here. Closed rows live in the sealed prefix
-    // folds plus the resident ledger; only the editable open-lot view is owned.
+    // Sink captures keep scalars and, for an ordinary observer capture, one
+    // owned equity point. Closed rows live in the sealed prefix folds plus
+    // the resident ledger; the editable open-lot view is owned separately.
     // Sink OFF keeps its original independently owned arrays.
     ReportC presentation_{};
     std::unique_ptr<TradeC[]> presentation_open_trades_;
     int presentation_open_trades_len_ = 0;
     bool presentation_sink_trades_ = false;
-    pf_equity_point_t presentation_equity_tail_{};
     // The equity length the metrics read: the engine's recorded point count taken
     // before present_report ran (fill_metrics_section's `n`), which a
     // presentation may leave behind in presentation_.equity_curve_len, the length
