@@ -685,6 +685,39 @@ class WorkflowPinTests(unittest.TestCase):
     def test_ci_release_gate_is_unconditional_and_precedes_every_release_write(self):
         self.assert_gate_pin(self.workflow())
 
+    def test_prebuilt_builds_the_emitted_sha_and_asserts_tag_identity(self):
+        jobs = _jobs(self.workflow())
+        self.assertRegex(jobs["release"],
+                         r"(?m)^      sha:\s+\$\{\{ steps\.publish\.outputs\.sha \}\}$")
+        push = next(step for step in _steps(jobs["release"])
+                    if step.startswith("      - name: Write bumped VERSION, commit, tag, push\n"))
+        self.assertIn("        id: publish\n", push)
+        self.assertIn('          git push --atomic origin HEAD "${TAG}"\n'
+                      '          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"', push)
+
+        steps = _steps(jobs["prebuilt"])
+        checkout = next(step for step in steps if "uses: actions/checkout@v4" in step)
+        self.assertIn("          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}\n",
+                      checkout)
+        self.assertIn("          fetch-depth: 0", checkout)
+        assertion = next(step for step in steps if step.startswith(
+            "      - name: Assert tag still names the emitted release commit\n"))
+        self.assertLess(steps.index(checkout), steps.index(assertion))
+        configure = next(step for step in steps if step.startswith("      - name: Configure\n"))
+        self.assertLess(steps.index(assertion), steps.index(configure))
+        self.assertIn("        if: ${{ !inputs.dry_run }}\n", assertion)
+        self.assertIn("          TAG: ${{ needs.release.outputs.tag }}\n", assertion)
+        self.assertIn("          SHA: ${{ needs.release.outputs.sha }}\n", assertion)
+        script = assertion.split("        run: |\n", 1)[1]
+        self.assertNotIn("${{", script)
+        self.assertIn("          set -euo pipefail\n", script)
+        self.assertIn('          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then\n'
+                      '            echo "::error::invalid emitted release sha: ${SHA}" >&2\n'
+                      '            exit 1\n'
+                      '          fi\n', script)
+        self.assertIn('          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"',
+                      script)
+
     def test_pin_fails_when_gate_is_deleted(self):
         workflow = self.workflow()
         changed = workflow.replace(self.gate_block(workflow), "", 1)

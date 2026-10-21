@@ -1277,6 +1277,12 @@ Every API call is a read using the release job's own App token. Rate limits
 and upstream 5xx responses refuse immediately, naming the failure, without
 sleeping or retrying; empty or unparseable evidence also refuses.
 
+Prebuilt jobs build the commit sha emitted after the release job's atomic
+push, and assert that the release tag still resolves to that sha before
+building. A missing or malformed sha or a changed tag fails the job. Dry runs
+build `github.sha` and skip the tag assertion because no tag exists. L6 adds
+a separate tag ruleset forbidding updates and deletion of `v*` tags.
+
 #### Allowed status creators
 
 In phase 1, the newest statuses API row for each full context must have a
