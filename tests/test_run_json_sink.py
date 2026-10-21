@@ -347,7 +347,8 @@ def test_persistent_temporary_io_error_keeps_the_disk_code(tmp_path, monkeypatch
                 raise OSError(28, "injected persistent close failure")
     def temporary(*args, **kwargs):
         file = real_temporary(*args, **kwargs)
-        if kwargs["mode"] == "w+":
+        if kwargs["mode"] == "w+b":
+            assert kwargs["buffering"] == 0
             file = File(file)
         files.append(file)
         return file

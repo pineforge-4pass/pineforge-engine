@@ -2194,6 +2194,8 @@ def _no_surrogates(text: str) -> str:
 def _dump_line(doc: dict) -> str:
     # The writer the failure line has always used: json.dump with these
     # separators and json's default ensure_ascii, so the line is ASCII.
+    # Only failure_line calls this helper, with capped diagnostic text/args.
+    # Successful reports use _prepare_stream_report; no report rows enter here.
     out = io.StringIO()
     json.dump(doc, out, separators=(",", ":"))
     return out.getvalue()
@@ -5396,9 +5398,9 @@ class _ReportSink:
             raise
 
     def verify(self, lib, state, report):
-        from pf_sink import SinkFormatError, SinkReader
+        from pf_sink import SinkFormatError
         try:
-            with SinkReader(self.path) as reader:
+            with _open_uncached_sink(self.path) as reader:
                 for _ in reader:
                     pass
                 self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
@@ -5417,9 +5419,9 @@ class _ReportSink:
             raise _engine_invariant("the report sink trailer differs from its engine receipt")
 
     def records(self, tag=None):
-        from pf_sink import SinkFormatError, SinkReader
+        from pf_sink import SinkFormatError
         try:
-            with SinkReader(self.path) as reader:
+            with _open_uncached_sink(self.path) as reader:
                 for record in reader:
                     if tag is None or record.tag == tag:
                         yield record
@@ -5713,7 +5715,9 @@ class _JSONColumn:
 
 def _json_temporary(resources, directory):
     try:
-        file = tempfile.TemporaryFile(mode="w+", encoding="ascii", newline="\n", dir=directory)
+        # _BoundedJSONFile owns ASCII encoding and the aligned I/O window.
+        # The owner supplies only an unbuffered, automatically unlinked fd.
+        file = tempfile.TemporaryFile(mode="w+b", buffering=0, dir=directory)
     except OSError as error:
         raise RunFailure("report sink open failed", "report_sink_failed") from error
     try:
@@ -5732,8 +5736,7 @@ def _close_json_temporary(file):
     try:
         file.close()
     except OSError as error:
-        # A failed buffered flush can fail again during close. Preserve the
-        # disk-failure code instead of replacing it with an untyped exception.
+        # Preserve the write/flush disk-failure code for close errors too.
         raise RunFailure("report sink write failed", "report_sink_failed") from error
 
 
@@ -5808,11 +5811,15 @@ def _stream_json_value(value, destination):
 
 def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
     try:
-        file = _json_temporary(resources, directory)
-        _stream_json(document, file)
-        file.write("\n")
-        file.flush()  # disk errors must precede the first stdout byte
-        file.seek(0)
+        with ExitStack() as prepared:
+            file = _json_temporary(prepared, directory)
+            _stream_json(document, file)
+            file.write("\n")
+            file.flush()  # disk errors must precede the first stdout byte
+            file.seek(0)
+            # A failed serialization closes its artifact immediately, even
+            # when the caller catches the error inside its resource scope.
+            resources.enter_context(prepared.pop_all())
     except OSError as error:
         if not sink_errors:
             raise

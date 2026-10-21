@@ -1,93 +1,123 @@
-R19–R22 implementation diff prepared; NOT verified or ready to declare complete.
-No compiler, build, test, repository script, installation, staging, commit or
-push ran on this Mac. Only reads, git inspection and file edits were performed.
-`git diff --check` passed. No lab connection was exposed/provided, so there are
-no RED/GREEN receipts, measured allocation totals, ctest summaries or log paths.
+Round 5 R21/R22 diff prepared: both sink methods use the bounded reader, JSON
+temporaries have an unbuffered binary owner, failed serialization closes its
+unpublished artifact immediately, and the lab driver is supplied. The remaining
+StringIO is the failure diagnostic formatter, documented below. These are source
+changes and authored regression rows, not a verification or performance verdict.
 
-HEAD/base: `583c2217d2524e8f2bc4c8a77dfa336309d741fc`.
-Branch: `o1w/pyjson`. The supervisor must commit the working-tree diff.
-`git diff --stat 583c2217d2..HEAD` is empty because this lane made no commits.
-The tracked working diff is 3 files, +730/-386; four new files (including this
-report) are untracked and must be included in the supervisor's commit.
+HEAD/base: `136a7b68a6139af72072cc7e89d276fa36ca7d1a`, branch `o1w/pyjson`.
+Initial `git status --porcelain=v1` stdout was empty. Round 1 is already committed
+at this HEAD; its historical report is available with `git show 136a7b68a6:REPORT.md`.
+This round leaves an unstaged diff and one new driver for the supervisor to commit.
+No staging, commit or push ran, following the explicit edit-only lane instruction
+and COMMON.md. `git diff --stat 136a7b68a6..HEAD` is therefore empty.
 
-Two dependencies remain:
+The three gaps:
 
-1. `_ReportSink.verify()` and `_ReportSink.records()` are outside the assigned
-   function ranges and still instantiate the buffered `SinkReader`. Both must
-   use `_open_uncached_sink(self.path)` instead of `SinkReader(self.path)`.
-   A replacement factory and an independent test are provided, but the factory
-   is NOT connected to these methods without the requested scope
-   extension. Until both are connected before the first full scan, sink
-   readback can populate cache proportional to output length. Do not claim
-   an end-to-end charged-memory bound for R19/R21/R22.
-2. The contract lane's `docs/design/o1-report-contract.md`, revision 1 with
-   round-2 reader declarations, now exists and was read. Its implemented
-   provider/ctypes bridge is absent on this base. No SUMMARY_ONLY support,
-   replay, empty-array inference, new flag or new export is advertised here.
-   The native provider must supply the frozen JSON summary folds/logical
-   counts; transport negotiation must select it at the ordinary and selected
-   builder-selection sites. Parser/provider edits are outside this lane.
-
-| Row | Before at base | Diff and resident bound | Intended fail-before evidence; all unexecuted |
+| Gap / rows | Before at 136a7b68a6 | After in working tree | Observable and authored test row |
 | --- | --- | --- | --- |
-| R19 | `src/report_sink_writer.cpp`: header/descriptor strings grew while formatting; records constructed owning strings; ordinary buffered writes left charged data cache behind. | One 1 MiB `Line` scratch in the writer state, one 64 KiB aligned I/O window plus 4095 alignment bytes, fixed numeric/UTF-8 token scratch and existing configuration strings. Header and all E/T/O/V/K/X/H records format into that scratch without per-record owning strings. Checks precede copies and retain the existing 1 MiB wire limit. Linux O_DIRECT, padding/truncation of the final disk block and fdatasync per window prevent accumulating buffered data windows. Public `f64`/`escaped_string` keep their owning APIs but are not called by the writer. | `test_report_sink_writer_memory`: 8 versus 256 long X records, verified receipt and physical line populations; prints calls, cumulative allocated bytes, peak retained bytes and cached pages separately. Base allocation traffic grows with records and base output pages remain cached. Existing `test_report_sink_format` supplies the independent million-value formatter/UTF-8/header/trade/trailer byte oracle. |
-| R20 | `build_report_dict` at base line 3810 retained T trade dictionaries, T PnLs and Bs curve dictionaries; selected and ordinary callers retained T incarnations. Ordinary and selected sink folds/iterators were already present in batch-B. | Scalar wins/losses/extremes and the exact `cum += pnl; peak=max(peak,cum); max_dd=min(max_dd,cum-peak)` trade-PnL fold. First PnL seeds best/worst, including signed-zero ties. Repeatable row/point iterators retain one record and support the selected curve's length/anchor checks. Read-only incarnation accessors get the old refusal pre-pass and are revisited without storing values. Native owning report arrays remain outside this Python transport change. | `test_python_trade_curve_and_serialization_peak_is_flat`, `test_legacy_main_assembly_peak_is_flat`, `test_selected_legacy_main_assembly_peak_is_flat`: T=256/24000, actual Bs/native feed populations asserted, tracing ends before the test consumer retains stdout. Base dictionaries/PnLs/curve cause MiB-scale growth. Frozen array-byte comparisons include signed zero and cancellation-sensitive PnLs. |
-| R21 | Selected base lines 4718–4722 and ordinary 5227–5231 used StringIO without a native sink. Batch-B already prepared sink-route JSON in a file, but buffered file I/O did not bound charged cache. | All report routes prepare an unpublished artifact through the streaming serializer, synchronize it, perform native cleanup, then publish with the existing stdout phase/error rules. Each file has one 64 KiB aligned anonymous working window; publication reads at most 1 MiB. No whole-report encoding string. String interiors encode in 4096-character pieces. Circular-document ValueError and legacy versus sink error classification are preserved. | The main-route peak tests and `test_legacy_routes_never_use_a_stringio_report` catch the old StringIO route. `test_artifact_cache_is_bounded_on_the_deployment_backing` writes/reads 2 MiB and 24 MiB plus a tail, checks actual byte populations and uses mincore to require at most one cached tail page; buffered base files fail. Existing failure tests were moved to the real field encoder/artifact write sites. |
-| R22 | `make_outputs_reader` copied whole native arrays and accumulated events; old-module/selected callers invoked the array builder. Batch-B already externalized sink output columns, but their buffered temps accumulated cache. | Native output copies use at most 4096 values; events yield individually. Borrowed event messages decode UTF-8 with replacement in fixed 4096-byte pieces, avoiding a whole c_char_p copy. Old-module outputs stream in all caller routes; a bounded validation walk keeps their reader failures in assembly. Sink columns use the uncached artifact and a 64 KiB serializer copy window. S manifest-defined series require S+3 fixed column windows/files; constants/manifests remain per-definition metadata. Column order/rgba-u32/null/UTF-8 encodings stay unchanged. | `test_legacy_main_assembly_peak_is_flat[True]` asserts actual T, Bs, two series, E and max native copy size; unchanged main/reader materializes them. `test_columns_do_not_accumulate_python_objects` catches the old 1 MiB column-copy peak, while the cache test catches dirty data pages. `test_borrowed_utf8_is_encoded_in_fixed_chunks` compares with the independent whole decode/JSON encoder. Ordinary/selected frozen byte tests cover output columns/events. |
+| 1 / R21, R22 sink readback | `docker/run_json.py:5401` (`_ReportSink.verify`) and `:5422` (`records`) created buffered `SinkReader` instances directly. | `docker/run_json.py:5403` and `:5424` call `_open_uncached_sink`. Its existing strict parser, receipt checks, error wrappers and full exhaustion checks stay in place. | Header/counts/SHA, immutable records, physical ordering, every tag filter, repeated scans and the last partial I/O window must agree with `pf_sink.SinkReader`. `test_report_sink_methods_use_uncached_reader_and_preserve_order` uses 5003 E, 3 T, 1 O, 1 V (message spanning a window), 1 K; asserts the factory is actually used and compares all records. `test_report_sink_reader_errors_match_buffered_reader` compares exact exception type/code/text for bad SHA, missing trailer, extra bytes and missing final LF, through both methods. `test_report_sink_changed_after_verification_consumes_the_tail` pins late digest refusal, yielded counts/tail values, and temporary versus caller-owned cleanup. |
+| 2 / R21 JSON artifact and R22 column owner | `docker/run_json.py:5716` opened a text `TemporaryFile(mode="w+", encoding="ascii", newline="\n")`. Round 1 already wrapped that owner in `_BoundedJSONFile`; serialization/readback itself already used its aligned direct I/O. `:5809` registered failed artifacts with the caller's longer-lived stack. | `docker/run_json.py:5720` opens `TemporaryFile(mode="w+b", buffering=0)` beneath that same bounded writer. `:5812` scopes preparation with a local ExitStack, transferring ownership only after serialization, LF, flush and rewind succeed. | Compact ASCII JSON bytes, escaping, key/row order, signed zero, final LF, phase/error classification and publication after native cleanup must stay identical. `test_array_transport_is_the_frozen_bytes` now includes 517 trades/1034 curve points. `test_json_temporary_is_unbuffered_and_preserves_multichunk_bytes` checks a real FileIO owner and every byte beyond 1 MiB against json.dumps. `test_failed_serialization_closes_unpublished_artifact_immediately` injects OSError/MemoryError/ValueError/KeyboardInterrupt after a real window write with the outer stack still open; checks closed fd/window and preserved user file. `test_automatic_sink_midwrite_failure_publishes_only_failure` executes real main assembly/serialization, then checks its sole failure line, closed artifact and removed temporary sink. Existing `test_persistent_temporary_io_error_keeps_the_disk_code` now injects at the binary owner and still pins actual flush/close failures. |
+| 3 / R20 report-size buffer audit | `docker/run_json.py:2197` is `_dump_line`'s StringIO. | `docker/run_json.py:2199` retains it; `:2197` documents its callers. This is the `failure_line -> _dump_line` failure-diagnostic route, outside the ordinary/selected successful per-run report producers. The sole production caller is failure_line; no trade, curve or output array is passed to it. | Failure text is clipped to 16 KiB UTF-8, each string argument to 1 KiB, and the final diagnostic envelope to 60 KiB plus LF. The scratch can exceed the final envelope while testing overflowing arguments, but it does not scale with report rows. `test_failure_only_stringio_keeps_frozen_bytes` compares full bytes with the immutable pre-L9A producer, including surrogates, Unicode and argument overflow. `test_automatic_report_never_calls_failure_stringio` forbids this helper during an actual populated automatic-sink report and checks real trade/curve counts. Existing cap rows in `docker/run_json_codes_test.py` also pin the diagnostic contract. |
 
-Backing contract: the qualification target is Linux on a real disk filesystem
-with effective O_DIRECT and 4096-byte-compatible direct I/O, synchronous
-pread/pwrite and fdatasync. `TMPDIR`, `--spill-dir` and named sink paths must
-use that backing. tmpfs/ramfs/memfd are rejected; there is no buffered fallback
-and no advisory-eviction claim. The Darwin F_NOCACHE branch is retained for
-compatibility but has no measured qualification. The new mincore tests inspect
-data-page residency rather than infer it from a syscall's success. Full cgroup
-charging, filesystem metadata, W=1/W=4 and deployment filesystem behavior still
-need the lab gate; mincore alone is not that gate.
+Expected fail-before reasons, NOT executed: on this round's base the sink-method
+factory witness sees zero opens; the JSON owner is TextIOWrapper rather than
+FileIO; and an artifact remains open after a caught serialization error until
+the outer stack exits. Byte/order/error rows are compatibility controls and
+should also pass before these fixes. No runtime RED/GREEN receipt is claimed.
 
-Batch-B already satisfied the ordinary sink summary's scalar PnL folds,
-ordinary/selected row iterators, selected sink JSON preparation and external
-sink output-column layout. This diff extends those pieces; it does not redo
-the native report APIs, selected-window refusals, metric replay or trade storage.
+The resident bound is the existing 64 KiB aligned I/O window per reader/artifact
+or output column, at most 1 MiB per publication read, and the strict reader's
+existing 1 MiB line/header bound and per-definition descriptors. No report rows
+are collected by the production transport. Qualification still requires a real
+Linux disk filesystem with effective O_DIRECT and compatible 4096-byte I/O;
+tmpfs/ramfs/memfd are rejected. Darwin F_NOCACHE remains unqualified. This round
+does not change the direct-I/O writer's synchronization policy or prove cgroup
+charging. The existing cache and Python peak rows remain lab work.
 
-Touched files:
+The new driver is `scripts/measure_run_json_temporary_sink.py`.
+From the repository root, SM-CX uses this one-line command, with the environment
+variables naming the same CSV/module and the recorded report's elapsed value
+and raw SHA-256 (disk-backed OUT_DIR):
 
-- `docker/run_json.py`
-- `src/report_sink_writer.cpp`
-- `docker/run_json_bounded_transport_test.py` (new)
-- `tests/test_report_sink_writer_memory.cpp` (new)
-- `tests/test_run_json_post_execution.py`
-- `tests/cr150.d/core-cr150-o1w-pyjson.cmake` (new)
-- `REPORT.md` (new handoff)
+```bash
+python3 scripts/measure_run_json_temporary_sink.py "$CSV_1M" o1w-pyjson-r5 "$OUT_DIR" --so "$STRATEGY_SO" --expect-bars 1000000 --elapsed-seconds "$PRECHANGE_REPORT_ELAPSED_SECONDS" --expected-sha256 "$PRECHANGE_REPORT_SHA256"
+```
 
-No existing public documentation anchors, ABI declarations/counts, report
-schema fields or fingerprint versions changed. No execution hash leaf or
-broker durable state changed. New state belongs to output formatting/transport.
+The driver runs the chosen producer's actual `run_json.main` once in a fresh process.
+Its observer forwards the real sink factory, requires one automatic temporary
+sink, refuses an unavailable sink ABI instead of measuring a legacy fallback,
+and checks removal after native cleanup. `wall_s` uses perf_counter across that
+process; `peak_rss_mb` uses wait4's per-child high-water mark (MiB). The small
+receipt sidecar is included in the child lifetime. After the measured process
+exits, the parent scans the complete CSV and streams the unmodified report in
+64 KiB windows to count its actual trade/equity items and compute raw SHA-256.
+Counts must match the verified sink receipt and the CSV/report input counts.
+There is no sampling or truncation.
 
-Lab work still required, on the exact committed tree:
+Success prints exactly one JSON line with `wall_s`, `peak_rss_mb`,
+`report_bytes`, `trades`, `equity`, and `sha256`; the complete raw report is
+published as `$OUT_DIR/o1w-pyjson-r5.report.json`. A hard link publishes only the
+finished file and refuses to overwrite an existing caller file. Failures return
+nonzero, print the failure on stderr, remove private scratch files, and publish
+no report. The label is only an artifact name; it is not injected into the report.
 
-- Compile the new C++ test first against the frozen previous header closure;
-  run the new tests on the unchanged base with tests only, record actual first
-  diagnostics/runtime RED reasons, then run them with the implementation.
-- CTest: `test_report_sink_writer_memory`, `test_run_json_bounded_transport`,
-  `test_report_sink_format`, `test_report_sink_l6b3`,
-  `test_run_json_sink_l9a`, `test_run_json_selected_sink_l9s`,
-  `test_run_json_sink_summary_l9b_native`,
-  `test_run_json_selected_sink_native_l9s`,
-  `test_run_json_selected_sink_memory_l9s`,
-  `test_run_json_post_execution`, `test_run_json_nonfinite_report`,
-  `test_cr150_cmake_d`.
-- Run full preflight, release and debug verification. The supervisor owns
-  corpus/parity and whole-cgroup W=1/W=4 qualification. No campaign sweep was run.
-- Compare ordinary, jailed entrypoint and selected outputs on real populated
-  modules byte for byte. The jailed launcher is not a separate producer in
-  this repository; its actual deployment execution remains unverified.
+`--elapsed-seconds` fixes only the producer's report-duration clock to the
+recorded value; wall/RSS measurements remain real. This is needed for raw
+byte comparison because elapsed_seconds otherwise varies on every run.
+The census only reads the report; it never rewrites or re-encodes it. `--producer` can point
+at the pre-change run_json.py with its own helper closure for a fresh comparison.
+If recording a new baseline, use the same module, CSV path, settings and elapsed
+value on both producers. Optional settings include input/script timeframe,
+magnifier switch, inputs, overrides, generated.cpp, syminfo and outputs.
 
-Reserve these functions/files against other lane edits: the two Python
-report builders' assembly/serialization call sites, `make_outputs_reader`,
-`build_report_dict`, `_JSONRecordArray`, `_JSONUTF8`, `_BoundedJSONFile`,
-`_UncachedSinkFile`, `_open_uncached_sink`, `_JSONColumn`, `_json_temporary`,
-`_stream_json`, `_stream_json_value`, `_prepare_stream_report`,
-`_legacy_streamed_outputs_block`, and all of `src/report_sink_writer.cpp`.
-Coordinate the pending two-method sink-reader change explicitly; selected
-reader refusals and other native report functions were not edited.
+Driver rows are in the existing `docker/run_json_bounded_transport_test.py`:
+`test_driver_census_counts_real_arrays_and_hashes_all_bytes` compares 517/1034
+populations, escaped strings across window boundaries and the independent raw
+digest; the truncation/extra-document row refuses incomplete output.
+`test_driver_measures_real_main_once_and_preserves_published_bytes` runs the
+real producer in a child with only native exports substituted, requires positive
+measured wall/RSS, checks all 23 input/curve rows and 3 trades, then compares
+published bytes with a direct main invocation. The failure row exercises a
+population mismatch, digest mismatch, real sink refusal and absent sink ABI;
+the ownership row preserves an existing caller report. The parser row checks
+help, missing positional input and missing input file without invoking a producer.
+All rows are authored and unexecuted.
+
+No compiler, py_compile, test, preflight, build, corpus sweep, measurement,
+installation or lab connection ran. `git diff --check` passed; source review
+also found and updated the existing ordinary sink test's text-mode fault hook
+so it continues to inject at the new binary owner. There are no verification
+summary lines, lab log paths, measured numbers or speed claims.
+
+Lab checks still required: py_compile of the producer/driver and changed tests;
+the driver help and missing-input invocations; `test_run_json_bounded_transport`,
+`test_run_json_sink_l9a`, `test_run_json_selected_sink_l9s`,
+`test_run_json_post_execution`, `test_run_json_nonfinite_report`, then the full
+required C++/corpus and maintainer verification/parity gates on the committed
+tree. Do not treat this diff as release proof.
+
+Touched files: `docker/run_json.py`, `docker/run_json_bounded_transport_test.py`,
+`tests/test_run_json_sink.py`, the new driver, and this report.
+Neither pending-ruling test file was edited. No C++/native measured source,
+public ABI, schema field, fingerprint version, durable hash leaf, documentation
+anchor/count, dependency or CMake registration changed.
+
+Already present before this round: batch-B's streaming sink serializer and
+external output columns; round 1's bounded JSON artifact/column writer, uncached
+reader factory, scalar Python trade folds and native output iterators. Those
+implementations were extended, not replaced. R19 has no new change this round.
+The separate SUMMARY_ONLY/provider contract dependency from round 1 is not
+resolved or advertised by these three transport fixes.
+
+Open lab input: the original campaign 1M driver's path, native module/settings,
+recorded duration and SHA were not supplied or found in this checkout. The
+runner is placed with the repository's Python drivers under scripts; the
+supervisor must bind the command's variables to those existing campaign inputs.
+No claim is made that the historical time difference was caused by the residual
+text owner, or that changing it produces any particular speed.
+
+Reserve `_ReportSink.verify`, `_ReportSink.records`, `_json_temporary`,
+`_prepare_stream_report`, the round-1 transport helpers, the new driver, and the
+changed regression rows against concurrent lane edits until the supervisor
+collects this diff. Suggested supervisor commit message:
+`CR-150 o1w-pyjson: wire sink readers, unbuffer JSON temps, audit failure StringIO; add measurement driver`.
