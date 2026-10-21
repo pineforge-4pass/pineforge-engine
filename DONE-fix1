@@ -1,0 +1,5 @@
+Fix round 1 authored after 243dba28a8 on cx/o1-p3b.
+Removed the obsolete waiver for the deleted pending-view cache.
+Refreshed all 43 flagged citations by hand; see REPORT.md, Fix round 1.
+No builds, tests, or repo scripts ran locally. Remote proof remains pending.
+This is a fix handoff, not a parity verdict or completion of the blocked rows.

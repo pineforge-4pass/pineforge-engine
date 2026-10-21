@@ -626,7 +626,7 @@ pump's operation (`Input` or `Stream`) and ordinal 0; until then the run goes on
 with the configuration it wrote, fills and notifications included.
 
 Generated Pine code runs on this same consumer: `source::PineStrategyHost`
-derives from `NativeStrategyHost` (`pine_strategy_host.hpp:287`) and lowers
+derives from `NativeStrategyHost` (`pine_strategy_host.hpp:288`) and lowers
 every `strategy.*` command into the native requests above. What the source
 layer keeps on top of them is TradingView's *policy* — the command batching,
 the priority and activation quirks, the money rounding — never a second
