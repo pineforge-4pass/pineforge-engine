@@ -212,41 +212,38 @@ void reserve_effects(StreamActionQueue& values, size_t) {
 
 ## Supporting change
 
-`src/native_execution_consumer.hpp` adds
-`detail::RunRowCodec<native_order::OpeningObservation>`: the row's
-`PositionIdentity` is a two-alternative `std::variant`, so the external record
-stores the alternative and its payload explicitly instead of raw object bytes.
-It adds no field a reader can observe.
+`src/native_execution_consumer.hpp` adds `detail::RunRowCodec<native_order::OpeningObservation>`:
+the row's `PositionIdentity` is a two-alternative `std::variant`, so the external record stores
+the alternative and its payload explicitly instead of raw object bytes. It adds no field a reader can observe.
 
 ## Deviations and open questions
 
-1. E17 cannot build until the two o1-e1 diffs above land; this is the
-   requested integration, not a fallback. The `front()` addition is new since
-   the earlier draft and is needed by `test_pending_order_identity.cpp`.
-2. E13's `TargetObservation::openings` and `CommandContext` opening storage stay
-   `std::vector` in o1-e2's `native_order.hpp`; `opening_rows()` is the
-   consumer-side page API, and the vector entry point is labelled as the
-   compatibility bridge. A core `OpeningRange` (visitor) would be needed before
-   every target/command path is flat.
-3. The C v1 working/open-lot snapshots remain owning, by the documented ABI
-   lifetime; a new versioned caller-buffer export is a separate ABI decision.
-4. `placement_scope_units` no longer builds `OpeningObservation` rows for
-   BindOpenings/BindCohort; it tests the same predicate
-   (`run == identity && cycle == position_cycle_seq_ && cycle > 0 && side != FLAT
-   && a matching lot exists`) and sums `lot.qty` in the same pyramid order, so
-   the floating-point sum is identical. This is a behaviour-preserving rewrite
-   that the row's memory bound requires; it should be re-read during review.
-5. E15's ordered selection is O(n²) in time by design (the row allows more
-   time). If the campaign sweep shows an unacceptable wall-clock regression on
-   a large hash population, the fix is a fixed-page external sort, not a new
-   digest.
-6. No `PF_API` export was added or removed, so `check_c_abi_runtime.py` is
-   unchanged; `native_stream_push_ticks_borrowed` is an internal C++ symbol.
+1. E17 cannot build until the two o1-e1 diffs above land; this is the requested integration, not a fallback. The `front()` addition is new since the earlier draft and is needed by `test_pending_order_identity.cpp`.
+2. E13's `TargetObservation::openings` and `CommandContext` opening storage stay `std::vector` in o1-e2's `native_order.hpp`; `opening_rows()` is the consumer-side page API, and the vector entry point is labelled as the compatibility bridge. A core `OpeningRange` (visitor) would be needed before every target/command path is flat.
+3. The C v1 working/open-lot snapshots remain owning, by the documented ABI lifetime; a new versioned caller-buffer export is a separate ABI decision.
+4. `placement_scope_units` no longer builds `OpeningObservation` rows for BindOpenings/BindCohort; it tests the same predicate (`run == identity && cycle == position_cycle_seq_ && cycle > 0 && side != FLAT && a matching lot exists`) and sums `lot.qty` in the same pyramid order, so the floating-point sum is identical. This is a behaviour-preserving rewrite that the row's memory bound requires; it should be re-read during review.
+5. E15's ordered selection is O(n²) in time by design (the row allows more time). If the campaign sweep shows an unacceptable wall-clock regression on a large hash population, the fix is a fixed-page external sort, not a new digest.
+6. No `PF_API` export was added or removed, so `check_c_abi_runtime.py` is unchanged; `native_stream_push_ticks_borrowed` is an internal C++ symbol.
 
 ## Verification status
 
-Not run here (environment rule): build, ctest, the fail-before first
-diagnostic for each new test unit, the corpus sweep, trade-diff and hash-leaf
-comparisons. The supervisor's remote proof must record, per test unit, the
-first diagnostic against the frozen previous-epoch header closure and then the
-green run and the sweep.
+Not run here (environment rule): build, ctest, the fail-before first diagnostic for each new test unit, the corpus sweep, trade-diff and hash-leaf comparisons.
+The supervisor's remote proof must record, per test unit, the first diagnostic against the frozen previous-epoch header closure and then the green run and the sweep.
+
+## Fix round 1
+
+Input: failed proof `rj-20261021t013508-217bd7`, lane HEAD `b31a5245acf1b64470d643e29405b7912e356bce`. Read both briefs, `git log -3`, this report, all nine failing-stage logs in full and all three summaries in `/Users/haoliangwen/.local/state/pineforge-top-core/lanes/core-cr150-o1e3b/lab-fail-rj-20261021t013508-217bd7/` before editing.
+
+| Stage | Cause | Fix |
+|---|---|---|
+| debug source-guard-dangling-comment-names | The reverse-read comment named `std::reverse_iterator`, absent from the source inventory. | Describe the temporary-iterator lifetime problem in prose; keep the iterator and guard unchanged. |
+| debug source-guard-native-versions | The opening codec reopened `namespace pineforge`, so the guard could not isolate the one engine epoch. | Use C++17 `namespace pineforge::detail` for the codec, preserving its unversioned scratch scope and the original versioned consumer scope. |
+| preflight detached-comments | A blank line detached the two-line hash-helper overview from the next declaration. | Join it to the ordered-scan comment block immediately above its template. |
+| preflight doc-anchors | Lane edits shifted cited source windows and changed the C tick bridge inside pinned windows: 109 BAD anchors (including one past EOF). | Manually refresh shifted citations across six pages; move unchanged C accessor pins with their bytes, and copy the lab's exact hashes for the still-complete runtime/stream windows. No pins or claims removed. |
+| preflight source-guard-dangling-comment-names | Same reverse-read comment as debug. | Same source comment fix. |
+| preflight source-guard-native-versions | Same duplicate outer namespace as debug. | Same codec namespace fix. |
+| preflight verifier-tests | The real source guards failed before the scripted driver stages; all 16 shards failed (214 tests), including missing-stage and not-started assertions. | Repair the two source causes above; leave every verifier assertion and guard untouched. |
+| release source-guard-dangling-comment-names | Same reverse-read comment as debug. | Same source comment fix. |
+| release source-guard-native-versions | Same duplicate outer namespace as debug. | Same codec namespace fix. |
+
+Edit-only handoff: no compiler, build, test, generator, repo script or lab submission ran here; only file reads/edits and git. `git diff --check` passed. Original report paragraphs were rewrapped to retain the brief's line limit. `DONE-fix1` marks the committed repair for resubmission, not a verification PASS; fresh preflight, release/debug, fail-before and corpus proof remain the supervisor's responsibility.

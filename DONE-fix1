@@ -1,0 +1,5 @@
+Fix round 1 — core-cr150-o1e3b, cx/o1-e3b
+Failed proof: rj-20261021t013508-217bd7
+Source guard causes and shifted documentation citations repaired; see REPORT.md.
+Edit only: no local builds, tests, generators or repository scripts.
+Ready for supervisor lab resubmission; verification and corpus proof pending.

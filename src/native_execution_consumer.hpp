@@ -24,8 +24,7 @@
 
 #define PINEFORGE_HAS_NATIVE_ROW_READBACK_V1 1
 
-namespace pineforge {
-namespace detail {
+namespace pineforge::detail {
 
 // PagedRunRows' record codec for one opening observation. PositionIdentity is
 // a two-alternative std::variant, so it is not trivially copyable: the record
@@ -64,8 +63,7 @@ template<> struct RunRowCodec<native_order::OpeningObservation> {
     }
 };
 
-} // namespace detail
-} // namespace pineforge
+} // namespace pineforge::detail
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {

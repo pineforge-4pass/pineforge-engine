@@ -145,8 +145,8 @@ public:
         mutable std::optional<T> row_;
     };
     using const_iterator = iterator<false>;
-    // A std::reverse_iterator would return a reference into a destroyed
-    // temporary iterator. Reverse reads need their own current row as well.
+    // A reverse adapter that dereferences a temporary would return a reference
+    // into a destroyed iterator. Reverse reads need their own current row too.
     using const_reverse_iterator = iterator<true>;
 
     PagedRunRows() = default;

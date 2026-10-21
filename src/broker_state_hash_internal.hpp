@@ -16,7 +16,6 @@ inline namespace engine_script_run_v19 {
 
 // BrokerStateHashSink itself is public (engine.hpp): a host folds its own
 // state through it. What stays here are the kernel's own fold helpers.
-
 // Unordered maps/sets have unique keys. Select their next key by scanning,
 // retaining only three iterators (previous, candidate, current), instead of
 // copying the key population into a sort workspace. Keeping iterators rather
