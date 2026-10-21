@@ -1,0 +1,17 @@
+CX-PERF441 edit-only lane handoff ready.
+HEAD: b4d20117b6d40f110a2be7f3fe3759adecba9e24
+Branch: core/cr150-perf441-fix1
+
+Rank 1: direct canonical hash writes remove owning per-leaf reflection.
+Rank 4: rejection indexing fused with newly folded events; payload destruction
+and the scan of previously queried events remain.
+Rank 5: OPEN; sharing cancellation classification requires the kernel seam owner.
+
+UNVERIFIED: no builds, tests, repository scripts, lab jobs or measurements run
+in this continuation. No verification/parity/performance PASS is claimed.
+No git add, commit or push; supervisor commits the diff.
+
+Report: REPORT-fix1.md contains the append-ready Fix round 1 — CX-PERF441
+section, base/working-tree citations, expected cost coefficients and deviations.
+Supervisor must append it to ../REPORT.md, which is outside the writable root.
+New source/test files are untracked and must be included in the handoff.

@@ -1,0 +1,13 @@
+Fix round 2 edit-only handoff ready.
+HEAD: 090106f52be52025622b96e7f3a74933f7e085c8
+Branch: core/cr150-perf441-fix1
+
+Exactly 18 named citations moved across 16 lines in the three assigned docs.
+No prose, other anchors, C++, headers, tests, or build files were changed.
+REPORT-fix2.md records all old/new pointers and the quoted C++ evidence.
+
+No builds, tests, repository scripts, remote lab jobs, or corpus sweeps run.
+Supervisor commits the diff and runs preflight, release, debug, docs proof.
+No git add, commit, or push run.
+
+Pre-existing dirty corpus and untracked DONE-fix1 left untouched.
