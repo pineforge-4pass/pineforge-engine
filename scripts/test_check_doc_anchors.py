@@ -348,6 +348,65 @@ class Precision(unittest.TestCase):
             self.assertNotIn('native_host.hpp:3 ', out)
 
 
+class CitedLine(unittest.TestCase):
+    """A claim belongs on the cited line, including the first line of a range."""
+
+    @staticmethod
+    def write_open_view_source(t: Tree) -> None:
+        lines = ['// unrelated source\n'] * 8121
+        lines[8084] = '    callback_context_.sub_bar_open_ms = point.coordinate.open_ms;\n'
+        lines[8120] = '    engine.current_bar_ = open_view;\n'
+        (t.root / 'src/file.cpp').write_text(''.join(lines))
+
+    def test_prose_fragment_at_8121_does_not_validate_8085(self) -> None:
+        body = ('The consumer has already set `engine.current_bar_ = open_view` '
+                '(`file.cpp:8085`), the complete bar for the callback.\n')
+        with tree(body) as t:
+            self.write_open_view_source(t)
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('file.cpp:8085  [SYMMISS]', out)
+            self.assertIn('file.cpp:8121', out)
+
+    def test_correct_prose_fragment_on_the_cited_line_passes(self) -> None:
+        body = ('The consumer has already set `engine.current_bar_ = open_view` '
+                '(`file.cpp:8121`), the complete bar for the callback.\n')
+        with tree(body) as t:
+            self.write_open_view_source(t)
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+
+    def test_a_symbol_mid_range_does_not_validate_the_start(self) -> None:
+        with tree('The spec `NativeRunSpec` native_host.hpp:4-8.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:4-8  [SYMMISS]', out)
+
+    def test_a_symbol_on_the_range_start_passes(self) -> None:
+        with tree('The spec `NativeRunSpec` native_host.hpp:5-8.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 0, out)
+
+    def test_a_prose_fragment_mid_range_does_not_validate_the_start(self) -> None:
+        with tree('The default `int max_open_lots = 0` native_host.hpp:6-7.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:6-7  [SYMMISS]', out)
+
+    def test_a_ruling_fragment_mid_range_does_not_validate_the_start(self) -> None:
+        with ruling(RULING + '| `x` | default `int max_open_lots = 0` native_host.hpp:6-7 |\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:6-7  [SYMMISS]', out)
+
+    def test_a_scoped_symbol_later_in_the_range_does_not_hide_a_wrong_scope(self) -> None:
+        with tree('The effect `GroupEffect::Reduce` native_host.hpp:22-26.\n') as t:
+            code, out = t.run()
+            self.assertEqual(code, 1, out)
+            self.assertIn('native_host.hpp:22-26  [SCOPE]', out)
+            self.assertIn('outside `GroupEffect`', out)
+
+
 class Fixing(unittest.TestCase):
     """--fix re-anchors what it can prove and refuses what it cannot."""
 
