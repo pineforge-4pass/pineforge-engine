@@ -354,8 +354,12 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
     if (!s) return 0;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return 0;
-    return engine->get_report_trade(trade_index).entry_incarnation;
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return 0;
+        return engine->get_report_trade(trade_index).entry_incarnation;
+    } catch (...) {
+        return 0;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): closed-trade id / exit-comment
@@ -369,28 +373,41 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * report-row overload is not possible.
  *
  * Returned pointers are valid until the next run() (or stream call) on this
- * handle, like strategy_get_last_error -- the runtime's own std::string
- * storage backing them is untouched until then. NULL on a NULL handle or an
+ * handle, like strategy_get_last_error. This legacy pointer API explicitly
+ * materializes each requested row; value/page readers use bounded storage.
+ * NULL on a NULL handle or an
  * out-of-range/streamed row, checked by the close-cause query before indexing. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-    return engine->get_report_trade(trade_index).entry_id.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).entry_id.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 PF_API const char* strategy_closed_trade_exit_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-    return engine->get_report_trade(trade_index).exit_id.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).exit_id.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-    return engine->get_report_trade(trade_index).exit_comment.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).exit_comment.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): why a REPORT-row closed trade
@@ -408,7 +425,11 @@ PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade
  * _effective_levels). */
 PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index) {
     if (!s) return -1;
-    return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
+    try {
+        return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
+    } catch (...) {
+        return -1;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): the script-facing position size

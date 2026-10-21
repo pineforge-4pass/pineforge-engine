@@ -3011,11 +3011,12 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     closed_rows_digested_ = 0;
     closed_rows_final_ = 0;
     if (streams_closed_rows(engine)) {
-        std::vector<std::uint64_t>().swap(closed_row_prefix_);
+        closed_row_prefix_.clear();
         closed_trade_report_ = std::make_unique<ClosedTradeReport>(engine.initial_capital_);
     } else {
         closed_row_prefix_.clear();
     }
+    engine.trades_.set_scratch_directory(engine.report_sink_state_.scratch_dir);
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;
@@ -11941,6 +11942,8 @@ uint64_t NativeExecutionConsumer::closed_rows_digest(
     f.h = closed_rows_digest_;
     for (std::size_t index = closed_rows_digested_; index < final_rows; ++index) {
         fold_closed_row(f, rows[index]);
+        if (closed_row_prefix_.size() == kClosedRowCheckpoints)
+            closed_row_prefix_.erase(closed_row_prefix_.begin());
         closed_row_prefix_.push_back(f.h);
     }
     closed_rows_digest_ = f.h;
@@ -11957,18 +11960,28 @@ void NativeExecutionConsumer::rewind_closed_rows(std::size_t first) const {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "closed-row rewind precedes the sealed prefix");
     if (first >= closed_rows_digested_) return;
-    closed_rows_digested_ = first;
-    closed_row_prefix_.resize(first - base);
-    closed_rows_digest_ = first == base ? closed_trade_prefix_.rows_digest
-                                       : closed_row_prefix_.back();
+    const std::size_t checkpoint_base = closed_rows_digested_ - closed_row_prefix_.size();
+    if (first > checkpoint_base) {
+        closed_row_prefix_.resize(first - checkpoint_base);
+        closed_rows_digest_ = closed_row_prefix_.back();
+        closed_rows_digested_ = first;
+    } else {
+        // No per-trade checkpoint is kept for this part of the mutable tail.
+        // The next digest read replays [base, first), then the amended suffix,
+        // in the original fold order over the ledger's exact external values.
+        closed_row_prefix_.clear();
+        closed_rows_digest_ = closed_trade_prefix_.rows_digest;
+        closed_rows_digested_ = base;
+    }
 }
 
 bool NativeExecutionConsumer::closed_rows_digest_holds(
-        const TradeLedger& rows) const noexcept {
+        const TradeLedger& rows) const {
     const std::size_t base = closed_trade_prefix_.base;
     if (rows.base() != base || closed_rows_digested_ < base
         || closed_rows_digested_ > rows.size()
-        || closed_row_prefix_.size() != closed_rows_digested_ - base) return false;
+        || closed_row_prefix_.size() > kClosedRowCheckpoints
+        || closed_row_prefix_.size() > closed_rows_digested_ - base) return false;
     BrokerStateHashSink f;
     f.h = closed_trade_prefix_.rows_digest;
     for (std::size_t index = base; index < closed_rows_digested_; ++index) {
@@ -11977,9 +11990,9 @@ bool NativeExecutionConsumer::closed_rows_digest_holds(
     return f.h == closed_rows_digest_;
 }
 
-void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) const noexcept {
+void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) const {
 #ifndef NDEBUG
-    // Debug builds re-fold the resident rows from base, seeded with the
+    // Debug builds re-fold the exact unsealed rows from base, seeded with the
     // immutable prefix digest: an amendment of a final row
     // without naming it aborts here instead of answering a digest no fresh
     // fold reproduces. Rows removed from the end are forgotten first, as a
@@ -13520,9 +13533,17 @@ void NativeExecutionConsumer::seal_closed_rows(
     // Materialize the digest before any row disappears, including in Release.
     // Debug's notification folds and final re-walk use this same prefix seed.
     (void)closed_rows_digest(engine.trades_);
-    const std::uint64_t rows_digest = closed_row_prefix_.at(global_end - base - 1);
-    // A failed write leaves every row resident and all report folds at the
-    // old base. The poisoned sink cannot acquire a successful trailer.
+    // A seal need not fall in the bounded checkpoint window. Replay from the
+    // previous sealed seed rather than retaining one checkpoint per row.
+    BrokerStateHashSink prefix_fold;
+    prefix_fold.h = closed_trade_prefix_.rows_digest;
+    engine.trades_.visit(base, global_end, [&](std::size_t, const Trade& row) {
+        fold_closed_row(prefix_fold, row);
+        return true;
+    });
+    const std::uint64_t rows_digest = prefix_fold.h;
+    // A failed write leaves the logical prefix and all report folds at the
+    // old base. Exact rows remain readable; the sink gets no valid trailer.
     for (std::size_t index = base; index < global_end; ++index)
         write_streamed_trade(engine, index, internal::report_trade_row(engine.trades_[index]));
     for (std::size_t index = base; index < global_end; ++index) {
@@ -13537,8 +13558,12 @@ void NativeExecutionConsumer::seal_closed_rows(
         engine.fold_trade_percent_prefix(row);
     }
     engine.trades_.seal(global_end);
-    closed_row_prefix_.erase(closed_row_prefix_.begin(),
-                              closed_row_prefix_.begin() + (global_end - base));
+    const std::size_t checkpoint_base = closed_rows_digested_ - closed_row_prefix_.size();
+    if (global_end > checkpoint_base) {
+        const auto retired = std::min(global_end - checkpoint_base, closed_row_prefix_.size());
+        closed_row_prefix_.erase(closed_row_prefix_.begin(),
+                                  closed_row_prefix_.begin() + retired);
+    }
     closed_trade_prefix_.base = global_end;
     closed_trade_prefix_.rows_digest = rows_digest;
     closed_trade_prefix_.exit_phase_digest = exit_phase_digest;
@@ -13554,7 +13579,7 @@ void NativeExecutionConsumer::finish_streamed_trade_metrics(
                                        "streamed trade metrics have no matching sealed prefix");
     // Finish copies after present_report has re-marked the open rows.
     // Iteration visits [base, size()), in global order, without a TradeC array.
-    // The sealed prefix, resident suffix and open rows each enter once.
+    // The sealed prefix, external/resident suffix and open rows enter once.
     auto all = closed_trade_report_->all;
     auto longs = closed_trade_report_->longs;
     auto shorts = closed_trade_report_->shorts;

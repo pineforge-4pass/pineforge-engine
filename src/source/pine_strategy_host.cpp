@@ -652,7 +652,9 @@ void source::PineStrategyHost::on_native_applied(
         const std::size_t index = event.first_trade_index + i;
         if (index < trades_.size()
             && trades_[index].close_cause == execution::CloseCause::Bracket) {
-            trades_[index].close_cause = execution::CloseCause::Unspecified;
+            trades_.modify(index, [](Trade& row) {
+                row.close_cause = execution::CloseCause::Unspecified;
+            });
         }
     }
     if (source_prepare_failed_) return;
@@ -700,13 +702,13 @@ void source::PineStrategyHost::on_native_applied(
             for (std::size_t index = event.first_trade_index + event.closed_trade_count;
                  index < trades_.size(); ++index) {
                 if (trades_[index].entry_incarnation == event.handle().incarnation)
-                    trades_[index].entry_time = script_open;
+                    trades_.modify(index, [&](Trade& row) { row.entry_time = script_open; });
             }
         }
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const std::size_t index = event.first_trade_index + i;
             if (index >= trades_.size()) continue;
-            trades_[index].exit_time = script_open;
+            trades_.modify(index, [&](Trade& row) { row.exit_time = script_open; });
         }
     }
     const auto p = adapter_.placement_.find(event.handle().incarnation);
@@ -780,8 +782,10 @@ void source::PineStrategyHost::on_native_applied(
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const std::size_t index = event.first_trade_index + i;
             if (index >= trades_.size()) continue;
-            trades_[index].exit_id.clear();
-            trades_[index].exit_comment = source::kIntradayLossComment;
+            trades_.modify(index, [](Trade& row) {
+                row.exit_id.clear();
+                row.exit_comment = source::kIntradayLossComment;
+            });
         }
     }
     // R5 lane L12 (2.ii l): the kernel used to read these strings back out of
@@ -793,7 +797,7 @@ void source::PineStrategyHost::on_native_applied(
     for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
         const std::size_t index = event.first_trade_index + i;
         if (index >= trades_.size()) continue;
-        Trade& row = trades_[index];
+        Trade row = trades_[index];
         if (row.exit_id == source::kMarginCallLabel) {
             row.close_cause = execution::CloseCause::Liquidation;
         } else if (row.exit_id.empty()) {
@@ -802,6 +806,7 @@ void source::PineStrategyHost::on_native_applied(
             else if (row.exit_comment.rfind(source::kIntradayLossComment, 0) == 0)
                 row.close_cause = execution::CloseCause::RiskLimit;
         }
+        trades_.replace(index, row);
     }
     project_short_seed_report_rows(event);
     if (!other_exit_here) order_global_exit_children(event);
@@ -1300,8 +1305,7 @@ void source::PineStrategyHost::adapter_label_bracket_trades(
     for (std::size_t offset = 0; offset < event.closed_trade_count; ++offset) {
         const std::size_t index = event.first_trade_index + offset;
         if (index >= trades_.size()) continue;
-        auto& trade = trades_[index];
-        trade.exit_from_bracket = from_bracket;
+        trades_.modify(index, [&](Trade& trade) { trade.exit_from_bracket = from_bracket; });
     }
 }
 
@@ -1479,10 +1483,12 @@ void source::PineStrategyHost::project_short_seed_report_rows(
             && placement_snapshot->source_id != plan.seed_id)) {
         return;
     }
-    for (auto& trade : trades_) {
+    for (std::size_t index = trades_.base(); index < trades_.size(); ++index) {
+        Trade trade = trades_[index];
         if (trade.entry_incarnation == plan.materialize_long.incarnation
             && trade.entry_id == plan.materialize_label) {
             trade.entry_incarnation = plan.final_short.incarnation;
+            trades_.replace(index, trade);
         }
     }
     const std::size_t begin = event.first_trade_index;
@@ -1490,7 +1496,9 @@ void source::PineStrategyHost::project_short_seed_report_rows(
     for (std::size_t index = begin; index < end && index < trades_.size(); ++index) {
         if (trades_[index].entry_incarnation == plan.final_short.incarnation
             && trades_[index].entry_id == plan.final_short_id) {
-            trades_[index].entry_incarnation = plan.materialize_long.incarnation;
+            trades_.modify(index, [&](Trade& row) {
+                row.entry_incarnation = plan.materialize_long.incarnation;
+            });
         }
     }
     adapter_.short_seed_.report_swap_pending = false;
@@ -1822,7 +1830,7 @@ static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger&,
 // the group is one row, the sort moves nothing and the call answers nullopt.
 // A quiet-bar gate (pine_quiet_bar.hpp): the ungated reference calls the sort
 // at every publication.
-static bool same_bar_exit_group_possible(const TradeLedger& trades) noexcept {
+static bool same_bar_exit_group_possible(const TradeLedger& trades) {
 #if PINEFORGE_PINE_QUIET_BAR_GATES
     if (trades.size() < 2) return false;
     const Trade& last = trades[trades.size() - 1];
@@ -2005,8 +2013,14 @@ void source::PineStrategyHost::order_global_exit_children(
         }
         for (std::size_t earlier = first; earlier < index; ++earlier)
             if (trades_[earlier].entry_incarnation == row.entry_incarnation) return;
-        if (std::find(ids.begin(), ids.end(), row.entry_id) == ids.end())
+        if (std::find(ids.begin(), ids.end(), row.entry_id) == ids.end()) {
             ids.push_back(row.entry_id);
+            // The existing entry-id table holds at most 27 keys. Rejecting
+            // an unsupported prefix here is the same semantic fallback the
+            // final rank query takes; adding further ids cannot restore it.
+            // Thus this temporary cannot grow with the closed-row block.
+            if (!adapter_.global_exit_child_ranks(ids)) return;
+        }
     }
     if (ids.size() < 2) return;
     if (first > 0 && trades_[first - 1].exit_time == head.exit_time
@@ -2019,14 +2033,21 @@ void source::PineStrategyHost::order_global_exit_children(
         const auto id = std::find(ids.begin(), ids.end(), trades_[first + lot].entry_id);
         return (*ranks)[static_cast<std::size_t>(id - ids.begin())];
     };
-    std::vector<std::size_t> children(count);
-    std::iota(children.begin(), children.end(), std::size_t{0});
-    std::stable_sort(children.begin(), children.end(),
-        [&](std::size_t a, std::size_t b) { return rank_of(a) < rank_of(b); });
+    const auto& directory = detail::run_consumer(*this).report_scratch_directory(*this);
+    ::pineforge::detail::ScratchSequence<std::size_t> children;
+    children.set_directory(directory);
+    for (std::size_t child = 0; child < count; ++child) children.push_back(child);
+    children.stable_sort([&](std::size_t a, std::size_t b) { return rank_of(a) < rank_of(b); });
     // Children in lot order settle exactly as the kernel's one fill did.
-    if (std::is_sorted(children.begin(), children.end())) return;
-    std::vector<Trade> rows;
-    std::vector<std::size_t> sources;
+    bool lot_order = true;
+    for (std::size_t child = 0; child < count; ++child) {
+        if (children[child] != child) { lot_order = false; break; }
+    }
+    if (lot_order) return;
+    TradeLedger rows;
+    ::pineforge::detail::ScratchSequence<std::size_t> sources;
+    rows.set_scratch_directory(directory);
+    sources.set_directory(directory);
     // The rule the adapter runs under, not the host's live copy a body writes.
     if (run.close_entries_rule_any) {
         for (const auto lot : children) {
@@ -2036,10 +2057,12 @@ void source::PineStrategyHost::order_global_exit_children(
     } else {
         const bool fees = commission_value_ != 0.0;
         struct Slice { std::size_t lot; double qty; std::size_t child; };
-        std::vector<Slice> slices;
-        std::vector<double> left(count);
+        ::pineforge::detail::ScratchSequence<Slice> slices;
+        ::pineforge::detail::ScratchSequence<double> left;
+        slices.set_directory(directory);
+        left.set_directory(directory);
         for (std::size_t lot = 0; lot < count; ++lot) {
-            left[lot] = trades_[first + lot].qty;
+            left.push_back(trades_[first + lot].qty);
             if (tv_money_round(left[lot]) != left[lot]) return;
         }
         std::size_t lot = 0;
@@ -2048,7 +2071,7 @@ void source::PineStrategyHost::order_global_exit_children(
             while (wanted > internal::kQtyEpsilon && lot < count) {
                 const double taken = std::min(left[lot], wanted);
                 slices.push_back({lot, taken, child});
-                left[lot] = tv_money_round(left[lot] - taken);
+                left.set(lot, tv_money_round(left[lot] - taken));
                 wanted = tv_money_round(wanted - taken);
                 if (left[lot] <= internal::kQtyEpsilon) ++lot;
             }
@@ -2103,8 +2126,9 @@ void source::PineStrategyHost::order_global_exit_children(
     for (std::size_t index = first; index < first + count; ++index) tally(trades_[index].pnl, -1);
     for (const auto& row : rows) tally(row.pnl, 1);
     trades_.resize(first);
-    for (auto& row : rows) trades_.push_back(std::move(row));
-    adapter_.permute_exit_phases(first, sources);
+    for (const auto& row : rows) trades_.push_back(row);
+    adapter_.permute_exit_phase_rows(first, sources.size(),
+                                    [&](std::size_t i) { return sources[i]; });
     native_closed_rows_amended(first);
 }
 
@@ -2131,9 +2155,10 @@ static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger& trades,
         // fills on the bar OPEN precede intrabar fills chronologically. Sibling
         // bracket exits that fill within the same phase tie-break by command
         // sequence (test_l10m_corpus_parity.cpp).
-        std::vector<std::size_t> indices(end - start);
-        std::iota(indices.begin(), indices.end(), start);
-        std::stable_sort(indices.begin(), indices.end(),
+        ::pineforge::detail::ScratchSequence<std::size_t> indices;
+        indices.set_directory(trades.scratch_directory());
+        for (std::size_t index = start; index < end; ++index) indices.push_back(index);
+        indices.stable_sort(
             [&](std::size_t ia, std::size_t ib) {
                 const bool open_a = adapter.is_open_phase_exit(ia);
                 const bool open_b = adapter.is_open_phase_exit(ib);
@@ -2142,14 +2167,22 @@ static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger& trades,
                 const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
                 return sa < sb;
             });
-        const bool moved = !std::is_sorted(indices.begin(), indices.end());
-        std::vector<Trade> sorted;
-        sorted.reserve(end - start);
-        for (std::size_t idx : indices) sorted.push_back(std::move(trades[idx]));
-        for (std::size_t i = 0; i < sorted.size(); ++i) trades[start + i] = std::move(sorted[i]);
+        bool moved = false;
+        TradeLedger sorted;
+        sorted.set_scratch_directory(trades.scratch_directory());
+        for (std::size_t i = 0; i < indices.size(); ++i) {
+            const auto index = indices[i];
+            moved = moved || index != start + i;
+            sorted.push_back(trades[index]);
+        }
+        sorted.visit(0, sorted.size(), [&](std::size_t i, const Trade& row) {
+            trades.replace(start + i, row);
+            return true;
+        });
         // The adapter's exit phases are keyed by trade index: move them with
         // the trades so the next call reads each trade's own phase.
-        adapter.permute_exit_phases(start, indices);
+        adapter.permute_exit_phase_rows(start, indices.size(),
+                                       [&](std::size_t i) { return indices[i]; });
         if (moved) return start;
     }
     return std::nullopt;

@@ -142,7 +142,7 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         double net_profit = 0.0;
 
         for (int i = 0; i < n; i++) {
-            const Trade& t = (i < n_closed) ? trades_[i]
+            const Trade t = (i < n_closed) ? trades_[i]
                                             : range_end_trades_[i - n_closed];
             out->trades[i].entry_time = t.entry_time;
             out->trades[i].exit_time = t.exit_time;
@@ -918,7 +918,7 @@ void BacktestEngine::write_report_sink_trades(const TradeC* open_rows, int count
         wire.entry_bar_index = row.entry_bar_index;
         wire.exit_bar_index = row.exit_bar_index;
         wire.open_at_end = row.open_at_end;
-        const Trade& identity = get_report_trade(static_cast<int>(i));
+        const Trade identity = get_report_trade(static_cast<int>(i));
         sink.writer->write_t(i + INT64_C(1), wire, identity.entry_incarnation,
             closed_trade_close_cause(static_cast<int>(i)), identity.entry_id,
             identity.exit_id, identity.exit_comment);

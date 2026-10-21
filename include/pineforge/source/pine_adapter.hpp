@@ -14,10 +14,12 @@
 #include <pineforge/detail/disk_resident_id_table.hpp>
 #include <pineforge/detail/id_pair_store.hpp>
 #include <pineforge/detail/adapter_exposure_storage.hpp>
+#include <pineforge/detail/scratch_sequence.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -1791,10 +1793,19 @@ public:
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
                                             const SourceId& from_entry = {}) const;
-    bool is_open_phase_exit(std::size_t trade_index) const noexcept;
+    bool is_open_phase_exit(std::size_t trade_index) const;
+    std::uint8_t exit_phase_value(std::size_t trade_index) const;
+    std::pair<std::size_t, std::uint64_t> exit_phase_prefix() const noexcept {
+        return {exit_phase_final_, exit_phase_digest_};
+    }
+    std::size_t resident_exit_phases() const noexcept {
+        return std::min(trade_exit_phase_.size(), trade_exit_phase_.resident_capacity());
+    }
     // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
     // slot start + i takes the phase of the trade previously at indices[i].
     void permute_exit_phases(std::size_t start, const std::vector<std::size_t>& indices);
+    void permute_exit_phase_rows(std::size_t start, std::size_t count,
+                                const std::function<std::size_t(std::size_t)>& source_at);
     // The place of each of `ids` among the children one global strategy.exit
     // fill closes, in TradingView's entry-id table (exit_rank_keys_); nullopt
     // where the pinned table does not reach (PineStrategyHost::
@@ -2765,7 +2776,7 @@ private:
     std::int64_t last_bar_dual_entry_script_open_ms_ =
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
-    std::vector<std::uint8_t> trade_exit_phase_;
+    ::pineforge::detail::ScratchSequence<std::uint8_t> trade_exit_phase_;
     // TradingView's entry-id table (global_exit_child_ranks): every entry id
     // in the order of its first fill, never removed, with a running digest,
     // and the most keys it ever held counting one transient key per live

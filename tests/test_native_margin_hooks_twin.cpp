@@ -127,7 +127,7 @@ struct TvAdapterHost final : source::PineStrategyHost {
             strategy_entry(long_side_ ? "L" : "S", long_side_, kNaN, kNaN, quantity_);
         }
     }
-    const Trade& row(int index) const { return get_trade(index); }
+    Trade row(int index) const { return get_trade(index); }
     double level() const { return margin_liquidation_price(); }
     double position() const { return physical_position().signed_units; }
     std::vector<const Trade*> margin_rows() const {
