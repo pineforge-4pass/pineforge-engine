@@ -727,10 +727,51 @@ class GuardedBounds(Tree):
             with self.subTest(directive):
                 self.rejected(directive + '\n' + LOOP_CPP, 'macro/conditional preprocessing')
 
-    def test_macros_in_other_scanned_files_cannot_rewrite_a_header_entry(self):
+    def test_spliced_digraph_in_entry_is_not_a_guard_proof(self):
+        # 28eac95877 sees neither physical line as a directive or a new site,
+        # and admits the unchanged literal guard. The continuation must refuse it.
+        loop = LOOP_CPP.replace('void on_bar(double x) {\n',
+                                'void on_bar(double x) {\n'
+                                '%\\\n:define push_back(x) resize(1u << 30)\n')
+        self.rejected(loop, 'line continuation')
+
+    def test_brace_digraphs_are_not_scope_proof(self):
+        # 28eac95877 leaves the %>-closed opener on its stack, making the global
+        # declaration "local". It also ignores the <% inner block in the second
+        # case. Both pass there; both must refuse without changing site spelling.
+        opener = LOOP_CPP.replace(
+            'void on_bar(double x) {\n    static std::vector<double> slots_;',
+            'void opener() { %>\nstd::vector<double> slots_;\nvoid on_bar(double x) {')
+        inner = LOOP_CPP.replace('void on_bar(double x) {',
+                                 'void on_bar(double x) { <%') + '}\n'
+        for shape, loop in (('global-after-opener', opener), ('inner-block', inner)):
+            with self.subTest(shape):
+                self.rejected(loop, 'brace digraphs')
+
+    def test_fixed_input_continuations_and_brace_digraphs_are_refused(self):
+        self.build(self.clean_entries())
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        self.assertEqual(counts(control)['PASS(bounded)'], 1)
+        # Each suffix is site-free and leaves the fixed declaration intact.
+        # 28eac95877 therefore passes all three; the proof-file checks must refuse.
+        for suffix, diagnostic in (('\\\n\n', 'line continuation'),
+                                   ('void helper() <% }\n', 'brace digraphs'),
+                                   ('void helper() { %>\n', 'brace digraphs')):
+            with self.subTest(suffix):
+                (self.root / 'include/pineforge/fixed.hpp').write_text(FIXED_HPP + suffix)
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertRegex(proc.stdout, r'FINDING .*bounded entry E1: '
+                                 rf'include/pineforge/fixed.hpp: {diagnostic}')
+                self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                self.assertNotIn('NEW ', proc.stdout)
+                self.assertNotIn('stale', proc.stdout)
+
+    def header_entry_control(self):
         header_file = 'include/pineforge/loop.hpp'
         header = '#pragma once\n' + LOOP_CPP
-        consumer = '#define unrelated(x) x\n#include "pineforge/loop.hpp"\n'
+        consumer = '#include <vector>\n#define unrelated(x) x\n#include "pineforge/loop.hpp"\n'
         self.build([entry('E1', file=header_file, state='bounded')], loop=consumer)
         write_tree(self.root, {
             header_file: header,
@@ -740,6 +781,10 @@ class GuardedBounds(Tree):
         control = self.gate()
         self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
         self.assertEqual(counts(control)['PASS(bounded)'], 1)
+        return consumer
+
+    def test_macros_in_other_scanned_files_cannot_rewrite_a_header_entry(self):
+        consumer = self.header_entry_control()
         for marker in ('#', '%:'):
             for definition in ('push_back(x) resize(1u << 30)',
                                'emplace_back(x) resize(1u << 30)', 'size() 0',
@@ -754,8 +799,79 @@ class GuardedBounds(Tree):
                     self.assertEqual(counts(proc)['PASS(bounded)'], 0)
                     self.assertNotIn('NEW ', proc.stdout)
 
+    def test_commented_and_spliced_defines_cannot_rewrite_a_header_entry(self):
+        consumer = self.header_entry_control()
+        include = '#include "pineforge/loop.hpp"'
+        definitions = ['#define/**/push_back(x) resize(1u << 30)']
+        for splice in ('\\\n', '\\ \t\r\n'):
+            definitions.extend((
+                f'#define {splice}push_back(x) resize(1u << 30)',
+                f'#{splice}define push_back(x) resize(1u << 30)',
+                f'%{splice}:define push_back(x) resize(1u << 30)'))
+        # 28eac95877 drops /**/ without a space, and never joins any splice.
+        # Its name regex therefore misses every definition, producing PASS=1.
+        # The includer is outside the proof files: only directive parsing can
+        # close these cases, not the entry/fixed-file continuation refusal.
+        for directive in definitions:
+            with self.subTest(directive):
+                (self.root / 'src/loop.cpp').write_text(
+                    consumer.replace(include, directive + '\n' + include))
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertRegex(proc.stdout, r'FINDING .*bounded entry E1: '
+                                 r"scanned file src/loop.cpp defines macro 'push_back'")
+                self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                self.assertNotIn('NEW ', proc.stdout)
+                self.assertNotIn('stale', proc.stdout)
+
+    def test_keyword_and_type_macros_cannot_rewrite_a_header_entry(self):
+        consumer = self.header_entry_control()
+        include = '#include "pineforge/loop.hpp"'
+        # None of these names is in 28eac95877's five-name refusal list. Their
+        # definitions add no sites or receiver/bound uses, so it passes each.
+        # constexpr/int occur only in the fixed input, exercising both files.
+        for name, definition in (('if', 'if(c) if (true)'),
+                                 ('static', 'static extern'),
+                                 ('std', 'std alternate_std'),
+                                 ('vector', 'vector alternate_vector'),
+                                 ('double', 'double ScalarWithSideEffects'),
+                                 ('constexpr', 'constexpr const'),
+                                 ('int', 'int long'),
+                                 ('x', 'x ignored_argument')):
+            with self.subTest(name):
+                directive = '#define ' + definition
+                (self.root / 'src/loop.cpp').write_text(
+                    consumer.replace(include, directive + '\n' + include))
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertRegex(proc.stdout, r'FINDING .*bounded entry E1: '
+                                 rf'scanned file src/loop.cpp defines macro {name!r}')
+                self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                self.assertNotIn('NEW ', proc.stdout)
+                self.assertNotIn('stale', proc.stdout)
+
 
 class FailClosed(Tree):
+    def test_blank_inventory_file_or_symbol_is_malformed(self):
+        self.build(self.clean_entries())
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        path = self.root / SITE_INVENTORY_REL
+        original = path.read_text()
+        # 28eac95877 accepts these fields through placeholder_ok=True, then
+        # reports stale/NEW identities with exit 1. They must be schema errors.
+        for field in ('file', 'symbol'):
+            for value in ('', ' \t '):
+                with self.subTest(field=field, value=value):
+                    inventory = json.loads(original)
+                    inventory['sites'][0][field] = value
+                    path.write_text(json.dumps(inventory))
+                    proc = self.gate()
+                    self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                    self.assertIn(f'site inventory record: field {field} is empty or a placeholder',
+                                  proc.stdout)
+                    self.assertNotIn('stale', proc.stdout)
+
     def test_inventory_spelling_cannot_be_empty_or_a_placeholder(self):
         self.build(self.clean_entries())
         control = self.gate()

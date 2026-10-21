@@ -441,7 +441,8 @@ def _need(mapping: dict, keys: tuple, who: str, allowed: tuple = ()) -> None:
 
 
 def _text(value, who: str, field: str, *, placeholder_ok: bool = False) -> str:
-    if not isinstance(value, str) or (not placeholder_ok and value.strip().lower() in PLACEHOLDERS):
+    if (not isinstance(value, str) or not value.strip()
+            or (not placeholder_ok and value.strip().lower() in PLACEHOLDERS)):
         raise GateError(f'{who}: field {field} is empty or a placeholder ({value!r})')
     return value
 
@@ -1037,7 +1038,10 @@ def _guarded_push(site: Site, code: str) \
 
 
 def _directives(text: str):
-    """Read directives from code only; C++17's %: digraph also means #."""
+    """Join translation-phase splices before lexing directives, including %:."""
+    # Keep this normalization out of Scanner._lex: the reviewed site identities
+    # still use the original physical lines and lexical brace paths.
+    text = re.sub(r'\\[ \t]*\r?\n', '', text)
     for code, _, literal in cxxlex.lex_lines(text):
         marker = re.match(r'\s*(?:#|%:)', code)
         if marker:
@@ -1062,7 +1066,19 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
         return [finding(first, 'fixed-input definition is outside the scanned source files')]
     lexed = {rel: Scanner._lex(text) for rel, text in texts.items()}
     fixed_header = str(fixed['definition']).removeprefix('include/')
-    for rel in {entry['file'], fixed['definition']}:
+    proof_files = {entry['file'], fixed['definition']}
+    macro_names = {'push_back', 'emplace_back', 'size'}
+    for rel in sorted(proof_files):
+        body = lexed[rel][0]
+        # The bounded proof uses physical-line code and ordinary braces.
+        # Refuse alternate spellings rather than changing inventory identities.
+        if any(line.rstrip().endswith('\\') for line in body.splitlines()):
+            return [finding(first, f'{rel}: line continuation is outside guarded bounded admission')]
+        if re.search(r'<%|%>', body):
+            return [finding(first, f'{rel}: brace digraphs are outside guarded bounded admission')]
+        # Keywords and scalar/type names can be macro-rewritten just like the
+        # receiver and bound. Include both proof files, not just five names.
+        macro_names.update(IDENT_RE.findall(body))
         for directive, literal in _directives(texts[rel]):
             if re.fullmatch(r'\s*#\s*pragma\s+once\s*', directive):
                 continue
@@ -1073,10 +1089,10 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
                 continue
             return [finding(first, 'macro/conditional preprocessing or unsupported includes '
                             'are outside guarded bounded admission')]
-    macro_names = {'push_back', 'emplace_back', 'size', entry['symbol'], bound}
     for rel, text in texts.items():
         for directive, _ in _directives(text):
-            definition = re.match(r'#\s*define\s+([A-Za-z_]\w*)', directive)
+            # cxxlex removes comments without inserting a separating space.
+            definition = re.match(r'#\s*define\s*([A-Za-z_]\w*)', directive)
             if definition and definition.group(1) in macro_names:
                 return [finding(first, f'scanned file {rel} defines macro '
                                 f'{definition.group(1)!r} used by guarded bounded admission')]
