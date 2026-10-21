@@ -307,4 +307,5 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "L18 scale-out failure: %s\n", error.what());
         return 1;
     }
+    return 0; // also permits the R11 fixture to include this entry point by name
 }
