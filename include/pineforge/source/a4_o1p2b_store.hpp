@@ -328,7 +328,8 @@ public:
 
     void set_directory(const std::string& directory) {
         if (store_ && directory != directory_)
-            throw std::logic_error("a4 ordered store directory changed during run");
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "a4 ordered store directory changed during run");
         directory_ = directory;
     }
 
@@ -370,7 +371,7 @@ public:
 
     void require_open() {
         if (!ensure_open())
-            throw pineforge::detail::ScratchIoError(EIO, "a4 ordered store open");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered store open");
     }
 
     const ScratchStore* store() const noexcept { return store_.get(); }
@@ -401,11 +402,11 @@ public:
     void begin_batch() {
         require_open();
         if (store_->begin() != ScratchStatus::ok)
-            throw pineforge::detail::ScratchIoError(EIO, "a4 ordered store begin");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered store begin");
     }
     void commit_batch() {
         if (store_ && store_->commit(ScratchDurability::buffered) != ScratchStatus::ok)
-            throw pineforge::detail::ScratchIoError(EIO, "a4 ordered store commit");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered store commit");
     }
     void rollback_batch() noexcept {
         if (store_) (void)store_->rollback();
@@ -413,7 +414,7 @@ public:
     void put(const ScratchByteSource& key, const ScratchByteSource& value) {
         ScratchHandle result = scratch_no_handle;
         if (!store_ || store_->put(key, value, result) != ScratchStatus::ok)
-            throw pineforge::detail::ScratchIoError(EIO, "a4 ordered store put");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered store put");
     }
     void erase(ScratchHandle handle) noexcept {
         if (store_) (void)store_->erase(handle);
@@ -639,7 +640,7 @@ public:
             // silently reading fewer rows than the size it just folded.
             Row row;
             if (!owner_->load(handle_, row))
-                throw pineforge::detail::ScratchIoError(EIO, "a4 ordered row decode");
+                pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered row decode");
             row_.emplace(std::move(row));
         }
         void advance() {
@@ -676,7 +677,7 @@ public:
         // it is a codec/programming error and is REFUSED here rather than
         // stored and silently skipped by a later pass.
         if (value.overflowed() || value.size() > raw_.size())
-            throw pineforge::detail::ScratchIoError(
+            pineforge::detail::raise_scratch_io_error(
                 EMSGSIZE, "a4 ordered row exceeds the prepared workspace");
         const pineforge::detail::ScratchSpanSource key_source{
             ScratchBytes{reinterpret_cast<const std::byte*>(encoded), 8}};
@@ -854,7 +855,7 @@ private:
     void store_handle(ScratchHandle handle, const Row& row) {
         std::uint8_t key[8];
         if (!owner_.read_key(handle, key))
-            throw pineforge::detail::ScratchIoError(EIO, "a4 ordered row key read");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered row key read");
         Segments value;
         Codec::encode(row, value);
         const pineforge::detail::ScratchSpanSource key_source{
@@ -937,7 +938,7 @@ public:
             }
             Row row;
             if (!owner_->load(handle_, row))
-                throw pineforge::detail::ScratchIoError(EIO, "a4 ordered row decode");
+                pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered row decode");
             row_.emplace(std::move(row));
         }
         void advance() {
@@ -976,7 +977,9 @@ public:
     // caller invariant violation.
     auto at(const Key& key) const {
         Row row;
-        if (!find(key, row)) throw std::out_of_range("a4 ordered store key");
+        if (!find(key, row))
+            throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {},
+                                           "a4 ordered store key");
         return row.second;
     }
     void upsert(const Key& key, const Row& row) {
@@ -1098,7 +1101,7 @@ public:
     // unordered_set::insert semantics: a present key leaves the set unchanged.
     void insert(std::uint64_t value) {
         if (!owner_.ensure_open())
-            throw pineforge::detail::ScratchIoError(EIO, "a4 ordered set open");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered set open");
         if (contains(value)) return;
         std::uint8_t key[8];
         store_le64(key, value);
@@ -1125,7 +1128,7 @@ public:
         if (!find_handle(value, handle)) return 0;
         StoreOwner::Batch batch(owner_);
         if (!erase_checked(handle))
-            throw pineforge::detail::ScratchIoError(EIO, "a4 ordered set erase");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered set erase");
         batch.commit();
         return 1;
     }
@@ -1170,7 +1173,7 @@ public:
             }
             std::uint64_t value = 0;
             if (!owner_->value_of(handle_, value))
-                throw pineforge::detail::ScratchIoError(EIO, "a4 ordered set row read");
+                pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered set row read");
             value_ = value;
         }
         void advance() {

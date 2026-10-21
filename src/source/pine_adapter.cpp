@@ -5258,7 +5258,7 @@ void PineExecutionAdapter::consume_opening_fees(
         // run instead of consuming past a row the legacy walk would have seen.
         if (!open_entry_fees_.load_raw(handle, bytes)
             || !OpenEntryFeeCodec::view(bytes, row))
-            throw pineforge::detail::ScratchIoError(EIO, "a4 fee ledger read");
+            pineforge::detail::raise_scratch_io_error(EIO, "a4 fee ledger read");
         const bool selected_origin = opening
             ? opening->incarnation == row.incarnation
             : (!openings || openings->incarnations.empty()
@@ -5281,11 +5281,11 @@ void PineExecutionAdapter::consume_opening_fees(
         remaining -= consumed;
         if (!(units > 0.0)) {
             if (!open_entry_fees_.erase_checked(handle))
-                throw pineforge::detail::ScratchIoError(EIO, "a4 fee ledger erase");
+                pineforge::detail::raise_scratch_io_error(EIO, "a4 fee ledger erase");
         } else {
             OpenEntryFeeCodec::patch_arithmetic(bytes, row, units, fee);
             if (!open_entry_fees_.store_raw(handle, bytes))
-                throw pineforge::detail::ScratchIoError(EIO, "a4 fee ledger store");
+                pineforge::detail::raise_scratch_io_error(EIO, "a4 fee ledger store");
         }
         handle = following;
     }

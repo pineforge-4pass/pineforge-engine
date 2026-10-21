@@ -210,10 +210,30 @@ void named_cancel_tokens() {
     bool threw = false;
     try {
         (void)tokens.at("missing");
-    } catch (const std::out_of_range&) {
+    } catch (const std::out_of_range& error) {
         threw = true;
+        const auto* failure = dynamic_cast<const RunFailureInfo*>(&error);
+        CHECK(failure && failure->run_failure_code() == RunFailureCode::engine_invariant);
+        CHECK(std::string(error.what()) == "a4 ordered store key");
     }
     CHECK(threw);
+
+    // A directory change after opening is still a logic_error, with a code
+    // carried at the raise site and the live dictionary left untouched.
+    threw = false;
+    try {
+        tokens.set_directory("o1p2b-other-directory");
+    } catch (const std::logic_error& error) {
+        threw = true;
+        const auto* failure = dynamic_cast<const RunFailureInfo*>(&error);
+        CHECK(failure && failure->run_failure_code() == RunFailureCode::engine_invariant);
+        CHECK(std::string(error.what()) == "a4 ordered store directory changed during run");
+    }
+    CHECK(threw);
+    CHECK(static_cast<std::size_t>(tokens.size()) == reference.size());
+    keys.clear();
+    for (const auto& row : tokens) keys.push_back(row.first);
+    CHECK(keys == sorted);
 }
 }
 

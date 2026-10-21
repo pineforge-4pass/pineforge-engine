@@ -4,6 +4,7 @@
 #include <pineforge/source/pine_adapter.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -256,8 +257,13 @@ void prepared_row_bound() {
     bool refused = false;
     try {
         (adapter.*member(Record{}))(placement, event);
-    } catch (const std::system_error&) {
+    } catch (const pineforge::detail::ScratchIoError& error) {
         refused = true;
+        CHECK(error.code() == std::error_code(EMSGSIZE, std::generic_category()));
+        CHECK(error.run_failure_code() == RunFailureCode::scratch_io_failed);
+        CHECK(std::string(error.what()) == std::system_error(
+            EMSGSIZE, std::generic_category(),
+            "a4 ordered row exceeds the prepared workspace").what());
     }
     CHECK(refused);
     CHECK((adapter.*member(Fees{})).empty());
