@@ -1013,26 +1013,26 @@ runs, and this page does not claim either target as met.
 
 ## Runners and time limits
 
-`ci.yml` and `native-live.yml` follow the frozen org `ci-labels.md` canon
-(SHA-256 `ac875205d8bdae2d7e0c23aca438118a0e9da2efb297de4e6b2cd80e7416f5b3`).
+`ci.yml`, `native-live.yml` and `corpus-parity.yml` follow the GCP fleet
+routing announced in owner bulletin #1056 (2026-10-21).
 Their Linux jobs resolve to these arrays on every event, including pull
 requests, with no hosted fallback:
 
-| Jobs | Resolved `runs-on` | Canon class |
+| Jobs | Resolved `runs-on` | Fleet class |
 | --- | --- | --- |
-| `preflight`, Ubuntu Release and Debug, `sanitizers`, `kernel-only`, all three native profiles | `["self-hosted","pf-ci","pf-ci-x64-16"]` | Heavy engine gates, 16 vCPU |
-| Both `authz` jobs, `changes`, `build-gate`, `native-live-gate` | `["self-hosted","pf-ci","pf-ci-x64"]` | Light pool class, 4 vCPU |
+| `preflight`, Ubuntu Release and Debug, `sanitizers`, `kernel-only`, all three native profiles, both corpus parity jobs | `["self-hosted","pf-gcp-pr"]` | Non-release on every ref |
+| Both `authz` jobs, `changes`, `build-gate`, `native-live-gate` | `["self-hosted","pf-gcp-pr"]` | Non-release on every ref |
+| Release `release`, Linux x64 `prebuilt`, `notify-hub`, baseline `promote` | `["self-hosted","pf-gcp-main"]` | Isolated release and promotion |
 | Both macOS build legs | `["macos-26"]` | The canon's hosted macOS exception |
 
-The frozen canon keeps light jobs on `pf-ci-x64` until the Cloud Run class
-is announced live. Its default for eligible jobs after that announcement is
-`["self-hosted","pf-ci","pf-ci-crj"]` (8 vCPU / 32 GiB); Docker-daemon jobs
-use `pf-ci-x64`, and heavier jobs use `pf-ci-x64-16`. It reserves
-`["self-hosted","pf-ci","pf-ci-release"]` for isolated release credentials
-and artifact provenance, never pull requests, and
-`["self-hosted","pf-ci","pf-ci-arm64"]` for required Linux ARM work.
+The GCP fleet puts both former light and heavy non-release jobs on
+`pf-gcp-pr` on every ref. Eligible checks, shell-only jobs and Docker-daemon
+jobs share `["self-hosted","pf-gcp-pr"]`; parallelism follows each runner's
+available cores. It reserves `["self-hosted","pf-gcp-main"]` for isolated
+release credentials and artifact provenance, never PR jobs, while required
+Linux ARM release work retains the hosted `ubuntu-22.04-arm` pin.
 
-Each scoped workflow starts with the verbatim canon `authz` job: no checkout,
+Each CI/native workflow starts with the verbatim canon `authz` job: no checkout,
 `permissions: {}`, no explicit timeout. It admits our events and same-repository,
 non-fork PRs by members, collaborators, or the PR-only bot allowlist
 `dependabot[bot] pineforge-app[bot]`; other same-repository authors must have
@@ -1044,8 +1044,9 @@ checkouts disable credential persistence. `ci.yml` has no PR path or branch
 filter. The reusable native workflow inherits the caller's PR event and
 performs its own authz check.
 
-LB-435 moves release routing to `["self-hosted","pf-ci","pf-ci-release"]`,
-replacing the hosted-only release ruling of 2026-10-19. The isolated class
+The GCP fleet routes releases to `["self-hosted","pf-gcp-main"]`,
+continuing LB-435's replacement of the hosted-only release ruling of
+2026-10-19. The isolated class
 serves release/deploy/publish jobs that reference `secrets.*`, request
 `id-token`, name an `environment` or mint an App token, and jobs that build
 artifacts those jobs publish, even without secrets. Its runner group is
@@ -1055,22 +1056,27 @@ Inherited workflow environment secrets count too. A conditional deployment
 step still holds those references in its job.
 
 In `release.yml`, `release`, `notify-hub` and the Linux x64 `prebuilt` leg
-select `["self-hosted","pf-ci","pf-ci-release"]` directly, with no hosted
+select `["self-hosted","pf-gcp-main"]` directly, with no hosted
 fallback. The `prebuilt` matrix keeps its three legs and
 `runs-on: ${{ matrix.runner }}`; `linux-aarch64` retains `ubuntu-22.04-arm`
-and waits for a release arm64 class, while `macos-universal` retains
+as an existing hosted exception, while `macos-universal` retains
 `macos-latest`. The workflow remains `workflow_dispatch` only.
 
-L6's 15:40 addendum also moves baseline `promote` in `promote-baseline.yml`
-to `["self-hosted","pf-ci","pf-ci-release"]` for its GitHub App secrets and
+The GCP fleet also routes baseline `promote` in `promote-baseline.yml`
+to `["self-hosted","pf-gcp-main"]`, preserving L6's 15:40 addendum's
+isolation for its GitHub App secrets and
 inherited `id-token: write` permission. This named exception retains its
 closed `pull_request_target` and manual dispatch triggers; only its
 `runs-on` line changes in the workflow.
 
 Other jobs in workflows triggered by `pull_request` or `pull_request_target`
-do not move to the release class. Docs `build` stays on `ubuntu-latest` because
-`docs.yml` accepts `pull_request`, even though its Cloudflare deployment step
-skips that event. That workflow is left intact.
+do not move to the release class. Docs `build` and both `corpus-parity.yml`
+jobs run on `pf-gcp-pr` behind the canonical `authz` job: `docs.yml` and
+`corpus-parity.yml` both accept `pull_request`, so a fork pull request must be
+refused before any checkout, exactly as `ci.yml` and `native-live.yml` refuse
+it. Outsider pull requests run no CI at all; there is no hosted fallback left
+on either workflow. The docs Cloudflare deployment step still skips
+`pull_request` events.
 
 Both aggregates use `if: always()` and first refuse unless authz succeeded,
 before any checkout or repository code. The native aggregate then requires
@@ -1082,8 +1088,10 @@ A fork must not be allowed to replace authz and obtain a runner.
 
 The four build names and PR-only `--exclude-label slow` policy are unchanged.
 The routing-only matrix includes contain JSON label arrays, decoded by
-`runs-on: ${{ fromJSON(matrix.runner) }}`. Each non-authz pool job also sets
-its matching job-level string `PF_CI_LABELS`; hosted macOS ignores that string.
+`runs-on: ${{ fromJSON(matrix.runner) }}`. The six non-authz CI jobs, two
+native jobs and two corpus jobs still declare legacy job-level
+`PF_CI_LABELS` metadata; no workflow or repository code consumes that string
+for routing, and hosted macOS ignores it.
 Parallelism remains `--jobs "$(getconf _NPROCESSORS_ONLN)"`.
 
 The dispatcher's actor allowlist follows the frozen canon `ci-labels.md` at
@@ -1092,60 +1100,73 @@ requests, and `pineforge-app[bot]`; the dispatcher's own rerun App is admitted
 only on its recorded-rerun path. The CI/native fragments do not extend this
 actor allowlist.
 
-The pre-job hook requires each pool job's `PF_CI_LABELS` to match its runner
-labels. `authz` is canon-verbatim and has no `PF_CI_LABELS`; whether the pool
-hook accepts it is settled by the first pool run.
+The old pool's pre-job-hook requirement that `PF_CI_LABELS` match runner
+labels no longer supplies the GCP routing pin; the exact `runs-on` and matrix
+values determine the fleet class. `authz` is canon-verbatim and has no
+`PF_CI_LABELS`; any fleet-side hook behavior is settled by the first cloud run.
 
 `scripts/ci_preflight.py` pins the runner arrays, matrix, exact canon authz
-step digest, every authz dependency, read-only permissions and both refuse-first
-aggregates. Its mutation tests write altered workflow files and read them back
-before checking hosted regressions, missing authz dependencies and lost refusal
+header (including the fleet comment and comma spacing), step digest, every
+authz dependency, read-only permissions and both refuse-first aggregates.
+Its mutation tests write altered workflow files and read them back before
+checking fleet-class swaps, retired and void labels, hosted fallbacks,
+missing jobs, authz text changes, missing authz dependencies and lost refusal
 steps. Under owner #827 (2026-10-20), no job or step may declare
 `timeout-minutes`, authz included. GitHub's own 6 h platform maximum is the
 only bound; no step, stage or row deadline is added.
 
-`corpus-parity.yml` and documentation deployment retain their existing routing
-and separate pins. Baseline promotion and release use #461's separate release
-pins; this CI/native migration does not certify those workflows against the
-new canon. The legacy corpus runner expression
-is pinned separately so it cannot become the CI/native default. This replaces
-the CI/native fallback policy documented by `28fe3466a` and `f9bee2220`, using
-the `b240f6d7` fragments after `1fe46216`. The temporary runner stopgap was
+`corpus-parity.yml` pins both jobs to the plain `pf-gcp-pr` literal behind
+canon authz, and documentation deployment moved from its former hosted route
+to the same gated `pf-gcp-pr` job (PR #472 security fix, 2026-10-21).
+Baseline promotion and release keep #461's separate release pins, now on
+`pf-gcp-main`; their trigger and promotion checks remain binding.
+The literal corpus runner pin refuses the former conditional expression and
+its hosted fallback, as do the CI/native pins. GCP routing supersedes the
+CI/native fallback policy documented by `28fe3466a` and `f9bee2220` and the
+pre-GCP `b240f6d7` fragments after `1fe46216`. The temporary runner stopgap was
 `3484a7c40` / `693fd9e68`; the earlier runner and docs-only descriptions were
 `d0935605c` and `133f57148`. The platform maxima from `2394ba2fc` remain.
 
 The `build` matrix has three legs on pull requests and four on every other
 event, retaining their `build (<image>, <type>)` names. Its routing-only
 `include` entries carry the JSON label arrays
-`["self-hosted","pf-ci","pf-ci-x64-16"]` for Linux and `["macos-26"]` for macOS,
+`["self-hosted","pf-gcp-pr"]` for Linux and `["macos-26"]` for macOS,
 selected with `runs-on: ${{ fromJSON(matrix.runner) }}`.
 The hosted macOS Release leg and non-PR macOS Debug leg stay on `macos-26`
 (M1, 3 cores, 7 GB). The shared
-build job sets the engine label string once; hosted macOS legs ignore it.
-Release's separate matrix routes Linux x64 to `pf-ci-release`, keeps its
+build job retains its legacy metadata string once; hosted macOS legs ignore it.
+Release's separate matrix routes Linux x64 to `pf-gcp-main`, keeps its
 hosted ARM/macOS labels and sets no `PF_CI_LABELS`.
-Promotion uses `pf-ci-release` for both closed `pull_request_target` and
+Promotion uses `pf-gcp-main` for both closed `pull_request_target` and
 `workflow_dispatch` triggers.
 
 Owner ruling of 2026-10-20, CI-HOSTED = B: all CI runs on our own machines,
-credentialed jobs included. Credential-free jobs run on the `pf-ci` pool;
-jobs that carry production credentials run on the separate `pf-ci-release`
-class (protected refs, one job per VM), never on the shared pool. Only macOS
-jobs stay on GitHub runners. The earlier CR-171 hosted exception is VOID.
+credentialed jobs included, subject to the pinned hosted exceptions below.
+Non-release jobs run on `pf-gcp-pr`; the named release and promotion jobs
+run on the separate `pf-gcp-main` class (protected refs, one job per VM),
+never on the shared non-release fleet. Hosted macOS jobs and release Linux ARM
+on `ubuntu-22.04-arm` retain their exact GitHub runner pins. The earlier
+CR-171 hosted exception is VOID.
 
-Owner ruling of 2026-10-20, REL-HOSTED = B: there is no hosted exception for
-the release workflow either; the release cut runs on `pf-ci-release`.
+Owner ruling of 2026-10-20, REL-HOSTED = B: the release cut and Linux x64
+artifact build run on `pf-gcp-main`; the existing ARM/macOS matrix legs retain
+their hosted pins.
 
 As of 2026-10-21, #461 has merged as main `03b2406dd`: the old hosted pins
-for the engine's release and promote jobs are gone. `scripts/ci_preflight.py:135-139`
-and `scripts/ci_preflight.py:474-481` pin those jobs to `pf-ci-release`, with
-the release `prebuilt` job selecting its pinned matrix. `HOSTED_JOB_RUNNERS`
-at `scripts/ci_preflight.py:130-132` now lists only docs `build` on
-`ubuntu-latest`. The existing guard for unlisted credential-bearing jobs
-still requires standard hosted routing (`scripts/ci_preflight.py:482-497`),
-and the release matrix retains its hosted ARM/macOS legs
-(`scripts/ci_preflight.py:77-89`). The remaining hosted Linux routes have yet to
-be migrated under the owner rulings above.
+for the engine's release and promote jobs are gone. `RELEASE_JOB_RUNNERS`
+and `runner_findings` in `scripts/ci_preflight.py` pin those jobs to
+`pf-gcp-main`, with the release `prebuilt` job selecting its pinned matrix.
+`HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py` is now empty: docs `build`
+moved to `["self-hosted","pf-gcp-pr"]` behind canon authz (2026-10-21, the
+PR #472 security fix), and `gated_workflow_findings` pins it and both
+`corpus-parity.yml` jobs — first-job authz, the byte-canonical header and step
+hash, `needs: [authz]` on every other job, readable events without
+`pull_request_target`, and a literal fleet array on every `runs-on`. The
+existing guard for unlisted credential-bearing jobs still requires standard
+hosted routing (`runner_findings` in `scripts/ci_preflight.py`), and the
+release matrix retains its hosted ARM/macOS legs (`RELEASE_STRATEGY` in
+`scripts/ci_preflight.py`). The only remaining hosted Linux route is release
+ARM `ubuntu-22.04-arm`.
 
 The `release.yml` pin requires readable `workflow_dispatch`-only triggers,
 refusing both PR events. The named promotion exception requires its existing

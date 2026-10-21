@@ -38,9 +38,8 @@ env:
 jobs:
   authz:
     name: authz
-    # Pool label (needs no toolchain or Docker). Switch to pf-ci-crj once laneboss's
-    # bulletin says the Cloud Run class is live.
-    runs-on: ["self-hosted", "pf-ci", "pf-ci-x64"]
+    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -103,7 +102,7 @@ jobs:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
     # All three profiles use the canon heavy pool class on every event.
-    runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     strategy:
       fail-fast: false
       matrix:
@@ -209,7 +208,7 @@ jobs:
   native-live-gate:
     needs: [authz, native-live]
     if: always()
-    runs-on: ["self-hosted","pf-ci","pf-ci-x64"]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     steps:
