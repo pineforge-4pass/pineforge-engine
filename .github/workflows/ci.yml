@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
+    # ready_for_review starts the full run when the PR is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       cold_native_cache:
@@ -155,7 +158,7 @@ jobs:
 
   preflight:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success') }}
     runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
@@ -230,7 +233,7 @@ jobs:
     # Proof jobs follow authz and classification alongside preflight. Only a
     # successful docs-only answer excuses a skip in the build aggregate.
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true')) }}
     # 360 minutes (the platform maximum): a full-set leg waits on the
     # test_ci_verify CTest row, 976-1288 s on the standard runners at
     # 0d76a099, which more cores do not shorten. No bound of ours may fail a
@@ -338,7 +341,7 @@ jobs:
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true')) }}
     runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
     # 360 minutes (the platform maximum). No CTest stage bound remains: main's
     # full set ran out of the old 30- and 60-minute stage bounds twice, and
@@ -412,7 +415,7 @@ jobs:
   # runs as an example_* row asserting both its exit code and its summary line.
   kernel-only:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true')) }}
     runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
@@ -483,7 +486,7 @@ jobs:
   # Reuse native proof once per CI run. Its manual dispatch runs every row.
   native-live:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true')) }}
     uses: ./.github/workflows/native-live.yml
     with:
       exclude_slow: ${{ github.event_name == 'pull_request' }}
@@ -495,7 +498,7 @@ jobs:
   # build-gate reports its result on every such run.
   corpus-parity-subset:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true')) }}
     uses: ./.github/workflows/corpus-parity.yml
     with:
       mode: subset

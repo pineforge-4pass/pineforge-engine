@@ -154,8 +154,9 @@ PROOF_JOBS = {'build': 'BUILD_RESULT', 'sanitizers': 'SANITIZER_RESULT',
               'corpus-parity-subset': 'PARITY_RESULT'}
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
-DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
-                  "needs.changes.outputs.docs_only != 'true') }}")
+PREFLIGHT_IF = "${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success') }}"
+DOCS_ONLY_SKIP = ("${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && "
+                  "(needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true')) }}")
 # The complete canon step, including its env, comments and shell, byte for byte.
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
@@ -615,7 +616,11 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     if events is None or 'pull_request_target' in events:
         findings.append(f'{name} must use readable events without pull_request_target')
     pr = re.search(r'(?m)^  pull_request:[^\n]*(?:\n(?:    [^\n]*|[ \t]*))*', workflow)
-    if name == 'ci.yml' and (not pr or pr[0].strip() != 'pull_request:'):
+    if name == 'ci.yml' and (not pr or pr[0].strip() != (
+            'pull_request:\n'
+            '    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);\n'
+            '    # ready_for_review starts the full run when the PR is marked ready.\n'
+            '    types: [opened, synchronize, reopened, ready_for_review]')):
         findings.append('ci.yml must run on every pull_request without event filters')
     if _job_values(workflow, 'permissions') != ['contents: read']:
         findings.append(f'{name} must retain contents: read workflow permissions')
@@ -790,7 +795,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         findings.append('changes must start after authz on every run')
     preflight = jobs.get('preflight', '')
     if (set(_needs(preflight)) != {'authz', 'changes'} or len(_needs(preflight)) != 2
-            or _job_values(preflight, 'if') != [AUTHZ_ALWAYS]):
+            or _job_values(preflight, 'if') != [PREFLIGHT_IF]):
         findings.append('preflight must follow authz and changes and run even if classification fails')
     if (f'      PINEFORGE_VERIFIER_SLOW: {PREFLIGHT_VERIFIER_SLOW}\n' not in preflight
             or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):

@@ -21,7 +21,7 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES, CORPUS_RUNNER,
                           DOCS_ONLY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS, LIGHT_LABELS, LIGHT_RUNNER,
                           LINUX_LABELS, LINUX_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
-                          PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
+                          PREFLIGHT_IF, PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
                           ci_workflow_findings, native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,7 +177,7 @@ class PreflightFailures(unittest.TestCase):
         guard = f'        if: {ci_preflight.AUTHZ_SUCCESS}\n'
         unnamed_run = '      - run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
         for function in ('always()', 'cancelled()', 'failure()', 'success()'):
-            conditioned = in_job(body, None, f'    if: {AUTHZ_ALWAYS}\n',
+            conditioned = in_job(body, None, f'    if: {PREFLIGHT_IF}\n',
                                  '    if: ${{ ' + function + " && needs.authz.result == 'success' }}\n")
             mutations = (
                 (in_job(conditioned, None, AUTHZ_REFUSE_STEP, ''),
@@ -789,9 +789,9 @@ class PreflightFailures(unittest.TestCase):
              'preflight must follow authz and changes'),
             ('preflight', '    needs: [authz, changes]\n', '    needs: build\n',
              'preflight must follow authz and changes'),
-            ('preflight', f'    if: {AUTHZ_ALWAYS}\n', skip,
+            ('preflight', f'    if: {PREFLIGHT_IF}\n', skip,
              'preflight must follow authz and changes'),
-            ('preflight', f'    if: {AUTHZ_ALWAYS}\n', '',
+            ('preflight', f'    if: {PREFLIGHT_IF}\n', '',
              'preflight must follow authz and changes'),
             ('changes', '    steps:\n', '    needs: preflight\n    steps:\n',
              'changes must start after authz'),
