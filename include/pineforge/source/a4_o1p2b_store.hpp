@@ -24,6 +24,8 @@
 // another lane's file.
 
 #include <pineforge/detail/scratch_errors.hpp>
+#include <pineforge/detail/scratch_backing.hpp>
+#include <pineforge/detail/scratch_readback.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/detail/scratch_store.hpp>
 
@@ -72,6 +74,11 @@ inline constexpr std::size_t kResidentBytes =
 // It is a prepared row bound, not a record count: a value larger than this is
 // a programming error in the codec, never a population limit.
 inline constexpr std::size_t kRawRowBytes = 4096;
+
+// Result of a raw value walk. `unavailable` means a live row could not be
+// read or parsed: the caller must not treat the rows it saw as the whole
+// population (a fold that silently stops would publish a different digest).
+enum class RawWalk : std::uint8_t { complete, stopped, unavailable };
 
 inline std::uint64_t load_le64(const std::uint8_t* bytes) noexcept {
     std::uint64_t value = 0;
@@ -148,6 +155,7 @@ public:
     }
 
     std::uint64_t size() const noexcept override { return size_; }
+    bool overflowed() const noexcept { return overflow_; }
 
     ScratchStatus read(std::uint64_t offset, ScratchBuffer destination) const noexcept override {
         if (overflow_ || offset > size_ || destination.size > size_ - offset)
@@ -622,9 +630,17 @@ public:
         }
         void load() {
             row_.reset();
+            if (!owner_ || handle_ == scratch_no_handle) {
+                handle_ = scratch_no_handle;
+                return;
+            }
+            // A LIVE handle that cannot be decoded is a corrupt store, not the
+            // end of the set: failing closed here keeps a hash fold from
+            // silently reading fewer rows than the size it just folded.
             Row row;
-            if (owner_ && owner_->load(handle_, row)) row_.emplace(std::move(row));
-            else handle_ = scratch_no_handle;
+            if (!owner_->load(handle_, row))
+                throw pineforge::detail::ScratchIoError(EIO, "a4 ordered row decode");
+            row_.emplace(std::move(row));
         }
         void advance() {
             if (!owner_ || handle_ == scratch_no_handle) return;
@@ -655,6 +671,13 @@ public:
         store_le64(encoded, next_seq_);
         Segments value;
         Codec::encode(row, value);
+        // The prepared row bound, not a population limit: every reader below
+        // walks one row in the fixed value workspace, so a row that outgrows
+        // it is a codec/programming error and is REFUSED here rather than
+        // stored and silently skipped by a later pass.
+        if (value.overflowed() || value.size() > raw_.size())
+            throw pineforge::detail::ScratchIoError(
+                EMSGSIZE, "a4 ordered row exceeds the prepared workspace");
         const pineforge::detail::ScratchSpanSource key_source{
             ScratchBytes{reinterpret_cast<const std::byte*>(encoded), 8}};
         StoreOwner::Batch batch(owner_);
@@ -731,22 +754,22 @@ public:
             && result == handle;
     }
     // Ordered walk over value bytes (no decode). The visitor returns false to
-    // stop; the return value is false only when a row could not be read or
-    // the visitor stopped. noexcept so the fee readers keep their noexcept
-    // contract: a store fault reads as "no more rows", never as a throw.
+    // stop. noexcept so the fee readers keep their noexcept contract, but the
+    // result separates "the visitor stopped" from "a live row is unreadable",
+    // so a caller never mistakes a truncated walk for the whole population.
     template<class Visit>
-    bool for_each_raw(Visit&& visit) const noexcept {
-        if (!owner_.store()) return false;
+    RawWalk for_each_raw(Visit&& visit) const noexcept {
+        if (!owner_.store()) return RawWalk::complete; // no store, no rows
         ScratchHandle handle = scratch_no_handle;
         for (bool more = owner_.first(handle); more;) {
             ScratchHandle following = scratch_no_handle;
             more = owner_.next(handle, following);
             ScratchBytes bytes;
-            if (!load_raw(handle, bytes)) return false;
-            if (!visit(bytes)) return false;
+            if (!load_raw(handle, bytes)) return RawWalk::unavailable;
+            if (!visit(bytes)) return RawWalk::stopped;
             handle = following;
         }
-        return true;
+        return RawWalk::complete;
     }
     void begin_batch() { owner_.begin_batch(); }
     void commit_batch() { owner_.commit_batch(); }
@@ -908,9 +931,14 @@ public:
         }
         void load() {
             row_.reset();
+            if (!owner_ || handle_ == scratch_no_handle) {
+                handle_ = scratch_no_handle;
+                return;
+            }
             Row row;
-            if (owner_ && owner_->load(handle_, row)) row_.emplace(std::move(row));
-            else handle_ = scratch_no_handle;
+            if (!owner_->load(handle_, row))
+                throw pineforge::detail::ScratchIoError(EIO, "a4 ordered row decode");
+            row_.emplace(std::move(row));
         }
         void advance() {
             if (!owner_ || handle_ == scratch_no_handle) return;
@@ -1012,7 +1040,7 @@ private:
                 ScratchBytes{reinterpret_cast<const std::byte*>(key.data()), key.size()}};
         }
     }
-    bool find_handle(const Key& key, ScratchHandle& handle) const {
+    bool find_handle(const Key& key, ScratchHandle& handle) const noexcept {
         const ScratchStore* store = owner_.store();
         if (!store) return false;
         std::uint8_t storage[8];
@@ -1134,16 +1162,18 @@ public:
             : owner_(owner), handle_(handle) {
             load();
         }
-        void load() noexcept {
-            std::uint64_t value = 0;
-            if (!owner_ || !owner_->value_of(handle_, value)) {
+        void load() {
+            value_ = 0;
+            if (!owner_ || handle_ == scratch_no_handle) {
                 handle_ = scratch_no_handle;
-                value_ = 0;
                 return;
             }
+            std::uint64_t value = 0;
+            if (!owner_->value_of(handle_, value))
+                throw pineforge::detail::ScratchIoError(EIO, "a4 ordered set row read");
             value_ = value;
         }
-        void advance() noexcept {
+        void advance() {
             if (!owner_ || handle_ == scratch_no_handle) return;
             ScratchHandle following = scratch_no_handle;
             if (!owner_->owner_.next(handle_, following)) {

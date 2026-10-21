@@ -5170,17 +5170,20 @@ double PineExecutionAdapter::percent_commission_live_equity(
     bool readable = true;
     // P22: fold the same surviving facts from the ordered store through its
     // prepared value buffer; this reader is noexcept, so a value it cannot
-    // parse answers the NaN the legacy arithmetic answered for a bad fee.
-    (void)open_entry_fees_.for_each_raw([&](a4_o1p2b::ScratchBytes bytes) noexcept {
-        OpenEntryFeeCodec::View fact;
-        if (!OpenEntryFeeCodec::view(bytes, fact) || !std::isfinite(fact.nonpercent_fee)) {
-            readable = false;
-            return false;
-        }
-        restored += fact.nonpercent_fee;
-        return true;
-    });
-    if (!readable) return std::numeric_limits<double>::quiet_NaN();
+    // parse — or a row whose bytes cannot even be read — answers the NaN the
+    // legacy arithmetic answered for a bad fee, never a silently short sum.
+    const auto walked = open_entry_fees_.for_each_raw(
+        [&](a4_o1p2b::ScratchBytes bytes) noexcept {
+            OpenEntryFeeCodec::View fact;
+            if (!OpenEntryFeeCodec::view(bytes, fact) || !std::isfinite(fact.nonpercent_fee)) {
+                readable = false;
+                return false;
+            }
+            restored += fact.nonpercent_fee;
+            return true;
+        });
+    if (!readable || walked == a4_o1p2b::RawWalk::unavailable)
+        return std::numeric_limits<double>::quiet_NaN();
     return std::isfinite(restored) ? marked + restored
                                    : std::numeric_limits<double>::quiet_NaN();
 }
@@ -5250,11 +5253,12 @@ void PineExecutionAdapter::consume_opening_fees(
         more = open_entry_fees_.next(handle, following);
         a4_o1p2b::ScratchBytes bytes;
         OpenEntryFeeCodec::View row;
+        // Every stored row went through push_back's prepared-bound check, so a
+        // value this pass cannot read or parse is a corrupt store: fail the
+        // run instead of consuming past a row the legacy walk would have seen.
         if (!open_entry_fees_.load_raw(handle, bytes)
-            || !OpenEntryFeeCodec::view(bytes, row)) {
-            handle = following;
-            continue;
-        }
+            || !OpenEntryFeeCodec::view(bytes, row))
+            throw pineforge::detail::ScratchIoError(EIO, "a4 fee ledger read");
         const bool selected_origin = opening
             ? opening->incarnation == row.incarnation
             : (!openings || openings->incarnations.empty()
@@ -18258,17 +18262,18 @@ bool PineExecutionAdapter::gain_loss_run_regime() const {
     const auto* spec = detail::run_spec(*host_);
     if (spec == nullptr || spec->fee_value != 0.0) return false;
     bool any_fee = false;
-    (void)open_entry_fees_.for_each_raw([&](a4_o1p2b::ScratchBytes bytes) noexcept {
-        OpenEntryFeeCodec::View fact;
-        // A value this reader cannot decode cannot prove the regime either:
-        // answer "a fee exists", which is the non-regime branch.
-        if (!OpenEntryFeeCodec::view(bytes, fact) || fact.nonpercent_fee != 0.0) {
-            any_fee = true;
-            return false;
-        }
-        return true;
-    });
-    if (any_fee) return false;
+    const auto walked = open_entry_fees_.for_each_raw(
+        [&](a4_o1p2b::ScratchBytes bytes) noexcept {
+            OpenEntryFeeCodec::View fact;
+            // A value this reader cannot decode cannot prove the regime either:
+            // answer "a fee exists", which is the non-regime branch.
+            if (!OpenEntryFeeCodec::view(bytes, fact) || fact.nonpercent_fee != 0.0) {
+                any_fee = true;
+                return false;
+            }
+            return true;
+        });
+    if (any_fee || walked == a4_o1p2b::RawWalk::unavailable) return false;
     return pine->pyramid_entries_.size() <= 1;
 }
 

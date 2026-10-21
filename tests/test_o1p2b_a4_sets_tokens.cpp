@@ -137,7 +137,7 @@ void named_cancel_tokens() {
     Adapter adapter;
     auto& tokens = adapter.*member(Tokens{});
     using Table = std::remove_reference_t<decltype(tokens)>;
-    using Row = typename Table::Row;
+    using Row = Table::Row;
     // Independent dictionary: key -> (entry incarnation, surviving exit).
     std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> reference;
     const struct { const char* id; std::uint64_t entry; std::uint64_t exit; } rows[] = {

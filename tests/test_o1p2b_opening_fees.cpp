@@ -14,6 +14,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace allocations {
@@ -236,6 +237,36 @@ void reversal_order_fee() {
 }
 }
 
+// A row larger than the prepared value workspace is refused at record time.
+// Storing it would let the later raw passes skip it silently, which is a
+// different ledger from the one the strategy recorded.
+void prepared_row_bound() {
+    Adapter adapter;
+    source::PineStrategyConfig config;
+    config.commission_type = static_cast<int>(CommissionType::CASH_PER_CONTRACT);
+    config.commission_value = 1.0;
+    adapter.set_configuration(config);
+    source::PlacementSnapshot placement;
+    placement.source_id.assign(source::a4_o1p2b::kRawRowBytes, 'x');
+    no::ExecutionAppliedEvent event;
+    auto definition = std::make_shared<no::RequestDefinition>();
+    definition->handle = {{"o1p2b-bound", 2}, 1};
+    event.definition = definition;
+    event.opened_units = 1.0;
+    bool refused = false;
+    try {
+        (adapter.*member(Record{}))(placement, event);
+    } catch (const std::system_error&) {
+        refused = true;
+    }
+    CHECK(refused);
+    CHECK((adapter.*member(Fees{})).empty());
+    // The same table keeps working for a row inside the prepared bound.
+    placement.source_id.assign(256, 'y');
+    (adapter.*member(Record{}))(placement, event);
+    CHECK((adapter.*member(Fees{})).size() == 1);
+}
+
 // A transaction that changes two rows and rolls back leaves the fill order,
 // both row values and the folded leaf exactly as they were.
 void rollback_leaves_ledger() {
@@ -268,7 +299,7 @@ void rollback_leaves_ledger() {
     CHECK(fees.first(first));
     CHECK(fees.next(first, second));
     CHECK(fees.load(second, rewritten));
-    fees.erase(first);
+    CHECK(fees.erase_checked(first));
     rewritten.units += 100.0;
     rewritten.nonpercent_fee += 100.0;
     fees.store(second, rewritten);
@@ -282,6 +313,7 @@ int main() {
     for (const std::size_t count : {std::size_t{16}, std::size_t{257}, std::size_t{4097}})
         selection_and_paid_cost(count);
     reversal_order_fee();
+    prepared_row_bound();
     rollback_leaves_ledger();
     std::printf("o1p2b opening fees: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
