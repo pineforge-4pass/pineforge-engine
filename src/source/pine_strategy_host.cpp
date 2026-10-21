@@ -1552,79 +1552,237 @@ int multi_day_count(const std::string& tf) {
 // date's day stamp otherwise -- from the bar holding the first held date
 // through the year after the last; empty when the session does not parse or
 // nothing is held.
-std::vector<std::int64_t> tradingview_multi_day_stamps(
-        int days, const Bar* chart, int n_chart, bool daily_chart, const std::vector<Bar>& aux,
-        const std::string& tz, const std::string& session, bool exchange_calendar) {
-    namespace cal = native_calendar;
-    const auto calendar = cal::parse_session(session, tz);
-    if (!calendar || days < 2) return {};
-    // Trading date (days since 1970-01-01) -> its bar's open.
-    std::map<std::int64_t, std::int64_t> held;
-    std::optional<cal::NativeSessionDay> cycle;
-    const auto hold = [&](std::int64_t ts, bool own_open) {
-        cycle = cal::session_day_at(*calendar, session_covered_instant_ms(ts, tz, session));
-        if (cycle && held.find(cycle->ordinal) == held.end()) {
-            held.emplace(cycle->ordinal,
-                         own_open ? ts : session_period_open_ms(ts, tz, session, CalendarPeriod::DAY));
+class TradingViewMultiDayStamps final : public NativeDayStampSource {
+    struct HeldDate {
+        std::int64_t ordinal;
+        std::int64_t open;
+    };
+    struct FeedCursor {
+        int index = 0;
+        std::optional<native_calendar::NativeSessionDay> cycle;
+        std::optional<std::int64_t> previous;
+    };
+    std::optional<HeldDate> read_day(
+            FeedCursor& cursor, const Bar* bars, int n, bool own_open) const {
+        while (cursor.index < n) {
+            const auto ts = bars[cursor.index++].timestamp;
+            if (!own_open && cursor.cycle && cursor.cycle->holds(ts)) continue;
+            cursor.cycle = native_calendar::session_day_at(*calendar_,
+                session_covered_instant_ms(ts, tz_, session_));
+            if (!cursor.cycle || cursor.previous == cursor.cycle->ordinal) continue;
+            cursor.previous = cursor.cycle->ordinal;
+            return HeldDate{cursor.cycle->ordinal, own_open ? ts
+                : session_period_open_ms(ts, tz_, session_, CalendarPeriod::DAY)};
+        }
+        return std::nullopt;
+    }
+    bool date_ordered(const Bar* bars, int n, bool own_open) const {
+        FeedCursor scan;
+        std::optional<std::int64_t> previous;
+        while (const auto day = read_day(scan, bars, n, own_open)) {
+            if (previous && day->ordinal < *previous) return false;
+            previous = day->ordinal;
+        }
+        return true;
+    }
+    struct HeldCursor {
+        const TradingViewMultiDayStamps* owner;
+        FeedCursor chart;
+        FeedCursor aux;
+        std::optional<HeldDate> chart_day;
+        std::optional<HeldDate> aux_day;
+
+        explicit HeldCursor(const TradingViewMultiDayStamps* source) : owner(source) {
+            chart_day = read(chart, owner->chart_, owner->n_chart_, owner->daily_chart_, owner->ordered_chart_);
+            aux_day = read(aux, owner->aux_->data(), static_cast<int>(owner->aux_->size()), false, owner->ordered_aux_);
+        }
+        std::optional<HeldDate> read(
+                FeedCursor& cursor, const Bar* bars, int n, bool own_open, bool ordered) {
+            if (ordered) return owner->read_day(cursor, bars, n, own_open);
+            // Historical timezone folds can reverse trading dates despite
+            // ordered timestamps. Select the next date by recomputation,
+            // retaining the first feed occurrence just as map::emplace did.
+            FeedCursor scan;
+            std::optional<HeldDate> result;
+            while (const auto day = owner->read_day(scan, bars, n, own_open)) {
+                if ((!cursor.previous || day->ordinal > *cursor.previous)
+                    && (!result || day->ordinal < result->ordinal)) result = day;
+            }
+            if (result) cursor.previous = result->ordinal;
+            return result;
+        }
+        std::optional<HeldDate> next() {
+            if (!chart_day && !aux_day) return std::nullopt;
+            // A chart date owns its stamp even if the auxiliary bar on that
+            // date opened earlier (a late daily Muhurat session).
+            const auto result = !aux_day || (chart_day && chart_day->ordinal <= aux_day->ordinal)
+                ? *chart_day : *aux_day;
+            if (chart_day && chart_day->ordinal == result.ordinal)
+                chart_day = read(chart, owner->chart_, owner->n_chart_, owner->daily_chart_, owner->ordered_chart_);
+            if (aux_day && aux_day->ordinal == result.ordinal)
+                aux_day = read(aux, owner->aux_->data(), static_cast<int>(owner->aux_->size()), false, owner->ordered_aux_);
+            return result;
+        }
+        std::size_t span_bytes() const {
+            return (chart.cycle ? chart.cycle->spans.capacity() * sizeof(std::pair<int64_t, int64_t>) : 0)
+                + (aux.cycle ? aux.cycle->spans.capacity() * sizeof(std::pair<int64_t, int64_t>) : 0);
         }
     };
-    // An intraday bar trades inside its session day: one inside the day the
-    // bar before it resolved is not resolved again.
-    for (int i = 0; i < n_chart; ++i) {
-        if (daily_chart || !cycle || !cycle->holds(chart[i].timestamp))
-            hold(chart[i].timestamp, daily_chart);
-    }
-    cycle.reset();
-    for (const Bar& bar : aux) {
-        if (!cycle || !cycle->holds(bar.timestamp)) hold(bar.timestamp, false);
-    }
-    if (held.empty()) return {};
-    const std::int64_t first = held.begin()->first;
-    const std::int64_t last = held.rbegin()->first;
-    const bool every_day = session.empty() || session == "24x7";
-    const auto trades = [&](std::int64_t d) {
-        if (exchange_calendar && d >= first && d <= last) return held.count(d) > 0;
-        const std::int64_t weekday = ((d % 7) + 7 + 4) % 7;  // 0 Sunday; 1970-01-01 a Thursday
-        return every_day || (weekday >= 1 && weekday <= 5);
+    struct OpenDate {
+        std::int64_t ordinal;
+        std::optional<std::int64_t> own_open;
     };
-    // The bar-opening dates of every year from the first held date's through
-    // the year after the last's, whose first trading date opens a bar.
-    std::vector<std::int64_t> opens;
-    const std::int64_t first_year = cal::native_civil_date(first).year;
-    const std::int64_t last_year = cal::native_civil_date(last).year + 1;
-    for (std::int64_t year = first_year; year <= last_year; ++year) {
-        const std::int64_t end = cal::native_civil_days(year + 1, 1, 1);
+    struct StampCursor {
+        const TradingViewMultiDayStamps* owner;
+        HeldCursor held;
+        std::optional<HeldDate> day;
+        std::int64_t year;
+        std::int64_t ordinal;
         std::int64_t count = 0;
-        for (std::int64_t d = cal::native_civil_days(year, 1, 1); d < end; ++d) {
-            if (!trades(d)) continue;
-            if (count++ % days == 0) opens.push_back(d);
+        bool started = false;
+        std::optional<OpenDate> pending;
+
+        explicit StampCursor(const TradingViewMultiDayStamps* source)
+            : owner(source), held(source), day(held.next()),
+              year(native_calendar::native_civil_date(source->first_).year),
+              ordinal(native_calendar::native_civil_days(year, 1, 1)) {}
+        std::optional<OpenDate> next_open() {
+            while (year <= owner->last_year_) {
+                const auto end = native_calendar::native_civil_days(year + 1, 1, 1);
+                if (ordinal == end) { ++year; count = 0; continue; }
+                const auto d = ordinal++;
+                while (day && day->ordinal < d) day = held.next();
+                const bool present = day && day->ordinal == d;
+                const auto weekday = ((d % 7) + 7 + 4) % 7;
+                const bool trades = owner->exchange_ && d >= owner->first_ && d <= owner->last_
+                    ? present : owner->every_day_ || (weekday >= 1 && weekday <= 5);
+                if (trades && count++ % owner->days_ == 0)
+                    return OpenDate{d, present ? std::optional<std::int64_t>(day->open) : std::nullopt};
+            }
+            return std::nullopt;
         }
-    }
-    auto begin = std::upper_bound(opens.begin(), opens.end(), first);
-    if (begin == opens.begin()) return {};
-    --begin;
-    // Through the next year's bars too, on the weekday rule: a stream's bars
-    // after the held ones.
-    std::vector<std::int64_t> stamps;
-    for (auto it = begin; it != opens.end(); ++it) {
-        const auto found = held.find(*it);
-        if (found != held.end()) {
-            stamps.push_back(found->second);
-            continue;
+        std::optional<std::int64_t> stamp(const OpenDate& open) const {
+            if (open.own_open) return open.own_open;
+            const auto date = native_calendar::native_civil_date(open.ordinal);
+            const auto noon = native_calendar::resolve_civil(
+                owner->tz_.empty() ? "UTC" : owner->tz_, static_cast<int>(date.year),
+                date.month, date.day, 12, 0);
+            if (!noon) return std::nullopt;
+            return session_period_open_ms(noon->epoch_ms, owner->tz_, owner->session_,
+                                          CalendarPeriod::DAY);
         }
-        // A trading date no bar holds: the stamp of the session day holding
-        // its local noon.
-        const cal::NativeCivilDate date = cal::native_civil_date(*it);
-        const auto noon = cal::resolve_civil(tz.empty() ? "UTC" : tz, static_cast<int>(date.year),
-                                             date.month, date.day, 12, 0);
-        if (!noon) return {};
-        stamps.push_back(session_period_open_ms(noon->epoch_ms, tz, session, CalendarPeriod::DAY));
+        std::optional<std::int64_t> next() {
+            if (!started) {
+                std::optional<OpenDate> begin;
+                while (const auto open = next_open()) {
+                    if (open->ordinal <= owner->first_) begin = open;
+                    else { pending = open; break; }
+                }
+                started = true;
+                return begin ? stamp(*begin) : std::nullopt;
+            }
+            const auto open = pending ? std::exchange(pending, std::nullopt) : next_open();
+            return open ? stamp(*open) : std::nullopt;
+        }
+    };
+
+public:
+    TradingViewMultiDayStamps(int days, const Bar* chart, int n_chart, bool daily_chart,
+            const std::vector<Bar>& aux, const std::string& tz, const std::string& session,
+            bool exchange_calendar)
+        : days_(days), chart_(chart), n_chart_(n_chart), daily_chart_(daily_chart), aux_(&aux),
+          tz_(tz), session_(session), exchange_(exchange_calendar),
+          every_day_(session.empty() || session == "24x7"),
+          calendar_(native_calendar::parse_session(session, tz)),
+          partition_(active_native_day_partition()) {
+        if (!calendar_ || days < 2) return;
+        ordered_chart_ = date_ordered(chart_, n_chart_, daily_chart_);
+        ordered_aux_ = date_ordered(aux_->data(), static_cast<int>(aux_->size()), false);
+        HeldCursor held(this);
+        while (const auto day = held.next()) {
+            if (held_days_++ == 0) first_ = day->ordinal;
+            last_ = day->ordinal;
+        }
+        if (held_days_ == 0) return;
+        last_year_ = native_calendar::native_civil_date(last_).year + 1;
+        StampCursor scan(this);
+        std::optional<std::int64_t> previous;
+        while (const auto stamp = scan.next()) {
+            if (previous && *stamp <= *previous) { size_ = 0; return; }
+            previous = stamp;
+            ++size_;
+        }
+        // A failed civil resolution must discard the entire partition, as
+        // the materialized implementation did, rather than keep a prefix.
+        if (scan.year <= last_year_) size_ = 0;
     }
-    for (std::size_t k = 1; k < stamps.size(); ++k) {
-        if (stamps[k] <= stamps[k - 1]) return {};
+    std::size_t size() const noexcept override { return size_; }
+    std::size_t held_days() const noexcept override { return held_days_; }
+    std::size_t resident_bytes() const noexcept override {
+        return sizeof(*this) + tz_.capacity() + session_.capacity()
+            + (calendar_ ? calendar_->timezone().capacity() + calendar_->literal().capacity()
+                + calendar_->windows().capacity() * sizeof(native_calendar::SessionWindow) : 0)
+            + (cursor_ ? cursor_->held.span_bytes() : 0);
     }
-    return stamps;
-}
+    std::int64_t at(std::size_t index) const override {
+        NativeDayPartitionScope partition_scope(partition_);
+        if (previous_ && index == previous_->first) return previous_->second;
+        if (!cursor_ || index < cursor_index_) reset_cursor();
+        while (cursor_index_ < index) advance_cursor();
+        return cursor_stamp_;
+    }
+    std::size_t upper_bound(std::int64_t ms) const override {
+        NativeDayPartitionScope partition_scope(partition_);
+        if (size_ == 0) return 0;
+        if (cursor_ && previous_ && ms >= previous_->second && ms < cursor_stamp_)
+            return cursor_index_;
+        if (!cursor_ || ms < cursor_stamp_) reset_cursor();
+        if (ms < cursor_stamp_) return 0;
+        while (cursor_index_ + 1 < size_) {
+            if (!next_stamp_) next_stamp_ = cursor_->next();
+            if (ms < *next_stamp_) break;
+            advance_cursor();
+        }
+        return cursor_index_ + 1;
+    }
+
+private:
+    void reset_cursor() const {
+        cursor_.emplace(this);
+        cursor_index_ = 0;
+        cursor_stamp_ = *cursor_->next();
+        previous_.reset();
+        next_stamp_.reset();
+    }
+    void advance_cursor() const {
+        previous_ = std::make_pair(cursor_index_, cursor_stamp_);
+        cursor_stamp_ = next_stamp_ ? *std::exchange(next_stamp_, std::nullopt) : *cursor_->next();
+        ++cursor_index_;
+    }
+    int days_;
+    const Bar* chart_;
+    int n_chart_;
+    bool daily_chart_;
+    const std::vector<Bar>* aux_;
+    std::string tz_;
+    std::string session_;
+    bool exchange_;
+    bool every_day_;
+    bool ordered_chart_ = true;
+    bool ordered_aux_ = true;
+    std::optional<native_calendar::SessionCalendar> calendar_;
+    const NativeDayPartition* partition_;
+    std::int64_t first_ = 0;
+    std::int64_t last_ = 0;
+    std::int64_t last_year_ = 0;
+    std::size_t held_days_ = 0;
+    std::size_t size_ = 0;
+    mutable std::optional<StampCursor> cursor_;
+    mutable std::size_t cursor_index_ = 0;
+    mutable std::int64_t cursor_stamp_ = 0;
+    mutable std::optional<std::pair<std::size_t, std::int64_t>> previous_;
+    mutable std::optional<std::int64_t> next_stamp_;
+};
 
 }  // namespace
 
@@ -1653,28 +1811,22 @@ void source::PineStrategyHost::scheduler_prepare_security_sequence(
     // An N-day request's bars are TradingView's (tradingview_multi_day_stamps),
     // its aggregator's period partition: the calendar aggregator split them
     // into single days.
-    std::map<int, std::vector<std::int64_t>> multi_day;
     for (auto& state : security_eval_states_) {
         const int days = multi_day_count(state.tf);
         if (days == 0 || state.aggregator.calendar_period() != CalendarPeriod::DAY
             || state.aggregator.has_native_periods()) {
             continue;
         }
-        auto found = multi_day.find(days);
-        if (found == multi_day.end()) {
-            static const std::vector<Bar> kNoAux;
-            const std::vector<Bar>* aux = &kNoAux;
+        static const std::vector<Bar> kNoAux;
+        const std::vector<Bar>* aux = &kNoAux;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-            if (aux_security_feed_enabled()) aux = &aux_security_bars_;
+        if (aux_security_feed_enabled()) aux = &aux_security_bars_;
 #endif
-            found = multi_day.emplace(days, tradingview_multi_day_stamps(
-                days, bars.data(), static_cast<int>(bars.size()),
-                tf_to_seconds(input_tf_) == 86400, *aux,
-                syminfo_.timezone, syminfo_.session,
-                session_template_knows_early_close())).first;
-        }
-        if (!found->second.empty())
-            state.aggregator.set_native_periods(found->second, found->second, CalendarPeriod::DAY);
+        auto stamps = std::make_shared<TradingViewMultiDayStamps>(
+            days, bars.data(), static_cast<int>(bars.size()),
+            tf_to_seconds(input_tf_) == 86400, *aux, syminfo_.timezone, syminfo_.session,
+            session_template_knows_early_close());
+        state.aggregator.set_native_day_cursor(std::move(stamps));
     }
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     if (aux_security_feed_enabled()) {

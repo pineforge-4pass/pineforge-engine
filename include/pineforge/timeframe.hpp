@@ -1,6 +1,10 @@
 #pragma once
 #include <string>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <memory>
+#include <utility>
 #include <vector>
 #include "bar.hpp"
 
@@ -77,6 +81,93 @@ std::string detect_timeframe(const Bar* bars, int n, int max_samples = 100);
 // ─── Calendar boundary detection ───────────────────────────────────────────────
 
 enum class CalendarPeriod { NONE, DAY, WEEK, MONTH };
+
+// Generated N-day stamps use the same indexed partition readers as a native
+// feed, without materializing either the stamp or its DAY group-open column.
+class NativeDayStampSource {
+public:
+    virtual ~NativeDayStampSource() = default;
+    virtual std::size_t size() const noexcept = 0;
+    virtual int64_t at(std::size_t index) const = 0;
+    virtual std::size_t upper_bound(int64_t ms) const = 0;
+    virtual std::size_t held_days() const noexcept = 0;
+    virtual std::size_t resident_bytes() const noexcept = 0;
+};
+
+class NativePeriodSequence {
+public:
+    struct Reference {
+        const NativePeriodSequence* source;
+        std::size_t index;
+        operator int64_t() const { return (*source)[index]; }
+        friend bool operator<(int64_t ms, Reference at) {
+            // upper_bound's binary probes share one forward seek instead
+            // of regenerating an indexed stamp at every midpoint.
+            const auto* generated = at.source->generated_source();
+            return generated ? generated->upper_bound(ms) <= at.index
+                             : ms < static_cast<int64_t>(at);
+        }
+    };
+    class Iterator {
+    public:
+        using iterator_category = std::random_access_iterator_tag;
+        using value_type = int64_t;
+        using difference_type = std::ptrdiff_t;
+        using pointer = void;
+        using reference = Reference;
+        Iterator() = default;
+        Iterator(const NativePeriodSequence* source, difference_type index)
+            : source_(source), index_(index) {}
+        reference operator*() const { return {source_, static_cast<std::size_t>(index_)}; }
+        reference operator[](difference_type n) const { return *(*this + n); }
+        Iterator& operator++() { ++index_; return *this; }
+        Iterator operator++(int) { const auto old = *this; ++*this; return old; }
+        Iterator& operator--() { --index_; return *this; }
+        Iterator operator--(int) { const auto old = *this; --*this; return old; }
+        Iterator& operator+=(difference_type n) { index_ += n; return *this; }
+        Iterator& operator-=(difference_type n) { index_ -= n; return *this; }
+        friend Iterator operator+(Iterator it, difference_type n) { return it += n; }
+        friend Iterator operator+(difference_type n, Iterator it) { return it += n; }
+        friend Iterator operator-(Iterator it, difference_type n) { return it -= n; }
+        friend difference_type operator-(Iterator a, Iterator b) { return a.index_ - b.index_; }
+        friend bool operator==(Iterator a, Iterator b) {
+            return a.source_ == b.source_ && a.index_ == b.index_;
+        }
+        friend bool operator!=(Iterator a, Iterator b) { return !(a == b); }
+        friend bool operator<(Iterator a, Iterator b) { return a.index_ < b.index_; }
+        friend bool operator>(Iterator a, Iterator b) { return b < a; }
+        friend bool operator<=(Iterator a, Iterator b) { return !(b < a); }
+        friend bool operator>=(Iterator a, Iterator b) { return !(a < b); }
+    private:
+        const NativePeriodSequence* source_ = nullptr;
+        difference_type index_ = 0;
+    };
+
+    NativePeriodSequence& operator=(std::vector<int64_t> values) {
+        source_.reset();
+        values_ = std::move(values);
+        return *this;
+    }
+    void bind(std::shared_ptr<const NativeDayStampSource> source) {
+        std::vector<int64_t>().swap(values_);
+        source_ = std::move(source);
+    }
+    void clear() { source_.reset(); values_.clear(); }
+    void reserve(std::size_t n) { values_.reserve(n); }
+    void push_back(int64_t value) { values_.push_back(value); }
+    bool empty() const { return size() == 0; }
+    std::size_t size() const { return source_ ? source_->size() : values_.size(); }
+    std::size_t capacity() const { return values_.capacity(); }
+    int64_t operator[](std::size_t at) const { return source_ ? source_->at(at) : values_[at]; }
+    int64_t back() const { return (*this)[size() - 1]; }
+    Iterator begin() const { return {this, 0}; }
+    Iterator end() const { return {this, static_cast<std::ptrdiff_t>(size())}; }
+    const NativeDayStampSource* generated_source() const { return source_.get(); }
+
+private:
+    std::vector<int64_t> values_;
+    std::shared_ptr<const NativeDayStampSource> source_;
+};
 
 /// Determine the calendar period for a target TF string.
 CalendarPeriod calendar_period_for(const std::string& tf);
@@ -383,6 +474,41 @@ public:
     AggregatedBar feed(const Bar& input_bar, int64_t next_input_ms,
                        int64_t calling_close_ms);
 
+    // Independent replay over this aggregator's immutable partition. Only
+    // the running bucket travels with the cursor; native feed tables are
+    // neither copied nor rebuilt. The owner's continuation state is restored
+    // before returning, including when a calendar lookup throws.
+    struct ReplayCursor {
+        Bar current{};
+        int sub_bar_count = 0;
+        bool emitted_complete = false;
+    };
+    AggregatedBar feed_cursor(ReplayCursor& cursor, const Bar& input_bar,
+                              int64_t next_input_ms) {
+        const Bar completed = last_completed_bar_;
+        const bool had_completed = has_completed_;
+        const auto exchange = [&] {
+            using std::swap;
+            swap(current_bar_, cursor.current);
+            swap(sub_bar_count_, cursor.sub_bar_count);
+            swap(current_emitted_complete_, cursor.emitted_complete);
+        };
+        const auto restore = [&] {
+            exchange();
+            last_completed_bar_ = completed;
+            has_completed_ = had_completed;
+        };
+        exchange();
+        try {
+            const auto result = feed(input_bar, next_input_ms);
+            restore();
+            return result;
+        } catch (...) {
+            restore();
+            throw;
+        }
+    }
+
     /// Current in-progress bar.
     Bar current() const;
 
@@ -452,6 +578,15 @@ public:
     void set_native_periods(std::vector<int64_t> stamps,
                             std::vector<int64_t> trade_instants,
                             CalendarPeriod feed_period);
+
+    void set_native_day_cursor(std::shared_ptr<const NativeDayStampSource> source) {
+        if (mode_ != Mode::CALENDAR || cal_period_ != CalendarPeriod::DAY
+            || !source || source->size() == 0) return;
+        native_last_bound_ = session_period_close_ms(
+            source->at(source->size() - 1), anchor_tz_, anchor_session_, CalendarPeriod::DAY);
+        native_stamps_.bind(source);
+        native_group_open_.bind(std::move(source));
+    }
 
     /// A RATIO aggregator's late day opens, from the installed native daily
     /// feed (native_late_day_opens over the evaluator's input): each opens a
@@ -552,8 +687,8 @@ private:
     // Native period partition (set_native_periods): the stamps, and per
     // stamp the open of the W / M group it belongs to (the stamp itself
     // for DAY). Empty unless a native feed installed them.
-    std::vector<int64_t> native_stamps_;
-    std::vector<int64_t> native_group_open_;
+    NativePeriodSequence native_stamps_;
+    NativePeriodSequence native_group_open_;
     int64_t native_last_bound_ = 0;   // nominal close of the last stamp's period
     // RATIO: the late day opens the grid starts from (set_native_day_opens).
     std::vector<int64_t> native_late_opens_;

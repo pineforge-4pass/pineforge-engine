@@ -86,6 +86,30 @@ Bar literal_bar(std::int64_t ts, double close) {
     return bar;
 }
 
+template <typename C>
+auto seed_projections(C& cursor, bool two, int)
+    -> decltype(cursor.push_back(source::HistoricalSecurityProjection{}), void()) {
+    cursor.push_back({literal_bar(1000, 100.0), 1000, true});
+    if (two) cursor.push_back({literal_bar(1900, 105.0), 1900, true});
+}
+
+template <typename C>
+void seed_projections(C& cursor, bool two, long) {
+    static const source::HistoricalSecurityProjection records[] = {
+        {literal_bar(1000, 100.0), 1000, true},
+        {literal_bar(1900, 105.0), 1900, true},
+    };
+    cursor.bind(records,
+        [](const void* owner, const C&, int child) -> typename C::Step {
+            return {static_cast<const source::HistoricalSecurityProjection*>(owner)[child],
+                    child + 1};
+        },
+        [](const void* owner, const Bar*, int child) {
+            return static_cast<const source::HistoricalSecurityProjection*>(owner)[child]
+                .first_child_ms;
+        }, 0, two ? 2 : 1);
+}
+
 struct Mutation {
     const char* name;
     void (*apply)(source::PineSecurityEvalState&);
@@ -108,8 +132,7 @@ const Mutation kMutations[] = {
     {"ha_seeded", [](source::PineSecurityEvalState& s) { s.ha_seeded = true; }},
     {"historical_projections",
      [](source::PineSecurityEvalState& s) {
-         s.historical_projections.push_back(
-             source::HistoricalSecurityProjection{literal_bar(1000, 100.0), 1000, true});
+         seed_projections(s.historical_projections, false, 0);
      }},
     {"lower_tf_requested",
      [](source::PineSecurityEvalState& s) { s.lower_tf_requested = true; }},
@@ -151,11 +174,11 @@ const Mutation kRecordMutations[] = {
     {"historical_projection_dispatched",
      [](source::PineSecurityEvalState& s) { s.historical_projection_dispatched = true; }},
     {"HistoricalSecurityProjection.bar",
-     [](source::PineSecurityEvalState& s) { s.historical_projections[0].bar.close = 111.0; }},
+     [](source::PineSecurityEvalState& s) { s.historical_projections.front().bar.close = 111.0; }},
     {"HistoricalSecurityProjection.first_child_ms",
-     [](source::PineSecurityEvalState& s) { s.historical_projections[0].first_child_ms = 1060; }},
+     [](source::PineSecurityEvalState& s) { s.historical_projections.front().first_child_ms = 1060; }},
     {"HistoricalSecurityProjection.is_complete",
-     [](source::PineSecurityEvalState& s) { s.historical_projections[0].is_complete = false; }},
+     [](source::PineSecurityEvalState& s) { s.historical_projections.front().is_complete = false; }},
     {"DeferredAuxBar.bar",
      [](source::PineSecurityEvalState& s) { s.deferred_aux[0].bar.close = 76.0; }},
     {"DeferredAuxBar.next_input_ms",
@@ -165,10 +188,7 @@ const Mutation kRecordMutations[] = {
 };
 
 void seed_records(source::PineSecurityEvalState& s) {
-    s.historical_projections.push_back(
-        source::HistoricalSecurityProjection{literal_bar(1000, 100.0), 1000, true});
-    s.historical_projections.push_back(
-        source::HistoricalSecurityProjection{literal_bar(1900, 105.0), 1900, true});
+    seed_projections(s.historical_projections, true, 0);
     s.deferred_aux.push_back(source::DeferredAuxBar{literal_bar(5000, 75.0), 5060, true});
 }
 

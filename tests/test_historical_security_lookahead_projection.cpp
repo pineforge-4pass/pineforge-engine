@@ -5,8 +5,11 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/na.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <map>
+#include <optional>
 #include <vector>
 
 using namespace pineforge;
@@ -33,6 +36,185 @@ struct Dispatch {
     bool complete;
 };
 
+struct ProjectionStorage {
+    std::size_t population;
+    std::size_t resident;
+    std::size_t bytes;
+};
+
+// The existing test-only member-pointer pattern also reads the real base
+// vectors, so the resident-bound assertion executes on both revisions.
+template <class Tag, auto Member> struct PrivateMember {
+    friend auto access(Tag) { return Member; }
+};
+struct PrepareSecurity { friend auto access(PrepareSecurity); };
+struct Stamps { friend auto access(Stamps); };
+struct Groups { friend auto access(Groups); };
+template struct PrivateMember<PrepareSecurity,
+    &source::PineStrategyHost::scheduler_prepare_security_sequence>;
+template struct PrivateMember<Stamps, &TimeframeAggregator::native_stamps_>;
+template struct PrivateMember<Groups, &TimeframeAggregator::native_group_open_>;
+
+struct PartitionStorage {
+    std::size_t population;
+    std::size_t resident;
+    std::size_t bytes;
+    std::optional<std::size_t> held_days;
+};
+template <typename C>
+auto partition_storage(const C& stamps, const C& groups, int)
+    -> decltype(stamps.generated_source(), PartitionStorage{}) {
+    const auto* source = stamps.generated_source();
+    return {stamps.size(), stamps.capacity() + groups.capacity(),
+            (stamps.capacity() + groups.capacity()) * sizeof(std::int64_t)
+                + (source ? source->resident_bytes() : 0),
+            source ? std::optional<std::size_t>(source->held_days()) : std::nullopt};
+}
+template <typename C>
+PartitionStorage partition_storage(const C& stamps, const C& groups, long) {
+    return {stamps.size(), stamps.size() + groups.size(),
+            (stamps.capacity() + groups.capacity()) * sizeof(std::int64_t), std::nullopt};
+}
+
+class NDayHarness final : public source::PineStrategyHost {
+public:
+    void prepare(const std::vector<Bar>& chart, const std::vector<Bar>& aux,
+                 const char* session, const char* type) {
+        input_tf_ = script_tf_ = "1D";
+        script_tf_seconds_ = 86400;
+        syminfo_.timezone = "UTC";
+        syminfo_.session = session;
+        syminfo_.type = type;
+        register_security_eval(0, "2D", "1D", true, false);
+        register_security_eval(1, "8D", "1D", true, false);
+        register_security_eval(2, "8D", "1D", true, false);
+        CHECK(set_aux_security_feed(aux.data(), static_cast<int>(aux.size()), "60"),
+              "N-day auxiliary feed installed");
+        (this->*access(PrepareSecurity{}))(chart);
+    }
+    TimeframeAggregator& partition(int site) { return security_eval_states_[site].aggregator; }
+    void on_source_bar(const Bar&) override {}
+};
+
+void test_nday_real_dates_stamps_and_fixed_resident_bound() {
+    namespace cal = native_calendar;
+    constexpr std::int64_t day_ms = 86'400'000;
+    const auto first = cal::native_civil_days(2023, 12, 29);
+    const auto last = cal::native_civil_days(2026, 1, 5);
+    const auto chart_first = cal::native_civil_days(2024, 1, 3);
+    const auto chart_last = cal::native_civil_days(2025, 12, 30);
+    const auto good_friday = cal::native_civil_days(2025, 4, 18);
+    const auto christmas = cal::native_civil_days(2025, 12, 25);
+    // The year's first trading date opens every N-day group, so its late
+    // chart stamp must win over an earlier auxiliary bar in all three sites.
+    const auto late_day = cal::native_civil_days(2025, 1, 1);
+    for (int mode = 0; mode < 3; ++mode) {
+        const bool every_day = mode == 0;
+        const bool exchange = mode == 2;
+        const char* session = every_day ? "24x7" : exchange ? "0930-1600" : "1700-1700";
+        const char* type = every_day ? "crypto" : exchange ? "stock" : "forex";
+        const auto nominal = [&](std::int64_t d) {
+            return d * day_ms + (every_day ? 0 : exchange ? 570 * 60'000LL : -7 * 3'600'000LL);
+        };
+        std::vector<Bar> chart, aux;
+        std::map<std::int64_t, std::int64_t> held;
+        for (auto d = first; d <= last; ++d) {
+            const auto weekday = ((d % 7) + 7 + 4) % 7;
+            if (!every_day && (weekday == 0 || weekday == 6)) continue;
+            if (d == christmas || d == good_friday) continue;
+            const bool own = d >= chart_first && d <= chart_last
+                && (d % 11 != 0 || d == late_day);
+            const bool finer = d == first || d == last || d % 5 == 0 || d == late_day;
+            const auto own_stamp = nominal(d) + (exchange && d == late_day ? 255 * 60'000LL : 0);
+            if (own) {
+                chart.push_back({100, 102, 99, 101, 1, own_stamp});
+                held.emplace(d, own_stamp);
+            }
+            if (finer) {
+                aux.push_back({100, 102, 99, 101, 1, nominal(d) + 30 * 60'000});
+                held.emplace(d, nominal(d));
+            }
+        }
+        CHECK(held.size() > 450, "hundreds of real chart/aux trading dates");
+        CHECK(held.count(christmas) == 0 && held.count(good_friday) == 0,
+              "missing exchange/OTC holidays are real input holes");
+        NDayHarness harness;
+        harness.prepare(chart, aux, session, type);
+        for (int site = 0; site < 3; ++site) {
+            const int days = site == 0 ? 2 : 8;
+            std::vector<std::int64_t> dates;
+            const auto first_held = held.begin()->first;
+            const auto last_held = held.rbegin()->first;
+            for (auto year = cal::native_civil_date(first_held).year;
+                 year <= cal::native_civil_date(last_held).year + 1; ++year) {
+                int count = 0;
+                for (auto d = cal::native_civil_days(year, 1, 1);
+                     d < cal::native_civil_days(year + 1, 1, 1); ++d) {
+                    const auto weekday = ((d % 7) + 7 + 4) % 7;
+                    const bool trades = exchange && d >= first_held && d <= last_held
+                        ? held.count(d) != 0 : every_day || (weekday >= 1 && weekday <= 5);
+                    if (trades && count++ % days == 0) dates.push_back(d);
+                }
+            }
+            auto begin = std::upper_bound(dates.begin(), dates.end(), first_held);
+            CHECK(begin != dates.begin(), "first held date has a containing N-day bucket");
+            if (begin == dates.begin()) continue;
+            std::vector<std::int64_t> expected;
+            for (--begin; begin != dates.end(); ++begin) {
+                const auto found = held.find(*begin);
+                expected.push_back(found == held.end() ? nominal(*begin) : found->second);
+            }
+            if (exchange)
+                CHECK(std::find(expected.begin(), expected.end(), held.at(late_day)) != expected.end(),
+                      "late chart open owns the N-day stamp despite earlier auxiliary trading");
+            auto& agg = harness.partition(site);
+            const auto storage = partition_storage(agg.*access(Stamps{}), agg.*access(Groups{}), 0);
+            CHECK(storage.population == expected.size(), "full N-day stamp population including next year");
+            if (storage.held_days)
+                CHECK(*storage.held_days == held.size(), "merged real held-date population");
+            CHECK(storage.resident == 0, "no resident N-day stamp/group table on either site");
+            CHECK(storage.bytes <= 4096, "fixed N-day cursor bytes including owned buffers");
+            for (std::size_t k = 0; k < expected.size(); ++k) {
+                const auto index = (k % 2 == 0) ? k / 2 : expected.size() - 1 - k / 2;
+                const auto stamp = expected[index];
+                CHECK(agg.bar_label_ms(stamp) == stamp, "N-day stamp survives nonmonotone seeks");
+                CHECK(agg.bucket_open_ms(stamp + 1) == stamp, "N-day membership matches every stamp");
+                if (index + 1 < expected.size())
+                    CHECK(agg.period_changes(stamp, expected[index + 1]), "every N-day boundary survives");
+            }
+            const auto last_bound = session_period_close_ms(
+                expected.back(), "UTC", session, CalendarPeriod::DAY);
+            CHECK(agg.bucket_open_ms(last_bound)
+                      == session_period_open_ms(last_bound, "UTC", session, CalendarPeriod::DAY),
+                  "nominal fallback after the final next-year stamp");
+            NativeDayPartition other;
+            other.tz = "UTC";
+            other.session = session;
+            other.stamps = {expected.front()};
+            other.trade_day = {first_held};
+            other.week_open = other.month_open = other.stamps;
+            other.last_bound = last_bound;
+            NativeDayPartitionScope ambient(&other);
+            CHECK(agg.bar_label_ms(expected[expected.size() / 2])
+                      == expected[expected.size() / 2], "recompute keeps preparation's calendar context");
+            const auto final = partition_storage(agg.*access(Stamps{}), agg.*access(Groups{}), 0);
+            CHECK(final.resident == 0 && final.bytes <= 4096, "seeking never grows resident storage");
+        }
+    }
+}
+
+template <typename C>
+auto projection_storage(const C& projections, int)
+    -> decltype(projections.capacity(), ProjectionStorage{}) {
+    return {projections.size(), projections.size(),
+            sizeof(C) + projections.capacity() * sizeof(source::HistoricalSecurityProjection)};
+}
+
+template <typename C>
+ProjectionStorage projection_storage(const C& projections, long) {
+    return {projections.size(), projections.resident_size(), sizeof(C)};
+}
+
 class ProjectionHarness final : public pineforge::source::PineStrategyHost {
 public:
     explicit ProjectionHarness(bool lookahead_on = true, bool gaps_on = false,
@@ -51,12 +233,66 @@ public:
 
     void on_source_bar(const Bar&) override {
         chart_values.push_back(visible_close);
+        if (measure_projection) {
+            const auto storage = projection_storage(pine_security_states_[0].historical_projections, 0);
+            projection_population = storage.population;
+            peak_resident = std::max(peak_resident, storage.resident);
+            peak_bytes = std::max(peak_bytes, storage.bytes);
+        }
     }
 
     std::vector<Dispatch> dispatches;
     std::vector<double> chart_values;
     double visible_close = na<double>();
+    bool measure_projection = false;
+    std::size_t projection_population = 0;
+    std::size_t peak_resident = 0;
+    std::size_t peak_bytes = 0;
 };
+
+void test_projection_population_has_one_resident_bucket() {
+    constexpr int n = 4098;
+    std::vector<Bar> bars;
+    for (int i = 0; i < n; ++i) {
+        const double value = static_cast<double>(i + 1);
+        bars.push_back({value, value + 2, value - 1, value, value,
+                        3'600'000 + static_cast<std::int64_t>(i) * 900'000});
+    }
+    for (const bool cut_first : {false, true}) {
+        ProjectionHarness harness;
+        harness.measure_projection = true;
+        harness.set_syminfo_metadata("historical_security_lookahead_projection", 1.0);
+        if (cut_first)
+            harness.set_syminfo_metadata("security_range_start_na_warmup", 4'500'000.0);
+        harness.run(bars.data(), n, "15", "15");
+        CHECK(harness.last_error().empty(), "bounded source projection succeeds");
+        const std::size_t population = cut_first ? 1024 : 1025;
+        CHECK(harness.projection_population == population, "real retained bucket population");
+        CHECK(harness.dispatches.size() == population, "every retained bucket dispatches");
+        CHECK(harness.peak_resident == 1, "one resident source projection (base retains every bucket)");
+        CHECK(harness.peak_bytes <= 512, "fixed source projection bytes including owned capacity");
+        CHECK(harness.chart_values.size() == bars.size(), "every source child is observed");
+        for (std::size_t i = 0; i < harness.dispatches.size(); ++i) {
+            const std::size_t begin = (i + (cut_first ? 1 : 0)) * 4;
+            const std::size_t end = std::min(begin + 4, bars.size());
+            const auto& got = harness.dispatches[i];
+            double volume = bars[begin].volume;
+            for (std::size_t j = begin + 1; j < end; ++j) volume += bars[j].volume;
+            CHECK(got.bar.timestamp == bars[begin].timestamp, "projected first label");
+            CHECK(got.bar.open == bars[begin].open
+                      && got.bar.low == bars[begin].low
+                      && got.bar.high == bars[end - 1].high
+                      && got.bar.close == bars[end - 1].close
+                      && got.bar.volume == volume, "exact projected OHLCV fold");
+            CHECK(got.complete == (end - begin == 4), "complete buckets and partial tail");
+        }
+        for (std::size_t i = 0; i < harness.chart_values.size(); ++i) {
+            const double want = cut_first && i < 4 ? na<double>()
+                : bars[std::min((i / 4 + 1) * 4, bars.size()) - 1].close;
+            CHECK(same(harness.chart_values[i], want), "FINAL projection held on every child");
+        }
+    }
+}
 
 std::vector<Bar> make_feed() {
     // One complete 60m bucket (01:00..01:45) and one incomplete tail
@@ -368,6 +604,8 @@ void test_stream_warmup_and_continuation_stay_progressive() {
 }  // namespace
 
 int main() {
+    test_nday_real_dates_stamps_and_fixed_resident_bound();
+    test_projection_population_has_one_resident_bucket();
     test_default_remains_progressive();
     test_flag_projects_full_bucket_then_holds();
     test_incomplete_tail_projects_available_aggregate();

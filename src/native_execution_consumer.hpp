@@ -805,13 +805,25 @@ private:
         // opens one.
         int bucket_first_index = -1;
         std::int64_t bucket_first_ms = 0;
-        // lookahead_on: the whole series, resolved at begin over the
-        // historical input (a stream's is its warmup), each bucket keyed to
-        // the input index it is delivered on.
-        std::vector<Bar> projected_bars;
-        std::vector<int> projected_first_index;
-        std::vector<std::int64_t> projected_first_ms;
-        std::vector<NativeCompletionKind> projected_completion;
+        // lookahead_on: one FINAL bucket ahead of the delivery cursor, over
+        // the borrowed historical input (a stream's warmup). The count-only
+        // pass leaves the evaluator's legacy terminal state in place.
+        struct ProjectedBucket {
+            Bar bar{};
+            int first_index = -1;
+            std::int64_t first_ms = 0;
+            NativeCompletionKind completion = NativeCompletionKind::Confirmed;
+        };
+        std::optional<ProjectedBucket> projected;
+        TimeframeAggregator::ReplayCursor projected_aggregate;
+        const Bar* projected_input = nullptr;
+        const NativeDayPartition* projected_partition = nullptr;
+        int projected_input_count = 0;
+        int projected_input_index = 0;
+        std::size_t projected_auxiliary_cursor = 0;
+        int projected_bucket_first_index = -1;
+        std::int64_t projected_bucket_first_ms = 0;
+        std::size_t projected_count = 0;
         std::size_t projected_cursor = 0;
     };
 
@@ -1107,6 +1119,8 @@ private:
     bool project_timeframe_subscription(BacktestEngine& engine,
                                         TimeframeSubscription& subscription,
                                         const Bar* input_bars, int n_input);
+    void advance_timeframe_projection(BacktestEngine& engine,
+                                      TimeframeSubscription& subscription);
     bool pump_timeframe_subscriptions(BacktestEngine& engine, const Bar& bar, int index,
                                       const native_calendar::NativeInterval& input_interval);
     // The declared auxiliary feed followed by a stream's appended bars, read

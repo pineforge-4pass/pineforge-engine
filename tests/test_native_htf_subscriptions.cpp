@@ -42,6 +42,7 @@
 // this TU is source-free and runs in the kernel-only profile.
 
 #include "native_htf_subscriptions_fixture.hpp"
+#include "../src/native_execution_consumer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -52,9 +53,126 @@
 #include <string>
 #include <vector>
 
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+struct NativeExecutionConsumerProbe {
+    struct ProjectionStorage {
+        std::size_t population = 0;
+        std::size_t delivered = 0;
+        std::size_t resident = 0;
+        std::size_t bytes = 0;
+    };
+    // Both overloads compile on 21ba62bd: its real retained population and
+    // capacities fail the same executed bound as the cursor implementation.
+    template <typename S>
+    static auto storage(const S& s, int)
+        -> decltype(s.projected_bars.size(), ProjectionStorage{}) {
+        return {s.projected_bars.size(), s.projected_cursor, s.projected_bars.size(),
+                sizeof(S) + s.projected_bars.capacity() * sizeof(Bar)
+                    + s.projected_first_index.capacity() * sizeof(int)
+                    + s.projected_first_ms.capacity() * sizeof(std::int64_t)
+                    + s.projected_completion.capacity() * sizeof(NativeCompletionKind)};
+    }
+    template <typename S>
+    static ProjectionStorage storage(const S& s, long) {
+        return {s.projected_count, s.projected_cursor,
+                s.projected.has_value() ? 1u : 0u, sizeof(S)};
+    }
+    static ProjectionStorage storage(const NativeStrategyHost& host) {
+        const auto& c = NativeExecutionConsumer::bound(host);
+        return c.subscriptions_.empty() ? ProjectionStorage{} : storage(c.subscriptions_[0], 0);
+    }
+};
+} // inline namespace engine_script_run_v19
+} // namespace pineforge
+
 namespace {
 using namespace pineforge;
 using namespace l6_fixture;
+
+class BoundedProjectionHost final : public NativeStrategyHost {
+public:
+    const std::vector<Bar>* chart = nullptr;
+    const std::vector<Bar>* feed = nullptr;
+    int children_per_bucket = 4;
+    int children_per_input = 1;
+    std::size_t buckets = 0;
+    std::size_t expected_buckets = 0;
+    std::size_t peak_resident = 0;
+    std::size_t peak_bytes = 0;
+    bool exact = true;
+
+    void on_native_input(const Bar&, const NativeInputContext&) override {
+        const auto storage = NativeExecutionConsumerProbe::storage(*this);
+        peak_resident = std::max(peak_resident, storage.resident);
+        peak_bytes = std::max(peak_bytes, storage.bytes);
+        exact = exact && storage.population == expected_buckets
+            && security_eval_states_[0].eval_complete_count
+                == static_cast<std::int64_t>(expected_buckets);
+    }
+    void on_native_timeframe_bar(const Bar& bar,
+                                 const NativeTimeframeBarContext& context) override {
+        const int begin = static_cast<int>(buckets) * children_per_bucket;
+        const auto& first = (*feed)[static_cast<std::size_t>(begin)];
+        const Bar want = hand_aggregate(*feed, begin, children_per_bucket, first.timestamp);
+        const auto storage = NativeExecutionConsumerProbe::storage(*this);
+        const auto pulled = native_series_bar(0);
+        exact = exact && context.subscription == 0 && pulled.has_value()
+            && pulled->close == want.close && bar.timestamp == want.timestamp
+            && bar.open == want.open && bar.high == want.high && bar.low == want.low
+            && bar.close == want.close && bar.volume == want.volume
+            && context.completion == NativeCompletionKind::Confirmed
+            && context.delivered_at_ms
+                == (*chart)[static_cast<std::size_t>(begin / children_per_input)].timestamp
+            && storage.delivered == buckets + 1;
+        ++buckets;
+    }
+};
+
+void test_lookahead_population_has_one_resident_projection() {
+    scenario = "lookahead population and resident bound";
+    for (const bool auxiliary : {false, true}) {
+        const int input_count = auxiliary ? 512 : 4098;
+        auto chart = quarter_hour_bars(input_count);
+        auto feed = chart;
+        NativeRunSpec spec = base_spec(auxiliary ? "60" : "15",
+                                       auxiliary ? "60" : "15", "bounded-projection");
+        NativeTimeframeSubscription subscription;
+        subscription.tf = auxiliary ? "15" : "60";
+        subscription.lookahead = true;
+        if (auxiliary) {
+            for (int i = 0; i < input_count; ++i)
+                chart[static_cast<std::size_t>(i)].timestamp =
+                    chart.front().timestamp + static_cast<std::int64_t>(i) * kHour;
+            feed = quarter_hour_bars(input_count * 12);
+            for (std::size_t i = 0; i < feed.size(); ++i)
+                feed[i].timestamp = chart.front().timestamp
+                    + static_cast<std::int64_t>(i) * 5 * kMinute;
+            NativeAuxiliaryFeed declared;
+            declared.tf = "5";
+            declared.bars = feed;
+            spec.auxiliary_feed = std::move(declared);
+            subscription.source = NativeSeriesSource::AuxiliaryFeed;
+        }
+        spec.subscriptions.push_back(std::move(subscription));
+        BoundedProjectionHost host;
+        host.chart = &chart;
+        host.feed = &feed;
+        host.children_per_bucket = auxiliary ? 3 : 4;
+        host.children_per_input = auxiliary ? 12 : 1;
+        host.expected_buckets = auxiliary ? 2048 : 1024;
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        host.run(chart.data(), static_cast<int>(chart.size()), spec.input_tf, spec.script_tf);
+        const auto final = NativeExecutionConsumerProbe::storage(host);
+        CHECK(host.last_error().empty());
+        CHECK(host.exact);
+        CHECK(host.buckets == host.expected_buckets);
+        CHECK(final.population == host.expected_buckets);
+        CHECK(final.delivered == host.expected_buckets);
+        CHECK(host.peak_resident == 1);
+        CHECK(host.peak_bytes <= 1024);
+    }
+}
 
 // A host in the adapter's shape: its series are known only to its own
 // run-begin registration, which opens by clearing the engine's evaluator
@@ -1015,6 +1133,7 @@ void test_lazy_seal_precedes_the_pump() {
 }  // namespace
 
 int main() {
+    test_lookahead_population_has_one_resident_projection();
     test_hourly_over_quarter_hour();
     test_hourly_lookahead();
     test_same_timeframe_instances();

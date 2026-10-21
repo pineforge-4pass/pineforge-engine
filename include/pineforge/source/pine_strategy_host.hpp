@@ -68,6 +68,113 @@ struct HistoricalSecurityProjection {
     bool is_complete = false;
 };
 
+// An indexed view keeps the existing dispatch/hash readers, but a peek at
+// the next first_child_ms reads only its input label. Its OHLCV is resolved
+// when that bucket becomes the reader's current projection.
+class HistoricalSecurityProjectionCursor {
+public:
+    struct Step {
+        HistoricalSecurityProjection projection;
+        int next_input = 0;
+    };
+    using Read = Step (*)(const void*, const HistoricalSecurityProjectionCursor&, int);
+    using Instant = std::int64_t (*)(const void*, const Bar*, int);
+
+    const Bar* input = nullptr;
+    int input_count = 0;
+    int sec_id = 0;
+    int requested_seconds = 0;
+    std::int64_t input_ms = 0;
+    const NativeDayPartition* partition = nullptr;
+
+    void bind(const void* owner, Read read, Instant instant, int begin, std::size_t count) {
+        owner_ = owner;
+        read_ = read;
+        instant_ = instant;
+        begin_ = begin;
+        count_ = count;
+        current_.reset();
+        index_ = 0;
+        if (count_ != 0) load(begin_);
+    }
+    void clear() { *this = HistoricalSecurityProjectionCursor{}; }
+    bool empty() const { return count_ == 0; }
+    std::size_t size() const { return count_; }
+    std::size_t resident_size() const { return current_ ? 1 : 0; }
+    HistoricalSecurityProjection& front() { return get(0); }
+    const HistoricalSecurityProjection& front() const { return get(0); }
+
+    template <typename T, T Bar::*Member>
+    struct BarField {
+        const HistoricalSecurityProjectionCursor* cursor;
+        std::size_t index;
+        operator T() const { return cursor->get(index).bar.*Member; }
+    };
+    struct BarView {
+        const HistoricalSecurityProjectionCursor* cursor;
+        std::size_t index;
+        BarField<double, &Bar::open> open;
+        BarField<double, &Bar::high> high;
+        BarField<double, &Bar::low> low;
+        BarField<double, &Bar::close> close;
+        BarField<double, &Bar::volume> volume;
+        BarField<std::int64_t, &Bar::timestamp> timestamp;
+        operator Bar() const { return cursor->get(index).bar; }
+    };
+    struct CompleteView {
+        const HistoricalSecurityProjectionCursor* cursor;
+        std::size_t index;
+        operator bool() const { return cursor->get(index).is_complete; }
+    };
+    struct View {
+        BarView bar;
+        std::int64_t first_child_ms;
+        CompleteView is_complete;
+    };
+    View operator[](std::size_t at) const {
+        std::int64_t first;
+        if (current_ && at > index_) {
+            int begin = next_input_;
+            for (std::size_t index = index_ + 1; index < at; ++index)
+                begin = read_(owner_, *this, begin).next_input;
+            first = instant_(owner_, input, begin);
+        } else {
+            first = get(at).first_child_ms;
+        }
+        return {{this, at, {this, at}, {this, at}, {this, at}, {this, at},
+                 {this, at}, {this, at}}, first, {this, at}};
+    }
+
+private:
+    const void* owner_ = nullptr;
+    Read read_ = nullptr;
+    Instant instant_ = nullptr;
+    int begin_ = 0;
+    std::size_t count_ = 0;
+    // These are recomputable over the borrowed feed. The legacy hash folds
+    // only the projection at historical_projection_cursor, as before.
+    mutable std::optional<HistoricalSecurityProjection> current_;
+    mutable std::size_t index_ = 0;
+    mutable int next_input_ = 0;
+
+    void load(int begin) const {
+        const auto step = read_(owner_, *this, begin);
+        current_ = step.projection;
+        next_input_ = step.next_input;
+    }
+    HistoricalSecurityProjection& get(std::size_t at) const {
+        if (!current_ || at < index_) {
+            index_ = 0;
+            load(begin_);
+        }
+        while (index_ < at) {
+            load(next_input_);
+            ++index_;
+        }
+        return *current_;
+    }
+};
+
 // One auxiliary bar a first-bucket-latched site holds back until the chart
 // body has run (PineSecurityEvalState::deferred_aux), with the cursor values
 // it would have been fed under.
@@ -189,14 +296,14 @@ struct PineSecurityEvalState {
     double ha_prev_open = 0.0;
     double ha_prev_close = 0.0;
     bool ha_seeded = false;
-    // One entry per projected HTF bucket, populated only for an explicitly
+    // One projected HTF bucket, resolved only for an explicitly
     // opted-in finite historical batch. Empty for every default/streaming
     // run and for sites outside the narrow HTF lookahead_on+gaps_off
     // contract. The feed index advances once per retained input bar (bars
     // before an opt-in security range start are dropped by both producer
     // and consumer); the projection cursor advances only at the next
     // bucket's first child.
-    std::vector<HistoricalSecurityProjection> historical_projections;
+    HistoricalSecurityProjectionCursor historical_projections;
     std::size_t historical_projection_cursor = 0;
     // Which projection (cursor) has already been dispatched: every later
     // input of the same bucket is a no-op for the evaluator.
@@ -956,6 +1063,9 @@ private:
     void init_security_eval_states_for_run(const std::string& effective_input_tf);
     void prepare_historical_security_lookahead_projections(
         const Bar* input_bars, int n_input, const std::string& effective_input_tf);
+    std::int64_t historical_security_child_ms(const Bar* input, int child) const;
+    HistoricalSecurityProjectionCursor::Step read_historical_security_projection(
+        const HistoricalSecurityProjectionCursor& cursor, int begin) const;
     void clear_historical_security_lookahead_projections();
     bool scheduler_feed_security_input(const Bar&, std::int64_t next_input_ms,
                                        bool calling_bar_complete,

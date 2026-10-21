@@ -2061,7 +2061,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
             if (subscription.latest) hash_bar(f, *subscription.latest);
             f.i(subscription.bucket_first_index);
             f.i(subscription.bucket_first_ms);
-            f.u(subscription.projected_bars.size());
+            f.u(subscription.projected_count);
             f.u(subscription.projected_cursor);
             // Only a series built from the auxiliary feed has a feed cursor;
             // a series built from the input folds exactly what it did.
@@ -9657,16 +9657,16 @@ bool NativeExecutionConsumer::feed_auxiliary_slice(
     return !failed();
 }
 
-// barmerge.lookahead_on: resolve the whole series over the historical input
-// now, so each completed bucket's FINAL values can be delivered at the input
-// bar that opened it. This pass IS the subscription's only feed for those
-// inputs; the pump is skipped over them, so the substitution/miss diagnostics
-// count each bucket exactly once. A stream's historical input is its warmup,
-// and the aggregator is left holding whatever bucket the warmup left open --
-// the live phase continues that very bucket through the aggregating pump.
+// Count completed projections without retaining them. This remains the
+// evaluator's only feed of the historical input, preserving its terminal
+// state, substitution diagnostics and continuation identity. Delivery uses
+// an independent one-bucket replay over the same partition and borrowed bars.
 bool NativeExecutionConsumer::project_timeframe_subscription(
         BacktestEngine& engine, TimeframeSubscription& subscription,
         const Bar* input_bars, int n_input) {
+    subscription.projected_input = input_bars;
+    subscription.projected_partition = active_native_day_partition();
+    subscription.projected_input_count = n_input;
     if (subscription.auxiliary) {
         // The same projection over the auxiliary feed: each historical input
         // folds its own slice, and a bucket is keyed to the input whose slice
@@ -9679,13 +9679,9 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
                 render(engine, "native auxiliary feed projection found an unaligned input");
                 return false;
             }
-            const auto record = [&subscription](const Bar& bucket, int first_index,
-                                                std::int64_t first_ms,
-                                                NativeCompletionKind completion) {
-                subscription.projected_bars.push_back(bucket);
-                subscription.projected_first_index.push_back(first_index);
-                subscription.projected_first_ms.push_back(first_ms);
-                subscription.projected_completion.push_back(completion);
+            const auto record = [&subscription](const Bar&, int, std::int64_t,
+                                                NativeCompletionKind) {
+                ++subscription.projected_count;
                 return true;
             };
             if (!feed_auxiliary_slice(engine, subscription, i,
@@ -9693,6 +9689,7 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
                 return false;
             }
         }
+        advance_timeframe_projection(engine, subscription);
         return !failed();
     }
     auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
@@ -9714,11 +9711,7 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
         // completed bucket current.
         const bool boundary = state.aggregator.is_active()
             && state.aggregator.current().timestamp != state.current_bar.timestamp;
-        subscription.projected_bars.push_back(state.current_bar);
-        subscription.projected_first_index.push_back(first_index);
-        subscription.projected_first_ms.push_back(first_ms);
-        subscription.projected_completion.push_back(
-            boundary ? NativeCompletionKind::LazyComplete : NativeCompletionKind::Confirmed);
+        ++subscription.projected_count;
         if (boundary) {
             first_index = i;
             first_ms = input_bars[i].timestamp;
@@ -9736,7 +9729,75 @@ bool NativeExecutionConsumer::project_timeframe_subscription(
     // opened is a warmup bar, not the first live one that continues it.
     subscription.bucket_first_index = first_index;
     subscription.bucket_first_ms = first_ms;
+    advance_timeframe_projection(engine, subscription);
     return !failed();
+}
+
+void NativeExecutionConsumer::advance_timeframe_projection(
+        BacktestEngine& engine, TimeframeSubscription& subscription) {
+    NativeDayPartitionScope partition_scope(subscription.projected_partition);
+    subscription.projected.reset();
+    if (subscription.projected_cursor >= subscription.projected_count) return;
+    auto& state = engine.security_eval_states_[static_cast<std::size_t>(subscription.sec_id)];
+    while (subscription.projected_input_index < subscription.projected_input_count) {
+        const int index = subscription.projected_input_index;
+        Bar child;
+        std::int64_t next_ms = 0;
+        if (subscription.auxiliary) {
+            const auto interval = input_interval_at(subscription.projected_input[index].timestamp);
+            // The count pass has already validated every input interval.
+            const std::size_t total = auxiliary_bar_count();
+            const std::size_t at = subscription.projected_auxiliary_cursor;
+            if (at >= total
+                || auxiliary_bar(at).timestamp >= interval->next_period_open_ms) {
+                ++subscription.projected_input_index;
+                continue;
+            }
+            child = auxiliary_bar(at);
+            ++subscription.projected_auxiliary_cursor;
+            if (at + 1 < total) next_ms = auxiliary_bar(at + 1).timestamp;
+        } else {
+            child = subscription.projected_input[index];
+            ++subscription.projected_input_index;
+            if (index + 1 < subscription.projected_input_count)
+                next_ms = subscription.projected_input[index + 1].timestamp;
+        }
+        if (subscription.projected_bucket_first_index < 0) {
+            subscription.projected_bucket_first_index = index;
+            subscription.projected_bucket_first_ms = child.timestamp;
+        }
+        auto aggregate = state.aggregator.feed_cursor(
+            subscription.projected_aggregate, child, next_ms);
+        if (!aggregate.is_complete) continue;
+        // Read the same authoritative substitution without incrementing its
+        // diagnostics or dispatching the evaluator a second time.
+        if (state.native_feed_index >= 0) {
+            const auto found = state.native_bars_by_label.find(
+                state.aggregator.bar_label_ms(aggregate.bar.timestamp));
+            if (found != state.native_bars_by_label.end()) {
+                const Bar& native = found->second;
+                aggregate.bar.open = native.open;
+                aggregate.bar.high = native.high;
+                aggregate.bar.low = native.low;
+                aggregate.bar.close = native.close;
+                aggregate.bar.volume = native.volume;
+            }
+        }
+        const bool boundary = state.aggregator.is_active()
+            && subscription.projected_aggregate.current.timestamp != aggregate.bar.timestamp;
+        subscription.projected = TimeframeSubscription::ProjectedBucket{
+            aggregate.bar, subscription.projected_bucket_first_index,
+            subscription.projected_bucket_first_ms,
+            boundary ? NativeCompletionKind::LazyComplete : NativeCompletionKind::Confirmed};
+        if (boundary) {
+            subscription.projected_bucket_first_index = index;
+            subscription.projected_bucket_first_ms = child.timestamp;
+        } else {
+            subscription.projected_bucket_first_index = -1;
+            subscription.projected_bucket_first_ms = 0;
+        }
+        return;
+    }
 }
 
 bool NativeExecutionConsumer::pump_timeframe_subscriptions(
@@ -9763,17 +9824,17 @@ bool NativeExecutionConsumer::pump_timeframe_subscriptions(
         }
         bool delivered = false;
         if (subscription.lookahead) {
-            while (subscription.projected_cursor < subscription.projected_bars.size()
-                   && subscription.projected_first_index[subscription.projected_cursor]
-                          == index) {
-                const std::size_t at = subscription.projected_cursor++;
+            while (subscription.projected
+                   && subscription.projected->first_index == index) {
+                ++subscription.projected_cursor;
                 if (!deliver_timeframe_bar(engine, subscription,
-                                           subscription.projected_bars[at],
-                                           subscription.projected_first_ms[at],
+                                           subscription.projected->bar,
+                                           subscription.projected->first_ms,
                                            bar.timestamp,
-                                           subscription.projected_completion[at])) {
+                                           subscription.projected->completion)) {
                     return false;
                 }
+                advance_timeframe_projection(engine, subscription);
                 delivered = true;
             }
             // Historical inputs are served entirely by that projection. A
