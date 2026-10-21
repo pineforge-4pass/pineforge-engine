@@ -97,6 +97,8 @@ KEYWORDS = {'operator', 'return', 'const', 'static', 'if', 'for', 'while', 'new'
             'noexcept', 'override', 'final', 'throw', 'sizeof', 'typename', 'template'}
 
 BLANK_CHARS = ' \t\r\n'
+SPLICE_RE = re.compile(r'\\[ \t\f\v\x00]*\n')
+DEFINE_RE = re.compile(r'(?<!\w)define(?:\s|/\*.*?\*/)*([A-Za-z_]\w*)', re.S)
 
 
 class GateError(Exception):
@@ -449,7 +451,7 @@ def _text(value, who: str, field: str, *, placeholder_ok: bool = False) -> str:
 
 def _str_list(value, who: str, field: str, *, nonempty: bool = True) -> list[str]:
     if not isinstance(value, list) or (nonempty and not value) \
-            or not all(isinstance(v, str) and v for v in value):
+            or not all(isinstance(v, str) and v.strip() for v in value):
         raise GateError(f'{who}: field {field} must be a {"non-empty " if nonempty else ""}'
                         'list of strings')
     return value
@@ -1037,17 +1039,6 @@ def _guarded_push(site: Site, code: str) \
             (base + size_start, base + size_end))
 
 
-def _directives(text: str):
-    """Join translation-phase splices before lexing directives, including %:."""
-    # Keep this normalization out of Scanner._lex: the reviewed site identities
-    # still use the original physical lines and lexical brace paths.
-    text = re.sub(r'\\[ \t]*\r?\n', '', text)
-    for code, _, literal in cxxlex.lex_lines(text):
-        marker = re.match(r'\s*(?:#|%:)', code)
-        if marker:
-            yield '#' + code[marker.end():], literal
-
-
 def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
                    texts: dict[str, str], manifest: Manifest) -> list[tuple[str, int, str]]:
     """Fail closed outside the small enforced form; annotation alone never passes."""
@@ -1059,43 +1050,55 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
 
     if eid in manifest.bound_errors:
         return [finding(first, manifest.bound_errors[eid])]
+    if Path(entry['file']).parts[0] == 'include':
+        return [finding(first, 'header entries under include/ are outside guarded bounded '
+                        'admission: prior includes and build flags are not proven')]
     if not IDENT_RE.fullmatch(bound) or bound not in manifest.fixed:
         return [finding(first, f'bound {bound!r}: guarded admission requires one fixed input identifier')]
     fixed = manifest.fixed[bound]
     if fixed['definition'] not in texts:
         return [finding(first, 'fixed-input definition is outside the scanned source files')]
-    lexed = {rel: Scanner._lex(text) for rel, text in texts.items()}
     fixed_header = str(fixed['definition']).removeprefix('include/')
     proof_files = {entry['file'], fixed['definition']}
     macro_names = {'push_back', 'emplace_back', 'size'}
     for rel in sorted(proof_files):
-        body = lexed[rel][0]
-        # The bounded proof uses physical-line code and ordinary braces.
-        # Refuse alternate spellings rather than changing inventory identities.
-        if any(line.rstrip().endswith('\\') for line in body.splitlines()):
+        raw = texts[rel]
+        # These are context-free raw-text refusals, including inside comments
+        # and literals. Do not let a lexer/compiler disagreement admit a proof.
+        if '\x00' in raw:
+            return [finding(first, f'{rel}: NUL is outside guarded bounded admission')]
+        if '\ufeff' in raw:
+            return [finding(first, f'{rel}: BOM is outside guarded bounded admission')]
+        if not raw.isascii():
+            return [finding(first, f'{rel}: non-ASCII text is outside guarded bounded admission')]
+        if re.search(r'(?:u8|[LuU])?R"', raw):
+            return [finding(first, f'{rel}: raw string literals are outside guarded bounded admission')]
+        if SPLICE_RE.search(raw):
             return [finding(first, f'{rel}: line continuation is outside guarded bounded admission')]
-        if re.search(r'<%|%>', body):
+        if re.search(r'<%|%>', raw):
             return [finding(first, f'{rel}: brace digraphs are outside guarded bounded admission')]
         # Keywords and scalar/type names can be macro-rewritten just like the
         # receiver and bound. Include both proof files, not just five names.
-        macro_names.update(IDENT_RE.findall(body))
-        for directive, literal in _directives(texts[rel]):
-            if re.fullmatch(r'\s*#\s*pragma\s+once\s*', directive):
+        macro_names.update(IDENT_RE.findall(raw))
+        for marker in re.finditer(r'#|%:', raw):
+            directive = '#' + raw[marker.end():].split('\n', 1)[0]
+            if re.fullmatch(r'#\s*pragma\s+once\s*', directive):
                 continue
-            if re.fullmatch(r'\s*#\s*include\s*<(?:vector|cstddef|cstdint)>\s*', directive):
+            if re.fullmatch(r'#\s*include\s*<(?:vector|cstddef|cstdint)>\s*', directive):
                 continue
-            if rel == entry['file'] and re.fullmatch(r'\s*#\s*include\s*', directive) \
-                    and literal.strip() == fixed_header:
+            if rel == entry['file'] and re.fullmatch(
+                    rf'#\s*include\s*"{re.escape(fixed_header)}"\s*', directive):
                 continue
-            return [finding(first, 'macro/conditional preprocessing or unsupported includes '
+            return [finding(first, f'{rel}: macro/conditional preprocessing or unsupported includes '
                             'are outside guarded bounded admission')]
     for rel, text in texts.items():
-        for directive, _ in _directives(text):
-            # cxxlex removes comments without inserting a separating space.
-            definition = re.match(r'#\s*define\s*([A-Za-z_]\w*)', directive)
-            if definition and definition.group(1) in macro_names:
+        # Raw strings can revert splices; comments can cross directive lines.
+        # Intentionally ignore lexical context and even the directive marker.
+        for definition in DEFINE_RE.finditer(SPLICE_RE.sub('', text)):
+            if definition.group(1) in macro_names:
                 return [finding(first, f'scanned file {rel} defines macro '
                                 f'{definition.group(1)!r} used by guarded bounded admission')]
+    lexed = {rel: Scanner._lex(text) for rel, text in texts.items()}
     declarations = [s for s in group if s.cls == 'decl']
     if len(declarations) != 1:
         return [finding(first, 'guarded admission requires exactly one local scalar-vector declaration')]

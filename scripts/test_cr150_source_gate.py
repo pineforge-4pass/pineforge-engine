@@ -601,6 +601,24 @@ class GuardedBounds(Tree):
         self.assertNotIn('NEW ', proc.stdout)
         return proc
 
+    def proof_file_rejected(self, rel: str, control: str, hostile: str, diagnostic: str):
+        self.build(self.clean_entries(), loop=control if rel == 'src/loop.cpp' else LOOP_CPP)
+        path = self.root / rel
+        path.write_text(control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 1)
+        # Keep the control's inventory: these raw-text mutations add no lexed
+        # sites. Neither a rebaseline nor a NEW/stale finding can explain refusal.
+        path.write_text(hostile)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f'bounded entry E1: {rel}: {diagnostic}', proc.stdout)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+        self.assertEqual(counts(proc)['findings'], 1)
+        self.assertNotIn('NEW ', proc.stdout)
+        self.assertNotIn('stale', proc.stdout)
+
     def test_original_ring_reserve_and_uncapped_push_is_not_bounded(self):
         self.rejected(UNCAPPED_RING_CPP, 'initially empty local')
         self.rejected(UNCAPPED_RING_CPP.replace('reserve(kRingSlots)', 'reserve(65)'),
@@ -768,40 +786,158 @@ class GuardedBounds(Tree):
                 self.assertNotIn('NEW ', proc.stdout)
                 self.assertNotIn('stale', proc.stdout)
 
-    def header_entry_control(self):
-        header_file = 'include/pineforge/loop.hpp'
-        header = '#pragma once\n' + LOOP_CPP
-        consumer = '#include <vector>\n#define unrelated(x) x\n#include "pineforge/loop.hpp"\n'
-        self.build([entry('E1', file=header_file, state='bounded')], loop=consumer)
-        write_tree(self.root, {
-            header_file: header,
-            SITE_INVENTORY_REL: inventory_text({
-                header_file: header, 'src/loop.cpp': consumer,
-                'include/pineforge/fixed.hpp': FIXED_HPP})})
+    def test_splices_in_comments_and_literals_cannot_hide_an_unguarded_push(self):
+        for rel in ('src/loop.cpp', 'include/pineforge/fixed.hpp'):
+            action = 'slots_.push_back(1.0);' if rel == 'src/loop.cpp' else 'int ignored = 0;'
+            for context, control, hostile in (
+                    ('block comment', f'/* {action} */',
+                     '/* *\\\n/ ' + action + ' /* */'),
+                    ('string', '(void)""; (void)"";',
+                     '(void)"\\\n"; ' + action + ' (void)"";'),
+                    ('char', "(void)'n'; (void)'n';",
+                     "(void)'\\\nn'; " + action + " (void)'n';")):
+                with self.subTest(file=rel, context=context):
+                    if rel == 'src/loop.cpp':
+                        benign = LOOP_CPP.replace('\n}', f'\n    {control}\n}}')
+                        mutation = LOOP_CPP.replace('\n}', f'\n    {hostile}\n}}')
+                    else:
+                        benign = FIXED_HPP + f'inline void cr150_note() {{\n    {control}\n}}\n'
+                        mutation = FIXED_HPP + f'inline void cr150_note() {{\n    {hostile}\n}}\n'
+                    # On 7331cbae29 cxxlex erases the splice and hidden action;
+                    # the lexed continuation check and guarded proof both pass.
+                    self.proof_file_rejected(rel, benign, mutation, 'line continuation')
+
+    def test_whitespace_splices_in_line_comments_are_refused_in_both_proof_files(self):
+        for rel in ('src/loop.cpp', 'include/pineforge/fixed.hpp'):
+            for whitespace in (' ', '\t', '\f', '\v'):
+                with self.subTest(file=rel, whitespace=repr(whitespace)):
+                    if rel == 'src/loop.cpp':
+                        benign = LOOP_CPP.replace('    if (', '    // cap\n    if (')
+                        mutation = benign.replace('// cap\n', '// cap \\' + whitespace + '\n')
+                    else:
+                        benign = FIXED_HPP + '// cap\ninline void cr150_note() {}\n'
+                        mutation = benign.replace('// cap\n', '// cap \\' + whitespace + '\n')
+                    # The parent drops the comment and sees the guard. GCC and
+                    # Clang splice its whitespace-terminated backslash instead.
+                    self.proof_file_rejected(rel, benign, mutation, 'line continuation')
+
+    def test_raw_string_splices_cannot_hide_defines_in_either_proof_file(self):
+        for rel in ('src/loop.cpp', 'include/pineforge/fixed.hpp'):
+            for prefix in ('R', 'u8R', 'LR', 'uR', 'UR'):
+                with self.subTest(file=rel, prefix=prefix):
+                    control = f'const auto* cr150_note = {prefix[:-1]}"a";\n'
+                    hostile = (f'const auto* cr150_note = {prefix}"x(a)x\\\n'
+                               '" /* )x";\n#define size() size() * 0\n// */\n')
+                    if rel == 'src/loop.cpp':
+                        benign = LOOP_CPP.replace('void on_bar', control + 'void on_bar')
+                        mutation = LOOP_CPP.replace('void on_bar', hostile + 'void on_bar')
+                    else:
+                        benign, mutation = FIXED_HPP + control, FIXED_HPP + hostile
+                    # The parent's joined-then-lexed view ends the raw literal
+                    # early and hides the define inside the resulting comment.
+                    self.proof_file_rejected(rel, benign, mutation, 'raw string literals')
+
+    def test_proof_file_refusals_use_raw_text_even_inside_comments(self):
+        cases = (
+            ('// ordinary string note\n', '// R" note\n', 'raw string literals'),
+            ('// ordinary brace note\n', '// <% note\n', 'brace digraphs'),
+            ('// ordinary directive note\n', '// #define size() 0\n',
+             'macro/conditional preprocessing'),
+            ('// ASCII note\n', '// note \x00\n', 'NUL'),
+            ('// ASCII note\n', '// note \ufeff\n', 'BOM'),
+            ('// cafe\n', '// caf\u00e9\n', 'non-ASCII text'),
+        )
+        for rel in ('src/loop.cpp', 'include/pineforge/fixed.hpp'):
+            for control, hostile, diagnostic in cases:
+                with self.subTest(file=rel, diagnostic=diagnostic):
+                    base = LOOP_CPP if rel == 'src/loop.cpp' else FIXED_HPP
+                    # All these comments disappear in the parent's lexer.
+                    self.proof_file_rejected(rel, base + control, base + hostile, diagnostic)
+
+    def test_nul_before_a_define_in_the_entry_cannot_bypass_the_allowlist(self):
+        control = LOOP_CPP.replace('    if (', '// size is a member function\n    if (')
+        hostile = LOOP_CPP.replace('    if (', '\x00#define size() size() * 0\n    if (')
+        # Inside the already-open function, the NUL adds no scope or site;
+        # the parent's directive regex ignores the line and admits its guard.
+        self.proof_file_rejected('src/loop.cpp', control, hostile, 'NUL')
+
+    def test_bom_before_an_include_in_the_entry_cannot_bypass_the_allowlist(self):
+        write_tree(self.root, {'tests/cr150_evil.hpp':
+                              '#include <vector>\n#define size() size() * 0\n'})
+        control = '#include <cstddef>\n;\n' + LOOP_CPP
+        hostile = '\ufeff#include "../tests/cr150_evil.hpp"\n;\n' + LOOP_CPP
+        # The empty declaration keeps the same function scope on the parent;
+        # its directive regex skips BOM and never reads the unscanned header.
+        self.proof_file_rejected('src/loop.cpp', control, hostile, 'BOM')
+
+    def other_scanned_control(self, consumer='#include <vector>\n#define unrelated(x) x\n'):
+        self.build(self.clean_entries())
+        write_tree(self.root, {'src/other.cpp': consumer})
         control = self.gate()
         self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
         self.assertEqual(counts(control)['PASS(bounded)'], 1)
         return consumer
 
-    def test_macros_in_other_scanned_files_cannot_rewrite_a_header_entry(self):
-        consumer = self.header_entry_control()
+    def other_scanned_rejected(self, control: str, hostile: str, name: str):
+        self.other_scanned_control(control)
+        (self.root / 'src/other.cpp').write_text(hostile)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(f"bounded entry E1: scanned file src/other.cpp defines macro {name!r}",
+                      proc.stdout)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+        self.assertEqual(counts(proc)['findings'], 1)
+        self.assertNotIn('header entries', proc.stdout)
+        self.assertNotIn('NEW ', proc.stdout)
+        self.assertNotIn('stale', proc.stdout)
+
+    def test_raw_string_splices_cannot_hide_defines_in_other_scanned_files(self):
+        for prefix in ('R', 'u8R', 'LR', 'uR', 'UR'):
+            with self.subTest(prefix=prefix):
+                note = (f'const auto* cr150_note = {prefix}"x(a)x\\\n'
+                        '" /* )x";\n#define unrelated() unrelated() * 0\n// */\n')
+                # The same raw literal and splice are permitted outside the
+                # proof files until the hidden define names a proof identifier.
+                self.other_scanned_rejected(note, note.replace('unrelated', 'size'), 'size')
+
+    def test_obscured_defines_in_other_scanned_files_are_refused_without_lexing(self):
+        directives = [
+            '#/*\n*/define unrelated() unrelated() * 0',
+            '\x00#define unrelated() unrelated() * 0',
+            '\ufeff#define unrelated() unrelated() * 0',
+            '#define/*\n*/unrelated() unrelated() * 0',
+        ]
+        for whitespace in ('\f', '\v', '\x00', ' \t\f\v\x00'):
+            directives.extend((
+                '#define \\' + whitespace + '\nunrelated() unrelated() * 0',
+                '#de\\' + whitespace + '\nfine unrelated() unrelated() * 0'))
+        for directive in directives:
+            with self.subTest(directive=repr(directive)):
+                # Each spelling is invisible to the parent's directive/name
+                # parser; changing just the macro name triggers the raw rule.
+                self.other_scanned_rejected(directive + '\n',
+                                            directive.replace('unrelated', 'size') + '\n', 'size')
+
+    def test_macros_in_other_scanned_files_cannot_rewrite_a_cpp_entry(self):
+        consumer = self.other_scanned_control()
         for marker in ('#', '%:'):
             for definition in ('push_back(x) resize(1u << 30)',
                                'emplace_back(x) resize(1u << 30)', 'size() 0',
                                'slots_ replaced_slots', 'kRingSlots 100'):
                 with self.subTest(marker=marker, definition=definition):
-                    (self.root / 'src/loop.cpp').write_text(
+                    (self.root / 'src/other.cpp').write_text(
                         f'{marker}define {definition}\n' + consumer)
                     proc = self.gate()
                     self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
                     self.assertRegex(proc.stdout, r'FINDING .*bounded entry E1: '
-                                     r'scanned file src/loop.cpp defines macro')
+                                     r'scanned file src/other.cpp defines macro')
                     self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                    self.assertNotIn('header entries', proc.stdout)
                     self.assertNotIn('NEW ', proc.stdout)
 
-    def test_commented_and_spliced_defines_cannot_rewrite_a_header_entry(self):
-        consumer = self.header_entry_control()
-        include = '#include "pineforge/loop.hpp"'
+    def test_commented_and_spliced_defines_cannot_rewrite_a_cpp_entry(self):
+        consumer = self.other_scanned_control()
+        include = '#include <vector>'
         definitions = ['#define/**/push_back(x) resize(1u << 30)']
         for splice in ('\\\n', '\\ \t\r\n'):
             definitions.extend((
@@ -810,23 +946,24 @@ class GuardedBounds(Tree):
                 f'%{splice}:define push_back(x) resize(1u << 30)'))
         # 28eac95877 drops /**/ without a space, and never joins any splice.
         # Its name regex therefore misses every definition, producing PASS=1.
-        # The includer is outside the proof files: only directive parsing can
+        # The auxiliary source is outside the proof files: only define refusal can
         # close these cases, not the entry/fixed-file continuation refusal.
         for directive in definitions:
             with self.subTest(directive):
-                (self.root / 'src/loop.cpp').write_text(
+                (self.root / 'src/other.cpp').write_text(
                     consumer.replace(include, directive + '\n' + include))
                 proc = self.gate()
                 self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
                 self.assertRegex(proc.stdout, r'FINDING .*bounded entry E1: '
-                                 r"scanned file src/loop.cpp defines macro 'push_back'")
+                                 r"scanned file src/other.cpp defines macro 'push_back'")
                 self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                self.assertNotIn('header entries', proc.stdout)
                 self.assertNotIn('NEW ', proc.stdout)
                 self.assertNotIn('stale', proc.stdout)
 
-    def test_keyword_and_type_macros_cannot_rewrite_a_header_entry(self):
-        consumer = self.header_entry_control()
-        include = '#include "pineforge/loop.hpp"'
+    def test_keyword_and_type_macros_cannot_rewrite_a_cpp_entry(self):
+        consumer = self.other_scanned_control()
+        include = '#include <vector>'
         # None of these names is in 28eac95877's five-name refusal list. Their
         # definitions add no sites or receiver/bound uses, so it passes each.
         # constexpr/int occur only in the fixed input, exercising both files.
@@ -840,18 +977,74 @@ class GuardedBounds(Tree):
                                  ('x', 'x ignored_argument')):
             with self.subTest(name):
                 directive = '#define ' + definition
-                (self.root / 'src/loop.cpp').write_text(
+                (self.root / 'src/other.cpp').write_text(
                     consumer.replace(include, directive + '\n' + include))
                 proc = self.gate()
                 self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
                 self.assertRegex(proc.stdout, r'FINDING .*bounded entry E1: '
-                                 rf'scanned file src/loop.cpp defines macro {name!r}')
+                                 rf'scanned file src/other.cpp defines macro {name!r}')
                 self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                self.assertNotIn('header entries', proc.stdout)
+                self.assertNotIn('NEW ', proc.stdout)
+                self.assertNotIn('stale', proc.stdout)
+
+    def test_header_entries_are_refused_even_with_a_guarded_local_vector(self):
+        header_file = 'include/pineforge/loop.hpp'
+        header = '#pragma once\n' + LOOP_CPP
+        self.build(self.clean_entries(), loop=header)
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        self.assertEqual(counts(control)['PASS(bounded)'], 1)
+        # The identical guarded function moves to a public header. The parent
+        # passes even when an unscanned header defines size() before inclusion.
+        for prelude in ('', '#include "../tests/cr150_evil.hpp"\n'):
+            with self.subTest(prelude=prelude):
+                consumer = '#include <vector>\n' + prelude + '#include "pineforge/loop.hpp"\n'
+                self.build([entry('E1', file=header_file, state='bounded')], loop=consumer)
+                write_tree(self.root, {
+                    header_file: header,
+                    'tests/cr150_evil.hpp': '#define size() size() * 0\n',
+                    SITE_INVENTORY_REL: inventory_text({
+                        header_file: header, 'src/loop.cpp': consumer,
+                        'include/pineforge/fixed.hpp': FIXED_HPP})})
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                self.assertIn('bounded entry E1: header entries under include/ are outside '
+                              'guarded bounded admission: prior includes and build flags '
+                              'are not proven', proc.stdout)
+                self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                self.assertEqual(counts(proc)['findings'], 1)
                 self.assertNotIn('NEW ', proc.stdout)
                 self.assertNotIn('stale', proc.stdout)
 
 
 class FailClosed(Tree):
+    def test_blank_inventory_scope_members_are_malformed(self):
+        self.build(self.clean_entries())
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        self.assertEqual(counts(control)['PASS(bounded)'], 1)
+        path = self.root / SITE_INVENTORY_REL
+        original = path.read_text()
+        # 7331cbae29 accepts whitespace-only list members, then returns exit 1
+        # for stale/NEW identities. This is an inventory error, before judging.
+        for value in (' ', '\t', '\r\n', '\f\v', ' \t\r\n '):
+            with self.subTest(scope=repr(value)):
+                inventory = json.loads(original)
+                inventory['sites'][0]['scope'] = [value]
+                path.write_text(json.dumps(inventory))
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn('ERROR: site inventory record: field scope must be a list of strings',
+                              proc.stdout)
+                self.assertIn('result: ERROR (the gate could not judge; this is never a pass)',
+                              proc.stdout)
+                # Exit 2 emits no verdict counts at all, including no bounded
+                # pass count; do not substitute an invented zero for missing data.
+                self.assertNotIn('PASS(bounded)', proc.stdout)
+                self.assertNotIn('NEW ', proc.stdout)
+                self.assertNotIn('stale', proc.stdout)
+
     def test_blank_inventory_file_or_symbol_is_malformed(self):
         self.build(self.clean_entries())
         control = self.gate()
