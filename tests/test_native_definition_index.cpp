@@ -187,7 +187,8 @@ struct Summary {
 void collect(const NativeExecutionConsumer& consumer, const Membership& membership, Summary& out) {
     const auto& core = consumer.request_core();
     out.cohorts = cohort_digest(core);
-    out.receipts = core.cohort_receipts();
+    const auto receipts = core.cohort_receipts();
+    out.receipts.assign(receipts.begin(), receipts.end());
     out.receipts_base = core.cohort_receipt_base();
     out.memberships = membership.answers;
     out.oracle_answers = membership.oracle_answers;

@@ -208,7 +208,8 @@ struct Driven {
     }
 };
 
-bool same_receipts(const std::vector<no::CohortReceipt>& a, const std::vector<no::CohortReceipt>& b) {
+template <class Receipts>
+bool same_receipts(const Receipts& a, const std::vector<no::CohortReceipt>& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (a[i].operation != b[i].operation || a[i].status != b[i].status

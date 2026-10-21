@@ -1,0 +1,5 @@
+Fix round 3 edit handoff — UNVERIFIED.
+HEAD unchanged: 07db2fd36946cbdf0ec9d07c947130320a064e3c.
+Four existing test files adapted; no assertion or expected value changed.
+Read REPORT.md for all 12 diagnostics, the two extra caller fixes, ownership request and presizer risk.
+No build, test, repository script or lab submission; no staging or commit.

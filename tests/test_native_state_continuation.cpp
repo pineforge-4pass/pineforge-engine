@@ -52,9 +52,12 @@
 #include <cstdio>
 #include <ctime>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace pineforge {
@@ -78,6 +81,29 @@ struct NativeExecutionConsumerProbe {
         return FoldField{std::move(name),
                          [=](C& c) { auto& v = get(c); *saved = v; change(v); },
                          [=](C& c) { get(c) = **saved; }};
+    }
+
+    // Paged rows cannot lend a member reference. Read and write the newest
+    // queued row, perturbing and restoring only the same member as field().
+    template <class Get, class Change>
+    static FoldField notification_field(std::string name, Get get, Change change) {
+        using T = std::decay_t<decltype(get(std::declval<C::AppliedNotification&>()))>;
+        auto saved = std::make_shared<std::optional<T>>();
+        return FoldField{std::move(name),
+            [=](C& c) {
+                C::AppliedNotification row;
+                c.applied_notifications_.back(&row);
+                auto& v = get(row);
+                *saved = v;
+                change(v);
+                c.applied_notifications_.write(c.applied_notifications_.size() - 1, &row);
+            },
+            [=](C& c) {
+                C::AppliedNotification row;
+                c.applied_notifications_.back(&row);
+                get(row) = **saved;
+                c.applied_notifications_.write(c.applied_notifications_.size() - 1, &row);
+            }};
     }
 
     template <class T>
@@ -146,12 +172,26 @@ struct NativeExecutionConsumerProbe {
             return c.pre_open_birth_point_ordinal_; }, bump));
         out.push_back(field("pre_open_birth_time_ms_", [](C& c) -> int64_t& {
             return c.pre_open_birth_time_ms_; }, bump));
-        out.push_back(field("pre_open_births_",
-            [](C& c) -> std::vector<native_order::RequestHandle>& { return c.pre_open_births_; },
-            [](auto& v) { v.push_back(native_order::RequestHandle{{"probe", 1}, 7}); }));
-        out.push_back(field("applied_notifications_",
-            [](C& c) -> std::vector<C::AppliedNotification>& { return c.applied_notifications_; },
-            [](auto& v) { v.push_back(C::AppliedNotification{}); }));
+        const auto births_were_absent = std::make_shared<bool>();
+        out.push_back(FoldField{"pre_open_births_",
+            [=](C& c) {
+                *births_were_absent = !c.pre_open_births_;
+                const native_order::RequestHandle rows[] = {{{"probe", 1}, 7}};
+                if (!c.pre_open_births_) {
+                    // Stage exactly the probe's injected rows.
+                    c.pre_open_births_ = std::make_unique<detail::PageStore>(
+                        sizeof(native_order::RequestHandle), std::size(rows),
+                        "continuation probe births");
+                }
+                for (const auto& row : rows) c.pre_open_births_->push_back(&row);
+            },
+            [=](C& c) {
+                c.pre_open_births_->pop_back();
+                if (*births_were_absent) c.pre_open_births_.reset();
+            }});
+        out.push_back(FoldField{"applied_notifications_",
+            [](C& c) { c.enqueue_applied_notification(C::AppliedNotification{}); },
+            [](C& c) { c.applied_notifications_.pop_back(); }});
         out.push_back(field("processing_input_", [](C& c) -> bool& { return c.processing_input_; }, flip));
         out.push_back(field("input_mode_", [](C& c) -> C::InputMode& { return c.input_mode_; },
             [](C::InputMode& v) {
@@ -249,22 +289,25 @@ struct NativeExecutionConsumerProbe {
             field("forming_", [](C& c) -> double& { return c.forming_.high; }, bump),
             [](C& c) { c.has_forming_ = !c.has_forming_; }});
         out.push_back({"queued notification history_index",
-            [](C& c) { c.applied_notifications_.push_back(C::AppliedNotification{}); },
-            field("history_index", [](C& c) -> std::size_t& {
-                return c.applied_notifications_.back().history_index; }, bump),
+            [](C& c) { c.enqueue_applied_notification(C::AppliedNotification{}); },
+            notification_field("history_index", [](C::AppliedNotification& row) -> std::size_t& {
+                return row.history_index; }, bump),
             [](C& c) { c.applied_notifications_.pop_back(); }});
         out.push_back({"queued notification ordinal",
-            [](C& c) { c.applied_notifications_.push_back(C::AppliedNotification{}); },
-            field("ordinal", [](C& c) -> uint64_t& { return c.applied_notifications_.back().ordinal; }, bump),
+            [](C& c) { c.enqueue_applied_notification(C::AppliedNotification{}); },
+            notification_field("ordinal", [](C::AppliedNotification& row) -> uint64_t& {
+                return row.ordinal; }, bump),
             [](C& c) { c.applied_notifications_.pop_back(); }});
         out.push_back({"queued notification point",
-            [](C& c) { c.applied_notifications_.push_back(C::AppliedNotification{}); },
-            field("point", [](C& c) -> double& { return c.applied_notifications_.back().point.price; }, bump),
+            [](C& c) { c.enqueue_applied_notification(C::AppliedNotification{}); },
+            notification_field("point", [](C::AppliedNotification& row) -> double& {
+                return row.point.price; }, bump),
             [](C& c) { c.applied_notifications_.pop_back(); }});
         out.push_back({"queued notification margin_call_index",
-            [](C& c) { c.applied_notifications_.push_back(C::AppliedNotification{}); },
-            field("margin_call_index", [](C& c) -> std::optional<std::size_t>& {
-                return c.applied_notifications_.back().margin_call_index; },
+            [](C& c) { c.enqueue_applied_notification(C::AppliedNotification{}); },
+            notification_field("margin_call_index",
+                [](C::AppliedNotification& row) -> std::optional<std::size_t>& {
+                    return row.margin_call_index; },
                 [](auto& v) { toggle(v); }),
             [](C& c) { c.applied_notifications_.pop_back(); }});
         return out;

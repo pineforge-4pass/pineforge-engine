@@ -153,7 +153,7 @@ struct Driver {
         const auto expected = reference.edit(operation, cohort, origin);
         if (add) core.cohort_add(cohort, origin);
         else core.cohort_remove(cohort, origin);
-        const auto& actual = core.cohort_receipts().back();
+        const auto actual = core.cohort_receipts().back();
         require(actual.operation == expected.operation && actual.status == expected.status
                 && actual.cohort == expected.cohort && actual.origin == expected.origin,
                 "roster receipt matches the original implementation");
