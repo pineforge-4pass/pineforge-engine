@@ -38,7 +38,7 @@ using SourceId = std::string;
 
 class PineStrategyHost;
 class PineScheduler;
-namespace detail { class PositionTailSpill; }
+namespace detail { class PositionTailSpill; class PositionTailSummary; }
 
 // R5 lane V19-E: v4 folds the adapter's live state -- the placement rows it
 // still holds, compact records of the erased ones, the pending queues -- and
@@ -1544,6 +1544,13 @@ public:
     void fixture_use_memory_auxiliary_tables();
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
 
+    // Diagnostic work counters, excluded from broker continuation state.
+    struct PositionTailWork {
+        std::uint64_t queries = 0, certified_queries = 0, fallback_queries = 0;
+        std::uint64_t update_rows = 0, replay_rows = 0, origin_visits = 0;
+    };
+    PositionTailWork position_tail_work() const noexcept;
+
     // `instrument_feeds`, when given, is moved into the spec's instrument
     // feeds (and back into it if the projection throws).
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
@@ -1834,6 +1841,13 @@ private:
     // reconstruct its reachable sequence. File offsets/cache are excluded
     // so the sealed/resident partition cannot change continuation hashes.
     std::shared_ptr<detail::PositionTailSpill> position_tail_spill_;
+    // Derived acceleration of the same closed-row source and current live
+    // maps. Every successful certificate proves equality to ordered replay;
+    // a cache miss, invalidation or complete discard changes only work.
+    // No independent broker state and no new H leaf (see the R11 proof).
+    std::shared_ptr<detail::PositionTailSummary> position_tail_summary_;
+    void observe_position_tail_rows();
+    void begin_position_tail_summary();
     struct CohortFacts {
         native_order::CohortHandle handle{};
         OriginRoster origins;
