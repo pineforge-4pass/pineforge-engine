@@ -232,9 +232,9 @@ public:
 };
 
 // Exercise the actual declined-pair/margin path as well as the table witness:
-// the pair parks X at 105, later bars reissue X at different stops, then a
-// rally calls margin. The old stop must stay superseded in the retaining
-// control and the erasing execution alike.
+// the pair parks X at 105, a partial X at 101 fills, and another declined
+// pair parks that retired row. A later X at 131 supersedes it through K3,
+// without a live replacement link. The remaining 79 short units reach margin.
 class ReissueRevival final : public BookHost {
 public:
     ReissueRevival() {
@@ -246,12 +246,14 @@ public:
         configure_pine_strategy(config);
         set_margin_call_enabled(true);
     }
-    bool saw_dormant = false, checked_supersession = false;
+    bool saw_dormant = false, saw_filled_candidate = false, checked_supersession = false;
     void on_source_bar(const Bar&) override {
         const int i = pine_bar_index();
         if (i == 1) {
             strategy_entry("S", false, missing, missing, 80.0);
-            strategy_exit("X", "S", missing, 105.0);
+            // Start partial too: percentage reissues preserve an existing
+            // family's reservation, so a full first exit would retain 80.
+            strategy_exit("X", "S", missing, 105.0, missing, missing, missing, 1.25);
         }
         if (i == 2) {
             strategy_entry("L", true);
@@ -263,24 +265,96 @@ public:
                     && row.second.source_id == "X" && row.second.exit_levels.stop == 105.0)
                     saw_dormant = saw_dormant || row.second.legs.dormant();
             check(saw_dormant, "declined pair did not park the original stop");
+            // 80 * 1.25% = one unit. This buy stop is below the next 102
+            // open, so it fills there without flattening the position cycle.
+            strategy_exit("X", "S", missing, 101.0, missing, missing, missing, 1.25);
+            filled_candidate_ = stop_at(4, 101.0);
+            check(filled_candidate_ != 0, "partial stop was not placed");
         }
-        if (i >= 4 && i <= 7 && live_position_size() < 0.0)
+        if (i == 5) {
+            observe_filled_candidate();
+            strategy_entry("L", true);
+            strategy_close("S", "Reverse to Long");
+        }
+        if (i == 7) inspect_supersession();
+        if ((i == 6 || i == 7) && live_position_size() < 0.0) {
+            if (i == 6)
+                check((adapter_.*member(Rows{})).at(filled_candidate_).legs.dormant(),
+                      "second declined pair did not park the filled candidate");
             strategy_exit("X", "S", missing, 125.0 + i);
+            if (i == 6) {
+                successor_ = stop_at(6, 131.0);
+                const auto& rows = adapter_.*member(Rows{});
+                check(successor_ > filled_candidate_
+                      && rows.at(successor_).projection_predecessor == 0,
+                      "filled stop reissue took the live-replacement K2 path");
+            }
+        }
         if (i == 8) {
             for (const auto& row : adapter_.*member(Rows{}))
                 if (row.second.family == ps::PineOrderFamily::ExitStop
-                    && row.second.source_id == "X" && row.second.exit_levels.stop == 105.0)
+                    && row.second.source_id == "X"
+                    && (row.second.exit_levels.stop == 105.0
+                        || row.first == filled_candidate_))
                     check(!row.second.restored_after_margin,
                           "different-stop same-id reissue failed to supersede the old stop");
-            checked_supersession = true;
         }
         observe_book();
+    }
+private:
+    std::uint64_t filled_candidate_ = 0, successor_ = 0;
+
+    std::uint64_t stop_at(int bar, double price) const {
+        std::uint64_t found = 0;
+        for (const auto& row : adapter_.*member(Rows{})) {
+            const auto& q = row.second;
+            if (q.family != ps::PineOrderFamily::ExitStop || q.source_id != "X"
+                || q.from_entry != "S" || q.projection_created_bar != bar
+                || q.exit_levels.stop != price) continue;
+            check(found == 0, "partial-stop scenario placed ambiguous handles");
+            found = row.first;
+        }
+        return found;
+    }
+
+    void observe_filled_candidate() {
+        bool filled = false;
+        for (const auto& row : native_events(cursor_)) {
+            if (!row.command) continue;
+            const auto* event = std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+            if (event && event->handle().incarnation == filled_candidate_)
+                filled = event->terminal && event->closed_units == 1.0
+                    && event->opened_units == 0.0 && event->interval_index() == 5
+                    && event->cycle_before == event->cycle_after;
+        }
+        bool working = false;
+        for (const auto& row : native_working_requests())
+            working = working || row.definition->handle.incarnation == filled_candidate_;
+        const auto& rows = adapter_.*member(Rows{});
+        const auto candidate = rows.find(filled_candidate_);
+        saw_filled_candidate = filled && !working && live_position_size() == -79.0
+            && candidate != rows.end() && candidate->second.bracket_origin.incarnation == 0
+            && candidate->second.legs.target().incarnation != 0;
+        check(saw_filled_candidate, "K3 candidate was not a filled, retired partial stop");
+        check(counting != nullptr, "filled-candidate oracle was not attached");
+        counting->filled_candidate = filled_candidate_;
+    }
+
+    void inspect_supersession() {
+        const auto& rows = adapter_.*member(Rows{});
+        checked_supersession = saw_filled_candidate && counting != nullptr
+            && counting->filled_candidate_witnesses > 0
+            && counting->filled_candidate_first == successor_;
+        check(checked_supersession, "full K3 oracle did not supersede the filled stop");
+        check(rows.contains(successor_), "first different-stop witness was not retained");
+        check(rows.contains(filled_candidate_) == ps::detail::retain_retired_rows(),
+              "superseded filled candidate did not follow the retirement switch");
     }
 };
 
 std::vector<Bar> margin_feed() {
-    // Same directed price path as the established V19-D revival witness;
-    // every command above runs against the real native consumer.
+    // The V19-D directed path, with a second upward gap at bar 6 to decline
+    // the second all-in reversal after the one-unit stop has filled.
     std::vector<Bar> result;
     const auto add = [&](double open, double high, double low, double close) {
         result.push_back({open, high, low, close, 1.0,
@@ -290,8 +364,10 @@ std::vector<Bar> margin_feed() {
     add(100.0, 100.2, 99.8, 100.0);
     add(100.0, 100.5, 99.7, 100.5);
     add(101.5, 103.0, 100.8, 102.0);
-    for (int i = 0; i < 4; ++i) add(102.0, 102.5, 101.5, 102.0);
-    add(102.0, 116.0, 101.8, 115.0);
+    for (int i = 0; i < 2; ++i) add(102.0, 102.5, 101.5, 102.0);
+    add(103.0, 103.5, 102.5, 103.0);
+    add(103.0, 103.5, 102.5, 103.0);
+    add(103.0, 116.0, 102.8, 115.0);
     add(115.0, 115.5, 114.5, 115.0);
     add(115.0, 115.5, 114.5, 115.0);
     return result;
@@ -341,15 +417,24 @@ int main() {
         ReissueRevival old_margin, new_margin;
         Work old_margin_work, new_margin_work;
         paired_books(margin_feed(), old_margin, new_margin, old_margin_work, new_margin_work);
-        check(new_margin.saw_dormant && new_margin.checked_supersession
-              && old_margin_work.witnesses > 0 && new_margin_work.witnesses > 0,
+        check(new_margin.saw_dormant && new_margin.saw_filled_candidate
+              && new_margin.checked_supersession && old_margin.checked_supersession
+              && old_margin_work.witnesses > 0 && new_margin_work.witnesses > 0
+              && old_margin_work.filled_candidate_witnesses > 0
+              && new_margin_work.filled_candidate_witnesses > 0,
               "different-stop revival supersession was not exercised");
         bool margin_closed = false;
+        int partial_closes = 0;
         for (int i = 0; i < new_margin.trade_count(); ++i) {
             const auto& trade = new_margin.get_trade(i);
             margin_closed = margin_closed || trade.exit_id == ps::kMarginCallLabel;
-            check(trade.exit_id != "X", "superseded stop closed the position after margin");
+            if (trade.exit_id == "X") {
+                check(trade.exit_bar_index == 5 && trade.qty == 1.0 && !trade.open_at_end,
+                      "superseded stop closed the position after its one-unit fill");
+                ++partial_closes;
+            }
         }
+        check(partial_closes == 1, "partial-stop scenario did not book exactly one X fill");
         check(margin_closed, "revival witness never reached a margin call");
         std::puts("test_position_tail_retirement: trades/reports, K3 oracle, archive/reissue/cancel/reset");
         return 0;

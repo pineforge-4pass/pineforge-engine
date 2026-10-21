@@ -26,6 +26,10 @@ struct Work {
     std::uint64_t pairs = 0, placements = 0, families = 0, settlements = 0;
     std::uint64_t oracle_pairs = 0, oracle_placements = 0, oracle_families = 0;
     std::uint64_t sweeps = 0, hashes = 0, witnesses = 0, filled_witnesses = 0;
+    // A scenario selects this handle only after observing its terminal fill.
+    // The all-pairs walk, rather than the production memo, supplies its answer.
+    std::uint64_t filled_candidate = 0, filled_candidate_first = 0;
+    std::uint64_t filled_candidate_witnesses = 0;
     std::size_t peak_placements = 0, peak_families = 0, peak_archived = 0;
 };
 inline Work* counting = nullptr;
@@ -69,6 +73,10 @@ void k3_oracle(const ps::PlacementTable& rows, const Candidates& candidates,
             expected.push_back(first);
             ++counting->witnesses;
             if (rows.at(first).filled_exit) ++counting->filled_witnesses;
+            if (candidate.first == counting->filled_candidate) {
+                counting->filled_candidate_first = first;
+                ++counting->filled_candidate_witnesses;
+            }
         }
     }
     std::sort(expected.begin(), expected.end());
