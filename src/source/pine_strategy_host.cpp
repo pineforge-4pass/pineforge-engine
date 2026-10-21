@@ -70,13 +70,13 @@ struct SourceCommandScratchRun {
         source::detail::make_command_scratch_backing(page_size);
     std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing =
         source::detail::make_command_scratch_backing(page_size);
-    ::pineforge::detail::ScratchStore trade{
+    ::pineforge::detail::CommandScratchStore trade{
         command_scratch_config(page_size, PineStrategyHost::trade_scratch_order()),
         trade_backing.get()};
-    ::pineforge::detail::ScratchStore dependency{
+    ::pineforge::detail::CommandScratchStore dependency{
         command_scratch_config(page_size, NativeExecutionConsumer::dependency_scratch_order()),
         dependency_backing.get()};
-    ::pineforge::detail::ScratchStore exit{
+    ::pineforge::detail::CommandScratchStore exit{
         command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
         exit_backing.get()};
     source::detail::ExitScratchContext exit_context{exit, {}};
