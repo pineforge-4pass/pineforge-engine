@@ -1,0 +1,3 @@
+Fix round 2 analysis handed off; the two assertions conflict with the pinned fold.
+See REPORT.md, "Fix round 2", for each cause and the design citations.
+Tests and runtime behavior are unchanged; this marker does not claim a passing proof.

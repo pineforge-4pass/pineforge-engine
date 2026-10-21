@@ -1,0 +1,3 @@
+Fix round 3 edits handed off under CORE-TOP ruling (a).
+The two expectations follow the pinned P37 fold; the positive count >= 2 case asserts the allocated nonzero cause.
+See REPORT.md, "Fix round 3". Supervisor lab verification is pending; no local tests or commit.

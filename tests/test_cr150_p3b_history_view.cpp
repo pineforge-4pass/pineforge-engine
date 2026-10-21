@@ -173,7 +173,11 @@ void prefix_retirement() {
     event.observation = std::move(observation);
     journal.append(std::move(event));
     CHECK(journal.events().size() == 1);
-    CHECK(compat::pine::admission_history_view(journal).default_cause(11) != 0);
+    // src/compat/pine/market_admission.cpp:92-105:
+    // The next sequence is an original default call with empty before/removed,
+    // so !original_default_call(o) || noncandidate || count >= 2 is false
+    // and no removed-row branch assigns a cause.
+    CHECK(compat::pine::admission_history_view(journal).default_cause(11) == 0);
     CHECK(compat::pine::admission_history_view(journal).default_cause(2) == 0);
     CHECK(journal.retired_prefix().count == count);
 }
@@ -203,7 +207,38 @@ void full_observation_override() {
     CHECK(journal.retired_prefix().digest == 1469598103934665603ULL);
     CHECK(journal.retired_prefix().last_sequence == 0);
     CHECK(journal.event_count() == count);
-    CHECK(compat::pine::admission_history_view(journal).default_cause(2) != 0);
+    // src/compat/pine/market_admission.cpp:92-105:
+    // Full retains three original default calls, each with empty before/removed,
+    // so !original_default_call(o) || noncandidate || count >= 2 is false
+    // and no removed-row branch assigns a cause for any retained sequence.
+    CHECK(compat::pine::admission_history_view(journal).default_cause(2) == 0);
+
+    // Positive P37 case, src/compat/pine/market_admission.cpp:92-105:
+    // Two same-bar entry rows awaiting default review make count >= 2 true,
+    // while !original_default_call(o), noncandidate and removals stay false.
+    const int bar = std::get<CommandEvent>(journal.events().back()).observation->bar;
+    CommandEvent next;
+    for (int i = 0; i < 2; ++i) {
+        auto row = old_order(bar, journal.next_sequence(), false, 0);
+        CHECK(compat::pine::awaits_default_review(row.draft));
+        CommandEvent prior;
+        prior.observation = row.draft.observation();
+        prior.outcome = Outcome::Admitted;
+        prior.admitted_incarnation = row.incarnation;
+        prior.before = next.before;
+        journal.append(std::move(prior));
+        next.before.push_back(std::move(row));
+    }
+    auto observation = std::make_shared<CommandObservation>(
+        *next.before.back().draft.observation());
+    observation->command = journal.next_sequence();
+    CHECK(compat::pine::original_default_call(*observation));
+    const uint64_t expected_cause = observation->command;
+    next.observation = std::move(observation);
+    next.outcome = Outcome::Admitted;
+    journal.append(std::move(next));
+    CHECK(expected_cause != 0
+          && compat::pine::admission_history_view(journal).default_cause(bar) == expected_cause);
 }
 }
 int main() {
