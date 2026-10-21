@@ -1286,8 +1286,23 @@ context evidence is absent. An empty single-object payload still refuses.
 Prebuilt jobs build the commit sha emitted after the release job's atomic
 push, and assert that the release tag still resolves to that sha before
 building. A missing or malformed sha or a changed tag fails the job. Dry runs
-build `github.sha` and skip the tag assertion because no tag exists. L6 adds
-a separate tag ruleset forbidding updates and deletion of `v*` tags.
+build `github.sha` and skip the tag assertion because no tag exists. A
+separate tag ruleset forbids updates and deletion of `v*` tags; see "Release
+tag immutability and recovery" below.
+
+#### Release tag immutability and recovery
+
+Release tags `v*` are protected by active GitHub ruleset `25591564`
+(`release tags immutable (v*)`), with `update` and `deletion` rules and no
+bypass actors. Creating a new `v*` tag is still allowed, so the workflow's
+annotated-tag push is unchanged. Moving or deleting an existing `v*` tag is
+refused for every workflow, script and token.
+
+Any recovery that requires deleting or moving a `v*` tag now requires a
+human administrator to explicitly edit ruleset `25591564`; nothing in this
+repository may assume it can re-tag. The workflow's
+["Refuse if tag already exists" step in `release.yml`](../.github/workflows/release.yml#L140)
+also refuses an existing tag before creating one.
 
 #### Allowed status creators
 
