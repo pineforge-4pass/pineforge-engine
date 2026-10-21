@@ -50,7 +50,7 @@ assignment, never a waiver of growth.
 | `BracketRoster::settled_` (F0d) | 1–2 B/settled leg/family plus capacity | L19h | OCA pairs and partial exits |
 | `input_next_ms_` (F1) | 8 B/input bar with a subscription | L19i, unless L3/L4 takes it | `routed_security`, `foreign_security` |
 | N-day stamps and native-group opens (F2) | 16 B/N trading days/site, not per trading day; prepare also has a per-day map transient | L19k if the measured slope exists | `nday_security`, 3D over daily bars; prepare transient remains OPEN |
-| Adapter `cohorts_by_id_`, `cohort_order_` (F3) | One map node plus one string-vector slot per distinct id; bytes/id OPEN | L19l | Short/long unique-entry populations and reused controls |
+| Adapter `cohorts_by_id_` (`DiskResidentIdTable`, F3) | Disk index owns lookup and first-insertion order; resident rows cover live cohorts; bytes/id OPEN | L19l | Short/long unique-entry populations and reused controls |
 | Entry-id rank table `exit_rank_keys_` (F3) | Source read below: at most 27 recorded keys at this base | L19l contract; bound reported for CORE-TOP | 10 vs 10,000 distinct ids, recurring 31-id unit control |
 | Kernel `cohorts_`, each roster's retained vector capacity (F3) | One 32 B roster slot nominal per distinct id plus member capacity; bytes/id OPEN | L19l | Unique-id control; empty roster lifetime is not the same as empty members |
 | `PlacementTable::sequence_index_`, `erased_minima_`, nested `by_from_entry` (F3) | Per (id, from_entry), maps/string storage; bytes/id OPEN | L19l | Unique entry ids and derived `strategy.close` labels |
@@ -221,7 +221,7 @@ The source read behind the replacement keys is:
 | L19d | `OriginRoster::push_back` | include/pineforge/source/pine_adapter.hpp:941 |
 | L19e | `Journal::append`, `Journal::reserve`, `Journal::next_sequence`, `CommandObservation` | src/source/market_admission.cpp:144, :125, :117 and :177 |
 | L19h | `BracketRoster` methods; `PlacementTable::try_emplace`/`replace` with an unsigned 64-bit vector element | include/pineforge/source/pine_adapter.hpp:772 and :790 |
-| L19l | `cohort_for`, `CohortFacts`, `CohortRoster`, `note_exit_rank_key`, `fold_sequence`, `SequenceMinima`; signed string-map values under `on_applied` | src/source/pine_adapter.cpp:3019, :6342, :24801; include/pineforge/source/pine_adapter.hpp:863 |
+| L19l | `cohort_for`, `CohortFacts`, `CohortRoster`, `note_exit_rank_key`, `fold_sequence`, `IdPairStore`; signed consumed-cycle entries under `on_applied` | src/source/pine_adapter.cpp:3021, :6355, :24439; include/pineforge/source/pine_adapter.hpp:865 |
 | L19i | `NativeExecutionConsumer::begin_timeframe_subscriptions` | src/native_execution_consumer.cpp:9397, assign at :9444 |
 | L19k | `tradingview_multi_day_stamps`, `TimeframeAggregator::set_native_periods` | src/source/pine_strategy_host.cpp:1560; src/timeframe.cpp:1769 |
 | L3/L4 | `PineScheduler::capture_begin`, `native_module::run_batch`; `script_bucket_completions`, `PineScheduler::run_begin` | src/source/pine_scheduler_native.cpp:19 and :176; include/pineforge/native_module.hpp:229; src/native_execution_consumer.cpp:9049 |

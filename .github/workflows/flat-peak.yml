@@ -4,24 +4,23 @@ name: Flat-peak memory gate
 # otherwise be noticed months later. A reusable workflow of two arms, each ONE
 # command of scripts/ci_flat_peak_gate.py (docs/ci.md, "Flat-peak memory gate"):
 #
-#   flat-peak-mem     `ctest -L mem` over a Release build that registers the
+#   flat-peak-mem     `ctest -L '^flatpeak$'` over a Release build that registers the
 #                     flat-memory rows, judged from the harness's own result
 #                     files and not from ctest's exit status alone
 #   flat-peak-census  tests/heap_census.py over the battery and the whole
 #                     corpus into a new directory, judged from census.json
 #
-# Callers: ci.yml, on a push to main and a manual dispatch and never on a pull
-# request, and release.yml, whose `release` job needs this gate so a regression
-# publishes nothing. A failing arm fails the job that calls it.
+# Callers: ci.yml, on same-repository pull requests, pushes to main and manual
+# dispatches, and release.yml, whose `release` job needs this gate so a
+# regression publishes nothing. Both arms are required by CI's build-gate.
 #
 # The gate steps carry no `if`, no continue-on-error and no `|| true`; the one
 # `always()` step of each job only retains diagnostics after the gate has
-# decided. scripts/ci_flat_peak_gate.py check-wiring (a ci_preflight stage)
-# holds that, and a registered row set that is empty or wrong fails the arm.
+# decided. Each wrapper requires a positive-count PASS summary as well as a
+# zero exit status; an absent script or missing summary fails the arm.
 #
-# Both jobs ride the standard Linux runner, as every workflow outside the three
-# a CI run starts must (scripts/ci_preflight.py), and carry the platform's own
-# 360-minute maximum, the only hang catcher (owner rule, 2026-10-12).
+# Both arms use the pf-gcp-pr Linux pool and depend on the canon authz job.
+# No job or step sets a time limit.
 
 on:
   workflow_call:
@@ -37,10 +36,77 @@ env:
   CCACHE_MAXSIZE: 500M
 
 jobs:
-  flat-peak-mem:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+  authz:
+    name: authz
+    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  flat-peak-mem:
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-pr"]
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       # The gate configures with PINEFORGE_VERSION_SOURCE=FILE: no tags, no
       # history.
       - uses: actions/checkout@v4
@@ -67,8 +133,18 @@ jobs:
 
       # Arm 1. Fails on a regression, on zero or a wrong row set under the label,
       # on a skipped row and on an absent or incomplete harness verdict.
-      - name: Flat-peak memory rows (ctest -L mem)
-        run: python3 scripts/ci_flat_peak_gate.py mem --build-dir build-flat-peak --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+      - name: Flat-peak memory rows (label flatpeak)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_log="$RUNNER_TEMP/flat-peak-mem.log"
+          trap 'cat "$gate_log"' EXIT
+          python3 scripts/ci_flat_peak_gate.py mem --build-dir build-flat-peak --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache > "$gate_log" 2>&1
+          summary="$(tail -n 1 "$gate_log")"
+          if ! grep -Eq '^flat-peak mem: PASS: ctest ran [1-9][0-9]* rows \(floor [1-9][0-9]*\); harness cases [1-9][0-9]*/[1-9][0-9]* passed over [1-9][0-9]* measured rungs$' <<< "$summary"; then
+            echo '::error::flat-peak mem: missing positive row-count PASS summary'
+            exit 1
+          fi
 
       - name: Retain gate diagnostics
         if: always()
@@ -76,14 +152,20 @@ jobs:
         with:
           name: flat-peak-mem-diagnostics
           path: |
+            ${{ runner.temp }}/flat-peak-mem.log
             build-flat-peak/flat_memory_macd_results/
             build-flat-peak/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 
   flat-peak-census:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       # Credentials stay persisted, exactly as the corpus parity jobs: the
       # submodule clone and `git lfs pull` below go out over https and that is
       # the configuration known to work for them.
@@ -163,7 +245,17 @@ jobs:
       # Arm 2. Fails on a growing allocation site (RED), on an incomplete proof
       # (OPEN), on an absent report and on a missing tool.
       - name: Heap census (growth gate)
-        run: python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_log="$RUNNER_TEMP/flat-peak-census.log"
+          trap 'cat "$gate_log"' EXIT
+          python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache > "$gate_log" 2>&1
+          summary="$(tail -n 1 "$gate_log")"
+          if ! grep -Eq '^flat-peak census: PASS: [1-9][0-9]* comparisons \(floor [1-9][0-9]*\), [1-9][0-9]* corpus probes, [0-9]+ growing sites, 0 not admitted, status PASS$' <<< "$summary"; then
+            echo '::error::flat-peak census: missing positive comparison-count PASS summary'
+            exit 1
+          fi
 
       - name: Retain gate diagnostics
         if: always()
@@ -171,6 +263,7 @@ jobs:
         with:
           name: flat-peak-census-diagnostics
           path: |
+            ${{ runner.temp }}/flat-peak-census.log
             build-flat-peak-census/heap-census/census.json
             build-flat-peak-census/heap-census/CENSUS.md
           if-no-files-found: warn

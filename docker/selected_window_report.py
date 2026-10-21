@@ -10,7 +10,7 @@ that are pure data or a thin native wrapper, so each can be controlled on its ow
   * the in-place trim view and the hash of the retained rows in the existing primary hash domain;
   * the exact report_window record R (its lookback member is the one triple of a build with no
     lookback producer), the full/v1 report_shape and the capability record (its
-    contract revision is this build's parity declaration, CONTRACT_REVISIONS);
+    contract revision is this build's completeness declaration, CONTRACT_REVISIONS);
   * the frozen selected_window ABI as a ctypes wrapper, and
     the exact comparison of the engine's native counts with the planned counts.
 
@@ -42,7 +42,8 @@ __all__ = [
     "SelectedWindowCountsC", "SelectedWindowError", "WIRE_VERSION", "WindowRequest",
     "build_report_window", "calendar_record", "calendar_session", "calendar_timezone",
     "canonical_timeframe", "capabilities_record", "check_native_counts",
-    "check_report_placements", "check_selected_curve", "check_unsupported_options",
+    "check_report_placements", "check_selected_curve", "check_selected_sink_curve",
+    "check_unsupported_options",
     "refusal_for_plan", "report_shape_full",
     "retained_rows", "support_policy", "timeframe_seconds", "update_rows_hash",
     "validate_request",
@@ -53,16 +54,17 @@ WIRE_VERSION = 1
 FINGERPRINT_VERSION = 2
 # The contract revision this build declares in its capability record (the member
 # selected_window_contract_revisions of --capabilities-json). This is the ONE place it is
-# written; capabilities_record is the code that reads it. Revision 1.3-parity declares value
-# parity with the 1.4.0 reference on the tested cases, with the typed value-ownership codes
-# strategy_value_invalid, engine_command_value_invalid, report_result_invalid and
-# report_post_execution_failed emitted and no completeness claim (value_ownership
-# parity_with_reference; a full build with a completeness proof lists ("1.3",), never both).
+# written; capabilities_record is the code that reads it. Revision 1.3 declares value
+# ownership "complete": the section-4 producers and manifest are present, the completeness
+# proof has run (EN-115), and the typed value-ownership codes strategy_value_invalid,
+# engine_command_value_invalid, report_result_invalid and report_post_execution_failed are
+# emitted. A full build declares 1.3, never 1.3-parity; a parity build declares 1.3-parity
+# (value_ownership parity_with_reference) and never 1.3; a tuple holding both is invalid.
 # The supported runtime lists this singleton tuple, with no feature switch, environment knob
 # or second constant. It is a declaration only: no request, report_window, phase record or
 # fingerprint member carries it, and the wire version (1), the phase version (1) and the
 # fingerprint/schema version (2) are unchanged.
-CONTRACT_REVISIONS = ("1.3-parity",)
+CONTRACT_REVISIONS = ("1.3",)
 REPORT_SHAPE = "full/v1"
 METERING_BASIS = "window-primary-input-bars/v1"
 MAX_PREROLL_BARS = 5000
@@ -594,7 +596,7 @@ def _established_number(value: Any) -> Optional[float]:
 
 def _finite_actual(value: Any) -> bool:
     """Whether value, as the engine produced it, is a finite number: an int or a float that is
-    not a bool, not None (the report writes a non-finite double as null), not text, and not NaN
+    not a bool, not None (executed curve marks must be finite), not text, and not NaN
     or an infinity. Nothing is converted or read from text."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
@@ -618,7 +620,9 @@ def check_selected_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
     with the capital is skipped. No capital is guessed or written back, and every other check
     above, the finiteness of the actual anchor equity included, is made in both cases. When the
     provenance does establish a finite capital (a number or text spelling one), the anchor
-    equity must equal it, or the run is an engine invariant failure."""
+    equity must equal it, or the run is an engine invariant failure. The anchor is also the
+    initial capital the report writer recomputes the compounded cagr from, with or without an
+    established capital (run_json._annualization_diagnostics, window_anchor)."""
     if len(curve) != window_script_bars + 1:
         raise _invariant(f"the selected curve has {len(curve)} points, the plan says "
                          f"{window_script_bars + 1}")
@@ -626,7 +630,30 @@ def check_selected_curve(curve: Sequence[Mapping[str, Any]], start_ms: int,
         if set(point) != {"time_ms", "equity", "open_profit"}:
             raise _invariant(f"point {position} of the selected curve does not have exactly "
                              "time_ms, equity and open_profit")
-    anchor = curve[0]
+    _check_selected_anchor(curve[0], start_ms, initial_capital)
+
+
+def check_selected_sink_curve(anchor: Optional[Mapping[str, Any]], equity_points: int,
+                              start_ms: int, window_script_bars: int,
+                              initial_capital: Any) -> None:
+    """Check a verified sink's E count and first E, without retaining its curve.
+
+    The fixed v1 reader has already checked every point's fields and types and
+    the trailer; the engine's selected latches own pre-roll, contiguity and
+    observation-count checks. Anchor semantics, including unresolved capital,
+    are shared with the array path.
+    """
+    if equity_points != window_script_bars + 1:
+        raise _invariant(f"the selected curve has {equity_points} points, the plan says "
+                         f"{window_script_bars + 1}")
+    if anchor is None or set(anchor) != {"time_ms", "equity", "open_profit"}:
+        raise _invariant("point 0 of the selected curve does not have exactly "
+                         "time_ms, equity and open_profit")
+    _check_selected_anchor(anchor, start_ms, initial_capital)
+
+
+def _check_selected_anchor(anchor: Mapping[str, Any], start_ms: int,
+                           initial_capital: Any) -> None:
     if anchor["time_ms"] != start_ms or anchor["open_profit"] != 0:
         raise _invariant("the selected curve does not start with the window anchor at T with "
                          "open profit 0")
@@ -694,10 +721,12 @@ def capabilities_record(supported: bool) -> Dict[str, Any]:
     members of features this build does not offer (compact shape, digest) are always absent.
 
     selected_window_contract_revisions is CONTRACT_REVISIONS as a fresh list when supported:
-    exactly ["1.3-parity"], declaring value parity with the 1.4.0 reference on the tested
-    cases, with the typed value-ownership codes (strategy_value_invalid,
-    engine_command_value_invalid, report_result_invalid and report_post_execution_failed)
-    emitted and no completeness claim, and never "1.3", which requires a completeness proof.
+    exactly ["1.3"], declaring value ownership "complete": the section-4 producers and
+    manifest are present, the completeness proof has run (EN-115), and the typed
+    value-ownership codes (strategy_value_invalid, engine_command_value_invalid,
+    report_result_invalid and report_post_execution_failed) are emitted. A full build
+    declares "1.3", never "1.3-parity"; a parity build declares exactly ["1.3-parity"] and
+    never "1.3"; a tuple holding both is invalid.
     It is [] when the runtime is not supported,
     so an unsupported runtime lists no revision at all. No other member of this document
     changes with the declaration."""

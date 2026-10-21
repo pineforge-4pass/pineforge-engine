@@ -3688,6 +3688,10 @@ endif()
 
 list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 
+# Report arithmetic and C-host failure ownership, with source-free includes.
+list(APPEND TEST_SOURCES test_metrics_overflow)
+list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
@@ -3772,13 +3776,28 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-add_test(NAME test_selected_window_ownership_manifest_controls
-    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py)
+# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
+# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
+# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
+# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
+# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
+# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
+# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
+# the four shard rows is the measurement; each shard also fails closed when it
+# runs a number of tests different from the number it selected.
+set(_pf_ownership_control_shards)
+foreach(_pf_ownership_shard 1 2 3 4)
+    add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
+            --shard ${_pf_ownership_shard}/4)
+    list(APPEND _pf_ownership_control_shards
+        test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4)
+endforeach()
 add_test(NAME test_selected_window_ownership_d4
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
         ManifestCheckerTests.test_d4_independent_reconstruction_matches_manifest)
 set_tests_properties(test_selected_window_ownership_manifest
-    test_selected_window_ownership_manifest_controls test_selected_window_ownership_d4
+    ${_pf_ownership_control_shards} test_selected_window_ownership_d4
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)
 
 # The C bridge test also links the shared window-plan helper, whose bridge
@@ -7269,7 +7288,7 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
             --report-sink off
             --work-dir ${CMAKE_BINARY_DIR}/flat_memory_work
             --results-dir ${CMAKE_BINARY_DIR}/flat_memory_results)
-    # CR-150 sm-cr150-ci-flatpeak: the rows `ctest -L mem` runs in CI. The cases
+    # CR-150 sm-cr150-ci-flatpeak: the rows `ctest -L '^flatpeak$'` runs in CI. The cases
     # a, g, h and borrowed load only macd.so, which this build dir produces
     # (flat_memory_macd above) and run_json.py (borrowed reads its source); they
     # are the same case functions test_flat_memory_rss_e2e runs, selected by the
@@ -7277,8 +7296,8 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
     # xsym_4 and scale_out, codegen outputs a plain build dir cannot make (the
     # pinned codegen is a separate repository reached only over the network), so
     # test_flat_memory_rss_e2e keeps its whole command and moves to the label
-    # `codegen-fixtures`: lab only. The label must not contain the text `mem`:
-    # `ctest -L` is a regular-expression search over the label strings.
+    # `codegen-fixtures`: lab only. The label must not match `^flatpeak$`, the
+    # anchored label the flat-peak gate selects (`ctest -L` is a regular-expression search).
     #
     # Case g sends a selected-window request, and run_json.py loads the planner
     # from <its directory>/../lib/libpineforge_window_plan.so (trusted_planner_path,
@@ -7306,7 +7325,70 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
             --work-dir ${CMAKE_BINARY_DIR}/flat_memory_macd_work
             --results-dir ${CMAKE_BINARY_DIR}/flat_memory_macd_results)
     set_tests_properties(test_flat_memory_rss_macd PROPERTIES
-        LABELS "mem;slow;l4-pending")
+        LABELS "flatpeak;slow;l4-pending")
     set_tests_properties(test_flat_memory_rss_e2e PROPERTIES
         LABELS "codegen-fixtures;slow;l4-pending")
 endif()
+# --- CR-150 core-cr150-l17b begin ---
+if(TARGET test_selected_metrics_l17b)
+    target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_L17B_SOURCE=1)
+    endif()
+endif()
+# --- CR-150 core-cr150-l17b end ---
+# --- CR-150 core-cr150-l19f begin ---
+# CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
+# --- CR-150 core-cr150-l19f end ---
+
+# --- CR-150 core-cr150-l2 begin ---
+if(TARGET outputs_fixture_strategy)
+    set_tests_properties(test_run_json_bin PROPERTIES
+        ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
+# --- CR-150 core-cr150-l2 end ---
+
+# --- CR-150 core-cr150-l9b begin ---
+# CR-150 L9B: native named-sink summary rows, after every line pin. The Python
+# row is registered in cr150.d/core-cr150-l9b.cmake. These rows read the real
+# L6B1 and outputs-fixture modules from their ENVIRONMENT, which a lane file may
+# not set, so they are registered here once both modules are declared. The
+# row exists only where both modules do: it never runs without them.
+# The opt-in corpus row (PINEFORGE_L9B_CORPUS_CASES) needs real lab probes that
+# only the supervisor can supply, so it is left out of this registration.
+if(TARGET report_sink_l6b1_strategy AND TARGET outputs_fixture_strategy
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_test(NAME test_run_json_sink_summary_l9b_native
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_summary.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_sink_summary_l9b_native APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9B_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9B_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
+# --- CR-150 core-cr150-l9b end ---
+
+# --- CR-150 core-cr150-l9s begin ---
+# CR-150 L9S: native selected-sink rows, after both module declarations.
+# The Python control row stays in cr150.d/core-cr150-l9s.cmake.
+# Corpus rows need a supervisor-supplied manifest; selecting them here would
+# otherwise always SKIP inside a green row.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS
+   AND NOT PINEFORGE_ENABLE_COVERAGE
+   AND TARGET report_sink_l6b1_strategy AND TARGET pineforge_window_plan)
+    add_test(NAME test_run_json_selected_sink_native_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_selected_sink_native_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    add_test(NAME test_run_json_selected_sink_memory_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink_memory.py)
+    set_property(TEST test_run_json_selected_sink_memory_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    set_tests_properties(test_run_json_selected_sink_memory_l9s PROPERTIES LABELS "slow;mem")
+endif()
+# --- CR-150 core-cr150-l9s end ---

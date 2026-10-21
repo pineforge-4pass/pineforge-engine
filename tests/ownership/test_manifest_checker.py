@@ -5,9 +5,14 @@ Run with Python 3.10+ (including -I). Mutations touch temporary copies only.
 The positive tree check deliberately requires the integrated producers, rather
 than accepting a recorded count or treating existing integration findings as a
 successful check. The supervisor runs this suite on the completed tree.
+
+Use --shard I/N (1-based) to run sorted loader-discovered ManifestCheckerTests
+ids at positions [I-1::N], plus the cheap partition guard in every shard.
+Without --shard, the usual unittest discovery and CLI selectors apply.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import copy
 import ctypes
@@ -38,7 +43,9 @@ def emitted_schema(root: Path) -> dict:
     """
     tree = ast.parse((root / "docker/run_json.py").read_text(encoding="utf-8"))
     classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC"}
-    functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict"}
+    functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict",
+                 "_annualization_diagnostics", "_annualization_block"}
+    assigned = {"EQUITY_REPORT_KEYS", "MIN_ANNUALIZATION_SPAN_MS"}
     selected = [ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
     found = set()
     for node in tree.body:
@@ -48,11 +55,12 @@ def emitted_schema(root: Path) -> dict:
         elif isinstance(node, ast.FunctionDef) and node.name in functions:
             selected.append(node)
             found.add(node.name)
-        elif isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "EQUITY_REPORT_KEYS" for t in node.targets):
-            selected.append(node)
-            found.add("EQUITY_REPORT_KEYS")
-    if found != classes | functions | {"EQUITY_REPORT_KEYS"}:
+        elif isinstance(node, ast.Assign):
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)} & assigned
+            if names:
+                selected.append(node)
+                found |= names
+    if found != classes | functions | assigned:
         raise AssertionError(f"independent D4 builder extraction is incomplete: {sorted(found)}")
     namespace = {"ctypes": ctypes, "math": math, "Path": Path,
                  "datetime": datetime, "timezone": timezone}
@@ -176,6 +184,7 @@ class ManifestCheckerTests(unittest.TestCase):
         for directory in ("src", "include", "docker"):
             shutil.copytree(ROOT / directory, self.root / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(ROOT / "tests/ownership/probes", self.root / "tests/ownership/probes")
 
     def reject(self, check, detail, *, copied_tree=False):
         result = self.run_checker(copied_tree=copied_tree)
@@ -191,6 +200,36 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
+
+    def test_report_probe_pin_removed_is_rejected(self):
+        self.doc["probes"] = []
+        self.reject("probe-pins", "unregistered report/buy_hold_return_overflow")
+
+    def test_report_probe_file_hash_changed_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "tests/ownership/probes/report/buy_hold_return_overflow/bars.csv"
+        path.write_bytes(path.read_bytes().replace(b"250000000", b"250000001", 1))
+        self.reject("probe-pins", "report/buy_hold_return_overflow: bars.csv sha256 differs",
+                    copied_tree=True)
+
+    def test_report_probe_file_pin_missing_is_rejected(self):
+        del self.doc["probes"][0]["sha256"]["run.json"]
+        self.reject("probe-pins", "report/buy_hold_return_overflow: pinned file set differs")
+
+    def test_report_probe_duplicate_is_rejected(self):
+        self.doc["probes"].append(copy.deepcopy(self.doc["probes"][0]))
+        self.reject("duplicate-probe", "report/buy_hold_return_overflow")
+
+    def test_report_metric_field_binding_changed_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        original = 'metric_field = f"metrics.{block}.{name}"'
+        self.assertEqual(text.count(original), 1)
+        path.write_text(text.replace(original, 'metric_field = f"metrics.{name}.{block}"'),
+                        encoding="utf-8")
+        self.reject("input", "unrecognized metric result guard; update the independent reconstruction",
+                    copied_tree=True)
 
     def test_kept_branch_anchor_removed_is_rejected(self):
         self.copy_tree()
@@ -319,18 +358,23 @@ class ManifestCheckerTests(unittest.TestCase):
         self.reject("sink-mapping", "source.admit_strategy_entry: fields/reasons differ from code")
 
     def test_catalog_code_missing_from_manifest_is_rejected(self):
-        self.doc["catalog"]["codes"] = [row for row in self.doc["catalog"]["codes"]
-                                         if row["code"] != "outputs_limit"]
-        self.reject("catalog-set", "missing outputs_limit")
+        rows = self.doc["catalog"]["codes"]
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                self.doc["catalog"]["codes"] = [row for row in rows if row["code"] != code]
+                self.reject("catalog-set", f"missing {code}")
 
     def test_catalog_registry_missing_code_is_rejected(self):
         self.copy_tree()
         path = self.root / "src/run_failure_registry.inc"
         text = path.read_text(encoding="utf-8")
-        text, changed = re.subn(r'^\s*\{"outputs_limit",[^\n]*\n', "", text, flags=re.M)
-        self.assertEqual(changed, 1)
-        path.write_text(text, encoding="utf-8")
-        self.reject("registry-set", "stale outputs_limit", copied_tree=True)
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                changed_text, changed = re.subn(
+                    r'^\s*\{"' + re.escape(code) + r'",[^\n]*\n', "", text, flags=re.M)
+                self.assertEqual(changed, 1)
+                path.write_text(changed_text, encoding="utf-8")
+                self.reject("registry-set", f"stale {code}", copied_tree=True)
 
     def test_unknown_producer_field_is_rejected_by_vocabulary(self):
         # Killer for vocabulary-check-disabled, even if another check also fails.
@@ -466,5 +510,69 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertIn("ownership[input]: duplicate JSON key format", result.stdout.splitlines())
 
 
+def shard_case_ids(index: int, count: int) -> list[str]:
+    ids = sorted(test.id() for test in
+                 unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
+    return ids[index - 1::count]
+
+
+class ManifestCheckerShardingTests(unittest.TestCase):
+    def test_shards_partition_every_case_exactly_once(self):
+        # Discover the expectation independently of shard_case_ids, and use
+        # index residues rather than reproducing its slicing implementation.
+        ids = sorted(test.id() for test in
+                     unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
+        self.assertGreaterEqual(len(ids), 30)
+        for count in range(1, 9):
+            with self.subTest(shards=count):
+                seen = set()
+                total = 0
+                for index in range(1, count + 1):
+                    shard = shard_case_ids(index, count)
+                    expected = [test_id for position, test_id in enumerate(ids)
+                                if position % count == index - 1]
+                    self.assertEqual(shard, expected)
+                    self.assertEqual(len(shard), len(set(shard)))
+                    self.assertTrue(seen.isdisjoint(shard))
+                    seen.update(shard)
+                    total += len(shard)
+                self.assertEqual(seen, set(ids))
+                self.assertEqual(total, len(ids))
+
+
+def parse_shard(value: str) -> tuple[int, int]:
+    message = "--shard must be I/N with integers satisfying 1 <= I <= N"
+    if re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", value) is None:
+        raise argparse.ArgumentTypeError(message)
+    index, count = map(int, value.split("/"))
+    if index > count:
+        raise argparse.ArgumentTypeError(message)
+    return index, count
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if any(arg == "--shard" or arg.startswith("--shard=") for arg in sys.argv[1:]):
+        parser = argparse.ArgumentParser(allow_abbrev=False)
+        parser.add_argument("--shard", type=parse_shard, metavar="I/N",
+                            required=True, action="append")
+        args = parser.parse_args()
+        if len(args.shard) != 1:
+            parser.error("specify --shard exactly once")
+        index, count = args.shard[0]
+        guards = [test.id() for test in unittest.TestLoader().loadTestsFromTestCase(
+            ManifestCheckerShardingTests)]
+        selected = shard_case_ids(index, count) + guards
+        if len(selected) == len(guards):
+            parser.error("shard %d/%d selects no case" % (index, count))
+        # The ids go in argv: with module=None unittest ignores defaultTest and
+        # would fall back to discovery (zero tests, exit 0 before Python 3.12).
+        program = unittest.main(module=None, argv=[sys.argv[0], *selected], exit=False)
+        # A shard that ran a different number of tests than it selected fails,
+        # whatever unittest's own exit status says.
+        if program.result.testsRun != len(selected) or not program.result.wasSuccessful():
+            print("shard %d/%d: ran %d tests, selected %d" % (
+                index, count, program.result.testsRun, len(selected)), file=sys.stderr)
+            sys.exit(1)
+        print("shard %d/%d: ran %d tests as selected" % (index, count, len(selected)))
+    else:
+        unittest.main()

@@ -162,6 +162,8 @@ C_ONLY: dict[str, str] = {
     "pf_settings_status_t": "the generated-strategy checked settings C protocol; "
                             "no kernel enumeration exists",
     "pf_execution_contract_e": "BacktestEngine::execution_contract() answers an int",
+    "pf_scratch_table_backend_e": "the compiled-strategy scratch-table setup C protocol; "
+                                  "not a native run-spec enumeration",
     "pf_native_spec_optional_e": "bit mask of optional_mask; each bit gates one std::optional "
                                  "field of NativeRunSpec",
     "pf_fill_qty_partition_e": "the Pine source host's pending-order probe writes an int; "

@@ -76,7 +76,7 @@ env:
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 jobs:
-  # RELEASE tier: the CR-150 flat-peak memory gate, `ctest -L mem` and the heap
+  # RELEASE tier: the CR-150 flat-peak memory gate, `ctest -L '^flatpeak$'` and the heap
   # census (.github/workflows/flat-peak.yml, docs/ci.md "Flat-peak memory gate").
   # The `release` job needs it, so a memory regression stops the run before the
   # VERSION bump is committed, before the tag is pushed, and so before the
@@ -91,7 +91,7 @@ jobs:
 
   release:
     needs: flat-peak-gate
-    runs-on: ubuntu-latest
+    runs-on: ["self-hosted","pf-gcp-main"]
 
     outputs:
       tag:        ${{ steps.bump.outputs.tag }}
@@ -109,7 +109,7 @@ jobs:
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
-          owner: pineforge-4pass
+          owner: ${{ github.repository_owner }}
           repositories: pineforge-engine
 
       - name: Checkout (full history)
@@ -354,7 +354,7 @@ jobs:
       matrix:
         include:
           - triple: linux-x86_64
-            runner: ubuntu-22.04
+            runner: ["self-hosted","pf-gcp-main"]
             cmake_extra: ""
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
@@ -381,11 +381,32 @@ jobs:
           NEXT: ${{ needs.release.outputs.version }}
         run: printf '%s\n' "${NEXT}" > VERSION
 
+      # linux-x86_64 runs on the pf-gcp-main fleet: no sudo, no docker, Eigen 3.4.0 is baked
+      # into its image. Only the hosted Linux slice (linux-aarch64) installs Eigen here.
       - name: Install Eigen3 (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.triple != 'linux-x86_64'
         run: |
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev
+
+      # Fail closed on the self-hosted slice: if the image ever loses its baked Eigen, the
+      # build must stop here instead of falling back to an unverified source.
+      - name: Assert Eigen3 3.4 on the self-hosted Linux x86_64 slice
+        if: runner.os == 'Linux' && matrix.triple == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          hdr=""
+          for p in /usr/include/eigen3/Eigen/Core /usr/local/include/eigen3/Eigen/Core; do
+            if [ -f "$p" ]; then hdr="$p"; break; fi
+          done
+          if [ -z "$hdr" ]; then
+            echo "::error::Eigen3 headers not found on the pf-gcp-main image"
+            exit 1
+          fi
+          macros="$(dirname "$hdr")/src/Core/util/Macros.h"
+          grep -q 'define EIGEN_WORLD_VERSION 3' "$macros"
+          grep -q 'define EIGEN_MAJOR_VERSION 4' "$macros"
+          echo "Eigen3 3.4.x present at $(dirname "$(dirname "$hdr")")"
 
       - name: Install Eigen3 (macOS)
         if: runner.os == 'macOS'
@@ -482,7 +503,7 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ["self-hosted","pf-gcp-main"]
     steps:
       - name: Mint org App token (hub dispatch)
         id: app
@@ -490,7 +511,7 @@ jobs:
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
-          owner: pineforge-4pass
+          owner: ${{ github.repository_owner }}
           repositories: pineforge-release
 
       # client_payload = {version: vX.Y.Z[-rc.N], prerelease: true|false,

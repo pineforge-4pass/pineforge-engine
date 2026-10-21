@@ -787,7 +787,7 @@ def case_h(harness: Harness) -> None:
 def case_j(harness: Harness) -> None:
     """(j) scale-out of one open position is flat, trades equal."""
     print("(j) rest flat while a position scales out")
-    module = harness.module("scale_out")
+    module = harness.module("scale_out_flat")
     chart_path, chart_mapped = harness.chart_input("j-chart", 100_000, "chop")
     values: list[tuple[str, int]] = []
     exit_counts: dict[int, int] = {}
@@ -937,7 +937,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="docker/run_json.py from the installed image")
     parser.add_argument("--module-dir", type=Path, default=None,
                         help="directory holding macd.so, every_k.so, xsym.so, "
-                             "scale_out.so (and the F13 modules)")
+                             "scale_out.so, scale_out_flat.so (and the F13 modules)")
     parser.add_argument("--module", action="append", default=[],
                         metavar="NAME=PATH", help="override one module path")
     parser.add_argument("--work-dir", type=Path, default=None,

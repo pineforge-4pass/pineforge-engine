@@ -206,19 +206,19 @@ references; L15a must maintain these anchors and mechanically pin every current
 
 | Reader to route through the view/source | Source anchors in this tree | DESIGN lines |
 |---|---|---|
-| Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.cpp:10057-10112` | 357-358 |
+| Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.cpp:10081-10136` | 357-358 |
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
-| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9597-9600`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9622-9624` | 361-363 |
-| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3006-3012` | 361-363; V1/V2 change 5 |
-| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2775-2776`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13066-13071` | 364-365 |
-| Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:234-244`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:293-300` | 366-367 |
-| Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1169-1175` | 367-368 |
+| Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9621-9624`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9646-9648` | 361-363 |
+| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3009-3015` | 361-363; V1/V2 change 5 |
+| Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2788-2789`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13662-13667` | 364-365 |
+| Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:236-246`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:294-301` | 366-367 |
+| Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1184-1190` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
-| Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.cpp:3217-3293` | 371,1221-1222 |
+| Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.cpp:3241-3317` | 371,1221-1222 |
 | Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:289` | 371,1223-1224 |
-| Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:8674-8707` | 371,1225 |
+| Per-script-bar lower-path binary search/walk | `candidate` `src/native_execution_consumer.cpp:8698-8731` | 371,1225 |
 | Scheduler sub-bar lookup and one-bar look-ahead | `PineScheduler::lower_path_bar_at` `src/source/pine_scheduler_native.cpp:265-287`; `next_open` `src/source/pine_scheduler_native.cpp:328-329` | 371,1226-1227 |
-| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3431-3435` | 371,1228 |
+| Lower-path emptiness test | `inactive_sampler_path` `src/source/pine_adapter.cpp:3437-3441` | 371,1228 |
 
 Every count/digest must fold the same bytes/order for copied and borrowed
 feeds, including cached and uncached paths (2.2:372-375). Views replace storage;
@@ -249,8 +249,107 @@ remain required before integration is declared verified.
 
 An ordinary report sink, including an observed run without an admitted selected
 window, presents a one-point copy of the editable equity tail so a hook cannot
-rewrite prefix records that have already been emitted. A selected sink performs
-one presentation of the full selected curve, preserving the hook's published-length
-changes before the selected writer emits the anchor and final window observations.
+rewrite prefix records that have already been emitted. A selected sink presents
+only the last min(W, M + 1) points to the hook, with W =
+`kSelectedPresentationWindowPoints` (2) and `equity_curve_len` equal to that
+tail-window length. The logical M + 1 stays capture-internal; hooks see only
+the window, with no ReportC or C ABI extension. Interior points are immutable
+to hooks and stream to scratch unchanged before presentation; the edited
+window follows them. The published count is the logical length minus the
+number of window points the hook cut. Metrics retain all M + 1 presented
+points, including any hidden suffix. Sink OFF keeps the full array unchanged.
 At capture, the existing admitted selected-window flag chooses the presentation
 once; subsequent report reads reuse that capture.
+
+Ordinary sink removal (`set_report_sink_v1(NULL)`) returns the typed setter
+refusal `-3` while that run's scratch curve is live and keeps the sink,
+scratch-backed summary report and bounded observer capture unchanged;
+the scratch is dropped at the next run begin or handle destruction without
+restoring a curve array.
+Sealed trade rows (`TradeLedger::base() > 0`) also refuse sink removal with `-3`
+and `set_trade_history_streamable(false)` with `coded<std::logic_error>(engine_invariant)`
+before any state change, preserving the sink, receipt and report without rehydrating
+rows until a new run begin clears size/base to 0 (ordinary scratch ownership still
+independently refuses removal).
+
+On the sink path, both ordinary and selected `present_report` hooks receive
+only the open-at-end trade rows, in the same lot order as the suffix of the
+sink-OFF array. `trades_len` is this open-lot count; `total_trades` still includes
+all closed rows. The hook may edit these rows in place, keeping their pointer
+and count. Its incoming `net_profit` still includes all rows. A hook that
+re-sums edited rows must continue `report_closed_net_profit()` one open row
+at a time, preserving the original left fold. Trade metrics fold directly over
+the ledger and then the presented open rows. T emission projects one ledger
+row at a time, followed by that same edited view; neither capture nor read
+allocates a closed-history `TradeC[]`. Sink OFF keeps the full array and is
+byte-identical.
+
+The sink's `presentation_` stores scalar report values with a null trade
+pointer; an ordinary observer capture also owns one presented equity point.
+The independent open-lot view is retained only to preserve
+the hook's edits across reads and explicit sink removal; its size depends on
+open lots, never closed trades. A completed selected capture owns its metric
+scratch separately. With a resident base of zero and no ordinary scratch owner,
+removing the sink explicitly requests full report arrays again, without
+dispatching a captured hook a second time. After sealing, removal is refused
+before any state change: retired rows remain in the sink and cannot be
+recovered from resident storage.
+
+L17c/d and L8c use one report path. `fill_trades_section`
+(`src/engine_report.cpp:112-169`) keeps the logical global count and copies only
+open rows for a sink. `report_closed_net_profit`
+(`src/engine_report.cpp:171-184`) starts at `ClosedTradePrefix::pnl` and adds the
+resident suffix in order. `finish_streamed_trade_metrics`
+(`src/native_execution_consumer.cpp:13555-13577`) finishes copies of the sealed
+accumulators over resident closed rows, then the presented open rows. The
+source host's terminal-quote presentation continues that same closed-row PnL
+fold before adding its edited open rows (`net_profit`
+`src/source/pine_strategy_host.cpp:1913-1914`).
+
+Selected carry-in validation includes the minimum entry time folded at seal
+(`first_entry_time` `src/native_execution_consumer.cpp:12523-12526`), so a
+window starting after a sealed entry refuses with the existing typed
+`engine_invariant`. Validation never indexes a retired row. `write_report_sink_trades`
+(`src/engine_report.cpp:901-934`) resumes at the global T cursor: sealed rows
+already in the sink are emitted exactly once, followed by the resident suffix
+and open rows. The sink remains the complete row report.
+
+HostRecorded contract, also to be carried into DESIGN 3.6 and the release-notes
+draft: a host that owns and pushes the curve owns its memory; the production Pine host uses KernelRecordedAtHostMarks (src/source/pine_adapter.cpp:2860), whose recorded curve is held in O(1) and streamed to the scratch file.
+HostRecorded's host-owned curve and the sink-OFF curve path retain their
+existing behavior.
+
+The kernel recorder uses the ordinary sink's scratch owner and single editable
+execution point for selected runs too. Released pre-window points update the
+existing selected validation latches; only the anchor and observations in
+[T, E) enter scratch. Capture judges those latches and the final execution
+point before presenting, then reads the bounded window from the scratch suffix
+and held point. It replaces that suffix with the edited window and transfers
+the same scratch owner to the selected metric snapshot. No selected history
+vector or second scratch writer is built on this recorder path.
+
+A live `fill_report` (`src/engine_report.cpp:57-80`) during an open selected
+kernel-recorder sink run refuses with a coded `std::logic_error`,
+`report_shape_unsupported` and `{"shape":"live_selected_sink"}`. It clears the
+output before allocating report rows, calling presentation or staging a point.
+The host may catch this read refusal and continue; the recorder, run-failure
+state and later selected capture remain unchanged. Sink OFF retains its live
+full-prefix array report.
+
+## Auxiliary-table fold across storage backends
+
+The consumed-cycle table retains both the fixed scratch-slab backend and
+WL-PTAILFIX's incremental disk radix fold. Both fold the live count followed
+by the same lexically ordered key/value bytes for every incoming hash seed.
+The disk backend keeps its radix buckets, journal, pending header/slot overlay
+and constant-time hash read.
+
+The slab's existing 40-byte records and 16-byte slots have no radix-node
+region. Its mutation path rebuilds an independent 257-word root transform
+with repeated ordered scans and fixed comparison buffers, then publishes the
+admitted header/slot and root. This costs quadratic key comparisons per
+mutation; hashing remains constant-time, with no file IO or allocation.
+The slab layout, admission limits, refusal-before-mutation rule and first-seen
+iteration stay unchanged. The root is reconstructible physical storage of the
+existing hash leaf, not a new logical hash field. Clear resets both roots;
+move carries the slab owner, collision seam and both fold states.

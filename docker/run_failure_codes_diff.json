@@ -1,20 +1,28 @@
 {
   "schema": "pineforge-run-failure-catalog-diff/v1",
   "from": {
-    "version": "1.6.1",
-    "tag": "v1.6.1",
+    "version": "1.6.2",
+    "tag": "v1.6.2",
     "catalogSha256": "7d61bad51f1f624a83fe90abb64646758c89f6e23c099e52167f9f1c11994d26"
   },
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "1d74dce76db87e07d9a7edb9683ab53f83410ad7d5b62e1e8960912b7201e162"
+    "catalogSha256": "550d56baebc7986a7bc2a5a33fb979a4b7774cca3c88b22668b3806ad7297852"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
     "after": "pineforge-run-failure-catalog/v1"
   },
-  "metadataChanges": [],
+  "metadataChanges": [
+    {
+      "path": "classes.resource",
+      "beforePresent": true,
+      "afterPresent": true,
+      "before": "Machine memory; retryable, capped.",
+      "after": "Machine memory or scratch storage; retryability is specified per code."
+    }
+  ],
   "added": [
     {
       "code": "report_sink_failed",
@@ -27,6 +35,56 @@
           "report sink open failed",
           "report sink write failed",
           "report sink write made no progress"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "scratch_capacity_exceeded",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "resource": {
+            "kind": "vocab",
+            "values": [
+              "layout",
+              "sequence_data",
+              "sequence_index",
+              "erased_data",
+              "erased_index",
+              "consumed_data",
+              "consumed_index",
+              "cohort",
+              "exit_rank",
+              "successor_roots"
+            ]
+          }
+        },
+        "class": "resource",
+        "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+        "english": [
+          "scratch capacity exceeded"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "scratch_io_failed",
+      "collection": "codes",
+      "entry": {
+        "args": {},
+        "class": "resource",
+        "description": "The engine could not create, resize, read or write scratch-table storage. The run has no successful completion.",
+        "english": [
+          "scratch create",
+          "scratch read",
+          "scratch write",
+          "id table create",
+          "id table resize",
+          "id table read",
+          "id table write"
         ],
         "retryable": false,
         "since": "1.7.0"
@@ -180,7 +238,10 @@
             "magnifier_volume_weighted",
             "bench",
             "ohlcv_bin",
-            "verify_bin"
+            "verify_bin",
+            "report_sink",
+            "run_id",
+            "spill_dir"
           ]
         }
       ]

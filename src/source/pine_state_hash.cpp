@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <type_traits>
 #include <variant>
 
@@ -303,11 +304,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& pair : staged_.inputs) input_keys.push_back(pair.first);
     std::sort(input_keys.begin(), input_keys.end()); f.u(input_keys.size());
     for (const auto& key : input_keys) { f.s(key); f.s(staged_.inputs.at(key)); }
-    std::vector<std::string> cohort_keys;
-    for (const auto& pair : cohorts_by_id_) cohort_keys.push_back(pair.first);
-    std::sort(cohort_keys.begin(), cohort_keys.end()); f.u(cohort_keys.size());
-    for (const auto& key : cohort_keys) {
-        const auto& cohort = cohorts_by_id_.at(key);
+    // Replay every logical cohort in the same lexicographic order as before,
+    // including retired summaries, without materializing an id-sized vector.
+    f.u(cohorts_by_id_.size());
+    for (const auto& row : cohorts_by_id_.all_sorted()) {
+        const auto& key = row.first; const auto& cohort = row.second;
         f.s(key); f.u(cohort.handle.value); f.i(cohort.cycle);
         // v4: the origin roster is append-only; its members fold once each,
         // when appended (OriginRoster::digest).
@@ -323,8 +324,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             f.u(incarnation); f.d(cohort.live_units_by_origin.at(incarnation));
         }
     }
-    f.u(cohort_order_.size());
-    for (const auto& key : cohort_order_) f.s(key);
+    f.u(cohorts_by_id_.size());
+    cohorts_by_id_.for_each_id([&](const auto& key) { f.s(key); });
     // v4: the rows the table still holds, in incarnation order, and what the
     // erased ones left: the high water, how many, and a running digest of
     // their identities (PlacementTable::erased_digest).
@@ -464,9 +465,27 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.d(fee.nonpercent_fee);
     }
     // v4: the final prefix folded once, the current bar's tail in full.
-    f.u(trade_exit_phase_.size()); f.u(exit_phase_final_); f.u(exit_phase_digest_);
-    for (std::size_t index = exit_phase_final_; index < trade_exit_phase_.size(); ++index)
-        f.u(trade_exit_phase_[index]);
+    const auto trade_prefix = host_
+        ? NativeExecutionConsumer::bound(*host_).closed_trade_prefix()
+        : NativeExecutionConsumer::ClosedTradePrefix{};
+    const std::size_t phase_end = trade_prefix.base + trade_exit_phase_.size();
+    const auto* phase_consumer = host_ ? &NativeExecutionConsumer::bound(*host_) : nullptr;
+    f.u(phase_end);
+    if (phase_consumer && phase_consumer->exit_phases_restarted()) {
+        // Preserve the sink-off hash's raw reset marker AND its phase bytes.
+        // The bounded transform applies the sealed bytes to this incoming
+        // hash, rather than substituting a different digest representation.
+        f.u(0); f.u(BrokerStateHashSink{}.h);
+        f.h = phase_consumer->replay_sealed_exit_phases(f.h);
+        for (const auto phase : trade_exit_phase_) f.u(phase);
+    } else {
+        if (exit_phase_final_ < trade_prefix.base)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                           "hashed exit-phase fold precedes the sealed prefix");
+        f.u(exit_phase_final_); f.u(exit_phase_digest_);
+        for (std::size_t index = exit_phase_final_; index < phase_end; ++index)
+            f.u(trade_exit_phase_.at(index - trade_prefix.base));
+    }
     // The entry-id table orders children once it holds two ids, and its size
     // matters once its peak passes 13 keys; below both it decides nothing.
     if (exit_rank_keys_.size() >= 2 || exit_rank_peak_ > 13 || exit_rank_alt_peak_ > 13) {
@@ -486,14 +505,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(intraday_relabel_ordinals.begin(), intraday_relabel_ordinals.end());
     f.u(intraday_relabel_ordinals.size());
     for (const auto ordinal : intraday_relabel_ordinals) f.u(ordinal);
-    std::vector<std::string> consumed_partial_keys;
-    consumed_partial_keys.reserve(consumed_partial_exit_cycles_.size());
-    for (const auto& row : consumed_partial_exit_cycles_) consumed_partial_keys.push_back(row.first);
-    std::sort(consumed_partial_keys.begin(), consumed_partial_keys.end());
-    f.u(consumed_partial_keys.size());
-    for (const auto& key : consumed_partial_keys) {
-        f.s(key); f.i(consumed_partial_exit_cycles_.at(key));
-    }
+    consumed_partial_exit_cycles_.fold_sorted(f);
     std::vector<std::uint64_t> shadowed_openings(
         bracket_shadowed_openings_.begin(), bracket_shadowed_openings_.end());
     std::sort(shadowed_openings.begin(), shadowed_openings.end());
@@ -661,9 +673,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             // as fold_source_money does.
             const std::uint64_t count = pine->closed_trade_count();
             const bool restart = count < source_money_folded_;
-            double gains = restart ? 0.0 : source_gains_;
-            double losses = restart ? 0.0 : source_losses_;
-            for (std::uint64_t index = restart ? 0 : source_money_folded_;
+            if (count < trade_prefix.base)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                               "hashed source-money rewind precedes the sealed prefix");
+            double gains = restart ? trade_prefix.source_gains : source_gains_;
+            double losses = restart ? trade_prefix.source_losses : source_losses_;
+            for (std::uint64_t index = restart ? trade_prefix.base : source_money_folded_;
                  index < count; ++index) {
                 const double profit = pine->closed_trade(index).pnl;
                 if (profit > 0.0) gains += profit;
