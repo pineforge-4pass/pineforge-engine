@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 namespace pineforge {
 namespace {
@@ -44,6 +45,33 @@ void hash_source_run_identity(BrokerStateHashSink& f,
     // The monotonically increasing native generation protects stale handles;
     // it does not change the source-visible state of a fresh run.
     f.u(0);
+}
+void hash_scratch_store(BrokerStateHashSink& f,
+                        const ::pineforge::detail::ScratchStore* store) {
+    f.b(store != nullptr);
+    if (!store) return;
+    // One page of workspace, independent of the record population. The state
+    // digest includes order.id, next_handle, record_count and every live row's
+    // handle/key/value, without depending on backing or cache placement.
+    std::vector<std::byte> page(store->page_size());
+    std::uint64_t digest = 0;
+    const auto status = store->state_digest({page.data(), page.size()}, digest);
+    if (status != ::pineforge::detail::ScratchStatus::ok)
+        throw coded<std::logic_error>(
+            status == ::pineforge::detail::ScratchStatus::io_error
+                ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
+            {}, "scratch state digest failed");
+    f.u(digest);
+}
+void hash_exit_scratch(BrokerStateHashSink& f,
+                       const source::detail::ExitScratchContext* scratch) {
+    f.b(scratch != nullptr);
+    if (!scratch) return;
+    hash_source_run_identity(f, scratch->run);
+    f.u(scratch->next_scope);
+    f.b(scratch->versions != nullptr);
+    f.b(scratch->lots != nullptr); f.b(scratch->working != nullptr);
+    hash_scratch_store(f, &scratch->store);
 }
 void hash_native_handle(BrokerStateHashSink& f, const native_order::RequestHandle& handle) {
     hash_source_run_identity(f, handle.run); f.u(handle.incarnation);
@@ -271,6 +299,7 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
 
 void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
+    hash_exit_scratch(f, exit_scratch_.get());
     f.u(source_sequence_); f.u(command_ordinal_); f.u(broker_open_epoch_);
     f.i(last_broker_open_ms_); f.u(source_command_sequence_); f.b(host_ != nullptr);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
@@ -1101,6 +1130,7 @@ void hash_selected_intents(BrokerStateHashSink& f, const source::detail::PineInt
 
 void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
+    hash_scratch_store(f, trade_scratch_);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);

@@ -1054,6 +1054,16 @@ ExitScratchContext& exit_scratch(const PineExecutionAdapter& adapter) {
     if (!adapter.exit_scratch_) exit_scratch_failure(ScratchStatus::programming_error);
     return *adapter.exit_scratch_;
 }
+ExitScratchError::ExitScratchError(ScratchStatus status)
+    : coded<std::logic_error>(
+          status == ScratchStatus::io_error ? RunFailureCode::scratch_io_failed
+              : status == ScratchStatus::capacity_exceeded
+                  ? RunFailureCode::scratch_capacity_exceeded : RunFailureCode::engine_invariant,
+          status == ScratchStatus::capacity_exceeded
+              ? RunFailureArgs{{"resource", "layout"}} : RunFailureArgs{},
+          "exit scratch operation failed"),
+      status_(status) {}
+
 [[noreturn]] void exit_scratch_failure(ScratchStatus status) {
     throw ExitScratchError(status);
 }

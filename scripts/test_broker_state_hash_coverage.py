@@ -160,6 +160,28 @@ class Coverage(unittest.TestCase):
              "adapter_.missing_hash(f);"),))
         self.assertEqual(result, 1, output)
 
+    def test_exit_scratch_fold_is_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        fold = "hash_exit_scratch(f, exit_scratch_.get());"
+        for replacement in ("", "hash_exit_scratch(f, nullptr);"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("exit_scratch_", output)
+
+    def test_trade_scratch_fold_is_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        fold = "hash_scratch_store(f, trade_scratch_);"
+        for replacement in ("", "hash_scratch_store(f, nullptr);"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("trade_scratch_", output)
+
     def test_unknown_waiver_is_rejected(self):
         result, output = self.check((
             ("scripts/broker_state_hash_waivers.txt",

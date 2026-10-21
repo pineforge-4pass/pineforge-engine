@@ -66,8 +66,15 @@ detail::ScratchStatus compare_trade_scratch(
 }
 
 void require_trade_scratch(detail::ScratchStatus status) {
-    if (status != detail::ScratchStatus::ok)
-        throw std::logic_error("trade scratch contract operation failed");
+    if (status == detail::ScratchStatus::ok) return;
+    const auto code = status == detail::ScratchStatus::io_error
+        ? RunFailureCode::scratch_io_failed
+        : status == detail::ScratchStatus::capacity_exceeded
+            ? RunFailureCode::scratch_capacity_exceeded : RunFailureCode::engine_invariant;
+    throw coded<std::logic_error>(code,
+        status == detail::ScratchStatus::capacity_exceeded
+            ? RunFailureArgs{{"resource", "layout"}} : RunFailureArgs{},
+        "trade scratch contract operation failed");
 }
 
 // These records are temporary, including on success. Rollback restores the
@@ -357,13 +364,15 @@ void source::PineStrategyHost::set_trade_scratch(detail::ScratchStore& store) {
     require_trade_scratch(store.status());
     if (store.transaction_active() || store.record_count() != 0
         || (trade_scratch_ && trade_scratch_->transaction_active()))
-        throw std::logic_error("trade scratch must be exclusively owned and empty");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "trade scratch must be exclusively owned and empty");
     trade_scratch_ = &store;
 }
 
 detail::ScratchStore& source::PineStrategyHost::trade_scratch() {
     if (!trade_scratch_)
-        throw std::logic_error("run owner did not provision trade scratch");
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "run owner did not provision trade scratch");
     return *trade_scratch_;
 }
 
@@ -2578,7 +2587,8 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                 current = source;
                 handle = scratch_find(scratch, {scratch_permutation, current, 0, 0});
                 if (handle == detail::scratch_no_handle)
-                    throw std::logic_error("incomplete trade scratch permutation");
+                    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                                  "incomplete trade scratch permutation");
             }
         }
         transaction.finish();

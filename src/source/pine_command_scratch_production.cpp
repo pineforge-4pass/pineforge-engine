@@ -1,5 +1,7 @@
 #include "pine_command_scratch_production.hpp"
 
+#include <pineforge/run_failure.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -51,14 +53,20 @@ std::uint64_t environment_byte_cap() {
     std::uint64_t bytes = 0;
     for (const char* digit = selected; *digit; ++digit) {
         if (*digit < '0' || *digit > '9')
-            throw std::invalid_argument("command scratch byte cap is not positive decimal uint64_t");
+            throw coded<std::invalid_argument>(RunFailureCode::scratch_configuration_invalid,
+                {{"reason", "nondecimal"}, {"stage", "command_scratch_byte_cap"}},
+                "command scratch byte cap is not positive decimal uint64_t");
         const auto value = static_cast<std::uint64_t>(*digit - '0');
         if (bytes > (std::numeric_limits<std::uint64_t>::max() - value) / 10)
-            throw std::invalid_argument("command scratch byte cap is not positive decimal uint64_t");
+            throw coded<std::invalid_argument>(RunFailureCode::scratch_configuration_invalid,
+                {{"reason", "overflow"}, {"stage", "command_scratch_byte_cap"}},
+                "command scratch byte cap is not positive decimal uint64_t");
         bytes = bytes * 10 + value;
     }
     if (bytes == 0)
-        throw std::invalid_argument("command scratch byte cap is not positive decimal uint64_t");
+        throw coded<std::invalid_argument>(RunFailureCode::scratch_configuration_invalid,
+            {{"reason", "nonpositive"}, {"stage", "command_scratch_byte_cap"}},
+            "command scratch byte cap is not positive decimal uint64_t");
     return bytes;
 }
 
@@ -79,7 +87,8 @@ public:
         path += "pineforge-command-XXXXXX";
         const int opened = ::mkstemp(path.data());
         if (opened < 0)
-            throw std::system_error(errno, std::generic_category(), "command scratch create");
+            throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+                std::system_error(errno, std::generic_category(), "command scratch create"));
 
         int result;
         do {
@@ -88,7 +97,8 @@ public:
         if (result < 0) {
             const int error = errno;
             ::close(opened);
-            throw std::system_error(error, std::generic_category(), "command scratch unlink");
+            throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+                std::system_error(error, std::generic_category(), "command scratch unlink"));
         }
         do {
             result = ::fcntl(opened, F_SETFD, FD_CLOEXEC);
@@ -96,7 +106,8 @@ public:
         if (result < 0) {
             const int error = errno;
             ::close(opened);
-            throw std::system_error(error, std::generic_category(), "command scratch cloexec");
+            throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+                std::system_error(error, std::generic_category(), "command scratch cloexec"));
         }
         fd_ = opened;
     }
@@ -211,10 +222,13 @@ CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registr
 
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size) {
-    if (page_size == 0) throw std::invalid_argument("command scratch page size is zero");
+    if (page_size == 0)
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "command scratch page size is zero");
     if (static_cast<std::uintmax_t>(page_size)
             > static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max()))
-        throw std::invalid_argument("command scratch page size is not representable in off_t");
+        throw coded<std::invalid_argument>(RunFailureCode::scratch_capacity_exceeded,
+            {{"resource", "layout"}}, "command scratch page size is not representable in off_t");
     const auto default_cap = environment_byte_cap();
     auto budget = command_scratch_byte_cap;
     if (!budget && default_cap != 0) {

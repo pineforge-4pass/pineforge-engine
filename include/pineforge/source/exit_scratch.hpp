@@ -2,6 +2,7 @@
 
 #include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/native_host.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
 #include <array>
@@ -70,10 +71,9 @@ struct ExitScratchContext {
                             bool (*)(void*, const NativeWorkingRequest&)) = nullptr;
 };
 
-class ExitScratchError final : public std::logic_error {
+class ExitScratchError final : public coded<std::logic_error> {
 public:
-    explicit ExitScratchError(ScratchStatus status)
-        : std::logic_error("exit scratch operation failed"), status_(status) {}
+    explicit ExitScratchError(ScratchStatus status);
     ScratchStatus status() const noexcept { return status_; }
 private:
     ScratchStatus status_;
