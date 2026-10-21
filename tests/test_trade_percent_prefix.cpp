@@ -71,10 +71,17 @@ public:
     }
 
     void replace_last(const Trade& row) {
-        const auto& old = trades_.back();
+        const Trade old = trades_.back();
         if (old.pnl > 0.0) --win_trades_count_;
         if (old.pnl < 0.0) --loss_trades_count_;
-        trades_.back() = row;
+        // TradeLedger answers back()/at()/[] by value and mutates only through
+        // modify()/replace(); an assignment to back() would write a temporary
+        // and replace nothing.
+        trades_.modify(trades_.size() - 1, [&](Trade& last) { last = row; });
+        // A replacement that did nothing must fail here rather than leave the
+        // prefix fold's replacement case unexercised.
+        const Trade stored = trades_.back();
+        PREFIX_CHECK(stored.pnl == row.pnl && stored.pnl_pct == row.pnl_pct);
         if (row.pnl > 0.0) ++win_trades_count_;
         if (row.pnl < 0.0) ++loss_trades_count_;
     }
