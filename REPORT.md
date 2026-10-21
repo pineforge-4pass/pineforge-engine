@@ -243,3 +243,143 @@ Input: `rj-20261021t031834-94c870`, HEAD `060cbe473755ea706847e5c3b54336fba0e5b7
 
 Owned repair: add `empty`, `operator[]` and ordered `begin/end` readers to `engine_stream.cpp`, and extend the exact header request above. Existing `test_bulk_preflight{,_l4d}` / `test_native_fused_settlement` range loops need iteration; `test_resolved_execution` / `test_native_scoped_close` need empty/index reads. An iterator owns one row and reads via `copy_at`, preserving nested-read lifetime without filling the legacy borrow cache. Tests and assertions are unchanged. The existing E13 report was rewrapped to retain the line limit. No published source citation targets `engine_stream.cpp`, so this edit shifts no cited range.
 Not built or tested here; no generator or repository script ran. `DONE-fix2` is an owned-scope handoff, with the header/member/overload integration and fresh lab proof still required; the build failure is not claimed resolved while that integration is absent.
+
+## Fix round 3
+
+Input HEAD: `652e6b29eed830aa9e6dea328eaded295a321e53`, branch
+`cx/o1-e3b`. Read the common brief and the complete 828-line
+`/Users/haoliangwen/.local/state/pineforge-top-core/lanes/core-cr150-o1e3b/lab-fail-fix2.log`.
+Proof `rj-20261021t043242-fc02e0` stopped during the release build: the
+first error is the missing `StreamActionQueue` declaration at
+`src/engine_stream.cpp:39`; the later queue-member and vector-method errors
+follow from it. There is no test verdict in that log.
+
+### Missing header hunk, now applied
+
+Section 1's requested `include/pineforge/engine.hpp` diff is applied
+verbatim, with no shape change and no edits elsewhere in that header:
+
+| Applied location | Hunk |
+|---|---|
+| `include/pineforge/engine.hpp:11` | Add `<iterator>`; `<cstddef>`, `<cstdint>`, `<memory>` and `<optional>` already exist. |
+| `include/pineforge/engine.hpp:73` | Add the borrowing-lifetime comment, feature macro at line 78, and complete `StreamActionQueue` declaration at line 79 through line 124, including its iterator, copy/move operations, owning and borrowing reads, mutation methods, and private pimpl. |
+| `include/pineforge/engine.hpp:1214` | Substitute `StreamActionQueue stream_order_actions_` for the vector. |
+| `include/pineforge/engine.hpp:1841` | Add the owning `stream_order_action_copy(int)` delegating to `copy_at`. |
+
+The four-line overview at `src/engine_stream.cpp:20` now describes the
+applied declaration; no executable queue code changed in this repair.
+The old statements above that the header integration is pending are
+historical and superseded by this section.
+
+### Complete E17 call-site audit
+
+These are declaration/type fixes through the header hunk, rather than test
+rewrites. Every direct member use under `src/`, `include/` and `tests/` was
+read, together with public-accessor callers and the C action projection.
+
+| Call site | Resolution / unchanged contract |
+|---|---|
+| `src/engine_stream.cpp:139`, `:157` | Entry/exit `push_back` binds to the declared `const StreamOrderAction&` overload, including an rvalue argument; append order and all row fields stay unchanged. |
+| `src/engine_stream.cpp:165`, `:166`, `:171`, `:191` | `size`, owning `copy_at`, and both `set` paths now name actual queue methods, instead of invalid vector methods. Metadata refresh retains physical action order. |
+| `include/pineforge/engine.hpp:1837`, `:1838`, `:1841`, `:1844` | Count, borrowed `at`, owning copy, and clear delegate to their matching public queue methods. |
+| `src/c_abi.cpp:740`, `:745`, `:757` | Count/get/clear compile against the unchanged engine accessors. Get deliberately keeps `stream_order_action_at`, so both returned strings survive subsequent gets until mutation/clear. Replacing it with a temporary owning copy would dangle the C pointers. Null/index checks, aggregate field order, boolean conversion and `entry_incarnation` are unchanged. |
+| `src/engine_run.cpp:161`, `src/native_execution_consumer.cpp:10798` | Both lifecycle clears use the declared `clear`; these files were not edited this round. |
+| `src/engine_execution.cpp:742`, `:1394` | **Unresolved cross-lane request below:** both reservation calls need Section 2's queue overload. The two `size` reads at lines 749 and 1408 already match. |
+| `tests/test_bulk_preflight.cpp:62`, `:97`; `tests/test_bulk_preflight_l4d.cpp:75`, `:110` | Seed pushes and const range loops use `push_back` and `begin/end`; iterator-local rows preserve sequence and text reads. |
+| `tests/test_native_fused_settlement.cpp:232`, `:337`, `:338` | Clear/count/range fold use the declared surface; every folded field, including private provenance, stays in the same order. |
+| `tests/test_pending_order_identity.cpp:129`, `:155`, `:186`, `:187` | Count and borrowed `front` remain available. Its other action reads use the unchanged public borrowed accessor. |
+| `tests/test_resolved_execution.cpp:89`; `tests/test_native_scoped_close.cpp:136` | Both return `const auto&`; their callers require only `size`, `empty` and const indexing, all now declared. |
+| `tests/test_native_fused_settlement_allocations.cpp:62` | `reserve(64)` resolves to the queue's file preparation API; no population-sized allocation is introduced. |
+| `tests/test_source_fifo_endpoints.cpp:140`; `tests/test_settlement_observation_boundary.cpp:132` | Size-only probes retain their `size_t` result. |
+| `tests/test_streaming.cpp`, `tests/test_streaming_l4d.cpp`, `tests/test_stream_preflight_rejections.cpp`, `tests/test_stream_preflight_rejections_l4d.cpp`, `tests/test_native_resting_replay_contract.cpp`, `tests/native_fused_settlement_fixture.hpp` | Public count/borrow/clear callers keep their existing types. Multiple borrowed rows and C text pointers survive other reads; snapshot vectors still copy owning `StreamOrderAction` values. |
+| Remaining C consumers in `tests/` and `runner/main.cpp:702` | Public C POD, symbols, signatures and copied text remain unchanged; these callers do not depend on the C++ container type. |
+
+No test, assertion, fixture, registration, ordering rule, hash leaf or
+public C declaration was changed, deleted, skipped or weakened.
+
+### Other lane-code audit and owned repair
+
+The E18 audit found a separate executed-result issue before any test was
+run: an already-empty successful count result was walked again solely to
+collect zero rows. Existing `tests/test_native_calc_plan.cpp:551` and
+`:748` require a single clock lookup for stalled and unbounded quiet
+intervals. `src/native_calc_plan.cpp:206` now returns the validated
+empty result directly, preserving its computed count and final state and
+avoiding the redundant clock walk. Nonempty schedules retain both passes.
+This is an empty-output materialization rule, independent of event kind,
+population, fixture identity or clock implementation. Tests are untouched.
+
+The header insertion shifts 145 citations on 112 existing lines across
+`docs/adr/0001-kernel-adapter-boundary.md`,
+`docs/design/native-feature-parity.md`, `docs/native-refactor-progress.md`,
+`docs/pages/native-engine.md` and `docs/pages/pine-to-native.md`.
+Only citation digits changed: header lines after old line 71 move by 53,
+and those after old line 1787 move by 56. The ADR's inherited comment
+window `:738-751` moves to `:791-804`. Every claim and existing content
+pin is retained; that pinned comment's source bytes are unchanged. No
+published citation names either changed `.cpp` unit.
+
+### COMPILE AUDIT — reading only, not a compiler verdict
+
+| File / region re-read | Access, const, signatures, includes and ODR |
+|---|---|
+| `include/pineforge/engine.hpp`, `src/engine_stream.cpp` | Every queue and nested-iterator declaration matches its definition, qualifiers and `noexcept`. The private `Impl` is complete before out-of-line construction/destruction/move definitions. The owning iterator uses the existing optional row. Required standard types have direct includes. No debug/release conditional changes. |
+| `src/c_abi.cpp` | The borrowed-tick bridge declaration and definition use the same engine epoch and function-pointer signature; its decoder returns `TradeTick` by value. The action getter still borrows stable strings. No new runtime export. |
+| `src/native_calc_plan.hpp` | `PagedRunRows` supplies every used count/index/range/reverse/copy/move method. Its iterator traits support existing vector range insertion. Indexing returns values, whose const-reference bindings in existing calc tests extend their lifetime. Scratch-file move/reset/read/write methods exist. Template definitions are header-resident; codec specializations define their members inside the class. |
+| `src/native_calc_plan.cpp` | The internal walk and public planner signatures agree. Refusal moves the captured plan; completed plans can move their page store. The consumer's plan/apply definitions match its existing declarations. The empty-output early return changes no type or exception specification. |
+| Owned E13/E17 regions of `src/native_execution_consumer.hpp` and `.cpp` | Drain handles/seeds and queue consumers use paged reads, pushes and `set`, rather than vector-only mutation. New public readbacks and private selector/tick-reader methods all have matching declarations. The opening codec is declared after its types and before use. The existing probe friend permits the new test's private reads. No other consumer regions were edited. |
+| `src/broker_state_hash_internal.hpp`, `src/source/pine_state_hash.cpp` | Ordered-scan helpers are inline templates visible through the existing include; map/set callbacks receive const rows and preserve key/value fold types. Copied iterators own paged rows where needed. No requested-but-missing declaration found. |
+| `src/native_c_host.cpp` | The lane's only addition is a comment; C snapshot vector types and lifetimes are unchanged. |
+| Four `tests/test_o1e3_*.cpp` units, `tests/o1e3_allocation_probe.hpp`, lane CMake fragment | New readback names are public or use the existing probe friend. Feature branches have corresponding declarations. Allocation-probe static storage is inline C++17. All four existing test registrations remain intact. |
+| Five documentation files above | Numeric citation updates only; no source symbol, pin, claim or code example changed. |
+
+No additional declaration/accessor mismatch was found in owned code by
+reading. Compiler warnings, historical-header configurations, linkage,
+and both Release and Debug remain **UNVERIFIED**.
+
+### Additional cross-lane request — required before building
+
+The round-3 exception authorizes only the exact `engine.hpp` hunk in
+o1-e1's files. `src/engine_execution.cpp` is also owned by o1-e1
+(Section 2 above), so it has not been edited. On this branch its only
+`reserve_effects` overloads at lines 61 and 71 take `std::vector<T>&`
+and `TradeLedger&`. Neither accepts the newly applied queue type.
+Consequently this standalone tree still has a known compile blocker at
+lines 742 and 1394; the missing header error is not the only integration
+needed. Scope clarification was requested; no answer is assumed.
+
+Supervisor/o1-e1 request: before the lab build, apply the existing Section
+2 overload immediately after `reserve_effects(TradeLedger&, size_t)` at
+`src/engine_execution.cpp:77`, unless the earlier o1-e1 merge has supplied it:
+
+```cpp
+void reserve_effects(StreamActionQueue& values, size_t) {
+    values.reserve(0); // prepare the external files; no count-dependent reservation
+}
+```
+
+This prepares external storage through the queue's actual API before the
+settlement mutates state. It must not be replaced by a vector fallback,
+unbounded reservation, conversion, conditional build omission or test
+change. Adding this four-line block shifts the existing
+`engine_execution.cpp` documentation citations by four lines, including
+the inherited `:1135` at `docs/design/native-feature-parity.md:874`;
+those digits must move with the integration.
+
+### UNVERIFIED / handoff
+
+- **Known integration blocker:** the queue reservation overload above.
+  No claim that this standalone tree is build-ready.
+- Fresh preflight, TS diff guard, Release, Debug and documentation checks
+  on the supervisor's exact committed tree.
+- All C++ suites, settlement/ABI matrices, checker self-tests, and every
+  new unit's fail-before diagnostic against the frozen header closure.
+- Full corpus/parity sweep, C action byte/lifetime equivalence, the E13 /
+  E15 / E17 / E18 allocation bounds, and the unchanged calc-clock tests.
+
+Only file reads, file edits and read-only git operations ran here.
+`git diff --check 652e6b29ee -- . ':!corpus'` passed. No compiler, cmake,
+ctest, test binary, repository script, generator, install or lab job ran.
+HEAD is unchanged, the index is empty, and the pre-existing dirty `corpus`
+submodule was not touched. `DONE-fix3` marks this edit-only handoff and its
+explicit cross-lane request, not a build/test PASS.

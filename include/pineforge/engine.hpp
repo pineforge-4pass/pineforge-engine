@@ -8,6 +8,7 @@
 #include <ctime>
 #include <limits>
 #include <memory>
+#include <iterator>
 #include <set>
 #include <algorithm>
 #include <unordered_map>
@@ -68,6 +69,58 @@ struct StreamOrderAction {
     std::string comment;
     uint64_t entry_incarnation = 0;
     size_t closed_trade_index = static_cast<size_t>(-1); // engine-private provenance
+};
+// The stream action queue's rows and index both live in external pages.
+// `at`/`front` are the legacy borrowing surface (see pineforge.h:752-760:
+// strings are borrowed until the next stream mutation or queue clear), so
+// their returned strings are kept until that mutation rather than until the
+// next read. `copy_at` owns exactly one row.
+#define PINEFORGE_HAS_STREAM_ACTION_PAGES_V1 1
+class StreamActionQueue {
+public:
+    class const_iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = StreamOrderAction;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const StreamOrderAction*;
+        using reference = const StreamOrderAction&;
+        const_iterator() = default;
+        reference operator*() const;
+        pointer operator->() const;
+        const_iterator& operator++();
+        const_iterator operator++(int);
+        bool operator==(const const_iterator& other) const;
+        bool operator!=(const const_iterator& other) const;
+    private:
+        friend class StreamActionQueue;
+        const_iterator(const StreamActionQueue* owner, std::size_t index);
+        const StreamActionQueue* owner_ = nullptr;
+        std::size_t index_ = 0;
+        mutable std::optional<StreamOrderAction> row_;
+    };
+    StreamActionQueue();
+    ~StreamActionQueue();
+    StreamActionQueue(const StreamActionQueue&);
+    StreamActionQueue& operator=(const StreamActionQueue&);
+    StreamActionQueue(StreamActionQueue&&) noexcept;
+    StreamActionQueue& operator=(StreamActionQueue&&) noexcept;
+    void reserve(std::size_t);
+    std::size_t size() const noexcept;
+    bool empty() const noexcept;
+    std::uint64_t external_bytes() const noexcept;
+    void clear() noexcept;
+    void push_back(const StreamOrderAction&);
+    StreamOrderAction copy_at(std::size_t) const;
+    const StreamOrderAction& at(std::size_t) const;
+    const StreamOrderAction& front() const;
+    const StreamOrderAction& operator[](std::size_t) const;
+    const_iterator begin() const;
+    const_iterator end() const;
+    void set(std::size_t, const StreamOrderAction&);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 // Forward declaration of an internal enum used by some BacktestEngine
@@ -1158,7 +1211,7 @@ protected:
     StreamInputMode stream_input_mode_ = StreamInputMode::UNSET;
     bool stream_observe_actions_ = false;
     uint64_t stream_action_sequence_ = 0;
-    std::vector<StreamOrderAction> stream_order_actions_;
+    StreamActionQueue stream_order_actions_;
 
     // --- request.security state ---
     struct SecurityEvalState {
@@ -1784,6 +1837,9 @@ public:
     int stream_order_actions_len() const { return static_cast<int>(stream_order_actions_.size()); }
     const StreamOrderAction& stream_order_action_at(int i) const {
         return stream_order_actions_.at(static_cast<size_t>(i));
+    }
+    StreamOrderAction stream_order_action_copy(int i) const {
+        return stream_order_actions_.copy_at(static_cast<size_t>(i));
     }
     void stream_order_actions_clear() { stream_order_actions_.clear(); }
     // Observable broker + stream cursors/forming bars, not a serialization of

@@ -1,0 +1,5 @@
+Fix round 3: edit-only handoff against 652e6b29eed830aa9e6dea328eaded295a321e53.
+Applied the exact engine.hpp queue declaration/member/copy-reader hunk.
+Audited E17 callers, fixed the empty calc-plan clock walk, refreshed citations.
+REQUIRED: supervisor/o1-e1 must apply REPORT.md's reserve_effects queue overload.
+No build, tests, repo scripts or lab jobs ran; no git staging or commit.

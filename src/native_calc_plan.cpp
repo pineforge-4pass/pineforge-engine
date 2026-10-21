@@ -203,9 +203,10 @@ Plan walk_schedule(const State& before, std::uint32_t cadence, const Event* even
 Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* events,
                    std::size_t count, const BarClock& clock, bool want_points) {
     // Validate every event and derive the final state without retaining any
-    // output. In particular, a late refusal never opens a points file.
+    // output. An empty result is already complete; a late refusal or empty
+    // schedule never opens a points file or repeats the clock lookup.
     Plan counted = walk_schedule(before, cadence, events, count, clock, false);
-    if (!want_points || counted.status != Status::Ok) return counted;
+    if (!want_points || counted.status != Status::Ok || counted.count == 0) return counted;
 
     // The same deterministic walk now writes external rows through one
     // current Point. No state is installed until this pass has completed;

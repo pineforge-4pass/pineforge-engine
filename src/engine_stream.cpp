@@ -17,10 +17,10 @@
 
 namespace pineforge {
 
-// StreamActionQueue's declaration/member substitution belongs to o1-e1's
-// engine.hpp. REPORT.md contains the exact integration diff; these methods
-// deliberately require that declaration rather than silently falling back
-// to a population-sized in-memory queue.
+// StreamActionQueue is declared in engine.hpp. Both its rows and index use
+// external pages; only the legacy reference-returning reads retain rows.
+// Owning reads and iterator reads keep one row, preserving nested-read
+// lifetime without filling the legacy borrowing cache.
 namespace {
 struct StreamActionCodec {
     static void write(detail::RunRowWriter& out, const StreamOrderAction& row) {
