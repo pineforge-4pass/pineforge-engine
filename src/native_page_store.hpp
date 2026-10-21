@@ -6,12 +6,14 @@
 // requests -- so none of them may be a resident vector. This is the storage
 // they move to.
 //
-// PageStore is a fixed-resident, file-backed sequence of trivially copyable
-// rows: a staging tail of a prepared, fixed row count, and an unlinked scratch
+// PageStore is a file-backed sequence of trivially copyable rows: a staging
+// tail of a prepared, fixed row count, and an unlinked scratch
 // file that every row that leaves the tail is written to. Resident memory is
 // the tail (and the one-page copy erase_if borrows) whatever the sequence's
-// length; the file grows with the rows. Nothing here refuses a push: unlike
-// the run's prepared ScratchSlab, whose regions are sized from the manifest,
+// length unless Full readback explicitly reserves a larger batch write buffer.
+// That buffer is released after the pump; the file grows with the rows.
+// Nothing here refuses a push: unlike the run's prepared ScratchSlab, whose
+// regions are sized from the manifest,
 // this file has no prepared row count to exceed, so a long run pages instead
 // of failing. An I/O fault surfaces as detail::ScratchIoError, the run-failure
 // code the rest of the scratch storage already raises (RunFailureCode::
@@ -42,6 +44,7 @@
 #include <string>
 #include <sys/types.h>
 #include <unistd.h>
+#include <utility>
 
 namespace pineforge::detail {
 
@@ -54,6 +57,7 @@ public:
     PageStore(std::size_t row_bytes, std::size_t resident_rows, const char* label)
         : row_bytes_(row_bytes == 0 ? 1 : row_bytes),
           resident_capacity_(resident_rows == 0 ? 1 : resident_rows),
+          staging_capacity_(resident_capacity_),
           label_(label == nullptr ? "native page store" : label),
           tail_(new unsigned char[static_cast<std::size_t>(row_bytes_ * resident_capacity_)]) {}
     ~PageStore() {
@@ -74,10 +78,11 @@ public:
     // Rows this store has written to its file, retired or not. Readback of the
     // storage, never of the sequence.
     std::uint64_t spilled_rows() const noexcept { return disk_rows_; }
-    // The fixed scratch this store holds, whatever its length: the tail plus,
-    // once a compaction ran, its page. Allocation metadata is not counted.
+    // All resident buffers, including a Full batch reservation and its saved
+    // staging tail, plus any compaction page. Allocation metadata is excluded.
     std::uint64_t resident_bytes() const noexcept {
         return static_cast<std::uint64_t>(row_bytes_ * resident_capacity_)
+            + (staging_tail_ ? static_cast<std::uint64_t>(row_bytes_ * staging_capacity_) : 0)
             + (scratch_ ? static_cast<std::uint64_t>(row_bytes_) * rows_per_scratch() : 0);
     }
     // The physical row index of logical row 0. erase_prefix moves it.
@@ -89,6 +94,31 @@ public:
         tail_size_ = 0;
         disk_rows_ = 0;
         retired_ = 0;
+    }
+
+    // Optional Full-readback batch buffer, used by push_back itself. A hint
+    // beyond the addressable byte count leaves the paged append path intact.
+    // Allocation failure preserves the existing tail and every logical row.
+    void reserve_resident_rows(std::size_t rows) {
+        if (rows <= resident_capacity_
+            || rows > std::numeric_limits<std::size_t>::max() / row_bytes_) return;
+        std::unique_ptr<unsigned char[]> reserved(new unsigned char[rows * row_bytes_]);
+        if (tail_size_ != 0) {
+            std::memcpy(reserved.get(), tail_.get(),
+                        static_cast<std::size_t>(tail_size_ * row_bytes_));
+        }
+        if (!staging_tail_) staging_tail_ = std::move(tail_);
+        tail_ = std::move(reserved);
+        resident_capacity_ = rows;
+    }
+
+    // Publish the batch before returning to the original staging tail. No
+    // allocation is needed; a failed write leaves the reserved tail intact.
+    void release_reservation() {
+        if (!staging_tail_) return;
+        flush_tail();
+        tail_ = std::move(staging_tail_);
+        resident_capacity_ = staging_capacity_;
     }
 
     void push_back(const void* row) {
@@ -287,9 +317,12 @@ private:
 
     std::size_t row_bytes_;
     std::size_t resident_capacity_;
+    const std::size_t staging_capacity_;
     const char* label_;
     // The staging tail: physical rows [disk_rows_, disk_rows_ + tail_size_).
     std::unique_ptr<unsigned char[]> tail_;
+    // The original fixed tail, saved while a Full batch owns a larger buffer.
+    std::unique_ptr<unsigned char[]> staging_tail_;
     // erase_if's one page, allocated at the first compaction only.
     std::unique_ptr<unsigned char[]> scratch_;
     std::uint64_t tail_size_ = 0;

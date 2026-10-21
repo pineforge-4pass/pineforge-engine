@@ -30,10 +30,10 @@ inline namespace engine_script_run_v19 {
 namespace {
 
 // E06-E09/E11/E12: the fixed staging row counts of the paged sequences this
-// consumer keeps (native_page_store.hpp). Every one is a prepared, fixed size
-// -- the rows a store holds before it spills -- never a rate, a bar count or a
-// book size. Resident memory is bounded by these counts times the row sizes,
-// whatever the run's length; the rows themselves live in the store's file.
+// consumer keeps (native_page_store.hpp). Structural Full driver batches may
+// reserve a larger write buffer for that pump alone; every other store keeps
+// its fixed tail. A completed pump flushes the Full buffer and releases it.
+// Overflow always spills; no reservation imposes a row limit.
 constexpr std::size_t kHandleStagingRows = 64;
 constexpr std::size_t kDriverStagingRows = 64;
 constexpr std::size_t kAccountStagingRows = 64;
@@ -3060,14 +3060,14 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // (source_price_time/effective_time fallbacks) or its continuation digest.
     last_price_ = 0.0;
     last_print_time_ms_ = 0;
-    // A paged log starts its next run's sequence at its first row; the file
-    // is reused, its bytes overwritten by the next flush.
-    if (driver_log_) driver_log_->clear();
+    // Drop any Full driver buffer a failed pump still held. Every new run
+    // starts with its own fixed staging tail and optional batch reservation.
+    driver_log_.reset();
     if (account_log_) account_log_->clear();
-    // v19-B: a log the run's retention does not keep holds no storage either
-    // (the staging tail and file of a previous run are released here).
+    // v19-B: a log the run's retention does not keep holds no storage either.
+    // The driver log was released above; the account log reuses its file
+    // under Full/Commands and drops both staging and file under Window.
     const NativeEventRetention kept = retention_override_.value_or(spec.event_retention);
-    if (kept != NativeEventRetention::Full) driver_log_.reset();
     if (kept == NativeEventRetention::Window) account_log_.reset();
     last_driver_ordinal_ = 0;
     last_account_ordinal_ = 0;
@@ -3434,9 +3434,9 @@ void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
     }
     last_driver_ordinal_ = point.coordinate.ordinal;
     // The driver log is a readback surface (native_events), kept only under
-    // NativeEventRetention::Full; since v19 no hash folds it. E07: it is a
-    // paged store, so its resident part is the fixed staging tail and a run
-    // with many points spills instead of growing the consumer.
+    // NativeEventRetention::Full; since v19 no hash folds it. Structural
+    // batches reserve their write buffer once; other paths keep the fixed
+    // staging tail. Both use this append path and spill at capacity.
     if (retention() == NativeEventRetention::Full) {
         page_store(driver_log_, sizeof(NativeDriverPoint), kDriverStagingRows,
                    "native driver log").push_back(&point);
@@ -3444,12 +3444,12 @@ void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
 }
 
 void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
-    // E07/E10: nothing to reserve. The driver log's resident part is the store's
-    // fixed staging tail, prepared when the store is created; its length is the
-    // run's and lives in the file. A batch's point count no longer sizes a
-    // residential buffer (and no count can be refused for being large), so a
-    // caller's projection is read and dropped.
-    (void)expected_points;
+    if (retention() != NativeEventRetention::Full) return;
+    if (expected_points <= kDriverStagingRows) return;
+    // Full readback buffers structural batches once; the hint is no row limit.
+    // Overflow and oversize hints retain the store's paged append path.
+    page_store(driver_log_, sizeof(NativeDriverPoint), kDriverStagingRows,
+               "native driver log").reserve_resident_rows(expected_points);
 }
 
 NativeEventRetention NativeExecutionConsumer::retention() const noexcept {
@@ -10602,17 +10602,9 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             consumer.subscription_input_n_ = 0;
         }
     } view(*this, bars, n);
-    // A batch knows its length, so the command history it appends to is sized
-    // for it instead of regrown by doubling, where every regrowth moves the
-    // whole log into a freshly faulted block and unmaps the old one. Capacity
-    // is not observable: no hash, readback or event reads it. A reservation
-    // the allocator refuses leaves the log growing as it always did.
-    //
-    // E07/E10: the driver log is not sized here any more. It is a paged store:
-    // its resident part is the fixed staging tail prepared with the store, and
-    // its points live in its file whatever the batch's length. A batch's point
-    // count is therefore neither a reservation nor a capacity claim, and no
-    // projected rate can refuse one.
+    // Full driver readback buffers a structural batch once. The buffer is
+    // used by record_driver, then flushed and released at the pump's end.
+    // Uncertain point counts and allocation failures keep the fixed paged tail.
     constexpr std::size_t kPresizeFactor = 16;
     const std::size_t total = n > 0 ? static_cast<std::size_t>(n) : 0;
     const std::size_t history_base = requests_.history().size();
@@ -10622,8 +10614,20 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         } catch (const std::bad_alloc&) {
         }
     };
-    // The capacity to give the command history after `consumed` inputs, or 0
-    // to leave it.
+    if (const auto* spec = spec_ptr(); spec && total > 0
+        && retention() == NativeEventRetention::Full
+        && pairing_.pairing == native_calendar::TimeframePairing::Passthrough) {
+        std::size_t per_bar = spec->intrabar.is_none() ? 4 : 0;
+        if (const auto* path = spec->intrabar.synthesized_path(); path && !path->volume_weighted)
+            per_bar = static_cast<std::size_t>(path->samples);
+        if (per_bar != 0 && spec->close_execution == NativeCloseExecution::AfterCalculation) ++per_bar;
+        const std::size_t maximum = std::numeric_limits<std::size_t>::max() / sizeof(NativeDriverPoint);
+        const auto base = driver_row_count();
+        if (per_bar != 0 && base <= maximum && total <= (maximum - base) / per_bar) {
+            hint([&] { reserve_driver_log(static_cast<std::size_t>(base) + per_bar * total); });
+        }
+    }
+    // Journal capacity after `consumed` inputs, or 0 to leave it.
     const auto presize = [total](std::size_t base, std::size_t size, std::size_t capacity,
                                  std::size_t consumed, std::size_t max_size) -> std::size_t {
         if (size <= base || size > max_size / (2 * kPresizeFactor)) return 0;
@@ -10634,13 +10638,11 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         const std::size_t wanted = std::min(projected + projected / 8, max_size);
         const std::size_t bound = size * kPresizeFactor;
         if (wanted <= bound) return wanted;
-        // At the bound, grow only once the log could not absorb another
-        // window like the one it has just recorded.
+        // At the bound, grow only when another observed window would not fit.
         return size + grown > capacity ? bound : 0;
     };
     std::size_t checkpoint = 64;
-    // At each doubling checkpoint of the inputs consumed, size the command
-    // history for the rest of the batch at the rate it has shown so far.
+    // At doubling checkpoints, size the retained journal from its observed rate.
     const auto presize_logs = [&](std::size_t consumed_inputs) {
         if (consumed_inputs != checkpoint || checkpoint >= total) return;
         const std::size_t consumed = checkpoint;
@@ -10655,11 +10657,8 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             hint([&] { requests_.reserve(events); });
         }
     };
-    // The pump compares the projected fields before its first input and after
-    // its last (v19, lane V19-C). Every boundary in between -- each input's own
-    // checks, and every callback and policy hook the inputs drive -- re-reads
-    // only the abort flag, the one thing another thread may set; a host that
-    // writes a projected field inside the pump fails at its end.
+    // v19-C: compare projection before/after the pump; internal boundaries
+    // re-read only the abort flag, the one field another thread may set.
     if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return;
     {
         PumpScope pump(*this);
@@ -10694,6 +10693,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             return;
         }
     }
+    if (driver_log_) driver_log_->release_reservation();
     (void)check_abort_or_projection(engine, NativeFailureOperation::Input);
 }
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {

@@ -354,10 +354,10 @@ public:
                            std::uint64_t& account, std::uint64_t account_end,
                            NativeMarketEvent& row) const;
     // E06/E07/E08/E09/E11/E12 witness: the rows each retained stream and queue
-    // holds, and the fixed scratch every paged store keeps whatever their
-    // length. Counts are logical (the rows a read returns), inline_bytes is
-    // storage this consumer allocates for paged sequences -- staging tails and
-    // compaction pages -- never a row count times a book, bar or event rate.
+    // holds, and all resident buffers each paged store owns. Counts are logical
+    // (the rows a read returns); inline_bytes includes staging tails,
+    // compaction pages and any active Full driver batch reservation.
+    // Completed batches release that reservation back to the fixed tail.
     struct ResidentInventory {
         // The rows each retained sequence holds (its population), not a
         // resident count: a paged sequence's rows live in its file.
@@ -366,10 +366,10 @@ public:
         std::uint64_t queued_notifications = 0;
         std::uint64_t pre_open_births = 0;
         std::uint64_t activation_births = 0;
-        // How many of those rows are in a scratch file rather than the fixed
+        // How many of those rows are in a scratch file rather than the
         // staging tail: the proof that a long population did spill.
         std::uint64_t spilled_rows = 0;
-        // The fixed scratch every paged sequence holds, whatever its length.
+        // Every resident buffer, including an active Full batch reservation.
         std::uint64_t inline_bytes = 0;
     };
     ResidentInventory resident_inventory() const noexcept;
@@ -1996,9 +1996,9 @@ private:
     // E07/E08: the driver points and account rows a readback keeps. The
     // length is the run's, not the consumer's -- one driver point per
     // waypoint or sample and one account row per fill -- so each is a paged
-    // store (native_page_store.hpp) with a fixed staging tail: O(1) resident
-    // under Full/Commands, and absent (null) under Window, exactly where the
-    // vectors used to be. Both are readback only; no hash folds them.
+    // store (native_page_store.hpp) with a fixed staging tail. Structural Full
+    // driver batches reserve one write buffer, then flush and release it.
+    // Window keeps neither log. Both are readback only; no hash folds them.
     std::unique_ptr<detail::PageStore> driver_log_;
     std::unique_ptr<detail::PageStore> account_log_;
     // V19-B: the newest driver point and account observation the run

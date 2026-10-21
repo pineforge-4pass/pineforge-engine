@@ -409,6 +409,58 @@ void cohort_receipt_window(int bars) {
     CHECK(again.rows_match);
 }
 
+// The Full batch write buffer must preserve both staged and already spilled
+// rows, then return to fixed staging without changing the logical sequence.
+void batch_write_buffer_rows() {
+    constexpr std::size_t staging = 4;
+    pineforge::detail::PageStore store(sizeof(std::uint64_t), staging, "batch buffer witness");
+    const auto fixed_bytes = store.resident_bytes();
+    std::vector<std::uint64_t> expected;
+    std::uint64_t next = 1;
+    const auto append = [&](std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::uint64_t row = next++;
+            expected.push_back(row);
+            store.push_back(&row);
+        }
+    };
+    const auto check_rows = [&] {
+        CHECK(store.size() == expected.size());
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+            std::uint64_t row = 0;
+            store.read(i, &row);
+            CHECK(row == expected[i]);
+        }
+    };
+    append(staging - 1);
+    const std::size_t reserved = 3 * staging;
+    store.reserve_resident_rows(reserved);
+    CHECK(store.resident_capacity() == reserved);
+    CHECK(store.resident_bytes() == fixed_bytes + reserved * sizeof(std::uint64_t));
+    check_rows();
+    append(2 * reserved);
+    CHECK(store.spilled_rows() > 0);
+    check_rows();
+    store.erase_prefix(staging);
+    expected.erase(expected.begin(), expected.begin() + staging);
+    const std::size_t larger = 2 * reserved;
+    store.reserve_resident_rows(larger);
+    CHECK(store.resident_capacity() == larger);
+    CHECK(store.resident_bytes() == fixed_bytes + larger * sizeof(std::uint64_t));
+    check_rows();
+    append(larger);
+    check_rows();
+    store.release_reservation();
+    CHECK(store.resident_capacity() == staging);
+    CHECK(store.resident_bytes() == fixed_bytes);
+    check_rows();
+    append(staging + 1);
+    store.release_reservation();
+    CHECK(store.resident_capacity() == staging);
+    CHECK(store.resident_bytes() == fixed_bytes);
+    check_rows();
+}
+
 }  // namespace
 
 int main() {
@@ -419,6 +471,7 @@ int main() {
     birth_lists();
     cohort_receipt_window(10);
     cohort_receipt_window(20);
+    batch_write_buffer_rows();
     std::printf("test_o1e3_consumer_pages: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

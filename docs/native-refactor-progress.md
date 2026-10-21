@@ -196,12 +196,12 @@ default `NativeEventRetention::Window` keeps no driver point and retires its
 journal at every script-bar boundary, so K4 has nothing to size.
 `reserve_driver_log` (`src/native_execution_consumer.cpp:3446-3451`) returns
 unless the retention is Full, and `presize_logs`
-(`src/native_execution_consumer.cpp:10644-10655`) sizes no journal under Window.
+(`src/native_execution_consumer.cpp:10646-10657`) sizes no journal under Window.
 `NativeRunSpec::event_retention` (`include/pineforge/native_run_spec.hpp:714`)
 defaults to Window, and the Pine adapter declares
 `NativeEventRetention::Window` (`src/source/pine_adapter.cpp:3005`). K4 still
-sizes Full runs (driver log and journal) and Commands runs (journal), and its
-witness, `tests/test_native_batch_log_presize.cpp`, runs under Full. PERF-K24's
+sizes structural Full driver buffers (O(B) peak) and retained journals; buffers spill
+after the pump. Its Full witness is `tests/test_native_batch_log_presize.cpp`. PERF-K24's
 replay figure (14.9 % less CPU on Linux aarch64) describes the tree before V19-B. In
 AUDIT4's probe an idle Window run holds 0 driver points and no block of 1 MiB
 or more, and the same run under Full holds 66,000 points in one block of

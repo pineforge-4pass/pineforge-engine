@@ -1,0 +1,6 @@
+Fix round 5 edit handoff — UNVERIFIED.
+HEAD unchanged: d675b92e588207d7a0f0e5c65274a7d6532e2ab5.
+Structural Full driver batches reserve one actual append buffer, then flush/release it.
+Paged overflow, fixed tails and all existing assertions remain.
+REPORT.md records the release/ctest cause, source audit and explicit O(B) Full peak exception.
+No build, test, script, checker, generator, staging or commit; supervisor proof is pending.
