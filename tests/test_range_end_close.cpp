@@ -134,7 +134,8 @@ public:
     using BacktestEngine::position_side_;
     using BacktestEngine::position_qty_;
     const TradeLedger& all_trades() const { return trades_; }
-    const std::vector<Trade>& range_end_rows() const { return range_end_trades_; }
+    // O1 R12: the terminal rows are rebuilt from the pinned mark, not stored.
+    const auto& range_end_rows() const { return range_end_trades_; }
     const std::vector<pf_equity_point_t>& curve() const { return equity_curve_; }
     double max_dd() const { return max_drawdown_; }
     double max_ru() const { return max_runup_; }

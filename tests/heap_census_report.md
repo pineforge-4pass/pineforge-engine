@@ -62,15 +62,16 @@ assignment, never a waiver of growth.
 | Any additional growing allocation stack | No size assumed | L19j | Full battery and every source-marked corpus validation probe |
 
 Bounded and non-production terms are not silently admitted. `range_end_trades_`
-and pyramid lots are bounded by current open lots; issued ranges, repriced rows
-and the Window command journal have existing bounds. Native/auxiliary security
+is a fixed-size terminal mark (O1W R12: report rows are rebuilt from the live
+lots, never retained) and pyramid lots are bounded by current open lots; issued
+ranges, repriced rows and the Window command journal have existing bounds. Native/auxiliary security
 copies, opt-in historical projections and Full driver logs are recorded as
 non-production in DESIGN 2.4/3.9. If any appears as a growing stack in the
 production battery/corpus, the driver reports it; it does not exempt a whole
 file or class name.
 
-Relevant declarations in the merged tree: `trades_` in include/pineforge/engine.hpp:547;
-`equity_curve_` in include/pineforge/engine.hpp:587; `closed_row_prefix_` in
+Relevant declarations in the merged tree: `trades_` in include/pineforge/engine.hpp:659;
+`equity_curve_` in include/pineforge/engine.hpp:700; `closed_row_prefix_` in
 src/native_execution_consumer.hpp:1937; `events_` in
 include/pineforge/source/market_admission.hpp:213; `OriginRoster` in
 include/pineforge/source/pine_adapter.hpp:935; the per-id cohort members in
