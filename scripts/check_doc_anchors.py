@@ -72,12 +72,12 @@ an argument list, a brace initialiser or template arguments:
     ``native_toolkit::OrderBook<Key>``            -> OrderBook
     ``Reduce{OwnerOpenedUnits{}}``                -> Reduce
 
-A span that is not identifier-shaped after that (``ticks * price_tick``, a
-path, a command line) yields **no** symbol claim; the anchor is then only
-checked for file and line existence.  Neither does a span rooted in a Pine
-namespace (``strategy.risk.max_position_size``, ``request.security``): those
-are the migration table's left column, spellings TradingView owns and the tree
-never declares.  Only the *nearest* preceding span is consulted - falling back
+A span that is not identifier-shaped after that can still claim a code
+fragment (``ticks * price_tick``, ``engine.current_bar_ = bar``), checked
+verbatim, whitespace aside, on the cited line. A path or a span rooted in a
+Pine namespace (``strategy.risk.max_position_size``, ``request.security``)
+claims neither: those Pine spellings belong to TradingView and the tree never
+declares them. Only the *nearest* preceding span is consulted - falling back
 to an earlier one would invent a claim the page did not make.
 
 A continuation list (```sym` x.cpp:10, `:20`, `:30```) shares the claim that
@@ -102,22 +102,22 @@ Ruling tables
 ADR-0001's ruling sections and the design record's inventory, coupling and
 native-only ruling sections (``RULING_SECTIONS``) are tables of *rulings*, and a
 ruling's citation is the evidence for it.  An anchor in one of their table rows
-must therefore carry a claim the gate can verify: a symbol, as everywhere, or -
-only here - a backticked code fragment (``engine.current_bar_ = bar``,
-``"pineforge-broker-state/v18"``), which must appear verbatim, whitespace
-aside, in the cited window.  A row anchor with neither is ``NOCLAIM``: without a
+must therefore carry a claim the gate can verify: a symbol or a backticked code
+fragment (``engine.current_bar_ = bar``, ``"pineforge-broker-state/v18"``),
+checked on the cited line just as in ordinary prose. A row anchor with neither
+is ``NOCLAIM``: without a
 claim, a citation that drifts onto unrelated code still passes, which is how
 design rows CT4 and RP5 and ADR rows 492, 493 and 563 came to point at
 unrelated lines while this gate said OK.
 
 Verdicts
 --------
-``OK``        file exists, line exists, and either the claimed symbol appears
-              in the cited window or no symbol was claimed.
+``OK``        file exists, line exists, and either the claimed symbol or
+              fragment appears on the cited line or no claim was required.
 ``NOFILE``    the path resolves nowhere.
 ``NOLINE``    the line (or range end) is past EOF, or the range is inverted.
-``SYMMISS``   the claimed symbol (or fragment) does not appear in the cited window.
-``SCOPE``     the symbol is in the window, but outside the brace scope of the
+``SYMMISS``   the claimed symbol (or fragment) does not appear on the cited line.
+``SCOPE``     the symbol is on the cited line, but outside the brace scope of the
               qualifier its span names.
 ``NOCLAIM``   a ruling-table anchor, or a symbol-less range anywhere, carries
               no verifiable claim.
@@ -128,15 +128,17 @@ Verdicts
 ``PINEMPTY``  a content pin over blank lines only (the empty string's hash).
 ``PINDOUBLE`` two or more pins before one anchor.
 
-The cited window is exactly ``[first, last]``. A symbol on the next line is
-outside the citation. A range without a symbol uses a backticked content hash,
-and the hash covers the cited source lines joined with ``\n``.
+The claim must appear on ``first``, for both a single-line citation and a
+range: a later occurrence in ``[first, last]`` cannot validate its start.
+The complete window still determines line bounds, comment-only checks and
+content pins. A range without a symbol or fragment uses a backticked content
+hash, which covers the cited source lines joined with ``\n``.
 
 Content pins (R5 lane H-DOCGATES)
 ---------------------------------
 A pin ```sha256:<64 hex>``` written right before an anchor ACCOMPANIES the
 claim; it never replaces it. The nearest backticked span before the pin is
-still the claim and is still checked against the window, a ruling row still
+still the claim and is still checked on the first cited line, a ruling row still
 needs its symbol or fragment, and a pinned comment window is ``COMMENTONLY``
 unless the sentence says "comment". Until this lane a pin dropped the claim and
 was compared alone, so whatever the line held passed -- a wrong line, a blank
@@ -299,7 +301,7 @@ class Anchor:
         self.borrowed = False         # a prose citation after a comma, claimless
         self.orphan = False
         self.ruling = False           # set by collect(): a row of a ruling table
-        self.fragment: str | None = None  # a ruling row's code-fragment claim
+        self.fragment: str | None = None  # a code-fragment claim, in prose or a ruling row
         self.verdict = 'OK'
         self.detail = ''
         self.suggestion: str | None = None
@@ -400,10 +402,10 @@ ANCHOR_SPAN_RE = re.compile(r'^\s*(?:' + _PATH + r')?:\d+(?:-\d+)?\s*$')
 
 
 def fragment_of(span: str | None) -> str | None:
-    """A ruling row's code fragment claim, or None when the span is no claim.
+    """A code fragment claim, or None when the span is no claim.
 
     A path, a bare ``:line`` continuation and a span with no identifier
-    character claim nothing; anything else a ruling row puts in backticks
+    character claim nothing; anything else the page puts in backticks
     before an anchor is a fragment of the cited code."""
     if not span:
         return None
@@ -567,10 +569,9 @@ def collect(page: Path, text: str) -> list[Anchor]:
     found.sort(key=lambda a: a.start)
     ruling_lines = ruling_table_lines(page, text)
     for anchor in found:
-        if anchor.doc_line in ruling_lines:
-            anchor.ruling = True
-            if anchor.symbol is None:
-                anchor.fragment = fragment_of(anchor.span)
+        anchor.ruling = anchor.doc_line in ruling_lines
+        if anchor.symbol is None:
+            anchor.fragment = fragment_of(anchor.span)
     return found
 
 
@@ -773,18 +774,17 @@ def judge(anchor: Anchor, tree: Tree) -> None:
 
     raw_hits = scoped(all_hits) or all_hits
     if anchor.verdict == 'OK':
-        window = range(anchor.first, anchor.last + 1)
-        if any(n in window for n in scoped(all_hits)):
+        if anchor.first in scoped(all_hits):
             return
-        stray = [n for n in all_hits if n in window]
-        if scopes and stray:
+        if scopes and anchor.first in all_hits:
             anchor.verdict = 'SCOPE'
             shown = ', '.join(f'{a}-{b}' for a, b in scopes)
-            anchor.detail = (f'`{anchor.symbol}` at line {stray[0]} is outside '
+            anchor.detail = (f'`{anchor.symbol}` at line {anchor.first} is outside '
                              f'`{anchor.qualifier}` (lines {shown})')
         else:
             anchor.verdict = 'SYMMISS'
-            anchor.detail = f'`{anchor.symbol}` is not in lines {anchor.first}-{anchor.last}'
+            anchor.detail = (f'`{anchor.symbol}` is not on cited line {anchor.first} '
+                             f'(lines {anchor.first}-{anchor.last})')
     if not raw_hits:
         anchor.suggestion = f'{anchor.path}:NONE  (`{anchor.symbol}` is nowhere in the file)'
         return
@@ -854,20 +854,21 @@ def judge_pins(anchor: Anchor, tree: Tree, path: Path) -> None:
 
 
 def judge_fragment(anchor: Anchor, tree: Tree, path: Path) -> None:
-    """A ruling row's code fragment must appear, whitespace aside, in the window."""
+    """A code fragment must appear, whitespace aside, on the first cited line."""
     lines = tree.lines(path)
     if anchor.verdict != 'OK':
         return
     needle = ' '.join(anchor.fragment.split())
 
-    def holds(first: int, last: int) -> bool:
-        return needle in ' '.join(' '.join(lines[first - 1:last]).split())
+    def holds(number: int) -> bool:
+        return needle in ' '.join(lines[number - 1].split())
 
-    if holds(anchor.first, anchor.last):
+    if holds(anchor.first):
         return
     anchor.verdict = 'SYMMISS'
-    anchor.detail = f'`{needle}` is not in lines {anchor.first}-{anchor.last}'
-    hits = [n for n in range(1, len(lines) + 1) if holds(n, n)]
+    anchor.detail = (f'`{needle}` is not on cited line {anchor.first} '
+                     f'(lines {anchor.first}-{anchor.last})')
+    hits = [n for n in range(1, len(lines) + 1) if holds(n)]
     if len(hits) == 1:
         end = hits[0] + anchor.length - 1
         if end <= len(lines):

@@ -468,9 +468,9 @@ byte-identical** to the spec. Conflicting values are a preflight refusal:
 spec fields.
 
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
-overload (`engine.hpp:1801-1813`) is **not** refused as a source mutation: it
+overload (`engine.hpp:1804-1816`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:10585-10635`), which admits the begin, checks the
+(`native_execution_consumer.cpp:10621-10671`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -644,7 +644,7 @@ segment, and discrete points, keep the ordinary birth gate above.
 `on_native_bar_open` fires at the modeled opening, before that point's matching
 pass (`native_execution_consumer.cpp:8127-8129`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8085`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8121`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
