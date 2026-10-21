@@ -1545,9 +1545,24 @@ public:
     std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
 
     // Diagnostic work counters, excluded from broker continuation state.
+    enum class PositionTailGuard : std::uint8_t {
+        None, Inactive, Invalidated, PublicationRewind, PublicationGap,
+        BeforeBarrier, NonmonotoneTime, MissingOrigin, ReactivatedOrigin,
+        SideMismatch, InvalidQuantity, QuantumShift, MagnitudeShift, MagnitudeOverflow,
+        InvalidCertificate, NonfiniteResult, NonPineHost, ShortSeed,
+        Amendment, Relabel, Flat, Rebind, Count
+    };
     struct PositionTailWork {
         std::uint64_t queries = 0, certified_queries = 0, fallback_queries = 0;
         std::uint64_t update_rows = 0, replay_rows = 0, origin_visits = 0;
+        // Populated only by the observation seam. Counts are cumulative
+        // within a run; observers take differences at each query.
+        std::uint64_t host_rows = 0, spill_rows = 0, replay_host_rows = 0;
+        std::uint64_t begin_updates = 0, begin_rows = 0, closed_updates = 0;
+        std::uint64_t open_updates = 0, reissue_updates = 0, reissue_rows = 0;
+        std::uint64_t sync_updates = 0, invalidations = 0;
+        std::uint64_t guard_reasons[static_cast<std::size_t>(PositionTailGuard::Count)]{};
+        PositionTailGuard guard_reason = PositionTailGuard::None;
     };
     PositionTailWork position_tail_work() const noexcept;
 

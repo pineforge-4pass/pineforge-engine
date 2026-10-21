@@ -25,6 +25,18 @@
 #include "pine_position_tail_binding.hpp"
 #include "pine_position_tail_summary.hpp"
 
+// Only an adapter TU using the existing observation seam selects the
+// counting instantiations. Normal builds select the empty diagnostic tag.
+#ifndef PINEFORGE_POSITION_TAIL_DIAGNOSTICS
+#ifdef PINEFORGE_POSITION_TAIL_OBSERVE
+#define PINEFORGE_POSITION_TAIL_DIAGNOSTICS \
+    ::pineforge::source::detail::PositionTailDiagnostics
+#else
+#define PINEFORGE_POSITION_TAIL_DIAGNOSTICS \
+    ::pineforge::source::detail::PositionTailNoDiagnostics
+#endif
+#endif
+
 #include <cerrno>
 #include <algorithm>
 #include <atomic>
@@ -1029,7 +1041,9 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 }
 
 void PineExecutionAdapter::bind(NativeStrategyHost& host) noexcept {
-    if (position_tail_summary_) position_tail_summary_->invalidate();
+    if (position_tail_summary_)
+        position_tail_summary_->invalidate(PositionTailGuard::Rebind,
+                                           PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
     host_ = &host;
     pine_view_host_ = nullptr;
     const auto* pine_host = pine_view_of(host_);
@@ -6366,7 +6380,9 @@ void PineExecutionAdapter::permute_exit_phases(std::size_t start,
                                                const std::vector<std::size_t>& indices) {
     // Both same-bar permutation and global-child re-cut use this seam,
     // including amendments which leave the closed-row count unchanged.
-    if (position_tail_summary_) position_tail_summary_->invalidate();
+    if (position_tail_summary_)
+        position_tail_summary_->invalidate(PositionTailGuard::Amendment,
+                                           PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
     const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
     const std::size_t base = host_ ? detail::run_consumer(*host_).closed_trade_prefix().base : 0;
     if (start < base)
@@ -11704,9 +11720,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     for (const auto& origin : cohort.second.live_units_by_origin)
                         include(origin.first);
                 });
-              }, completed_entry_units)
+              }, completed_entry_units, PINEFORGE_POSITION_TAIL_DIAGNOSTICS{})
             : summary.margin(physical.signed_units > 0.0,
-                             fifo_named_entry ? &from_entry : nullptr, completed_entry_units);
+                             fifo_named_entry ? &from_entry : nullptr, completed_entry_units,
+                             PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
         const auto include_completed = [&](bool is_long, std::uint64_t incarnation,
                                             bool margin_call, const auto& named_entry_matches) {
             if (is_long != (physical.signed_units > 0.0)) return false;
@@ -11725,7 +11742,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 [&](std::size_t index) -> const Trade& {
                     return host.get_trade(static_cast<int>(index));
                 }, position_tail_spill_.get(), position_open_script_bar_,
-                include_completed, from_entry, summary.work);
+                include_completed, from_entry, summary.work,
+                PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
 #ifdef PINEFORGE_POSITION_TAIL_OBSERVE
         // Test-TU observer: the reference walk is never linked into runtime.
         PINEFORGE_POSITION_TAIL_OBSERVE(completed_entry_units, certified);
@@ -24532,7 +24550,19 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     fold_source_money();
     // New rows are visible NOW, including to nested relative/prearmed
     // reissues below, while the live maps still precede the ordinary debit.
-    observe_position_tail_rows();
+    if constexpr (PINEFORGE_POSITION_TAIL_DIAGNOSTICS::enabled) {
+        if (position_tail_summary_) {
+            auto& work = position_tail_summary_->work;
+            const auto before = work.update_rows;
+            ++work.reissue_updates;
+            observe_position_tail_rows();
+            work.reissue_rows += work.update_rows - before;
+        } else {
+            observe_position_tail_rows();
+        }
+    } else {
+        observe_position_tail_rows();
+    }
     // materialize_relative_exits can submit new legs. A submission inserts
     // into placement_ and may rehash it, so no reference or iterator into
     // placement_ may survive that call.
@@ -25038,7 +25068,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 += std::abs(event.opened_units);
             if (position_tail_summary_)
                 position_tail_summary_->open_origin(
-                    event.handle().incarnation, event.opened_units > 0.0);
+                    event.handle().incarnation, event.opened_units > 0.0,
+                    PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
             if (position_tail_summary_)
                 position_tail_summary_->live_cohort(&*cohort, true);
         }
@@ -25807,7 +25838,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                                          /*dormant_rows_only=*/true,
                                          /*paired_close=*/nullptr);
         position_tail_spill_.reset();
-        if (position_tail_summary_) position_tail_summary_->invalidate();
+        if (position_tail_summary_)
+            position_tail_summary_->invalidate(PositionTailGuard::Flat,
+                                               PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
         position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
         position_open_bar_index_ = -1;
         position_open_phase_ = NativePathPhase::None;
@@ -26506,7 +26539,9 @@ int PineExecutionAdapter::short_seed_collision_role_v1(native_order::RequestHand
 bool PineExecutionAdapter::take_intraday_loss_relabel(std::uint64_t ordinal) noexcept {
     const bool relabel = intraday_loss_relabel_ordinals_.erase(ordinal) != 0;
     // The host clears exit_id immediately after this receipt is taken.
-    if (relabel && position_tail_summary_) position_tail_summary_->invalidate();
+    if (relabel && position_tail_summary_)
+        position_tail_summary_->invalidate(PositionTailGuard::Relabel,
+                                           PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
     return relabel;
 }
 
@@ -28099,12 +28134,15 @@ void PineExecutionAdapter::observe_position_tail_rows() {
     // Short-seed presentation swaps incarnations after Applied returns.
     // Non-Pine hosts can amend rows without the Pine permutation seam.
     if (!pine || short_seed_.final_short.incarnation != 0) {
-        position_tail_summary_->invalidate();
+        position_tail_summary_->invalidate(
+            !pine ? PositionTailGuard::NonPineHost : PositionTailGuard::ShortSeed,
+            PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
         return;
     }
     const auto& host = require_host();
     position_tail_summary_->observe(pine->trades_.base(), host.closed_trade_count(),
-        [&](std::size_t index) -> const Trade& { return host.get_trade(static_cast<int>(index)); });
+        [&](std::size_t index) -> const Trade& { return host.get_trade(static_cast<int>(index)); },
+        PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
 }
 
 void PineExecutionAdapter::begin_position_tail_summary() {
@@ -28112,7 +28150,9 @@ void PineExecutionAdapter::begin_position_tail_summary() {
         position_tail_summary_ = std::make_shared<detail::PositionTailSummary>();
     auto* pine = pine_view_of(host_);
     if (!pine || short_seed_.final_short.incarnation != 0) {
-        position_tail_summary_->invalidate();
+        position_tail_summary_->invalidate(
+            !pine ? PositionTailGuard::NonPineHost : PositionTailGuard::ShortSeed,
+            PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
         return;
     }
     // L18 has just reset the old spill. Replay the resident reachable suffix
@@ -28120,13 +28160,15 @@ void PineExecutionAdapter::begin_position_tail_summary() {
     const auto& host = require_host();
     position_tail_summary_->begin_position(position_open_script_bar_, pine->trades_.base(),
         host.closed_trade_count(),
-        [&](std::size_t index) -> const Trade& { return host.get_trade(static_cast<int>(index)); });
+        [&](std::size_t index) -> const Trade& { return host.get_trade(static_cast<int>(index)); },
+        PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
     const bool is_long = detail::run_position(require_host()).signed_units > 0.0;
     for (const auto& cohort : cohorts_by_id_) {
         if (cohort.second.live_units_by_origin.empty()) continue;
         position_tail_summary_->live_cohort(&cohort, true);
         for (const auto& origin : cohort.second.live_units_by_origin)
-            position_tail_summary_->open_origin(origin.first, is_long);
+            position_tail_summary_->open_origin(origin.first, is_long,
+                                                PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
     }
 }
 

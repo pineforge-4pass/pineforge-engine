@@ -70,6 +70,14 @@ public:
     std::size_t peak_sealed = 0;
     int scaled_while_open = 0;
 
+    void tail_work_phase(const char* phase) const {
+#ifdef PINEFORGE_POSITION_TAIL_WORK_PHASE
+        PINEFORGE_POSITION_TAIL_WORK_PHASE(phase, adapter_.position_tail_work(), &adapter_);
+#else
+        (void)phase;
+#endif
+    }
+
     void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             peak_resident = peak_sealed = 0;
@@ -210,10 +218,14 @@ void run_streamed(const std::vector<Bar>& bars, const ScaleOut& reference,
     // Reuse the same host to exercise run reset after the prior spill has
     // been populated and read; the second begin must open a fresh file.
     for (int pass = 0; pass < (restart ? 2 : 1); ++pass) {
+        streamed.tail_work_phase("streamed-run-begin");
         streamed.run(bars.data(), static_cast<int>(bars.size()));
+        streamed.tail_work_phase("streamed-run-end");
         require(streamed.last_error().empty(), streamed.last_error().c_str());
         Report actual;
+        streamed.tail_work_phase("streamed-report-begin");
         streamed.fill_report(&actual.value);
+        streamed.tail_work_phase("streamed-report-end");
         require(std::memcmp(&expected.metrics, &actual.value.metrics, sizeof expected.metrics) == 0,
                 "scale-out metrics differ");
         require(expected.net_profit == actual.value.net_profit
@@ -221,7 +233,9 @@ void run_streamed(const std::vector<Bar>& bars, const ScaleOut& reference,
                 "scale-out report totals differ");
         require(reference.broker_state_hash() == streamed.broker_state_hash(),
                 "scale-out terminal broker hash differs");
+        streamed.tail_work_phase("sink-compare-begin");
         equal_sink(reference, expected, path);
+        streamed.tail_work_phase("sink-compare-end");
         pf_report_sink_receipt_v1 receipt{};
         receipt.struct_size = sizeof receipt;
         receipt.version = 1;
@@ -261,10 +275,14 @@ void differential(int exits, bool long_side, bool restart, bool retaining_contro
     const auto bars = feed(exits);
     const int retained_closes = retained_origin ? exits : 0;
     ScaleOut reference(long_side, restart, retained_closes);
+    reference.tail_work_phase("reference-run-begin");
     reference.run(bars.data(), static_cast<int>(bars.size()));
+    reference.tail_work_phase("reference-run-end");
     require(reference.last_error().empty(), reference.last_error().c_str());
     Report expected;
+    reference.tail_work_phase("reference-report-begin");
     reference.fill_report(&expected.value);
+    reference.tail_work_phase("reference-report-end");
     require(reference.scaled_while_open >= exits && expected.value.trades_len >= exits,
             "scale-out reference did not generate the requested exit population");
     if (retained_origin) {

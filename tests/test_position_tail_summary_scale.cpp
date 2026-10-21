@@ -42,6 +42,9 @@ void observe(double actual, bool fast, const Work& work, const void* adapter,
     ++queries;
     if (fast) ++certified;
     else ++fallback;
+#ifdef PINEFORGE_POSITION_TAIL_WORK_REPORT
+    PINEFORGE_POSITION_TAIL_WORK_REPORT(work, adapter, fast);
+#endif
     if (!compare_old_walk) return;
 
     const auto includes = [&](bool side, std::uint64_t incarnation, bool margin,
@@ -90,7 +93,9 @@ void observe(double actual, bool fast, const Work& work, const void* adapter,
         position_tail_spill_.get(), position_open_script_bar_, cohorts_by_id_, \
         ancestry_sized_target, fifo_named_entry, from_entry, physical.signed_units > 0.0)
 #define PINEFORGE_POSITION_TAIL_BEFORE_QUERY(summary) \
-    do { if (::r11_observer::force_ordered_replay) (summary).invalidate(); } while (false)
+    do { if (::r11_observer::force_ordered_replay) \
+        (summary).invalidate(::pineforge::source::PineExecutionAdapter::PositionTailGuard::Invalidated, \
+                             PINEFORGE_POSITION_TAIL_DIAGNOSTICS{}); } while (false)
 #include "../src/source/pine_adapter.cpp"
 #undef PINEFORGE_POSITION_TAIL_BEFORE_QUERY
 #undef PINEFORGE_POSITION_TAIL_OBSERVE
@@ -101,7 +106,10 @@ void observe(double actual, bool fast, const Work& work, const void* adapter,
 #undef main
 #undef PINEFORGE_L18_SCALE_OUT_100K
 
-int main() {
+#ifndef PINEFORGE_POSITION_TAIL_SCALE_MAIN
+#define PINEFORGE_POSITION_TAIL_SCALE_MAIN main
+#endif
+int PINEFORGE_POSITION_TAIL_SCALE_MAIN() {
     try {
         using namespace r11_observer;
         reset_counts();
@@ -153,4 +161,5 @@ int main() {
         std::fprintf(stderr, "R11 scale/oracle failure: %s\n", error.what());
         return 1;
     }
+    return 0;
 }
