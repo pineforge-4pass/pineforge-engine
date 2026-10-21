@@ -438,6 +438,19 @@ class WiringTests(TempCase):
         self.assertEqual(gate.check_wiring(ROOT), [])
         self.assertEqual(self.findings(), [])
 
+    def test_a_gate_arm_with_a_time_limit_is_refused(self):
+        # ci_preflight.py pins both arms with limit None: the owner's
+        # no-time-limits rule forbids an explicit job or step time limit, so
+        # neither arm may carry `timeout-minutes` (and the real tree pins that
+        # through test_the_tree_is_wired).
+        found = self.findings(**{'.github/workflows/flat-peak.yml': [
+            ('\n    steps:\n      # The gate configures',
+             '\n    timeout-minutes: 360\n    steps:\n      # The gate configures'),
+            ('\n    steps:\n      # Credentials stay persisted',
+             '\n    timeout-minutes: 360\n    steps:\n      # Credentials stay persisted')]})
+        self.assertIn('flat-peak.yml job flat-peak-mem must not set a time limit', found)
+        self.assertIn('flat-peak.yml job flat-peak-census must not set a time limit', found)
+
     def test_ci_without_the_gate_job_is_refused(self):
         found = self.findings(**{'.github/workflows/ci.yml': [('\n  flat-peak:\n', '\n  flat-peak-renamed:\n')]})
         self.assertIn('ci.yml must call the flat-peak gate (job flat-peak)', found)

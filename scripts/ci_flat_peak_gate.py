@@ -441,8 +441,10 @@ def check_wiring(root: Path) -> list[str]:
         if any(token in run[0] for token in ('|', ';', '&&')):
             findings.append(f'flat-peak.yml job {job}: the {arm} command must stand alone '
                             '(a pipe or a chain can hide its status)')
-        if not any(line.strip().startswith('timeout-minutes') for line in jobs.get(job, [])):
-            findings.append(f'flat-peak.yml job {job} must carry the platform time limit')
+        # scripts/ci_preflight.py pins both arms with limit None: the owner's
+        # no-time-limits rule forbids an explicit job or step time limit here.
+        if any(line.strip().startswith('timeout-minutes') for line in jobs.get(job, [])):
+            findings.append(f'flat-peak.yml job {job} must not set a time limit')
 
     # ci.yml: the MAIN tier runs it, a pull request does not.
     block = job_blocks(ci).get('flat-peak')
