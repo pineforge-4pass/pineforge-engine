@@ -209,10 +209,10 @@ references; L15a must maintain these anchors and mechanically pin every current
 | Kernel instrument-feed pump: current bar, close, next open, count | `NativeExecutionConsumer::pump_instrument_subscription` `src/native_execution_consumer.cpp:10117-10173` | 357-358 |
 | Host feed lookup/delivery and column reads | `installed_symbol_feed` `src/source/pine_security_eval.cpp:1059-1068`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1291-1301`; `installed_symbol_feed` `src/source/pine_security_eval.cpp:1320-1328` | 359-360 |
 | Feed validation: bar values/order, close length/bounds, column length; configure and consumer entry points | `feed.bars` `src/native_run_spec.cpp:259-290`; `instrument_feed_shapes` `src/native_run_spec.cpp:743`; `validate_native_instrument_feeds` `src/native_run_spec.cpp:1019-1022`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9657-9660`; `validate_native_timeframe_subscriptions` `src/native_execution_consumer.cpp:9682-9685` | 361-363 |
-| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3006-3012` | 361-363; V1/V2 change 5 |
+| Adapter projection validation: use the context normalizer; host stages after lending and before projection, using a context built from its store | `normalize_projected_spec` `src/source/pine_adapter.cpp:3007-3013` | 361-363; V1/V2 change 5 |
 | Instrument-feed digest and cached/uncached continuation folds | `digest_instrument_feed_views` `src/native_run_spec.cpp:1162-1205`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:322-324`; `native_instrument_feeds_digest` `src/native_execution_consumer.cpp:2824-2825`; `native_run_spec_digest` `src/native_execution_consumer.cpp:13399-13404` | 364-365 |
-| Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:235-245`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:294-301` | 366-367 |
-| Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1191-1197` | 367-368 |
+| Staged feed counts in host state and its hash | `installed_symbol_feed` `src/source/pine_strategy_host.cpp:237-247`; `staged_.instrument_feeds` `src/source/pine_state_hash.cpp:294-301` | 366-367 |
+| Refresh of symbol-data digest and host hash fold | `refresh_symbol_data_digest` `src/source/pine_security_eval.cpp:1553-1566`; `symbol_data_digest_` `src/source/pine_state_hash.cpp:1197-1203` | 367-368 |
 | Restore/store upkeep and column-setter length check | `held.bars` `src/source/pine_security_eval.cpp:1091-1101`; `data.bars` `src/source/pine_security_eval.cpp:1433-1439` | 369-370 |
 | Lower-path preflight/validation | `NativeExecutionConsumer::preflight_intrabar_path` `src/native_execution_consumer.cpp:3278-3353` | 371,1221-1222 |
 | Lower-path digest (count first) and continuation hash | `native_intrabar_path_digest` `src/native_run_spec.cpp:891-919`; `native_intrabar_path_digest` `src/native_execution_consumer.cpp:289` | 371,1223-1224 |
@@ -236,7 +236,7 @@ metadata, validation and continuation identity remain the existing contract.
 | V2 | RESOLVED | CORE-TOP 19:24 amendment: four-operation virtual provider with nonthrowing visitor, const read context, cached count, overlapping/repeated segments, separate look-ahead and exclusive consumer ownership; eager configure component digests propagate failures (changes 1-2,4,6-9). | L15a/L16 |
 
 S1's model is the observation query, `strategy_execution_observation_v1`
-`include/pineforge/execution_observer.h:134-141`.
+`include/pineforge/execution_observer.h:141-148`.
 
 ## Lab handoff
 

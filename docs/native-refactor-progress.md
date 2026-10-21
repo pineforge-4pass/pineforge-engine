@@ -241,7 +241,7 @@ Mac's 489 and 412 and 1003 of 1249, and no Mac output moved.
 
 - **PERF-L4's retired reader slots.** `event_high_water_reader_` and
   `terminal_receipt_high_water_reader_`
-  (`include/pineforge/source/pine_adapter.hpp:2430-2431`), with their type
+  (`include/pineforge/source/pine_adapter.hpp:2431-2432`), with their type
   `ReceiptHighWaterReader`, are storage nothing reads or writes since PERF-L4:
   they keep `PineExecutionAdapter`'s layout, which is part of
   `PineStrategyHost`'s and so of the generated script's ABI. They go at the next

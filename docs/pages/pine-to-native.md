@@ -680,7 +680,7 @@ classifies its own rows by order family instead. Which leg closed a row is its
 
 Indicators and history need no translation at all: `pineforge::ta` ta.hpp:12 is
 the same numerics the adapter uses, and the header pulls only `na`, `series`
-and `window_sum` ta.hpp:2-4, so it is engine-free. `pineforge::Series<T>`
+and `window_sum` ta.hpp:4-6, so it is engine-free. `pineforge::Series<T>`
 series.hpp:94 is Pine's history operator as a fixed-capacity ring you push what
 you want to keep into. Pine's `input.*` becomes ordinary constructor
 parameters: `set_input` engine.hpp:1875 exists but its getters are protected,

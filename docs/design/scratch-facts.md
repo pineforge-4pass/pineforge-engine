@@ -32,7 +32,7 @@ additional preparation leases. Each number may be absent and proved zero is
 present. A proof requires a closed future-query surface and includes every handle
 inside pending/authority/source worksets. An unrestricted native observer or a
 bar-dependent estimate supplies no such proof, per the contract comment for
-`LiveBounds` include/pineforge/detail/scratch_facts.hpp:242-250
+`LiveBounds` include/pineforge/detail/scratch_facts.hpp:247-255
 
 Before semantic begin, after effective inputs/overrides, `decide_scratch_backend`
 returns external_history with no finite plan if any roster or live proof is
