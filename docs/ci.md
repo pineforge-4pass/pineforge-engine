@@ -1061,7 +1061,6 @@ fallback. The `prebuilt` matrix keeps its three legs and
 `runs-on: ${{ matrix.runner }}`; `linux-aarch64` retains `ubuntu-22.04-arm`
 as an existing hosted exception, while `macos-universal` retains
 `macos-latest`. The workflow remains `workflow_dispatch` only.
-A release is refused unless the released tree's merged-PR head carries `pineforge/verify` and `pineforge/parity` success, read through the statuses API (fail closed); main commits carry no statuses.
 
 The GCP fleet also routes baseline `promote` in `promote-baseline.yml`
 to `["self-hosted","pf-gcp-main"]`, preserving L6's 15:40 addendum's
@@ -1252,3 +1251,28 @@ split. Cancelled/failed jobs did skip the old compiler post-save, which reduced
 cache freshness; the new save ordering addresses that independently. The
 historical ASan startup assertion remains a separate diagnosis, and splitting
 jobs does not establish a runtime fix or dismiss a sanitizer failure.
+
+### Release guard phases
+
+The release guard requires exactly `pineforge/verify` and `pineforge/parity`
+to be `success`; lite variants never satisfy either requirement. Phase 1 is
+the **transitional** merged-PR-head path for main commits that predate the
+main watcher. It requires exactly one associated merged PR whose head tree
+matches the released tree, then reads that head's full contexts through the
+statuses API. Zero matches refuse; multiple matches refuse and name every
+matching PR, with no preference for the newest.
+
+Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
+`scripts/release_gate.py` is `None`. When C2 main-watch (#176) supplies the
+receipt reader, the cut-over is the watcher's **first recorded main sha**,
+fixed in that constant by a reviewed PR. The release job cannot configure it
+through an environment variable or workflow input. At that sha and every
+descendant, the guard requires a main-proof receipt for the **exact main
+sha** with both full contexts green and does not consult PR heads. Missing,
+unreadable or non-green receipts refuse, with no transitional fallback.
+Commits preceding the cut-over retain phase 1; unknown ancestry refuses.
+The reader seam defines normalized context states, not a receipt storage format.
+
+Every API call is a read using the release job's own App token. Rate limits
+and upstream 5xx responses refuse immediately, naming the failure, without
+sleeping or retrying; empty or unparseable evidence also refuses.
