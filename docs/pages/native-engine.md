@@ -470,7 +470,7 @@ spec fields.
 The rich `run(bars, n, input_tf, script_tf, inputs, syminfo, overrides, …)`
 overload (`engine.hpp:1801-1813`) is **not** refused as a source mutation: it
 reaches `NativeExecutionConsumer::run_rich`
-(`native_execution_consumer.cpp:10573-10623`), which admits the begin, checks the
+(`native_execution_consumer.cpp:10585-10635`), which admits the begin, checks the
 timeframe arguments against the spec, preflights and pumps the batch exactly
 like the plain overload. `inputs` / `syminfo` / `overrides` are carried only as
 `NativeBeginArgs` fields to `prepare_native_begin` — the overrides as the
@@ -502,7 +502,7 @@ five commands through `strategy_native_submit_v1` / `_replace_v1` /
 kernel from C* below.
 
 `native_order::Request` values belong to `native_order_v7`
-(`native_order.hpp:27`); identity types stay `native_order_v1`. Label/comment
+(`native_order.hpp:29`); identity types stay `native_order_v1`. Label/comment
 remain inert text. The market default path still constructs from:
 
 - `order_action::Transact{signed_units}` — finite nonzero
@@ -638,13 +638,13 @@ a host reacts to its own execution and may submit again. A request born there,
 mid-bar on a continuous segment, is eligible on the **remaining path suffix** of
 that segment — the birth is admitted at the current cursor and the geometric
 search then sees only the unconsumed suffix (`born_on_remaining_path`,
-`native_execution_consumer.cpp:6563-6567`). Requests accepted before the
+`native_execution_consumer.cpp:6575-6579`). Requests accepted before the
 segment, and discrete points, keep the ordinary birth gate above.
 
 `on_native_bar_open` fires at the modeled opening, before that point's matching
-pass (`native_execution_consumer.cpp:8079-8081`). **Lookahead warning:** the
+pass (`native_execution_consumer.cpp:8091-8093`). **Lookahead warning:** the
 `Bar` it receives is the *complete* script bar — the consumer has already set
-`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8073`), the
+`engine.current_bar_ = open_view` (`native_execution_consumer.cpp:8085`), the
 complete bar unless the spec asks for `NativeOpenBarView::OpenOnly` — so its
 high, low and close are the finished bar's, not what is known at the open. A
 host that must decide on open-only information reads
@@ -1496,7 +1496,7 @@ adapter answers `margin_check_allowed` with TradingView's scheduling — which
 includes the post-exit re-size: when a priced bracket leg of the script bar
 fills, the slice resting at that bar's adverse extreme was sized on the
 pre-exit book, and the legacy broker cancelled and re-scheduled it there
-(`margin_check_allowed` `pine_adapter.cpp:17894-17927`), so the adapter admits
+(`margin_check_allowed` `pine_adapter.cpp:17942-17975`), so the adapter admits
 the kernel's own point for that driver point while (and only while) a slice
 rests —
 `resolve_margin_requirement` with its ten-significant-digit money and
@@ -2047,11 +2047,11 @@ The kernel never drops an event its own live state still reads. A queued
 applied notification (and the margin receipt it carries) pins the window at
 its execution, a live deferred group-adjustment chain pins it at its head,
 and the rest of what the journal used to answer is state now: a request's
-replace-chain root is `RequestDefinition::root` (`native_order.hpp:738`) and
+replace-chain root is `RequestDefinition::root` (`native_order.hpp:740`) and
 the order core's chain index, which is all a cohort command reads about a
 request that is no longer working; a trail's arm ordinal
 (`NativeTrailState::activation_ordinal`) is its tracking state's
-(`TrailTrack` `native_order.hpp:652`); the FX-roll margin check reads the
+(`TrailTrack` `native_order.hpp:654`); the FX-roll margin check reads the
 last two driver points' instants; and a group-effect receipt whose outcome
 event was dropped stands on its own record. A host that wants the whole run
 after it has ended asks for `Full` (or `Commands`); the Pine adapter declares
@@ -2112,7 +2112,7 @@ default, set while no run is active — because each row is a full
 the live state, not the run's length: the closed rows enter through a running
 digest). With the switch on,
 one row follows each point, after the extremes that point just folded
-(`record_script_report_point`, `native_execution_consumer.cpp:8984`), so
+(`record_script_report_point`, `native_execution_consumer.cpp:8996`), so
 
 ```text
 broker_state_hash_len == equity_curve_len == script_bars_processed
@@ -2239,13 +2239,13 @@ under the ticket the model or the run named. A host running its own forced
 close states the cause on the row it produced.
 
 `closed_trade_close_cause(i)` (`engine.hpp:1850`) is the C++ read and
-`strategy_closed_trade_close_cause` (`pineforge.h:1309`) the C one, with the
+`strategy_closed_trade_close_cause` (`pineforge.h:1364`) the C one, with the
 same numbering: `-1` for a bad index or a NULL handle, `0` UNKNOWN, `1`
 SCRIPT, `2` BRACKET, `3` MARGIN_CALL, `4` INTRADAY_LOSS_CAP, `5`
 INTRADAY_FILL_CAP, `6` RANGE_END. A row closed at the end of the run
 (`open_at_end`) always answers `6`, ahead of every other cause. The ticket a
 row was booked under is `strategy_closed_trade_entry_id` /
-`_exit_id` / `_exit_comment` (`pineforge.h:1242-1257`), which index exactly the
+`_exit_id` / `_exit_comment` (`pineforge.h:1297-1312`), which index exactly the
 rows of `fill_report`'s trade array and take any handle this engine produces
 — including a `pf_strategy_t` from `strategy_native_host_create_v1`, which is
 how a C host reads back the ticket its own margin model declared.
@@ -3086,7 +3086,7 @@ Only completed buckets are published, so this recipe has no lookahead by
 construction. It is the same class the kernel's own subscription evaluator
 aggregates with, and the one the kernel's `script_bucket_completions` query
 feeds when the Pine scheduler asks how its input span buckets
-(`ScriptBucketCursor` `native_execution_consumer.cpp:9068`). What it does
+(`ScriptBucketCursor` `native_execution_consumer.cpp:9080`). What it does
 **not** give you is what a
 declared subscription does: an `authoritative_bars` feed, the `gaps` and
 `lookahead` delivery rules, the lazy-seal chronology, a C spelling, and the
@@ -3150,7 +3150,7 @@ These are existing refusals, not implied future features:
 - In-session gaps on a realtime stream, and in a `Canonical` stream warmup
 - Source `calc_on_every_tick` / `calc_on_order_fills` enabled (the runner
   rejects an explicit true override, and the Pine host refuses a stream begin
-  with `calc_on_order_fills`, `pine_strategy_host.cpp:304-307`). This is a
+  with `calc_on_order_fills`, `pine_strategy_host.cpp:305-308`). This is a
   **source-route** refusal, not a limit on the native hooks: `on_native_tick`
   and `on_native_applied` are delivered on a stream, and a native host's own
   `NativeRunSpec::calculation` is accepted there, where `EveryModeledPoint`
@@ -3696,7 +3696,7 @@ The Pine adapter emits `Sized` for the default-quantity entries above and no
 Pine/generated hosts derive from `pineforge::source::PineStrategyHost`, which
 derives from `NativeStrategyHost`; handwritten native hosts also derive from
 `NativeStrategyHost`. The source adapter/scheduler hash domain is
-`kSourceAdapterDomain` `pine_adapter.hpp:46`
+`kSourceAdapterDomain` `pine_adapter.hpp:47`
 (`"pineforge-source-adapter/v4"`), while the public C ABI remains version 4.
 
 The ownership switch is complete: the compatibility loop and the source

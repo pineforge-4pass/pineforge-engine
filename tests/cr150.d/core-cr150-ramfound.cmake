@@ -1,0 +1,4 @@
+list(APPEND TEST_SOURCES test_scratch_slab_layout)
+list(APPEND TEST_SOURCES test_scratch_tables_abi)
+pineforge_add_unit_test(test_scratch_slab_layout)
+pineforge_add_unit_test(test_scratch_tables_abi)

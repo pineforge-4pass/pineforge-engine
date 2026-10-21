@@ -23,6 +23,8 @@
 #include <variant>
 #include <vector>
 
+namespace pineforge::detail { class ScratchSlab; }
+
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
 
@@ -1697,6 +1699,7 @@ public:
     WorkingRequestCore(WorkingRequestCore&& other) noexcept;
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
     void set_successor_roots_directory(const std::string& directory); // After reset, before the first spill; empty uses TMPDIR or /tmp.
+    void bind_scratch_slab(const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab);
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }

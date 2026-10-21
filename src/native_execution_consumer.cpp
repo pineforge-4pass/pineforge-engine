@@ -2,13 +2,13 @@
 #include "engine_internal.hpp"
 #include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
-#include "engine_value_invalid.hpp"
 #include "native_matching.hpp"
 #include "selected_report_view.hpp"
 #include "report_sink_writer.hpp"
 #include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 #include <pineforge/timeframe.hpp>
+#include <pineforge/detail/scratch_defaults.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1741,22 +1741,39 @@ bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
 
 bool NativeExecutionConsumer::prepare_public_begin(
         BacktestEngine& engine, const NativeBeginArgs& args) {
+    if (preparing_begin_ || in_callback_ || processing_input_
+        || std::holds_alternative<NativeRunning>(state_)) {
+        const char* text = preparing_begin_ ? "native prepare_native_begin cannot reenter"
+                                            : "native begin is forbidden while running";
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
+        render(engine, text);
+        return false;
+    }
+    try {
+        auto config = engine.scratch_table_config_;
+        const auto& m = config.manifest;
+        if (config.backend == detail::ScratchTableBackend::bounded_memory
+            && m.K_q == 0 && m.B_q == 0 && m.K_e == 0 && m.B_e == 0
+            && m.K_c == 0 && m.B_c == 0 && m.U == 0 && m.B_U == 0
+            && m.V == 0 && m.B_V == 0 && m.R == 0) {
+            // Stream n is warmup, not a declared lifetime input-bar count.
+            if (args.is_stream)
+                config.manifest = detail::default_scratch_manifest();
+            else if (args.n >= 0)
+                config.manifest = detail::default_scratch_manifest(
+                    static_cast<std::uint64_t>(args.n));
+            // Invalid negative batch n keeps its existing input-validation path.
+        }
+        engine.prepare_scratch_table_run(config);
+    } catch (const std::exception& e) {
+        render_exception(engine, e);
+        return false;
+    }
     interval_cache_.clear();
-    // The run before's day labels read nothing of this run's begin; this
-    // run's are prepared once its feeds are installed (prepare_day_labels).
     day_labels_.clear();
-    // Borrowed for the length of this begin call only: begin_ready needs the
-    // caller's own input array to prepare declared higher-timeframe series.
     begin_bars_ = args.bars;
     begin_n_ = args.n;
     begin_is_stream_ = args.is_stream;
-    if (preparing_begin_) {
-        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
-        render(engine, "native prepare_native_begin cannot reenter");
-        return false;
-    }
-    // The run's one downcast: every callback site reads it back through
-    // native_host().
     downcast_engine_ = &engine;
     downcast_host_ = dynamic_cast<NativeStrategyHost*>(&engine);
     auto* host = downcast_host_;
@@ -1767,10 +1784,6 @@ bool NativeExecutionConsumer::prepare_public_begin(
     } catch (const std::exception& e) {
         pending_bar_views_ = {};
         preparing_begin_ = false;
-        // A provider's begin-time validation is a public-entry refusal.  It
-        // has not started a native run or consumed an identity, so preserve a
-        // reusable Unconfigured/Completed host just as other begin refusals
-        // do. Callback exceptions after begin_ready remain terminal.
         render_exception(engine, e);
         return false;
     } catch (...) {
@@ -2935,12 +2948,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // same values from this generic driver.
     engine.diag_magnifier_sub_bars_processed_ = 0;
     engine.diag_magnifier_sample_ticks_processed_ = 0;
-    // The report's "was a magnifier active for this run": exactly when the
-    // spec declares an intrabar path, which is when this consumer walks one
-    // (driver_statistics_.intrabar_path_enabled below). Reporting only; a
-    // host that keeps its own notion of the flag rewrites it in its callbacks.
+    // Report-only: did this spec declare an intrabar path? The consumer walks
+    // that path (driver_statistics_.intrabar_path_enabled below) for any host.
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
+    requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
@@ -13314,6 +13326,28 @@ void ScriptBucketCursor::reset() {
 std::int64_t NativeExecutionConsumer::subscription_next_input_ms(int index) const noexcept {
     return subscription_input_bars_ && index >= 0 && index < subscription_input_n_ - 1
         ? subscription_input_bars_[index + 1].timestamp : 0;
+}
+
+// Called only after the consumer's read-only lifecycle/reentry guards and
+// before its first cache or provider mutation. The caller snapshots policy
+// once; this helper never reads configuration or an environment variable.
+// Old backend bindings retain their owner until reset/readers retire.
+void BacktestEngine::prepare_scratch_table_run(const detail::ScratchTableConfig& config) {
+    std::shared_ptr<detail::ScratchSlab> next;
+    switch (config.backend) {
+    case detail::ScratchTableBackend::disk_scratch:
+        break;
+    case detail::ScratchTableBackend::bounded_memory:
+        // Check arithmetic before even the shared-owner metadata allocation.
+        // The constructor rechecks standalone callers and zeroes the backing
+        // allocation before publication. bad_alloc remains out_of_memory.
+        (void)detail::compute_layout(config.manifest);
+        next = std::make_shared<detail::ScratchSlab>(config.manifest);
+        break;
+    default:
+        throw detail::ScratchCapacityError(detail::ScratchResource::layout);
+    }
+    scratch_table_run_.slab = std::move(next);
 }
 
 }  // inline namespace engine_script_run_v19

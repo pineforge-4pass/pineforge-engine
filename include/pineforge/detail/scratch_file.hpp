@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_slab.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -17,17 +18,9 @@
 
 namespace pineforge::detail {
 
-// Keep the errno and std::system_error contract of the successor-root file,
-// and carry the run's typed scratch-I/O failure through the ordinary catcher.
-class ScratchIoError final : public std::system_error, public RunFailureInfo {
-public:
-    ScratchIoError(int error, const char* operation)
-        : std::system_error(error, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
-};
-
-// Run-owned, anonymous, close-on-exec scratch. All reads/writes are positional;
-// no shared cursor, global descriptor, mapping, or growing userspace buffer.
+// Run-owned positional scratch: an anonymous, close-on-exec file for an empty
+// owner, or checked slab copies when bound. No shared cursor, global descriptor,
+// mapping, cached byte view, or growing userspace backing buffer.
 class ScratchFile {
 public:
     ScratchFile() = default;
@@ -39,10 +32,24 @@ public:
             clear();
             fd_ = std::exchange(other.fd_, -1);
             directory_ = std::move(other.directory_);
+            slab_ = std::move(other.slab_);
+            resource_ = other.resource_;
         }
         return *this;
     }
     ~ScratchFile() { clear(); }
+
+    // Binding is a begin/reset operation. Keep shared ownership, never a byte
+    // view: every access below goes through the slab's checked copy API.
+    void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
+        if (slab) (void)slab->region(resource);
+        clear();
+        slab_ = slab;
+        resource_ = resource;
+        if (slab_) slab_->reset(resource_);
+    }
+    const std::shared_ptr<ScratchSlab>& scratch_owner() const noexcept { return slab_; }
+    ScratchResource scratch_resource() const noexcept { return resource_; }
 
     void set_directory(const std::string& value) {
         if (fd_ >= 0 && directory_ != value)
@@ -52,8 +59,12 @@ public:
     void clear() noexcept {
         if (fd_ >= 0) ::close(fd_);
         fd_ = -1;
+        // resource_ was validated at bind. Clearing reuses the same allocation
+        // and binding; a later empty-owner bind explicitly restores disk mode.
+        if (slab_) slab_->reset(resource_);
     }
     void open(const char* prefix) {
+        if (slab_) return;
         if (fd_ >= 0) return;
         const char* temporary = std::getenv("TMPDIR");
         std::string name = directory_.empty()
@@ -81,6 +92,10 @@ public:
             throw ScratchIoError(EFBIG, "scratch offset exhausted");
     }
     void write(std::uint64_t offset, const void* data, std::size_t length) {
+        if (slab_) {
+            slab_->write_at(resource_, offset, data, length);
+            return;
+        }
         check_extent(offset, length);
         const auto* bytes = static_cast<const unsigned char*>(data);
         std::size_t written = 0;
@@ -95,6 +110,10 @@ public:
         }
     }
     void read(std::uint64_t offset, void* data, std::size_t length) const {
+        if (slab_) {
+            slab_->read_at(resource_, offset, data, length);
+            return;
+        }
         check_extent(offset, length);
         auto* bytes = static_cast<unsigned char*>(data);
         std::size_t received = 0;
@@ -112,5 +131,9 @@ public:
 private:
     int fd_ = -1;
     std::string directory_;
+    // Physical backing only; logical table records and hash folds are shared
+    // by both backends. No region base/payload pointer is retained here.
+    std::shared_ptr<ScratchSlab> slab_;
+    ScratchResource resource_ = ScratchResource::cohort;
 };
 } // namespace pineforge::detail

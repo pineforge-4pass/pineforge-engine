@@ -849,7 +849,6 @@ std::unique_ptr<PlacementSnapshot> PlacementTable::take(std::uint64_t incarnatio
 }
 
 void PlacementTable::remember_erased(const PlacementSnapshot& row) {
-    fold_sequence(erased_minima_, row);
     if (row.family != PineOrderFamily::Margin && erased_foreign_ids_.size() < 3
         && std::find(erased_foreign_ids_.begin(), erased_foreign_ids_.end(), row.source_id)
             == erased_foreign_ids_.end()) {
@@ -900,27 +899,28 @@ void PlacementTable::compact() {
 
 std::uint64_t PlacementTable::command_sequence_for(const std::string& source_id,
                                                    const std::string& from_entry) const {
-    for (const auto incarnation : unfolded_) {
-        if (const PlacementSnapshot* row = locate(incarnation)) fold_sequence(sequence_index_, *row);
-    }
-    // The pending ids are folded now; release their storage so an erased
-    // history cannot leave a capacity-sized allocation behind.
-    std::vector<std::uint64_t>().swap(unfolded_);
     constexpr auto absent = std::numeric_limits<std::uint64_t>::max();
     bool known = false;
     std::uint64_t any = absent;
     bool paired_known = false;
     std::uint64_t paired = absent;
-    const Minima* const indexes[] = {&sequence_index_, &erased_minima_};
-    for (const Minima* index : indexes) {
-        const auto minima = index->lookup(source_id);
-        if (!minima) continue;
+    visit_rows([&](std::uint64_t, const PlacementSnapshot& row) {
+        if (row.source_id != source_id) return false;
+        known = true;
+        any = std::min(any, row.command_sequence);
+        if (row.from_entry == from_entry) {
+            paired_known = true;
+            paired = std::min(paired, row.command_sequence);
+        }
+        return false;
+    });
+    if (const auto minima = erased_minima_.lookup(source_id)) {
         known = true;
         any = std::min(any, *minima);
-        const auto pair = index->lookup(source_id, from_entry);
-        if (!pair) continue;
-        paired_known = true;
-        paired = std::min(paired, *pair);
+        if (const auto pair = erased_minima_.lookup(source_id, from_entry)) {
+            paired_known = true;
+            paired = std::min(paired, *pair);
+        }
     }
     if (!known) return absent;
     if (paired_known && paired != absent) return paired;
@@ -3019,6 +3019,8 @@ std::uint64_t PineExecutionAdapter::key_for(const SourceId& left, const SourceId
 }
 
 native_order::CohortHandle PineExecutionAdapter::cohort_for(const SourceId& id) {
+    // Read index bytes before find can spill and before the host issues a handle.
+    cohorts_by_id_.require_insert(id);
     auto found = cohorts_by_id_.find(id);
     if (found != cohorts_by_id_.end()) return found->second.handle;
     CohortFacts facts;
@@ -3652,14 +3654,16 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     if (exit_phase_final_ < phase_base)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "exit-phase fold precedes the sealed prefix");
-    for (; exit_phase_final_ < phase_base + trade_exit_phase_.size(); ++exit_phase_final_) {
-        exit_phase_digest_ = fold_exit_phase(exit_phase_digest_,
-                                             trade_exit_phase_.at(exit_phase_final_ - phase_base));
-    }
-    detail::run_consumer(require_host()).finish_exit_phase_restart();
+    const auto finish_phases = [&] {
+        for (; exit_phase_final_ < phase_base + trade_exit_phase_.size(); ++exit_phase_final_) {
+            exit_phase_digest_ = fold_exit_phase(exit_phase_digest_,
+                                                 trade_exit_phase_.at(exit_phase_final_ - phase_base));
+        }
+        detail::run_consumer(require_host()).finish_exit_phase_restart();
+    };
     const bool retain_rows = detail::retain_retired_rows();
     // Every live handle has a row; nothing beyond them means nothing retired.
-    if (placement_.size() <= live_handles_.size()) return;
+    if (placement_.size() <= live_handles_.size()) { finish_phases(); return; }
     const int interval = context.coordinate.interval_index;
     const std::int64_t cycle = current_position_cycle_;
 
@@ -3809,10 +3813,10 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     if (!unpinned) release_superseded();
     // Quiet bars stop before gathering roots. Market-add marks still need
     // the full pass to prune them against the roots.
-    if (market_pyramid_adds_.empty() && !unpinned && released.empty()) return;
+    if (market_pyramid_adds_.empty() && !unpinned && released.empty()) { finish_phases(); return; }
     // Only a host whose kernel can say what it still works erases a row.
     IExecutionConsumer* consumer = bound_consumer();
-    if (!consumer) return;
+    if (!consumer) { finish_phases(); return; }
     const auto& core = as_native_consumer(*consumer).request_core();
 
     auto& roots = sweep.roots;
@@ -3926,12 +3930,6 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     root(short_seed_long_candidate_.incarnation);
     std::sort(roots.begin(), roots.end());
     roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
-    // Only an open lot or working request can still ask for a market-add mark.
-    for (auto mark = market_pyramid_adds_.begin(); mark != market_pyramid_adds_.end();) {
-        if (std::binary_search(roots.begin(), roots.end(), *mark)) ++mark;
-        else mark = market_pyramid_adds_.erase(mark);
-    }
-
     // Live rows supply K7/K8; K1's unwithdrawn current-cycle lifecycles
     // supply the K2/K3 revival candidates.
     for (const auto& handle : live_handles_) {
@@ -4040,6 +4038,20 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         doomed.push_back(incarnation);
         return false;
     });
+    // The entire retirement workset, before phase/digest publication, mark
+    // pruning, bracket consumed facts, cohort sides or the first row removal.
+    // The workset contains handles only; the ticket borrows the retained rows.
+    if (!retain_rows) {
+        placement_.preflight_erased_rows([&](const auto& emit) {
+            for (const auto incarnation : doomed) emit(placement_.at(incarnation));
+        });
+    }
+    finish_phases();
+    // Only an open lot or working request can still ask for a market-add mark.
+    for (auto mark = market_pyramid_adds_.begin(); mark != market_pyramid_adds_.end();) {
+        if (std::binary_search(roots.begin(), roots.end(), *mark)) ++mark;
+        else mark = market_pyramid_adds_.erase(mark);
+    }
     if (doomed.empty()) return;
 
     for (const auto incarnation : doomed) {
@@ -4387,6 +4399,9 @@ void PineExecutionAdapter::activate_short_seed_plan_at_open(const NativeDecision
 std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key) {
+    // The accepted opening appends its cohort below. Hold the complete node
+    // ticket before any host submit/replace or source placement/origin write.
+    if (opening) cohorts_by_id_.require_insert(snapshot.source_id);
     auto& host = require_host();
     // A core-sized opening freezes its basis at the execution point the CORE
     // sees when it accepts the command; the source froze the same rule when
@@ -6377,6 +6392,7 @@ void PineExecutionAdapter::note_exit_rank_key(const SourceId& id) {
         // The recorded population remains capped at 27 keys, as before.
         return;
     }
+    exit_rank_keys_.require_insert(id);
     exit_rank_keys_.insert(id, static_cast<std::uint32_t>(exit_rank_keys_.size()));
     const std::uint64_t size = id.size();
     exit_rank_keys_digest_ = fnv_append(exit_rank_keys_digest_, &size, sizeof(size));
@@ -6629,6 +6645,7 @@ native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bo
     // HostSized, but the generic book authority remains the whole physical
     // position rather than a synthetic empty cohort.
     if (id.empty()) return native_order::Independent{};
+    cohorts_by_id_.require_insert(id);
     // pine_fills.cpp:7669-7675 uses from_entry as a position-cycle existence
     // gate under FIFO; the actual reduction still consumes the global physical
     // roster.  ANY alone selects the named cohort as the settlement scope.
@@ -7214,6 +7231,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
 void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double limit_price,
                                        double stop_price, double qty, const std::string& comment,
                                        const std::string& oca_name, int oca_type, int qty_type) {
+    require_cohort_ticket(&id);
     native_order::Request request;
     // An infinite quantity trades the default quantity, as na does (lab tv
     // tailc-a-qty-nonfinite2: +-Infinity and na legs all enter at the
@@ -9681,6 +9699,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    require_cohort_ticket();
     record_close_first(!immediately && !std::isfinite(qty)
                        && (!std::isfinite(qty_percent) || qty_percent >= 100.0)
                        && (id.empty() || open_lot_of(id)));
@@ -10590,6 +10609,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
 
 void PineExecutionAdapter::close_all() {
     if (intraday_loss_orders_blocked()) return;
+    require_cohort_ticket();
     reroute_fixed_entries_before_request();
     const double held = detail::run_position(require_host()).signed_units;
     if (held == 0.0) return;
@@ -11093,6 +11113,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    const bool cohort_candidate = !from_entry.empty()
+        && (!std::isnan(limit_price) || !std::isnan(stop_price)
+            || !std::isnan(profit_ticks) || !std::isnan(loss_ticks)
+            || !std::isnan(trail_points) || !std::isnan(trail_price));
+    require_cohort_ticket(cohort_candidate ? &from_entry : nullptr);
     reroute_fixed_entries_before_request();
     if (!from_entry.empty()) {
         const auto token = named_entry_cancel_tokens_.find(from_entry);
@@ -13410,6 +13435,7 @@ void PineExecutionAdapter::materialize_pending_bracket_legs(
 
 void PineExecutionAdapter::release_delayed_orders(
         bool explicit_brackets_only, double current_open) {
+    require_cohort_ticket();
     auto delayed = std::move(delayed_market_orders_);
     delayed_market_orders_.clear();
     for (auto& order : delayed) {
@@ -13465,6 +13491,7 @@ void PineExecutionAdapter::release_delayed_orders(
 }
 
 void PineExecutionAdapter::flush_pending_entries() {
+    require_cohort_ticket();
     // Quiet (pine_quiet_bar.hpp): no delayed order, same-bar batch or held
     // entry is queued; the batch's close total is still reset, as the flush
     // below always does.
@@ -13561,6 +13588,7 @@ void PineExecutionAdapter::flush_pending_entries() {
 }
 
 void PineExecutionAdapter::reroute_fixed_entries_before_request(bool invalidate_batch) {
+    require_cohort_ticket();
     const auto point = detail::callback_point(require_host());
     if (!point) return;
     const auto script_open = point->decision.script_bar_open_ms;
@@ -13631,6 +13659,7 @@ void PineExecutionAdapter::reroute_incomplete_fixed_batch(bool invalidate_batch)
 
 void PineExecutionAdapter::flush_pending_same_bar_commands(
         bool flat_pair_follows, bool invalidate_batch) {
+    require_cohort_ticket();
     reroute_incomplete_fixed_batch(invalidate_batch);
     std::vector<PendingSameBarCommand> queued;
     queued.swap(pending_same_bar_commands_);
@@ -14679,6 +14708,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    require_cohort_ticket(&id);
     reroute_fixed_entries_before_request();
     // ab9714be pine_strategy_commands.cpp:2120-2203: strategy.order appends to pending book after earlier script commands
     if (!pending_same_bar_commands_.empty()) {
@@ -16432,7 +16462,43 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_source_terms(
     return result;
 }
 
+bool PineExecutionAdapter::partial_exit_sibling_live(
+        const PlacementSnapshot& source, native_order::RequestHandle target) const {
+    return std::any_of(live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+        if (handle == target) return false;
+        const auto sibling = placement_.find(handle.incarnation);
+        if (sibling == placement_.end()) return false;
+        const auto family = sibling->second.family;
+        // One bracket's stop/limit/trail legs are one owner order. Keep the
+        // existing consumed-cycle predicate, shared with on_applied below.
+        if (sibling->second.command_sequence == source.command_sequence
+            && sibling->second.bracket_origin == source.bracket_origin) return false;
+        return sibling->second.source_id == source.source_id
+            && sibling->second.from_entry == source.from_entry
+            && (family == PineOrderFamily::ExitLimit || family == PineOrderFamily::ExitStop
+                || family == PineOrderFamily::ExitTrail);
+    });
+}
+
+void PineExecutionAdapter::preflight_id_pair_precommit(const NativePrecommitView& view) const {
+    if (view.settlement_readiness != execution::Status::Applied
+        || !(view.inspected_closed_units > 0.0) || view.account.signed_units_after == 0.0)
+        return;
+    const auto found = placement_.find(view.target.incarnation);
+    if (found == placement_.end()) return;
+    const auto& source = found->second;
+    if ((source.family != PineOrderFamily::ExitLimit && source.family != PineOrderFamily::ExitStop
+         && source.family != PineOrderFamily::ExitTrail)
+        || !((std::isfinite(source.requested_qty) && source.requested_qty > 0.0)
+             || (std::isfinite(source.qty_percent) && source.qty_percent < 100.0 - 1e-9))
+        || partial_exit_sibling_live(source, view.target)) return;
+    // Still ONE single-string key with one separator. This borrowed view
+    // performs no allocation, publication or financial/source mutation.
+    consumed_partial_exit_cycles_.preflight_joined_single(source.source_id, '\x1f', source.from_entry);
+}
+
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
+    require_tree_precommit(view);
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot != placement_.end()) {
         const auto& source = snapshot->second;
@@ -16581,6 +16647,9 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             }
         }
     }
+    // All exit-specific refusal gates above have passed. A storage refusal
+    // is a coded exception, never a trading-policy Refuse verdict.
+    preflight_id_pair_precommit(view);
     if (!view.account.would_open) return NativePrecommitVerdict::Admit;
     if (snapshot == placement_.end()) return NativePrecommitVerdict::Refuse;
     const auto& source = snapshot->second;
@@ -21627,6 +21696,7 @@ void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
 }
 
 void PineExecutionAdapter::admit_deferred_open_marketable_sells() {
+    require_cohort_ticket();
     auto queued = std::move(deferred_open_marketable_sells_);
     deferred_open_marketable_sells_.clear();
     std::stable_sort(queued.begin(), queued.end(),
@@ -24850,27 +24920,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 exit_tombstones_[placement_snapshot->source_id + "\x1f"
                                  + placement_snapshot->from_entry] = origin;
         }
-        const bool sibling_leg_still_live = std::any_of(
-            live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
-                if (handle == event.handle()) return false;
-                const auto sibling = placement_.find(handle.incarnation);
-                if (sibling == placement_.end()) return false;
-                const auto family = sibling->second.family;
-                // ab9714be pine_fills.cpp:7012-7024 counts other PENDING
-                // ORDERS with the id (a second binding); the stop/limit/trail
-                // legs of one strategy.exit call are one owner order, so a
-                // same-bracket leg the fill is about to OCA-retire is not a
-                // surviving sibling.
-                if (sibling->second.command_sequence == placement_snapshot->command_sequence
-                    && sibling->second.bracket_origin == placement_snapshot->bracket_origin)
-                    return false;
-                return sibling->second.source_id == placement_snapshot->source_id
-                    && sibling->second.from_entry == placement_snapshot->from_entry
-                    && (family == PineOrderFamily::ExitLimit
-                        || family == PineOrderFamily::ExitStop
-                        || family == PineOrderFamily::ExitTrail);
-            });
-        if (!sibling_leg_still_live) {
+        // ab9714be pine_fills.cpp:7012-7024: other pending orders with this
+        // id count as siblings; same-bracket legs are one owner order.
+        if (!partial_exit_sibling_live(*placement_snapshot, event.handle())) {
             consumed_partial_exit_cycles_.insert_or_assign(
                 placement_snapshot->source_id + "\x1f" + placement_snapshot->from_entry,
                 current_position_cycle_);
@@ -28174,9 +28226,7 @@ PineExecutionAdapter::CohortFacts::restore_record(const Record& row) {
     if (row.handle == 0 || static_cast<std::uint64_t>(
             static_cast<std::size_t>(row.origin_count)) != row.origin_count
         || row.erased_sides > 3) {
-        throw coded<std::runtime_error>(
-            RunFailureCode::report_sink_failed, {},
-            ::pineforge::detail::ScratchIoError(EIO, "scratch cohort invalid record").what());
+        ::pineforge::detail::raise_scratch_io_error(EIO, "scratch cohort invalid record");
     }
     CohortFacts facts;
     facts.handle.value = row.handle;
@@ -28225,8 +28275,12 @@ PineExecutionAdapter::require_cohort(const SourceId& id) {
 namespace pineforge::source {
 
 void PlacementTable::set_auxiliary_tables_directory(const std::string& directory) {
-    sequence_index_.set_directory(directory);
     erased_minima_.set_directory(directory);
+}
+
+void PlacementTable::bind_auxiliary_scratch_tables(const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab) {
+    erased_minima_.bind_scratch_tables(slab, ::pineforge::detail::ScratchResource::erased_data,
+                                      ::pineforge::detail::ScratchResource::erased_index);
 }
 
 void PlacementTable::fixture_use_memory_auxiliary_tables() {
@@ -28234,12 +28288,11 @@ void PlacementTable::fixture_use_memory_auxiliary_tables() {
         throw coded<std::logic_error>(
             RunFailureCode::engine_invariant, {},
             "placement auxiliary fixture backend changed after use");
-    sequence_index_.fixture_use_memory_reference();
     erased_minima_.fixture_use_memory_reference();
 }
 
 std::uint64_t PlacementTable::auxiliary_disk_bytes() const noexcept {
-    return sequence_index_.disk_bytes() + erased_minima_.disk_bytes();
+    return erased_minima_.disk_bytes();
 }
 
 // Part C's name for the merged binding: set_id_tables_directory above binds
@@ -28255,6 +28308,71 @@ void PineExecutionAdapter::fixture_use_memory_auxiliary_tables() {
 
 std::uint64_t PineExecutionAdapter::fixture_auxiliary_disk_bytes() const noexcept {
     return placement_.auxiliary_disk_bytes() + consumed_partial_exit_cycles_.disk_bytes();
+}
+
+} // namespace pineforge::source
+
+#include "../scratch_table_binders.hpp"
+#include <pineforge/run_failure.hpp>
+
+namespace pineforge::detail {
+
+// The tree and IdPair lanes fill their respective backend-owned seams;
+// the foundation's begin calls and binder declarations remain unchanged.
+void bind_tree_scratch_tables(source::PineExecutionAdapter& adapter,
+                              const std::shared_ptr<ScratchSlab>& slab) {
+    // Refuse a late rebind before either table can change backing/bytes.
+    if (adapter.cohorts_by_id_.size() != 0 || adapter.exit_rank_keys_.size() != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "tree scratch backend changed after use");
+    adapter.cohorts_by_id_.bind_scratch(slab, ScratchResource::cohort);
+    adapter.exit_rank_keys_.bind_scratch(slab, ScratchResource::exit_rank);
+}
+
+void bind_id_pair_scratch_tables(source::PineExecutionAdapter& adapter,
+                                 const std::shared_ptr<ScratchSlab>& slab) {
+    adapter.placement_.bind_auxiliary_scratch_tables(slab);
+    adapter.consumed_partial_exit_cycles_.bind_scratch_tables(
+        slab, ScratchResource::consumed_data, ScratchResource::consumed_index);
+}
+
+} // namespace pineforge::detail
+
+namespace pineforge::source {
+
+void PineExecutionAdapter::require_cohort_ticket(const SourceId* prospective) const {
+    cohorts_by_id_.require_inserts([&](auto&& visit) {
+        if (prospective) visit(*prospective);
+        for (const auto& row : pending_same_bar_commands_)
+            if (row.opening) visit(row.snapshot.source_id);
+        for (const auto& row : pending_entries_) visit(row.snapshot.source_id);
+        for (const auto& row : pending_coof_requests_)
+            if (row.opening) visit(row.snapshot.source_id);
+        for (const auto& row : delayed_market_orders_)
+            if (row.snapshot.family == PineOrderFamily::Entry
+                || row.snapshot.family == PineOrderFamily::Order)
+                visit(row.snapshot.source_id);
+        for (const auto& row : deferred_open_marketable_sells_) visit(row.snapshot.source_id);
+    });
+}
+
+void PineExecutionAdapter::require_exit_rank_key(const SourceId& id) const {
+    // Preserve the 27/28 cutoff: an ignored 28th key needs no ticket, even
+    // when its string would exceed the admitted aggregate byte allowance.
+    if (exit_rank_keys_.size() > 26) return;
+    exit_rank_keys_.require_insert(id);
+}
+
+void PineExecutionAdapter::require_tree_precommit(const NativePrecommitView& view) const {
+    // The kernel calls PRECOMMIT only for an Applied-ready candidate, before
+    // financial effects. Capacity is a coded infrastructure exception, never
+    // a trading Refuse. This mirrors note_exit_rank_key's on_applied predicate.
+    if (!view.account.would_open || view.inspected_opened_units == 0.0) return;
+    const auto row = placement_.find(view.target.incarnation);
+    if (row != placement_.end()
+        && (row->second.family == PineOrderFamily::Entry
+            || row->second.family == PineOrderFamily::Order))
+        require_exit_rank_key(row->second.source_id);
 }
 
 } // namespace pineforge::source

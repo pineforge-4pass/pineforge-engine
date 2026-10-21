@@ -8,6 +8,7 @@
 #include "../engine_internal.hpp"
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
+#include "../scratch_table_binders.hpp"
 #include "pine_host_reads.hpp"
 #include "pine_intent_state.hpp"
 #include "pine_quiet_bar.hpp"
@@ -327,11 +328,11 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
-    // Source placement evidence is retained by request incarnation so a
-    // re-issued bracket can preserve its exact historical projection.  Batch
-    // callers already disclose their bar count here; reserve the ordinary
-    // two-leg-per-bar capacity once instead of repeatedly rehashing that
-    // durable table during a long replay.
+    const auto& scratch = scratch_tables_for_run();
+    ::pineforge::detail::bind_tree_scratch_tables(adapter_, scratch);
+    ::pineforge::detail::bind_id_pair_scratch_tables(adapter_, scratch);
+    // Reserve placement evidence by incarnation once for the disclosed batch:
+    // two legs per bar, including re-issued brackets' historical projections.
     if (args.n > 0 && static_cast<std::size_t>(args.n)
         <= adapter_.placement_.max_size() / 2U) {
         adapter_.placement_.reserve(static_cast<std::size_t>(args.n) * 2U);
@@ -868,8 +869,9 @@ std::optional<double> source::PineStrategyHost::resolve_anchored_level(
 
 NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         const NativePrecommitView& view) const {
+    const auto verdict = adapter_.validate_precommit(view);
     precommit_held_units_ = std::abs(detail::run_position(*this).signed_units);
-    return adapter_.validate_precommit(view);
+    return verdict;
 }
 
 void source::PineStrategyHost::configure_pine_strategy(const PineStrategyConfig& config) {

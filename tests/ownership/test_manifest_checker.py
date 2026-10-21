@@ -319,18 +319,23 @@ class ManifestCheckerTests(unittest.TestCase):
         self.reject("sink-mapping", "source.admit_strategy_entry: fields/reasons differ from code")
 
     def test_catalog_code_missing_from_manifest_is_rejected(self):
-        self.doc["catalog"]["codes"] = [row for row in self.doc["catalog"]["codes"]
-                                         if row["code"] != "outputs_limit"]
-        self.reject("catalog-set", "missing outputs_limit")
+        rows = self.doc["catalog"]["codes"]
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                self.doc["catalog"]["codes"] = [row for row in rows if row["code"] != code]
+                self.reject("catalog-set", f"missing {code}")
 
     def test_catalog_registry_missing_code_is_rejected(self):
         self.copy_tree()
         path = self.root / "src/run_failure_registry.inc"
         text = path.read_text(encoding="utf-8")
-        text, changed = re.subn(r'^\s*\{"outputs_limit",[^\n]*\n', "", text, flags=re.M)
-        self.assertEqual(changed, 1)
-        path.write_text(text, encoding="utf-8")
-        self.reject("registry-set", "stale outputs_limit", copied_tree=True)
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                changed_text, changed = re.subn(
+                    r'^\s*\{"' + re.escape(code) + r'",[^\n]*\n', "", text, flags=re.M)
+                self.assertEqual(changed, 1)
+                path.write_text(changed_text, encoding="utf-8")
+                self.reject("registry-set", f"stale {code}", copied_tree=True)
 
     def test_unknown_producer_field_is_rejected_by_vocabulary(self):
         # Killer for vocabulary-check-disabled, even if another check also fails.

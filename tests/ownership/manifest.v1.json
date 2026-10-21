@@ -235,7 +235,7 @@
     "file": "docker/run_failure_codes.json",
     "registry": "src/run_failure_registry.inc",
     "registry_sentinel": "",
-    "reconciliation": "Appendix C has 38 existing and 23 window/new rows. The actual catalog adds outputs_limit, outputs_rejected, and window_pruner_unsupported: 64 named codes, with one unnamed registry sentinel giving 65 registry entries. The plan's 40+24 groups those two outputs extensions with existing and the pruner extension with window. Neither counts nor groups substitute for exact set comparisons.",
+    "reconciliation": "Appendix C has 38 existing and 23 window/new rows. The actual catalog adds outputs_limit, outputs_rejected, window_pruner_unsupported, report_sink_failed, scratch_capacity_exceeded, and scratch_io_failed: 67 named codes, with one unnamed registry sentinel giving 68 registry entries. The plan's 40+24 groups those two outputs extensions with existing and the pruner extension with window; the sink and table-scratch resource extensions are engine-owned. Neither counts nor groups substitute for exact set comparisons.",
     "codes": [
       {"code": "chart_bars_rejected", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller primary feed"},
       {"code": "chart_bars_unreadable", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller file/parser"},
@@ -274,6 +274,8 @@
       {"code": "run_mode_unsupported", "class": "unsupported", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller run mode"},
       {"code": "run_options_rejected", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller options"},
       {"code": "run_request_invalid", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller parser/options including supplied text before binding"},
+      {"code": "scratch_capacity_exceeded", "class": "resource", "retryable": false, "since": "1.7.0", "appendix": "catalog-extension", "reachability": "indirect", "route": "valid table demand exceeds caller-admitted scratch layout or fixed region capacity; engine storage resource, never a strategy value failure"},
+      {"code": "scratch_io_failed", "class": "resource", "retryable": false, "since": "1.7.0", "appendix": "catalog-extension", "reachability": "indirect", "route": "caller scratch path or valid table demand encounters storage failure; engine storage resource, never a strategy value failure"},
       {"code": "security_feed_refused", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller feed installation"},
       {"code": "setting_rejected", "class": "input", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller override/input setter; source declaration faults retain source code"},
       {"code": "setting_unsupported", "class": "unsupported", "retryable": false, "since": "1.4.0", "appendix": "C-existing", "reachability": "no", "route": "caller setter support"},

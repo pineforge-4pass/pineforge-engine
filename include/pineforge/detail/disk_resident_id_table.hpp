@@ -117,6 +117,13 @@ public:
     DiskResidentIdTable& operator=(DiskResidentIdTable&&) noexcept = default;
 
     void set_directory(const std::string& directory) { index_.set_directory(directory); }
+    void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
+        index_.bind_scratch(slab, resource);
+    }
+    void require_insert(const std::string& key) const { index_.require_insert(key); }
+    template<class Enumerate> void require_inserts(Enumerate&& enumerate) const {
+        index_.require_inserts(std::forward<Enumerate>(enumerate));
+    }
     void clear() noexcept { resident_.clear(); index_.clear(); }
     std::uint64_t size() const noexcept { return index_.size(); }
     std::size_t resident_size() const noexcept { return resident_.size(); }
@@ -174,6 +181,9 @@ public:
         return end();
     }
     std::pair<iterator, bool> emplace(const std::string& key, Value value) {
+        // A refused new logical row must not first overwrite/evict an eligible
+        // resident row. This search reads index bytes only, without restoring.
+        index_.require_insert(key);
         spill();
         const auto placed = index_.insert(key, value.retired_record());
         if (!placed.second) return {{this, placed.first, load(placed.first)}, false};
