@@ -1242,11 +1242,17 @@ struct WorkingRequestCore::JournalStore {
     ExtFile data;
     mutable std::array<Cached, 4> cache{};
     mutable std::size_t cache_next = 0;
+    // The directory this core's stores spill into ("": TMPDIR, then /tmp), set
+    // beside the successor roots'. The journal exists for the whole life of a
+    // bound core, so it is where the core keeps it (scratch_directory): the
+    // core itself holds no string for it.
+    std::string where;
 
     JournalStore() { chunks.reserve(kMaxResident / kChunk + 4); }
     void set_directory(const std::string& directory) {
         pages.set_directory(directory);
         data.set_directory(directory);
+        where = directory;
     }
     std::size_t resident_count() const noexcept { return static_cast<std::size_t>(end - first); }
     // Every spilled event has been retired: the page table, the file behind
@@ -1589,14 +1595,16 @@ struct WorkingRequestCore::BookSpill {
     uint64_t next_alive(uint64_t at) const { return alive_from(rows.next_sorted(at)); }
     uint64_t priority_at(uint64_t at) const { return book_key_value(rows.key(at)); }
     // Keeps a copy of a spilled row alive for a reader; the last kSide copies
-    // stay valid.
-    const LiveRequest* stash(LiveRequest row) const {
+    // stay valid. keep hands the copy to a reader that holds it itself (the
+    // ring and the reader share it, so it lives until both let go); stash
+    // answers a bare pointer.
+    std::shared_ptr<LiveRequest> keep(LiveRequest row) const {
         auto kept = std::make_shared<LiveRequest>(std::move(row));
-        const LiveRequest* pointer = kept.get();
-        side[side_next] = std::move(kept);
+        side[side_next] = kept;
         side_next = (side_next + 1) % side.size();
-        return pointer;
+        return kept;
     }
+    const LiveRequest* stash(LiveRequest row) const { return keep(std::move(row)).get(); }
     bool worth_compacting() const {
         return gone > 2 * alive + 64 || garbage > blobs.size() / 2 + (uint64_t{1} << 20);
     }
@@ -1633,11 +1641,9 @@ struct WorkingRequestCore::BookSpill {
     }
 };
 
-// ---- what the stores know about the core (E02--E05) -----------------------
-
-// The core keeps no copy of what a store knows: the spilled count is the
-// book spill's, the journal's length the journal's, the keys' base and count
-// the key log's.
+// What the stores know about the core (E02--E05). The core keeps no copy of
+// it: the spilled count is the book spill's, the journal's length the
+// journal's, the keys' base and count the key log's.
 std::size_t WorkingRequestCore::spilled_count() const noexcept {
     return book_spill_ ? static_cast<std::size_t>(book_spill_->alive) : 0;
 }
@@ -1828,7 +1834,9 @@ void WorkingRequestCore::LiveView::const_iterator::settle() {
     held_.reset();
     if (core_->book_done(cursor_)) return;
     if (core_->book_next_spilled(cursor_)) {
-        held_ = std::make_shared<LiveRequest>(core_->book_spill_->read(
+        // Through the ring, so a reference the view handed out stays valid
+        // for the next few spilled rows it reads, as the header promises.
+        held_ = core_->book_spill_->keep(core_->book_spill_->read(
                 core_->book_spill_->rows.get(cursor_.at)));
     }
 }
@@ -7613,19 +7621,21 @@ void WorkingRequestCore::set_successor_roots_directory(const std::string& direct
     if (!successor_roots_) successor_roots_ = std::make_shared<SuccessorRootIndex>();
     successor_roots_->set_directory(directory);
     // The journal's pages, the group-effect keys, the long chains' id lists
-    // and the working book's spilled rows spill beside the successor roots
-    // (scratch_directory is the roots' directory).
+    // and the working book's spilled rows spill beside the successor roots;
+    // the journal store keeps the name for the stores created later.
     if (journal_) journal_->set_directory(directory);
     if (receipt_store_) receipt_store_->log.set_directory(directory);
     if (chain_segments_) chain_segments_->set_directory(directory);
     if (book_spill_) book_spill_->set_directory(directory);
 }
 
-// Where a store created now spills: the successor roots' directory (empty:
-// TMPDIR, then /tmp), so that the core itself keeps no string for it.
+// Where a store created now spills: the directory set_successor_roots_directory
+// named (empty: TMPDIR, then /tmp). The journal store keeps it, so that the
+// core itself holds no string for it and binding a scratch slab (which swaps
+// the successor-root index) cannot lose it.
 const std::string& WorkingRequestCore::scratch_directory() const noexcept {
     static const std::string none;
-    return successor_roots_ ? successor_roots_->directory : none;
+    return journal_ ? journal_->where : none;
 }
 
 void WorkingRequestCore::reserve_successor_root() {
