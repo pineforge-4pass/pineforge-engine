@@ -46,6 +46,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/report_mode.h>
 #include <pineforge/report_pages.hpp>
+#include <pineforge/metrics_fold.hpp>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
@@ -53,6 +54,7 @@
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
+#define PINEFORGE_HAS_EQUITY_METRICS_FOLD_V1 1
 namespace pineforge {
 namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
@@ -301,6 +303,8 @@ struct ReportC {
     int64_t   broker_state_hash_len;
 };
 
+// Same words/values as docs/design/o1-report-contract.md in o1w-contract.
+// The envelope lane owns the versioned provider API and its eligibility gate.
 // O1 report envelope v1. Data and method declarations do not advertise
 // runtime support; the legacy ReportC layout remains ABI 4.
 enum class ReportMode : std::uint32_t {
@@ -608,6 +612,8 @@ protected:
     double min_equity_ = 0.0;    // trough equity for runup
 
     // --- Per-script-bar equity curve (metrics + pf_report_t exposure) ---
+    // SUMMARY_ONLY uses exactly one editable point; the fixed prefix lives
+    // outside the broker-state region below.
     std::vector<pf_equity_point_t> equity_curve_;
     int64_t bars_in_market_ = 0;     // script bars with an open position at close
     double first_bar_open_ = std::numeric_limits<double>::quiet_NaN();  // buy&hold basis
@@ -628,6 +634,61 @@ protected:
     int eventrades_count_ = 0;
 
     // @broker-state end
+
+    // Output-only O1W state, deliberately outside the broker-state region.
+    // Like equity_curve_, it never supplies an execution decision. The
+    // derived broker-prefix helper restores the ALREADY HASHED four extrema;
+    // it adds no broker leaf and changes no existing hash domain.
+    ReportMode pending_equity_report_mode_ = ReportMode::FULL;
+    ReportMode active_equity_report_mode_ = ReportMode::FULL;
+    metrics::EquityMetricsFold summary_equity_fold_;
+    mutable metrics::EquityFoldSnapshot summary_equity_snapshot_;
+    mutable bool summary_equity_snapshot_valid_ = false;
+    mutable bool summary_equity_ratios_ready_ = false;
+    std::optional<metrics::EquityRatioResult> summary_equity_ratios_;
+    double summary_broker_equity_prefix_[4]{};
+
+public:
+    // Equity component of the versioned mode setter. The envelope owner must
+    // first establish replay/presentation eligibility and all OTHER sequence
+    // policies. This helper alone does not advertise a complete mode provider.
+    // Status values follow the versioned contract: accepted=0, invalid=-1,
+    // busy=-3, conflict=-4. Configuration takes effect at the next run begin.
+    int set_equity_report_mode(ReportMode mode);
+    ReportMode equity_report_mode() const { return active_equity_report_mode_; }
+    std::int64_t equity_logical_point_count() const {
+        return active_equity_report_mode_ == ReportMode::SUMMARY_ONLY
+            ? summary_equity_fold_.first_pass().point_count
+            : static_cast<std::int64_t>(equity_curve_.size());
+    }
+    // Frozen presented first pass from the latest equity-metric assembly.
+    // The envelope copies its count with captured=0/external=0. No curve
+    // pointer is exposed. A pending second pass cannot certify completion.
+    const metrics::EquityFoldSnapshot* equity_summary_snapshot() const {
+        return summary_equity_snapshot_valid_ ? &summary_equity_snapshot_ : nullptr;
+    }
+    bool equity_summary_ratios_ready() const { return summary_equity_ratios_ready_; }
+    bool install_equity_ratio_result(const metrics::EquityRatioResult& result) {
+        if (!summary_equity_snapshot_valid_ || !result.matches(summary_equity_snapshot_))
+            return false;
+        summary_equity_ratios_ = result;
+        summary_equity_ratios_ready_ = true;
+        return true;
+    }
+
+protected:
+    // Consumer terminal/range-end integration calls this BEFORE its legacy
+    // full-array refold. No history is reread. The prefix excludes the held
+    // point, including when a host just rewrote last_equity_point().
+    bool refold_summary_equity_tail() {
+        if (active_equity_report_mode_ != ReportMode::SUMMARY_ONLY) return false;
+        max_equity_ = summary_broker_equity_prefix_[0];
+        min_equity_ = summary_broker_equity_prefix_[1];
+        max_drawdown_ = summary_broker_equity_prefix_[2];
+        max_runup_ = summary_broker_equity_prefix_[3];
+        if (!equity_curve_.empty()) fold_equity_extreme(equity_curve_.back().equity);
+        return true;
+    }
 
     // Host-installed excursion capability (RULING A48).  Transient run
     // wiring, not durable broker state: reset_run_state clears it and the
@@ -1403,12 +1464,37 @@ protected:
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
     // make the curve differ between magnifier on/off.
     void record_equity_point(int64_t script_bar_ts) {
-        if (prepare_equity_point()) first_bar_open_ = current_bar_.open;
+        const bool summary = active_equity_report_mode_ == ReportMode::SUMMARY_ONLY;
+        if (summary ? equity_curve_.empty() : prepare_equity_point())
+            first_bar_open_ = current_bar_.open;
         pf_equity_point_t p;
         p.time_ms = script_bar_ts;
         p.open_profit = open_profit(current_bar_.close);
         p.equity = initial_capital_ + net_profit_sum_ + p.open_profit;
-        store_equity_point(p);
+        if (summary) {
+            if (!equity_curve_.empty()) {
+                const auto& held = equity_curve_.back();
+                summary_equity_fold_.replace_last(
+                    held, metrics::equity_month_key(held.time_ms, chart_timezone_));
+                auto& prefix = summary_broker_equity_prefix_;
+                const double eq = held.equity;
+                if (eq > prefix[0]) prefix[0] = prefix[1] = eq;
+                if (eq < prefix[1]) prefix[1] = eq;
+                const double dd = prefix[0] - eq;
+                if (dd > prefix[2]) prefix[2] = dd;
+                const double ru = eq - prefix[1];
+                if (ru > prefix[3]) prefix[3] = ru;
+            }
+            summary_equity_fold_.fold(
+                p, metrics::equity_month_key(p.time_ms, chart_timezone_),
+                true, position_side_ != PositionSide::FLAT);
+            if (equity_curve_.empty()) equity_curve_.push_back(p);
+            else equity_curve_.back() = p;
+            summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
+            summary_equity_ratios_.reset();
+        } else {
+            store_equity_point(p);
+        }
         if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
