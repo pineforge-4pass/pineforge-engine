@@ -1,9 +1,9 @@
 // CR-150 O1C. Predicted first red on 6cfcff0696: the frozen closure has no
-// pineforge/detail/scratch_store.hpp (fatal error: file not found). With only
-// the declarations of that header and no ScratchStore definition, this body
-// compiles and the first red is the link of ScratchStore. The complete body
-// must be compiled there on the lab; no fail-before or passing execution is
-// claimed by this edit-only lane.
+// pineforge/detail/scratch_store.hpp (fatal error: file not found). Against the
+// DRAFT v0 declarations alone (e43d7bcc7) this body compiles and the first red
+// is the link of ScratchStore, which that commit declares and does not define.
+// The complete body must be compiled there on the lab; no fail-before or
+// passing execution is claimed by this edit-only lane.
 //
 // Every expected value below comes from an independent oracle (a sorted model
 // with its own comparator and its own FNV-1a fold), never from the store, and

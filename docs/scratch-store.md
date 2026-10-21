@@ -176,6 +176,30 @@ bytes with no allocation, file or growth. It supports `buffered` only. The
 backings for `disk`, `memfd` and `tmpfs` are written against the same base class;
 choosing among them is the host's decision at construction.
 
+## Reference definition
+
+`include/pineforge/detail/scratch_store_impl.hpp` defines `ScratchStore`, and
+`scratch_store.hpp` includes it, so one include gives a working store. It is a
+reference definition: the declarations are the contract, and a replacement that
+keeps them and passes the fixtures is equally valid. It uses fixed-size pages
+whose last sixteen bytes are reserved, a copy-in copy-out page cache that never
+hands out a pointer, an in-place undo journal whose page images are written
+through before the first change of a page in a transaction, two alternating
+superblocks written at commit, a B+tree of handles ordered through the caller's
+comparator, a radix table from handle to blob locations, and blobs held as
+chains of 64-byte cells or of whole pages. The resident workspace is one block
+sized by the config and allocated once, in the constructor. `journal_slots` and
+`index_slots` are validated floors: the definition's fixed work buffers exceed
+them.
+
+Its limits, which a replacement need not share: a page size of at most 1 MiB, a
+page count of at most 16 Mi, records below 2^61 bytes and handle numbers below
+2^62; index nodes are not merged after erasures; cell pages never return to the
+page pool; the journal pool keeps as many pages as the largest transaction so
+far touched; and the interior nodes of the handle table are not reclaimed, so
+the backing grows by well under one byte per handle ever issued even when the
+live set is bounded.
+
 ## Statuses
 
 | Status | Meaning in this API |
@@ -217,9 +241,9 @@ unchanged, and a comparator's failure unchanged.
 
 Each row names the clause, the fixture function that holds it and the failure
 before the contract holds. Against the frozen base the three headers are absent,
-so every body fails to compile with the missing-header diagnostic; with the
-declarations alone the store fixture compiles and fails at the link of
-`ScratchStore`.
+so every body fails to compile with the missing-header diagnostic; against the
+first published declarations alone the store fixture compiles and fails at the
+link of `ScratchStore`, which they declare and do not define.
 
 | Clause | Fixture | Fails before because |
 | --- | --- | --- |
@@ -241,10 +265,9 @@ declarations alone the store fixture compiles and fails at the link of
 | Geometry floor and refused opens | `geometry_and_open_validation` | no store to open |
 | Randomized differential walk against a sorted model | `differential_random_walk` | no store to open |
 
-The store fixture links `ScratchStore`, so `tests/cr150.d/core-cr150-o1c.cmake`
-registers it only when configured with `-DPINEFORGE_O1C_STORE_FIXTURE=ON`; the
-definition of `ScratchStore` removes that guard so the fixture runs in every
-configuration.
+The store fixture is registered unconditionally in
+`tests/cr150.d/core-cr150-o1c.cmake`, together with the backing fixture and the
+guard, and runs against the reference definition below.
 
 The store fixture checks every expected value against an independent sorted
 model and an independent FNV fold. It reads the population it claims to test
