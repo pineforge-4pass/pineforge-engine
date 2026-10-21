@@ -596,18 +596,20 @@ void seal_conditions() {
     require(choose(rows.size(), rows.size(), rows[1].entry_incarnation) == 1,
             "condition 4: mutable short-seed incarnation was retired");
     const auto old_time = rows[1].exit_time;
-    rows[1].exit_time = open;
+    rows.modify(1, [&](Trade& row) { row.exit_time = open; });
     require(choose(rows.size(), rows.size()) == 1, "condition 3: equal bar-open time was retired");
-    rows[1].exit_time = open + 1;
+    rows.modify(1, [&](Trade& row) { row.exit_time = open + 1; });
     require(choose(rows.size(), rows.size()) == 1, "condition 3: future row was retired");
-    rows[1].exit_time = old_time;
+    rows.modify(1, [&](Trade& row) { row.exit_time = old_time; });
     rows.resize(final);
-    for (std::size_t i = final - 3; i < final; ++i) rows[i].exit_time = open - 1;
+    for (std::size_t i = final - 3; i < final; ++i)
+        rows.modify(i, [&](Trade& row) { row.exit_time = open - 1; });
     require(choose(rows.size(), rows.size()) == final - 4,
             "condition 2: exit-time tail or predecessor was retired");
     rows.seal(1);
     require(choose(rows.size(), rows.size()) == final - 4, "global indices rebased after retirement");
-    for (auto& row : rows) row.exit_time = open - 1;
+    for (auto i = rows.base(); i < rows.size(); ++i)
+        rows.modify(i, [&](Trade& row) { row.exit_time = open - 1; });
     require(choose(rows.size(), rows.size()) == rows.base(),
             "single exit-time block must remain resident");
     rows.clear();

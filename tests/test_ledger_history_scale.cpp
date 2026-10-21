@@ -189,9 +189,8 @@ public:
                 strategy_close("seed", "closed history", 1.0, missing, true);
         }
     }
-    void on_native_applied(const native_order::ExecutionAppliedEvent& event,
-                           const NativeDecisionContext& context) override {
-        source::PineStrategyHost::on_native_applied(event, context);
+    void on_native_applied_event(const native_order::ExecutionAppliedEvent& event,
+                                 const NativeDecisionContext& context) override {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const Trade row = get_trade(static_cast<int>(event.first_trade_index + i));
             std::string bytes = encoded(row);

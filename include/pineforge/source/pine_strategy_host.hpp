@@ -577,6 +577,15 @@ public:
     void fixture_retain_all_events();
 
 protected:
+    // CR-150 observer seam: on_native_applied is final, so a host that has to
+    // observe an applied event after the host itself has settled its rows
+    // overrides THIS instead. Called exactly once per applied event, at the
+    // end of on_native_applied and after finish_applied_admission -- never
+    // per bar. Empty by default, so a host that does not override it behaves
+    // byte for byte as before and folds the same hash. It observes; it does
+    // not admit, price or seal anything.
+    virtual void on_native_applied_event(const native_order::ExecutionAppliedEvent&,
+                                         const NativeDecisionContext&) {}
     // Narrow test-facade configuration slots keep the frozen L0 oracle bodies
     // unchanged while routing their setup through the source configuration
     // projected at the native begin boundary.

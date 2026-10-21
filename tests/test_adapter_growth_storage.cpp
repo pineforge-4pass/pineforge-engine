@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -28,6 +29,11 @@ struct Probe {
     bool old_implementation = false;
     std::vector<Units*> units;
     std::vector<Opened*> opened;
+    // L18's tail summary reuses the same two substituted operations on its own
+    // exposure containers (an origin map and a live-cohort set). Their element
+    // types are private to that class, so the witness below is by address: the
+    // same property, "empty with retained buckets".
+    std::vector<const void*> other_exposure_storage;
 };
 inline Probe* active = nullptr;
 
@@ -36,6 +42,10 @@ void remember(std::vector<Container*>& rows, Container& container) {
     if (std::find(rows.begin(), rows.end(), &container) == rows.end())
         rows.push_back(&container);
 }
+inline void remember_any(std::vector<const void*>& rows, const void* container) {
+    if (std::find(rows.begin(), rows.end(), container) == rows.end())
+        rows.push_back(container);
+}
 inline void observe(Units& units) {
     if (active && units.empty() && units.bucket_count() > Units{}.bucket_count())
         remember(active->units, units);
@@ -43,6 +53,18 @@ inline void observe(Units& units) {
 inline void observe(Opened& opened) {
     if (active && opened.empty() && opened.capacity() > Opened{}.capacity())
         remember(active->opened, opened);
+}
+template<class K, class V, class H, class E, class A>
+void observe(std::unordered_map<K, V, H, E, A>& map) {
+    if (active && map.empty()
+        && map.bucket_count() > std::unordered_map<K, V, H, E, A>{}.bucket_count())
+        remember_any(active->other_exposure_storage, &map);
+}
+template<class K, class H, class E, class A>
+void observe(std::unordered_set<K, H, E, A>& set) {
+    if (active && set.empty()
+        && set.bucket_count() > std::unordered_set<K, H, E, A>{}.bucket_count())
+        remember_any(active->other_exposure_storage, &set);
 }
 
 // Before L19m the per-origin erase left the empty map/vector untouched;

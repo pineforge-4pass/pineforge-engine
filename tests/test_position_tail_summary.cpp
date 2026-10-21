@@ -87,7 +87,7 @@ struct Fixture {
         barrier = time;
         spill.reset(); // same position-open seam as the adapter
         summary.begin_position(time, resident.base(), resident.size(),
-                               [&](std::size_t i) -> const Trade& { return resident[i]; });
+                               [&](std::size_t i) -> Trade { return resident[i]; });
     }
     void add_origin(std::uint64_t origin, bool is_long = true,
                     const std::string& name = "reused") {
@@ -102,7 +102,7 @@ struct Fixture {
     }
     void sync() {
         summary.observe(resident.base(), resident.size(),
-                        [&](std::size_t i) -> const Trade& { return resident[i]; });
+                        [&](std::size_t i) -> Trade { return resident[i]; });
     }
     void retire(std::uint64_t origin) {
         for (auto& cohort : live) {
@@ -147,7 +147,7 @@ struct Fixture {
             // summary's certificate and incremental bookkeeping.
             actual = source::detail::replay_position_tail(
                 resident.size(), resident.base(),
-                [&](std::size_t i) -> const Trade& { return resident[i]; },
+                [&](std::size_t i) -> Trade { return resident[i]; },
                 spill.get(), barrier,
                 [&](bool is_long, std::uint64_t origin, bool margin, const auto& matches) {
                     if (is_long != query.is_long) return false;
@@ -248,7 +248,8 @@ void barriers_reversals_and_amendments() {
 
     // Re-cut a row without changing the final count. Invalidation must not
     // rely on detecting a smaller count or only on the next append.
-    f.reference.back().qty = f.resident.back().qty = 0.375;
+    f.reference.back().qty = 0.375;
+    f.resident.modify(f.resident.size() - 1, [](Trade& t) { t.qty = 0.375; });
     f.summary.invalidate();
     f.all_queries();
     assert(f.fallback != 0);
@@ -394,7 +395,8 @@ void random_sequences() {
                     f.all_queries();
                 }
                 if (i == 7 && cycle % 3 == 0) {
-                    f.reference.back().qty = f.resident.back().qty = 0.75;
+                    f.reference.back().qty = 0.75;
+                    f.resident.modify(f.resident.size() - 1, [](Trade& t) { t.qty = 0.75; });
                     f.summary.invalidate();
                     f.all_queries();
                 }
@@ -411,7 +413,7 @@ void random_sequences() {
 void resident_bound() {
     PositionTailSummary summary;
     TradeLedger resident;
-    summary.begin_position(10, 0, 0, [&](std::size_t i) -> const Trade& { return resident[i]; });
+    summary.begin_position(10, 0, 0, [&](std::size_t i) -> Trade { return resident[i]; });
     global_allocation::recording = true;
     const auto before = global_allocation::live_bytes;
     std::size_t at_1k = 0;
