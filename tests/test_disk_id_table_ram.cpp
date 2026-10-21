@@ -131,7 +131,7 @@ void packed_rotations_lookup_updates_and_orders() {
     require(lifetime.expired(), "empty owner detaches the old slab after reset");
     bool disk_failed = false;
     try { moved.insert("disk", value(2)); }
-    catch (const detail::ScratchIoError& error) {
+    catch (const detail::AuxiliaryScratchIoError& error) {
         disk_failed = classify_run_failure(error).code == RunFailureCode::scratch_io_failed;
     }
     require(disk_failed, "empty owner really restores the ordinary disk path");

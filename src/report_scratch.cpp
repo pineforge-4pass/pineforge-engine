@@ -5,9 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
-#include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
@@ -25,18 +23,8 @@ static_assert(std::numeric_limits<off_t>::is_signed
               "scratch offsets must fit the P00 signed 64-bit region");
 static_assert(kScratchWindowPoints > 0, "scratch window must hold a complete point");
 
-// L19a preserves errno through std::system_error. Also carry the established
-// sink-I/O run code: the classifier otherwise treats an uncoded system_error
-// as engine_unclassified_error in this integration epoch.
-class ScratchIoError final : public std::system_error, public RunFailureInfo {
-public:
-    ScratchIoError(int error_number, const char* operation)
-        : std::system_error(error_number, std::generic_category(), operation),
-          RunFailureInfo(RunFailureCode::report_sink_failed, {}) {}
-};
-
 [[noreturn]] void fail_io(int error_number, const char* operation) {
-    throw ScratchIoError(error_number, operation);
+    throw detail::ReportScratchIoError(error_number, operation, {{"reason", "scratch_io"}});
 }
 
 constexpr std::int64_t maximum_offset() {
@@ -53,7 +41,8 @@ void check_span(std::int64_t offset, std::size_t length) {
 }
 
 void check_region(const metrics::ScratchCurveRegion& region) {
-    if ((region.point_count != 0 && region.descriptor < 0) || region.byte_offset < 0
+    if ((region.point_count != 0 && !region.scratch && region.descriptor < 0)
+        || region.byte_offset < 0
         || region.byte_offset > maximum_offset() || region.point_count < 0
         || region.point_count
             > (maximum_offset() - region.byte_offset)
@@ -85,89 +74,81 @@ void read_exact(int descriptor, std::int64_t offset, void* bytes, std::size_t le
     }
 }
 
-int open_private_file(const std::string& directory) {
-    if (directory.empty() || directory.find('\0') != std::string::npos) {
+} // namespace
+
+ScratchFile::ScratchFile(const std::string& directory, detail::ScratchStore store) {
+    if (directory.find('\0') != std::string::npos) {
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                             "report scratch directory is invalid");
     }
-#if defined(O_TMPFILE) && defined(O_CLOEXEC)
-    int anonymous;
-    do {
-        anonymous = ::open(directory.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
-    } while (anonymous < 0 && errno == EINTR);
-    if (anonymous >= 0) return anonymous;
-    // Filesystems/older kernels may lack O_TMPFILE. Other failures (permissions,
-    // quota, missing directory) must keep their errno and requested directory.
-    if (errno != EOPNOTSUPP && errno != EINVAL && errno != EISDIR && errno != ENOSYS)
-        fail_io(errno, "report scratch create");
-#endif
-    std::string name = directory;
-    if (name.back() != '/') name += '/';
-    name += "pineforge-scratch-XXXXXX";
-    const int descriptor = ::mkstemp(name.data());
-    if (descriptor < 0) fail_io(errno, "report scratch create");
-    if (::unlink(name.c_str()) != 0) {
-        const int error_number = errno;
-        ::close(descriptor);
-        fail_io(error_number, "report scratch unlink");
+    file_.set_store(store);
+    file_.set_directory(directory);
+    try {
+        file_.open("pineforge-scratch");
+    } catch (const detail::ReportScratchIoError& error) {
+        // Keep the report facade's create English and errno. Arena reasons
+        // and their per-raiser arguments propagate unchanged.
+        const auto& failure = error.run_failure();
+        if (failure.args && *failure.args == "{\"reason\":\"scratch_io\"}")
+            fail_io(error.code().value(), "report scratch create");
+        throw;
     }
-    int flags;
-    do {
-        flags = ::fcntl(descriptor, F_GETFD);
-    } while (flags < 0 && errno == EINTR);
-    int result = -1;
-    if (flags >= 0) {
-        do {
-            result = ::fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC);
-        } while (result < 0 && errno == EINTR);
-    }
-    if (result < 0) {
-        const int error_number = errno;
-        ::close(descriptor);
-        fail_io(error_number, "report scratch cloexec");
-    }
-    return descriptor;
 }
 
-} // namespace
-
-ScratchFile::ScratchFile(const std::string& directory)
-    : descriptor_(open_private_file(directory)) {}
-
-ScratchFile::~ScratchFile() {
-    if (descriptor_ >= 0) ::close(descriptor_);
-}
+ScratchFile::~ScratchFile() = default;
 
 int ScratchFile::descriptor() const noexcept {
-    return descriptor_;
+    return file_.descriptor();
 }
 
 void ScratchFile::write(std::int64_t byte_offset, const void* bytes, std::size_t length) {
     check_span(byte_offset, length);
     check_buffer(bytes, length);
+    if (length == 0) return;
+    // Reserve the complete requested extent before publishing any of this
+    // buffer. Both backends use this same end calculation. A refused arena
+    // claim propagates unchanged.
+    ensure_size(byte_offset + static_cast<std::int64_t>(length));
     const auto* source = static_cast<const unsigned char*>(bytes);
     std::size_t written = 0;
     while (written < length) {
         const std::size_t chunk = std::min(length - written, kScratchWindowBytes);
-        const ssize_t count = ::pwrite(descriptor_, source + written, chunk,
-            static_cast<off_t>(byte_offset + static_cast<std::int64_t>(written)));
-        if (count < 0 && errno == EINTR) continue;
-        if (count <= 0) fail_io(count < 0 ? errno : EIO, "report scratch write");
-        written += static_cast<std::size_t>(count);
+        file_.write(static_cast<std::uint64_t>(byte_offset) + written, source + written, chunk);
+        written += chunk;
     }
 }
 
 void ScratchFile::read(std::int64_t byte_offset, void* bytes, std::size_t length) const {
-    read_exact(descriptor_, byte_offset, bytes, length);
+    check_span(byte_offset, length);
+    check_buffer(bytes, length);
+    if (length == 0) return;
+    file_.read(static_cast<std::uint64_t>(byte_offset), bytes, length);
 }
 
 void ScratchFile::truncate(std::int64_t byte_count) {
     check_span(byte_count, 0);
-    int result;
-    do {
-        result = ::ftruncate(descriptor_, static_cast<off_t>(byte_count));
-    } while (result < 0 && errno == EINTR);
-    if (result < 0) fail_io(errno, "report scratch truncate");
+    file_.truncate(static_cast<std::uint64_t>(byte_count));
+}
+
+void ScratchFile::ensure_size(std::int64_t byte_count) {
+    check_span(byte_count, 0);
+    file_.open("pineforge-scratch");
+    file_.ensure_size(static_cast<std::uint64_t>(byte_count));
+}
+
+void ScratchFile::clear() {
+    truncate(0);
+}
+
+void ScratchFile::release() noexcept {
+    file_.clear();
+}
+
+metrics::ScratchCurveRegion ScratchFile::curve_region(
+    std::int64_t byte_offset, std::int64_t point_count) const {
+    const metrics::ScratchCurveRegion region{-1, byte_offset, point_count, &file_};
+    check_region(region);
+    return region;
 }
 
 struct ScratchCurveWriter::State {
@@ -176,7 +157,8 @@ struct ScratchCurveWriter::State {
     std::size_t pending_count = 0;
     std::int64_t disk_points = 0;
 
-    explicit State(const std::string& directory) : file(directory) {}
+    explicit State(const std::string& directory)
+        : file(directory, detail::ScratchStore::curve) {}
 };
 
 ScratchCurveWriter::ScratchCurveWriter(const std::string& directory)
@@ -213,7 +195,14 @@ void ScratchCurveWriter::replace_last(const pf_equity_point_t& point) {
 
 void ScratchCurveWriter::clear() {
     auto& state = *state_;
-    state.file.truncate(0);
+    state.file.clear();
+    state.disk_points = 0;
+    state.pending_count = 0;
+}
+
+void ScratchCurveWriter::release() noexcept {
+    auto& state = *state_;
+    state.file.release();
     state.disk_points = 0;
     state.pending_count = 0;
 }
@@ -252,7 +241,7 @@ std::int64_t ScratchCurveWriter::size() const noexcept {
 
 metrics::ScratchCurveRegion ScratchCurveWriter::region() const {
     flush();
-    return {state_->file.descriptor(), 0, state_->disk_points};
+    return state_->file.curve_region(0, state_->disk_points);
 }
 
 void read_scratch_points(const metrics::ScratchCurveRegion& region,
@@ -268,8 +257,14 @@ void read_scratch_points(const metrics::ScratchCurveRegion& region,
     }
     const std::int64_t offset =
         region.byte_offset + first * static_cast<std::int64_t>(sizeof(pf_equity_point_t));
-    read_exact(region.descriptor, offset, points,
-                static_cast<std::size_t>(count) * sizeof(pf_equity_point_t));
+    const auto length = static_cast<std::size_t>(count) * sizeof(pf_equity_point_t);
+    check_buffer(points, length);
+    if (length == 0) return;
+    if (region.scratch) {
+        region.scratch->read(static_cast<std::uint64_t>(offset), points, length);
+    } else {
+        read_exact(region.descriptor, offset, points, length);
+    }
 }
 
 struct ScratchCurveWindow::State {

@@ -312,7 +312,7 @@ struct Host final : NativeStrategyHost {
     mutable std::int64_t actual_length_at_presentation = 0;
     mutable std::array<pf_equity_point_t, kSelectedPresentationWindowPoints> tail_at_presentation{};
     mutable std::uint64_t hash_at_capture = 0;
-    mutable int scratch_descriptor_at_presentation = -1;
+    mutable metrics::ScratchCurveRegion scratch_at_presentation{-1, 0, 0};
     // The execution input as the presentation hook sees it, before any edit.
     mutable std::vector<pf_equity_point_t> held_at_presentation;
     mutable std::vector<TradeC> open_rows_at_presentation;
@@ -353,7 +353,7 @@ struct Host final : NativeStrategyHost {
         length_at_presentation = legacy_full_curve ? out->equity_curve_len
             : std::min(out->equity_curve_len, kSelectedPresentationWindowPoints);
         held_at_presentation = equity_curve_;
-        scratch_descriptor_at_presentation = report_sink_equity_scratch_region().descriptor;
+        scratch_at_presentation = report_sink_equity_scratch_region();
         if (legacy_full_curve) {
             // Preserve the old unrestricted hook for sink-OFF regressions.
             if (edit_middle && out->equity_curve_len > 2) {
@@ -576,12 +576,13 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     const auto cut = hide ? window_len : window_len - after_shrink
         + std::min(after_shrink, tail_cut);
     CHECK(array.value.equity_curve_len == logical_len - cut);
-    CHECK(streamed.scratch_descriptor_at_presentation >= 0);
-    if (streamed.scratch_descriptor_at_presentation >= 0) {
+    CHECK(streamed.scratch_at_presentation.scratch != nullptr);
+    if (streamed.scratch_at_presentation.scratch) {
         std::vector<pf_equity_point_t> raw(static_cast<std::size_t>(logical_len));
+        auto region = streamed.scratch_at_presentation;
+        region.point_count = logical_len;
         report_sink::read_scratch_points(
-            {streamed.scratch_descriptor_at_presentation, 0, logical_len}, 0,
-            raw.data(), logical_len);
+            region, 0, raw.data(), logical_len);
         CHECK(array.value.equity_curve != nullptr);
         if (array.value.equity_curve)
             CHECK(std::memcmp(raw.data(), array.value.equity_curve,
@@ -674,7 +675,7 @@ struct LiveReportHost final : NativeStrategyHost {
     std::array<std::int64_t, 2> live_held_times{};
     mutable int live_presentations = 0;
     mutable int captures = 0;
-    mutable int scratch_descriptor_at_capture = -1;
+    mutable metrics::ScratchCurveRegion scratch_at_capture{-1, 0, 0};
 
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
         ++calculations;
@@ -725,6 +726,7 @@ struct LiveReportHost final : NativeStrategyHost {
         }
         const auto prefix_after = report_sink_equity_scratch_region();
         CHECK(prefix_after.descriptor == prefix_before.descriptor);
+        CHECK(prefix_after.scratch == prefix_before.scratch);
         CHECK(prefix_after.byte_offset == prefix_before.byte_offset);
         CHECK(prefix_after.point_count == prefix_before.point_count);
         CHECK(same_points(held_before, equity_curve_));
@@ -737,7 +739,7 @@ struct LiveReportHost final : NativeStrategyHost {
             ++live_presentations;
         } else {
             ++captures;
-            scratch_descriptor_at_capture = report_sink_equity_scratch_region().descriptor;
+            scratch_at_capture = report_sink_equity_scratch_region();
         }
     }
 };
@@ -793,12 +795,13 @@ void live_selected_reads_preserve_capture(Directory& directory) {
           == static_cast<std::int64_t>(array_counts.window_script_bars) + 1);
     CHECK(summary.value.equity_curve == nullptr && summary.value.equity_curve_len == 0);
     CHECK(summary.value.trades == nullptr && summary.value.trades_len == 0);
-    CHECK(streamed.scratch_descriptor_at_capture >= 0 && array.value.equity_curve != nullptr);
-    if (streamed.scratch_descriptor_at_capture >= 0 && array.value.equity_curve) {
+    CHECK(streamed.scratch_at_capture.scratch != nullptr && array.value.equity_curve != nullptr);
+    if (streamed.scratch_at_capture.scratch && array.value.equity_curve) {
         std::vector<pf_equity_point_t> raw(static_cast<std::size_t>(array.value.equity_curve_len));
+        auto region = streamed.scratch_at_capture;
+        region.point_count = array.value.equity_curve_len;
         report_sink::read_scratch_points(
-            {streamed.scratch_descriptor_at_capture, 0, array.value.equity_curve_len},
-            0, raw.data(), array.value.equity_curve_len);
+            region, 0, raw.data(), array.value.equity_curve_len);
         CHECK(std::memcmp(raw.data(), array.value.equity_curve,
                           raw.size() * sizeof(pf_equity_point_t)) == 0);
     }
@@ -952,11 +955,13 @@ void empty_selected_windows_follow_array_path(Directory& directory) {
         CHECK(summary.value.equity_curve == nullptr && summary.value.equity_curve_len == 0);
         compare_sink_records(baseline, array.value, read(path));
         CHECK(receipt(streamed).count_e == 1 && receipt(streamed).complete == 1);
-        CHECK(streamed.scratch_descriptor_at_presentation >= 0);
-        if (streamed.scratch_descriptor_at_presentation >= 0) {
+        CHECK(streamed.scratch_at_presentation.scratch != nullptr);
+        if (streamed.scratch_at_presentation.scratch) {
             pf_equity_point_t stored{};
+            auto region = streamed.scratch_at_presentation;
+            region.point_count = 1;
             report_sink::read_scratch_points(
-                {streamed.scratch_descriptor_at_presentation, 0, 1}, 0, &stored, 1);
+                region, 0, &stored, 1);
             CHECK(std::memcmp(&stored, &anchor, sizeof stored) == 0);
         }
         CHECK(streamed.set_report_sink_v1(nullptr) == 0);
@@ -1257,7 +1262,7 @@ struct StorageHost final : NativeStrategyHost {
         // Snapshot the actual record-time prefix before capture transfers its
         // owner. These reads and checks precede the allocation measurement.
         prefix_before_capture = recorded_prefix();
-        if (prefix_before_capture.descriptor >= 0 && prefix_before_capture.point_count > 0) {
+        if (prefix_before_capture.scratch && prefix_before_capture.point_count > 0) {
             report_sink::read_scratch_points(prefix_before_capture, 0, &anchor_before_capture, 1);
             report_sink::read_scratch_points(
                 prefix_before_capture, prefix_before_capture.point_count - 1,
@@ -1424,11 +1429,11 @@ CaptureStorage selected_capture_storage(Directory& directory, const char* name, 
     const auto recorded_capacity =
         std::max(host.peak_recorded_capacity, host.recorded_capacity()) * sizeof(pf_equity_point_t);
     const auto prefix = host.prefix_before_capture;
-    CHECK(prefix.descriptor >= 0);
+    CHECK(prefix.scratch != nullptr);
     // The real record-time file contains anchor + M-1 released observations
     // before capture. An implementation that spills only at capture fails.
     CHECK(prefix.point_count == m);
-    if (prefix.descriptor >= 0 && prefix.point_count == m) {
+    if (prefix.scratch && prefix.point_count == m) {
         const pf_equity_point_t expected_anchor{kT, kCapital, 0.0};
         const pf_equity_point_t expected_last{
             bars[static_cast<std::size_t>(m - 2)].timestamp, kCapital, 0.0};

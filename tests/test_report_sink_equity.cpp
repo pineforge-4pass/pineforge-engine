@@ -79,7 +79,7 @@ public:
         result.extremes[2] = max_drawdown_;
         result.extremes[3] = max_runup_;
         const auto prefix = report_sink_equity_scratch_region();
-        result.count = prefix.descriptor >= 0
+        result.count = prefix.scratch != nullptr || prefix.descriptor >= 0
             ? prefix.point_count + (last_equity_point() ? 1 : 0)
             : static_cast<std::int64_t>(equity_curve_.size());
         result.presentations = presentations;
@@ -99,7 +99,7 @@ public:
             if (runup > ru) ru = runup;
         };
         const auto prefix = report_sink_equity_scratch_region();
-        if (prefix.descriptor >= 0) {
+        if (prefix.scratch || prefix.descriptor >= 0) {
             const pineforge::report_sink::ScratchCurveWindow curve(prefix);
             for (std::int64_t i = 0; i < curve.size(); ++i) fold(curve[i]);
             if (const auto* held = last_equity_point()) fold(*held);

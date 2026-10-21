@@ -1,0 +1,6 @@
+if(UNIX)
+    add_test(NAME test_sink_finalize COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/docker/pineforge_sink_finalize_test.py)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+        add_test(NAME test_sink_finalize_native COMMAND ${CMAKE_COMMAND} -E env "PINEFORGE_FINALIZE_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>" ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/docker/pineforge_sink_finalize_test.py -k pipe_round_trip_from_path_writer)
+    endif()
+endif()

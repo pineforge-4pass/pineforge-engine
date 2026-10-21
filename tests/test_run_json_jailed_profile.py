@@ -26,6 +26,7 @@ import run_json
 import test_run_json_bin as bars
 import test_run_json_nonfinite_report as reports
 import test_run_json_sink as sinks
+import test_run_json_sink_fd as fd_sinks
 
 PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
@@ -127,6 +128,58 @@ class SelectedProfileLibrary(ScratchRecorder, reports.ReportLib):
     def _run(self, state, rows, count, *args):
         self.record_run(state, count)
         return super()._run(state, rows, count, *args)
+
+
+class ProfileFdLibrary(ScratchRecorder, fd_sinks.FdLibrary):
+    """Use B5's real stream fixture with the existing scratch ABI recorder."""
+
+    def __init__(self, *, symbol=True, setter_status=0):
+        super().__init__()
+        self.init_scratch(symbol=symbol, setter_status=setter_status)
+        self.strategy_create = self.export("strategy_create", self.create)
+        self.strategy_free = self.export("strategy_free", self.free)
+        if symbol:
+            setattr(self, SETTER, self.export(SETTER, getattr(self, SETTER)))
+
+    def install_fd(self, state, pointer):
+        self.history.append(("sink", state, pointer._obj.fd))
+        return super().install_fd(state, pointer)
+
+    def run(self, state, rows, count, *args):
+        self.record_run(state, count)
+        return super().run(state, rows, count, *args)
+
+    def free(self, state):
+        super().free(state)
+        self.release(state)
+
+
+class SelectedProfileFdLibrary(ScratchRecorder, fd_sinks.SelectedFdLibrary):
+    def __init__(self, *, symbol=True, setter_status=0):
+        super().__init__(fd_sinks.selected.full_plan())
+        self.init_scratch(symbol=symbol, setter_status=setter_status)
+        native_free = self.strategy_free
+
+        def free(state):
+            native_free(state)
+            self.release(state)
+
+        self.strategy_create, self.strategy_free = self.create, free
+
+    def install_fd(self, state, pointer):
+        self.history.append(("sink", state, pointer._obj.fd))
+        return super().install_fd(state, pointer)
+
+    def _run(self, state, rows, count, *args):
+        self.record_run(state, count)
+        return super()._run(state, rows, count, *args)
+
+
+def invoke_profile_sink(tmp_path, mode, library, extra):
+    if mode == "selected":
+        return fd_sinks.selected_invoke(tmp_path, library, extra, no_files=True)
+    source = bars.csv_file(tmp_path)
+    return fd_sinks.invoke(source, library, extra, no_files=True)
 
 
 @pytest.fixture(autouse=True)
@@ -258,6 +311,93 @@ def test_sink_factory_refuses_file_work_before_even_probing_the_sink_abi(monkeyp
     args = run_json.argparse.Namespace(profile="jailed")
     assert run_json._new_report_sink(NoSinkAccess(), 7, args) is None
     assert files == []
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "selected"])
+def test_jailed_fd_overrides_sinks_off_after_admission(tmp_path, mode):
+    factory = SelectedProfileFdLibrary if mode == "selected" else ProfileFdLibrary
+    with fd_sinks.Stream() as reference_stream:
+        reference = invoke_profile_sink(tmp_path, mode, factory(), [
+            "--report-sink-fd", str(reference_stream.writer), "--run-id", fd_sinks.RUN_ID])
+    assert (reference[0], reference[2]) == (0, ""), reference
+    library = factory()
+    with fd_sinks.Stream() as stream:
+        result = invoke_profile_sink(tmp_path, mode, library, [
+            "--profile", "jailed", "--report-sink-fd", str(stream.writer),
+            "--run-id", fd_sinks.RUN_ID])
+        assert (result[0], result[2]) == (0, ""), result
+        with pytest.raises(OSError) as closed:
+            fd_sinks.os.fstat(stream.writer)
+        assert closed.value.errno == fd_sinks.errno.EBADF
+    assert stream.data == reference_stream.data
+    actual, expected = json.loads(result[1]), json.loads(reference[1])
+    assert "trades" not in actual and "equity_curve" not in actual
+    if mode == "selected":
+        assert "report_window" in actual and "report_shape" in actual
+        actual["diagnostics"].pop("phase_timing")
+        expected["diagnostics"].pop("phase_timing")
+    fd_sinks.assert_document(json.dumps(actual, separators=(",", ":")) + "\n", expected)
+    assert actual["summary"]["total_trades"] == len(fd_sinks.PNLS)
+    assert_admission(library, 1, 18 if mode == "selected" else 10)
+    names = [row[0] for row in library.history]
+    assert names == ["create", "scratch", "sink", "run", "free"]
+    assert library.installed == [stream.writer]
+    assert library.queried == library.summary_queries == 1
+    assert not list(tmp_path.glob("*.sink"))
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "selected", "capabilities"])
+def test_jailed_path_is_typed_refusal_before_library_calls(tmp_path, mode):
+    library = SelectedProfileFdLibrary() if mode == "selected" else ProfileFdLibrary()
+    path = tmp_path / "untouched.sink"
+    path.write_bytes(b"caller-owned bytes\n")
+    extra = ["--capabilities-json"] if mode == "capabilities" else []
+    status, text, stderr = invoke_profile_sink(tmp_path, mode, library, [
+        "--profile", "jailed", "--report-sink", str(path), *extra])
+    document = reports.strict_line(text)
+    assert status == 1 and stderr == ""
+    assert (document["code"], document["args"]) == (
+        "run_request_invalid", {"option": "arguments"})
+    assert "summary" not in document and "--report-sink-fd" in document["error"]
+    assert library.calls == [] and library.history == [] and library.installed == []
+    assert path.read_bytes() == b"caller-owned bytes\n"
+
+
+def test_jailed_path_factory_refuses_before_probing_sink_abi(monkeypatch):
+    class NoSinkAccess:
+        def __getattr__(self, name):
+            raise AssertionError("refused path probed " + name)
+    files = forbid_spools(monkeypatch)
+    args = run_json.argparse.Namespace(profile="jailed", report_sink=Path("unused.sink"))
+    with pytest.raises(run_json.RunFailure) as failure:
+        run_json._new_report_sink(NoSinkAccess(), 7, args)
+    assert (failure.value.code, failure.value.code_args) == (
+        "run_request_invalid", {"option": "arguments"})
+    assert files == []
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "selected"])
+@pytest.mark.parametrize("symbol,setter_status,code,args", [
+    (False, 0, "strategy_library_incompatible", {"reason": "setter_missing"}),
+    (True, -1, "engine_invariant", {}),
+])
+def test_jailed_fd_requires_admission_before_installing_the_sink(
+        tmp_path, mode, symbol, setter_status, code, args):
+    factory = SelectedProfileFdLibrary if mode == "selected" else ProfileFdLibrary
+    library = factory(symbol=symbol, setter_status=setter_status)
+    with fd_sinks.Stream() as stream:
+        status, text, stderr = invoke_profile_sink(tmp_path, mode, library, [
+            "--profile", "jailed", "--report-sink-fd", str(stream.writer)])
+        fd_sinks.os.fstat(stream.writer)  # Admission failed before ownership transfer.
+    document = reports.strict_line(text)
+    assert status == 1 and stderr == ""
+    assert (document["code"], document["args"]) == (code, args)
+    assert "summary" not in document and stream.data == b""
+    assert library.installed == [] and library.queried == library.summary_queries == 0
+    assert library.released == library.created and len(library.created) == 1
+    assert not library.configured
+    assert [row[0] for row in library.history] == (
+        ["create", "scratch", "free"] if symbol else ["create", "free"])
 
 
 @pytest.mark.parametrize("code,args", [

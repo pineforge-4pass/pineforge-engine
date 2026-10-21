@@ -31,6 +31,36 @@ typedef struct pf_report_sink_v1 {
     const char* scratch_dir;
 } pf_report_sink_v1;
 
+/** Borrowed sequential stream sink descriptor (CX-SINK-B1/B2).
+ *  struct_size is sizeof(pf_report_sink_fd_v1), version is 1. fd is the
+ *  caller-selected write end of a FIFO or AF_UNIX SOCK_STREAM socket; there
+ *  is no library default fd number. NULL run_id means ""; it is copied.
+ *  No path or scratch directory is supplied or derived for this sink.
+ *
+ *  The caller keeps fd open through the run and report capture. The library
+ *  neither duplicates nor closes it, including on replacement, removal,
+ *  failure, abort or handle destruction. The caller closes it to deliver EOF
+ *  to the trusted finalizer. A new run on the same fd appends a new stream;
+ *  use a fresh stream per run when the reader expects one header/trailer.
+ *
+ *  Bytes, canonical JSON, hashes, LF framing and the 1 MiB line limit are
+ *  identical to the path sink. Writes are strictly sequential: no open,
+ *  creation, seek, pwrite, truncation, unlink or rename on this route.
+ *  Partial writes and EINTR are retried; EAGAIN blocks in poll() with bounded
+ *  buffering. Only a successful run writes a trailer, as its last line.
+ *  Failure or abort leaves no valid trailer; the receipt stays incomplete.
+ *
+ *  Socket writes use send(..., MSG_NOSIGNAL). For a FIFO the host MUST ignore
+ *  SIGPIPE (Python does by default; C hosts use signal(SIGPIPE, SIG_IGN))
+ *  so a closed reader becomes the typed report_sink_failed error. The
+ *  library never changes process-wide signal dispositions. */
+typedef struct pf_report_sink_fd_v1 {
+    uint32_t    struct_size;
+    uint32_t    version;
+    int         fd;
+    const char* run_id;
+} pf_report_sink_fd_v1;
+
 /** Trailer receipt (DESIGN 6:1291-1298,1305-1306).
  *  The seven counts correspond to E, T, O, V, K, X, H in that order.
  *  sha256_hex is the trailer's lowercase SHA-256, NUL-terminated, and is ""
@@ -55,6 +85,63 @@ PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, sha256_hex) == 64);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, reserved) == 129);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, complete) == 136);
 PF_STATIC_ASSERT(offsetof(pf_report_sink_receipt_v1, trades_retained) == 140);
+
+/** Report-only T-row summary (CX-SINK-B5a), independent of the 144-byte
+ *  trailer receipt above. Size 64, alignment 8, with no implicit padding:
+ *  struct_size 0, version 4, count_t 8, wins 16, losses 24, best_trade 32,
+ *  worst_trade 40, max_drawdown 48, nonfinite_t_field 56, complete 60.
+ *
+ *  Rows enter in global T order, using the original report doubles. Wins
+ *  and losses count strictly positive/negative P&L; either zero counts as
+ *  neither. Best/worst start with the first P&L and retain the previous
+ *  operand on ties (including signed zero). Empty extrema are +0.0.
+ *  Drawdown is the nonpositive minimum of cumulative trade P&L minus its
+ *  running peak, both starting at +0.0; it is not equity-curve drawdown.
+ *
+ *  nonfinite_t_field is 0 if all eight canonical doubles are finite.
+ *  Otherwise it names the first field of the first offending T row:
+ *  5 entry_price, 6 exit_price, 7 qty, 8 pnl, 9 pnl_pct, 10 max_runup,
+ *  11 max_drawdown, 12 commission. These are T wire field indices.
+ *  complete mirrors the trailer receipt. Values are published only with
+ *  a successful trailer; until then they are zero and complete is 0. */
+typedef struct pf_report_sink_summary_v1 {
+#if defined(__cplusplus)
+    alignas(8)
+#elif defined(_MSC_VER)
+    __declspec(align(8))
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    _Alignas(8)
+#elif defined(__GNUC__)
+    __attribute__((aligned(8)))
+#endif
+    uint32_t struct_size;
+    uint32_t version;
+    int64_t  count_t;
+    int64_t  wins;
+    int64_t  losses;
+    double   best_trade;
+    double   worst_trade;
+    double   max_drawdown;
+    int32_t  nonfinite_t_field;
+    uint32_t complete;
+} pf_report_sink_summary_v1;
+
+PF_STATIC_ASSERT(sizeof(pf_report_sink_summary_v1) == 64);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, struct_size) == 0);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, version) == 4);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, count_t) == 8);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, wins) == 16);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, losses) == 24);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, best_trade) == 32);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, worst_trade) == 40);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, max_drawdown) == 48);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, nonfinite_t_field) == 56);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_summary_v1, complete) == 60);
+#if defined(__cplusplus)
+PF_STATIC_ASSERT(alignof(pf_report_sink_summary_v1) == 8);
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+PF_STATIC_ASSERT(_Alignof(pf_report_sink_summary_v1) == 8);
+#endif
 
 /** Returns report sink ABI version 1 (DESIGN 6:1300). */
 PF_API uint32_t pf_report_sink_version(void);
@@ -82,6 +169,16 @@ PF_API uint32_t pf_report_sink_version(void);
  *  entry points and report behavior stay unchanged (6:1352-1354). */
 PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
 
+/** Install, replace or remove (NULL) the single sink using a borrowed fd.
+ *  Mutually exclusive with strategy_set_report_sink_v1: either setter
+ *  replaces the other kind, and NULL through either setter removes it.
+ *  Returns 0 accepted; -1 bad handle, struct_size, version or negative fd;
+ *  -2 stream running/beginning; -3 run in progress, as the path setter.
+ *  Descriptor I/O/type validation occurs at run begin; a closed fd or a
+ *  non-stream descriptor fails the run with report_sink_failed. Summary
+ *  reports and strategy_report_sink_receipt_v1 follow the path sink rules. */
+PF_API int strategy_set_report_sink_fd_v1(pf_strategy_t, const pf_report_sink_fd_v1*);
+
 /** Query the sink receipt (DESIGN 6:1302; RESOLVED S1).
  *  CORE-TOP's rev 6 amendment (10-18 16:04) uses the observation query
  *  strategy_execution_observation_v1 in execution_observer.h as its model.
@@ -94,6 +191,19 @@ PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
  *  Failed, refused, aborted or truncated runs have no valid trailer
  *  (3.7:791-793); a receipt without completion is not a valid sink. */
 PF_API int strategy_report_sink_receipt_v1(pf_strategy_t, pf_report_sink_receipt_v1*);
+
+/** Query the T-row summary for either the path or fd sink.
+ *  Initialize out->struct_size to sizeof(*out), out->version to 1.
+ *  Returns 0 filled; -1 with *out unchanged for NULL out, bad handle,
+ *  struct_size or version, exactly as strategy_report_sink_receipt_v1.
+ *  No sink, an unstarted run, failure or abort yields zero values and
+ *  complete 0. After successful report capture, count_t equals the trailer's
+ *  count_t and complete is 1. A nonzero nonfinite_t_field must be rejected
+ *  by consumers as report_result_invalid{field:"trades.<name>",
+ *  reason:"nonfinite"} before using the summary.
+ *  Queries never capture a report, read a sink, or advance the fold; repeated
+ *  reads return the same value. Replacement/removal and new runs reset it. */
+PF_API int strategy_report_sink_summary_v1(pf_strategy_t, pf_report_sink_summary_v1*);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -401,6 +401,8 @@ public:
     // presented open-lot view. The engine owns the no-copy report path.
     void finish_streamed_trade_metrics(const BacktestEngine& engine, ReportC* out,
                                       const TradeC* open_rows, int count) const;
+    pf_report_sink_summary_v1 finish_report_sink_summary(const BacktestEngine& engine,
+        const TradeC* open_rows, int count) const;
     void fold_sealed_exit_phase(std::uint8_t phase);
     std::uint64_t replay_sealed_exit_phases(std::uint64_t seed) const noexcept;
     void restart_exit_phases() noexcept { exit_phases_restarted_ = closed_trade_prefix_.base != 0; }
@@ -1980,12 +1982,23 @@ private:
     mutable std::vector<std::uint64_t> closed_row_prefix_;
     ClosedTradePrefix closed_trade_prefix_;
     std::optional<std::int64_t> closed_trade_seal_bar_;
+    // Report output only: neither this fold nor ClosedTradeReport participates
+    // in StateFold, closed_rows_digest or the source host extension hash.
+    // Persistent state advances at seal only; finalization folds a COPY.
+    struct ReportTradeSummary {
+        pf_report_sink_summary_v1 value{};
+        double cumulative = 0.0;
+        double peak = 0.0;
+        bool has_trade = false;
+        void fold(const TradeC& row) noexcept;
+    };
     struct ClosedTradeReport {
         explicit ClosedTradeReport(double capital)
             : all(metrics::TradeFilter::ALL, capital),
               longs(metrics::TradeFilter::LONG, capital),
               shorts(metrics::TradeFilter::SHORT, capital) {}
         metrics::TradeStatsAccumulator all, longs, shorts;
+        ReportTradeSummary summary;
         // Selected carry-in validation must still inspect sealed entry times.
         std::int64_t first_entry_time = std::numeric_limits<std::int64_t>::max();
     };
@@ -2276,13 +2289,14 @@ private:
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
     // Sink captures keep scalars and, for an ordinary observer capture, one
-    // owned equity point. Closed rows live in the sealed prefix folds plus
+    // inline equity point. Closed rows live in the sealed prefix folds plus
     // the resident ledger; the editable open-lot view is owned separately.
     // Sink OFF keeps its original independently owned arrays.
     ReportC presentation_{};
     std::unique_ptr<TradeC[]> presentation_open_trades_;
     int presentation_open_trades_len_ = 0;
     bool presentation_sink_trades_ = false;
+    pf_equity_point_t presentation_equity_tail_{};
     // The equity length the metrics read: the engine's recorded point count taken
     // before present_report ran (fill_metrics_section's `n`), which a
     // presentation may leave behind in presentation_.equity_curve_len, the length

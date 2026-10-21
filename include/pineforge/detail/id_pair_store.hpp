@@ -28,6 +28,8 @@
 
 namespace pineforge::detail {
 
+// IdPairScratchFile and its errno-preserving auxiliary failure live in
+// id_pair_scratch_file.hpp, shared with the ordered-fold implementation above.
 // One 40-byte record plus both strings per distinct key ever seen, and a
 // 16-byte on-disk hash slot at <= 1/2 load (32..64 bytes/key after warmup).
 // Replacing a value, erasing and recurring reuse the original record.

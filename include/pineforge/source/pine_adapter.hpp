@@ -1870,7 +1870,7 @@ private:
         std::unordered_map<std::uint64_t, double> live_units_by_origin;
         std::int64_t cycle = 0;
         Record retired_record() const noexcept;
-        static CohortFacts restore_record(const Record&);
+        static CohortFacts restore_record(const Record&, bool arena_backed = false);
         bool spillable() const noexcept;
         // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
         // in `origins` whose placement rows were erased, so a question about

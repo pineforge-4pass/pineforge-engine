@@ -16,9 +16,11 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <fcntl.h>
 #include <limits>
 #include <string>
 #include <system_error>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -112,6 +114,29 @@ void backwards(const char* directory) {
     assert(spill.previous(cursor, row));
     equal_row(spill, row, replacement);
     assert(cursor == 0);
+}
+
+void file_clear_and_release(const char* directory) {
+    PositionTailBinding::File file(directory);
+    const pf_equity_point_t bytes{1, 2.0, 3.0};
+    file.write(0, &bytes, sizeof(bytes));
+    const int descriptor = file.descriptor();
+    assert(descriptor >= 0);
+    file.clear();
+    struct stat status{};
+    assert(file.descriptor() == descriptor);
+    assert(::fstat(descriptor, &status) == 0 && status.st_size == 0);
+    file.write(0, &bytes, sizeof(bytes));
+    pf_equity_point_t actual{};
+    file.read(0, &actual, sizeof(actual));
+    assert(std::memcmp(&actual, &bytes, sizeof(bytes)) == 0);
+    file.release();
+    errno = 0;
+    assert(file.descriptor() == -1);
+    assert(::fcntl(descriptor, F_GETFD) == -1 && errno == EBADF);
+    file.write(0, &bytes, sizeof(bytes));
+    file.read(0, &actual, sizeof(actual));
+    assert(std::memcmp(&actual, &bytes, sizeof(bytes)) == 0);
 }
 
 void window_edges(const char* directory) {
@@ -254,6 +279,7 @@ void failures(const char* directory) {
 int main() {
     Directory directory;
     backwards(directory.path);
+    file_clear_and_release(directory.path);
     window_edges(directory.path);
     barriers_and_splits(directory.path);
     bounded_heap(directory.path);

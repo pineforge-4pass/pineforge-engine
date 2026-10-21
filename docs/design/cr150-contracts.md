@@ -35,7 +35,9 @@ built, compiled or tested on the P00 machine.
 | File / declaration | DESIGN / amendment authority | Implementing lane |
 |---|---|---|
 | `include/pineforge/report_sink.h`: `pf_report_sink_v1` | 6:1283-1289,1307-1309 | L6b-1 |
+| `pf_report_sink_fd_v1` and `strategy_set_report_sink_fd_v1(pf_strategy_t,const pf_report_sink_fd_v1*)` | CORE-TOP CX-SINK-B1/B2 inherited-fd amendment, 10-20 | L22a |
 | `pf_report_sink_receipt_v1` and its layout assertions | 6:1291-1298,1305-1306 | L6b-1 |
+| `pf_report_sink_summary_v1` and `strategy_report_sink_summary_v1(pf_strategy_t,pf_report_sink_summary_v1*)` | CORE-TOP CX-SINK-B5a ordered T-summary amendment, 10-20; [layout and lifecycle](../pages/abi-stability.md#report-sink-summary-receipt) | L22q |
 | `pf_report_sink_version(void)` | 6:1300 | L6b-1 |
 | `strategy_set_report_sink_v1(pf_strategy_t,const pf_report_sink_v1*)` | 6:1301,1307-1317 | L6b-1 |
 | `strategy_report_sink_receipt_v1(pf_strategy_t,pf_report_sink_receipt_v1*)` | 6:1302; 3.7:791-793; amendment S1 | L6b-1 |
@@ -57,6 +59,21 @@ L6b-1 must enroll `report_sink.h`, the three definitions and their counts
 together, and add `PINEFORGE_HAS_REPORT_SINK_V1` only with runtime support
 (DESIGN 6:1268-1271,1333-1338). There is no transitive include from an existing
 header in P00. O/V/K/X/H operations remain L6b-3's extension.
+
+CORE-TOP's CX-SINK-B1/B2 amendment supersedes DESIGN 3.11's path-only
+statement for jailed children. `LineWriter` also accepts a borrowed
+`pf_report_sink_fd_v1`, with no path or scratch directory; both modes share
+the canonical v1 builder and receipt. The fd route retries sequential writes
+and waits on back-pressure without growing its buffer. It never closes the
+caller's fd or changes SIGPIPE handling. The trusted finalizer owns file
+creation. See the [fd ABI contract](../pages/abi-stability.md).
+
+CX-SINK-B5a adds a separate 64-byte, 8-byte-aligned summary receipt without
+changing the 144-byte trailer receipt. Report-only sealed-prefix folds and
+a copy folded over the resident/presented suffix preserve the Python T-fold
+bits, strict win/loss counts, first zero sign and first nonfinite T-field
+index (5..12). Neither the fold nor the published receipt enters broker
+state hashes; completion is published with the successful trailer.
 
 ## TradeLedger
 
@@ -284,8 +301,9 @@ row at a time, followed by that same edited view; neither capture nor read
 allocates a closed-history `TradeC[]`. Sink OFF keeps the full array and is
 byte-identical.
 
-The sink's `presentation_` stores scalar report values with a null trade
-pointer; an ordinary observer capture also owns one presented equity point.
+The sink's `presentation_` stores scalar report values with null trade and
+equity pointers; an ordinary observer capture also owns one inline presented
+equity point.
 The independent open-lot view is retained only to preserve
 the hook's edits across reads and explicit sink removal; its size depends on
 open lots, never closed trades. A completed selected capture owns its metric

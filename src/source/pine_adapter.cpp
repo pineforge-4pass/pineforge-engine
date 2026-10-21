@@ -1019,6 +1019,8 @@ void audit_placement_scan(const PlacementTable& table, unsigned line, Predicate&
 PineExecutionAdapter::PineExecutionAdapter(compat::pine::CapAttachment attachment)
     : cap(attachment) {
     pending_view_.owner_ = this;
+    cohorts_by_id_.set_store(::pineforge::detail::ScratchStore::cohort);
+    exit_rank_keys_.set_store(::pineforge::detail::ScratchStore::exit_rank);
 }
 
 PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
@@ -28262,7 +28264,7 @@ PineExecutionAdapter::CohortFacts::retired_record() const noexcept {
 }
 
 PineExecutionAdapter::CohortFacts
-PineExecutionAdapter::CohortFacts::restore_record(const Record& row) {
+PineExecutionAdapter::CohortFacts::restore_record(const Record& row, bool /*arena_backed*/) {
     if (row.handle == 0 || static_cast<std::uint64_t>(
             static_cast<std::size_t>(row.origin_count)) != row.origin_count
         || row.erased_sides > 3) {

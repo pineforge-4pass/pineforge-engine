@@ -5914,19 +5914,19 @@ struct WorkingRequestCore::SuccessorRootIndex {
         name += "pineforge-roots-XXXXXX";
         const int opened = ::mkstemp(name.data());
         if (opened < 0) {
-            throw detail::ScratchIoError(errno, "native successor roots create");
+            throw detail::AuxiliaryScratchIoError(errno, "native successor roots create");
         }
         // Unlink before publishing the descriptor: an opened scratch file
         // has no directory entry. mkstemp creates it with mode 0600.
         if (::unlink(name.c_str()) != 0) {
             const int error = errno;
             ::close(opened);
-            throw detail::ScratchIoError(error, "native successor roots unlink");
+            throw detail::AuxiliaryScratchIoError(error, "native successor roots unlink");
         }
         if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
             const int error = errno;
             ::close(opened);
-            throw detail::ScratchIoError(error, "native successor roots cloexec");
+            throw detail::AuxiliaryScratchIoError(error, "native successor roots cloexec");
         }
         fd = opened;
     }
@@ -5969,7 +5969,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
                 if (count < 0 && errno == EINTR) continue;
                 if (count <= 0) {
                     const int error = count < 0 ? errno : EIO;
-                    throw detail::ScratchIoError(error, "native successor roots write");
+                    throw detail::AuxiliaryScratchIoError(error, "native successor roots write");
                 }
                 written += static_cast<std::size_t>(count);
             }
@@ -6003,13 +6003,13 @@ struct WorkingRequestCore::SuccessorRootIndex {
                 if (count < 0 && errno == EINTR) continue;
                 if (count <= 0) {
                     const int error = count < 0 ? errno : EIO;
-                    throw detail::ScratchIoError(error, "native successor roots read");
+                    throw detail::AuxiliaryScratchIoError(error, "native successor roots read");
                 }
                 received += static_cast<std::size_t>(count);
             }
         }
         if (row.root == 0 || row.root >= row.successor) {
-            throw detail::ScratchIoError(EIO, "native successor roots invalid row");
+            throw detail::AuxiliaryScratchIoError(EIO, "native successor roots invalid row");
         }
         return row;
     }

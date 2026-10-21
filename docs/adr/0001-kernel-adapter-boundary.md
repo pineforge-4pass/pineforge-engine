@@ -32,12 +32,12 @@ Three layers, two of them meant to be optional:
 1. **Generic kernel — Pine-agnostic (the reusable core).** The public host is
    `pineforge::NativeStrategyHost` (`native_host.hpp:845`), an abstract subclass of
    `BacktestEngine`. Kernel translation units are named, not inferred: they are the
-   forty-four members of `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:116`) — the `engine_*`,
+   forty-five members of `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:116`) — the `engine_*`,
    `native_*`, `ta_*`, `market_driver`, `magnifier`, `math`, `matrix`, `session_time`,
    `timeframe`, `timezone`, `str_utils`, `c_abi`, `native_c_host`, `reservation_expansion`
    (`CMakeLists.txt:127`) and `pending_order_mirror` (`CMakeLists.txt:133`) units — plus the
    headers directly under `include/pineforge/`. That list is what `add_library`
-   (`CMakeLists.txt:163`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
+   (`CMakeLists.txt:164`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
    `PINEFORGE_SOURCE_LAYER_SOURCES` are disjoint: no file is in both, and none is outside both.
    **Two stems exist twice; the kernel copy is the generic half** —
    `ReservationExpansion` (`src/reservation_expansion.cpp:10`) and
@@ -197,8 +197,8 @@ summary of it.
   `broker_state_hash()` (`engine.hpp:2045`)
   folds that hash with position and lot state under the pinned domain
   `pineforge-broker-state/v19` (`engine_state_hash.cpp:41`), the closed rows as their count and
-  a running digest each final row folds into once; it is the one exported to C
-  (`c_abi.cpp:594`). A host folds its **own** durable state into it through
+  a running digest each final row folds into once; it is the one exported to C as
+  `strategy_broker_state_hash` (`c_abi.cpp:594`). A host folds its **own** durable state into it through
   `hash_host_extension` (`engine.hpp:407`), whose deprecated spelling
   `hash_source_extension` (`engine.hpp:413`) the generic default forwards to. Per-bar rows of
   the same hash are recorded under `KernelRecorded` with the recording switch on.
@@ -370,7 +370,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
 ## Current state vs. target (read before relying on "without Pine")
 
 - **The kernel is a separately linkable artifact.** `add_library`
-  (`CMakeLists.txt:163`) builds `pineforge_kernel` / `PineForge::kernel` from
+  (`CMakeLists.txt:164`) builds `pineforge_kernel` / `PineForge::kernel` from
   `PINEFORGE_KERNEL_SOURCES` alone, with the same flags `pineforge` uses, in **both**
   configurations. `libpineforge.a` still carries the adapter beside the kernel by default;
   `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` (`CMakeLists.txt:43`) compiles no source-layer
@@ -423,7 +423,7 @@ citations, 264 are in `src/source/` and its headers; 6 sit in kernel files
   (`float_band_eq` `ta_compare_band.hpp:38`), the TV-named fields of the frozen
   `pf_pending_order_v1_t` mirror, and the lot-flag pair above.
 - **The C API trades.** Two disjoint runtime inventories, both pinned.
-  `src/c_abi.cpp` implements the **85** codegen-facing runtime `PF_API` symbols that
+  `src/c_abi.cpp` implements the **88** codegen-facing runtime `PF_API` symbols that
   `scripts/check_c_abi_runtime.py` pins by name, and `src/native_c_host.cpp` implements the
   **43** additive symbols of `<pineforge/native_c_api.h>`. A C host creates a host from a
   callback table (`strategy_native_host_create_v1` `native_c_api.h:2682`), runs a batch

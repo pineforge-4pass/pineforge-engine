@@ -600,7 +600,7 @@ public:
         slab()->write_at(ScratchResource::cohort, 57, &invalid, sizeof invalid);
         bool io = false;
         try { (void)source_hash(); }
-        catch (const detail::ScratchIoError& error) {
+        catch (const detail::AuxiliaryScratchIoError& error) {
             io = error.code().value() == EIO
                 && classify_run_failure(error).code == RunFailureCode::scratch_io_failed;
         }

@@ -12449,6 +12449,7 @@ void NativeExecutionConsumer::drop_presentation() noexcept {
     presentation_open_trades_.reset();
     presentation_open_trades_len_ = 0;
     presentation_sink_trades_ = false;
+    presentation_equity_tail_ = {};
     presentation_metric_equity_len_ = 0;
     presentation_metric_observations_ = 0;
     presentation_metric_curve_.reset();
@@ -12497,6 +12498,7 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
     const bool sink_trades = engine.report_sink_state_.enabled;
     TradeC* open_storage = nullptr;
     int open_count = 0;
+    pf_equity_point_t ordinary_tail{};
     std::array<pf_equity_point_t, kSelectedPresentationWindowPoints> tail{};
     std::unique_ptr<report_sink::ScratchCurveWriter> metric_curve;
     try {
@@ -12702,6 +12704,11 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
             if (local.trades != open_storage || local.trades_len != open_count)
                 refuse_selected_capture(
                     "native sink report: presentation changed its open-lot view");
+            if (!sink_window && engine.report_sink_state_.equity_scratch) {
+                if (local.equity_curve_len > 0) ordinary_tail = local.equity_curve[0];
+                delete[] local.equity_curve;
+                local.equity_curve = nullptr;
+            }
         }
     } catch (...) {
         if (sink_trades) local.trades = open_storage;
@@ -12714,6 +12721,7 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
         presentation_open_trades_.reset(local.trades);
         presentation_open_trades_len_ = local.trades_len;
         presentation_sink_trades_ = true;
+        presentation_equity_tail_ = ordinary_tail;
         local.trades = nullptr;
         local.trades_len = 0;
     }
@@ -13154,13 +13162,12 @@ void NativeExecutionConsumer::restore_report_sink_equity_curve(BacktestEngine& e
         if (count > 0) {
             captured_curve = std::make_unique<pf_equity_point_t[]>(static_cast<std::size_t>(count));
             std::copy(restored.begin(), restored.end(), captured_curve.get());
-            // The bounded observer capture owns its presented tail directly.
-            captured_curve[count - 1] = consumer->presentation_.equity_curve[
-                consumer->presentation_.equity_curve_len - 1];
+            // The bounded observer capture owns its presented tail inline.
+            captured_curve[count - 1] = consumer->presentation_equity_tail_;
         }
     }
     // All allocations and reads succeeded. Publish both arrays atomically
-    // with respect to exceptions.
+    // with respect to exceptions. Sink removal does not invoke this bridge.
     engine.equity_curve_.swap(restored);
     if (captured) {
         delete[] consumer->presentation_.equity_curve;
@@ -13209,9 +13216,7 @@ bool BacktestEngine::prepare_equity_point() {
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        throw coded<std::runtime_error>(code, {}, error.what());
+        throw coded<std::runtime_error>(error.run_failure(), error.what());
     } catch (...) {
         sink.writer.reset();
         throw;
@@ -13381,9 +13386,7 @@ bool NativeExecutionConsumer::capture_selected_sink(BacktestEngine& engine) {
         // observer fault after this capture therefore cannot publish a trailer.
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        throw coded<std::runtime_error>(code, {}, error.what());
+        throw coded<std::runtime_error>(error.run_failure(), error.what());
     } catch (...) {
         sink.writer.reset();
         throw;
@@ -13503,9 +13506,7 @@ void NativeExecutionConsumer::write_streamed_trade(
         ++sink.receipt.count_t;
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         auto& mutable_engine = const_cast<BacktestEngine&>(engine);
         mutable_engine.last_run_status_ = 1;
         note_run_failure(mutable_engine, failure.what(), classify_run_failure(failure));
@@ -13537,6 +13538,7 @@ void NativeExecutionConsumer::seal_closed_rows(
         closed_trade_report_->all.fold(record);
         closed_trade_report_->longs.fold(record);
         closed_trade_report_->shorts.fold(record);
+        closed_trade_report_->summary.fold(record);
         closed_trade_report_->first_entry_time =
             std::min(closed_trade_report_->first_entry_time, row.entry_time);
         closed_trade_prefix_.pnl += row.pnl;
@@ -13574,6 +13576,56 @@ void NativeExecutionConsumer::finish_streamed_trade_metrics(
     out->metrics.all = all.finish();
     out->metrics.longs = longs.finish();
     out->metrics.shorts = shorts.finish();
+}
+
+void NativeExecutionConsumer::ReportTradeSummary::fold(const TradeC& row) noexcept {
+    if (value.nonfinite_t_field == 0) {
+        // T wire indices 5..12, also the Python validation order. Preserve
+        // the FIRST row/field even when a later row has a lower field index.
+        const double fields[] = {row.entry_price, row.exit_price, row.qty, row.pnl,
+            row.pnl_pct, row.max_runup, row.max_drawdown, row.commission};
+        for (std::size_t field = 0; field < sizeof fields / sizeof fields[0]; ++field) {
+            if (!std::isfinite(fields[field])) {
+                value.nonfinite_t_field = static_cast<std::int32_t>(field) + 5;
+                break;
+            }
+        }
+    }
+    // Python max(previous, pnl)/min(previous, pnl) keep the first operand
+    // on equality (and unordered comparisons), including either zero sign.
+    if (!has_trade) {
+        value.best_trade = value.worst_trade = row.pnl;
+        has_trade = true;
+    } else {
+        if (row.pnl > value.best_trade) value.best_trade = row.pnl;
+        if (row.pnl < value.worst_trade) value.worst_trade = row.pnl;
+    }
+    ++value.count_t;
+    if (row.pnl > 0.0) ++value.wins;
+    if (row.pnl < 0.0) ++value.losses;
+    // Keep the exact Python left-fold order over ORIGINAL report P&Ls.
+    cumulative += row.pnl;
+    if (cumulative > peak) peak = cumulative;
+    const double drawdown = cumulative - peak;
+    if (drawdown < value.max_drawdown) value.max_drawdown = drawdown;
+}
+
+pf_report_sink_summary_v1 NativeExecutionConsumer::finish_report_sink_summary(
+        const BacktestEngine& engine, const TradeC* open_rows, int count) const {
+    if (engine.trades_.base() != closed_trade_prefix_.base
+        || (engine.trades_.base() != 0 && !closed_trade_report_)
+        || count < 0 || (count > 0 && !open_rows))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report summary has no matching sealed prefix or open-lot view");
+    // Retaining/non-streamable modules have no sealed report accumulator.
+    // Both routes resume the same global sequence after presentation.
+    auto summary = closed_trade_report_ ? closed_trade_report_->summary : ReportTradeSummary{};
+    if (summary.value.count_t != static_cast<std::int64_t>(engine.trades_.base()))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report summary count differs from the sealed trade base");
+    for (const auto& row : engine.trades_) summary.fold(internal::report_trade_row(row));
+    for (int index = 0; index < count; ++index) summary.fold(open_rows[index]);
+    return summary.value;
 }
 
 void NativeExecutionConsumer::fill_streamed_report(
