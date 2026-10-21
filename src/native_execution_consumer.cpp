@@ -37,7 +37,7 @@ namespace {
 constexpr std::size_t kHandleStagingRows = 64;
 constexpr std::size_t kDriverStagingRows = 64;
 constexpr std::size_t kAccountStagingRows = 64;
-constexpr std::size_t kNotificationStagingRows = 32;
+// The applied-notification queue prepares its fixed 32-row tail at construction.
 constexpr std::size_t kMatchStagingRows = 64;
 
 // The store a slot owns, created on first use with its fixed staging tail.
@@ -2152,14 +2152,14 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     }
     // The pending notifications, in queue order: the rows a callback still
     // owes fold exactly as the vector's did.
-    const std::uint64_t notification_count = applied_notification_count();
-    const std::uint64_t notification_from = std::min<std::uint64_t>(
-        static_cast<std::uint64_t>(notification_head_), notification_count);
-    f.u(notification_count - notification_from);
-    if (applied_notifications_) {
+    const std::uint64_t notification_count = applied_notifications_.size();
+    const std::uint64_t notification_from =
+        static_cast<std::uint64_t>(notification_head_);
+    f.u(applied_notifications_.size() - notification_head_);
+    if (!applied_notifications_.empty()) {
         AppliedNotification notification;
         for (std::uint64_t index = notification_from; index < notification_count; ++index) {
-            applied_notifications_->read(index, &notification);
+            applied_notifications_.read(index, &notification);
             f.u(notification.history_index);
             f.u(notification.ordinal);
             hash_current_point(f, notification.point);
@@ -3036,7 +3036,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     activation_birth_point_ordinal_ = 0;
     activation_birth_time_ms_ = 0;
     if (activation_births_) activation_births_->clear();
-    if (applied_notifications_) applied_notifications_->clear();
+    applied_notifications_.clear();
     notification_head_ = 0;
     consuming_request_ = false;
     draining_notifications_ = false;
@@ -3469,11 +3469,11 @@ void NativeExecutionConsumer::retire_journal() noexcept {
                                             : std::numeric_limits<uint64_t>::max();
     // Every queued notification pins its cause, delivered or not: the queue is
     // cleared as a whole when a drain ends, exactly as it always was.
-    if (applied_notifications_) {
+    if (!applied_notifications_.empty()) {
         AppliedNotification notification;
-        for (std::uint64_t index = 0, count = applied_notifications_->size();
+        for (std::uint64_t index = 0, count = applied_notifications_.size();
              index < count; ++index) {
-            applied_notifications_->read(index, &notification);
+            applied_notifications_.read(index, &notification);
             if (notification.ordinal == 0) return;
             through = std::min(through, notification.ordinal - 1);
         }
@@ -8115,7 +8115,7 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
 }
 
 std::uint64_t NativeExecutionConsumer::applied_notification_count() const noexcept {
-    return applied_notifications_ ? applied_notifications_->size() : 0;
+    return applied_notifications_.size();
 }
 
 void NativeExecutionConsumer::enqueue_applied_notification(AppliedNotification notification) {
@@ -8123,9 +8123,9 @@ void NativeExecutionConsumer::enqueue_applied_notification(AppliedNotification n
     // E11: a settlement burst decides the queue's length, so it spills rather
     // than growing the consumer; the row is a value and the fold reads it back
     // in this same order.
-    page_store(applied_notifications_, sizeof(AppliedNotification),
-               kNotificationStagingRows, "native applied notifications")
-        .push_back(&notification);
+    // The queue keeps the same fixed 32-row staging even while empty;
+    // only its backing file is acquired on the first spill.
+    applied_notifications_.push_back(&notification);
 }
 
 void NativeExecutionConsumer::finish_callback(BacktestEngine& engine, uint64_t ordinal) {
@@ -8214,8 +8214,8 @@ void NativeExecutionConsumer::invoke_applied_callback(
 void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine) {
     if (in_callback_ || consuming_request_ || draining_notifications_ || failed()) return;
     draining_notifications_ = true;
-    auto& queued = page_store(applied_notifications_, sizeof(AppliedNotification),
-                              kNotificationStagingRows, "native applied notifications");
+    // The queue object stays fixed while callbacks append to its paged rows.
+    auto& queued = applied_notifications_;
     // The size is re-read every turn: a callback may enqueue another fill.
     while (notification_head_ < queued.size() && !failed()) {
         AppliedNotification notification;
@@ -12092,8 +12092,8 @@ NativeExecutionConsumer::resident_inventory() const noexcept {
     ResidentInventory out;
     out.driver_rows = driver_row_count();
     out.account_rows = account_row_count();
-    if (applied_notifications_) {
-        const std::uint64_t queued = applied_notifications_->size();
+    if (!applied_notifications_.empty()) {
+        const std::uint64_t queued = applied_notifications_.size();
         const std::uint64_t head = std::min<std::uint64_t>(
             static_cast<std::uint64_t>(notification_head_), queued);
         // The rows a callback still owes, not the ones already delivered.
@@ -12101,8 +12101,8 @@ NativeExecutionConsumer::resident_inventory() const noexcept {
     }
     out.pre_open_births = pre_open_births_ ? pre_open_births_->size() : 0;
     out.activation_births = activation_births_ ? activation_births_->size() : 0;
-    std::uint64_t bytes = 0;
-    std::uint64_t spilled = 0;
+    std::uint64_t bytes = applied_notifications_.resident_bytes();
+    std::uint64_t spilled = applied_notifications_.spilled_rows();
     const auto add = [&bytes, &spilled](const std::unique_ptr<detail::PageStore>& store) {
         if (!store) return;
         bytes += store->resident_bytes();
@@ -12112,7 +12112,7 @@ NativeExecutionConsumer::resident_inventory() const noexcept {
     add(account_log_);
     add(pre_open_births_);
     add(activation_births_);
-    add(applied_notifications_);
+    // The queue's fixed staging was counted above, including while empty.
     add(match_provenance_);
     add(match_skipped_);
     add(match_trail_handles_);

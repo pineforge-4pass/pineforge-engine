@@ -1880,7 +1880,7 @@ private:
     uint64_t activation_birth_point_ordinal_ = 0;
     int64_t activation_birth_time_ms_ = 0;
     std::unique_ptr<detail::PageStore> activation_births_;
-    std::unique_ptr<detail::PageStore> applied_notifications_;
+    detail::PageStore applied_notifications_{sizeof(AppliedNotification), 32, "native applied notifications"};
     std::size_t notification_head_ = 0;
     bool processing_input_ = false;
     InputMode input_mode_ = InputMode::Unselected;
