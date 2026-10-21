@@ -145,7 +145,7 @@ jobs:
           # Search every page: a second match must defer, never pick a PR.
           pulls=$(gh api --paginate --slurp \
             "repos/${{ github.repository }}/commits/$SHA/pulls?per_page=100")
-          PULLS="$pulls" python3 - <<'PY'
+          python3 - 3<<<"$pulls" <<'PY'
           import json
           import os
 
@@ -159,8 +159,8 @@ jobs:
 
           sha = os.environ["SHA"]
           try:
-              pages = json.loads(os.environ["PULLS"], parse_constant=reject_constant)
-          except ValueError:
+              pages = json.loads(open(3, encoding="utf-8").read(), parse_constant=reject_constant)
+          except (ValueError, RecursionError):
               skip("invalid merged PR response JSON")
               raise SystemExit(0)
           if (not isinstance(pages, list)

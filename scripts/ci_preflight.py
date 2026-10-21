@@ -896,9 +896,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         'INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}',
     )
     resolver_selection = (
-        'PULLS="$pulls" python3 - <<\'PY\'',
+        'python3 - 3<<<"$pulls" <<\'PY\'',
         'sha = os.environ["SHA"]',
-        'pages = json.loads(os.environ["PULLS"], parse_constant=reject_constant)',
+        'pages = json.loads(open(3, encoding="utf-8").read(), parse_constant=reject_constant)',
         ('matches = [pr for page in pages for pr in page '
          'if pr.get("state") == "closed" '
          'and pr.get("merged_at") is not None '

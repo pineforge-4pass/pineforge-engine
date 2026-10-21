@@ -1227,9 +1227,9 @@ class PreflightFailures(unittest.TestCase):
 
     def test_baseline_promotion_pins_python_selection_and_unique_match(self):
         for before, after in (
-                ('PULLS="$pulls" python3 - <<\'PY\'', "python3 - <<'PY'"),
+                ('python3 - 3<<<"$pulls" <<\'PY\'', "python3 - <<'PY'"),
                 ('sha = os.environ["SHA"]', 'sha = "a" * 40'),
-                ('pages = json.loads(os.environ["PULLS"], parse_constant=reject_constant)',
+                ('pages = json.loads(open(3, encoding="utf-8").read(), parse_constant=reject_constant)',
                  'pages = [[]]'),
                 ('matches = [pr for page in pages for pr in page',
                  'matches = [pr for page in pages[:1] for pr in page'),
@@ -1731,6 +1731,9 @@ class BaselinePromotionResolution(unittest.TestCase):
         self.assertNotIn('${{', script)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            pages_file = root / 'pr-pages.json'
+            pages_file.write_text(json.dumps(pages) if raw_json is None else raw_json,
+                                  encoding='utf-8')
             gh = root / 'gh'
             # Only the API transport is fake; bash and python3 run the workflow's
             # actual selection and output formatting against the fixture JSON.
@@ -1740,13 +1743,13 @@ class BaselinePromotionResolution(unittest.TestCase):
                 '"repos/owner/engine/commits/" + os.environ["SHA"] + "/pulls?per_page=100"]\n'
                 'if sys.argv[1:] != expected: raise SystemExit(2)\n'
                 'pathlib.Path(os.environ["LOOKUP_LOG"]).write_text("called\\n")\n'
-                'print(os.environ["PR_PAGES"])\n')
+                'sys.stdout.write(pathlib.Path(os.environ["PR_PAGES_FILE"]).read_text(encoding="utf-8"))\n')
             gh.chmod(0o755)
             output = root / 'outputs'
             log = root / 'lookup'
             env = {**os.environ, 'EVENT_NAME': event, 'SHA': sha or self.SHA,
                    'GH_TOKEN': 'fixture-token',
-                   'PR_PAGES': json.dumps(pages) if raw_json is None else raw_json,
+                   'PR_PAGES_FILE': str(pages_file),
                    'INPUT_MERGE_SHA': '', 'INPUT_HEAD_SHA': '', 'INPUT_PR_NUMBER': '',
                    'INPUT_PR_URL': '', 'INPUT_MERGED_AT': '', **(inputs or {}),
                    'LOOKUP_LOG': str(log), 'GITHUB_OUTPUT': str(output),
@@ -1772,6 +1775,22 @@ class BaselinePromotionResolution(unittest.TestCase):
                     'merged_at': merged_at, 'ok': 'true'})
                 self.assertNotIn('::notice::', stdout)
                 self.assertTrue(called)
+
+    def test_push_reads_response_larger_than_linux_environment_limit(self):
+        """The 131,072-byte limit per environment string exists only on Linux.
+
+        This catches the transport regression on the CLOUD host, not on macOS.
+        """
+        pr = dict(self.merged_pr(), body='界' * 50_000)
+        raw_json = json.dumps([[pr]], ensure_ascii=False)
+        self.assertGreater(len(raw_json.encode('utf-8')), 131_072)
+        values, stdout, called = self.run_resolver(None, raw_json=raw_json)
+        self.assertEqual(values, {
+            'merge_sha': self.SHA, 'head_sha': self.HEAD, 'pr_number': '231',
+            'pr_url': 'https://github.com/owner/engine/pull/231',
+            'merged_at': '2026-10-21T08:15:30Z', 'ok': 'true'})
+        self.assertNotIn('::notice::', stdout)
+        self.assertTrue(called)
 
     def test_push_defers_with_notice_and_no_metadata_without_one_match(self):
         pr = self.merged_pr()
@@ -1811,6 +1830,12 @@ class BaselinePromotionResolution(unittest.TestCase):
                 self.assertEqual(values, {'ok': 'false'})
                 self.assertEqual(stdout, '::notice::invalid merged PR response JSON; skipping\n')
                 self.assertTrue(called)
+
+    def test_push_defers_on_deeply_nested_json_without_metadata(self):
+        values, stdout, called = self.run_resolver(None, raw_json='[' * 100_000)
+        self.assertEqual(values, {'ok': 'false'})
+        self.assertEqual(stdout, '::notice::invalid merged PR response JSON; skipping\n')
+        self.assertTrue(called)
 
     def test_push_requires_an_array_of_page_arrays_of_pr_objects(self):
         pr = self.merged_pr()
