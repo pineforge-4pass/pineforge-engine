@@ -102,7 +102,7 @@ permissions:
 jobs:
   promote:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
-    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
+    runs-on: ["self-hosted","pf-gcp-engine-main"]
     steps:
       - name: Determine repo axis
         id: axis

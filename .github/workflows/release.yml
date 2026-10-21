@@ -77,7 +77,7 @@ env:
 
 jobs:
   release:
-    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
+    runs-on: ["self-hosted","pf-gcp-engine-main"]
 
     outputs:
       tag:        ${{ steps.bump.outputs.tag }}
@@ -340,7 +340,7 @@ jobs:
       matrix:
         include:
           - triple: linux-x86_64
-            runner: ["self-hosted","pf-ci","pf-ci-release"]
+            runner: ["self-hosted","pf-gcp-engine-main"]
             cmake_extra: ""
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
@@ -370,8 +370,29 @@ jobs:
       - name: Install Eigen3 (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libeigen3-dev
+          set -euo pipefail
+          eigen_present() {
+            test -f /usr/include/eigen3/Eigen/Core ||
+              cmake --find-package -DNAME=Eigen3 -DCOMPILER_ID=GNU -DLANGUAGE=CXX -DMODE=EXIST >/dev/null 2>&1
+          }
+          if eigen_present; then
+            echo "Eigen3 is present; skipping apt."
+          elif command -v apt-get >/dev/null 2>&1 &&
+               command -v sudo >/dev/null 2>&1 &&
+               sudo -n true 2>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y libeigen3-dev
+            if ! eigen_present; then
+              echo "::error::Eigen3 is missing after installation; the runner image must bake libeigen3-dev." >&2
+              exit 1
+            fi
+          else
+            echo "::error::Eigen3 is a missing prerequisite; the runner image must bake libeigen3-dev." >&2
+            exit 1
+          fi
+          if ! eigen_present; then
+            echo "::error::Eigen3 is a missing prerequisite; the runner image must bake libeigen3-dev." >&2
+            exit 1
+          fi
 
       - name: Install Eigen3 (macOS)
         if: runner.os == 'macOS'
@@ -468,7 +489,7 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
+    runs-on: ["self-hosted","pf-gcp-engine-main"]
     steps:
       - name: Mint org App token (hub dispatch)
         id: app
