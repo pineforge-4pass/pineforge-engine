@@ -893,6 +893,17 @@ the report. The flat-peak gate holds that in CI, so a regression fails a build
 instead of being noticed releases later. It has two arms, one command each,
 both in `scripts/ci_flat_peak_gate.py`:
 
+The growth gate is a required lane of `build-gate`: both `mem` (`ctest -L mem`)
+and `census` (battery plus full corpus under Valgrind) run on Linux
+`pf-linux-x64-16` for same-repository PRs, pushes to main and manual CI
+dispatches, and in the reusable release gate; neither enters the macOS matrix.
+Fork PRs retain their exclusion, so a non-docs fork skip fails `build-gate`.
+Only a skip after `changes` succeeded with `docs_only == 'true'` is accepted.
+A missing script, non-zero exit, absent positive-count PASS summary, memory
+growth or incomplete proof fails the lane and the aggregate. The required
+maintainer statuses `pineforge/verify` and `pineforge/parity` are unchanged;
+this workflow dependency does not change the repository ruleset.
+
 | Arm | Runs | Passes only when |
 | --- | --- | --- |
 | `mem` | a Release build with `PINEFORGE_BUILD_FLAT_MEMORY_TESTS=ON`, then `ctest -L mem`: the row `test_flat_memory_rss_macd`, the harness `tests/flat_memory_rss_e2e.py` over the cases `a`, `g`, `h` and `borrowed` (the bars, selected-window and magnifier ladders, and the borrowed-feed source check), run through a staged copy of `docker/run_json.py` beside the planner library the build made (`flat_memory_prefix`) | `ctest -N -L mem` lists exactly that row, ctest ran it and printed `ctest ran N rows (floor M)` with N at least M, it was not skipped, and the harness's own `RUN.COMPLETE` and four `case-*.json` say PASS with every ladder's rungs measured |
@@ -919,13 +930,13 @@ what it is for.
 
 Where it runs:
 
-- MAIN: the `flat-peak` job of `ci.yml` calls the reusable workflow
+- CI: the `flat-peak` job of `ci.yml` calls the reusable workflow
   `.github/workflows/flat-peak.yml` (jobs `flat-peak-mem` and
-  `flat-peak-census`, the standard `ubuntu-24.04` runner, the 360-minute
-  platform maximum) on a push to main and on a manual dispatch. A regression
-  fails the job and so the run. The job stays out of the advisory `build`
-  aggregate: that aggregate accepts only success or a docs-only skip from each
-  lane it names, and this lane is skipped on every pull request.
+  `flat-peak-census`) on a same-repository pull request, a push to main and a
+  manual dispatch. Both jobs use CI's exact trusted-event runner expression:
+  `pf-linux-x64-16`, with `ubuntu-24.04` only as the untrusted-event fallback.
+  Neither arm nor `build-gate` declares a timeout. A failed arm or an
+  unexpected skip fails the `build` aggregate through its `flat-peak` need.
 - RELEASE: the `flat-peak-gate` job of `release.yml` calls the same workflow,
   and the `release` job needs it. `prebuilt` needs `release` and `notify-hub`
   needs both, so a regression stops a dispatch before the `VERSION` bump is
@@ -934,10 +945,9 @@ Where it runs:
   commit, the one `release` bumps from, holds no secret and changes nothing: a
   stopped dispatch leaves nothing to undo, and the next one starts clean. A dry
   run runs the gate too.
-- Pull request: unchanged. A pull-request variant is wired only if it measures
-  under 60 seconds end to end, and a cold run of the `mem` arm builds the
-  engine in Release before its first row starts; the census profiles every
-  corpus probe twice under Valgrind. Neither arm runs on a pull request.
+- Pull request: both full arms run for branches of this repository. Fork
+  pull requests skip the growth work; `build-gate` rejects that skip unless
+  `changes` succeeded and answered docs-only. There is no fork success bypass.
 
 What a failure means. A red `mem` arm names the case and its ladder: that
 case's rest grew with its axis by more than the harness's slope limit (1 MiB),
@@ -955,9 +965,12 @@ plain build directory cannot make, because the pinned codegen is another
 repository reached over the network. The label must not contain `mem`:
 `ctest -L` is a regular-expression search, and `check-wiring` (the preflight
 stage `flat-peak-wiring`, with the unit tests of the stage `flat-peak-gate-tests`)
-fails on such a label, on a pull-request trigger, on a gate step that carries an
-`if`, a pipe or `continue-on-error`, and on a release job that stops needing the
-gate.
+checks this label set, gate steps without an `if`, a pipe or
+`continue-on-error`, and the release dependency chain. The workflow wrappers
+also require the script's final summaries, `flat-peak mem: PASS: ctest ran N
+rows (floor M); harness cases C/C passed over R measured rungs` and
+`flat-peak census: PASS: N comparisons (floor M), P corpus probes, G growing
+sites, 0 not admitted, status PASS`, with positive row/comparison counts.
 
 On a Linux host with the toolchain, the same two commands run the gate:
 
@@ -972,13 +985,14 @@ its LFS feed, and a build directory that has not held a census before.
 ## Runners and time limits
 
 The heavy jobs -- `preflight`, the four `build` legs, `sanitizers`,
-`kernel-only`, `native-live` and both corpus-parity jobs -- run on larger
-runners for a push, a manual dispatch, the nightly schedule and a pull request
+`kernel-only`, `native-live`, both corpus-parity jobs and both flat-peak arms --
+run on larger runners for a push, a manual dispatch, the nightly schedule and a pull request
 from a branch of this repository: the organization's `pf-linux-x64-16` (Ubuntu
 24.04 x64, 16 cores, 64 GB) and GitHub's `macos-26-xlarge` (the `macos-26`
 arm64 image on an M2, 5 cores, 14 GB). A larger runner bills the organization
-even for a public repository, so a pull request from a fork runs the same jobs
-on the free standard runners, `ubuntu-24.04` (4 vCPU, 16 GB) and `macos-26`
+even for a public repository, so a pull request from a fork runs the proof jobs
+other than flat-peak on the free standard runners, `ubuntu-24.04` (4 vCPU,
+16 GB) and `macos-26`
 (M1, 3 cores, 7 GB). Every heavy job selects its runner with one test that
 names what it trusts: a push, the schedule, a manual dispatch, or a
 `pull_request` whose head is a branch of this repository. Every other event
@@ -992,10 +1006,11 @@ runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || 
 ```
 
 The `build` matrix pairs each image with its `larger_runner` and names its legs
-explicitly, so they stay `build (<image>, <type>)`. `native-live.yml` and
-`corpus-parity.yml` apply the test themselves; in a `workflow_call` the
-`github` context is the caller's, so a fork's pull request through CI gets the
-standard runner there too. The advisory `build` aggregate runs a few seconds of
+explicitly, so they stay `build (<image>, <type>)`. `native-live.yml`,
+`corpus-parity.yml` and `flat-peak.yml` apply the test themselves; in a
+`workflow_call` the `github` context is the caller's, preserving the standard
+runner fallback for fork events. CI excludes forks from its flat-peak call.
+The advisory `build` aggregate runs a few seconds of
 shell and stays on the standard runner for every event. So does the `changes`
 job, a two-commit checkout and one `git diff`.
 
@@ -1003,12 +1018,12 @@ Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
 `check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
 parallelism follow the runner: 16 on the larger Linux runner, 5 on the M2, 4
 and 3 on the standard runners. The larger Linux runner is configured for at
-most eight jobs at once, and one CI run starts seven there (preflight, the two
-Ubuntu `build` legs, sanitizers, kernel-only, native-live and the parity
-subset); a pull request that touches the corpus pin or the parity tooling also
-starts the whole sweep there, an eighth. A documentation-only change starts
-preflight alone there. A second run that overlaps them waits
-for a runner. Larger runners bill the organization's Actions budget: with no
+most eight jobs at once; the two flat-peak arms join preflight, the Ubuntu
+`build` legs, sanitizers, kernel-only, native-live and the parity subset, so
+jobs may queue even within one CI run. A pull request that touches the corpus
+pin or parity tooling also starts the whole sweep there. A documentation-only
+change starts preflight alone there. Larger runners bill the organization's
+Actions budget: with no
 payment method or a spending limit of zero, their jobs wait for a runner that
 never comes, since GitHub does not fall back to a standard one. The test keeps
 a fork's pull request that leaves the workflows alone off the larger runners;
@@ -1016,12 +1031,18 @@ one that edits them runs its own copy, which preflight reports but does not
 stop, so the repository's approval rule for workflow runs from outside
 contributors is what bounds that case.
 
-`scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
-limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included, and keeps every other workflow -- `docs.yml`,
+`scripts/ci_preflight.py` (`ci-workflow-contract`) pins each job's
+runner, time-limit policy and parallelism in `ci.yml`, `native-live.yml`,
+`corpus-parity.yml` and `flat-peak.yml`, the `build` strategy block included,
+and keeps other
+workflows -- `docs.yml`,
 `promote-baseline.yml` and any new one -- on standard runners. Only
 `release.yml` is exempt, by name and while its `on:` block names only events no
-fork can raise (a push, the schedule, a dispatch; a dispatch alone today). A
+fork can raise (a push, the schedule, a dispatch; a dispatch alone today).
+The flat-peak arms and `build-gate` forbid explicit job or step timeouts;
+other jobs retain their inherited platform-maximum declarations. The gate's
+own older MAIN-only/timeout wiring checks remain a CR150-CX follow-up and
+currently fail preflight for this configuration. A
 heavy job moved back to the standard runner, a test or matrix entry that lets a
 fork's pull request onto a larger runner, a call to a workflow outside
 `.github/workflows/`, a changed time limit, a `ci_verify.py` call without
@@ -1091,7 +1112,8 @@ bounds the M2 from above.
 | `native-live-gate` | 360 (was 5) | Seconds; failure, cancellation and unexpected skip all fail the aggregate. |
 | `corpus-parity` | 360 (was 120) | 16.3-26.2 min on the standard runner, 10.1-10.3 min on the verification hosts. |
 | `corpus-parity-subset` | 360 (was 30) | 1.8-4.7 min on the standard runner, 2.4-3.8 min on the verification hosts. |
-| `build` (aggregate) | 360 (was 5) | Seconds. |
+| `build` (aggregate) | No explicit limit | Seconds; checks every required lane result, including flat-peak. |
+| `flat-peak-mem`, `flat-peak-census` | No explicit limit | Linux only; no GitHub duration measured from this lane. |
 | `changes` | 360 (was 5) | Seconds: a two-commit checkout and one `git diff`, on the standard runner. |
 
 Those three cancelled main jobs and the separate ASan failure in run

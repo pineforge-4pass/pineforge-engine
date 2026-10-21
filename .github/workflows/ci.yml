@@ -379,28 +379,23 @@ jobs:
     with:
       mode: subset
 
-  # MAIN tier: the CR-150 flat-peak memory gate, `ctest -L mem` and the heap
-  # census (.github/workflows/flat-peak.yml, docs/ci.md "Flat-peak memory
-  # gate"), after a merge and on a manual dispatch, never on a pull request: the
-  # pull-request tier is unchanged. A regression fails this job and so the run.
-  # It stays out of the advisory aggregate below on purpose: that aggregate
-  # accepts only success or a docs-only skip from each lane it names, and this
-  # lane is skipped on every pull request.
+  # Required growth lane of build-gate: both Linux arms run on same-repository
+  # PRs, pushes and dispatches. Keep the base's fork exclusion; a non-docs fork
+  # skip fails build-gate, whose only accepted skip is a proven docs-only one.
   flat-peak:
     needs: changes
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     uses: ./.github/workflows/flat-peak.yml
 
-  # Advisory aggregate context covering every GitHub Actions lane. The merge
+  # Aggregate context requiring every named GitHub Actions lane to pass. The merge
   # ruleset requires pineforge/verify and pineforge/parity, posted by the
   # maintainers, rather than this build context.
   build-gate:
     name: build
-    needs: [changes, preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
+    needs: [changes, preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset, flat-peak]
     if: always()
     # A few seconds of shell: the standard runner, for every event.
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
     steps:
       - name: Require every verification lane to have passed
         shell: bash
@@ -413,11 +408,13 @@ jobs:
           NATIVE_RESULT: ${{ needs.native-live.result }}
           KERNEL_RESULT: ${{ needs.kernel-only.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
+          FLAT_PEAK_RESULT: ${{ needs.flat-peak.result }}
         run: |
           printf '%s\n' "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
-            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT"
+            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
+            "flat-peak: $FLAT_PEAK_RESULT"
           # A proof lane passes by succeeding, or by having been skipped after
           # the changes job succeeded and answered docs-only. A lane skipped
           # for any other reason fails, and preflight must always succeed.
@@ -426,4 +423,5 @@ jobs:
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
           [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
             && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
-            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"
+            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
+            && passed "$FLAT_PEAK_RESULT"

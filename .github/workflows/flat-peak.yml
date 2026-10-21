@@ -10,18 +10,17 @@ name: Flat-peak memory gate
 #   flat-peak-census  tests/heap_census.py over the battery and the whole
 #                     corpus into a new directory, judged from census.json
 #
-# Callers: ci.yml, on a push to main and a manual dispatch and never on a pull
-# request, and release.yml, whose `release` job needs this gate so a regression
-# publishes nothing. A failing arm fails the job that calls it.
+# Callers: ci.yml, on same-repository pull requests, pushes to main and manual
+# dispatches, and release.yml, whose `release` job needs this gate so a
+# regression publishes nothing. Both arms are required by CI's build-gate.
 #
 # The gate steps carry no `if`, no continue-on-error and no `|| true`; the one
 # `always()` step of each job only retains diagnostics after the gate has
-# decided. scripts/ci_flat_peak_gate.py check-wiring (a ci_preflight stage)
-# holds that, and a registered row set that is empty or wrong fails the arm.
+# decided. Each wrapper requires a positive-count PASS summary as well as a
+# zero exit status; an absent script or missing summary fails the arm.
 #
-# Both jobs ride the standard Linux runner, as every workflow outside the three
-# a CI run starts must (scripts/ci_preflight.py), and carry the platform's own
-# 360-minute maximum, the only hang catcher (owner rule, 2026-10-12).
+# Both jobs use CI's exact Linux runner selection, with the standard runner
+# only as the fallback for untrusted events. No job or step sets a time limit.
 
 on:
   workflow_call:
@@ -38,8 +37,7 @@ env:
 
 jobs:
   flat-peak-mem:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     steps:
       # The gate configures with PINEFORGE_VERSION_SOURCE=FILE: no tags, no
       # history.
@@ -68,7 +66,17 @@ jobs:
       # Arm 1. Fails on a regression, on zero or a wrong row set under the label,
       # on a skipped row and on an absent or incomplete harness verdict.
       - name: Flat-peak memory rows (ctest -L mem)
-        run: python3 scripts/ci_flat_peak_gate.py mem --build-dir build-flat-peak --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_log="$RUNNER_TEMP/flat-peak-mem.log"
+          trap 'cat "$gate_log"' EXIT
+          python3 scripts/ci_flat_peak_gate.py mem --build-dir build-flat-peak --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache > "$gate_log" 2>&1
+          summary="$(tail -n 1 "$gate_log")"
+          if ! grep -Eq '^flat-peak mem: PASS: ctest ran [1-9][0-9]* rows \(floor [1-9][0-9]*\); harness cases [1-9][0-9]*/[1-9][0-9]* passed over [1-9][0-9]* measured rungs$' <<< "$summary"; then
+            echo '::error::flat-peak mem: missing positive row-count PASS summary'
+            exit 1
+          fi
 
       - name: Retain gate diagnostics
         if: always()
@@ -76,13 +84,13 @@ jobs:
         with:
           name: flat-peak-mem-diagnostics
           path: |
+            ${{ runner.temp }}/flat-peak-mem.log
             build-flat-peak/flat_memory_macd_results/
             build-flat-peak/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 
   flat-peak-census:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
     steps:
       # Credentials stay persisted, exactly as the corpus parity jobs: the
       # submodule clone and `git lfs pull` below go out over https and that is
@@ -163,7 +171,17 @@ jobs:
       # Arm 2. Fails on a growing allocation site (RED), on an incomplete proof
       # (OPEN), on an absent report and on a missing tool.
       - name: Heap census (growth gate)
-        run: python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_log="$RUNNER_TEMP/flat-peak-census.log"
+          trap 'cat "$gate_log"' EXIT
+          python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache > "$gate_log" 2>&1
+          summary="$(tail -n 1 "$gate_log")"
+          if ! grep -Eq '^flat-peak census: PASS: [1-9][0-9]* comparisons \(floor [1-9][0-9]*\), [1-9][0-9]* corpus probes, [0-9]+ growing sites, 0 not admitted, status PASS$' <<< "$summary"; then
+            echo '::error::flat-peak census: missing positive comparison-count PASS summary'
+            exit 1
+          fi
 
       - name: Retain gate diagnostics
         if: always()
@@ -171,6 +189,7 @@ jobs:
         with:
           name: flat-peak-census-diagnostics
           path: |
+            ${{ runner.temp }}/flat-peak-census.log
             build-flat-peak-census/heap-census/census.json
             build-flat-peak-census/heap-census/CENSUS.md
           if-no-files-found: warn

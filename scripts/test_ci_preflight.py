@@ -15,7 +15,7 @@ from unittest import mock
 
 import ci_preflight
 import ci_verify
-from ci_preflight import (CORES, DOCS_ONLY_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER, NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
+from ci_preflight import (CORES, DOCS_ONLY_SKIP, FLAT_PEAK_SKIP, JOB_RUNNERS, LINUX_RUNNER, MATRIX_RUNNER, NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, _jobs, check_commands,
                           ci_workflow_findings, native_workflow_findings, run_checks)
 
@@ -72,6 +72,8 @@ class PreflightFailures(unittest.TestCase):
             (0, '  build:\n', '  missing-build:\n'),
             (0, '  kernel-only:\n', '  missing-kernel:\n'),
             (0, '  corpus-parity-subset:\n', '  missing-subset:\n'),
+            (0, '  flat-peak:\n', '  missing-flat-peak:\n'),
+            (0, 'uses: ./.github/workflows/flat-peak.yml', 'uses: ./.github/workflows/native-live.yml'),
             (0, '  build-gate:\n', '  missing-gate:\n'),
             (0, 'passed "$SANITIZER_RESULT"', 'true'),
             (0, '[[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT"',
@@ -240,7 +242,9 @@ class PreflightFailures(unittest.TestCase):
              'ci.yml job sanitizers must allow 360'),
             (0, 'kernel-only', 'timeout-minutes: 360', 'timeout-minutes: 45',
              'ci.yml job kernel-only must allow 360'),
-            (0, 'build-gate', '    timeout-minutes: 360\n', '', 'ci.yml job build-gate must allow 360'),
+            (0, 'build-gate', '    runs-on: ubuntu-24.04\n',
+             '    runs-on: ubuntu-24.04\n    timeout-minutes: 360\n',
+             'ci.yml job build-gate must not set a time limit'),
             (0, 'changes', 'runs-on: ubuntu-24.04', 'runs-on: pf-linux-x64-16',
              'ci.yml job changes must run on ubuntu-24.04'),
             (0, 'changes', '    timeout-minutes: 360\n', '    timeout-minutes: 300\n',
@@ -339,20 +343,21 @@ class PreflightFailures(unittest.TestCase):
         skip = f'    if: {DOCS_ONLY_SKIP}\n'
         mutations = []
         for job in PROOF_JOBS:
+            job_skip = f'    if: {FLAT_PEAK_SKIP if job == "flat-peak" else DOCS_ONLY_SKIP}\n'
             refused = f'{job} must start alongside preflight, after changes alone'
             mutations += [
                 (job, '    needs: changes\n', '', refused),
                 (job, '    needs: changes\n', '    needs: [changes, preflight]\n', refused),
                 (job, '    needs: changes\n', '    needs: preflight\n', refused),
-                (job, skip, '', refused),
+                (job, job_skip, '', refused),
                 # A failed or unanswered classification must run the job.
-                (job, skip, "    if: ${{ needs.changes.outputs.docs_only != 'true' }}\n", refused),
-                (job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only == 'false' }}\n",
+                (job, job_skip, "    if: ${{ needs.changes.outputs.docs_only != 'true' }}\n", refused),
+                (job, job_skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only == 'false' }}\n",
                  refused),
-                (job, skip, skip.replace("!= 'true'", "!= 'true' && github.event_name != 'push'"),
+                (job, job_skip, job_skip.replace("!= 'true'", "!= 'true' && github.event_name != 'push'"),
                  refused),
                 # A skip the aggregate would not accept: a failed classification.
-                (job, skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
+                (job, job_skip, "    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}\n",
                  refused)]
         mutations += [
             ('preflight', '    timeout-minutes: 360\n', '    timeout-minutes: 360\n    needs: changes\n',
@@ -588,13 +593,12 @@ class PreflightFailures(unittest.TestCase):
         self.assertTrue(any('lint.yml job lint must stay on a standard runner' in line for line in
                             ci_workflow_findings(*original, others=dict(others, **{'lint.yml': decoy}))))
 
-    def test_no_stage_runs_under_a_timeout_and_jobs_keep_the_platform_maximum(self):
+    def test_no_stage_timeout_and_jobs_preserve_their_limit_policy(self):
         # Owner rule, 2026-10-12: no stage of this preflight is run under a
         # timeout of its own any more (its verifier-tests stage has taken
-        # longer than the old 2400 s bound on slow hosts), and every pinned
-        # job limit is GitHub's own 360-minute maximum -- the only hang
-        # catcher left, and deliberately the same for a five-second job and
-        # the full verifier.
+        # longer than the old 2400 s bound on slow hosts). The growth arms and
+        # build aggregate forbid explicit limits; other pinned jobs retain
+        # their inherited 360-minute declarations.
         self.assertFalse(hasattr(ci_preflight, 'STAGE_TIMEOUT_SECONDS'))
         source = (ROOT / 'scripts/ci_preflight.py').read_text()
         stage_call = re.search(r'result = subprocess\.run\(argv, cwd=source[^\n]*\)',
@@ -604,7 +608,28 @@ class PreflightFailures(unittest.TestCase):
         for workflow, jobs in JOB_RUNNERS.items():
             for job, (_, minutes, _) in jobs.items():
                 with self.subTest(workflow=workflow, job=job):
-                    self.assertEqual(minutes, 360)
+                    self.assertEqual(minutes, None if workflow == 'flat-peak.yml' or
+                                     (workflow == 'ci.yml' and job == 'build-gate') else 360)
+
+    def test_flat_peak_arms_pin_linux_runners_parallelism_and_no_time_limit(self):
+        original, others = self.ci_sources(), self.other_sources()
+        self.assertEqual(ci_workflow_findings(*original, others=others), [])
+        for job in ('flat-peak-mem', 'flat-peak-census'):
+            for before, after, finding in (
+                    (LINUX_RUNNER, 'ubuntu-24.04', f'job {job} must run on'),
+                    (LINUX_RUNNER, 'pf-linux-x64-16', f'job {job} must run on'),
+                    ("|| 'ubuntu-24.04'", "|| 'pf-linux-x64-16'", f'job {job} must run on'),
+                    ('    steps:\n', '    timeout-minutes: 360\n    steps:\n',
+                     f'job {job} must not set a time limit'),
+                    ('        shell: bash\n', '        shell: bash\n        timeout-minutes: 360\n',
+                     f'job {job} must not set a time limit'),
+                    (f'--jobs {CORES}', '--jobs 4', f'job {job} must size its parallelism'),
+                    ('        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
+                     f'job {job} must not continue on error')):
+                with self.subTest(job=job, after=after):
+                    changed = in_job(others['flat-peak.yml'], job, before, after)
+                    findings = ci_workflow_findings(*original, others=dict(others, **{'flat-peak.yml': changed}))
+                    self.assertTrue(any(finding in line for line in findings), findings)
 
     def contract_stage(self, mutation):
         """Run the ci-workflow-contract stage's argv in a copy of the tree."""

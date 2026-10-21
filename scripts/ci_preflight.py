@@ -83,24 +83,25 @@ CURL_CACHE_SAVE = ("${{ inputs.cold-cache != 'true' && steps.curl-build.outcome 
                    "&& steps.curl-cache.outputs.cache-hit != 'true' }}")
 # Build and CTest parallelism is the core count of whichever runner took the job.
 CORES = '"$(getconf _NPROCESSORS_ONLN)"'
-VERIFY, PARITY = 'ci_verify.py', 'check_corpus_parity.sh'
+VERIFY, PARITY, FLAT_PEAK = 'ci_verify.py', 'check_corpus_parity.sh', 'ci_flat_peak_gate.py'
 PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # Every job with a runner in the workflows a CI run starts: its runs-on, its
 # timeout-minutes, exactly, and the command that must carry the core count.
-# Every one of them is the platform's own 360-minute job maximum, the only
-# hang catcher left (owner rule, 2026-10-12: no time limit of this repository
-# may fail a run for slowness); docs/ci.md says so.
+# None forbids an explicit job or step time limit (flat-peak and build-gate).
+# Other jobs retain their inherited platform-maximum declarations.
 JOB_RUNNERS = {
     'ci.yml': {'changes': ('ubuntu-24.04', 360, None),
                'preflight': (LINUX_RUNNER, 360, None),
                'build': (MATRIX_RUNNER, 360, VERIFY),
                'sanitizers': (LINUX_RUNNER, 360, VERIFY),
                'kernel-only': (LINUX_RUNNER, 360, VERIFY),
-               'build-gate': ('ubuntu-24.04', 360, None)},
+               'build-gate': ('ubuntu-24.04', None, None)},
     'native-live.yml': {'native-live': (LINUX_RUNNER, 360, VERIFY),
                          'native-live-gate': ('ubuntu-24.04', 360, None)},
     'corpus-parity.yml': {'corpus-parity': (LINUX_RUNNER, 360, PARITY),
                           'corpus-parity-subset': (LINUX_RUNNER, 360, PARITY)},
+    'flat-peak.yml': {'flat-peak-mem': (LINUX_RUNNER, None, FLAT_PEAK),
+                      'flat-peak-census': (LINUX_RUNNER, None, FLAT_PEAK)},
 }
 # Every other workflow keeps its jobs on these. release.yml is exempt by name,
 # while its on: block names only events no fork can raise (a push, the
@@ -110,13 +111,19 @@ STANDARD_RUNNERS = ('ubuntu-24.04', 'ubuntu-latest')
 TRUSTED_ONLY_WORKFLOWS = ('release.yml',)
 TRUSTED_ONLY_EVENTS = {'push', 'schedule', 'workflow_dispatch'}
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
-# for the changes job alone and skips only when it succeeded and answered
-# docs-only -- exactly the skip the build aggregate accepts -- so a failed or
-# unanswered classification runs it.
+# for changes alone; the aggregate accepts a skip only when classification
+# succeeded and answered docs-only. Flat-peak additionally excludes fork PRs,
+# whose non-docs skip the aggregate rejects.
 PROOF_JOBS = {'build': 'BUILD_RESULT', 'sanitizers': 'SANITIZER_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
-              'corpus-parity-subset': 'PARITY_RESULT'}
+              'corpus-parity-subset': 'PARITY_RESULT', 'flat-peak': 'FLAT_PEAK_RESULT'}
 DOCS_ONLY_SKIP = ("${{ !cancelled() && (needs.changes.result != 'success' || "
+                  "needs.changes.outputs.docs_only != 'true') }}")
+# The growth work retains its fork exclusion. The aggregate still rejects a
+# non-docs fork skip; it never converts that exclusion into a passing proof.
+FLAT_PEAK_SKIP = ("${{ !cancelled() && (github.event_name != 'pull_request' || "
+                  "github.event.pull_request.head.repo.full_name == github.repository) && "
+                  "(needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
 # The classification step, exactly: the base's copy of the rule judges the
 # change, a base without one runs every job, and the answer is the script's.
@@ -136,7 +143,7 @@ CLASSIFY_STEP = """      - name: Classify the change
 """
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kernel-only, '
-              'corpus-parity-subset]')
+              'corpus-parity-subset, flat-peak]')
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
 # submodule guards across parallel unittest shards (run_unittest_shards.py),
@@ -147,10 +154,10 @@ GATE_NEEDS = ('needs: [changes, preflight, build, sanitizers, native-live, kerne
 _JOB_HEADER = re.compile(r'^  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(?:#.*)?$', re.MULTILINE)
 _JOBS_KEY = re.compile(r'^jobs:[ \t]*(?:#.*)?$', re.MULTILINE)
 _ON_KEY = re.compile(r'^(?:on|"on"|\'on\')[ \t]*:[ \t]*([^#\n]*)', re.MULTILINE)
-# --jobs and every abbreviation argparse accepts for it in ci_verify.py, and a
-# call of ci_verify itself, as a script or a module.
+# --jobs and every argparse abbreviation, and a verifier or growth-gate call,
+# as a script or a module.
 _JOBS_FLAG = re.compile(r'(?<![\w-])--j(?:o|ob|obs)?(?=[\s=]|$)')
-_VERIFY_CALL = re.compile(r'\bci_verify\.py\b|-m\s+ci_verify\b')
+_VERIFY_CALL = re.compile(r'\b(?:ci_verify|ci_flat_peak_gate)\.py\b|-m\s+(?:ci_verify|ci_flat_peak_gate)\b')
 
 
 def _jobs_text(workflow: str) -> str | None:
@@ -255,7 +262,7 @@ def _sized(text: str, command: str | None) -> bool:
     """Whether a job's work runs at the runner's core count.
 
     Counted over the whole job, in order, so no line, block or chaining form
-    matters: every ci_verify call carries one core-count --jobs before the next
+    matters: every verifier/growth call carries one core-count --jobs before the next
     call, no other --jobs spelling appears, and every JOBS and parity-script
     mention is part of the one parity command.
     """
@@ -268,7 +275,7 @@ def _sized(text: str, command: str | None) -> bool:
     return (re.fullmatch(r'(?:CF)*', calls) is not None
             and len(re.findall(r'\bJOBS\s*[:=]', text)) == parity
             and text.count(PARITY) == parity
-            and (command != VERIFY or bool(calls))
+            and (command not in (VERIFY, FLAT_PEAK) or bool(calls))
             and (command != PARITY or parity > 0))
 
 
@@ -325,7 +332,10 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             runner, minutes, command = pinned[job]
             if runs_on != [runner]:
                 findings.append(f'{name} job {job} must run on {runner}')
-            if _job_values(body, 'timeout-minutes') != [str(minutes)]:
+            if minutes is None and any(_key_value(line, 'timeout-minutes') is not None
+                                       for line in _code(body)):
+                findings.append(f'{name} job {job} must not set a time limit')
+            elif minutes is not None and _job_values(body, 'timeout-minutes') != [str(minutes)]:
                 findings.append(f'{name} job {job} must allow {minutes} minutes')
             # A job on 16 cores that still asks for 4 wastes the runner it pays for.
             if not _sized(_counted_text(body), command):
@@ -491,10 +501,14 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         if _job_values(jobs.get(job, ''), 'needs') or _job_values(jobs.get(job, ''), 'if'):
             findings.append(f'{job} must start at once on every run')
     for job in PROOF_JOBS:
+        condition = FLAT_PEAK_SKIP if job == 'flat-peak' else DOCS_ONLY_SKIP
         if (_job_values(jobs.get(job, ''), 'needs') not in (['changes'], ['[changes]'])
-                or _job_values(jobs.get(job, ''), 'if') != [DOCS_ONLY_SKIP]):
+                or _job_values(jobs.get(job, ''), 'if') != [condition]):
             findings.append(f'{job} must start alongside preflight, after changes alone, '
-                            'and skip only a docs-only change')
+                            + ('and preserve its docs-only/fork condition' if job == 'flat-peak'
+                               else 'and skip only a docs-only change'))
+    if _job_values(jobs.get('flat-peak', ''), 'uses') != ['./.github/workflows/flat-peak.yml']:
+        findings.append('flat-peak must call ./.github/workflows/flat-peak.yml')
     changes = jobs.get('changes', '')
     if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
             or CLASSIFY_STEP not in changes + '\n'):
@@ -502,7 +516,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     # A job or step that continues on error reports success to the aggregate
     # however it ended.
     for name, workflow in (('ci.yml', ci), ('native-live.yml', native),
-                           ('corpus-parity.yml', parity)):
+                           ('corpus-parity.yml', parity),
+                           ('flat-peak.yml', (others or {}).get('flat-peak.yml', ''))):
         for job, body in _jobs(workflow).items():
             if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
                 findings.append(f'{name} job {job} must not continue on error')
