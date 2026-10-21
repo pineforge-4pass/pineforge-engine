@@ -12,6 +12,13 @@
 #include <type_traits>
 #include <variant>
 
+#ifndef PINEFORGE_TAIL_WORK
+#define PINEFORGE_TAIL_WORK(site, count) ((void)0)
+#endif
+#ifndef PINEFORGE_BROKER_HASH_OBSERVE
+#define PINEFORGE_BROKER_HASH_OBSERVE(rows, families, archived, digest) ((void)0)
+#endif
+
 namespace pineforge {
 namespace {
 
@@ -59,6 +66,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.requested_qty); f.d(value.projection_remaining_qty);
     f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort);
+    // Conditional v19/v4 retirement fact: an untouched placement retains
+    // its byte spelling. This receipt decides the filled-limit K1 exception.
+    if (value.filled_exit) f.u(0x66696c6c6564ULL);
     f.b(value.reservation_deferred_to_pending_entry);
     // Folded only when set, so a run that never issues a void exit keeps
     // its digest (lane W3B-ENG-GRID).
@@ -329,9 +339,17 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // v4: the rows the table still holds, in incarnation order, and what the
     // erased ones left: the high water, how many, and a running digest of
     // their identities (PlacementTable::erased_digest).
+    // O1W's terminally filled, non-revivable limits use the same erase/fold
+    // path. This deliberately changes values inside the retirement epoch;
+    // no hash of a mutable placement is cached.
+    PINEFORGE_BROKER_HASH_OBSERVE(placement_, bracket_families_,
+                                settled_bracket_families_, settled_bracket_digest_);
     f.u(placement_.high_water()); f.u(placement_.erased_rows()); f.u(placement_.erased_digest());
     f.u(placement_.size());
-    for (const auto& row : placement_) { f.u(row.first); hash_placement(f, row.second); }
+    for (const auto& row : placement_) {
+        PINEFORGE_TAIL_WORK("hash_placements", 1);
+        f.u(row.first); hash_placement(f, row.second);
+    }
     std::vector<std::uint64_t> live_keys;
     for (const auto& pair : live_by_source_key_) live_keys.push_back(pair.first);
     std::sort(live_keys.begin(), live_keys.end()); f.u(live_keys.size());
@@ -343,10 +361,20 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         // v4: the settled prefix as its count and running digest, the
         // working tail in full, and the consumed legs of erased members.
         const auto& family = bracket_families_.at(key);
+        PINEFORGE_TAIL_WORK("hash_families", 1);
         f.u(key); f.u(family.settled_count()); f.u(family.settled_digest());
         hash_native_handle_vector(f, family.working_tail());
         f.u(family.consumed_facts().size());
         for (const auto& fact : family.consumed_facts()) { f.u(fact.first); f.u(fact.second); }
+    }
+    // Immutable wholly settled families are still addressable for a later
+    // bracket cancel/re-issue. Their keyed digest changes on archive, restore
+    // and erase, so reads cost only active families. This versioned extension
+    // is absent when no family is archived; the v4 working-tail fold above
+    // keeps its spelling. Run identity is normalized as for native handles.
+    if (!settled_bracket_families_.empty()) {
+        f.s("pineforge-settled-bracket-families/v1");
+        f.u(settled_bracket_families_.size()); f.u(settled_bracket_digest_);
     }
     f.u(pending_bracket_legs_.size());
     for (const auto& leg : pending_bracket_legs_) {

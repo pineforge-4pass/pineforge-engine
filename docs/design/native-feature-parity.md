@@ -1208,6 +1208,41 @@ rows and cost ×18.6.
 The tombstone audit counts that scan as the existence test it is: an erased row
 is a hit only when no retained row answers the test first.
 
+**O1W: filled limit retirement and incremental K3.** A terminal Applied fill
+of an origin-free limit without protection or a replacement definition records
+`PlacementSnapshot::filled_exit`; a fresh request incarnation clears that fact.
+K1 releases an origin-free limit-only filled
+exit whose placed and inherited lifecycle definitions contain no stop, loss
+or trail and no pending replacement. Suspension cannot give it an executable
+margin-revival stop, and no opened origin asks its consumed-leg question.
+Roots and K2/K3 still pin it as evidence for another candidate. In particular,
+a later same-family/id/from-entry row with different stop bits can still be
+the first K3 witness for an earlier candidate; distinct ids or identical stop
+bits cannot satisfy that test. Future calls cannot require the erased row
+as a candidate: it is already non-revivable, and K3 only looks forward in
+placement age. Filled stops, trails, bound-origin brackets and inherited
+replacements keep the existing lifecycle pins.
+
+K3 memoizes its lowest-incarnation witness per candidate and the last scan's
+placement high water. New candidates read all retained rows; unresolved old
+candidates read only newly placed rows. Resolved candidates keep their pinned
+witness. Anchored legs adopted below the high water are explicitly compared
+against old candidates too; a wholesale row rewrite invalidates the memo.
+The memo is reconstructible from the table and cleared at run begin.
+Wholly settled bracket families with no consumed-origin facts leave the active
+family table, keeping their exact prefix record in an archive. Appending
+restores that record; bracket cancellation still emits its settled count of
+same-run non-working cancellations. Ordinary family scans and hash reads
+visit active families only. The archive's keyed digest is maintained on every
+archive, restore and erase, under `pineforge-settled-bracket-families/v1`;
+the terminal-fill marker and earlier placement erasure are explicit hash
+value changes within the v19/v4 retirement epoch, like INT21 above. Mutable
+placements and family tails continue to fold in full. The `retired_row_scratch_`
+waiver covers only the derived memos, not the archive or terminal-fill fact.
+`test_position_tail_retirement` compares retaining/erasing runs and exact
+K3-oracle answers; `test_position_tail_retirement_work` counts production K3
+pairs and hash-row visits over doubled scale-out feeds.
+
 **Completed by R5 lane V19-FIX (audit X2, X9), inside the v19 epoch.** Two
 reads still cost what the run had done (macOS arm64, Release, process CPU).
 K1 held a leg lifecycle of the current position cycle for the margin revival,

@@ -37,6 +37,15 @@
 #endif
 #endif
 
+// Compile-time observation only, as for the position-tail seam above. No
+// environment variable, strategy input or test population selects a path.
+#ifndef PINEFORGE_TAIL_WORK
+#define PINEFORGE_TAIL_WORK(site, count) ((void)0)
+#endif
+#ifndef PINEFORGE_RETIREMENT_OBSERVE
+#define PINEFORGE_RETIREMENT_OBSERVE(rows, candidates, first) ((void)0)
+#endif
+
 #include <cerrno>
 #include <algorithm>
 #include <atomic>
@@ -125,6 +134,42 @@ bool same_exit_levels(const PineExitLevels& left, const PineExitLevels& right) n
 bool withdrawn(const exit_legs::Lifecycle& legs) noexcept {
     return legs.retired(exit_legs::Leg::Stop) && legs.retired(exit_legs::Leg::Limit)
         && legs.retired(exit_legs::Leg::Trail);
+}
+
+// A filled origin-free limit has no consumed-origin reader. Even if a later
+// reversal suspends it, margin revival cannot execute it: both the placed and
+// inherited lifecycle definitions lack a stop (and every loss/trail input).
+// Do not infer this from !live alone: cancelled stops and dormant replacements
+// can still revive. K2/K3 may nevertheless need this row as a supersessor.
+bool unbound_limit_without_revival(const PlacementSnapshot& row) noexcept {
+    const auto& levels = row.exit_levels;
+    const auto no_protection = [](const exit_legs::Prices& prices) {
+        return std::isnan(prices.stop_price) && std::isnan(prices.loss_ticks)
+            && std::isnan(prices.trail_points) && std::isnan(prices.trail_price)
+            && std::isnan(prices.trail_offset);
+    };
+    const auto& suspension = row.legs.suspension();
+    return row.family == PineOrderFamily::ExitLimit
+        && row.bracket_origin.incarnation == 0 && row.per_entry_origin == 0
+        && !row.pending_bound_exit && !row.legs.pending_replacement()
+        && std::isnan(levels.stop) && std::isnan(levels.loss_ticks)
+        && std::isnan(levels.trail_points) && std::isnan(levels.trail_price)
+        && std::isnan(levels.trail_offset)
+        && no_protection(row.legs.prices())
+        && (!suspension || !suspension->revival_definition
+            || no_protection(suspension->revival_definition->prices()));
+}
+
+bool filled_limit_without_revival(const PlacementSnapshot& row) noexcept {
+    return row.filled_exit && unbound_limit_without_revival(row);
+}
+
+// Order-independent keyed fold: only immutable archive records enter it.
+// XOR permits exact removal on restore/cancel without replaying history.
+std::uint64_t settled_bracket_hash(std::uint64_t key, const BracketRoster::Settled& row) {
+    BrokerStateHashSink f;
+    f.u(key); f.u(row.last); f.u(row.count); f.u(row.digest);
+    return f.h;
 }
 
 bool finite_positive(double value) noexcept {
@@ -2268,14 +2313,14 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         [&](std::uint64_t, const PlacementSnapshot& candidate) {
             return candidate.placement_cycle == current_position_cycle_
                 && candidate.legs.dormant() && candidate.legs.target().incarnation != 0
-                && !withdrawn(candidate.legs);
+                && !withdrawn(candidate.legs) && !filled_limit_without_revival(candidate);
         });
 #if PINEFORGE_PLACEMENT_AUDIT
     for (const auto& retained : placement_) {
         const auto& candidate = retained.second;
         if (retained.second.placement_cycle != current_position_cycle_
             || !candidate.legs.dormant() || !candidate.legs.target().incarnation
-            || withdrawn(candidate.legs)) {
+            || withdrawn(candidate.legs) || filled_limit_without_revival(candidate)) {
             continue;
         }
         const auto inc = retained.first;
@@ -2425,6 +2470,10 @@ void PineExecutionAdapter::reset_for_run() {
     pine_view_host_ = nullptr;
     // Incarnations start over with the run.
     retired_row_scratch_.unsuperseded.clear();
+    retired_row_scratch_.reissues.clear();
+    retired_row_scratch_.adopted_reissues.clear();
+    retired_row_scratch_.reissue_high_water = 0;
+    retired_row_scratch_.reissue_cycle = -1;
     retired_row_scratch_.roster_pass_due = true;
     if (auto* index = adapter_lookup_index(bound_consumer(), this, run_counter_, false))
         index->clear();
@@ -2432,7 +2481,7 @@ void PineExecutionAdapter::reset_for_run() {
     cohorts_by_id_.clear();
     placement_.clear();
     live_by_source_key_.clear();
-    bracket_families_.clear();
+    clear_bracket_families();
     pending_bracket_legs_.clear();
     pending_entries_.clear();
     delayed_market_orders_.clear();
@@ -3487,6 +3536,17 @@ native_order::Group PineExecutionAdapter::group_for(const std::string& name, int
 
 void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
                                     PlacementSnapshot&& snapshot) {
+    snapshot.filled_exit = false;
+    // Most rows arrive above the high water. An anchored leg can be adopted
+    // later: K3 must compare that new peer against old (even resolved)
+    // candidates too. A wholesale rewrite invalidates the immutable-field
+    // memo rather than trusting its former identity/stop answer.
+    if (placement_.contains(handle.incarnation)) {
+        retired_row_scratch_.reissues.clear();
+        retired_row_scratch_.reissue_high_water = 0;
+    } else if (handle.incarnation <= retired_row_scratch_.reissue_high_water) {
+        retired_row_scratch_.adopted_reissues.push_back(handle.incarnation);
+    }
     if (snapshot.reservation_growth_owner_incarnation != 0
         && snapshot.reservation_growth_owner_incarnation != handle.incarnation) {
         snapshot.reservation_growth_source.assign_capture(
@@ -3577,7 +3637,7 @@ std::uint64_t retired_rows_erased() noexcept { return rows_erased.load(std::memo
 // Audit mirror of K1's cycle and oldest dormant-representative pins.
 // A named id's momentary exposure does not shorten the cycle pin.
 bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) const noexcept {
-    if (row.legs.target().incarnation == 0) return false;
+    if (row.legs.target().incarnation == 0 || filled_limit_without_revival(row)) return false;
     const std::uint64_t origin = row.bracket_origin.incarnation;
     bool askable = false;
     for (const auto& handle : live_handles_) if (handle.incarnation == origin) askable = true;
@@ -3671,6 +3731,10 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // for an origin that is live or opened. A cycle that cancels and re-places an
 // exit every bar at the same level -- no re-issue at another stop supersedes
 // it -- no longer holds a row per bar either.
+//
+// O1W: a terminally filled origin-free limit without any stop/loss/trail or
+// inherited replacement definition is not a revival candidate. K2, K3 and
+// the ordinary roots still keep it when another reader needs its identity.
 void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& context) {
     // The previous bars' trades are final: their exit phases fold once.
     const std::size_t phase_base = detail::run_consumer(require_host()).closed_trade_prefix().base;
@@ -3730,7 +3794,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         // Exposure at this sweep cannot decide what a later margin call reads.
         // Supersession below still releases legs the revival can no longer use.
         const bool askable = contains(askable_origins, value.bracket_origin.incarnation);
-        if (value.legs.target().incarnation != 0
+        if (value.legs.target().incarnation != 0 && !filled_limit_without_revival(value)
             && ((value.placement_cycle >= cycle && !withdrawn(value.legs))
                 || (askable && !value.legs.dormant())
                 || std::find(origin_pins.begin(), origin_pins.end(), &value) != origin_pins.end())) return true;
@@ -3977,7 +4041,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
         if (value.legs.target().incarnation == 0 || value.placement_cycle != cycle
             || !exit_family(value.family) || value.from_entry.empty()
-            || withdrawn(value.legs)) {
+            || withdrawn(value.legs) || filled_limit_without_revival(value)) {
             return false;
         }
         if (unpinned) {
@@ -4003,30 +4067,75 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
         candidate_names.push_back(c.second->legs.target().incarnation);
     }
     std::sort(candidate_names.begin(), candidate_names.end());
-    // K3: the lowest-incarnation current-cycle re-issue superseding each candidate.
+    // K3: preserve the first witness, but never repeat old-candidate x old-row
+    // comparisons. Identity, stop bits and placement time do not change.
+    // Rows appended since the last K3 pass can only add later witnesses.
     auto& first_reissues = sweep.first_reissues;
-    if (!candidates.empty()) {
-        constexpr std::uint64_t none = std::numeric_limits<std::uint64_t>::max();
-        first_reissues.assign(candidates.size(), none);
+    auto& next_reissues = sweep.next_reissues;
+    if (sweep.reissue_cycle != cycle) {
+        sweep.reissues.clear();
+        sweep.reissue_high_water = 0;
+        sweep.reissue_cycle = cycle;
+    }
+    std::size_t prior = 0;
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        const auto incarnation = candidates[index].first;
+        while (prior < sweep.reissues.size() && sweep.reissues[prior].first < incarnation) ++prior;
+        const bool known = prior < sweep.reissues.size()
+            && sweep.reissues[prior].first == incarnation
+            && (sweep.reissues[prior].second == 0
+                || placement_.contains(sweep.reissues[prior].second));
+        const auto witness = known ? sweep.reissues[prior].second : 0;
+        next_reissues.emplace_back(incarnation, witness);
+        if (!known) sweep.new_candidates.push_back(index);
+        else {
+            sweep.known_candidates.push_back(index);
+            if (witness == 0) sweep.unresolved_candidates.push_back(index);
+        }
+    }
+    const auto compare_reissue = [&](std::uint64_t incarnation, const PlacementSnapshot& value,
+                                     std::size_t index) {
+        PINEFORGE_TAIL_WORK("k3_pairs", 1);
+        auto& witness = next_reissues[index].second;
+        const auto& c = candidates[index];
+        if (incarnation <= c.first || (witness != 0 && incarnation >= witness)) return;
+        const auto& q = *c.second;
+        if (q.family == value.family
+            && q.placement_script_open_ms < value.placement_script_open_ms
+            && !same_double_bits(q.exit_levels.stop, value.exit_levels.stop)
+            && q.source_id == value.source_id && q.from_entry == value.from_entry)
+            witness = incarnation;
+    };
+    if (!sweep.new_candidates.empty()) {
         placement_.visit_rows([&](std::uint64_t incarnation, const PlacementSnapshot& value) {
-            if (value.placement_cycle != cycle || !exit_family(value.family)) return false;
-            for (std::size_t index = 0; index < candidates.size(); ++index) {
-                const auto& c = candidates[index];
-                if (incarnation <= c.first || incarnation >= first_reissues[index]) continue;
-                const PlacementSnapshot& q = *c.second;
-                if (q.family == value.family
-                    && q.placement_script_open_ms < value.placement_script_open_ms
-                    && !same_double_bits(q.exit_levels.stop, value.exit_levels.stop)
-                    && q.source_id == value.source_id && q.from_entry == value.from_entry) {
-                    first_reissues[index] = incarnation;
-                }
-            }
+            if (value.placement_cycle == cycle && exit_family(value.family))
+                for (const auto index : sweep.new_candidates) compare_reissue(incarnation, value, index);
             return false;
         });
-        first_reissues.erase(std::remove(first_reissues.begin(), first_reissues.end(), none),
-                             first_reissues.end());
-        std::sort(first_reissues.begin(), first_reissues.end());
     }
+    if (!sweep.unresolved_candidates.empty()) {
+        const PlacementTable& rows = placement_;
+        for (auto it = rows.upper_bound(sweep.reissue_high_water); it != rows.end(); ++it) {
+            const auto& value = it->second;
+            if (value.placement_cycle == cycle && exit_family(value.family))
+                for (const auto index : sweep.unresolved_candidates)
+                    compare_reissue(it->first, value, index);
+        }
+    }
+    for (const auto incarnation : sweep.adopted_reissues) {
+        const auto row = placement_.find(incarnation);
+        if (row == placement_.end() || row->second.placement_cycle != cycle
+            || !exit_family(row->second.family)) continue;
+        for (const auto index : sweep.known_candidates)
+            compare_reissue(incarnation, row->second, index);
+    }
+    sweep.adopted_reissues.clear();
+    for (const auto& answer : next_reissues)
+        if (answer.second != 0) first_reissues.push_back(answer.second);
+    std::sort(first_reissues.begin(), first_reissues.end());
+    sweep.reissues.swap(next_reissues);
+    sweep.reissue_high_water = placement_.high_water();
+    PINEFORGE_RETIREMENT_OBSERVE(placement_, candidates, first_reissues);
 
     auto& doomed = sweep.doomed;
     auto root_cursor = roots.begin();
@@ -4098,6 +4207,7 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     // Every family settles the members whose rows would be gone (or are gone),
     // and keeps a consumed-leg fact only while its origin is live or opened.
     for (auto& family : bracket_families_) {
+        PINEFORGE_TAIL_WORK("settle_families", 1);
         family.second.settle([&](std::uint64_t incarnation) {
             return retain_rows ? contains(doomed, incarnation)
                                : !placement_.contains(incarnation);
@@ -4106,7 +4216,44 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
             return contains(askable_origins, origin);
         });
     }
+    // The existing every-row-retained reference also keeps family records
+    // in their old table; normal runs archive only immutable prefixes.
+    if (!retain_rows) archive_settled_bracket_families();
     if (!retain_rows) placement_.compact();
+}
+
+BracketRoster& PineExecutionAdapter::bracket_family(std::uint64_t key) {
+    const auto archived = settled_bracket_families_.find(key);
+    if (archived != settled_bracket_families_.end()) {
+        // Publish before removing the immutable record, so a failed allocation
+        // leaves the old family and its digest intact.
+        const auto placed = bracket_families_.try_emplace(key, archived->second);
+        assert(placed.second);
+        settled_bracket_digest_ ^= settled_bracket_hash(key, archived->second);
+        settled_bracket_families_.erase(archived);
+        return placed.first->second;
+    }
+    return bracket_families_[key];
+}
+
+void PineExecutionAdapter::archive_settled_bracket_families() {
+    for (auto at = bracket_families_.begin(); at != bracket_families_.end();) {
+        if (!at->second.wholly_settled()) {
+            ++at;
+            continue;
+        }
+        const auto value = at->second.settled_record();
+        const auto inserted = settled_bracket_families_.emplace(at->first, value);
+        assert(inserted.second);
+        settled_bracket_digest_ ^= settled_bracket_hash(at->first, value);
+        at = bracket_families_.erase(at);
+    }
+}
+
+void PineExecutionAdapter::clear_bracket_families() noexcept {
+    bracket_families_.clear();
+    settled_bracket_families_.clear();
+    settled_bracket_digest_ = 0;
 }
 
 // R5 lane V19-FIX: the kernel's cohort rosters hold what can still be bound.
@@ -7208,7 +7355,7 @@ void PineExecutionAdapter::flush_coof_tail(
         const auto accepted = submit_or_replace(std::move(pending.request), std::move(pending.snapshot),
                                                 pending.opening, pending.replacement_key);
         if (accepted && pending.family_key != 0)
-            bracket_families_[pending.family_key].push_back(*accepted);
+            bracket_family(pending.family_key).push_back(*accepted);
     }
 }
 
@@ -12464,7 +12611,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                     replacement_key);
             if (accepted) {
-                auto& family = bracket_families_[family_key];
+                auto& family = bracket_family(family_key);
                 // Every family member was remembered before this submission,
                 // so a successor above the prior placement high-water cannot
                 // already be present; only a returned existing handle needs
@@ -13370,7 +13517,7 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         const auto accepted = submit_or_replace(std::move(leg.request), std::move(leg.snapshot), false,
                                                 leg.replacement_key);
         if (accepted) {
-            bracket_families_[leg.family_key].push_back(*accepted);
+            bracket_family(leg.family_key).push_back(*accepted);
             if (execute_after_calculation) {
                 (void)require_host().execute_current(
                     {*accepted, NativeCurrentPriceRule::NearestTick});
@@ -13485,7 +13632,7 @@ void PineExecutionAdapter::materialize_pending_bracket_legs(
         }
         const auto accepted = submit_or_replace(std::move(leg.request), std::move(leg.snapshot),
                                                 false, leg.replacement_key);
-        if (accepted) bracket_families_[leg.family_key].push_back(*accepted);
+        if (accepted) bracket_family(leg.family_key).push_back(*accepted);
     }
 }
 
@@ -13533,7 +13680,7 @@ void PineExecutionAdapter::release_delayed_orders(
             if (accepted && (family == PineOrderFamily::ExitLimit
                              || family == PineOrderFamily::ExitStop
                              || family == PineOrderFamily::ExitTrail)) {
-                bracket_families_[family_key].push_back(*accepted);
+                bracket_family(family_key).push_back(*accepted);
             }
             if (accepted && execute_coof_open) {
                 (void)require_host().execute_current(
@@ -13623,7 +13770,7 @@ void PineExecutionAdapter::flush_pending_entries() {
             auto& leg = brackets[candidate.index];
             const auto accepted = submit_or_replace(std::move(leg.request), std::move(leg.snapshot),
                                                     false, leg.replacement_key);
-            if (accepted) bracket_families_[leg.family_key].push_back(*accepted);
+            if (accepted) bracket_family(leg.family_key).push_back(*accepted);
         }
         return;
     }
@@ -14628,6 +14775,13 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
         settled_run = found->second.run_identity();
         bracket_families_.erase(found);
         found_family = true;
+    } else if (const auto archived = settled_bracket_families_.find(key);
+               archived != settled_bracket_families_.end()) {
+        settled = archived->second.count;
+        settled_run = archived->second.run;
+        settled_bracket_digest_ ^= settled_bracket_hash(key, archived->second);
+        settled_bracket_families_.erase(archived);
+        found_family = true;
     }
     if (!found_family) return;
     // Every member the kernel no longer works, including settled members,
@@ -14739,7 +14893,7 @@ void PineExecutionAdapter::cancel_all() {
     }
     retire_cancelled_exits(nullptr, cancelled);
     pending_margin_revivals_.clear();
-    bracket_families_.clear();
+    clear_bracket_families();
     pending_bracket_legs_.clear();
     pending_entries_.clear();
     delayed_market_orders_.clear();
@@ -20995,9 +21149,9 @@ void PineExecutionAdapter::defer_declined_reversal_exits_at_adverse(
             std::move(request), std::move(deferred.snapshot), false,
             replacement_key);
         if (accepted) {
-            bracket_families_[key_for(
+            bracket_family(key_for(
                 placement_.at(accepted->incarnation).source_id,
-                placement_.at(accepted->incarnation).from_entry)].push_back(*accepted);
+                placement_.at(accepted->incarnation).from_entry)).push_back(*accepted);
         }
     }
 }
@@ -21982,7 +22136,7 @@ void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
                     std::move(reordered.request), std::move(reordered.snapshot),
                     false, reordered.replacement_key);
                 if (accepted)
-                    bracket_families_[reordered.family_key].push_back(*accepted);
+                    bracket_family(reordered.family_key).push_back(*accepted);
             } else if (defer_trails) {
                 auto delayed = std::move(*retired.delayed_leg);
                 delayed_market_orders_.push_back({
@@ -22121,7 +22275,7 @@ void PineExecutionAdapter::reaccept_gapped_bracket_behind_same_id_add(
             + std::to_string(static_cast<int>(leg.family));
         const auto accepted = submit_or_replace(
             std::move(request), std::move(leg), false, replacement_key);
-        if (accepted) bracket_families_[family_key].push_back(*accepted);
+        if (accepted) bracket_family(family_key).push_back(*accepted);
     }
 }
 
@@ -23580,7 +23734,7 @@ void PineExecutionAdapter::submit_per_entry_child(const PerEntryExit& exit,
         const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                 replacement_key);
         if (accepted) {
-            auto& roster = bracket_families_[family_key];
+            auto& roster = bracket_family(family_key);
             if (!roster.holds(*accepted)) roster.push_back(*accepted);
         }
     };
@@ -25776,7 +25930,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             const auto accepted = submit_or_replace(
                 std::move(request), std::move(snapshot), false, replacement_key);
             if (accepted) {
-                bracket_families_[family_key].push_back(*accepted);
+                bracket_family(family_key).push_back(*accepted);
                 if (reached) {
                     (void)require_host().execute_current(
                         {*accepted, NativeCurrentPriceRule::NearestTick});
@@ -25895,7 +26049,13 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         short_seed_.report_swap_pending = true;
     }
     update_l4c_lifecycle(event, context);
-    if (event.terminal) retire(event.handle());
+    if (event.terminal) {
+        const auto filled = placement_.find(event.handle().incarnation);
+        if (filled != placement_.end() && event.closed_units > 0.0
+            && unbound_limit_without_revival(filled->second))
+            filled->second.filled_exit = true;
+        retire(event.handle());
+    }
     if (event.ordinal != day_ledger_.observed_applied_ordinal) {
         day_ledger_.observed_applied_ordinal = event.ordinal;
         const auto day = chart_day_key(context.sub_bar_open_ms);
