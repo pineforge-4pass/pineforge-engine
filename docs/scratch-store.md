@@ -373,8 +373,8 @@ nothing about that bound.
 
 There are two journals. The native order-command journal is
 `WorkingRequestCore::history_`, beside its working book `live_`
-(`include/pineforge/native_order.hpp:2301`,
-`include/pineforge/native_order.hpp:2302`); the native consumer owns that core
+(`include/pineforge/native_order.hpp:2302`,
+`include/pineforge/native_order.hpp:2301`); the native consumer owns that core
 as `requests_` (`src/native_execution_consumer.hpp:1739`). The admission
 journal belongs to the source adapter
 (`include/pineforge/source/pine_adapter.hpp:1851`), which the source host owns
@@ -397,7 +397,7 @@ and cover simultaneous work, rather than being a fresh allowance per row.
 
 | Clause | Observable input | Invariant | Fixed-memory bound | Refusal state(s) | Required red test |
 | --- | --- | --- | --- | --- | --- |
-| S3-O | Append to both journals, reset the source adapter, then begin another run with reused incarnation numbers. | Ownership and sequence frontiers stay separate; no record or prefix from the previous run is read as current. | Combined userspace <= B_u; charged physical memory <= B_p. | Stale-run read, cross-journal alias or population-sized copy refuses qualification; scratch failures follow S34-S. | `s3_separate_journal_owners_and_reset_red` |
+| S3-O | Append to both journals, reset the source adapter, then begin another run with reused incarnation numbers. | Ownership and sequence frontiers stay separate; no record or prefix from the previous run is read as current. | Combined userspace <= B_u; charged backing bytes reported by stats; B_p per the measuring lane. | Stale-run read, cross-journal alias or population-sized copy refuses qualification; scratch failures follow S34-S. | `s3_separate_journal_owners_and_reset_red` |
 | S4-O | Submit, replace normally, re-price with keep_handle, cancel and execute while source instructions remain queued. | One native executable row per live handle; source projection and queued intent retain their existing meanings; matching order is ascending LiveRequest::priority, including a kept handle moved to the back (`include/pineforge/native_order.hpp:1706`, `include/pineforge/native_order.hpp:781`). | Combined userspace <= B_u, including pending observers and replacement scratch. | Duplicate execution authority, stale projection, changed tie order or memory above B_u refuses qualification. | `s4_one_queue_owner_kept_handle_order_red` |
 
 ### Records and ordering
@@ -493,6 +493,19 @@ symbol without that census is not a proof. The store already forbids allocation
 after construction (`include/pineforge/detail/scratch_store.hpp:55`); the codec
 and queue cannot put a growing allocation outside its stats and call it fixed.
 
+Red tests witness B_u with the heap census through
+`tests/global_allocation_replacement.hpp`, with allocation-byte recording,
+plus `ScratchStore::stats().resident_bytes` and the fixed caller-page counts,
+without double-counting workspace already in the heap census. B_p is not a
+red-test obligation: red tests read its observer-charged backing-extent proxy,
+`stats().backing_pages * page_size()` (also `stats().backing_bytes`), with exact
+call/byte accounting under the observer contract
+(`docs/scratch-store.md:218-224`). This reports backing extent bytes, not
+physical memory or cumulative write traffic. The measuring lane supplies A, M
+and the physical proof, including growing charged tmpfs/memfd/cache pages when
+those backings exist, and its flat-RSS gate. Refusals for unproved A/M belong
+to that measuring-lane qualification, not red-test assertions.
+
 Count each physical allocation island once, including unused capacity and
 allocator overhead. For a vector the payload charge is capacity * sizeof(T),
 not size * sizeof(T). Add each distinct shared observation/definition allocation
@@ -530,9 +543,9 @@ O(the largest bar), and a capacity proportional to a past peak all fail B_u.
 
 | Clause | Observable input | Invariant | Fixed-memory bound | Refusal state(s) | Required red test |
 | --- | --- | --- | --- | --- | --- |
-| S3-M | With geometry fixed, increase J and payload length separately, delay acknowledgements, pin a long deferred chain, and emit arbitrarily many admission events inside one bar before draining. | Every allocation island above is counted through construction, append, folding, eviction, retirement and drain; excess records remain exact in backing. | Userspace <= B_u and charged physical memory <= B_p at every phase, including transient peaks. | Any growing allocation, peak capacity, uncharged shared payload or unproved A/M refuses the bounded claim; resident-slot exhaustion must spill, not truncate or cap the workload. | `s3_journal_islands_fixed_under_pins_red` |
-| S4-M | Increase Q, P and C independently; churn replacements, cohort receipts and duplicate roster entries, drain them, then repeat with the same geometry. | Queue, indexes, roster positions and receipts remain exact; neither live populations nor old peak capacity are a resident allowance. | Userspace <= B_u and charged physical memory <= B_p during updates, observers, retirement and empty-state reuse. | Population-sized scratch, nodes, buckets, free lists or retained capacity refuse qualification; a workload cap is not an O(1) proof. | `s4_queue_and_membership_islands_fixed_red` |
-| S4-RE | Mark P open lots twice, read terminal rows, clear, then mark again. | Preserve lot order, row values and the existing left-fold P&L; retain only the terminal mark descriptor, as the current producer already does (`src/native_execution_consumer.cpp:9084`, `src/native_execution_consumer.cpp:9091`). | Descriptor plus fixed row/chunk scratch <= B_u; no P-row/string cache. | Non-finite rows retain the current refusal (`src/native_execution_consumer.cpp:9096`); any materialized range_end_trades_ population refuses qualification. | `s4_terminal_mark_descriptor_stays_fixed_red` |
+| S3-M | With geometry fixed, increase J and payload length separately, delay acknowledgements, pin a long deferred chain, and emit arbitrarily many admission events inside one bar before draining. | Every allocation island above is counted through construction, append, folding, eviction, retirement and drain; excess records remain exact in backing. | Userspace <= B_u at every phase, including transient peaks; charged backing bytes reported by stats; B_p per the measuring lane. | Any growing allocation, peak capacity, uncharged shared payload or unproved A/M refuses the bounded claim; resident-slot exhaustion must spill, not truncate or cap the workload. | `s3_journal_islands_fixed_under_pins_red` |
+| S4-M | Increase Q, P and C independently; churn replacements, cohort receipts and duplicate roster entries, drain them, then repeat with the same geometry. | Queue, indexes, roster positions and receipts remain exact; neither live populations nor old peak capacity are a resident allowance. | Userspace <= B_u during updates, observers, retirement and empty-state reuse; charged backing bytes reported by stats; B_p per the measuring lane. | Population-sized scratch, nodes, buckets, free lists or retained capacity refuse qualification; a workload cap is not an O(1) proof. | `s4_queue_and_membership_islands_fixed_red` |
+| S4-RE | Mark P open lots twice, read terminal rows, clear, then mark again. | Preserve lot order, row values and the existing left-fold P&L; retain only the terminal mark descriptor, as the current producer already does (`src/native_execution_consumer.cpp:9084`, `src/native_execution_consumer.cpp:9091`). | Descriptor plus fixed row/chunk scratch <= B_u; no P-row/string cache. | Non-finite rows retain the current refusal (`src/native_execution_consumer.cpp:9096`); a population materialized by the producer refuses qualification. The path under test is the producer at `src/native_execution_consumer.cpp:9084-9099` reading through row(index); the C-accessor deque OpenReportRowSource::materialized_ (`include/pineforge/engine.hpp:415`, filled by materialize() on the C-accessor path at `include/pineforge/engine.hpp:2059`) is out of this clause. | `s4_terminal_mark_descriptor_stays_fixed_red` |
 
 ### Transactions and retain windows
 
@@ -634,15 +647,15 @@ at commit together with successor roots and group receipts, before retirement
 running fold (`src/native_execution_consumer.cpp:12074`). Dropping a prefix
 advances history_base and the ordinal/receipt windows; it does not subtract
 that prefix, reset a digest, fold the new base, or reissue a logical index.
-Continuation requires the lifetime counts to agree
-(`src/native_execution_consumer.cpp:2051`).
+The continuation count check is debug-only (`#ifndef NDEBUG`,
+`src/native_execution_consumer.cpp:2048`, `src/native_execution_consumer.cpp:2051`).
 
 Admission's v4 digest folds fields reflected under the literal path "event",
 in ascending sequence, each field's path, value-alternative index and value
 (`src/source/pine_state_hash.cpp:21`, `src/source/pine_state_hash.cpp:803`).
 It uses BrokerStateHashSink, including its zero/NaN normalization
-(`include/pineforge/engine.hpp:481`), rather than native StateFold's exact-bit
-word mixing (`src/native_execution_consumer.cpp:150`). The parent hash includes
+(`include/pineforge/engine.hpp:481`), rather than native WordSink's exact-bit
+word spelling (`src/native_execution_consumer.cpp:150`). The parent hash includes
 sequence_frontier, lifetime folded count and digest
 (`src/source/pine_state_hash.cpp:774`), not the number of resident events.
 The present cursor mismatch path restarts at the retired prefix, not necessarily
@@ -671,8 +684,8 @@ for any of these existing native/source folds.
 Production reads use ScratchReadback point/page/visitor sources and store
 seeks, including nested disjoint pages; a decoded array, text or key may exceed
 the cache. Native history_at below base still throws out_of_range and event_at
-for a retired event still returns null (`src/native_order.cpp:1080`,
-`src/native_order.cpp:1096`). The public native_events snapshot starts at the
+for a retired event still returns null (`src/native_order.cpp:1096`,
+`src/native_order.cpp:1080`). The public native_events snapshot starts at the
 window floor when asked from below it
 (`include/pineforge/native_host.hpp:1330`); that owning compatibility surface is
 not proof of a bounded production reader. An adapter cannot collect those rows
@@ -694,7 +707,7 @@ fit the proved M; a flat userspace RSS by itself is insufficient.
 
 | Clause | Observable input | Invariant | Fixed-memory bound | Refusal state(s) | Required red test |
 | --- | --- | --- | --- | --- | --- |
-| S34-B | Identical large populations on explicitly selected backings, repeated reads/writes, per-run extent cap failures and owner destruction. | Observer counts every attempted operation once with its real kind; preserve buffered reopen/rollback and backing lifetime; report actual extent growth separately from resident memory. | Userspace <= B_u; all charged physical islands including backing cache <= B_p. | Unproved M, growing charged tmpfs/memfd/cache pages, hidden I/O, a cap overrun treated as success, or persistence beyond the backing owner refuses qualification; cap/medium failure is io_error. | `s34_backing_physical_charge_and_lifetime_red` |
+| S34-B | Identical large populations on test_memory in this tree; disk/memfd/tmpfs when their backings exist (unspecified here, `docs/scratch-store.md:351`); repeated reads/writes, per-run extent cap failures and owner destruction. | Observer counts every attempted operation once with its real kind; preserve buffered reopen/rollback and backing lifetime; report actual extent growth separately from resident memory. | Userspace <= B_u; charged backing bytes reported by stats; B_p per the measuring lane. | Hidden I/O, a cap overrun treated as success, or persistence beyond the backing owner refuses qualification; cap/medium failure is io_error. | `s34_backing_physical_charge_and_lifetime_red` |
 
 ### Statuses
 
@@ -706,7 +719,7 @@ The bounded-claim refusals in the tables are evidence failures, not new enums.
 
 | Clause | Observable input | Invariant | Fixed-memory bound | Refusal state(s) | Required red test |
 | --- | --- | --- | --- | --- | --- |
-| S34-S | Fill resident slots, exceed a backing growth cap, inject medium/corruption faults, use an invalid geometry/handle/buffer, and cancel a walk. | Full resident slots spill; no drop, sampling, retry or alternate-medium fallback makes a failed operation succeed; readers do not convert faults to false membership. | Failure paths and rollback use the same B_u/B_p, with no population-sized diagnostic. | Preserve io_error for medium/cap failure, corrupt for invalid stored bytes, programming_error for misuse/provisioning, not_found/end for proved absence and cancelled for visitor cancellation; route backing io_error to the typed scratch I/O failure as required above. | `s34_failures_are_not_empty_membership_red` |
+| S34-S | Fill resident slots, exceed a backing growth cap, inject medium/corruption faults, use an invalid geometry/handle/buffer, and cancel a walk. | Full resident slots spill; no drop, sampling, retry or alternate-medium fallback makes a failed operation succeed; readers do not convert faults to false membership. | Failure paths and rollback use B_u, with no population-sized diagnostic; charged backing bytes reported by stats; B_p per the measuring lane. | Preserve io_error for medium/cap failure, corrupt for invalid stored bytes, programming_error for misuse/provisioning, not_found/end for proved absence and cancelled for visitor cancellation; route backing io_error to the typed scratch I/O failure as required above. | `s34_failures_are_not_empty_membership_red` |
 
 ### What a consumer lane must do
 
