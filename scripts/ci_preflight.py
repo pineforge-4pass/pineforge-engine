@@ -39,7 +39,7 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
-PR_FAST_ROWS_SHA256 = 'c6ec80674daf15ea1cc5d390acdf5f1098620a7fad65a86dfbe5e12fbe29b568'
+PR_FAST_ROWS_SHA256 = '0509b2219786efb6878b193639344c299ff8075ba4532dbe09e80e6e97b60a9a'
 # FLEET-POST=A: Linux PR and full-event jobs use separate, literal fleet arrays.
 # Release artifacts and baseline promotion retain their isolated -main policy.
 PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
