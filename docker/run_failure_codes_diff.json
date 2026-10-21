@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "550d56baebc7986a7bc2a5a33fb979a4b7774cca3c88b22668b3806ad7297852"
+    "catalogSha256": "c971a371cf64bef156e1a38dc6a5cd48a5214de9d9c6b7aee7233d3bb6b80ae2"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -21,6 +21,13 @@
       "afterPresent": true,
       "before": "Machine memory; retryable, capped.",
       "after": "Machine memory or scratch storage; retryability is specified per code."
+    },
+    {
+      "path": "kinds.boolean",
+      "beforePresent": false,
+      "afterPresent": true,
+      "before": null,
+      "after": "A JSON boolean."
     }
   ],
   "added": [
@@ -28,9 +35,65 @@
       "code": "report_sink_failed",
       "collection": "codes",
       "entry": {
-        "args": {},
-        "class": "resource",
-        "description": "The engine could not create or write the report sink. The run has no completed sink or valid trailer.",
+        "args": {
+          "arena_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "cap_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "claimed_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "high_water_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "needed_bytes_lower_bound": {
+            "kind": "integer",
+            "optional": true
+          },
+          "reason": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "arena_exhausted",
+              "arena_io",
+              "arena_backing",
+              "scratch_io",
+              "sink_io",
+              "sink_peer_closed",
+              "sink_exhausted"
+            ]
+          },
+          "sink_bytes": {
+            "kind": "integer",
+            "optional": true
+          },
+          "store": {
+            "kind": "vocab",
+            "optional": true,
+            "values": [
+              "curve",
+              "position_tail",
+              "cohort",
+              "exit_rank",
+              "sequence_index",
+              "sequence_index_idx",
+              "erased_minima",
+              "erased_minima_idx",
+              "partial_cycles",
+              "partial_cycles_idx",
+              "successor_roots",
+              "unknown"
+            ]
+          }
+        },
+        "class": "engine_fault",
+        "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, store identifies the requesting scratch user, and needed_bytes_lower_bound is the least additional arena bytes needed to satisfy the failed request. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
         "english": [
           "report sink open failed",
           "report sink write failed",
@@ -76,7 +139,7 @@
       "entry": {
         "args": {},
         "class": "resource",
-        "description": "The engine could not create, resize, read or write scratch-table storage. The run has no successful completion.",
+        "description": "The engine could not create, resize, read or write the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io.",
         "english": [
           "scratch create",
           "scratch read",
@@ -117,6 +180,39 @@
             "order",
             "timeframe_invalid"
           ]
+        }
+      ]
+    },
+    {
+      "code": "run_aborted",
+      "collection": "codes",
+      "fields": [
+        {
+          "path": "args.bars_count",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "integer",
+            "optional": true
+          }
+        },
+        {
+          "path": "args.strategy_started",
+          "beforePresent": false,
+          "afterPresent": true,
+          "before": null,
+          "after": {
+            "kind": "boolean",
+            "optional": true
+          }
+        },
+        {
+          "path": "description",
+          "beforePresent": true,
+          "afterPresent": true,
+          "before": "The run was aborted on request.",
+          "after": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used)."
         }
       ]
     },
