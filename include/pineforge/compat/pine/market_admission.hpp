@@ -24,6 +24,8 @@ public:
     // Borrowed live view: a later query observes subsequent journal edits.
     // Zero means absent; every actual cause has a nonzero allocated sequence.
     uint64_t pair_cause(int bar) const;
+    // An original default call with an empty prior book creates no cause.
+    // Retaining its observation alone does not populate History::default_causes.
     uint64_t default_cause(int bar) const;
 private:
     uint64_t cause(int bar, bool pair) const;
