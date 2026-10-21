@@ -43,37 +43,34 @@ enum : std::uint64_t {
     scratch_incarnation, scratch_row, scratch_sort, scratch_permutation
 };
 
-detail::ScratchBytes scratch_bytes(const void* data, std::size_t size) noexcept {
+::pineforge::detail::ScratchBytes scratch_bytes(const void* data, std::size_t size) noexcept {
     return {static_cast<const std::byte*>(data), size};
 }
 
-detail::ScratchBuffer scratch_buffer(void* data, std::size_t size) noexcept {
+::pineforge::detail::ScratchBuffer scratch_buffer(void* data, std::size_t size) noexcept {
     return {static_cast<std::byte*>(data), size};
 }
 
-detail::ScratchStatus compare_trade_scratch(
-        void*, const detail::ScratchByteSource& a, const detail::ScratchByteSource& b,
+::pineforge::detail::ScratchStatus compare_trade_scratch(
+        void*, const ::pineforge::detail::ScratchByteSource& a, const ::pineforge::detail::ScratchByteSource& b,
         int& order) noexcept {
     TradeScratchKey ka{}, kb{};
     if (a.size() != sizeof ka || b.size() != sizeof kb)
-        return detail::ScratchStatus::programming_error;
+        return ::pineforge::detail::ScratchStatus::programming_error;
     auto status = a.read(0, scratch_buffer(ka.data(), sizeof ka));
-    if (status != detail::ScratchStatus::ok) return status;
+    if (status != ::pineforge::detail::ScratchStatus::ok) return status;
     status = b.read(0, scratch_buffer(kb.data(), sizeof kb));
-    if (status != detail::ScratchStatus::ok) return status;
+    if (status != ::pineforge::detail::ScratchStatus::ok) return status;
     order = ka < kb ? -1 : kb < ka ? 1 : 0;
-    return detail::ScratchStatus::ok;
+    return ::pineforge::detail::ScratchStatus::ok;
 }
 
-void require_trade_scratch(detail::ScratchStatus status) {
-    if (status == detail::ScratchStatus::ok) return;
-    const auto code = status == detail::ScratchStatus::io_error
+void require_trade_scratch(::pineforge::detail::ScratchStatus status) {
+    if (status == ::pineforge::detail::ScratchStatus::ok) return;
+    const auto code = status == ::pineforge::detail::ScratchStatus::io_error
         ? RunFailureCode::scratch_io_failed
-        : status == detail::ScratchStatus::capacity_exceeded
-            ? RunFailureCode::scratch_capacity_exceeded : RunFailureCode::engine_invariant;
-    throw coded<std::logic_error>(code,
-        status == detail::ScratchStatus::capacity_exceeded
-            ? RunFailureArgs{{"resource", "layout"}} : RunFailureArgs{},
+        : RunFailureCode::engine_invariant;
+    throw coded<std::logic_error>(code, {},
         "trade scratch contract operation failed");
 }
 
@@ -81,7 +78,7 @@ void require_trade_scratch(detail::ScratchStatus status) {
 // empty store and its handle counter; no scratch state survives a callback.
 class TradeScratchTransaction {
 public:
-    explicit TradeScratchTransaction(detail::ScratchStore& store) : store_(store) {
+    explicit TradeScratchTransaction(::pineforge::detail::ScratchStore& store) : store_(store) {
         require_trade_scratch(store_.begin());
     }
     ~TradeScratchTransaction() {
@@ -89,56 +86,56 @@ public:
     }
     void finish() { require_trade_scratch(store_.rollback()); }
 private:
-    detail::ScratchStore& store_;
+    ::pineforge::detail::ScratchStore& store_;
 };
 
-detail::ScratchHandle scratch_seek(const detail::ScratchStore& store,
+::pineforge::detail::ScratchHandle scratch_seek(const ::pineforge::detail::ScratchStore& store,
                                   const TradeScratchKey& key) {
-    detail::ScratchSpanSource probe(scratch_bytes(key.data(), sizeof key));
-    detail::ScratchHandle handle = detail::scratch_no_handle;
+    ::pineforge::detail::ScratchSpanSource probe(scratch_bytes(key.data(), sizeof key));
+    ::pineforge::detail::ScratchHandle handle = ::pineforge::detail::scratch_no_handle;
     const auto status = store.lower_bound(probe, handle);
-    if (status != detail::ScratchStatus::end) require_trade_scratch(status);
+    if (status != ::pineforge::detail::ScratchStatus::end) require_trade_scratch(status);
     return handle;
 }
 
-TradeScratchKey scratch_key(const detail::ScratchReadback& store,
-                           detail::ScratchHandle handle) {
+TradeScratchKey scratch_key(const ::pineforge::detail::ScratchReadback& store,
+                           ::pineforge::detail::ScratchHandle handle) {
     TradeScratchKey key{};
-    require_trade_scratch(store.read(handle, detail::ScratchField::key, 0,
+    require_trade_scratch(store.read(handle, ::pineforge::detail::ScratchField::key, 0,
                                      scratch_buffer(key.data(), sizeof key)));
     return key;
 }
 
-detail::ScratchHandle scratch_find(const detail::ScratchStore& store,
+::pineforge::detail::ScratchHandle scratch_find(const ::pineforge::detail::ScratchStore& store,
                                   const TradeScratchKey& key) {
     const auto handle = scratch_seek(store, key);
-    return handle != detail::scratch_no_handle && scratch_key(store, handle) == key
-        ? handle : detail::scratch_no_handle;
+    return handle != ::pineforge::detail::scratch_no_handle && scratch_key(store, handle) == key
+        ? handle : ::pineforge::detail::scratch_no_handle;
 }
 
-void scratch_put(detail::ScratchStore& store, const TradeScratchKey& key,
-                 const detail::ScratchByteSource& value) {
-    detail::ScratchSpanSource source(scratch_bytes(key.data(), sizeof key));
-    detail::ScratchHandle handle = detail::scratch_no_handle;
+void scratch_put(::pineforge::detail::ScratchStore& store, const TradeScratchKey& key,
+                 const ::pineforge::detail::ScratchByteSource& value) {
+    ::pineforge::detail::ScratchSpanSource source(scratch_bytes(key.data(), sizeof key));
+    ::pineforge::detail::ScratchHandle handle = ::pineforge::detail::scratch_no_handle;
     require_trade_scratch(store.put(source, value, handle));
 }
 
-void scratch_put(detail::ScratchStore& store, const TradeScratchKey& key,
-                 detail::ScratchBytes value = {}) {
-    detail::ScratchSpanSource source(value);
+void scratch_put(::pineforge::detail::ScratchStore& store, const TradeScratchKey& key,
+                 ::pineforge::detail::ScratchBytes value = {}) {
+    ::pineforge::detail::ScratchSpanSource source(value);
     scratch_put(store, key, source);
 }
 
 template<class Visit>
-void scratch_walk(const detail::ScratchStore& store, std::uint64_t kind, Visit&& visit) {
+void scratch_walk(const ::pineforge::detail::ScratchStore& store, std::uint64_t kind, Visit&& visit) {
     auto handle = scratch_seek(store, {kind, 0, 0, 0});
-    while (handle != detail::scratch_no_handle) {
+    while (handle != ::pineforge::detail::scratch_no_handle) {
         const auto key = scratch_key(store, handle);
         if (key[0] != kind) break;
         visit(handle, key);
-        detail::ScratchHandle next = detail::scratch_no_handle;
+        ::pineforge::detail::ScratchHandle next = ::pineforge::detail::scratch_no_handle;
         const auto status = store.next(handle, next);
-        if (status != detail::ScratchStatus::end) require_trade_scratch(status);
+        if (status != ::pineforge::detail::ScratchStatus::end) require_trade_scratch(status);
         handle = next;
     }
 }
@@ -192,7 +189,7 @@ void scratch_trade_scalars(const TradeScratchHeader& header, Trade& row) noexcep
 
 // Scalar amendments plus borrowed original text. put streams all five spans;
 // neither a row's strings nor the replacement population is copied into RAM.
-class TradeScratchSource final : public detail::ScratchByteSource {
+class TradeScratchSource final : public ::pineforge::detail::ScratchByteSource {
 public:
     TradeScratchSource(TradeScratchHeader header, const Trade& text) noexcept
         : header_(header), parts_{scratch_bytes(header_.data(), sizeof header_),
@@ -205,12 +202,12 @@ public:
         for (const auto part : parts_) result += part.size;
         return result;
     }
-    detail::ScratchStatus read(std::uint64_t offset,
-                              detail::ScratchBuffer destination) const noexcept override {
+    ::pineforge::detail::ScratchStatus read(std::uint64_t offset,
+                              ::pineforge::detail::ScratchBuffer destination) const noexcept override {
         if (offset > size() || destination.size > size() - offset
             || (destination.size && !destination.data))
-            return detail::ScratchStatus::programming_error;
-        if (!destination.size) return detail::ScratchStatus::ok;
+            return ::pineforge::detail::ScratchStatus::programming_error;
+        if (!destination.size) return ::pineforge::detail::ScratchStatus::ok;
         for (const auto part : parts_) {
             if (offset >= part.size) { offset -= part.size; continue; }
             const auto count = std::min(destination.size,
@@ -221,29 +218,29 @@ public:
             offset = 0;
             if (!destination.size) break;
         }
-        return detail::ScratchStatus::ok;
+        return ::pineforge::detail::ScratchStatus::ok;
     }
 private:
     const TradeScratchHeader header_;
-    const std::array<detail::ScratchBytes, 5> parts_;
+    const std::array<::pineforge::detail::ScratchBytes, 5> parts_;
 };
 
-TradeScratchHeader scratch_read_trade(const detail::ScratchReadback& store,
-                                     detail::ScratchHandle handle) {
+TradeScratchHeader scratch_read_trade(const ::pineforge::detail::ScratchReadback& store,
+                                     ::pineforge::detail::ScratchHandle handle) {
     TradeScratchHeader header{};
-    require_trade_scratch(store.read(handle, detail::ScratchField::value, 0,
+    require_trade_scratch(store.read(handle, ::pineforge::detail::ScratchField::value, 0,
                                      scratch_buffer(header.data(), sizeof header)));
     return header;
 }
 
-void scratch_trade_text(const detail::ScratchReadback& store, detail::ScratchHandle handle,
+void scratch_trade_text(const ::pineforge::detail::ScratchReadback& store, ::pineforge::detail::ScratchHandle handle,
                         const TradeScratchHeader& header, Trade& row) {
     const std::array<std::string*, 4> text{
         &row.entry_id, &row.entry_comment, &row.exit_comment, &row.exit_id};
     std::uint64_t offset = sizeof header;
     for (std::size_t index = 0; index < text.size(); ++index) {
         text[index]->resize(static_cast<std::size_t>(header[19 + index]));
-        require_trade_scratch(store.read(handle, detail::ScratchField::value, offset,
+        require_trade_scratch(store.read(handle, ::pineforge::detail::ScratchField::value, offset,
             scratch_buffer(text[index]->data(), text[index]->size())));
         offset += text[index]->size();
     }
@@ -356,11 +353,11 @@ void return_feed_bytes(std::vector<NativeInstrumentFeed>& store,
 
 }  // namespace
 
-detail::ScratchKeyOrder source::PineStrategyHost::trade_scratch_order() noexcept {
+::pineforge::detail::ScratchKeyOrder source::PineStrategyHost::trade_scratch_order() noexcept {
     return {0x5830365830370001ULL, nullptr, compare_trade_scratch};
 }
 
-void source::PineStrategyHost::set_trade_scratch(detail::ScratchStore& store) {
+void source::PineStrategyHost::set_trade_scratch(::pineforge::detail::ScratchStore& store) {
     require_trade_scratch(store.status());
     if (store.transaction_active() || store.record_count() != 0
         || (trade_scratch_ && trade_scratch_->transaction_active()))
@@ -369,7 +366,7 @@ void source::PineStrategyHost::set_trade_scratch(detail::ScratchStore& store) {
     trade_scratch_ = &store;
 }
 
-detail::ScratchStore& source::PineStrategyHost::trade_scratch() {
+::pineforge::detail::ScratchStore& source::PineStrategyHost::trade_scratch() {
     if (!trade_scratch_)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "run owner did not provision trade scratch");
@@ -2325,7 +2322,7 @@ void source::PineStrategyHost::order_global_exit_children(
             return;
         }
         const TradeScratchKey incarnation{scratch_incarnation, row.entry_incarnation, 0, 0};
-        if (scratch_find(scratch, incarnation) != detail::scratch_no_handle) return;
+        if (scratch_find(scratch, incarnation) != ::pineforge::detail::scratch_no_handle) return;
         scratch_put(scratch, incarnation);
         different_ids = different_ids || row.entry_id != head.entry_id;
     }
@@ -2464,7 +2461,7 @@ void source::PineStrategyHost::order_global_exit_children(
     }
     // settlement safety guard (an invariant), not Pine parity. Validate all
     // replacements before changing the committed rows or their tallies.
-    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey&) {
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
         Trade row{};
         scratch_trade_scalars(scratch_read_trade(scratch, handle), row);
         if (!internal::closed_row_all_finite(row))
@@ -2482,20 +2479,20 @@ void source::PineStrategyHost::order_global_exit_children(
         else { eventrades_count_ += sign; }
     };
     for (std::size_t index = first; index < first + count; ++index) tally(trades_[index].pnl, -1);
-    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey&) {
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
         Trade row{};
         scratch_trade_scalars(scratch_read_trade(scratch, handle), row);
         tally(row.pnl, 1);
     });
     trades_.resize(first);
-    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey&) {
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey&) {
         const auto header = scratch_read_trade(scratch, handle);
         trades_.push_back(Trade{});
         scratch_trade_scalars(header, trades_.back());
         scratch_trade_text(scratch, handle, header, trades_.back());
     });
     const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
-    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey& key) {
+    scratch_walk(scratch, scratch_row, [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey& key) {
         const auto header = scratch_read_trade(scratch, handle);
         const auto target = first + static_cast<std::size_t>(key[1]);
         const auto phase = static_cast<std::uint8_t>(header[1]);
@@ -2558,9 +2555,9 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         // This is a seek walk, not a store callback: the fixed mapping value
         // is read out before put, and its source never reads the same store.
         scratch_walk(scratch, scratch_sort,
-            [&](detail::ScratchHandle handle, const TradeScratchKey& key) {
+            [&](::pineforge::detail::ScratchHandle handle, const TradeScratchKey& key) {
                 std::uint8_t phase = none;
-                require_trade_scratch(scratch.read(handle, detail::ScratchField::value, 0,
+                require_trade_scratch(scratch.read(handle, ::pineforge::detail::ScratchField::value, 0,
                                                    scratch_buffer(&phase, sizeof phase)));
                 const std::array<std::uint64_t, 2> mapping{key[3], phase};
                 scratch_put(scratch, {scratch_permutation, target++, 0, 0},
@@ -2570,12 +2567,12 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         // mapping marks that target visited in backing, without a RAM bitmap.
         for (std::size_t cycle = start; cycle < end; ++cycle) {
             auto handle = scratch_find(scratch, {scratch_permutation, cycle, 0, 0});
-            if (handle == detail::scratch_no_handle) continue;
+            if (handle == ::pineforge::detail::scratch_no_handle) continue;
             Trade row = std::move(trades[cycle]);
             std::size_t current = cycle;
             for (;;) {
                 std::array<std::uint64_t, 2> mapping{};
-                require_trade_scratch(scratch.read(handle, detail::ScratchField::value, 0,
+                require_trade_scratch(scratch.read(handle, ::pineforge::detail::ScratchField::value, 0,
                     scratch_buffer(mapping.data(), sizeof mapping)));
                 const auto source = static_cast<std::size_t>(mapping[0]);
                 const auto phase = static_cast<std::uint8_t>(mapping[1]);
@@ -2586,7 +2583,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                 if (source == cycle) break;
                 current = source;
                 handle = scratch_find(scratch, {scratch_permutation, current, 0, 0});
-                if (handle == detail::scratch_no_handle)
+                if (handle == ::pineforge::detail::scratch_no_handle)
                     throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                                   "incomplete trade scratch permutation");
             }

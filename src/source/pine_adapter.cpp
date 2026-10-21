@@ -1057,10 +1057,8 @@ ExitScratchContext& exit_scratch(const PineExecutionAdapter& adapter) {
 ExitScratchError::ExitScratchError(ScratchStatus status)
     : coded<std::logic_error>(
           status == ScratchStatus::io_error ? RunFailureCode::scratch_io_failed
-              : status == ScratchStatus::capacity_exceeded
-                  ? RunFailureCode::scratch_capacity_exceeded : RunFailureCode::engine_invariant,
-          status == ScratchStatus::capacity_exceeded
-              ? RunFailureArgs{{"resource", "layout"}} : RunFailureArgs{},
+              : RunFailureCode::engine_invariant,
+          {},
           "exit scratch operation failed"),
       status_(status) {}
 
@@ -24801,8 +24799,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         for (std::size_t index = 0; index < pending_entries_.size(); ++index) {
             auto& entry = pending_entries_[index];
             if (entry.snapshot.paired_reversal_parent == event.handle()) {
-                after_close.push_back(versions.pending(after_close.scope(), entry.request,
-                                                       entry.snapshot, entry.replacement_key));
+                after_close.push_back(versions.pending(after_close.scope(), std::as_const(entry.request),
+                                                       std::as_const(entry.snapshot),
+                                                       std::as_const(entry.replacement_key)));
             } else {
                 if (remaining != index) pending_entries_[remaining] = std::move(entry);
                 ++remaining;
@@ -24811,7 +24810,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         pending_entries_.resize(remaining);
         for (const auto version : after_close) {
             PendingEntry entry;
-            versions.pending(version, entry.request, entry.snapshot, entry.replacement_key);
+            std::as_const(versions).pending(version, entry.request, entry.snapshot, entry.replacement_key);
             entry.snapshot.paired_reversal_parent = {};
             entry.snapshot.market_admission = {};
             entry.request.owner = native_order::Independent{};
