@@ -146,6 +146,10 @@
       {"field": "risk.equity", "reasons": ["nonfinite"]}, {"field": "risk.threshold", "reasons": ["nonfinite", "numeric_overflow"]}
     ]},
     {"id": "engine.src/engine_execution.cpp.fee", "file": "src/engine_execution.cpp", "anchor": "engine_command_value_invalid_or_count", "producer": "engine_command_value_invalid", "stage": "fee", "fields": [{"field": "fee.commission", "reasons": ["nonfinite", "numeric_overflow"]}]},
+    {"id": "report._build_sink_report", "file": "docker/run_json.py", "anchor": "_build_sink_report", "producer": "report_result_invalid", "stage": null, "fields": [
+      {"field": "equity_curve.equity", "reasons": ["nonfinite"]},
+      {"field": "equity_curve.open_profit", "reasons": ["nonfinite"]}
+    ]},
     {"id": "report._validate_report_result", "file": "docker/run_json.py", "anchor": "_validate_report_result", "producer": "report_result_invalid", "stage": null, "fields": [
       {"field": "trades.entry_price", "reasons": ["nonfinite"]}, {"field": "trades.exit_price", "reasons": ["nonfinite"]},
       {"field": "trades.qty", "reasons": ["nonfinite"]}, {"field": "trades.pnl", "reasons": ["nonfinite"]},
