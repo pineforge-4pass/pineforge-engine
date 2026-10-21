@@ -2279,6 +2279,8 @@ def _no_surrogates(text: str) -> str:
 def _dump_line(doc: dict) -> str:
     # The writer the failure line has always used: json.dump with these
     # separators and json's default ensure_ascii, so the line is ASCII.
+    # Only failure_line calls this helper, with capped diagnostic text/args.
+    # Successful reports use _prepare_stream_report; no report rows enter here.
     out = io.StringIO()
     json.dump(doc, out, separators=(",", ":"))
     return out.getvalue()
@@ -3763,26 +3765,39 @@ def make_outputs_reader(lib, strat):
     the event (the library lends it only until the next call that runs or
     clears)."""
 
+    def times(which):
+        n = max(0, int(lib.strategy_outputs_bars_len(strat)))
+        opens, closes = (ctypes.c_int64 * 4096)(), (ctypes.c_int64 * 4096)()
+        for offset in range(0, n, 4096):
+            count, written = min(4096, n - offset), ctypes.c_int64()
+            if lib.strategy_outputs_bar_times_copy(
+                    strat, offset, opens, closes, count, ctypes.byref(written)) != 0:
+                raise _outputs_incompatible("the bar times could not be read",
+                                            "outputs_api_mismatch")
+            for index in range(written.value):
+                yield (opens if which == "open" else closes)[index]
+            if written.value < count:
+                break
+
     def bar_times():
-        n = int(lib.strategy_outputs_bars_len(strat))
-        opens = (ctypes.c_int64 * max(n, 1))()
-        closes = (ctypes.c_int64 * max(n, 1))()
-        written = ctypes.c_int64(0)
-        if n > 0 and lib.strategy_outputs_bar_times_copy(
-                strat, 0, opens, closes, n, ctypes.byref(written)) != 0:
-            raise _outputs_incompatible("the bar times could not be read",
-                                        "outputs_api_mismatch")
-        return list(opens[:written.value]), list(closes[:written.value])
+        return (_JSONRecordArray(lambda: times("open")),
+                _JSONRecordArray(lambda: times("close")))
 
     def series(slot):
-        n = int(lib.strategy_outputs_bars_len(strat))
-        values = (ctypes.c_double * max(n, 1))()
-        written = ctypes.c_int64(0)
-        if lib.strategy_outputs_series_copy(strat, slot, 0, values, n,
-                                            ctypes.byref(written)) != 0:
-            raise _outputs_incompatible(f"series slot {slot} could not be read",
-                                        "outputs_api_mismatch")
-        return list(values[:written.value])
+        def values():
+            n = max(0, int(lib.strategy_outputs_bars_len(strat)))
+            buffer = (ctypes.c_double * 4096)()
+            for offset in range(0, max(n, 1), 4096):
+                count, written = min(4096, n - offset), ctypes.c_int64()
+                if lib.strategy_outputs_series_copy(
+                        strat, slot, offset, buffer, count, ctypes.byref(written)) != 0:
+                    raise _outputs_incompatible(f"series slot {slot} could not be read",
+                                                "outputs_api_mismatch")
+                for index in range(written.value):
+                    yield buffer[index]
+                if written.value < count:
+                    break
+        return _JSONRecordArray(values)
 
     def constants():
         n = int(lib.strategy_outputs_constants_copy(strat, None, 0))
@@ -3792,18 +3807,19 @@ def make_outputs_reader(lib, strat):
         return list(values[:max(n, 0)])
 
     def events():
-        out = []
         for index in range(int(lib.strategy_outputs_events_len(strat))):
             event = OutputEventC()
             if lib.strategy_outputs_event_get(strat, index, ctypes.byref(event),
                                               ctypes.sizeof(event)) != 0:
                 raise _outputs_incompatible(f"event {index} could not be read",
                                             "outputs_api_mismatch")
-            # A c_char_p field reads as a bytes copy: taken here, while the
-            # library still lends the text.
-            out.append(types.SimpleNamespace(
-                **{name: getattr(event, name) for name, _ in OutputEventC._fields_}))
-        return out
+            # Read the pointer itself: a c_char_p field access would copy the
+            # complete message. Consume its bounded UTF-8 chunks before the
+            # next event getter, while the library still lends the text.
+            address = ctypes.c_void_p.from_buffer(event, OutputEventC.message.offset).value
+            yield types.SimpleNamespace(
+                **{name: (_JSONUTF8(address) if address else None) if name == "message"
+                   else getattr(event, name) for name, _ in OutputEventC._fields_})
 
     return types.SimpleNamespace(
         manifest=lambda: _outputs_manifest(lib, strat),
@@ -3957,13 +3973,10 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                       applied_inputs: dict[str, str],
                       applied_overrides: dict[str, str],
                       applied_runtime: dict[str, object] | None = None,
-                      trade_entry_incarnations: list[int] | None = None) -> dict:
-    trades = []
-    pnls: list[float] = []
-    for i in range(report.trades_len):
+                      trade_entry_incarnations=None) -> dict:
+    def trade_at(i):
         t = report.trades[i]
-        pnls.append(float(t.pnl))
-        trades.append({
+        return {
             "n":            i + 1,
             "side":         "long" if t.is_long else "short",
             "entry_time":   int(t.entry_time),
@@ -3980,18 +3993,25 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "exit_bar_index":  int(t.exit_bar_index),
             "open_at_end":     bool(t.open_at_end),
             "entry_incarnation": (
-                int(trade_entry_incarnations[i])
+                int(trade_entry_incarnations(i))
+                if callable(trade_entry_incarnations) else int(trade_entry_incarnations[i])
                 if trade_entry_incarnations is not None
                 and i < len(trade_entry_incarnations) else 0
             ),
-        })
+        }
 
-    n = len(pnls)
-    wins   = sum(1 for p in pnls if p > 0)
-    losses = sum(1 for p in pnls if p < 0)
-
+    n = int(report.trades_len)
+    trades = _JSONRecordArray(lambda: (trade_at(i) for i in range(n)), n, trade_at)
+    wins, losses = 0, 0
+    best, worst = 0.0, 0.0
     cum, peak, max_dd = 0.0, 0.0, 0.0
-    for p in pnls:
+    for i in range(n):
+        p = float(report.trades[i].pnl)
+        wins += int(p > 0)
+        losses += int(p < 0)
+        # max/min keep their first argument on ties, including signed zero.
+        best = max(best, p) if i else p
+        worst = min(worst, p) if i else p
         cum += p
         peak = max(peak, cum)
         max_dd = min(max_dd, cum - peak)
@@ -4009,15 +4029,14 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
 
     # Per-script-bar equity curve (ABI v2). equity_curve may be NULL if a
     # mid-run exception truncated it (len then 0); guard the pointer deref.
-    equity_curve = []
-    if report.equity_curve:
-        for i in range(int(report.equity_curve_len)):
-            p = report.equity_curve[i]
-            equity_curve.append({
-                "time_ms":     int(p.time_ms),
-                "equity":      _num(p.equity),
-                "open_profit": _num(p.open_profit),
-            })
+    def point_at(i):
+        p = report.equity_curve[i]
+        return {"time_ms": int(p.time_ms), "equity": _num(p.equity),
+                "open_profit": _num(p.open_profit)}
+
+    points = int(report.equity_curve_len) if report.equity_curve else 0
+    equity_curve = _JSONRecordArray(
+        lambda: (point_at(i) for i in range(points)), points, point_at)
 
     return {
         "engine": "pineforge",
@@ -4042,8 +4061,8 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "win_rate_pct":   round((wins / n * 100.0) if n else 0.0, 4),
             "net_pnl":        float(report.net_profit),
             "avg_trade":      (float(report.net_profit) / n) if n else 0.0,
-            "best_trade":     max(pnls) if pnls else 0.0,
-            "worst_trade":    min(pnls) if pnls else 0.0,
+            "best_trade":     best,
+            "worst_trade":    worst,
             "max_drawdown":   max_dd,
             "bars_processed": int(report.input_bars_processed),
         },
@@ -4805,15 +4824,20 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         if args.outputs:
             outputs_block = (
                 _sink_outputs_block(lib, state, sink, output_files, summary_only=sink.named)
-                if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
+                if sink is not None else _legacy_streamed_outputs_block(lib, state, validate=True))
             applied_runtime["outputs"] = True
         # ONE R object, placed in all three required places (the third is
         # fingerprint.provenance.runtime, which is applied_runtime itself).
         applied_runtime["report_window"] = window
         incarnation_accessor = getattr(lib, "strategy_closed_trade_entry_incarnation", None)
         trade_entry_incarnations = (
-            [int(incarnation_accessor(state, i)) for i in range(report.trades_len)]
+            (lambda i: int(incarnation_accessor(state, i)))
             if sink is None and incarnation_accessor is not None else None)
+        if trade_entry_incarnations is not None:
+            # Keep accessor refusals before report assembly, as in the old
+            # list pre-pass. These read-only values are revisited during output.
+            for i in range(report.trades_len):
+                trade_entry_incarnations(i)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, fed_count, plan["fed_first_data_ms"], plan["fed_last_data_ms"],
@@ -4874,12 +4898,15 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         # 6. Serialization begins; the timing is known now and is outside the provenance.
         _advance(phases, "serialization")
         out["diagnostics"]["phase_timing"] = phases.writer.phase_timing()
-        if sink is not None and not getattr(sink, "fd_mode", False):
-            buffer = _prepare_stream_report(out, binary_inputs, sink.directory)
-        else:
+        if sink is not None and getattr(sink, "fd_mode", False):
             buffer = io.StringIO()
             json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
             buffer.write("\n")
+            buffer.seek(0)
+        else:
+            buffer = _prepare_stream_report(
+                out, binary_inputs, sink.directory if sink is not None else args.spill_dir,
+                sink_errors=sink is not None)
         if output_files is not None:
             output_files.close()  # surface column close failures before stdout
     except Exception as error:
@@ -4901,9 +4928,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         _free_sink_run(lib, state, report, sink)
         if detach_error is not None and sys.exc_info()[1] is None:
             raise _typed_failure(detach_error) or detach_error
-    status = _write_report(
-        buffer if sink is not None and not getattr(sink, "fd_mode", False) else buffer.getvalue(),
-        phases)
+    status = _write_report(buffer, phases)
     if status:
         return status
     try:
@@ -5384,15 +5409,17 @@ def _main(argv, binary_inputs) -> int:
         if args.outputs:
             outputs_block = (
                 _sink_outputs_block(lib, state, sink, output_files, summary_only=sink.named)
-                if sink is not None else build_outputs_block(make_outputs_reader(lib, state)))
+                if sink is not None else _legacy_streamed_outputs_block(lib, state, validate=True))
             applied_runtime["outputs"] = True
         incarnation_accessor = getattr(
             lib, "strategy_closed_trade_entry_incarnation", None)
         trade_entry_incarnations = (
-            [int(incarnation_accessor(state, i))
-             for i in range(report.trades_len)]
+            (lambda i: int(incarnation_accessor(state, i)))
             if sink is None and incarnation_accessor is not None else None
         )
+        if trade_entry_incarnations is not None:
+            for i in range(report.trades_len):
+                trade_entry_incarnations(i)
         builder = _build_sink_report if sink is not None else build_report_dict
         out = builder(
             report, args.ohlcv, n, first_ts, last_ts,
@@ -5436,12 +5463,15 @@ def _main(argv, binary_inputs) -> int:
         # Serialized whole before any byte is written (the same JSON encoder), so
         # a failure while it is built never follows half a report.
         try:
-            if sink is not None and not getattr(sink, "fd_mode", False):
-                buffer = _prepare_stream_report(out, binary_inputs, sink.directory)
-            else:
+            if sink is not None and getattr(sink, "fd_mode", False):
                 buffer = io.StringIO()
                 json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
                 buffer.write("\n")
+                buffer.seek(0)
+            else:
+                buffer = _prepare_stream_report(
+                    out, binary_inputs, sink.directory if sink is not None else args.spill_dir,
+                    sink_errors=sink is not None)
         except ValueError as error:
             # Match only the encoder's allow_nan=False refusal, including the
             # versions that append repr(value); other ValueErrors keep their code.
@@ -5471,9 +5501,7 @@ def _main(argv, binary_inputs) -> int:
             raise _typed_failure(detach_error) or detach_error
     # A closed pipe or a full disk while the report is written: a failure line now would
     # follow part of a report, so none is written (see _write_report).
-    status = _write_report(
-        buffer if sink is not None and not getattr(sink, "fd_mode", False) else buffer.getvalue(),
-        phases)
+    status = _write_report(buffer, phases)
     if status:
         return status
     if phases is not None:
@@ -5750,9 +5778,9 @@ class _ReportSink:
             raise
 
     def verify(self, lib, state, report):
-        from pf_sink import SinkFormatError, SinkReader
+        from pf_sink import SinkFormatError
         try:
-            with SinkReader(self.path) as reader:
+            with _open_uncached_sink(self.path) as reader:
                 for _ in reader:
                     pass
                 self.header, self.counts, self.sha256 = reader.header, reader.counts, reader.sha256
@@ -5771,9 +5799,9 @@ class _ReportSink:
             raise _engine_invariant("the report sink trailer differs from its engine receipt")
 
     def records(self, tag=None):
-        from pf_sink import SinkFormatError, SinkReader
+        from pf_sink import SinkFormatError
         try:
-            with SinkReader(self.path) as reader:
+            with _open_uncached_sink(self.path) as reader:
                 for record in reader:
                     if tag is None or record.tag == tag:
                         yield record
@@ -5816,8 +5844,237 @@ def _check_bench_run(lib, state):
 
 class _JSONRecordArray:
     """A repeatable iterator factory, never a retained list of report rows."""
-    def __init__(self, records):
+    def __init__(self, records, length=None, item=None):
         self.records = records
+        self.length, self.item = length, item
+
+    def __iter__(self):
+        return iter(self.records())
+
+    def __len__(self):
+        if self.length is None:
+            raise TypeError("a streamed array has no resident length")
+        return self.length
+
+    def __getitem__(self, index):
+        if self.item is None or not isinstance(index, int):
+            raise TypeError("a streamed array has no random access")
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        return self.item(index)
+
+
+class _JSONUTF8:
+    """A borrowed event message, decoded with the existing replacement rule."""
+    _strlen = ctypes.CDLL(None).strlen
+    _strlen.argtypes, _strlen.restype = (ctypes.c_void_p,), ctypes.c_size_t
+
+    def __init__(self, address):
+        self.address = address
+        self.size = self._strlen(address)
+
+    def chunks(self):
+        import codecs
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        for offset in range(0, self.size, 4096):
+            yield decoder.decode(ctypes.string_at(
+                self.address + offset, min(4096, self.size - offset)))
+        yield decoder.decode(b"", final=True)
+
+
+class _BoundedJSONFile:
+    """Append, synchronize, then read a transactional ASCII artifact.
+
+    Deployment: a real disk filesystem supporting Linux O_DIRECT or Darwin
+    F_NOCACHE. RAM filesystems are not external storage. One aligned 64 KiB
+    anonymous window is the entire I/O working set; direct reads/writes bypass
+    the data page cache. Every write window is synchronized before reuse.
+    There is deliberately no buffered-I/O fallback or advisory eviction claim.
+    """
+    window = 64 * 1024
+
+    def __init__(self, file):
+        import fcntl
+        self.file = file
+        self.buffer = None
+        self.used = self.base = self.size = self.position = 0
+        self.read_base, self.read_size = -1, 0
+        self.reading = False
+        self.binary = False
+        self.libc = ctypes.CDLL(None, use_errno=True)
+        fd = file.fileno()
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("report artifacts require a disk-backed regular file")
+        if sys.platform.startswith("linux"):
+            # f_type is the first long in Linux struct statfs. Reserve more
+            # than the complete structure without depending on its tail ABI.
+            filesystem = ctypes.create_string_buffer(256)
+            if self.libc.fstatfs(fd, ctypes.byref(filesystem)) != 0:
+                self._io_error()
+            kind = ctypes.c_long.from_buffer(filesystem).value
+            if kind in (0x01021994, 0x858458f6):  # tmpfs, ramfs (also memfd)
+                raise OSError("report artifacts require disk backing, not tmpfs or ramfs")
+            fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_DIRECT)
+        elif sys.platform == "darwin":
+            fcntl.fcntl(fd, 48, 1)  # F_NOCACHE: synchronous uncached file I/O
+        else:
+            raise OSError("uncached report artifact I/O is unavailable on this platform")
+        for name in ("pread", "pwrite"):
+            function = getattr(self.libc, name)
+            function.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int64)
+            function.restype = ctypes.c_ssize_t
+        self.buffer = mmap.mmap(-1, self.window)
+        self.address = ctypes.addressof(ctypes.c_char.from_buffer(self.buffer))
+
+    @staticmethod
+    def _io_error():
+        number = ctypes.get_errno()
+        raise OSError(number, os.strerror(number))
+
+    @property
+    def closed(self):
+        return self.file.closed
+
+    def fileno(self):
+        return self.file.fileno()
+
+    def _sync_window(self):
+        if not self.used:
+            return
+        # Only the final disk block is padded. Truncation removes the padding
+        # before any reader can publish it. A partial window stays available
+        # for append, e.g. a flush before the trailer/last delimiter.
+        aligned = (self.used + 4095) & ~4095
+        self.buffer[self.used:aligned] = b"\0" * (aligned - self.used)
+        while True:
+            written = self.libc.pwrite(self.file.fileno(), self.address, aligned, self.base)
+            if written >= 0 or ctypes.get_errno() != 4:  # EINTR
+                break
+        if written < 0:
+            self._io_error()
+        if written != aligned:
+            raise OSError("short report artifact write")
+        os.ftruncate(self.file.fileno(), self.size)
+        if hasattr(os, "fdatasync"):
+            os.fdatasync(self.file.fileno())
+        else:
+            os.fsync(self.file.fileno())
+        if self.used == self.window:
+            self.base += self.window
+            self.used = 0
+
+    def write(self, text):
+        if self.reading:
+            raise ValueError("a prepared report artifact is read-only")
+        for offset in range(0, len(text), self.window):
+            data = text[offset:offset + self.window].encode("ascii")
+            position = 0
+            while position < len(data):
+                count = min(self.window - self.used, len(data) - position)
+                self.buffer[self.used:self.used + count] = data[position:position + count]
+                self.used += count
+                self.size += count
+                position += count
+                if self.used == self.window:
+                    self._sync_window()
+        return len(text)
+
+    def flush(self):
+        self.file.flush()  # retain checked flush/close failure behavior
+        if not self.reading:
+            self._sync_window()
+
+    def seek(self, position):
+        if position != 0:
+            raise ValueError("report artifacts only rewind to zero")
+        self.flush()
+        self.reading = True
+        self.position, self.read_base, self.read_size = 0, -1, 0
+        return 0
+
+    def read(self, count=-1):
+        if not self.reading:
+            self.seek(0)
+        count = 1024 * 1024 if count < 0 else min(count, 1024 * 1024)
+        pieces = []
+        while count > 0 and self.position < self.size:
+            base = self.position // self.window * self.window
+            if base != self.read_base:
+                while True:
+                    copied = self.libc.pread(self.file.fileno(), self.address, self.window, base)
+                    if copied >= 0 or ctypes.get_errno() != 4:  # EINTR
+                        break
+                if copied < 0:
+                    self._io_error()
+                if copied == 0:
+                    raise OSError("short report artifact read")
+                self.read_base, self.read_size = base, copied
+            offset = self.position - base
+            take = min(count, self.read_size - offset, self.size - self.position)
+            if take <= 0:
+                raise OSError("short report artifact read")
+            data = self.buffer[offset:offset + take]
+            pieces.append(data if self.binary else data.decode("ascii"))
+            count -= take
+            self.position += take
+        return (b"" if self.binary else "").join(pieces)
+
+    def close(self):
+        if self.buffer is not None:
+            self.buffer.close()
+            self.buffer = None
+        self.file.close()
+
+
+class _UncachedSinkFile(_BoundedJSONFile):
+    """Binary readback after the fixed sink reader has validated its header."""
+    def __init__(self, file):
+        position = file.tell()
+        super().__init__(file)
+        self.binary = self.reading = True
+        self.position, self.size = position, os.fstat(file.fileno()).st_size
+
+    def readline(self, limit):
+        pieces, consumed = [], 0
+        while consumed < limit and self.position < self.size:
+            # Populate one direct window using the same bounded reader.
+            first = self.read(1)
+            if not first:
+                break
+            pieces.append(first)
+            consumed += 1
+            if first == b"\n":
+                break
+            offset = self.position - self.read_base
+            end = min(self.read_size, offset + limit - consumed)
+            newline = self.buffer.find(b"\n", offset, end)
+            take = (newline + 1 if newline >= 0 else end) - offset
+            if take:
+                pieces.append(self.read(take))
+                consumed += take
+            if newline >= 0:
+                break
+        return b"".join(pieces)
+
+
+def _open_uncached_sink(path):
+    """Reuse the strict reader; only its bounded header uses buffered I/O.
+
+    The header's existing 1 MiB line bound also bounds that initial cache
+    footprint. All subsequent reads bypass cache through a fixed 64 KiB window.
+    """
+    from pf_sink import SinkReader
+    reader = SinkReader(path)
+    try:
+        reader._file = _UncachedSinkFile(reader._file)
+    except OSError as error:
+        reader._refuse(error)
+    except BaseException:
+        reader.close()
+        raise
+    return reader
 
 
 class _JSONColumn:
@@ -5830,7 +6087,7 @@ class _JSONColumn:
         try:
             if not self.empty:
                 self.file.write(",")
-            self.file.write(json.dumps(value, separators=(",", ":"), allow_nan=False))
+            _stream_json(value, self.file)
         except OSError as error:
             raise RunFailure("report sink write failed", "report_sink_failed",
                              {"reason": "scratch_io"}) from error
@@ -5839,12 +6096,19 @@ class _JSONColumn:
 
 def _json_temporary(resources, directory):
     try:
-        file = tempfile.TemporaryFile(mode="w+", encoding="ascii", newline="\n", dir=directory)
+        # _BoundedJSONFile owns ASCII encoding and the aligned I/O window.
+        # The owner supplies only an unbuffered, automatically unlinked fd.
+        file = tempfile.TemporaryFile(mode="w+b", buffering=0, dir=directory)
     except OSError as error:
         raise RunFailure("report sink open failed", "report_sink_failed",
                          {"reason": "scratch_io"}) from error
     try:
+        file = _BoundedJSONFile(file)
         resources.callback(_close_json_temporary, file)
+    except OSError as error:
+        file.close()
+        raise RunFailure("report sink open failed", "report_sink_failed",
+                         {"reason": "scratch_io"}) from error
     except BaseException:
         file.close()
         raise
@@ -5863,10 +6127,30 @@ def _close_json_temporary(file):
 
 def _stream_json(value, destination):
     """json.dump's compact bytes, with bounded arrays supplied by the sink."""
+    compound = isinstance(value, (dict, list, tuple, _JSONRecordArray))
+    active = getattr(destination, "_json_active", None)
+    owner = active is None
+    if owner:
+        active = destination._json_active = set()
+    marker = id(value)
+    if compound:
+        if marker in active:
+            raise ValueError("Circular reference detected")
+        active.add(marker)
+    try:
+        _stream_json_value(value, destination)
+    finally:
+        if compound:
+            active.remove(marker)
+        if owner:
+            del destination._json_active
+
+
+def _stream_json_value(value, destination):
     if isinstance(value, _JSONColumn):
         destination.write("[")
         value.file.seek(0)
-        while chunk := value.file.read(1024 * 1024):
+        while chunk := value.file.read(64 * 1024):
             destination.write(chunk)
         destination.write("]")
     elif isinstance(value, _JSONRecordArray):
@@ -5875,8 +6159,7 @@ def _stream_json(value, destination):
         for item in value.records():
             if not first:
                 destination.write(",")
-            # One bounded record, with today's ensure_ascii/default encoder.
-            destination.write(json.dumps(item, separators=(",", ":"), allow_nan=False))
+            _stream_json(item, destination)
             first = False
         destination.write("]")
     elif isinstance(value, dict):
@@ -5895,20 +6178,42 @@ def _stream_json(value, destination):
                 destination.write(",")
             _stream_json(item, destination)
         destination.write("]")
+    elif isinstance(value, str):
+        # Encode string interiors in fixed character windows; slicing at a
+        # Unicode code point preserves ensure_ascii's surrogate/escape bytes.
+        destination.write('"')
+        for offset in range(0, len(value), 4096):
+            destination.write(json.dumps(value[offset:offset + 4096], allow_nan=False)[1:-1])
+        destination.write('"')
+    elif isinstance(value, _JSONUTF8):
+        destination.write('"')
+        for chunk in value.chunks():
+            destination.write(json.dumps(chunk, allow_nan=False)[1:-1])
+        destination.write('"')
     else:
         destination.write(json.dumps(value, separators=(",", ":"), allow_nan=False))
 
 
-def _prepare_stream_report(document, resources, directory):
-    file = _json_temporary(resources, directory)
+def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
     try:
-        _stream_json(document, file)
-        file.write("\n")
-        file.flush()  # disk errors must precede the first stdout byte
-        file.seek(0)
+        with ExitStack() as prepared:
+            file = _json_temporary(prepared, directory)
+            _stream_json(document, file)
+            file.write("\n")
+            file.flush()  # disk errors must precede the first stdout byte
+            file.seek(0)
+            # A failed serialization closes its artifact immediately, even
+            # when the caller catches the error inside its resource scope.
+            resources.enter_context(prepared.pop_all())
     except OSError as error:
+        if not sink_errors:
+            raise
         raise RunFailure("report sink write failed", "report_sink_failed",
                          {"reason": "scratch_io"}) from error
+    except RunFailure as error:
+        if not sink_errors and error.code == "report_sink_failed" and isinstance(error.__cause__, OSError):
+            raise error.__cause__
+        raise
     return file
 
 
@@ -6057,40 +6362,64 @@ def _outputs_metadata(raw_manifest, slots, constants):
         constants=lambda: constants, events=lambda: ()))
 
 
-def _legacy_streamed_outputs_block(lib, state):
-    """L6b-1 compatibility: bounded C-reader windows until L6b-3 emits O/V/K."""
+def _legacy_streamed_outputs_block(lib, state, *, validate=False):
+    """Bounded C-reader windows, including modules without a report sink."""
     reader = make_outputs_reader(lib, state)
-    slots = int(lib.strategy_outputs_series_count(state))
-    n = max(0, int(lib.strategy_outputs_bars_len(state)))
-    block = _outputs_metadata(reader.manifest(), slots, reader.constants())
+    block = _outputs_metadata(reader.manifest(), reader.series_count(), reader.constants())
     outputs = {entry["index"]: entry for entry in
                _manifest_entries(block["manifest"], "outputs", ("index", "id"))}
+    entries = sorted(_manifest_entries(block["manifest"], "series", ("slot", "output")),
+                     key=lambda entry: entry["slot"])
 
     def times(which):
-        for offset in range(0, n, 4096):
-            count = min(4096, n - offset)
-            opens, closes = (ctypes.c_int64 * count)(), (ctypes.c_int64 * count)()
-            copied = ctypes.c_int64()
-            if (lib.strategy_outputs_bar_times_copy(state, offset, opens, closes, count,
-                                                     ctypes.byref(copied)) != 0 or copied.value != count):
-                raise _outputs_incompatible("the bar times could not be read", "outputs_api_mismatch")
-            for value in (opens if which == "open" else closes):
-                yield _output_time(value)
+        if hasattr(lib, "strategy_outputs_bar_times_copy"):
+            n = max(0, int(lib.strategy_outputs_bars_len(state)))
+            for offset in range(0, n, 4096):
+                count = min(4096, n - offset)
+                opens, closes = (ctypes.c_int64 * count)(), (ctypes.c_int64 * count)()
+                copied = ctypes.c_int64()
+                if (lib.strategy_outputs_bar_times_copy(state, offset, opens, closes, count,
+                                                         ctypes.byref(copied)) != 0
+                        or copied.value != count):
+                    raise _outputs_incompatible("the bar times could not be read", "outputs_api_mismatch")
+                for value in (opens if which == "open" else closes):
+                    yield _output_time(value)
+            return
+        opens, closes = reader.bar_times()
+        for value in (opens if which == "open" else closes):
+            yield _output_time(value)
 
     def series(slot, encoding):
-        for offset in range(0, n, 4096):
-            count = min(4096, n - offset)
-            values, copied = (ctypes.c_double * count)(), ctypes.c_int64()
-            if (lib.strategy_outputs_series_copy(state, slot, offset, values, count,
-                                                  ctypes.byref(copied)) != 0 or copied.value != count):
-                raise _outputs_incompatible(f"series slot {slot} could not be read", "outputs_api_mismatch")
-            for value in values:
-                yield _output_value(value, encoding)
+        if hasattr(lib, "strategy_outputs_series_copy"):
+            n = max(0, int(lib.strategy_outputs_bars_len(state)))
+            for offset in range(0, n, 4096):
+                count = min(4096, n - offset)
+                values, copied = (ctypes.c_double * count)(), ctypes.c_int64()
+                if (lib.strategy_outputs_series_copy(state, slot, offset, values, count,
+                                                      ctypes.byref(copied)) != 0
+                        or copied.value != count):
+                    raise _outputs_incompatible(f"series slot {slot} could not be read",
+                                                "outputs_api_mismatch")
+                for value in values:
+                    yield _output_value(value, encoding)
+            return
+        for value in reader.series(slot):
+            yield _output_value(value, encoding)
+
+    # Reader failures and invalid event references still belong to assembly,
+    # before entering serialization. A second, bounded walk writes the rows.
+    if validate:
+        for which in ("open", "close"):
+            for _ in times(which):
+                pass
+        for entry in entries:
+            for _ in series(entry["slot"], entry.get("encoding")):
+                pass
+        for event in reader.events():
+            _report_output_event(event, outputs)
 
     block["bars"] = {"open_ms": _JSONRecordArray(lambda: times("open")),
                      "close_ms": _JSONRecordArray(lambda: times("close"))}
-    entries = sorted(_manifest_entries(block["manifest"], "series", ("slot", "output")),
-                     key=lambda entry: entry["slot"])
     for entry, metadata in zip(block["series"], entries):
         slot, encoding = metadata["slot"], metadata.get("encoding")
         entry["values"] = _JSONRecordArray(lambda slot=slot, encoding=encoding: series(slot, encoding))
