@@ -53,8 +53,9 @@ std::size_t command_scratch_page_size() {
     errno = 0;
     const long size = ::sysconf(_SC_PAGESIZE);
     if (size <= 0)
-        throw std::system_error(errno ? errno : EINVAL, std::generic_category(),
-                                "command scratch platform page size");
+        throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+            std::system_error(errno ? errno : EINVAL, std::generic_category(),
+                              "command scratch platform page size"));
     return static_cast<std::size_t>(size);
 }
 
@@ -82,8 +83,13 @@ struct SourceCommandScratchRun {
 
     SourceCommandScratchRun() {
         for (const auto* store : {&trade, &dependency, &exit}) {
-            if (store->status() != ::pineforge::detail::ScratchStatus::ok)
-                throw std::logic_error("run command scratch store failed to open");
+            if (store->status() != ::pineforge::detail::ScratchStatus::ok) {
+                const auto code = store->status() == ::pineforge::detail::ScratchStatus::io_error
+                    ? RunFailureCode::scratch_io_failed
+                    : RunFailureCode::engine_invariant;
+                throw coded<std::logic_error>(code, {},
+                    "run command scratch store failed to open");
+            }
         }
         // This head exposes owning NativeOpenLot rows and snapshot readers,
         // rather than the reference tree's NativeOpenLotView visitor API.
