@@ -7411,3 +7411,19 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT APPLE
             --fixture ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/o1_report_contract/summary_only.json)
 endif()
 # --- CR-150 core-cr150-o1w-contract end ---
+
+# --- CR-150 core-cr150-cr224 begin ---
+# A dedicated ALL-build module is necessary: ci_verify disables corpus targets.
+# Keep the original corpus source and whole-archive runtime exports unchanged.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(cr224_nofile_strategy MODULE ../corpus/validation/bracket-same-id-exit-replace-01/generated.cpp)
+    target_link_libraries(cr224_nofile_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(cr224_nofile_strategy PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(cr224_nofile_strategy PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(cr224_nofile_strategy PRIVATE -ffp-contract=off -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare)
+    set_target_properties(cr224_nofile_strategy PROPERTIES PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cr224_nofile")
+endif()
+# --- CR-150 core-cr150-cr224 end ---
