@@ -38,15 +38,19 @@ def pull(head=HEAD, number=17, merged_at="2026-10-20T12:00:00Z"):
     return {"number": number, "merged_at": merged_at, "head": {"sha": head}}
 
 
+def status(context, state="success"):
+    return {"context": context, "state": state,
+            "creator": {"login": "luisleo526", "type": "User"}}
+
+
 def successes():
-    return [{"context": "pineforge/verify", "state": "success"},
-            {"context": "pineforge/parity", "state": "success"}]
+    return [status("pineforge/verify"), status("pineforge/parity")]
 
 
 def green_statuses():
     return successes() + [
-        {"context": "pineforge/verify", "state": "failure"},
-        {"context": "pineforge/parity", "state": "pending"},
+        status("pineforge/verify", "failure"),
+        status("pineforge/parity", "pending"),
     ]
 
 
@@ -135,6 +139,60 @@ class GateTests(unittest.TestCase):
         self.assertIn((PULLS_API, True, None), self.api.calls)
         self.assertIn((STATUSES_API, True, None), self.api.calls)
 
+    def test_success_from_an_unknown_creator_or_wrong_type_refuses(self):
+        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
+            for login, creator_type in (("untrusted-operator", "User"), ("luisleo526", "Bot")):
+                with self.subTest(context=context, login=login, creator_type=creator_type):
+                    self.api = FakeAPI()
+                    rows = successes()
+                    rows[index]["creator"] = {"login": login, "type": creator_type}
+                    self.api.statuses(rows)
+                    self.assert_refused(
+                        f"{context}: refused status creator (login={login!r}, type={creator_type!r})")
+
+    def test_newest_untrusted_creator_cannot_be_rescued_by_an_older_allowed_success(self):
+        for context in ("pineforge/verify", "pineforge/parity"):
+            with self.subTest(context=context):
+                self.api = FakeAPI()
+                newest = status(context)
+                newest["creator"] = {"login": "untrusted-operator", "type": "User"}
+                self.api.responses[STATUSES_API] = (
+                    json.dumps([newest]) + "\n" + json.dumps(successes()))
+                self.assert_refused(
+                    f"{context}: refused status creator (login='untrusted-operator', type='User')")
+
+    def test_status_without_creator_refuses(self):
+        for index, context in enumerate(("pineforge/verify", "pineforge/parity")):
+            with self.subTest(context=context):
+                self.api = FakeAPI()
+                rows = successes()
+                del rows[index]["creator"]
+                self.api.statuses(rows)
+                self.assert_refused(f"{context}: missing or malformed status creator: None")
+
+    def test_malformed_creator_object_refuses(self):
+        for creator in (None, "luisleo526", ["luisleo526", "User"]):
+            with self.subTest(creator=creator):
+                self.api = FakeAPI()
+                rows = successes()
+                rows[0]["creator"] = creator
+                self.api.statuses(rows)
+                self.assert_refused(
+                    f"pineforge/verify: missing or malformed status creator: {creator!r}")
+
+    def test_missing_or_malformed_creator_fields_refuse_without_inventing_an_identity(self):
+        for creator in ({}, {"login": "luisleo526"}, {"type": "User"},
+                        {"login": None, "type": "User"}, {"login": "luisleo526", "type": None},
+                        {"login": 17, "type": "User"}, {"login": "luisleo526", "type": ["User"]}):
+            with self.subTest(creator=creator):
+                self.api = FakeAPI()
+                rows = successes()
+                rows[0]["creator"] = creator
+                self.api.statuses(rows)
+                self.assert_refused(
+                    "pineforge/verify: refused status creator "
+                    f"(login={creator.get('login')!r}, type={creator.get('type')!r})")
+
     def test_missing_verify_refuses(self):
         self.api.statuses([successes()[1]])
         self.assert_refused("missing pineforge/verify")
@@ -151,18 +209,18 @@ class GateTests(unittest.TestCase):
 
     def test_lite_verify_cannot_replace_missing_full_verify(self):
         self.api.statuses([
-            {"context": "pineforge/verify-lite", "state": "success"}, successes()[1]])
+            status("pineforge/verify-lite"), successes()[1]])
         self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/verify")
 
     def test_lite_verify_cannot_override_pending_full_verify(self):
         self.api.statuses([
-            {"context": "pineforge/verify-lite", "state": "success"},
-            {"context": "pineforge/verify", "state": "pending"}, successes()[1]])
+            status("pineforge/verify-lite"),
+            status("pineforge/verify", "pending"), successes()[1]])
         self.assert_refused(f"PR #17 head {HEAD}: pineforge/verify=pending (expected success)")
 
     def test_lite_parity_cannot_replace_full_parity(self):
         self.api.statuses([
-            successes()[0], {"context": "pineforge/parity-lite", "state": "success"}])
+            successes()[0], status("pineforge/parity-lite")])
         self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/parity")
 
     def test_failure_refuses(self):
@@ -313,7 +371,7 @@ class GateTests(unittest.TestCase):
 
     def test_newest_failure_cannot_be_masked_by_an_older_success(self):
         self.api.statuses([
-            {"context": "pineforge/verify", "state": "failure"},
+            status("pineforge/verify", "failure"),
             *successes(),
         ])
         self.assert_refused("pineforge/verify=failure (expected success)")
@@ -328,14 +386,14 @@ class GateTests(unittest.TestCase):
     def test_status_pages_preserve_first_occurrence_across_page_boundaries(self):
         self.api.responses[STATUSES_API] = (
             json.dumps([successes()[0]]) + "\n" + json.dumps([
-                successes()[1], {"context": "pineforge/verify", "state": "failure"}]))
+                successes()[1], status("pineforge/verify", "failure")]))
         code, stdout, stderr = self.run_gate()
         self.assertEqual(code, 0, stderr)
         self.assertIn("pineforge/verify=success; pineforge/parity=success", stdout)
 
     def test_failure_on_the_first_page_cannot_be_masked_by_later_success(self):
         self.api.responses[STATUSES_API] = (
-            json.dumps([{"context": "pineforge/verify", "state": "failure"}])
+            json.dumps([status("pineforge/verify", "failure")])
             + "\n" + json.dumps(successes()))
         self.assert_refused("pineforge/verify=failure (expected success)")
 
@@ -494,7 +552,8 @@ class GateTests(unittest.TestCase):
                  "missing or invalid commit.tree.sha"),
                 (STATUSES_API, "null", "an empty payload"),
                 (STATUSES_API, "[null]", "invalid status row"),
-                (STATUSES_API, '[{"context": "pineforge/verify"}]', "invalid status state")):
+                (STATUSES_API, json.dumps([{key: value for key, value in successes()[0].items()
+                                           if key != "state"}]), "invalid status state")):
             with self.subTest(endpoint=endpoint, payload=payload):
                 self.api = FakeAPI()
                 self.api.responses[endpoint] = payload

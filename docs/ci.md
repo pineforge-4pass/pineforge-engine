@@ -1276,3 +1276,16 @@ The reader seam defines normalized context states, not a receipt storage format.
 Every API call is a read using the release job's own App token. Rate limits
 and upstream 5xx responses refuse immediately, naming the failure, without
 sleeping or retrying; empty or unparseable evidence also refuses.
+
+#### Allowed status creators
+
+In phase 1, the newest statuses API row for each full context must have a
+`creator.login` and `creator.type` pair in `ALLOWED_STATUS_CREATORS` in
+`scripts/ci_release_gate.py`. Missing or malformed creators and every other
+identity refuse, even when an older row from an allowed creator succeeded.
+
+| Login | Type | Confirmed producer |
+| --- | --- | --- |
+| `luisleo526` | `User` | The operator PAT that posts `pineforge/verify` / `pineforge/parity` via `lab verify record` / `lab verify parity`. |
+
+Adding a creator is a code change reviewed like any other.

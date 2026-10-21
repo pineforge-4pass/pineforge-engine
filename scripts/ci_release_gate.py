@@ -21,6 +21,8 @@ from typing import Callable
 
 
 CONTEXTS = ("pineforge/verify", "pineforge/parity")
+# Confirmed operator PAT; additions require a reviewed code change (docs/ci.md).
+ALLOWED_STATUS_CREATORS = (("luisleo526", "User"),)
 MAIN_PROOF_WATCHER_FIRST_SHA: str | None = None
 """None = the watcher is not live yet. Otherwise its FIRST recorded main sha.
 
@@ -282,6 +284,17 @@ def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor)
         # GitHub returns newest first. Never let an older row override it.
         if context in latest:
             continue
+        if context in CONTEXTS:
+            creator = row.get("creator")
+            if not isinstance(creator, dict):
+                raise ReleaseGateError(
+                    f"API {endpoint}: {context}: missing or malformed status creator: {creator!r}")
+            login, creator_type = creator.get("login"), creator.get("type")
+            if (not isinstance(login, str) or not isinstance(creator_type, str)
+                    or (login, creator_type) not in ALLOWED_STATUS_CREATORS):
+                raise ReleaseGateError(
+                    f"API {endpoint}: {context}: refused status creator "
+                    f"(login={login!r}, type={creator_type!r})")
         state = row.get("state")
         if not isinstance(state, str) or not state:
             raise ReleaseGateError(f"API {endpoint} returned invalid status state for {context}")
