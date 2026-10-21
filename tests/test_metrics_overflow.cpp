@@ -93,7 +93,15 @@ public:
         t.is_long = value.is_long != 0;
         t.max_runup = value.max_runup; t.max_drawdown = value.max_drawdown;
         t.entry_bar_index = value.entry_bar_index; t.exit_bar_index = value.exit_bar_index;
-        (range_end ? range_end_trades_ : trades_).push_back(t);
+        // The two report rows live in differently typed stores since the O(1)
+        // contract: closed rows in TradeLedger, the range-end section in the
+        // constant-memory OpenReportRowSource (R12). Seeding the latter is its
+        // documented reference-oracle path.
+        if (range_end) {
+            range_end_trades_.push_back(t);
+        } else {
+            trades_.push_back(t);
+        }
     }
     void read(ReportC& out) const { fill_trades_section(&out); }
 };
