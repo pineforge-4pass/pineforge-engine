@@ -4,7 +4,7 @@ name: Flat-peak memory gate
 # otherwise be noticed months later. A reusable workflow of two arms, each ONE
 # command of scripts/ci_flat_peak_gate.py (docs/ci.md, "Flat-peak memory gate"):
 #
-#   flat-peak-mem     `ctest -L mem` over a Release build that registers the
+#   flat-peak-mem     `ctest -L '^flatpeak$'` over a Release build that registers the
 #                     flat-memory rows, judged from the harness's own result
 #                     files and not from ctest's exit status alone
 #   flat-peak-census  tests/heap_census.py over the battery and the whole
@@ -66,7 +66,7 @@ jobs:
 
       # Arm 1. Fails on a regression, on zero or a wrong row set under the label,
       # on a skipped row and on an absent or incomplete harness verdict.
-      - name: Flat-peak memory rows (ctest -L mem)
+      - name: Flat-peak memory rows (label flatpeak)
         shell: bash
         run: |
           set -euo pipefail

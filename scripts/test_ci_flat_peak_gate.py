@@ -140,8 +140,8 @@ class MemGateTests(TempCase):
         self.assertIn('-DPINEFORGE_BUILD_FLAT_MEMORY_TESTS=ON', runner.calls[0])
         self.assertIn('-DCMAKE_BUILD_TYPE=Release', runner.calls[0])
         self.assertEqual(runner.calls[1][-3:], ['pineforge', 'flat_memory_macd', 'flat_memory_prefix'])
-        self.assertEqual(runner.calls[2], ['ctest', '--test-dir', str(self.build), '-N', '-L', 'mem'])
-        self.assertEqual(runner.calls[3], ['ctest', '--test-dir', str(self.build), '-L', 'mem',
+        self.assertEqual(runner.calls[2], ['ctest', '--test-dir', str(self.build), '-N', '-L', '^flatpeak$'])
+        self.assertEqual(runner.calls[3], ['ctest', '--test-dir', str(self.build), '-L', '^flatpeak$',
                                            '--no-tests=error', '--output-on-failure', '--timeout', '0', '-V'])
 
     def test_zero_registered_rows_fail_before_the_run(self):
@@ -461,8 +461,8 @@ class WiringTests(TempCase):
 
     def test_a_gate_step_that_continues_on_error_is_refused(self):
         found = self.findings(**{'.github/workflows/flat-peak.yml': [(
-            '      - name: Flat-peak memory rows (ctest -L mem)\n',
-            '      - name: Flat-peak memory rows (ctest -L mem)\n        continue-on-error: true\n')]})
+            '      - name: Flat-peak memory rows (label flatpeak)\n',
+            '      - name: Flat-peak memory rows (label flatpeak)\n        continue-on-error: true\n')]})
         self.assertTrue(any('must not continue on error' in finding for finding in found), found)
 
     def test_a_gate_step_under_an_if_is_refused(self):
@@ -496,9 +496,9 @@ class WiringTests(TempCase):
 
     def test_a_mem_row_that_loses_its_label_is_refused(self):
         found = self.findings(**{'tests/CMakeLists.txt': [(
-            'set_tests_properties(test_flat_memory_rss_macd PROPERTIES\n        LABELS "mem;slow;l4-pending")',
+            'set_tests_properties(test_flat_memory_rss_macd PROPERTIES\n        LABELS "flatpeak;slow;l4-pending")',
             'set_tests_properties(test_flat_memory_rss_macd PROPERTIES\n        LABELS "slow;l4-pending")')]})
-        self.assertTrue(any('must carry the label mem' in finding for finding in found), found)
+        self.assertTrue(any('must carry the label flatpeak' in finding for finding in found), found)
 
     def test_a_mem_row_that_runs_the_source_tree_run_json_is_refused(self):
         found = self.findings(**{'tests/CMakeLists.txt': [(
@@ -506,10 +506,18 @@ class WiringTests(TempCase):
             '--run-json ${PROJECT_SOURCE_DIR}/docker/run_json.py')]})
         self.assertTrue(any('must run the staged run_json.py' in finding for finding in found), found)
 
-    def test_a_label_that_ctest_l_mem_would_also_select_is_refused(self):
+    def test_a_row_that_the_flatpeak_label_would_also_select_is_refused(self):
         found = self.findings(**{'tests/CMakeLists.txt': [(
-            'LABELS "codegen-fixtures;slow;l4-pending"', 'LABELS "mem-codegen-fixtures;slow;l4-pending"')]})
-        self.assertTrue(any('regular-expression search' in finding for finding in found), found)
+            'LABELS "codegen-fixtures;slow;l4-pending"', 'LABELS "flatpeak;slow;l4-pending"')]})
+        self.assertTrue(any('would select it' in finding for finding in found), found)
+
+    def test_another_lines_mem_label_is_not_the_gates_business(self):
+        # The integration line's l9s row carries "slow;mem"; the gate's own label is anchored, so a
+        # `mem` label on a row of another line is neither selected nor a wiring finding.
+        base = self.findings()
+        found = self.findings(**{'tests/CMakeLists.txt': [(
+            'LABELS "codegen-fixtures;slow;l4-pending"', 'LABELS "slow;mem"')]})
+        self.assertEqual(found, base)
 
     def test_a_missing_file_is_a_finding(self):
         self.assertEqual(gate.check_wiring(self.tmp / 'empty')[0].split(' ')[0], 'cannot')

@@ -5,7 +5,7 @@ One command per arm, run by .github/workflows/flat-peak.yml (ci.yml calls it on
 a push to main, release.yml calls it before anything is published):
 
   mem     Release build with the flat-memory rows registered, the macd module,
-          `ctest -L mem`, then the harness's own result files (RUN.COMPLETE and
+          `ctest -L '^flatpeak$'`, then the harness's own result files (RUN.COMPLETE and
           one case-*.json per case). ctest's exit status alone is never the
           verdict.
   census  the heap-census fixture and every corpus strategy module, then
@@ -41,8 +41,12 @@ from ci_verify import ctest_list_count, ctest_list_names, ctest_rows  # noqa: E4
 
 ROOT = Path(__file__).resolve().parents[1]
 
-MEM_LABEL = 'mem'
-# The rows `ctest -L mem` must register and run, exactly. test_flat_memory_rss_macd
+# The gate owns its own label: `mem` is a generic label other lines may put on
+# rows of their own (the integration line's l9s row does), so the arm selects
+# `flatpeak` by an anchored regular expression (`ctest -L` is a regex search).
+MEM_LABEL = 'flatpeak'
+MEM_LABEL_RE = f'^{MEM_LABEL}$'
+# The rows `ctest -L '^flatpeak$'` must register and run, exactly. test_flat_memory_rss_macd
 # is the macd-only part of test_flat_memory_rss_e2e (tests/CMakeLists.txt): its
 # cases load no codegen output, so a plain build directory can run them.
 MEM_ROWS = ('test_flat_memory_rss_macd',)
@@ -62,7 +66,7 @@ MEM_STAGED = (Path('flat_memory_prefix') / 'bin' / 'run_json.py',
               Path('flat_memory_prefix') / 'lib' / 'libpineforge_window_plan.so')
 MEM_BUILD_TARGETS = ['pineforge', 'flat_memory_macd', 'flat_memory_prefix']
 # The row that keeps every case and needs codegen outputs: lab only, and its
-# label must never match `ctest -L mem` (a regular-expression search).
+# label must never match `ctest -L '^flatpeak$'`.
 LAB_ONLY_ROW = 'test_flat_memory_rss_e2e'
 
 CENSUS_SCHEMA = 'pineforge-heap-census/v1'
@@ -209,12 +213,12 @@ def gate_mem(root: Path, build: Path, jobs: int, launcher: str | None, runner=de
 
     # Registration first: a label that selects nothing, or something else, must
     # fail here, before a run that would pass over the wrong rows or none.
-    status, listing = runner(['ctest', '--test-dir', str(build), '-N', '-L', MEM_LABEL], root)
+    status, listing = runner(['ctest', '--test-dir', str(build), '-N', '-L', MEM_LABEL_RE], root)
     registered = ctest_list_names(listing.encode()) or frozenset()
     count = ctest_list_count(listing.encode())
     if status != 0 or count is None:
-        return fail('mem', 2, [f'ctest -N -L {MEM_LABEL} exited {status} without a readable row count'])
-    print(f'flat-peak mem: ctest -N -L {MEM_LABEL} registers {count} rows: '
+        return fail('mem', 2, [f'ctest -N -L {MEM_LABEL_RE} exited {status} without a readable row count'])
+    print(f'flat-peak mem: ctest -N -L {MEM_LABEL_RE} registers {count} rows: '
           f'{", ".join(sorted(registered)) or "none"}')
     if count == 0 or registered != frozenset(MEM_ROWS) or count != len(MEM_ROWS):
         return fail('mem', 1, [
@@ -222,7 +226,7 @@ def gate_mem(root: Path, build: Path, jobs: int, launcher: str | None, runner=de
             f'{list(MEM_ROWS)}; zero rows means the label or PINEFORGE_BUILD_FLAT_MEMORY_TESTS is '
             'gone, an extra row is one this build directory cannot run'])
 
-    status, output = runner(['ctest', '--test-dir', str(build), '-L', MEM_LABEL, '--no-tests=error',
+    status, output = runner(['ctest', '--test-dir', str(build), '-L', MEM_LABEL_RE, '--no-tests=error',
                              '--output-on-failure', '--timeout', '0', '-V'], root)
     reasons: list[str] = []
     ran = 0
@@ -470,7 +474,7 @@ def check_wiring(root: Path) -> list[str]:
             findings.append(f'release.yml job {job} must need exactly {shown}')
     findings += tolerance_findings('release.yml', release)
 
-    # tests/CMakeLists.txt: `mem` selects exactly the rows this build directory can run.
+    # tests/CMakeLists.txt: `flatpeak` selects exactly the rows this build directory can run.
     labels = dict(re.findall(r'set_tests_properties\(\s*(\S+)\s+PROPERTIES\s+LABELS\s+"([^"]*)"\s*\)', cmake))
     for row in MEM_ROWS:
         registration = re.search(rf'add_test\(\s*NAME\s+{re.escape(row)}\b([^)]*)\)', cmake)
@@ -486,9 +490,9 @@ def check_wiring(root: Path) -> list[str]:
         findings.append(f'tests/CMakeLists.txt gives {LAB_ONLY_ROW} no label set')
     for row, text in labels.items():
         for label in text.split(';'):
-            if MEM_LABEL in label and not (label == MEM_LABEL and row in MEM_ROWS):
+            if re.search(MEM_LABEL_RE, label) and row not in MEM_ROWS:
                 findings.append(f'tests/CMakeLists.txt row {row} carries label {label!r}: `ctest -L '
-                                f'{MEM_LABEL}` is a regular-expression search and would select it')
+                                f'{MEM_LABEL_RE}` would select it')
     return findings
 
 

@@ -7269,7 +7269,7 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
             --report-sink off
             --work-dir ${CMAKE_BINARY_DIR}/flat_memory_work
             --results-dir ${CMAKE_BINARY_DIR}/flat_memory_results)
-    # CR-150 sm-cr150-ci-flatpeak: the rows `ctest -L mem` runs in CI. The cases
+    # CR-150 sm-cr150-ci-flatpeak: the rows `ctest -L '^flatpeak$'` runs in CI. The cases
     # a, g, h and borrowed load only macd.so, which this build dir produces
     # (flat_memory_macd above) and run_json.py (borrowed reads its source); they
     # are the same case functions test_flat_memory_rss_e2e runs, selected by the
@@ -7277,8 +7277,8 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
     # xsym_4 and scale_out, codegen outputs a plain build dir cannot make (the
     # pinned codegen is a separate repository reached only over the network), so
     # test_flat_memory_rss_e2e keeps its whole command and moves to the label
-    # `codegen-fixtures`: lab only. The label must not contain the text `mem`:
-    # `ctest -L` is a regular-expression search over the label strings.
+    # `codegen-fixtures`: lab only. The label must not match `^flatpeak$`, the
+    # anchored label the flat-peak gate selects (`ctest -L` is a regular-expression search).
     #
     # Case g sends a selected-window request, and run_json.py loads the planner
     # from <its directory>/../lib/libpineforge_window_plan.so (trusted_planner_path,
@@ -7306,7 +7306,7 @@ if(PINEFORGE_BUILD_FLAT_MEMORY_TESTS)
             --work-dir ${CMAKE_BINARY_DIR}/flat_memory_macd_work
             --results-dir ${CMAKE_BINARY_DIR}/flat_memory_macd_results)
     set_tests_properties(test_flat_memory_rss_macd PROPERTIES
-        LABELS "mem;slow;l4-pending")
+        LABELS "flatpeak;slow;l4-pending")
     set_tests_properties(test_flat_memory_rss_e2e PROPERTIES
         LABELS "codegen-fixtures;slow;l4-pending")
 endif()

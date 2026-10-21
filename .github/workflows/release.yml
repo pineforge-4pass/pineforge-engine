@@ -76,7 +76,7 @@ env:
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
 jobs:
-  # RELEASE tier: the CR-150 flat-peak memory gate, `ctest -L mem` and the heap
+  # RELEASE tier: the CR-150 flat-peak memory gate, `ctest -L '^flatpeak$'` and the heap
   # census (.github/workflows/flat-peak.yml, docs/ci.md "Flat-peak memory gate").
   # The `release` job needs it, so a memory regression stops the run before the
   # VERSION bump is committed, before the tag is pushed, and so before the

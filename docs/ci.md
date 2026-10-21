@@ -895,7 +895,7 @@ both in `scripts/ci_flat_peak_gate.py`:
 
 | Arm | Runs | Passes only when |
 | --- | --- | --- |
-| `mem` | a Release build with `PINEFORGE_BUILD_FLAT_MEMORY_TESTS=ON`, then `ctest -L mem`: the row `test_flat_memory_rss_macd`, the harness `tests/flat_memory_rss_e2e.py` over the cases `a`, `g`, `h` and `borrowed` (the bars, selected-window and magnifier ladders, and the borrowed-feed source check), run through a staged copy of `docker/run_json.py` beside the planner library the build made (`flat_memory_prefix`) | `ctest -N -L mem` lists exactly that row, ctest ran it and printed `ctest ran N rows (floor M)` with N at least M, it was not skipped, and the harness's own `RUN.COMPLETE` and four `case-*.json` say PASS with every ladder's rungs measured |
+| `mem` | a Release build with `PINEFORGE_BUILD_FLAT_MEMORY_TESTS=ON`, then `ctest -L '^flatpeak$'`: the row `test_flat_memory_rss_macd`, the harness `tests/flat_memory_rss_e2e.py` over the cases `a`, `g`, `h` and `borrowed` (the bars, selected-window and magnifier ladders, and the borrowed-feed source check), run through a staged copy of `docker/run_json.py` beside the planner library the build made (`flat_memory_prefix`) | `ctest -N -L '^flatpeak$'` lists exactly that row, ctest ran it and printed `ctest ran N rows (floor M)` with N at least M, it was not skipped, and the harness's own `RUN.COMPLETE` and four `case-*.json` say PASS with every ladder's rungs measured |
 | `census` | the heap-census fixture and every corpus strategy module, then `tests/heap_census.py --battery tests/fixtures/flat_memory --corpus corpus` into a new directory | `census.json` says status `PASS` (no growing allocation site outside the two admissions: caller OHLCV and declared closed-trade history), carries no open-proof error, and judged at least the battery's modes plus one comparison per corpus probe |
 
 Each arm prints how many rows or comparisons it judged and exits non-zero on
@@ -917,7 +917,7 @@ Both `mem` rows carry `l4-pending`: they are red until the work that makes a
 run's rest flat has landed, so the gate is red on any tree before it, which is
 what it is for.
 
-The growth gate is a required lane of `build-gate`: both `mem` (`ctest -L mem`)
+The growth gate is a required lane of `build-gate`: both `mem` (`ctest -L '^flatpeak$'`)
 and `census` (battery plus full corpus under Valgrind) run on Linux
 `pf-linux-x64-16` for same-repository PRs, pushes to main and manual CI
 dispatches, and in the reusable release gate; neither enters the macOS matrix.
@@ -951,7 +951,7 @@ Where it runs:
 
 What a failure means. A red `mem` arm names the case and its ladder: that
 case's rest grew with its axis by more than the harness's slope limit (1 MiB),
-so the flat-memory property regressed. `label mem selects 0 rows` means the
+so the flat-memory property regressed. `label flatpeak selects 0 rows` means the
 label, the CMake option or the row is gone, and no rows is never a pass. A
 `census` RED lists every growing allocation site that is not admitted, with its
 comparison, its owner and its bytes per unit; OPEN means the proof is
@@ -962,8 +962,9 @@ Lab only. `test_flat_memory_rss_e2e` keeps every case, so it also runs `b`,
 `codegen-fixtures`: those cases load `every_k`, `xsym`, `xsym_2`, `xsym_4` and
 `scale_out`, codegen outputs of `tests/fixtures/flat_memory/*.pine` that a
 plain build directory cannot make, because the pinned codegen is another
-repository reached over the network. The label must not contain `mem`:
-`ctest -L` is a regular-expression search, and `check-wiring` (the preflight
+repository reached over the network. The label must not match `^flatpeak$`
+(the gate owns that label, anchored: rows of other lines may carry `mem` or any
+other label; `ctest -L` is a regular-expression search), and `check-wiring` (the preflight
 stage `flat-peak-wiring`, with the unit tests of the stage `flat-peak-gate-tests`)
 checks this label set, gate steps without an `if`, a pipe or
 `continue-on-error`, and the release dependency chain. The workflow wrappers
