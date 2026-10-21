@@ -61,7 +61,7 @@ header made available but the provider TU/registration withheld, the test must
 fail to link the factory and observer-registration functions. The remote lab
 must record the actual first diagnostic.
 
-The requested base does not contain `src/source/pine_command_scratch.hpp` or the
+The requested base carries `src/source/pine_command_scratch_production.hpp` but lacks the pre-rename `src/source/pine_command_scratch.hpp` <!-- verified HEAD --> and the
 O1 fixture headers named in the brief. The new header declares the exact factory
 signature directly, so the standalone patch does not depend on those later
 lane additions. Other O1 lanes can retain their identical existing factory
@@ -94,7 +94,7 @@ every comparison returned 0. No frozen header was edited. The literal
 reference-tree identity condition therefore has three pre-existing exceptions
 for the supervisor to reconcile.
 
-`cmp src/source/pine_command_scratch.hpp <reference>/src/source/pine_command_scratch.hpp`
+The historical `cmp src/source/pine_command_scratch.hpp <reference>/src/source/pine_command_scratch.hpp` <!-- verified HEAD -->
 returned 2 because the local file is absent. A read-only `rg --files` search for
 that exact filename under both source directories returned no matches (exit 1):
 it is absent in both trees, so no byte-comparison PASS is claimed for that file.
