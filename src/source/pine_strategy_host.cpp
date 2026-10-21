@@ -818,6 +818,9 @@ void source::PineStrategyHost::on_native_applied(
     // after it, exactly where the adapter's own cascade used to put it.
     // Finish the same range-end mark, then any post-calculation journal tail.
     finish_applied_admission(event, context);
+    // The observer seam: once per applied event, after every row this event
+    // produced has settled. Empty unless a host overrides it.
+    on_native_applied_event(event, context);
 }
 
 void source::PineStrategyHost::record_applied_range_end() {
