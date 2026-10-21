@@ -38,6 +38,7 @@ env:
 jobs:
   flat-peak-mem:
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    timeout-minutes: 360
     steps:
       # The gate configures with PINEFORGE_VERSION_SOURCE=FILE: no tags, no
       # history.
@@ -91,6 +92,7 @@ jobs:
 
   flat-peak-census:
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    timeout-minutes: 360
     steps:
       # Credentials stay persisted, exactly as the corpus parity jobs: the
       # submodule clone and `git lfs pull` below go out over https and that is
