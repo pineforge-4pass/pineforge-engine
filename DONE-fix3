@@ -1,0 +1,4 @@
+Fix round 3: corrected the live-book fixture's strided loop bound.
+REPORT.md records the release/ctest cause, fix and UNVERIFIED items.
+Ready for supervisor review, commit and remote verification.
+No build, compiler, test, script, checker or generator was run locally.

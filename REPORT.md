@@ -244,3 +244,31 @@ line number would expose SYMMISS. Updating the cited symbol is pending clarifica
 
 Nothing was built, compiled, run, tested, or regenerated locally. `git diff --check` passes.
 `DONE-fix1` is deliberately not written while the memory fix and one citation remain open.
+
+## Fix round 3
+
+Handoff HEAD: `220553e5c9363a1f866f8646825f8dbdf791e86f` (unchanged; supervisor commits the diff).
+Read both complete summaries and the whole CTest log in
+`../lab-fail-rj-20261021t073244-9f1416/` before editing; `release-ctest.log` and
+`out_release_build-release_ci-logs_ctest.log` are byte-identical. Preflight passed, including
+doc anchors. The only failed stage was release `ctest` (exit 8): row 982,
+`test_native_o1_live_book`, SEGFAULT after 1.76 s, out of 1017 selected rows.
+
+Cause: the lane added an out-of-bounds fixture loop at `tests/test_native_o1_live_book.cpp:300`.
+`exercise_book(12000)` appends 12000 ordinary handles plus one parent and four children:
+`handles.size()` and `values.size()` are 12005. With `i += 3`, the old condition
+`i != handles.size()` cannot terminate there: after 12003 it accesses `handles[12006]`,
+outside the constructed vector elements, and continues. That invalid handle reaches
+`find_live` / `names_run`, which can dereference its invalid session-key pointer; the
+corresponding `values[i]` access can also overrun. This loop was introduced in lane
+commit `966ac0349e`.
+
+Fix: change that condition to `i < handles.size()`. All 4002 valid sampled lookups and value
+comparisons remain, as do the complete queue walk, populations, bounds and all subsequent
+command/ownership/rollback assertions. This is a one-line replacement with no shifted
+source ranges; no doc citation, registry, catalog, guard or production file changed.
+
+**UNVERIFIED:** no build, compiler, test, script, checker or generator was run locally.
+The log has no backtrace, so the exact faulting instruction remains unconfirmed.
+The supervisor must rerun the live-book row and full release verification, plus the
+required remaining profiles/corpus verification; this edit has no passing lab proof yet.
