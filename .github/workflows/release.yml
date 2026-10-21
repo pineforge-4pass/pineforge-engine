@@ -77,7 +77,7 @@ env:
 
 jobs:
   release:
-    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
+    runs-on: ["self-hosted","pf-gcp-main"]
 
     outputs:
       tag:        ${{ steps.bump.outputs.tag }}
@@ -340,7 +340,7 @@ jobs:
       matrix:
         include:
           - triple: linux-x86_64
-            runner: ["self-hosted","pf-ci","pf-ci-release"]
+            runner: ["self-hosted","pf-gcp-main"]
             cmake_extra: ""
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
@@ -468,7 +468,7 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
+    runs-on: ["self-hosted","pf-gcp-main"]
     steps:
       - name: Mint org App token (hub dispatch)
         id: app
