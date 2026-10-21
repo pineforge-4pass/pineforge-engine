@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import json
 from pathlib import Path
 import re
 import shutil
@@ -26,6 +27,9 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 GATE = SCRIPTS / 'cr150_source_gate.py'
+sys.path.insert(0, str(SCRIPTS))
+from cr150_source_gate import Scanner, SITE_INVENTORY_REL, SITE_SCHEMA  # noqa: E402
+
 PIN = '52101f9b7b540fece4493ddc7495451b6d85fc07'
 MANIFEST_REL = 'ci/cr150-source-bounds.yaml'
 # What the gate scans on the real tree, plus the files that bind it.
@@ -33,6 +37,14 @@ REAL_TREE_DIRS = ('src', 'include', 'tutorial', 'ci')
 REAL_TREE_FILES = ('scripts/regen_corpus_cpp.sh',)
 
 LOOP_CPP = '''\
+#include <vector>
+#include "pineforge/fixed.hpp"
+void on_bar(double x) {
+    static std::vector<double> slots_;
+    if (slots_.size() < kRingSlots) slots_.push_back(1.0);
+}
+'''
+UNCAPPED_RING_CPP = '''\
 #include <vector>
 #include "pineforge/fixed.hpp"
 struct Ring {
@@ -116,6 +128,14 @@ def write_tree(root: Path, files: dict[str, str]) -> None:
         path.write_text(text)
 
 
+def inventory_text(texts: dict[str, str]) -> str:
+    """Freeze a control's concrete sites BEFORE any mutation, without a verdict."""
+    sites = Scanner(set()).scan(texts)
+    return json.dumps({'schema': SITE_SCHEMA, 'sites': [
+        dict(file=site.file, symbol=site.symbol, **site.identity()) for site in sites
+    ]}, indent=1) + '\n'
+
+
 def digest(root: Path) -> dict[str, str]:
     out = {}
     for path in sorted(root.rglob('*')):
@@ -153,6 +173,8 @@ class Tree(unittest.TestCase):
             'include/pineforge/fixed.hpp': FIXED_HPP,
             'scripts/regen_corpus_cpp.sh': PIN_SH,
             MANIFEST_REL: manifest(entries, **kw)})
+        write_tree(self.root, {SITE_INVENTORY_REL: inventory_text({
+            'src/loop.cpp': loop, 'include/pineforge/fixed.hpp': FIXED_HPP})})
 
     def gate(self, *extra):
         before = digest(self.root)
@@ -165,14 +187,21 @@ class Tree(unittest.TestCase):
 
 
 class PositiveControls(Tree):
-    def test_fixed_constant_capacity_exits_0_and_counts_as_pass(self):
+    def test_own_size_guard_exits_0_and_counts_as_pass(self):
         self.build(self.clean_entries())
         proc = self.gate()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         c = counts(proc)
         self.assertEqual((c['files_scanned'], c['findings'], c['OPEN']), (2, 0, 0))  # loop.cpp + fixed.hpp
-        self.assertGreaterEqual(c['sites_found'], 3)  # decl + reserve + push_back
+        self.assertGreaterEqual(c['sites_found'], 2)  # declaration + guarded push_back
         self.assertEqual(c['PASS(bounded)'], 1)
+
+    def test_single_push_in_a_braced_guard_is_admitted(self):
+        loop = LOOP_CPP.replace(') slots_.push_back(1.0);', ') { slots_.push_back(1.0); }')
+        self.build(self.clean_entries(), loop=loop)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 1)
 
     def test_pending_flat_memory_is_reported_open_never_pass(self):
         self.build([entry('E1', state='pending-flat-memory')])
@@ -195,6 +224,130 @@ class PositiveControls(Tree):
 
 
 class UnlistedSite(Tree):
+    def test_u0549_spelling_in_another_function_is_a_new_site(self):
+        control = '''\
+void set_rates(int n) {
+    std::vector<double> next_rates;
+    next_rates.reserve(n);
+}
+'''
+        self.build([entry('U0549', symbol='next_rates', state='unreviewed')], loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['OPEN'], 1)
+        extra = '''\
+void cr150_extra(int n) {
+    std::vector<int> next_rates;
+    next_rates.resize(n);
+}
+'''
+        (self.root / 'src/loop.cpp').write_text(control + extra)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW decl site on \'next_rates\'.*entry U0549')
+        self.assertIn('cr150_extra', proc.stdout)
+
+    def test_same_scope_duplicate_declaration_preserves_multiplicity(self):
+        control = 'void f() { std::vector<int> next_rates; }\n'
+        self.build([entry('E1', symbol='next_rates', ops=['decl'], state='unreviewed')],
+                   loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # Deliberately ill-formed C++: this indexes source, so even an identical
+        # second declaration in one lexical scope must not inherit the first.
+        (self.root / 'src/loop.cpp').write_text(
+            control.replace('next_rates;', 'next_rates; std::vector<int> next_rates;'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW decl site.*entry E1.*ordinal=2')
+
+    def test_identical_type_and_operations_in_a_new_scope_are_new_sites(self):
+        control = 'void first(int n) { std::vector<int> rows; rows.resize(n); }\n'
+        self.build([entry('E1', symbol='rows', state='unreviewed')], loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (self.root / 'src/loop.cpp').write_text(control + control.replace('first', 'second'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW decl site.*entry E1.*second')
+        self.assertRegex(proc.stdout, r'NEW grow site.*entry E1.*second')
+
+    def test_a_scope_change_is_not_hidden_by_unchanged_site_counts(self):
+        control = 'void first() { std::vector<int> rows; }\n'
+        self.build([entry('E1', symbol='rows', ops=['decl'], state='unreviewed')], loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (self.root / 'src/loop.cpp').write_text(control.replace('first', 'second'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW decl site.*entry E1.*second')
+        self.assertIn('reviewed site identity', proc.stdout)
+        self.assertIn('stale', proc.stdout)
+
+    def test_identical_sibling_blocks_have_distinct_site_identities(self):
+        statement = '{ std::vector<int> rows; rows.resize(n); }'
+        control = f'void f(int n) {{\n    {statement}\n}}\n'
+        self.build([entry('E1', symbol='rows', state='unreviewed')], loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (self.root / 'src/loop.cpp').write_text(
+            control.replace('\n}\n', f'\n    {statement}\n}}\n'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW decl site.*entry E1.*<block> #2')
+        self.assertRegex(proc.stdout, r'NEW grow site.*entry E1.*<block> #2')
+
+    def test_a_type_change_is_not_hidden_by_unchanged_scope_and_counts(self):
+        control = 'void f() { std::vector<int> rows; }\n'
+        self.build([entry('E1', symbol='rows', ops=['decl'], state='unreviewed')], loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (self.root / 'src/loop.cpp').write_text(control.replace('vector<int>', 'vector<double>'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW decl site.*entry E1')
+        self.assertIn('reviewed site identity', proc.stdout)
+        self.assertIn('stale', proc.stdout)
+
+    def test_second_identical_growth_statement_is_a_new_site(self):
+        control = 'void f() { std::vector<int> rows; rows.push_back(1); }\n'
+        self.build([entry('E1', symbol='rows', state='unreviewed')], loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (self.root / 'src/loop.cpp').write_text(
+            control.replace('rows.push_back(1);', 'rows.push_back(1); rows.push_back(1);'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW grow site.*entry E1.*ordinal=2')
+
+    def test_moving_lines_and_whitespace_keeps_the_site_identity(self):
+        self.build(self.clean_entries())
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        moved = '\n// added diagnostic lines\n\n' + LOOP_CPP.replace(
+            'std::vector<double>', 'std::vector< double >')
+        (self.root / 'src/loop.cpp').write_text(moved)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 1)
+
+    def test_authoring_inventory_does_not_change_the_verification_baseline(self):
+        control = 'void first() { std::vector<int> rows; }\n'
+        self.build([entry('E1', symbol='rows', ops=['decl'], state='unreviewed')], loop=control)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        frozen = json.loads((self.root / SITE_INVENTORY_REL).read_text())
+        (self.root / 'src/loop.cpp').write_text(control + control.replace('first', 'second'))
+        authored = self.gate('--emit-site-inventory')
+        self.assertEqual(authored.returncode, 0, authored.stdout + authored.stderr)
+        proposal = json.loads(authored.stdout)
+        self.assertGreater(len(proposal['sites']), len(frozen['sites']))
+        self.assertNotIn('result:', authored.stdout)
+        self.assertEqual(json.loads((self.root / SITE_INVENTORY_REL).read_text()), frozen)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'NEW decl site.*entry E1.*second')
+
     def test_push_back_without_entry_exits_1_and_names_the_line(self):
         self.build(self.clean_entries())
         self.assertEqual(self.gate().returncode, 0)  # positive control, same tree
@@ -291,22 +444,32 @@ class UnlistedSite(Tree):
 
 
 class BadBounds(Tree):
-    def test_bound_naming_a_growth_axis_exits_2(self):
-        bad = ['bars', 'n_bars', 'trades', 'trade_count', 'entries', 'decisions',
-               'history_len', 'bar_index + 1', 'slots_', 'slots_.size()', 'kRingSlots + bars']
-        for expr in bad:
+    def test_bound_naming_a_growth_axis_is_a_finding_with_the_entry_id(self):
+        for expr in ('bars', 'n_bars', 'trades', 'trade_count', 'entries', 'decisions',
+                     'history_len', 'bar_index + 1', 'kRingSlots + bars'):
             with self.subTest(expr):
                 self.build([entry('E1', state='bounded', bound=expr,
                                   bound_inputs=['kRingSlots'])])
                 proc = self.gate()
-                self.assertEqual(proc.returncode, 2, f'{expr}: {proc.stdout}{proc.stderr}')
-                self.assertRegex(proc.stdout + proc.stderr, r'E1')
+                self.assertEqual(proc.returncode, 1, f'{expr}: {proc.stdout}{proc.stderr}')
+                self.assertRegex(proc.stdout, r'FINDING .*entry E1:.*bound .*forbidden growth axis')
+                self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+
+    def test_tautological_bound_is_a_manifest_error(self):
+        for expr in ('slots_', 'slots_.size()'):
+            with self.subTest(expr):
+                self.build([entry('E1', state='bounded', bound=expr)])
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn('E1', proc.stdout)
+                self.assertIn('tautology', proc.stdout)
 
     def test_bound_input_outside_the_fixed_input_list_exits_2(self):
         self.build([entry('E1', state='bounded', bound='kOther', bound_inputs=['kOther'])])
         proc = self.gate()
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertIn('fixed input', proc.stdout + proc.stderr)
+        self.assertIn('entry E1', proc.stdout)
 
     def test_fixed_input_that_names_a_growth_axis_exits_2(self):
         extra = flow(name='kMaxBars', value=9, definition='include/pineforge/fixed.hpp',
@@ -321,6 +484,49 @@ class BadBounds(Tree):
         (self.root / 'include/pineforge/fixed.hpp').write_text('constexpr int kRingSlots = 65;\n')
         proc = self.gate()
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+
+    def test_fixed_input_requires_an_uncommented_nonlocal_immutable_definition(self):
+        bad = (
+            'int kRingSlots = 64;\n',
+            '// constexpr int kRingSlots = 64;\nint kRingSlots = 65;\n',
+            '/* constexpr int kRingSlots = 64; */\n',
+            'void f() { constexpr int kRingSlots = 64; }\n',
+            'const char* text = "constexpr int kRingSlots = 64;";\n',
+            'struct Limits { const int kRingSlots = 64; };\n',
+            'struct Limits { const int kRingSlots = 64; '
+            'Limits(int n) : kRingSlots(n) {} };\n',
+        )
+        for definition in bad:
+            with self.subTest(definition):
+                self.build(self.clean_entries())
+                control = self.gate()
+                self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+                (self.root / 'include/pineforge/fixed.hpp').write_text(definition)
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn('namespace/class-scope const/constexpr', proc.stdout)
+
+    def test_fixed_input_value_is_required(self):
+        self.build(self.clean_entries())
+        path = self.root / MANIFEST_REL
+        path.write_text(path.read_text().replace('value: 64, ', ''))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn('fixed input kRingSlots: missing required field(s) value', proc.stdout)
+
+    def test_const_namespace_and_constexpr_class_definitions_are_supported(self):
+        for definition in (
+                'namespace limits { const int kRingSlots = 64; }\n',
+                'struct Limits { static constexpr int kRingSlots = 64; };\n',
+                'struct Limits { inline static const int kRingSlots = 64; };\n'):
+            with self.subTest(definition):
+                # OPEN rows exercise provenance without making an unsupported
+                # qualified-name bounded claim.
+                self.build([entry('E1', state='unreviewed')])
+                (self.root / 'include/pineforge/fixed.hpp').write_text(definition)
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertEqual(counts(proc)['PASS(bounded)'], 0)
 
     def test_bounded_entry_missing_a_required_field_exits_2(self):
         for field in ('bound', 'lifetime', 'rollback', 'hash_reader', 'tests', 'owner'):
@@ -347,7 +553,124 @@ class BadBounds(Tree):
         self.assertEqual(self.gate().returncode, 2)
 
 
+class GuardedBounds(Tree):
+    def rejected(self, loop: str, diagnostic: str, entries=None):
+        self.build(self.clean_entries())
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        self.assertEqual(counts(control)['PASS(bounded)'], 1)
+        # Record the negative shape's actual sites as well. Its rejection must
+        # come from enforcement, independently of the NEW-site check.
+        self.build(entries or self.clean_entries(), loop=loop)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, rf'FINDING .*bounded entry E1:.*(?:{diagnostic})')
+        self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+        self.assertNotIn('NEW ', proc.stdout)
+        return proc
+
+    def test_original_ring_reserve_and_uncapped_push_is_not_bounded(self):
+        self.rejected(UNCAPPED_RING_CPP, 'initially empty local')
+        self.rejected(UNCAPPED_RING_CPP.replace('reserve(kRingSlots)', 'reserve(65)'),
+                      'initially empty local')
+
+    def test_uncapped_repeated_push_is_not_bounded(self):
+        self.rejected(LOOP_CPP.replace('if (slots_.size() < kRingSlots) ', ''),
+                      'no direct own-size guard')
+
+    def test_reserve_only_is_not_a_maximum_even_with_a_fixed_argument(self):
+        for argument in ('kRingSlots', '65'):
+            with self.subTest(argument):
+                loop = LOOP_CPP.replace('if (slots_.size() < kRingSlots) slots_.push_back(1.0);',
+                                        f'slots_.reserve({argument});')
+                self.rejected(loop, 'reserve/resize/assign is not an enforced maximum')
+
+    def test_literal_guard_does_not_match_a_named_bound(self):
+        self.rejected(LOOP_CPP.replace('< kRingSlots', '< 65'),
+                      "guard bound '65' does not match declared bound 'kRingSlots'")
+
+    def test_guard_identifier_must_be_the_declared_fixed_input(self):
+        loop = LOOP_CPP.replace('void on_bar', 'constexpr int kOther = 64;\nvoid on_bar')
+        self.rejected(loop.replace('< kRingSlots', '< kOther'),
+                      "guard bound 'kOther' does not match declared bound 'kRingSlots'")
+
+    def test_guard_on_a_different_container_is_not_an_enforced_bound(self):
+        loop = LOOP_CPP.replace('static std::vector<double> slots_;',
+                                'static std::vector<double> slots_;\n'
+                                '    static std::vector<double> other;')
+        loop = loop.replace('if (slots_.size()', 'if (other.size()')
+        self.rejected(loop, "this container's own size", entries=self.clean_entries() + [
+            entry('E2', symbol='other', ops=['decl'], state='unreviewed')])
+
+    def test_guard_cannot_cover_a_loop_or_two_pushes(self):
+        for body in ('{ slots_.push_back(1.0); slots_.push_back(1.0); }',
+                     'for (int i = 0; i < 100; ++i) slots_.push_back(1.0);'):
+            with self.subTest(body):
+                loop = LOOP_CPP.replace('slots_.push_back(1.0);', body)
+                self.rejected(loop, 'guard block|no direct own-size guard')
+
+    def test_a_guard_does_not_admit_other_growth_or_aliases(self):
+        for statement in ('slots_.resize(kRingSlots);', 'slots_.assign(kRingSlots, 1);',
+                          'slots_.reserve(kRingSlots);', 'slots_.push_back(1.0);',
+                          'auto& alias = slots_; alias.push_back(1.0);'):
+            with self.subTest(statement):
+                loop = LOOP_CPP.replace('\n}', f'\n    {statement}\n}}')
+                entries = self.clean_entries()
+                if 'alias' in statement:
+                    entries += [entry('E2', symbol='alias', ops=['grow'], state='unreviewed')]
+                self.rejected(loop, 'unsupported|no direct own-size guard', entries=entries)
+
+    def test_shadowing_the_fixed_input_is_not_admitted(self):
+        loop = LOOP_CPP.replace('static std::vector<double> slots_;',
+                                'int kRingSlots = 100;\n    static std::vector<double> slots_;')
+        self.rejected(loop, 'unsupported use or shadow declaration')
+
+    def test_push_arguments_cannot_hide_calls_or_conversions(self):
+        for argument in ('x', 'convert()', '(on_bar(x), 1.0)'):
+            with self.subTest(argument):
+                self.rejected(LOOP_CPP.replace('push_back(1.0)', f'push_back({argument})'),
+                              'numeric literal push argument')
+
+    def test_macro_expansion_is_not_treated_as_a_guard_proof(self):
+        self.rejected('#define push_back(x) insert(end(), 65, x)\n' + LOOP_CPP,
+                      'macro/conditional preprocessing')
+
+
 class FailClosed(Tree):
+    def test_missing_site_inventory_exits_2_instead_of_rebaselining(self):
+        self.build(self.clean_entries())
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (self.root / SITE_INVENTORY_REL).unlink()
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn('site inventory', proc.stdout)
+        self.assertIn('missing', proc.stdout)
+
+    def test_removing_a_reviewed_site_record_does_not_disable_matching(self):
+        self.build(self.clean_entries())
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        path = self.root / SITE_INVENTORY_REL
+        inventory = json.loads(path.read_text())
+        inventory['sites'].pop()
+        path.write_text(json.dumps(inventory))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn('NEW ', proc.stdout)
+        self.assertIn('entry E1', proc.stdout)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+
+    def test_duplicate_reviewed_identity_is_not_silently_collapsed(self):
+        self.build(self.clean_entries())
+        path = self.root / SITE_INVENTORY_REL
+        inventory = json.loads(path.read_text())
+        inventory['sites'].append(inventory['sites'][0])
+        path.write_text(json.dumps(inventory))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn('duplicate identity', proc.stdout)
+
     def test_missing_manifest_exits_2(self):
         self.build(self.clean_entries())
         (self.root / MANIFEST_REL).unlink()
@@ -448,6 +771,8 @@ class RealTree(unittest.TestCase):
         self.assertGreater(c['sites_found'], 0)
         self.assertGreater(c['entries_matched'], 0)
         self.assertEqual(c['findings'], 0)
+        self.assertEqual(c['PASS(bounded)'], 0)
+        self.assertEqual(c['OPEN'], 1215)
         # Every matched entry is exactly one of PASS(bounded) / OPEN.
         self.assertEqual(c['PASS(bounded)'] + c['OPEN'], c['entries_matched'])
         strict = run_gate(ROOT, '--strict')
@@ -467,6 +792,18 @@ class RealTree(unittest.TestCase):
             self.assertIn('no manifest entry', proc.stdout)
             target.write_text(original)
             self.assertEqual(run_gate(tree).returncode, 0)
+            # The read's collision: same spelling/op classes, new scope/type.
+            target.write_text(original + '''
+void cr150_extra(int n) {
+    std::vector<int> next_rates;
+    next_rates.resize(n);
+}
+''')
+            proc = run_gate(tree)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertRegex(proc.stdout, r'NEW decl site on \'next_rates\'.*entry U0549')
+            target.write_text(original)
+            self.assertEqual(run_gate(tree).returncode, 0)
             # 2. a real entry deleted: its sites become unlisted
             manifest_path = tree / MANIFEST_REL
             text = manifest_path.read_text()
@@ -484,17 +821,60 @@ class RealTree(unittest.TestCase):
             proc = run_gate(tree)
             self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
             manifest_path.write_text(text)
-            # 4. an OPEN entry rewritten to claim a bound that names bars
-            real = text.splitlines()
-            at = next(i for i, l in enumerate(real) if l.startswith('  - {')
-                      and ('state: "pending-flat-memory"' in l or 'state: "unreviewed"' in l))
-            real[at] = re.sub(r'state: "(pending-flat-memory|unreviewed)"',
-                              'state: "bounded", bound: "bars", bound_inputs: ["bars"], '
-                              'lifetime: "x", rollback: "x", hash_reader: "x", tests: "x"', real[at])
-            manifest_path.write_text('\n'.join(real) + '\n')
-            proc = run_gate(tree)
-            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertTrue(self.manifest_present)
+
+    def test_real_tree_bad_bound_changes_only_a_passing_controls_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.copy_tree(Path(tmp))
+            proc = run_gate(tree)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            baseline_open = counts(proc)['OPEN']
+            source_file = 'src/cr150_bound_control.cpp'
+            fixed_file = 'include/pineforge/cr150_bound_control.hpp'
+            loop = LOOP_CPP.replace('pineforge/fixed.hpp', 'pineforge/cr150_bound_control.hpp')
+            loop = loop.replace('slots_', 'fixture_slots').replace('kRingSlots', 'kFixtureLimit')
+            loop = loop.replace('on_bar', 'fixture_push')
+            fixed = FIXED_HPP.replace('kRingSlots', 'kFixtureLimit')
+            write_tree(tree, {source_file: loop, fixed_file: fixed})
+            manifest_path = tree / MANIFEST_REL
+            text = manifest_path.read_text()
+            marker = 'fixed_inputs:\n  []\nentries:\n'
+            self.assertEqual(text.count(marker), 1, 'expected the real OPEN-only manifest')
+            fixed_row = flow(name='kFixtureLimit', value=64, definition=fixed_file,
+                             fixed_before_bar0=True)
+            eid = 'CR150_BOUND_CONTROL'
+            control_entry = entry(eid, file=source_file, symbol='fixture_slots', state='bounded',
+                                  bound='kFixtureLimit', bound_inputs=['kFixtureLimit'])
+            control_text = text.replace(marker, f'fixed_inputs:\n{fixed_row}\nentries:\n')
+            control_text += control_entry + '\n'
+            manifest_path.write_text(control_text)
+            # Extend only with the deliberate fixture's sites. Existing source
+            # inventory is kept intact; the copied real tree is not rebaselined.
+            inventory_path = tree / SITE_INVENTORY_REL
+            inventory = json.loads(inventory_path.read_text())
+            fixture_inventory = json.loads(inventory_text({source_file: loop, fixed_file: fixed}))
+            inventory['sites'].extend(fixture_inventory['sites'])
+            inventory_path.write_text(json.dumps(inventory, indent=1) + '\n')
+            control = run_gate(tree)
+            self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+            self.assertEqual(counts(control)['PASS(bounded)'], 1)
+            self.assertEqual(counts(control)['OPEN'], baseline_open)
+            before = digest(tree)
+            # Only the bound expression changes. Phase, state, bound_inputs,
+            # source, fixed-input declaration and inventory remain the control's.
+            mutated_entry = control_entry.replace('bound: "kFixtureLimit"',
+                                                   'bound: "kFixtureLimit + bars"')
+            self.assertNotEqual(mutated_entry, control_entry)
+            manifest_path.write_text(control_text.replace(control_entry, mutated_entry, 1))
+            proc = run_gate(tree)
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertRegex(proc.stdout, rf'FINDING {source_file}:\d+: bounded entry {eid}: '
+                             rf'entry {eid}: bound .*names \'bars\': forbidden growth axis \(bar\)')
+            self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+            self.assertEqual(counts(proc)['OPEN'], baseline_open)
+            after = digest(tree)
+            self.assertEqual({p: h for p, h in before.items() if p != MANIFEST_REL},
+                             {p: h for p, h in after.items() if p != MANIFEST_REL})
 
     def test_preflight_runs_the_gate_and_its_tests_unconditionally(self):
         sys.path.insert(0, str(SCRIPTS))
@@ -511,6 +891,9 @@ class RealTree(unittest.TestCase):
             bad = Path(tmp) / 'bad'
             write_tree(bad, {'src/loop.cpp': LOOP_CPP, 'include/pineforge/fixed.hpp': FIXED_HPP,
                              'scripts/regen_corpus_cpp.sh': PIN_SH,
+                             SITE_INVENTORY_REL: inventory_text({
+                                 'src/loop.cpp': LOOP_CPP,
+                                 'include/pineforge/fixed.hpp': FIXED_HPP}),
                              MANIFEST_REL: manifest([])})
             argv = [sys.executable, '-B', str(GATE), '--root', str(bad)]
             with contextlib.redirect_stdout(io.StringIO()) as printed:

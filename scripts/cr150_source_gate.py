@@ -8,13 +8,17 @@ temporaries, map subscripts, container assignment, string append) and compares
 the index with ``ci/cr150-source-bounds.yaml``.
 
 Exit 0: no finding. Exit 1: a finding (an unlisted site, a stale entry, a
-bounded entry covering a computed reserve/resize, a ceiling or pin drift) or,
+bounded entry without supported size-guard enforcement, a ceiling or pin drift) or,
 with ``--strict``, any OPEN entry left. Exit 2: the gate cannot judge (missing
-or malformed manifest, an entry whose bound is not a fixed pre-bar-0 constant
-expression, zero files, zero sites, a broken pattern set).
+or malformed manifest/site inventory, an invalid fixed input or bound syntax,
+zero files, zero sites, a broken pattern set). A bound naming a growth axis is
+an exit-1 finding with its entry ID.
 
-An entry is ``bounded`` only with a bound expression over declared fixed
-inputs; it counts as PASS(bounded). An entry whose flat-memory implementation
+An entry is ``bounded`` only with a declared fixed input and supported
+own-size-guarded growth; metadata or reserve alone never counts as PASS(bounded).
+Concrete sites are pinned by lexical scope, operation/type and occurrence in a
+reviewed companion inventory, independently of the (file, symbol) entry groups.
+An entry whose flat-memory implementation
 has not landed is ``pending-flat-memory`` (inventory row and growth axis
 named) or ``unreviewed`` (nobody has established a bound). Both are OPEN: they
 are listed and counted, never PASS, and ``--strict`` fails on them. A green
@@ -25,6 +29,8 @@ string literals removed): not alias, type or call-path proof.
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
+from collections import Counter
 import fnmatch
 import glob
 import json
@@ -38,6 +44,8 @@ import cxxlex  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST_REL = 'ci/cr150-source-bounds.yaml'
 SCHEMA = 'cr150-source-bounds/v1'
+SITE_SCHEMA = 'cr150-source-sites/v1'
+SITE_INVENTORY_REL = 'ci/cr150-source-sites.json'
 PREFIX = 'cr150_source_gate:'
 
 OP_CLASSES = ('grow', 'alloc', 'decl', 'temp', 'subscript', 'assign', 'append')
@@ -93,6 +101,64 @@ BLANK_CHARS = ' \t\r\n'
 
 class GateError(Exception):
     """The gate cannot judge: exit 2."""
+
+
+class GrowthAxisBound(GateError):
+    """A bounded claim naming a growth axis is a finding, not a schema error."""
+
+
+def _tokens(text: str) -> str:
+    """Whitespace-independent spelling, without joining adjacent identifiers."""
+    return ' '.join(re.findall(r'[A-Za-z_]\w*|\d+|::|->|&&|\|\||\S', text))
+
+
+class Scopes:
+    """Lexical brace paths, not C++ name lookup.
+
+    Each component contains the tokenized brace header and its occurrence among
+    identical siblings. Lines and byte offsets are diagnostics only. Repeated
+    declarations/operations within one path get a separate ordinal in Scanner.
+    """
+
+    def __init__(self, code: str):
+        self.starts = [0]
+        self.paths: list[tuple[str, ...]] = [()]
+        self.kinds: list[tuple[str, ...]] = [()]
+        stack: list[tuple[str, str]] = []
+        counts: Counter = Counter()
+        boundary = 0
+        for match in re.finditer(r'[{};]', code):
+            ch, pos = match.group(), match.start()
+            if ch == '{':
+                header = re.sub(r'(?m)^\s*#.*$', '', code[boundary:pos]).strip()
+                spelling = _tokens(header) or '<block>'
+                parent = tuple(part for part, _ in stack)
+                counts[parent, spelling] += 1
+                kind = 'other'
+                if re.fullmatch(r'(?:inline\s+)?namespace(?:\s+[\w:]+)?', header):
+                    kind = 'namespace'
+                elif re.fullmatch(r'(?:class|struct|union)\s+\w+(?:\s+final)?'
+                                  r'(?:\s*:[^;{}()]*)?', header):
+                    kind = 'class'
+                stack.append((f'{spelling} #{counts[parent, spelling]}', kind))
+            elif ch == '}' and stack:
+                stack.pop()
+            if ch in '{}':
+                self.starts.append(pos + 1)
+                self.paths.append(tuple(part for part, _ in stack))
+                self.kinds.append(tuple(kind for _, kind in stack))
+            boundary = pos + 1
+
+    def at(self, pos: int) -> tuple[str, ...]:
+        return self.paths[bisect_right(self.starts, pos) - 1]
+
+    def nonlocal_at(self, pos: int) -> bool:
+        return all(kind in ('namespace', 'class')
+                   for kind in self.kinds[bisect_right(self.starts, pos) - 1])
+
+    def class_at(self, pos: int) -> bool:
+        kinds = self.kinds[bisect_right(self.starts, pos) - 1]
+        return bool(kinds) and kinds[-1] == 'class'
 
 
 # --------------------------------------------------------------------------
@@ -326,9 +392,9 @@ def bound_identifiers(expr: str, symbol: str, who: str) -> set[str]:
     for name in sorted(names):
         axis = _forbidden(name)
         if axis:
-            raise GateError(f'{who}: bound {expr!r} names {name!r}: forbidden growth axis '
-                            f'({axis}); a bound must be independent of bars/trades/entries/'
-                            'decisions/history')
+            raise GrowthAxisBound(f'{who}: bound {expr!r} names {name!r}: forbidden growth axis '
+                                  f'({axis}); a bound must be independent of bars/trades/entries/'
+                                  'decisions/history')
         if name == symbol:
             raise GateError(f'{who}: bound {expr!r} names the container itself ({symbol!r}): '
                             'tautology, not a bound')
@@ -367,11 +433,16 @@ class Manifest:
         if not isinstance(data, dict):
             raise GateError('manifest must be a mapping')
         _need(data, ('schema', 'codegen', 'scan', 'ceilings', 'owners', 'fixed_inputs',
-                     'entries'), 'manifest')
+                     'entries'), 'manifest', ('site_inventory',))
         if data['schema'] != SCHEMA:
             raise GateError(f'manifest schema {data["schema"]!r} != {SCHEMA!r}')
         self.root = root
         self.data = data
+        self.site_inventory = _text(data.get('site_inventory', SITE_INVENTORY_REL),
+                                    'manifest', 'site_inventory')
+        inventory_path = Path(self.site_inventory)
+        if inventory_path.is_absolute() or '..' in inventory_path.parts:
+            raise GateError('site_inventory must be a path inside the scanned root')
         self._codegen(data['codegen'])
         scan = data['scan']
         if not isinstance(scan, dict):
@@ -454,7 +525,7 @@ class Manifest:
             who = f'fixed input {item.get("name", "?") if isinstance(item, dict) else "?"}'
             if not isinstance(item, dict):
                 raise GateError(f'{who}: must be a flow map')
-            _need(item, ('name', 'definition', 'fixed_before_bar0'), who, ('value', 'note'))
+            _need(item, ('name', 'definition', 'value', 'fixed_before_bar0'), who, ('note',))
             name = item['name']
             if not isinstance(name, str) or not IDENT_RE.fullmatch(name):
                 raise GateError(f'{who}: name is not an identifier')
@@ -469,22 +540,31 @@ class Manifest:
             definition = self.root / str(item['definition'])
             if not definition.is_file():
                 raise GateError(f'{who}: definition file {item["definition"]!r} not found')
-            body = definition.read_text(errors='replace')
-            if not re.search(rf'\b{re.escape(name)}\b', body):
-                raise GateError(f'{who}: {name!r} does not occur in {item["definition"]}')
-            if 'value' in item:
-                if not isinstance(item['value'], int):
-                    raise GateError(f'{who}: value must be an integer')
-                if not re.search(rf'\b{re.escape(name)}\b[^;=]*=\s*{item["value"]}\b', body):
-                    raise GateError(f'{who}: {item["definition"]} does not define '
-                                    f'{name} = {item["value"]}')
-            self.fixed[name] = item
+            value = item['value']
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise GateError(f'{who}: value must be a positive integer')
+            body, _ = Scanner._lex(definition.read_text(errors='replace'))
+            scopes = Scopes(body)
+            declarations = list(re.finditer(
+                r'(?<![\w:])(?P<storage>(?:(?:inline|static)\s+)*)(?:constexpr|const)\s+'
+                r'(?:std::)?(?:size_t|u?int(?:8|16|32|64)_t|'
+                r'(?:unsigned\s+|signed\s+)?(?:int|long(?:\s+long)?|short))\s+'
+                rf'(?P<name>{re.escape(name)})\s*=\s*{value}\s*;', body))
+            declarations = [m for m in declarations if scopes.nonlocal_at(m.start())
+                            and (not scopes.class_at(m.start())
+                                 or 'static' in m.group('storage').split())]
+            if len(declarations) != 1:
+                raise GateError(f'{who}: {item["definition"]} must have exactly one '
+                                f'namespace/class-scope const/constexpr integer definition '
+                                f'{name} = {value} (static at class scope; comments are not declarations)')
+            self.fixed[name] = {**item, '_name_span': declarations[0].span('name')}
 
     def _entries(self, entries) -> None:
         if not isinstance(entries, list):
             raise GateError('entries must be a list')
         self.entries: list[dict] = []
         self.by_key: dict[tuple[str, str], dict] = {}
+        self.bound_errors: dict[str, str] = {}
         ids: set[str] = set()
         for entry in entries:
             who = f'entry {entry.get("id", "?") if isinstance(entry, dict) else "?"}'
@@ -527,7 +607,10 @@ class Manifest:
                 if not re.fullmatch(r'[A-Z]\d{2}', str(entry['inventory'])):
                     raise GateError(f'{who}: inventory must be an A-section row id (e.g. R01)')
             if state == 'bounded':
-                self._bounded(entry, who)
+                try:
+                    self._bounded(entry, who)
+                except GrowthAxisBound as error:
+                    self.bound_errors[entry['id']] = str(error)
             key = (entry['file'], entry['symbol'])
             if key in self.by_key:
                 raise GateError(f'{who}: duplicate (file, symbol) key {key}; '
@@ -558,20 +641,64 @@ def load_manifest(root: Path, path: Path) -> Manifest:
     return Manifest(parse_yaml(path.read_text()), root)
 
 
+def load_site_inventory(root: Path, manifest: Manifest) -> dict[tuple, dict]:
+    path = root / manifest.site_inventory
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise GateError('site inventory resolves outside the scanned root')
+    if not path.is_file():
+        raise GateError(f'site inventory {manifest.site_inventory} is missing; generate and '
+                        'review it explicitly with --emit-site-inventory, never during verification')
+    try:
+        data = json.loads(path.read_text())
+    except (ValueError, OSError) as error:
+        raise GateError(f'site inventory {manifest.site_inventory}: {error}') from error
+    if not isinstance(data, dict) or set(data) != {'schema', 'sites'} \
+            or data['schema'] != SITE_SCHEMA or not isinstance(data['sites'], list):
+        raise GateError(f'site inventory must have schema {SITE_SCHEMA} and a sites list')
+    records = {}
+    for record in data['sites']:
+        if not isinstance(record, dict):
+            raise GateError('site inventory record must be a map')
+        _need(record, ('file', 'symbol', 'scope', 'cls', 'spelling', 'ordinal'),
+              'site inventory record')
+        for field in ('file', 'symbol', 'spelling'):
+            _text(record[field], 'site inventory record', field)
+        _str_list(record['scope'], 'site inventory record', 'scope', nonempty=False)
+        if record['cls'] not in OP_CLASSES or not isinstance(record['ordinal'], int) \
+                or isinstance(record['ordinal'], bool) or record['ordinal'] < 1:
+            raise GateError('site inventory record has an invalid class or ordinal')
+        key = (record['file'], record['symbol'], tuple(record['scope']),
+               record['cls'], _tokens(record['spelling']), record['ordinal'])
+        if key in records:
+            raise GateError(f'duplicate identity in site inventory: {key}')
+        records[key] = record
+    return records
+
+
 # --------------------------------------------------------------------------
 # scanner
 # --------------------------------------------------------------------------
 
 class Site:
-    __slots__ = ('file', 'line', 'cls', 'symbol', 'text', 'computed', 'container')
+    __slots__ = ('file', 'line', 'cls', 'symbol', 'text', 'computed', 'container',
+                 'pos', 'scope', 'ordinal')
 
-    def __init__(self, file, line, cls, symbol, text, computed=False, container=''):
+    def __init__(self, file, line, cls, symbol, text, computed=False, container='', *, pos=0):
         self.file, self.line, self.cls, self.symbol = file, line, cls, symbol
         self.text, self.computed, self.container = text, computed, container
+        self.pos, self.scope, self.ordinal = pos, (), 0
 
     @property
     def key(self):
+        return (*self.group_key, self.scope, self.cls, _tokens(self.text), self.ordinal)
+
+    @property
+    def group_key(self):
         return (self.file, self.symbol)
+
+    def identity(self) -> dict:
+        return dict(scope=list(self.scope), cls=self.cls, spelling=_tokens(self.text),
+                    ordinal=self.ordinal)
 
 
 def _match_angle(code: str, start: int) -> int | None:
@@ -722,7 +849,7 @@ class Scanner:
             line = self._line(starts, match.start())
             text = code[match.start():end].replace('\n', ' ').strip()
             if code[rest] in '({' and suffix_start == rest:
-                sites.append(Site(rel, line, 'temp', f'<temp:{kind}>', text))
+                sites.append(Site(rel, line, 'temp', f'<temp:{kind}>', text, pos=match.start()))
                 continue
             ident = IDENT_RE.match(code, rest)
             if not ident or ident.group(0) in KEYWORDS:
@@ -737,7 +864,7 @@ class Scanner:
             if after >= len(code) or code[after] not in ';=({,)[':
                 continue
             symbol = ident.group(0)
-            sites.append(Site(rel, line, 'decl', symbol, text, container=text))
+            sites.append(Site(rel, line, 'decl', symbol, text, container=text, pos=match.start()))
             containers.add(symbol)
             if kind in MAP_TYPES or kind in CUSTOM_MAPS:
                 maps.add(symbol)
@@ -775,7 +902,7 @@ class Scanner:
                     first = _split_top(arg)[0] if arg.strip() else ''
                     computed = not self._is_fixed_arg(first)
                 sites.append(Site(rel, self._line(starts, m.start()), 'grow', symbol,
-                                  f'{symbol}.{op}(...)', computed))
+                                  f'{symbol}.{op}(...)', computed, pos=m.start()))
             for m in NEW_RE.finditer(code):
                 before = code[max(0, m.start() - 12):m.start()]
                 after = code[m.end():m.end() + 2].strip()
@@ -784,33 +911,42 @@ class Scanner:
                 if re.search(r'operator\s*$', before):
                     # a user-defined allocation function (class-specific operator new)
                     sites.append(Site(rel, self._line(starts, m.start()), 'alloc', 'operator new',
-                                      'operator new'))
+                                      'operator new', pos=m.start()))
                     continue
                 typename = re.match(r'\s*([\w:]+)', code[m.end():m.end() + 80])
                 symbol = _assigned_name(code, m.start()) or f'new:{typename.group(1) if typename else "?"}'
                 sites.append(Site(rel, self._line(starts, m.start()), 'alloc', symbol,
-                                  f'new {typename.group(1) if typename else ""}'))
+                                  f'new {typename.group(1) if typename else ""}', pos=m.start()))
             for m in CALLOC_RE.finditer(code):
                 symbol = _assigned_name(code, m.start()) or m.group(1)
-                sites.append(Site(rel, self._line(starts, m.start()), 'alloc', symbol, m.group(1)))
+                sites.append(Site(rel, self._line(starts, m.start()), 'alloc', symbol, m.group(1),
+                                  pos=m.start()))
             for m in MAKE_RE.finditer(code):
                 symbol = _assigned_name(code, m.start()) or m.group(1)
-                sites.append(Site(rel, self._line(starts, m.start()), 'alloc', symbol, m.group(1)))
+                sites.append(Site(rel, self._line(starts, m.start()), 'alloc', symbol, m.group(1),
+                                  pos=m.start()))
             for m in TO_STRING_RE.finditer(code):
                 sites.append(Site(rel, self._line(starts, m.start()), 'temp', 'std::to_string',
-                                  'std::to_string(...)'))
+                                  'std::to_string(...)', pos=m.start()))
             map_syms, str_syms, all_syms = maps | members_map, strings | members_str, \
                 containers | members_all
             for m in OPERATOR_RE.finditer(code):
                 name, op = m.group(1), m.group(2)
                 line = self._line(starts, m.start(1))
                 if op == '[' and name in map_syms:
-                    sites.append(Site(rel, line, 'subscript', name, f'{name}[...]'))
+                    sites.append(Site(rel, line, 'subscript', name, f'{name}[...]', pos=m.start()))
                 elif op == '=' and name in all_syms and (line, name) not in decl_pos:
-                    sites.append(Site(rel, line, 'assign', name, f'{name} = ...'))
+                    sites.append(Site(rel, line, 'assign', name, f'{name} = ...', pos=m.start()))
                 elif op in ('+=', '<<') and name in str_syms:
-                    sites.append(Site(rel, line, 'append', name, f'{name} {op} ...'))
-        sites.sort(key=lambda s: (s.file, s.line, s.cls, s.symbol))
+                    sites.append(Site(rel, line, 'append', name, f'{name} {op} ...', pos=m.start()))
+        sites.sort(key=lambda s: (s.file, s.pos, s.cls, s.symbol))
+        scopes = {rel: Scopes(code) for rel, (code, _) in lexed.items()}
+        ordinals: Counter = Counter()
+        for site in sites:
+            site.scope = scopes[site.file].at(site.pos)
+            stem = (*site.group_key, site.scope, site.cls, _tokens(site.text))
+            ordinals[stem] += 1
+            site.ordinal = ordinals[stem]
         return sites
 
 
@@ -829,6 +965,139 @@ void canary(Canary& c, int n) {
 
 def canary_classes() -> set[str]:
     return {s.cls for s in Scanner(set()).scan({'canary.cpp': CANARY})}
+
+
+def _guarded_push(site: Site, code: str) \
+        -> tuple[str, tuple[int, int], tuple[int, int], tuple[int, int]] | str:
+    """Recognize just one direct, scalar push guarded by its receiver's size.
+
+    No intervening statements, loops, compound conditions, range insertion,
+    member receivers or argument expressions are admitted. This intentionally
+    does not try to prove arbitrary C++ control flow.
+    """
+    operation = GROW_RE.match(code, site.pos)
+    if operation is None or operation.group(1) not in ('push_back', 'emplace_back'):
+        return 'unsupported growth: reserve/resize/assign is not an enforced maximum'
+    receiver = re.search(r'(?<![\w.>])([A-Za-z_]\w*)\s*$', code[:site.pos])
+    if receiver is None or receiver.group(1) != site.symbol:
+        return 'guarded admission supports a bare local vector receiver only'
+    open_at = operation.end() - 1
+    close = _match_paren(code, open_at)
+    if close is None:
+        return 'cannot delimit the growth call'
+    argument = code[open_at + 1:close].strip()
+    if not re.fullmatch(r'[-+]?\d+(?:\.\d+)?', argument):
+        return 'guarded admission requires a numeric literal push argument (no conversion/call side effects)'
+    guard = re.search(r'\bif\s*\((?P<condition>[^;{}]*)\)\s*(?P<brace>\{)?\s*$',
+                      code[:receiver.start()])
+    if guard is None:
+        return 'growth has no direct own-size guard against the declared bound'
+    condition = re.fullmatch(
+        rf'\s*(?P<receiver>{re.escape(site.symbol)})\s*\.\s*size\s*\(\s*\)\s*<\s*'
+        r'(?P<bound>[A-Za-z_]\w*|\d+)\s*', guard.group('condition'))
+    if condition is None:
+        return 'guard must compare this container\'s own size() < the declared bound identifier'
+    tail = re.match(r'\s*;\s*', code[close + 1:])
+    if tail is None:
+        return 'guard body must be a standalone push statement'
+    if guard.group('brace') and not code[close + 1 + tail.end():].startswith('}'):
+        return 'guard block must contain exactly one push statement'
+    start, end = condition.span('bound')
+    base = guard.start('condition')
+    size_start, size_end = condition.span('receiver')
+    return (condition.group('bound'), (base + start, base + end), receiver.span(1),
+            (base + size_start, base + size_end))
+
+
+def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
+                   texts: dict[str, str], manifest: Manifest) -> list[tuple[str, int, str]]:
+    """Fail closed outside the small enforced form; annotation alone never passes."""
+    eid, bound = entry['id'], entry['bound']
+    first = group[0]
+
+    def finding(site: Site, reason: str):
+        return (site.file, site.line, f'bounded entry {eid}: {reason}')
+
+    if eid in manifest.bound_errors:
+        return [finding(first, manifest.bound_errors[eid])]
+    if not IDENT_RE.fullmatch(bound) or bound not in manifest.fixed:
+        return [finding(first, f'bound {bound!r}: guarded admission requires one fixed input identifier')]
+    fixed = manifest.fixed[bound]
+    if fixed['definition'] not in texts:
+        return [finding(first, 'fixed-input definition is outside the scanned source files')]
+    lexed = {rel: Scanner._lex(text)[0] for rel, text in texts.items()}
+    fixed_header = str(fixed['definition']).removeprefix('include/')
+    for rel in {entry['file'], fixed['definition']}:
+        for directive, _, literal in cxxlex.lex_lines(texts[rel]):
+            if not directive.lstrip().startswith('#'):
+                continue
+            if re.fullmatch(r'\s*#\s*pragma\s+once\s*', directive):
+                continue
+            if re.fullmatch(r'\s*#\s*include\s*<(?:vector|cstddef|cstdint)>\s*', directive):
+                continue
+            if rel == entry['file'] and re.fullmatch(r'\s*#\s*include\s*', directive) \
+                    and literal.strip() == fixed_header:
+                continue
+            return [finding(first, 'macro/conditional preprocessing or unsupported includes '
+                            'are outside guarded bounded admission')]
+    declarations = [s for s in group if s.cls == 'decl']
+    if len(declarations) != 1:
+        return [finding(first, 'guarded admission requires exactly one local scalar-vector declaration')]
+    declaration = declarations[0]
+    code = lexed[declaration.file]
+    scalar = (r'(?:bool|char|float|double|(?:std::)?u?int(?:8|16|32|64)_t|'
+              r'(?:unsigned\s+|signed\s+)?(?:int|short|long(?:\s+long)?))')
+    empty = re.match(rf'std::vector\s*<\s*{scalar}\s*>\s+(?P<symbol>{re.escape(entry["symbol"])})'
+                     r'\s*(?:;|\{\s*\}\s*;)', code[declaration.pos:])
+    if empty is None or Scopes(code).nonlocal_at(declaration.pos):
+        return [finding(declaration, 'guarded admission requires an initially empty local '
+                        'std::vector of scalar values; member/global/initialized containers stay OPEN')]
+    issues = []
+    symbol_spans = {(declaration.pos + empty.start('symbol'),
+                     declaration.pos + empty.end('symbol'))}
+    growth = [s for s in group if s.cls == 'grow']
+    if not growth:
+        issues.append(finding(declaration, 'no guarded growth witnesses the declared bound'))
+    for site in group:
+        if site.cls == 'decl':
+            continue
+        if site.cls != 'grow':
+            issues.append(finding(site, f'{site.cls} is outside guarded scalar-push admission'))
+            continue
+        if site.computed:
+            issues.append(finding(site, f'{site.text} argument is computed, not an enforced bound'))
+            continue
+        if site.scope[:len(declaration.scope)] != declaration.scope:
+            issues.append(finding(site, 'growth is outside the matched declaration scope'))
+            continue
+        guard = _guarded_push(site, lexed[site.file])
+        if isinstance(guard, str):
+            issues.append(finding(site, guard))
+        else:
+            symbol_spans.update(guard[2:])
+            if guard[0] != bound:
+                issues.append(finding(site, f'guard bound {guard[0]!r} does not match declared bound {bound!r}'))
+    for match in re.finditer(rf'\b{re.escape(entry["symbol"])}\b', code):
+        if match.span() not in symbol_spans:
+            issues.append(finding(declaration, 'container has an unsupported use or shadow '
+                                  'outside its declaration/direct size-guarded pushes; aliases '
+                                  'and other mutation paths are not admitted'))
+            break
+    # Do not resolve shadowing with a new C++ parser. Refuse a fixed name used
+    # anywhere except its immutable declaration and recognized push guards.
+    allowed = {(fixed['definition'], *fixed['_name_span'])}
+    for site in sites:
+        if site.cls == 'grow':
+            guard = _guarded_push(site, lexed[site.file])
+            if not isinstance(guard, str) and guard[0] == bound:
+                allowed.add((site.file, *guard[1]))
+    for rel, body in lexed.items():
+        for match in re.finditer(rf'\b{re.escape(bound)}\b', body):
+            if (rel, *match.span()) not in allowed:
+                issues.append((rel, Scanner._line(Scanner._lex(texts[rel])[1], match.start()),
+                               f'bounded entry {eid}: fixed bound {bound!r} has an unsupported '
+                               'use or shadow declaration outside its definition/size guards'))
+    return issues
 
 
 # --------------------------------------------------------------------------
@@ -872,9 +1141,10 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
     if not sites:
         raise GateError(f'the scan of {len(files)} file(s) found zero sites; a gate that '
                         'matches nothing is not a pass')
+    inventory = load_site_inventory(root, manifest)
     by_key: dict[tuple[str, str], list[Site]] = {}
     for site in sites:
-        by_key.setdefault(site.key, []).append(site)
+        by_key.setdefault(site.group_key, []).append(site)
     findings: list[tuple[str, int, str]] = []
     matched: dict[str, dict] = {}
     entry_findings: set[str] = set()
@@ -886,6 +1156,13 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
                                  f'on {site.symbol!r} ({site.text})'))
             continue
         matched[entry['id']] = entry
+        for site in group:
+            if site.key not in inventory:
+                findings.append((site.file, site.line, f'NEW {site.cls} site on {site.symbol!r}: '
+                                 f'identity not in reviewed site inventory for entry {entry["id"]}; '
+                                 f'scope={list(site.scope)!r} ordinal={site.ordinal} '
+                                 f'({site.text})'))
+                entry_findings.add(entry['id'])
         seen_classes = {s.cls for s in group}
         for cls in sorted(seen_classes - set(entry['ops'])):
             first = next(s for s in group if s.cls == cls)
@@ -893,12 +1170,20 @@ def run(root: Path, manifest_path: Path, strict: bool, json_out: Path | None):
                              f'not in the ops of entry {entry["id"]} ({first.text})'))
             entry_findings.add(entry['id'])
         if entry['state'] == 'bounded':
-            for site in group:
-                if site.computed:
-                    findings.append((site.file, site.line,
-                                     f'bounded entry {entry["id"]} covers a {site.text} whose '
-                                     'argument is computed, not a declared fixed input'))
-                    entry_findings.add(entry['id'])
+            issues = bounded_issues(entry, group, sites, texts, manifest)
+            findings.extend(issues)
+            if issues:
+                entry_findings.add(entry['id'])
+    live_keys = {site.key for site in sites}
+    for key, record in inventory.items():
+        if key not in live_keys:
+            entry = manifest.by_key.get((record['file'], record['symbol']))
+            findings.append((record['file'], int(entry.get('line') or 0) if entry else 0,
+                             f'reviewed site identity for {record["symbol"]!r} '
+                             f'({entry["id"] if entry else "no entry"}) matches no site: stale; '
+                             'review the scope/type/multiplicity change'))
+            if entry:
+                entry_findings.add(entry['id'])
     for entry in manifest.entries:
         if entry['id'] not in matched:
             findings.append((entry['file'], int(entry.get('line') or 0),
@@ -975,7 +1260,7 @@ def emit_seed(root: Path, manifest_path: Path) -> int:
     sites = Scanner(set(manifest.fixed)).scan({r: (root / r).read_text(errors='replace') for r in files})
     by_key: dict[tuple[str, str], list[Site]] = {}
     for site in sites:
-        by_key.setdefault(site.key, []).append(site)
+        by_key.setdefault(site.group_key, []).append(site)
     top = max([int(m.group(1)) for e in manifest.entries
                if (m := re.fullmatch(r'U(\d+)', e['id']))] or [0])
     for key, group in sorted(by_key.items()):
@@ -1000,6 +1285,26 @@ def emit_seed(root: Path, manifest_path: Path) -> int:
     return 0
 
 
+def emit_site_inventory(root: Path, manifest_path: Path) -> int:
+    """Authoring only: print identities for an explicitly reviewed snapshot.
+
+    Verification never calls this function and never rewrites the inventory.
+    Existing OPEN entry rows can retain their IDs and spelling groups; every
+    concrete occurrence is pinned separately in this companion inventory.
+    """
+    manifest = load_manifest(root, manifest_path)
+    files = sorted(set(resolve_files(root, manifest.files))
+                   | set(resolve_files(root, manifest.generated)))
+    sites = Scanner(set(manifest.fixed)).scan(
+        {rel: (root / rel).read_text(errors='replace') for rel in files})
+    if not files or not sites:
+        raise GateError('cannot author an inventory from zero files or zero sites')
+    print(json.dumps({'schema': SITE_SCHEMA, 'sites': [
+        dict(file=site.file, symbol=site.symbol, **site.identity()) for site in sites
+    ]}, indent=1))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1013,6 +1318,8 @@ def main(argv: list[str] | None = None) -> int:
                         help='run only the built-in scanner canary')
     parser.add_argument('--emit-seed', action='store_true',
                         help='print unreviewed entry lines for scanned keys without an entry')
+    parser.add_argument('--emit-site-inventory', action='store_true',
+                        help='authoring only: print scoped site identities; never a tree verdict')
     args = parser.parse_args(argv)
     try:
         if args.self_check:
@@ -1024,6 +1331,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest_path = (args.manifest or root / MANIFEST_REL).resolve()
         if args.emit_seed:
             return emit_seed(root, manifest_path)
+        if args.emit_site_inventory:
+            return emit_site_inventory(root, manifest_path)
         return run(root, manifest_path, args.strict, args.json)[0]
     except GateError as error:
         print(f'{PREFIX} ERROR: {error}')

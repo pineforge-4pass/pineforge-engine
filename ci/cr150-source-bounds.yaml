@@ -2,15 +2,31 @@
 #
 # Format: the restricted YAML subset the gate parses (maps, lists, flow maps).
 # Every container-bearing site in the scanned set (scan.files + generated_files)
-# needs an entry keyed by (file, symbol); the gate fails on an unlisted site, a
-# stale entry, an op class the entry does not list, a bounded entry over a
-# computed reserve/resize, a codegen pin drift, or an OPEN count above its ceiling.
+# needs an entry grouped by (file, symbol). Each concrete occurrence is also
+# recorded in the companion JSON site inventory: lexical brace scope (tokenized
+# header + sibling ordinal), operation/type spelling and occurrence ordinal.
+# Lines remain diagnostics, never identity. New/missing identities fail closed,
+# even when their symbol and op classes already have an OPEN entry.
+# `site_inventory` is an optional root-relative path, defaulting to
+# ci/cr150-source-sites.json. Its file is required, read-only during verification
+# and reviewed separately; --emit-site-inventory only AUTHORS a proposed snapshot.
+# The existing entry rows need no scope fields or edits to retain their IDs.
+# The gate also fails on an unlisted/stale entry, an op class the entry does not
+# list, unsupported bounded growth, codegen pin drift or an OPEN ceiling excess.
 #
 # States
 #   bounded              bound = expression over declared fixed_inputs only (no bars,
 #                        trades, entries, decisions, history, no container size);
-#                        counted PASS(bounded). Needs lifetime, rollback,
-#                        hash_reader and tests.
+#                        counted PASS(bounded) only for the supported enforced
+#                        form: initially empty local scalar vector, every push
+#                        directly guarded by its own size() < the fixed bound,
+#                        one numeric-literal push per branch, no aliases/other
+#                        uses. reserve/assign/resize alone never enforce a cap.
+#                        Unsupported forms stay OPEN. Needs lifetime, rollback,
+#                        hash_reader and tests. Fixed inputs need an uncommented
+#                        namespace/class-scope const/constexpr integer definition
+#                        matching their required positive `value`; class inputs
+#                        must be static (an instance may override a const field).
 #   pending-flat-memory  the A-section inventory row (o1inv REPORT, `inventory`)
 #                        names the growth axis (`grows_with`); the flat-memory
 #                        implementation has not landed. OPEN, never PASS.
@@ -32,6 +48,7 @@
 # was marked bounded: no scanned container has a named fixed pre-bar-0 constant
 # in source that bounds it.
 schema: cr150-source-bounds/v1
+site_inventory: ci/cr150-source-sites.json
 codegen:
   pin: "52101f9b7b540fece4493ddc7495451b6d85fc07"
   pin_source: scripts/regen_corpus_cpp.sh
