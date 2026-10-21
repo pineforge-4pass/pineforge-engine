@@ -2,6 +2,7 @@
 """Release gate decisions and text pins; no subprocesses or network in tests."""
 from __future__ import annotations
 
+import ast
 import contextlib
 from collections import Counter
 import io
@@ -315,9 +316,25 @@ class GateTests(unittest.TestCase):
                             ref="refs/tags/v2.0.0")
         self.assertEqual(self.api.calls, [])
 
+    def test_main_backport_ref_refuses_before_any_api_call(self):
+        self.assert_refused("release requires refs/heads/main, got refs/heads/main-backport",
+                            ref="refs/heads/main-backport")
+        self.assertEqual(self.api.calls, [])
+
+    def test_main_ref_with_a_trailing_newline_refuses_before_any_api_call(self):
+        self.assert_refused("release requires refs/heads/main, got refs/heads/main\n",
+                            ref="refs/heads/main\n")
+        self.assertEqual(self.api.calls, [])
+
     def test_sha_must_equal_the_live_main_head(self):
         self.api.responses[MAIN_API] = OTHER_HEAD + "\n"
         self.assert_refused(f"release sha {SHA} is not current main head {OTHER_HEAD}")
+        self.assertEqual(self.api.calls, [(MAIN_API, False, ".commit.sha")])
+
+    def test_a_shared_seven_hex_prefix_is_not_the_main_head(self):
+        current = SHA[:7] + OTHER_HEAD[7:]
+        self.api.responses[MAIN_API] = current + "\n"
+        self.assert_refused(f"release sha {SHA} is not current main head {current}")
         self.assertEqual(self.api.calls, [(MAIN_API, False, ".commit.sha")])
 
     def test_raised_rate_limit_is_named_and_preserves_the_stderr(self):
@@ -688,6 +705,26 @@ class APICommandTests(unittest.TestCase):
 
 
 class MainProofSeamTests(unittest.TestCase):
+    def test_checked_in_cut_over_is_a_literal_without_environment_or_cli_overrides(self):
+        source = Path(ci_release_gate.__file__).read_text()
+        self.assertRegex(source, r"(?m)^MAIN_PROOF_WATCHER_FIRST_SHA: str \| None = "
+                         r"(?:None|\"[0-9a-f]{40}\"|'[0-9a-f]{40}')$")
+        self.assertNotRegex(source, r"\b(?:environ|getenv)\b")
+        module = ast.parse(source)
+        writes = [node for node in ast.walk(module)
+                  if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+                  and node.id == "MAIN_PROOF_WATCHER_FIRST_SHA"]
+        self.assertEqual(len(writes), 1, "the cut-over must have only its checked-in assignment")
+        main = next(node for node in module.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "main")
+        flags = [ast.literal_eval(argument)
+                 for node in ast.walk(main)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                 and node.func.attr == "add_argument"
+                 for argument in node.args]
+        self.assertEqual(flags, ["--repo", "--sha", "--ref"],
+                         "main must offer no cut-over override flag")
+
     def test_reader_is_not_live_and_defines_no_storage_format(self):
         with self.assertRaisesRegex(NotImplementedError,
                                     "^phase 2 receipt reader lands with C2 main-watch #176$"):
@@ -791,6 +828,15 @@ class WorkflowPinTests(unittest.TestCase):
                       '          fi\n', script)
         self.assertIn('          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"',
                       script)
+
+    def test_prebuilt_requires_release_success_without_failure_bypasses(self):
+        jobs = _jobs(self.workflow())
+        self.assertRegex(jobs["prebuilt"], r"(?m)^    needs: release$")
+        for job in ("release", "prebuilt"):
+            with self.subTest(job=job):
+                self.assertNotRegex(jobs[job], r"\balways\s*\(")
+                self.assertNotRegex(jobs[job], r"!\s*cancelled\s*\(")
+                self.assertNotIn("continue-on-error", jobs[job])
 
     def test_pin_fails_when_gate_is_deleted(self):
         workflow = self.workflow()
