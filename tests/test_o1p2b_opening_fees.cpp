@@ -37,6 +37,7 @@ namespace {
 using namespace pineforge;
 using Adapter = source::PineExecutionAdapter;
 using Fee = source::OpenEntryFeeFact;
+using a4handle = source::a4_o1p2b::ScratchHandle;
 namespace no = pineforge::native_order;
 
 int checks = 0, failures = 0;
@@ -93,7 +94,8 @@ void reference_consume(std::vector<Fee>& rows, const no::ExecutionAppliedEvent& 
     rows = std::move(survivors);
 }
 
-std::uint64_t fee_leaf(const std::vector<Fee>& rows) {
+template<class Rows>
+std::uint64_t fee_leaf(const Rows& rows) {
     BrokerStateHashSink sink;
     sink.u(rows.size());
     for (const auto& row : rows) {
@@ -107,17 +109,35 @@ std::uint64_t fee_leaf(const std::vector<Fee>& rows) {
     return sink.h;
 }
 
+// The ledger's resident workspace is the admitted fixed configuration, not a
+// population-sized allocation: the same value at 16 rows and at 4097, and
+// never above the prepared store plus its one value workspace.
+std::size_t seen_resident = 0;
+void bound(const Adapter& adapter) {
+    const auto& actual = adapter.*member(Fees{});
+    CHECK(actual.resident_bytes() == actual.resident_limit());
+    CHECK(actual.resident_bytes() <= source::a4_o1p2b::kResidentBytes
+        + source::a4_o1p2b::kRawRowBytes);
+    if (seen_resident == 0) seen_resident = actual.resident_bytes();
+    CHECK(actual.resident_bytes() == seen_resident);
+}
+
 void same_rows(const Adapter& adapter, const std::vector<Fee>& expected) {
     const auto& actual = adapter.*member(Fees{});
-    CHECK(actual.size() == expected.size());
-    if (actual.size() != expected.size()) return;
-    for (std::size_t i = 0; i < expected.size(); ++i) {
-        CHECK(actual[i].opening == expected[i].opening);
-        CHECK(actual[i].source_id == expected[i].source_id);
-        CHECK(bits(actual[i].units, expected[i].units));
-        CHECK(bits(actual[i].nonpercent_fee, expected[i].nonpercent_fee));
+    CHECK(static_cast<std::size_t>(actual.size()) == expected.size());
+    if (static_cast<std::size_t>(actual.size()) != expected.size()) return;
+    std::size_t i = 0;
+    for (const auto& row : actual) {
+        if (i >= expected.size()) break;
+        CHECK(row.opening == expected[i].opening);
+        CHECK(row.source_id == expected[i].source_id);
+        CHECK(bits(row.units, expected[i].units));
+        CHECK(bits(row.nonpercent_fee, expected[i].nonpercent_fee));
+        ++i;
     }
+    CHECK(i == expected.size());
     CHECK(fee_leaf(actual) == fee_leaf(expected));
+    bound(adapter);
 }
 
 void consume(Adapter& adapter, std::vector<Fee>& expected,
@@ -216,10 +236,53 @@ void reversal_order_fee() {
 }
 }
 
+// A transaction that changes two rows and rolls back leaves the fill order,
+// both row values and the folded leaf exactly as they were.
+void rollback_leaves_ledger() {
+    Adapter adapter;
+    source::PineStrategyConfig config;
+    config.commission_type = static_cast<int>(CommissionType::CASH_PER_CONTRACT);
+    config.commission_value = 0.4;
+    adapter.set_configuration(config);
+    std::vector<Fee> expected;
+    for (std::size_t i = 0; i < 24; ++i) {
+        source::PlacementSnapshot placement;
+        placement.source_id = i % 2 ? "A" : "B";
+        no::ExecutionAppliedEvent event;
+        auto definition = std::make_shared<no::RequestDefinition>();
+        definition->handle = {{"o1p2b-rollback", 5}, i + 1};
+        event.definition = definition;
+        event.opened_units = 1.0 + static_cast<double>(i % 5) * 0.5;
+        (adapter.*member(Record{}))(placement, event);
+        expected.push_back({event.handle(), placement.source_id, event.opened_units,
+                            config.commission_value * event.opened_units});
+    }
+    same_rows(adapter, expected);
+    auto& fees = adapter.*member(Fees{});
+    const std::uint64_t before = fee_leaf(fees);
+    const std::size_t size_before = static_cast<std::size_t>(fees.size());
+    fees.begin_batch();
+    Fee rewritten;
+    a4handle first = 0;
+    a4handle second = 0;
+    CHECK(fees.first(first));
+    CHECK(fees.next(first, second));
+    CHECK(fees.load(second, rewritten));
+    fees.erase(first);
+    rewritten.units += 100.0;
+    rewritten.nonpercent_fee += 100.0;
+    fees.store(second, rewritten);
+    fees.rollback_batch();
+    CHECK(static_cast<std::size_t>(fees.size()) == size_before);
+    CHECK(fee_leaf(fees) == before);
+    same_rows(adapter, expected);
+}
+
 int main() {
     for (const std::size_t count : {std::size_t{16}, std::size_t{257}, std::size_t{4097}})
         selection_and_paid_cost(count);
     reversal_order_fee();
+    rollback_leaves_ledger();
     std::printf("o1p2b opening fees: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

@@ -4468,13 +4468,16 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             std::abs(physical.signed_units), percent);
     }
     if (opening && !snapshot.source_id.empty()) {
-        if (const auto token = named_entry_cancel_tokens_.find(snapshot.source_id);
-            token != named_entry_cancel_tokens_.end()) {
+        // P25: read the ONE token row a cancelled id kept, then drop it. The
+        // ordered store keys the row by the id, so the read is a point lookup
+        // and the erase names the same key.
+        NamedEntryCancelCodec::Row token;
+        if (named_entry_cancel_tokens_.find(snapshot.source_id, token)) {
             snapshot.recreated_after_named_cancelled_entry_incarnation =
-                token->second.entry_incarnation;
+                token.second.entry_incarnation;
             snapshot.named_cancel_surviving_exit_incarnation =
-                token->second.surviving_exit_incarnation;
-            named_entry_cancel_tokens_.erase(token);
+                token.second.surviving_exit_incarnation;
+            named_entry_cancel_tokens_.erase_key(snapshot.source_id);
         }
     }
     // ab9714be pine_strategy_commands.cpp:497: order records created_position_cycle_seq from current cycle
@@ -4882,9 +4885,12 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                          || family == PineOrderFamily::ExitStop
                          || family == PineOrderFamily::ExitTrail)
                         && !snapshot.from_entry.empty()) {
-                        const auto token = named_entry_cancel_tokens_.find(snapshot.from_entry);
-                        bool retained_child = token != named_entry_cancel_tokens_.end()
-                            && token->second.surviving_exit_incarnation
+                        // P25: the id's kept token, if any, names the exit
+                        // incarnation its recreation retained.
+                        NamedEntryCancelCodec::Row token;
+                        bool retained_child = named_entry_cancel_tokens_.find(
+                                snapshot.from_entry, token)
+                            && token.second.surviving_exit_incarnation
                                 == existing_handle->incarnation;
                         for (const auto& live : live_handles_) {
                             const auto parent = placement_.find(live.incarnation);
@@ -5161,11 +5167,20 @@ double PineExecutionAdapter::percent_commission_live_equity(
     // (default_sizing_cash, R5 lane PAR-CASHFEE).  source_margin_money also
     // charges cash-per-contract fees for its tape-pinned margin policy.
     double restored = 0.0;
-    for (const auto& fact : open_entry_fees_) {
-        if (!std::isfinite(fact.nonpercent_fee))
-            return std::numeric_limits<double>::quiet_NaN();
+    bool readable = true;
+    // P22: fold the same surviving facts from the ordered store through its
+    // prepared value buffer; this reader is noexcept, so a value it cannot
+    // parse answers the NaN the legacy arithmetic answered for a bad fee.
+    (void)open_entry_fees_.for_each_raw([&](a4_o1p2b::ScratchBytes bytes) noexcept {
+        OpenEntryFeeCodec::View fact;
+        if (!OpenEntryFeeCodec::view(bytes, fact) || !std::isfinite(fact.nonpercent_fee)) {
+            readable = false;
+            return false;
+        }
         restored += fact.nonpercent_fee;
-    }
+        return true;
+    });
+    if (!readable) return std::numeric_limits<double>::quiet_NaN();
     return std::isfinite(restored) ? marked + restored
                                    : std::numeric_limits<double>::quiet_NaN();
 }
@@ -5216,28 +5231,62 @@ void PineExecutionAdapter::record_opening_fee(
 void PineExecutionAdapter::consume_opening_fees(
         const native_order::ExecutionAppliedEvent& event, const SourceId* source_id) {
     if (!(event.closed_units > 0.0) || !std::isfinite(event.closed_units)) return;
-    std::vector<std::uint64_t> selected;
-    if (const auto* opening = std::get_if<execution::OpeningExposure>(&event.scope)) {
-        selected.push_back(opening->incarnation);
-    } else if (const auto* openings = std::get_if<native_order::SelectedExposure>(&event.scope)) {
-        selected = openings->incarnations;
-    }
+    // The event owns the selection for this entire call. Borrow it instead
+    // of copying a notification-sized list merely to test membership. An
+    // empty SelectedExposure retains the existing whole-book meaning.
+    const auto* opening = std::get_if<execution::OpeningExposure>(&event.scope);
+    const auto* openings = std::get_if<native_order::SelectedExposure>(&event.scope);
+    // P22: the facts are one ordered store in fill order. The pass reads the
+    // ONE value buffer the table prepared, does the SAME binary64 arithmetic
+    // and writes a surviving row back under its own key; nothing is copied
+    // out of the store and nothing is allocated per row. An empty ledger
+    // never opens a store, so this stays allocation-free on that path too.
+    if (open_entry_fees_.size() == 0) return;
     double remaining = event.closed_units;
-    for (auto it = open_entry_fees_.begin(); it != open_entry_fees_.end() && remaining > 0.0;) {
-        const bool selected_origin = selected.empty()
-            || std::find(selected.begin(), selected.end(), it->opening.incarnation) != selected.end();
-        if (!selected_origin || (source_id && it->source_id != *source_id)
-            || !(it->units > 0.0) || !std::isfinite(it->units)) {
-            ++it;
+    auto batch = open_entry_fees_.batch();
+    a4_o1p2b::ScratchHandle handle = a4_o1p2b::scratch_no_handle;
+    for (bool more = open_entry_fees_.first(handle); more && remaining > 0.0;) {
+        a4_o1p2b::ScratchHandle following = a4_o1p2b::scratch_no_handle;
+        more = open_entry_fees_.next(handle, following);
+        a4_o1p2b::ScratchBytes bytes;
+        OpenEntryFeeCodec::View row;
+        if (!open_entry_fees_.load_raw(handle, bytes)
+            || !OpenEntryFeeCodec::view(bytes, row)) {
+            handle = following;
             continue;
         }
-        const double consumed = std::min(it->units, remaining);
-        const double fraction = consumed / it->units;
-        it->units -= consumed;
-        it->nonpercent_fee -= it->nonpercent_fee * fraction;
+        const bool selected_origin = opening
+            ? opening->incarnation == row.incarnation
+            : (!openings || openings->incarnations.empty()
+                || std::find(openings->incarnations.begin(), openings->incarnations.end(),
+                             row.incarnation) != openings->incarnations.end());
+        const bool same_source = !source_id
+            || (row.source_id.size == source_id->size()
+                && (row.source_id.size == 0
+                    || std::memcmp(row.source_id.data, source_id->data(),
+                                   row.source_id.size) == 0));
+        if (!selected_origin || !same_source
+            || !(row.units > 0.0) || !std::isfinite(row.units)) {
+            handle = following;
+            continue;
+        }
+        const double consumed = std::min(row.units, remaining);
+        const double fraction = consumed / row.units;
+        const double units = row.units - consumed;
+        const double fee = row.nonpercent_fee - row.nonpercent_fee * fraction;
         remaining -= consumed;
-        if (!(it->units > 0.0)) it = open_entry_fees_.erase(it); else ++it;
+        if (!(units > 0.0)) {
+            if (!open_entry_fees_.erase_checked(handle))
+                throw pineforge::detail::ScratchIoError(EIO, "a4 fee ledger erase");
+        } else {
+            OpenEntryFeeCodec::patch_arithmetic(bytes, row, units, fee);
+            if (!open_entry_fees_.store_raw(handle, bytes))
+                throw pineforge::detail::ScratchIoError(EIO, "a4 fee ledger store");
+        }
+        handle = following;
     }
+    open_entry_fees_.refresh_last();
+    batch.commit();
 }
 
 void PineExecutionAdapter::record_dropped_close(
@@ -5962,9 +6011,10 @@ void PineExecutionAdapter::consume_closed_trade_rows(
         if (bracket && !exact_bracket_owner)
             bracket_shadowed_openings_.insert(trade.entry_incarnation);
         if (!drained) return;
+        // P24: membership in the ordered opening set (ascending identity,
+        // exactly the fold order the hash reader sorted out of the set).
         const bool owned_bracket = bracket && exact_bracket_owner
-            && bracket_shadowed_openings_.find(trade.entry_incarnation)
-                == bracket_shadowed_openings_.end();
+            && !bracket_shadowed_openings_.contains(trade.entry_incarnation);
         if (!close_path && !owned_bracket) return;
         cohort.opened.erase(
             std::remove_if(cohort.opened.begin(), cohort.opened.end(),
@@ -9069,10 +9119,10 @@ void PineExecutionAdapter::submit_entry_with_policy(
     if (current == 0.0 && config_.process_orders_on_close && default_sized
         && std::holds_alternative<native_order::Stop>(request.trigger)
         && !finite_positive(limit_price) && oca_name.empty()) {
-        const auto token = named_entry_cancel_tokens_.find(id);
-        if (token != named_entry_cancel_tokens_.end()
-            && token->second.entry_incarnation != 0
-            && token->second.surviving_exit_incarnation != 0) {
+        NamedEntryCancelCodec::Row token;
+        if (named_entry_cancel_tokens_.find(id, token)
+            && token.second.entry_incarnation != 0
+            && token.second.surviving_exit_incarnation != 0) {
             std::vector<std::uint64_t> child_families;
             for (const auto& handle : live_handles_) {
                 const auto child = placement_.find(handle.incarnation);
@@ -9091,9 +9141,9 @@ void PineExecutionAdapter::submit_entry_with_policy(
             }
             if (child_families.size() == 1) {
                 snapshot.recreated_after_named_cancelled_entry_incarnation =
-                    token->second.entry_incarnation;
+                    token.second.entry_incarnation;
                 snapshot.named_cancel_surviving_exit_incarnation =
-                    token->second.surviving_exit_incarnation;
+                    token.second.surviving_exit_incarnation;
             }
             snapshot.retained_parent_topology = true;
             if (const auto point = detail::callback_point(require_host())) {
@@ -9101,7 +9151,7 @@ void PineExecutionAdapter::submit_entry_with_policy(
                 snapshot.projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
             }
             snapshot.source_sequence = source_sequence_ + 1;
-            if (child_families.size() != 1) named_entry_cancel_tokens_.erase(token);
+            if (child_families.size() != 1) named_entry_cancel_tokens_.erase_key(id);
             pending_entries_.push_back({std::move(request), std::move(snapshot), id});
             return;
         }
@@ -11120,8 +11170,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     require_cohort_ticket(cohort_candidate ? &from_entry : nullptr);
     reroute_fixed_entries_before_request();
     if (!from_entry.empty()) {
-        const auto token = named_entry_cancel_tokens_.find(from_entry);
-        if (token != named_entry_cancel_tokens_.end()) {
+        NamedEntryCancelCodec::Row token;
+        if (named_entry_cancel_tokens_.find(from_entry, token)) {
             bool recreated_parent = std::any_of(
                 pending_entries_.begin(), pending_entries_.end(),
                 [&](const PendingEntry& pending) {
@@ -11140,7 +11190,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // The cancellation token belongs only to a retained child that
             // survives until the fresh parent is declared.  Reissuing the
             // child first creates a fresh topology and consumes that token.
-            if (!recreated_parent) named_entry_cancel_tokens_.erase(token);
+            if (!recreated_parent) named_entry_cancel_tokens_.erase_key(from_entry);
         }
     }
     const bool actionable = !std::isnan(limit_price) || !std::isnan(stop_price)
@@ -12738,7 +12788,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     }
     if (defer_for_same_bar_priority && !from_entry.empty())
-        named_entry_cancel_tokens_.erase(from_entry);
+        named_entry_cancel_tokens_.erase_key(from_entry);
     if (pooc_short_tick_scope && source_point) {
         bool competing_entry = false;
         for (const auto& handle : live_handles_) {
@@ -14615,8 +14665,9 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
             token.surviving_exit_incarnation = handle.incarnation;
         }
     }
-    if (token.entry_incarnation != 0) named_entry_cancel_tokens_[id] = token;
-    else named_entry_cancel_tokens_.erase(id);
+    if (token.entry_incarnation != 0)
+        named_entry_cancel_tokens_.upsert(id, {id, token});
+    else named_entry_cancel_tokens_.erase_key(id);
     const auto same_bar_before = pending_same_bar_commands_.size();
     pending_same_bar_commands_.erase(std::remove_if(pending_same_bar_commands_.begin(),
         pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& command) {
@@ -18206,9 +18257,18 @@ bool PineExecutionAdapter::gain_loss_run_regime() const {
     if (pine == nullptr || host_ == nullptr) return false;
     const auto* spec = detail::run_spec(*host_);
     if (spec == nullptr || spec->fee_value != 0.0) return false;
-    for (const auto& fact : open_entry_fees_) {
-        if (fact.nonpercent_fee != 0.0) return false;
-    }
+    bool any_fee = false;
+    (void)open_entry_fees_.for_each_raw([&](a4_o1p2b::ScratchBytes bytes) noexcept {
+        OpenEntryFeeCodec::View fact;
+        // A value this reader cannot decode cannot prove the regime either:
+        // answer "a fee exists", which is the non-regime branch.
+        if (!OpenEntryFeeCodec::view(bytes, fact) || fact.nonpercent_fee != 0.0) {
+            any_fee = true;
+            return false;
+        }
+        return true;
+    });
+    if (any_fee) return false;
     return pine->pyramid_entries_.size() <= 1;
 }
 
@@ -26594,7 +26654,7 @@ void PineExecutionAdapter::fixture_remove_entry_without_named_cancel(
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
-    named_entry_cancel_tokens_.erase(id);
+    named_entry_cancel_tokens_.erase_key(id);
 }
 
 void PineExecutionAdapter::set_risk_direction(int direction) noexcept { risk_.direction = direction; }
@@ -28255,6 +28315,14 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     exit_rank_keys_.set_directory(directory);
     placement_.set_auxiliary_tables_directory(directory);
     consumed_partial_exit_cycles_.set_directory(directory);
+    // A4 rows P22-P25: one directory for every adapter-owned ordered store.
+    // They open lazily on the first record, so a bind before the run reaches
+    // every backing file (a never-opened store uses the same scratch medium
+    // with an empty directory, as the existing tables do).
+    open_entry_fees_.set_directory(directory);
+    current_debited_applied_ordinals_.set_directory(directory);
+    bracket_shadowed_openings_.set_directory(directory);
+    named_entry_cancel_tokens_.set_directory(directory);
 }
 
 PineExecutionAdapter::CohortTable::iterator

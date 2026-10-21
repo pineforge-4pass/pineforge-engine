@@ -14,10 +14,12 @@
 #include <pineforge/detail/disk_resident_id_table.hpp>
 #include <pineforge/detail/id_pair_store.hpp>
 #include <pineforge/detail/adapter_exposure_storage.hpp>
+#include <pineforge/source/a4_o1p2b_store.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -1766,7 +1768,7 @@ public:
         source_batch_mutated_ = false;
     }
     bool fixture_named_entry_cancel_active(const SourceId& id) const noexcept {
-        return named_entry_cancel_tokens_.find(id) != named_entry_cancel_tokens_.end();
+        return named_entry_cancel_tokens_.contains(id);
     }
     std::vector<native_order::RequestHandle> take_first_open_newborns();
     // Pull terminal generic receipts before a source callback observes the
@@ -2581,6 +2583,129 @@ private:
     AnchoredRelativeStats anchored_relative_stats_{};
     std::int64_t anchored_cohort_sequence_ = 0;
     std::vector<PerEntryExit> per_entry_exits_;
+    // A4 rows P22/P23/P25 (lane core-cr150-o1p2b): exact external stores on
+    // the shared ScratchStore contract (a4_o1p2b_store.hpp). Each keeps the
+    // population's order (fill order for the fee ledgers, ascending key where
+    // the owning container's order was unspecified and every reader sorts it)
+    // and its exact row bytes, so the hash readers in pine_state_hash.cpp fold
+    // the same stream without being edited. The resident workspace is a fixed
+    // page/journal/index configuration, never a record limit. Rows P18/P19
+    // (pending calc-on-fill / margin revival) and P20/P21 (live handle
+    // rosters) are not moved here: see REPORT.md for the contracts they need.
+    struct OpenEntryFeeCodec {
+        using Row = OpenEntryFeeFact;
+        // Field view over a stored value: the consume pass reads this instead
+        // of materialising a Row, so it allocates nothing on the bar path.
+        struct View {
+            pineforge::detail::ScratchBytes source_id{};
+            double units = 0.0;
+            double nonpercent_fee = 0.0;
+            std::uint64_t incarnation = 0;
+            std::size_t units_offset = 0;
+            std::size_t fee_offset = 0;
+        };
+        static void encode(const Row& row, a4_o1p2b::Segments& value) {
+            value.text(row.opening.run.session_key.string());
+            value.u64(row.opening.run.run_number);
+            value.u64(row.opening.incarnation);
+            value.text(row.source_id);
+            value.f64(row.units);
+            value.f64(row.nonpercent_fee);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::string session;
+            std::uint64_t offset = 0;
+            if (!a4_o1p2b::read_text(store, handle, offset, session)
+                || !a4_o1p2b::read_u64(store, handle, offset, row.opening.run.run_number)
+                || !a4_o1p2b::read_u64(store, handle, offset, row.opening.incarnation)
+                || !a4_o1p2b::read_text(store, handle, offset, row.source_id)
+                || !a4_o1p2b::read_f64(store, handle, offset, row.units)
+                || !a4_o1p2b::read_f64(store, handle, offset, row.nonpercent_fee)
+                || offset != info.value_bytes)
+                return false;
+            row.opening.run.session_key = native_order::SessionKey(session);
+            return true;
+        }
+        // Parses a value already read into the table's fixed buffer. Never
+        // allocates: the source id stays a view into those bytes.
+        static bool view(pineforge::detail::ScratchBytes bytes, View& out) noexcept {
+            std::size_t at = 0;
+            std::uint64_t skipped = 0;
+            std::uint32_t length = 0;
+            if (!take_u32(bytes, at, length) || !skip(bytes, at, length)) return false;
+            if (!take_u64(bytes, at, skipped)) return false; // run number
+            if (!take_u64(bytes, at, out.incarnation)) return false;
+            if (!take_u32(bytes, at, length)) return false;
+            if (at > bytes.size || bytes.size - at < length) return false;
+            out.source_id = pineforge::detail::ScratchBytes{bytes.data + at, length};
+            at += length;
+            out.units_offset = at;
+            if (!take_f64(bytes, at, out.units)) return false;
+            out.fee_offset = at;
+            if (!take_f64(bytes, at, out.nonpercent_fee)) return false;
+            return at == bytes.size;
+        }
+        static void patch_arithmetic(pineforge::detail::ScratchBytes bytes, const View& view,
+                                     double units, double nonpercent_fee) noexcept {
+            std::memcpy(const_cast<std::byte*>(bytes.data) + view.units_offset,
+                        &units, sizeof units);
+            std::memcpy(const_cast<std::byte*>(bytes.data) + view.fee_offset,
+                        &nonpercent_fee, sizeof nonpercent_fee);
+        }
+
+    private:
+        static bool take_u32(pineforge::detail::ScratchBytes bytes, std::size_t& at,
+                             std::uint32_t& out) noexcept {
+            if (at > bytes.size || bytes.size - at < 4) return false;
+            out = 0;
+            for (int index = 0; index < 4; ++index)
+                out |= static_cast<std::uint32_t>(bytes.data[at + index]) << (8 * index);
+            at += 4;
+            return true;
+        }
+        static bool take_u64(pineforge::detail::ScratchBytes bytes, std::size_t& at,
+                             std::uint64_t& out) noexcept {
+            if (at > bytes.size || bytes.size - at < 8) return false;
+            out = 0;
+            for (int index = 0; index < 8; ++index)
+                out |= static_cast<std::uint64_t>(bytes.data[at + index]) << (8 * index);
+            at += 8;
+            return true;
+        }
+        static bool take_f64(pineforge::detail::ScratchBytes bytes, std::size_t& at,
+                             double& out) noexcept {
+            std::uint64_t bits = 0;
+            if (!take_u64(bytes, at, bits)) return false;
+            std::memcpy(&out, &bits, sizeof out);
+            return true;
+        }
+        static bool skip(pineforge::detail::ScratchBytes bytes, std::size_t& at,
+                         std::size_t length) noexcept {
+            if (at > bytes.size || bytes.size - at < length) return false;
+            at += length;
+            return true;
+        }
+    };
+    struct NamedEntryCancelCodec {
+        using Key = SourceId;
+        using Row = std::pair<SourceId, NamedEntryCancelToken>;
+        static void encode(const Row& row, a4_o1p2b::Segments& value) {
+            value.u64(row.second.entry_incarnation);
+            value.u64(row.second.surviving_exit_incarnation);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::uint64_t offset = 0;
+            return a4_o1p2b::read_key_text(store, handle, info, row.first)
+                && a4_o1p2b::read_u64(store, handle, offset, row.second.entry_incarnation)
+                && a4_o1p2b::read_u64(store, handle, offset,
+                                      row.second.surviving_exit_incarnation)
+                && offset == info.value_bytes;
+        }
+    };
     std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<PendingMarginRevival> pending_margin_revivals_;
     std::vector<native_order::RequestHandle> live_handles_;
@@ -2590,16 +2715,24 @@ private:
     // (fold_dropped_close, pine_state_hash.cpp).
     std::uint64_t dropped_close_count_ = 0;
     std::uint64_t dropped_close_digest_ = 1469598103934665603ULL;
-    std::vector<OpenEntryFeeFact> open_entry_fees_;
+    // P22: open-entry fee facts in fill order, one row per unconsumed fill.
+    a4_o1p2b::SeqTable<OpenEntryFeeCodec> open_entry_fees_{
+        "o1p2b-open-entry-fees", 0x50323231ULL};
     // Current executions settle synchronously, while their generic Applied
     // notification is delivered after the enclosing callback.  Record the
     // source-cohort debit so a second immediate command sees the new basis,
     // then suppress just that duplicate debit at notification delivery.
-    std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
+    // P23: applied ordinals already debited by a synchronous execution.
+    a4_o1p2b::U64SetTable current_debited_applied_ordinals_{
+        "o1p2b-current-debited", 0x50323331ULL};
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
     pineforge::detail::IdPairStore<std::int64_t> consumed_partial_exit_cycles_;
-    std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
-    std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
+    // P24: entry incarnations whose bracket was shadowed by another owner.
+    a4_o1p2b::U64SetTable bracket_shadowed_openings_{
+        "o1p2b-bracket-shadowed", 0x50323431ULL};
+    // P25: named-entry cancel tokens, keyed by the cancelled entry id.
+    a4_o1p2b::KeyedTable<NamedEntryCancelCodec> named_entry_cancel_tokens_{
+        "o1p2b-named-cancel", 0x50323531ULL};
     // An exit bound to its entry id whose working order a strategy.cancel of
     // the id withdrew (PlacementSnapshot::pending_bound_exit): TradingView
     // keeps the binding, so the id's next entry order re-arms the exit as
