@@ -1,3 +1,0 @@
-Fix round 1 authored: restore four missing 00 bytes in two golden certificates.
-See REPORT.md for field offsets, entry arithmetic and the files touched.
-Full verification remains pending the supervisor's four-step lab job.
