@@ -1923,16 +1923,21 @@ public:
              MagnifierDistribution magnifier_dist = MagnifierDistribution::ENDPOINTS);
 
     int trade_count() const { return (int)trades_.size(); }
-    const Trade& get_trade(int i) const { return trades_[i]; }
+    Trade get_trade(int i) const { return trades_.read(static_cast<std::size_t>(i)); }
     // The same closed rows under the `closed_trade_*` name a host reads them
     // by (RP6). The per-field `closed_trade_*` family below stays protected
-    // Pine plumbing: one whole row by reference answers all of it, and a host
+    // Pine plumbing: one owning row value answers all of it, and a host
     // that owns its report needs the row, not twenty wrappers. Range-end
     // report rows are NOT here — report_trade_count() / get_report_trade()
-    // below span both spaces. Unchecked, like get_trade above: index against
-    // closed_trade_count().
+    // below span both spaces. Index against closed_trade_count(); each read
+    // owns its exact value, including a row below the published base.
     std::size_t closed_trade_count() const noexcept { return trades_.size(); }
-    const Trade& closed_trade(std::size_t i) const { return trades_[i]; }
+    Trade closed_trade(std::size_t i) const { return trades_.read(i); }
+    // Newest first, preserving global indices across resident and external
+    // rows. Start cursor at closed_trade_count(); false means cursor == 0.
+    bool previous_closed_trade(std::size_t& cursor, Trade& value) const {
+        return trades_.previous(cursor, value);
+    }
     // The REPORT's row space: trades_ followed by range_end_trades_, in the
     // order fill_trades_section lays pf_report_t::trades out. trade_count()
     // / get_trade() stay the Pine-visible closed trades (strategy.closedtrades
@@ -1942,10 +1947,18 @@ public:
     int report_trade_count() const {
         return (int)(trades_.size() + range_end_trades_.size());
     }
-    const Trade& get_report_trade(int i) const {
+    Trade get_report_trade(int i) const {
         const int n_closed = (int)trades_.size();
         return i < n_closed ? trades_[(size_t)i]
                             : range_end_trades_[(size_t)(i - n_closed)];
+    }
+    // The legacy C string ABI promises pointer lifetime until the next run.
+    // Asking for that borrowed storage explicitly materializes the requested
+    // row. Ordinary report/value readers never enter this compatibility path.
+    const Trade& materialize_report_trade(int i) const {
+        const int n_closed = static_cast<int>(trades_.size());
+        return i < n_closed ? trades_.materialize(static_cast<std::size_t>(i))
+                            : range_end_trades_[static_cast<std::size_t>(i - n_closed)];
     }
 
     // ABI v4 live-runtime surface (task 9): classify why a REPORT-row

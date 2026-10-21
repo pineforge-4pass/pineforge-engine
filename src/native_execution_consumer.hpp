@@ -364,7 +364,7 @@ public:
     // rows the digest has taken and answers whether they still match: the
     // Debug check a run's end makes, and a witness's probe.
     uint64_t closed_rows_digest(const TradeLedger& rows) const;
-    bool closed_rows_digest_holds(const TradeLedger& rows) const noexcept;
+    bool closed_rows_digest_holds(const TradeLedger& rows) const;
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
     void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }
@@ -388,6 +388,9 @@ public:
         return true;
     }
     std::size_t closed_rows_final() const noexcept { return closed_rows_final_; }
+    std::size_t resident_closed_row_checkpoints() const noexcept {
+        return closed_row_prefix_.size();
+    }
     const ClosedTradePrefix& closed_trade_prefix() const noexcept { return closed_trade_prefix_; }
     std::size_t closed_rows_sealable(const TradeLedger& rows, std::size_t phase_final,
         std::uint64_t money_folded, std::int64_t script_bar_open,
@@ -1691,7 +1694,7 @@ private:
     void revoke_activation_birth(const native_order::RequestHandle&);
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
-    void verify_closed_rows(const BacktestEngine& engine) const noexcept;
+    void verify_closed_rows(const BacktestEngine& engine) const;
     void rewind_closed_rows(std::size_t first) const;
     void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
                                const TradeC& row) const;
@@ -1980,10 +1983,14 @@ private:
     mutable std::uint64_t closed_rows_digest_ = 1469598103934665603ULL;
     mutable std::size_t closed_rows_digested_ = 0;
     std::size_t closed_rows_final_ = 0;
-    // The digest after each digested row, so an amendment (closed_rows_amended)
-    // rewinds to the row before it in O(1): one word per resident final row.
-    // Index zero stores the digest after global row closed_trade_prefix_.base.
-    mutable std::vector<std::uint64_t> closed_row_prefix_;
+    // Only the newest checkpoints stay resident. An older amendment restarts
+    // at the sealed seed and replays exact rows from the external ledger.
+    static constexpr std::size_t kClosedRowCheckpoints = 64;
+    mutable std::vector<std::uint64_t> closed_row_prefix_ = [] {
+        std::vector<std::uint64_t> values;
+        values.reserve(kClosedRowCheckpoints);
+        return values;
+    }();
     ClosedTradePrefix closed_trade_prefix_;
     std::optional<std::int64_t> closed_trade_seal_bar_;
     // Report output only: neither this fold nor ClosedTradeReport participates

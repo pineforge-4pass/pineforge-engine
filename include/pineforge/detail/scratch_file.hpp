@@ -17,8 +17,14 @@
 #include <system_error>
 #include <unistd.h>
 #include <utility>
+#if defined(__linux__)
+#include <sys/vfs.h>
+#endif
 
 namespace pineforge::detail {
+
+// Compatibility name for ledger/phase users of the report-scratch backend.
+using ScratchIoError = ReportScratchIoError;
 
 // Run-owned positional scratch: an anonymous, close-on-exec file for an empty
 // owner, or checked slab copies when bound. Without a slab, open() selects an
@@ -44,6 +50,10 @@ public:
             region_ = std::move(other.region_);
             other.region_.size = 0;
             io_raiser_ = other.io_raiser_;
+            bounded_cache_ = other.bounded_cache_;
+            dirty_begin_ = other.dirty_begin_;
+            dirty_end_ = other.dirty_end_;
+            other.dirty_begin_ = other.dirty_end_ = 0;
         }
         return *this;
     }
@@ -72,6 +82,12 @@ public:
     // inherit their index label before open(); prefixes are never identities.
     void set_store(ScratchStore store) noexcept { region_.store = store; }
 
+    // Opt in before opening. Only the ledger/phase consumers request this;
+    // existing scratch users keep their established I/O behavior.
+    void bound_cache() {
+        if (fd_ >= 0) throw std::logic_error("scratch cache policy changed after open");
+        bounded_cache_ = true;
+    }
     void set_directory(const std::string& value) {
         if (arena_) return;
         if (fd_ >= 0 && directory_ != value)
@@ -83,6 +99,7 @@ public:
         arena_ = nullptr;
         if (fd_ >= 0) ::close(fd_);
         fd_ = -1;
+        dirty_begin_ = dirty_end_ = 0;
         // resource_ was validated at bind. Clearing reuses the same allocation
         // and binding; a later empty-owner bind explicitly restores disk mode.
         if (slab_) slab_->reset(resource_);
@@ -131,6 +148,32 @@ public:
             io_error(error, "scratch cloexec");
         }
         fd_ = opened;
+        if (bounded_cache_) {
+#if defined(__linux__)
+            struct statfs backing{};
+            if (::fstatfs(fd_, &backing) != 0) {
+                const int error = errno;
+                clear();
+                io_error(error, "scratch backing");
+            }
+            // These are memory filesystems, not an external row source.
+            if (backing.f_type == 0x01021994 || backing.f_type == 0x858458f6) {
+                clear();
+                io_error(ENODEV, "scratch requires disk backing");
+            }
+            const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_RANDOM);
+            if (error != 0) {
+                clear();
+                io_error(error, "scratch random access");
+            }
+#elif defined(__APPLE__)
+            if (::fcntl(fd_, F_NOCACHE, 1) == -1) {
+                const int error = errno;
+                clear();
+                io_error(error, "scratch uncached access");
+            }
+#endif
+        }
     }
     // Monotone, zero-filled growth, for sparse hash indexes and similar
     // ftruncate users. Does not shrink or open the file. Arena mode claims
@@ -178,8 +221,11 @@ public:
         const auto* bytes = static_cast<const unsigned char*>(data);
         std::size_t written = 0;
         while (written < length) {
-            const auto chunk = std::min(length - written,
-                static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            const auto position = offset + written;
+            const auto chunk = std::min(length - written, bounded_cache_
+                ? kCacheBytes - static_cast<std::size_t>(position % kCacheBytes)
+                : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            prepare_write(position, chunk);
             const ssize_t count = ::pwrite(fd_, bytes + written, chunk,
                                            static_cast<off_t>(offset + written));
             if (count < 0 && errno == EINTR) continue;
@@ -200,13 +246,14 @@ public:
         auto* bytes = static_cast<unsigned char*>(data);
         std::size_t received = 0;
         while (received < length) {
-            const auto chunk = std::min(length - received,
-                static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            const auto chunk = std::min(length - received, bounded_cache_ ? kCacheBytes
+                : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
             const ssize_t count = ::pread(fd_, bytes + received, chunk,
                                           static_cast<off_t>(offset + received));
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch read");
             received += static_cast<std::size_t>(count);
+            discard_clean_cache();
         }
     }
 
@@ -229,6 +276,33 @@ private:
             throw AuxiliaryScratchIoError(error, operation);
         throw ReportScratchIoError(error, operation, {{"reason", "scratch_io"}});
     }
+    static constexpr std::size_t kCacheBytes = 64 * 1024;
+    void discard_clean_cache() const {
+#if defined(__linux__)
+        if (bounded_cache_) {
+            const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+            if (error != 0) io_error(error, "scratch discard cache");
+        }
+#endif
+    }
+    void prepare_write(std::uint64_t offset, std::size_t count) {
+        if (!bounded_cache_) return;
+        const auto first = dirty_begin_ == dirty_end_ ? offset : std::min(offset, dirty_begin_);
+        const auto end = std::max(offset + count, dirty_end_);
+        if (end - first > kCacheBytes) {
+#if defined(__linux__)
+            int result;
+            do { result = ::fdatasync(fd_); } while (result != 0 && errno == EINTR);
+            if (result != 0) io_error(errno, "scratch flush cache window");
+#endif
+            discard_clean_cache();
+            dirty_begin_ = offset;
+            dirty_end_ = offset + count;
+        } else {
+            dirty_begin_ = first;
+            dirty_end_ = end;
+        }
+    }
     int fd_ = -1;
     std::string directory_;
     // Physical backing only; logical table records and hash folds are shared
@@ -238,5 +312,7 @@ private:
     ScratchArena* arena_ = nullptr;
     ScratchArena::Region region_;
     IoRaiser io_raiser_ = IoRaiser::report_sink;
+    bool bounded_cache_ = false;
+    std::uint64_t dirty_begin_ = 0, dirty_end_ = 0;
 };
 } // namespace pineforge::detail

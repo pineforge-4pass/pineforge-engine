@@ -918,7 +918,8 @@ void closed_rows_are_final_after_their_notification() {
         host->bar_script = amend(read_before);
         host->applied_script = [](Host& h, const no::ExecutionAppliedEvent& event) {
             for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
-                h.mutable_rows()[event.first_trade_index + i].exit_time += 1000;
+                h.mutable_rows().modify(event.first_trade_index + i,
+                                        [](Trade& row) { row.exit_time += 1000; });
             }
         };
         return host;
@@ -944,9 +945,9 @@ void closed_rows_are_final_after_their_notification() {
         if (bar == 3) h.submit(no::Request{no::Flatten{}, "out", ""});
         if (bar == 5 && !h.rows().empty()) {
             (void)h.broker_state_hash();   // folds the final row
-            h.mutable_rows()[0].exit_price += 1.0;
+            h.mutable_rows().modify(0, [](Trade& row) { row.exit_price += 1.0; });
             refused = !NativeExecutionConsumerProbe::holds(h.consumer(), h.rows());
-            h.mutable_rows()[0].exit_price -= 1.0;
+            h.mutable_rows().modify(0, [](Trade& row) { row.exit_price -= 1.0; });
         }
     };
     CHECK(run(late, base_spec(), 8));
@@ -960,7 +961,7 @@ void closed_rows_are_final_after_their_notification() {
     named.bar_script = amend(false);
     CHECK(run(named, base_spec(), 6));
     const std::uint64_t before = named.broker_state_hash();
-    named.mutable_rows()[0].exit_time += 1000;
+    named.mutable_rows().modify(0, [](Trade& row) { row.exit_time += 1000; });
     CHECK(named.broker_state_hash() == before);
     CHECK(!NativeExecutionConsumerProbe::holds(named.consumer(), named.rows()));
     named.native_closed_rows_amended(0);
@@ -979,11 +980,19 @@ void closed_rows_are_final_after_their_notification() {
     CHECK(run(sorted, base_spec(), 8));
     CHECK(sorted.rows().size() == 2);
     const std::uint64_t in_order = sorted.broker_state_hash();
-    std::swap(sorted.mutable_rows()[0], sorted.mutable_rows()[1]);
+    {
+        const Trade first = sorted.rows()[0], second = sorted.rows()[1];
+        sorted.mutable_rows().replace(0, second);
+        sorted.mutable_rows().replace(1, first);
+    }
     sorted.native_closed_rows_amended(0);
     CHECK(sorted.broker_state_hash() != in_order);
     CHECK(NativeExecutionConsumerProbe::holds(sorted.consumer(), sorted.rows()));
-    std::swap(sorted.mutable_rows()[0], sorted.mutable_rows()[1]);
+    {
+        const Trade first = sorted.rows()[0], second = sorted.rows()[1];
+        sorted.mutable_rows().replace(0, second);
+        sorted.mutable_rows().replace(1, first);
+    }
     sorted.native_closed_rows_amended(0);
     CHECK(sorted.broker_state_hash() == in_order);
     // Rows removed from the end need no name: the kernel only appends, so a

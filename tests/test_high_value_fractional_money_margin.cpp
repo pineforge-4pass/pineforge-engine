@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <vector>
 
 using namespace pineforge;
@@ -40,8 +41,8 @@ public:
     int margin_count()const{
         int n=0;for(const auto&t:trades_)if(t.exit_comment=="Margin call")++n;return n;
     }
-    const Trade* margin()const{
-        for(const auto&t:trades_)if(t.exit_comment=="Margin call")return &t;return nullptr;
+    std::optional<Trade> margin()const{
+        for(const auto&t:trades_)if(t.exit_comment=="Margin call")return t;return std::nullopt;
     }
     double final_position()const{return signed_position_size();}
 };

@@ -65,7 +65,7 @@ typedef struct pf_report_sink_fd_v1 {
  *  The seven counts correspond to E, T, O, V, K, X, H in that order.
  *  sha256_hex is the trailer's lowercase SHA-256, NUL-terminated, and is ""
  *  until the trailer exists. complete becomes 1 once the trailer is written.
- *  trades_retained is 1 when closedtrades.* history also stays in RAM.
+ *  trades_retained is 1 when closedtrades.* history stays script-readable.
  *  The explicit seven-byte reserved field gives a 144-byte layout with no
  *  implicit padding. PF_ABI_VERSION stays 4; no existing report/trade grows.
  *  RESOLVED S1: receipt query initialization and outcomes follow the

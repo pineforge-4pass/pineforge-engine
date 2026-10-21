@@ -6344,25 +6344,38 @@ std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
     return placement_.command_sequence_for(exit_id, from_entry);
 }
 
-bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const noexcept {
+std::uint8_t PineExecutionAdapter::exit_phase_value(std::size_t trade_index) const {
     const std::size_t base = host_ ? detail::run_consumer(*host_).closed_trade_prefix().base : 0;
-    // This frozen noexcept query is called only on the protected tail group.
-    // A broken seal proof is loud here as well as in the ledger itself.
-    if (trade_index < base) std::abort();
+    if (trade_index < base)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "exit-phase read precedes the sealed prefix");
     return trade_index - base < trade_exit_phase_.size()
-        && trade_exit_phase_[trade_index - base] == static_cast<std::uint8_t>(NativePathPhase::Open);
+        ? trade_exit_phase_[trade_index - base] : static_cast<std::uint8_t>(NativePathPhase::None);
+}
+
+bool PineExecutionAdapter::is_open_phase_exit(std::size_t trade_index) const {
+    return exit_phase_value(trade_index) == static_cast<std::uint8_t>(NativePathPhase::Open);
 }
 
 void PineExecutionAdapter::permute_exit_phases(std::size_t start,
                                                const std::vector<std::size_t>& indices) {
+    permute_exit_phase_rows(start, indices.size(),
+                           [&](std::size_t i) { return indices[i]; });
+}
+
+void PineExecutionAdapter::permute_exit_phase_rows(
+        std::size_t start, std::size_t count,
+        const std::function<std::size_t(std::size_t)>& source_at) {
     const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
     const std::size_t base = host_ ? detail::run_consumer(*host_).closed_trade_prefix().base : 0;
     if (start < base)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "exit-phase permutation precedes the sealed prefix");
-    std::vector<std::uint8_t> permuted;
-    permuted.reserve(indices.size());
-    for (const std::size_t index : indices) {
+    ::pineforge::detail::ScratchSequence<std::uint8_t> permuted;
+    if (host_)
+        permuted.set_directory(detail::run_consumer(*host_).report_scratch_directory(*host_));
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::size_t index = source_at(i);
         if (index < base)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                            "exit-phase read precedes the sealed prefix");
@@ -6503,6 +6516,8 @@ void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t 
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "exit-phase write precedes the sealed prefix");
     const std::size_t offset = trade_index - prefix.base;
+    if (trade_exit_phase_.empty() && host_)
+        trade_exit_phase_.set_directory(detail::run_consumer(*host_).report_scratch_directory(*host_));
     if (offset >= trade_exit_phase_.size())
         trade_exit_phase_.resize(offset + 1, static_cast<std::uint8_t>(NativePathPhase::None));
     if (trade_index < exit_phase_final_ && trade_exit_phase_[offset] != phase) {
@@ -6511,7 +6526,7 @@ void PineExecutionAdapter::set_exit_phase(std::size_t trade_index, std::uint8_t 
         exit_phase_digest_ = prefix.exit_phase_digest;
         if (host_) detail::run_consumer(*host_).restart_exit_phases();
     }
-    trade_exit_phase_[offset] = phase;
+    trade_exit_phase_.set(offset, phase);
 }
 
 void PineExecutionAdapter::observe_terminal_receipts() {

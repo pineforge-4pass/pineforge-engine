@@ -87,7 +87,7 @@ public:
     }
     int trades() const { return trade_count(); }
     double first_pnl() const { return trades() ? get_trade(0).pnl : kNaN; }
-    const Trade& trade(int index) const { return get_trade(index); }
+    Trade trade(int index) const { return get_trade(index); }
 };
 
 // A default 100%-of-equity order is placed under FX=1.0 and fills on the
@@ -112,7 +112,7 @@ public:
     double open_qty() const {
         return position_side_ == PositionSide::LONG ? position_qty_ : 0.0;
     }
-    const Trade& trade(int i) const { return get_trade(i); }
+    Trade trade(int i) const { return get_trade(i); }
 };
 
 // A live 1x long crosses a timestamped FX epoch on bar 2.  The broker must
@@ -147,7 +147,7 @@ public:
         return position_side_ == PositionSide::LONG ? position_qty_ : 0.0;
     }
     int trades() const { return trade_count(); }
-    const Trade& trade(int i) const { return get_trade(i); }
+    Trade trade(int i) const { return get_trade(i); }
 
 private:
     int on_bar_calls_ = 0;
@@ -217,7 +217,7 @@ public:
     double open_qty() const {
         return position_side_ == PositionSide::SHORT ? position_qty_ : 0.0;
     }
-    const Trade& trade(int i) const { return get_trade(i); }
+    Trade trade(int i) const { return get_trade(i); }
 
 private:
     int on_bar_calls_ = 0;
@@ -298,7 +298,7 @@ public:
     }
     double observed_open_profit() const { return observed_open_profit_; }
     int trades() const { return trade_count(); }
-    const Trade& trade(int i) const { return get_trade(i); }
+    Trade trade(int i) const { return get_trade(i); }
 
 private:
     double qty_;
@@ -868,7 +868,7 @@ int main() {
             int observed_trades() const { return observed_trades_; }
             bool still_short() const { return still_short_; }
             int trades() const { return trade_count(); }
-            const Trade& trade(int i) const { return get_trade(i); }
+            Trade trade(int i) const { return get_trade(i); }
         private:
             double qty_after_fill_ = kNaN;
             int trades_after_fill_ = -1;
