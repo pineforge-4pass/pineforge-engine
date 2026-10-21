@@ -1,0 +1,5 @@
+Fix round 2 — core-cr150-o1e3b, cx/o1-e3b
+Failed proof: rj-20261021t031834-94c870
+Owned queue-reader repair and complete E17 integration request: REPORT.md.
+Build resolution still requires the o1-e1-owned header/member/overload changes.
+Edit only; no local build, test, generator or repository script. Lab proof pending.

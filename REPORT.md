@@ -18,6 +18,9 @@ below; the lane deliberately does not fall back to a vector.
 --- a/include/pineforge/engine.hpp
 +++ b/include/pineforge/engine.hpp
 @@
+ #include <memory>
++#include <iterator>
+@@
  struct StreamOrderAction {
 @@
      size_t closed_trade_index = static_cast<size_t>(-1); // engine-private provenance
@@ -30,6 +33,27 @@ below; the lane deliberately does not fall back to a vector.
 +#define PINEFORGE_HAS_STREAM_ACTION_PAGES_V1 1
 +class StreamActionQueue {
 +public:
++    class const_iterator {
++    public:
++        using iterator_category = std::forward_iterator_tag;
++        using value_type = StreamOrderAction;
++        using difference_type = std::ptrdiff_t;
++        using pointer = const StreamOrderAction*;
++        using reference = const StreamOrderAction&;
++        const_iterator() = default;
++        reference operator*() const;
++        pointer operator->() const;
++        const_iterator& operator++();
++        const_iterator operator++(int);
++        bool operator==(const const_iterator& other) const;
++        bool operator!=(const const_iterator& other) const;
++    private:
++        friend class StreamActionQueue;
++        const_iterator(const StreamActionQueue* owner, std::size_t index);
++        const StreamActionQueue* owner_ = nullptr;
++        std::size_t index_ = 0;
++        mutable std::optional<StreamOrderAction> row_;
++    };
 +    StreamActionQueue();
 +    ~StreamActionQueue();
 +    StreamActionQueue(const StreamActionQueue&);
@@ -38,12 +62,16 @@ below; the lane deliberately does not fall back to a vector.
 +    StreamActionQueue& operator=(StreamActionQueue&&) noexcept;
 +    void reserve(std::size_t);
 +    std::size_t size() const noexcept;
++    bool empty() const noexcept;
 +    std::uint64_t external_bytes() const noexcept;
 +    void clear() noexcept;
 +    void push_back(const StreamOrderAction&);
 +    StreamOrderAction copy_at(std::size_t) const;
 +    const StreamOrderAction& at(std::size_t) const;
 +    const StreamOrderAction& front() const;
++    const StreamOrderAction& operator[](std::size_t) const;
++    const_iterator begin() const;
++    const_iterator end() const;
 +    void set(std::size_t, const StreamOrderAction&);
 +private:
 +    struct Impl;
@@ -82,57 +110,13 @@ void reserve_effects(StreamActionQueue& values, size_t) {
 
 `src/native_execution_consumer.{hpp,cpp}`, `src/native_c_host.cpp`.
 
-- **Drain lists.** `drain_handles_` and `drain_seeds_` are now
-  `detail::PagedRunRows` (external rows + external index), and
-  `drain_dependency_queue`'s `queue` too. `read_drain_handles` reproduces the
-  three former core selectors (`group_recipients`, `waiting_children`,
-  `bound_close_handles`) row for row in `live()` order: same group/cohort test,
-  same applied-handle exclusion, same `acceptance_ordinal < applied.ordinal`
-  guard, same Wait/BookClose/OpeningClose/OpeningsClose selection. The applied
-  payload is snapshotted before the book is scanned, so an external journal page
-  may evict safely. Bound proved: the scratch is fixed (two small files, one
-  current row); no capacity grows with the book.
-- **Queue order.** The former `std::sort` over the suffix is replaced by an
-  ordered selection scan sorting on `(cause.ordinal, child priority)`, the same
-  two keys and the same `operator<`. Two distinct live requests never share a
-  priority (priority is the request's own queue number or its incarnation) and
-  one cause ordinal names one event, so tied rows are the same item; the scan's
-  order is therefore the sort's observable order. Cost is quadratic time, zero
-  heap; the row allows more time.
-- **Opening read-back.** New `opening_rows()` returns
-  `detail::PagedRunRows<native_order::OpeningObservation>`; selection on
-  `(incarnation, original index)` is exactly the former stable sort, including
-  duplicate and stale handles. `read_openings_into` keeps its owning signature
-  (the still-vector-valued `TargetObservation`/`CommandContext` copy is an
-  explicit non-flat compatibility bridge) and now fills it from `opening_rows`.
-  Row content is `read_opening`'s: `queried_opening`, `queried_cycle`,
-  `current_position`, `has_live_matching_lot` — the same facts
-  `refresh_openings` wrote, so `refresh_openings` is unchanged for its other
-  caller.
-- **Current-book read-back.** `working_request_count()` / `working_request_at()`
-  project one row per call in `live()` order, skipping `hidden_until_armed`
-  exactly as `working_requests()` does; `open_lot_at()` projects one lot and
-  `open_lots()` now iterates it. The owning vectors remain as explicit
-  compatibility APIs.
-- **C v1 snapshots.** `native_c_host.cpp`'s working/open-lot caches are
-  unchanged: `native_c_api.h:1653,1763` promises every copied-out string stays
-  valid until the next count/snapshot call, which a reusable page cannot do.
-  A versioned caller-owned text-buffer export is required before claiming flat
-  C read-back; no C export or sink field was changed here (deviation, stated).
-- **Hash effect: none.** No row representation is folded; `read_opening`'s
-  output is byte-identical to the former `refresh_openings` result.
-- Test: `tests/test_o1e3_readback_pages.cpp`. Reaches 256/1024 lots and working
-  requests and asserts both populations; compares every lot row against a
-  frozen vector implementation copied from the base projection and every
-  working row against `native_working_requests()`; drives duplicate, reversed
-  and stale-run handles to pin the stable tie order; nested reads during the
-  walk prove a borrowed row is not evicted; full-consumption witness. Drain
-  case reaches 2×population live requests, asserts every `CancelledEvent`
-  handle order (parents then their children), that the book emptied, and that
-  the seed population is `population + 1`. Bound: peak live bytes ≤ 16384 and
-  drain scratch ≤ 4096. At base the same test compiles against the frozen
-  header closure (`#else` branch uses `native_open_lots`/`native_working_requests`
-  and the probe's `read_openings`) and the RED is the byte bound.
+- **Drain lists.** `drain_handles_` and `drain_seeds_` are now `detail::PagedRunRows` (external rows + external index), and `drain_dependency_queue`'s `queue` too. `read_drain_handles` reproduces the three former core selectors (`group_recipients`, `waiting_children`, `bound_close_handles`) row for row in `live()` order: same group/cohort test, same applied-handle exclusion, same `acceptance_ordinal < applied.ordinal` guard, same Wait/BookClose/OpeningClose/OpeningsClose selection. The applied payload is snapshotted before the book is scanned, so an external journal page may evict safely. Bound proved: the scratch is fixed (two small files, one current row); no capacity grows with the book.
+- **Queue order.** The former `std::sort` over the suffix is replaced by an ordered selection scan sorting on `(cause.ordinal, child priority)`, the same two keys and the same `operator<`. Two distinct live requests never share a priority (priority is the request's own queue number or its incarnation) and one cause ordinal names one event, so tied rows are the same item; the scan's order is therefore the sort's observable order. Cost is quadratic time, zero heap; the row allows more time.
+- **Opening read-back.** New `opening_rows()` returns `detail::PagedRunRows<native_order::OpeningObservation>`; selection on `(incarnation, original index)` is exactly the former stable sort, including duplicate and stale handles. `read_openings_into` keeps its owning signature (the still-vector-valued `TargetObservation`/`CommandContext` copy is an explicit non-flat compatibility bridge) and now fills it from `opening_rows`. Row content is `read_opening`'s: `queried_opening`, `queried_cycle`, `current_position`, `has_live_matching_lot` — the same facts `refresh_openings` wrote, so `refresh_openings` is unchanged for its other caller.
+- **Current-book read-back.** `working_request_count()` / `working_request_at()` project one row per call in `live()` order, skipping `hidden_until_armed` exactly as `working_requests()` does; `open_lot_at()` projects one lot and `open_lots()` now iterates it. The owning vectors remain as explicit compatibility APIs.
+- **C v1 snapshots.** `native_c_host.cpp`'s working/open-lot caches are unchanged: `native_c_api.h:1653,1763` promises every copied-out string stays valid until the next count/snapshot call, which a reusable page cannot do. A versioned caller-owned text-buffer export is required before claiming flat C read-back; no C export or sink field was changed here (deviation, stated).
+- **Hash effect: none.** No row representation is folded; `read_opening`'s output is byte-identical to the former `refresh_openings` result.
+- Test: `tests/test_o1e3_readback_pages.cpp`. Reaches 256/1024 lots and working requests and asserts both populations; compares every lot row against a frozen vector implementation copied from the base projection and every working row against `native_working_requests()`; drives duplicate, reversed and stale-run handles to pin the stable tie order; nested reads during the walk prove a borrowed row is not evicted; full-consumption witness. Drain case reaches 2×population live requests, asserts every `CancelledEvent` handle order (parents then their children), that the book emptied, and that the seed population is `population + 1`. Bound: peak live bytes ≤ 16384 and drain scratch ≤ 4096. At base the same test compiles against the frozen header closure (`#else` branch uses `native_open_lots`/`native_working_requests` and the probe's `read_openings`) and the RED is the byte bound.
 
 ## E15 — hash ordering workspaces
 
@@ -247,3 +231,15 @@ Input: failed proof `rj-20261021t013508-217bd7`, lane HEAD `b31a5245acf1b64470d6
 | release source-guard-native-versions | Same duplicate outer namespace as debug. | Same codec namespace fix. |
 
 Edit-only handoff: no compiler, build, test, generator, repo script or lab submission ran here; only file reads/edits and git. `git diff --check` passed. Original report paragraphs were rewrapped to retain the brief's line limit. `DONE-fix1` marks the committed repair for resubmission, not a verification PASS; fresh preflight, release/debug, fail-before and corpus proof remain the supervisor's responsibility.
+
+## Fix round 2
+
+Input: `rj-20261021t031834-94c870`, HEAD `060cbe473755ea706847e5c3b54336fba0e5b765`. Read both full build logs and summaries under `/Users/haoliangwen/.local/state/pineforge-top-core/lanes/core-cr150-o1e3b/lab-fail-rj-20261021t031834-94c870/` before editing. That tree's preflight passed (exit 0); debug and release stopped during build, before any CTest or ABI run.
+
+| Stage | Cause | Fix / ownership |
+|---|---|---|
+| debug build, exit 2 (`out_debug_build-debug_ci-logs_build.log`) | `engine_stream.cpp:39` implements `StreamActionQueue`, but `engine.hpp` has no declaration and still holds `std::vector<StreamOrderAction>`; its metadata reads then fail on `copy_at`/`set`. | The exact E17 header/member/copy-reader diff and `reserve_effects` overload above are required. The brief assigns both files to o1-e1; approval to apply that integration here is pending. |
+| release build, exit 2 (`out_release_build-release_ci-logs_build.log`) | The same undeclared queue and vector-method errors in both libraries; the other diagnostics are warnings. | Same required integration; no conditional omission, vector fallback, disabled test or guard change. |
+
+Owned repair: add `empty`, `operator[]` and ordered `begin/end` readers to `engine_stream.cpp`, and extend the exact header request above. Existing `test_bulk_preflight{,_l4d}` / `test_native_fused_settlement` range loops need iteration; `test_resolved_execution` / `test_native_scoped_close` need empty/index reads. An iterator owns one row and reads via `copy_at`, preserving nested-read lifetime without filling the legacy borrow cache. Tests and assertions are unchanged. The existing E13 report was rewrapped to retain the line limit. No published source citation targets `engine_stream.cpp`, so this edit shifts no cited range.
+Not built or tested here; no generator or repository script ran. `DONE-fix2` is an owned-scope handoff, with the header/member/overload integration and fresh lab proof still required; the build failure is not claimed resolved while that integration is absent.

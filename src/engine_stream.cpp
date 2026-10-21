@@ -59,6 +59,32 @@ StreamActionQueue& StreamActionQueue::operator=(const StreamActionQueue& other) 
 StreamActionQueue::StreamActionQueue(StreamActionQueue&&) noexcept = default;
 StreamActionQueue& StreamActionQueue::operator=(StreamActionQueue&&) noexcept = default;
 
+StreamActionQueue::const_iterator::const_iterator(
+        const StreamActionQueue* owner, std::size_t index) : owner_(owner), index_(index) {}
+StreamActionQueue::const_iterator::reference StreamActionQueue::const_iterator::operator*() const {
+    if (!row_) row_.emplace(owner_->copy_at(index_));
+    return *row_;
+}
+StreamActionQueue::const_iterator::pointer StreamActionQueue::const_iterator::operator->() const {
+    return &**this;
+}
+StreamActionQueue::const_iterator& StreamActionQueue::const_iterator::operator++() {
+    ++index_; row_.reset(); return *this;
+}
+StreamActionQueue::const_iterator StreamActionQueue::const_iterator::operator++(int) {
+    auto old = *this; ++*this; return old;
+}
+bool StreamActionQueue::const_iterator::operator==(const const_iterator& other) const {
+    return owner_ == other.owner_ && index_ == other.index_;
+}
+bool StreamActionQueue::const_iterator::operator!=(const const_iterator& other) const {
+    return !(*this == other);
+}
+StreamActionQueue::const_iterator StreamActionQueue::begin() const { return {this, 0}; }
+StreamActionQueue::const_iterator StreamActionQueue::end() const { return {this, size()}; }
+bool StreamActionQueue::empty() const noexcept { return size() == 0; }
+const StreamOrderAction& StreamActionQueue::operator[](std::size_t index) const { return at(index); }
+
 void StreamActionQueue::reserve(std::size_t) {
     if (!impl_) impl_ = std::make_unique<Impl>();
     impl_->rows.prepare();
