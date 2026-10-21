@@ -2341,8 +2341,16 @@ void source::PineStrategyHost::order_global_exit_children(
     std::size_t age_count = 0;
     const auto age_of = [&](std::size_t lot) {
         const auto& keys = adapter_.exit_rank_keys_;
-        return static_cast<std::size_t>(
-            std::find(keys.begin(), keys.end(), trades_[first + lot].entry_id) - keys.begin());
+        const auto found = keys.find(trades_[first + lot].entry_id);
+        return found ? static_cast<std::size_t>(keys.get(*found))
+                     : static_cast<std::size_t>(keys.size());
+    };
+    const auto key_of = [&](std::size_t age) {
+        SourceId id;
+        adapter_.exit_rank_keys_.for_each_inserted([&](SourceId key, std::uint32_t key_age) {
+            if (key_age == age) id = std::move(key);
+        });
+        return id;
     };
     std::vector<SourceId> ids;
     for (std::size_t lot = 0; lot < count; ++lot) {
@@ -2356,7 +2364,7 @@ void source::PineStrategyHost::order_global_exit_children(
         ranks[age] = rank->front();
         for (std::size_t earlier = 0; earlier < age_count; ++earlier) {
             ids.resize(1);
-            ids.push_back(adapter_.exit_rank_keys_[ages[earlier]]);
+            ids.push_back(key_of(ages[earlier]));
             if (!adapter_.global_exit_child_ranks(ids)) return;
         }
         ages[age_count++] = age;
