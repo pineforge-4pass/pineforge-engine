@@ -21,7 +21,7 @@ ownership rule unchanged.
 The proportional rule applies to **cagr**, and reaches calmar through it;
 **sharpe_bar and sortino_bar** keep one formula on every span. The complete
 annualized-field inventory of `compute_equity_stats`
-(`src/engine_metrics.cpp:222`), with exact public paths and reason keys, is
+(`src/engine_metrics.cpp:449`), with exact public paths and reason keys, is
 below. No field other than `cagr` and `calmar` receives an annualization
 reason, and `calmar` carries the same reason as the `cagr` it was computed from.
 
@@ -149,7 +149,7 @@ cases or to any other field; in particular `sharpe_bar` and `sortino_bar` have
 none on any span. If `cagr` took its compounded form,
 `diagnostics.annualization` is absent, whatever `calmar` is.
 
-`_annualization_diagnostics` (`docker/run_json.py:3578`) derives the span from
+`_annualization_diagnostics` (`docker/run_json.py:3973`) derives the span from
 the same first and last curve times. Under one day a finite `cagr` on a positive
 span is enough, since the kernel makes `cagr` null only in the existing
 domains. From one day on the writer repeats the kernel's arithmetic, `(pow(E/E0,

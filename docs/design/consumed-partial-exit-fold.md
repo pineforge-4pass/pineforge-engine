@@ -58,7 +58,7 @@ hash request would put the work on the per-bar path. The scheduler calls
 its quiet carried-callback branch
 (`src/source/pine_scheduler_native.cpp:639`,
 `src/source/pine_scheduler_native.cpp:725`). With recording enabled this
-calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:2772`).
+calls `broker_state_hash` (`src/source/pine_strategy_host.cpp:2805`).
 `on_native_bar` then refreshes the recorded row after the adapter's close
 (`src/source/pine_strategy_host.cpp:613`); its `recording` guard
 (`src/source/pine_strategy_host.cpp:629`) enables
@@ -95,7 +95,7 @@ old sorted live sequence. Dead rows contribute identity. The existing
 257-seed composition law therefore proves equality for every state and
 every incoming seed, including binary keys and prefixes. `fold_sorted`
 still folds the live count and applies this root in O(1)
-(`include/pineforge/detail/id_pair_store.hpp:330`).
+(`include/pineforge/detail/id_pair_store.hpp:332`).
 
 ### Fixed budget and publication
 
