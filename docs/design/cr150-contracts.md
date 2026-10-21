@@ -314,9 +314,9 @@ before any state change: retired rows remain in the sink and cannot be
 recovered from resident storage.
 
 L17c/d and L8c use one report path. `fill_trades_section`
-(`src/engine_report.cpp:112-169`) keeps the logical global count and copies only
+(`src/engine_report.cpp:134-191`) keeps the logical global count and copies only
 open rows for a sink. `report_closed_net_profit`
-(`src/engine_report.cpp:171-184`) starts at `ClosedTradePrefix::pnl` and adds the
+(`src/engine_report.cpp:193-206`) starts at `ClosedTradePrefix::pnl` and adds the
 resident suffix in order. `finish_streamed_trade_metrics`
 (`src/native_execution_consumer.cpp:13594-13616`) finishes copies of the sealed
 accumulators over resident closed rows, then the presented open rows. The
@@ -346,7 +346,7 @@ and held point. It replaces that suffix with the edited window and transfers
 the same scratch owner to the selected metric snapshot. No selected history
 vector or second scratch writer is built on this recorder path.
 
-A live `fill_report` (`src/engine_report.cpp:57-80`) during an open selected
+A live `fill_report` (`src/engine_report.cpp:68-91`) during an open selected
 kernel-recorder sink run refuses with a coded `std::logic_error`,
 `report_shape_unsupported` and `{"shape":"live_selected_sink"}`. It clears the
 output before allocating report rows, calling presentation or staging a point.

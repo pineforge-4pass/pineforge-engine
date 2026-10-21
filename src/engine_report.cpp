@@ -33,9 +33,20 @@ void BacktestEngine::trace(const std::string& name, double value) {
     TraceEntryC e;
     e.timestamp = current_bar_.timestamp;
     e.bar_index = bar_index_;
-    e.name_id = intern_trace_name(name);
+    e.name_id = 0;
     e.value = value;
-    if (!stream_report_sink_trace(e)) trace_buffer_.push_back(e);
+    // A sink carries the name text in each X record, so the resident interned
+    // name table is not consulted (R16: streaming is O(1) in distinct names).
+    if (stream_report_sink_trace(name, e)) {
+        fold_trace_leaf(sequence_witness_.traces, e.timestamp, e.bar_index, name, value);
+        return;
+    }
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        fold_trace_leaf(sequence_witness_.traces, e.timestamp, e.bar_index, name, value);
+        return;
+    }
+    e.name_id = intern_trace_name(name);
+    trace_buffer_.push_back(e);
 }
 
 
@@ -77,6 +88,11 @@ void BacktestEngine::fill_report(ReportC* out) const {
             {{"shape", "live_selected_sink"}},
             "native selected report: a live sink report is unavailable before capture");
     }
+    // Finalize the optional sequences the run accumulated. Both calls are
+    // idempotent: the summary witness counts each row/hash once, and the sink
+    // path has already streamed and retired them.
+    fold_pending_hashes_into_witness();
+    fold_current_output_row_witness();
     fill_trades_section(out);
 
     out->input_bars_processed = diag_input_bars_processed_;
@@ -96,11 +112,17 @@ void BacktestEngine::fill_report(ReportC* out) const {
 
     // ABI v4 task 6: per-script-bar broker-state hash, empty unless
     // recording was enabled via set_broker_state_hash_recording. Owns the
-    // allocation; freed by free_report.
-    const int64_t hn = (int64_t)broker_state_hashes_.size();
-    out->broker_state_hash_len = hn;
-    out->broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
-    if (hn > 0) std::copy(broker_state_hashes_.begin(), broker_state_hashes_.end(), out->broker_state_hash);
+    // allocation; freed by free_report. SummaryOnly keeps the fixed ordered
+    // witness and publishes no owning array (R14).
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        out->broker_state_hash_len = 0;
+        out->broker_state_hash = nullptr;
+    } else {
+        const int64_t hn = (int64_t)broker_state_hashes_.size();
+        out->broker_state_hash_len = hn;
+        out->broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
+        if (hn > 0) std::copy(broker_state_hashes_.begin(), broker_state_hashes_.end(), out->broker_state_hash);
+    }
     finish_report_sink(out);
 }
 
@@ -388,6 +410,15 @@ void BacktestEngine::fill_security_diag_section(ReportC* out) const {
 // window because no trace() calls run after fill_report). Owns both
 // allocations; freed by ``free_report``.
 void BacktestEngine::fill_trace_section(ReportC* out) const {
+    // SummaryOnly keeps the ordered witness, not the sequence (R15). A sink
+    // has already streamed every X record, so no resident array is owed.
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        out->trace = nullptr;
+        out->trace_len = 0;
+        out->trace_names = nullptr;
+        out->trace_names_len = 0;
+        return;
+    }
     int trace_n = (int)trace_buffer_.size();
     out->trace_len = trace_n;
     if (trace_n > 0) {
@@ -533,6 +564,11 @@ void BacktestEngine::clear_output_record() {
     output_sequence_ = 0;
     output_row_seq_base_ = 0;
     output_cleared_sequence_ = 0;
+    sequence_witness_.rows = report_sequence::SequenceWitness{};
+    sequence_witness_.events = report_sequence::SequenceWitness{};
+    sequence_row_folded_ = false;
+    output_row_witness_base_ = report_sequence::SequenceWitness{};
+    output_event_row_witness_ = report_sequence::SequenceWitness{};
     std::fill(output_ordinals_.begin(), output_ordinals_.end(), 0u);
     std::fill(output_constants_.begin(), output_constants_.end(), kUnwrittenOutput);
     std::fill(output_constant_written_.begin(), output_constant_written_.end(), uint8_t{0});
@@ -588,12 +624,17 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
     if (output_open_ms_.empty() || open_ms > output_open_ms_.back()) {
         if (report_sink_output_row() + 1 >= INT_MAX)
             refuse_output_limit("too_many_rows", "outputs: the row count is at its limit");
+        // Closing the previous row: fold it into the ordered witness and drop
+        // it (summary), or stream and drop it (sink). R17 keeps one row.
+        finalize_summary_output_row();
         retire_report_sink_output_row();
         output_series_.resize(output_series_.size() + slots, kUnwrittenOutput);
         output_open_ms_.push_back(open_ms);
         output_close_ms_.push_back(close_ms);
         std::fill(output_ordinals_.begin(), output_ordinals_.end(), 0u);
         output_row_seq_base_ = output_sequence_;
+        output_row_witness_base_ = sequence_witness_.rows;
+        output_event_row_witness_ = sequence_witness_.events;
         return;
     }
     if (open_ms < output_open_ms_.back()) {
@@ -607,6 +648,19 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
             RunFailureCode::outputs_rejected, {{"reason", "recalculated_after_clear"}},
             "outputs: bar " + std::to_string(report_sink_output_row())
                 + " was recalculated after its events were cleared");
+    }
+    // A recalculation retracts this row's provisional events: the summary
+    // witness returns to its value when the row opened (O(1) rollback).
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
+        && !report_sink_state_.writer) {
+        sequence_witness_.events = output_event_row_witness_;
+        // A report read may have folded this still-open row (a live stream
+        // snapshot). Its values are about to change, so retire that fold and
+        // let the next finalization fold the recalculated row.
+        if (sequence_row_folded_) {
+            sequence_witness_.rows = output_row_witness_base_;
+            sequence_row_folded_ = false;
+        }
     }
     std::fill(output_series_.end() - static_cast<std::ptrdiff_t>(slots), output_series_.end(),
               kUnwrittenOutput);
@@ -639,8 +693,6 @@ void BacktestEngine::record_output_event(int output, double value, const std::st
     if (output_open_ms_.empty()) refuse_output("output_event with no open bar");
     if (output < 0 || output >= outputs_count_)
         refuse_output("output " + std::to_string(output) + " is out of range");
-    if (output_events_.size() >= static_cast<size_t>(INT_MAX))
-        refuse_output_limit("too_many_events", "outputs: the event queue is full");
     if (output_sequence_ == std::numeric_limits<uint64_t>::max())
         refuse_output("event sequence overflow");
     OutputEvent event;
@@ -662,6 +714,18 @@ void BacktestEngine::record_output_event(int output, double value, const std::st
         event.message = *message;
         event.message_hash64 = output_message_hash(*message);
     }
+    // SummaryOnly publishes no event array (R18): the record is folded into
+    // the ordered witness at once, and a same-row recalculation restores the
+    // witness snapshot, so the fixed state does not grow with events.
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
+        && !report_sink_state_.writer) {
+        fold_event_leaf(sequence_witness_.events, event);
+        output_sequence_ = event.sequence;
+        ++output_ordinals_[static_cast<size_t>(output)];
+        return;
+    }
+    if (output_events_.size() >= static_cast<size_t>(INT_MAX))
+        refuse_output_limit("too_many_events", "outputs: the event queue is full");
     output_events_.push_back(std::move(event));
     output_sequence_ = output_events_.back().sequence;
     ++output_ordinals_[static_cast<size_t>(output)];
@@ -718,7 +782,15 @@ const BacktestEngine::OutputEvent* BacktestEngine::output_event_at(int index) co
 }
 
 void BacktestEngine::output_events_clear() {
-    if (output_events_.empty()) return;
+    if (output_events_.empty()) {
+        // SummaryOnly has no queue: the folded witness already holds the
+        // cleared events, exactly as the sink published them before clearing.
+        if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
+            && !report_sink_state_.writer) {
+            output_cleared_sequence_ = std::max(output_cleared_sequence_, output_sequence_);
+        }
+        return;
+    }
     write_report_sink_events();
     output_cleared_sequence_ = std::max(output_cleared_sequence_, output_events_.back().sequence);
     output_events_.clear();
@@ -870,6 +942,9 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
 
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
+    // A begin owns a fresh run: the optional-sequence witnesses start empty
+    // beside the arrays the run resets.
+    reset_optional_sequence_witness();
     sink.writer.reset();
     sink.equity_scratch.reset();
     sink.equity_tail_stored = false;
@@ -1163,12 +1238,16 @@ void BacktestEngine::report_sink_record(Write write) const {
     }
 }
 
-bool BacktestEngine::stream_report_sink_trace(const TraceEntryC& entry) {
+bool BacktestEngine::stream_report_sink_trace(const std::string& name,
+                                              const TraceEntryC& entry) {
     auto& sink = report_sink_state_;
     if (!sink.writer || sink.receipt.complete) return false;
-    const pf_trace_entry_t wire{entry.timestamp, entry.bar_index, entry.name_id, entry.value};
+    // The X record carries the name text itself; name_id is report-array
+    // provenance and this streaming path keeps no resident name table (R16).
+    // The caller's name view outlives the write.
+    const pf_trace_entry_t wire{entry.timestamp, entry.bar_index, 0, entry.value};
     report_sink_record([&] {
-        sink.writer->write_x(wire, trace_names_[static_cast<std::size_t>(entry.name_id)]);
+        sink.writer->write_x(wire, name);
         ++sink.receipt.count_x;
     });
     return true;
@@ -1207,6 +1286,7 @@ void BacktestEngine::write_report_sink_events() const {
             wire.message = event.has_message ? event.message.c_str() : nullptr;
             sink.writer->write_v(wire, event.message);
             ++sink.receipt.count_v;
+            fold_event_leaf(sequence_witness_.events, event);
         }
     });
 }
@@ -1219,6 +1299,8 @@ void BacktestEngine::write_report_sink_output_row() const {
         sink.writer->write_o(sink.output_base, output_open_ms_.back(), output_close_ms_.back(),
                              values, outputs_slots_);
         ++sink.receipt.count_o;
+        fold_row_leaf(sequence_witness_.rows, sink.output_base, output_open_ms_.back(),
+                      output_close_ms_.back(), values, outputs_slots_);
         write_report_sink_events();
     });
 }
@@ -1239,6 +1321,9 @@ void BacktestEngine::retire_report_sink_output_row() {
 void BacktestEngine::write_report_sink_hashes() const {
     auto& sink = report_sink_state_;
     if (!sink.writer || sink.receipt.complete) return;
+    // The witness covers exactly the leaves this call writes, in order, and a
+    // repeated call after fill_report's fold adds nothing twice.
+    fold_pending_hashes_into_witness();
     report_sink_record([&] {
         for (const auto hash : broker_state_hashes_) {
             sink.writer->write_h(hash);
@@ -1249,11 +1334,173 @@ void BacktestEngine::write_report_sink_hashes() const {
 
 void BacktestEngine::retire_report_sink_hashes() {
     auto& sink = report_sink_state_;
-    if (!sink.writer || sink.receipt.complete) return;
-    // The previous point is now final, including any Pine terminal rewrite.
-    // Its successor is appended by the existing native or marking-host path.
-    write_report_sink_hashes();
-    broker_state_hashes_.clear();
+    if (sink.writer && !sink.receipt.complete) {
+        // The previous point is now final, including any Pine terminal
+        // rewrite. Its successor is appended by the existing native or
+        // marking-host path.
+        write_report_sink_hashes();
+        broker_state_hashes_.clear();
+        sequence_hash_folded_ = 0;
+        return;
+    }
+    if (!sink.writer && optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        // No stream requested: fold the finalized leaf into the ordered
+        // witness and retire it, so the recorded vector stays one leaf deep.
+        fold_pending_hashes_into_witness();
+        broker_state_hashes_.clear();
+        sequence_hash_folded_ = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CR-150 o1w-seq (R14--R18): the fixed ordered witnesses.
+//
+// Every fold below is over the record's semantic fields, in record order, on
+// an explicit little-endian byte spelling. Nothing here reads the report mode
+// or an array, so the same run folds the same digest whether the sequence was
+// streamed to a sink or consumed as a summary. The witnesses are the only
+// state the summary mode adds; each is O(1).
+namespace {
+
+// FNV-1a's prime over an explicit little-endian spelling. The digest starts at
+// zero because a witness is an opaque ordered equality check, not a hash of
+// independent bytes.
+constexpr std::uint64_t kSequenceDigestPrime = 1099511628211ULL;
+
+void sequence_fold_byte(std::uint64_t& digest, std::uint8_t byte) {
+    digest ^= byte;
+    digest *= kSequenceDigestPrime;
+}
+
+void sequence_fold_u64(std::uint64_t& digest, std::uint64_t value) {
+    for (int shift = 0; shift < 64; shift += 8)
+        sequence_fold_byte(digest, static_cast<std::uint8_t>(value >> shift));
+}
+
+void sequence_fold_i64(std::uint64_t& digest, std::int64_t value) {
+    sequence_fold_u64(digest, static_cast<std::uint64_t>(value));
+}
+
+void sequence_fold_u32(std::uint64_t& digest, std::uint32_t value) {
+    sequence_fold_u64(digest, value);
+}
+
+void sequence_fold_i32(std::uint64_t& digest, std::int32_t value) {
+    sequence_fold_u64(digest, static_cast<std::uint32_t>(value));
+}
+
+void sequence_fold_f64(std::uint64_t& digest, double value) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof bits);
+    sequence_fold_u64(digest, bits);
+}
+
+void sequence_fold_text(std::uint64_t& digest, const std::string& text) {
+    sequence_fold_u64(digest, static_cast<std::uint64_t>(text.size()));
+    for (const unsigned char byte : text) sequence_fold_byte(digest, byte);
+}
+
+}  // namespace
+
+void BacktestEngine::reset_optional_sequence_witness() {
+    sequence_witness_ = report_sequence::OptionalSequenceSummary{};
+    sequence_hash_folded_ = 0;
+    sequence_row_folded_ = false;
+    output_row_witness_base_ = report_sequence::SequenceWitness{};
+    output_event_row_witness_ = report_sequence::SequenceWitness{};
+}
+
+void BacktestEngine::fold_hash_leaf(report_sequence::SequenceWitness& witness,
+                                    std::uint64_t hash) {
+    ++witness.count;
+    sequence_fold_u64(witness.digest, hash);
+}
+
+void BacktestEngine::fold_trace_leaf(report_sequence::SequenceWitness& witness,
+                                     std::int64_t timestamp, std::int32_t bar_index,
+                                     const std::string& name, double value) {
+    ++witness.count;
+    sequence_fold_i64(witness.digest, timestamp);
+    sequence_fold_i32(witness.digest, bar_index);
+    sequence_fold_text(witness.digest, name);
+    sequence_fold_f64(witness.digest, value);
+}
+
+void BacktestEngine::fold_row_leaf(report_sequence::SequenceWitness& witness,
+                                   std::int64_t row, std::int64_t open_ms,
+                                   std::int64_t close_ms, const double* values,
+                                   std::int64_t count) {
+    ++witness.count;
+    sequence_fold_i64(witness.digest, row);
+    sequence_fold_i64(witness.digest, open_ms);
+    sequence_fold_i64(witness.digest, close_ms);
+    sequence_fold_i64(witness.digest, count);
+    for (std::int64_t i = 0; i < count; ++i)
+        sequence_fold_f64(witness.digest, values[i]);
+}
+
+void BacktestEngine::fold_event_leaf(report_sequence::SequenceWitness& witness,
+                                     const OutputEvent& event) {
+    ++witness.count;
+    sequence_fold_u64(witness.digest, event.sequence);
+    sequence_fold_i32(witness.digest, event.output_index);
+    sequence_fold_i32(witness.digest, event.bar_index);
+    sequence_fold_i64(witness.digest, event.bar_open_ms);
+    sequence_fold_i64(witness.digest, event.bar_close_ms);
+    sequence_fold_u32(witness.digest, event.ordinal_in_bar);
+    sequence_fold_u32(witness.digest, event.phase);
+    sequence_fold_u32(witness.digest, event.confirmed);
+    sequence_fold_f64(witness.digest, event.value);
+    sequence_fold_u64(witness.digest, event.message_hash64);
+    sequence_fold_u32(witness.digest, event.has_message ? 1u : 0u);
+    if (event.has_message) sequence_fold_text(witness.digest, event.message);
+}
+
+void BacktestEngine::fold_pending_hashes_into_witness() const {
+    for (std::size_t i = sequence_hash_folded_; i < broker_state_hashes_.size(); ++i)
+        fold_hash_leaf(sequence_witness_.hashes, broker_state_hashes_[i]);
+    sequence_hash_folded_ = broker_state_hashes_.size();
+}
+
+void BacktestEngine::fold_current_output_row_witness() const {
+    if (optional_report_mode_ != report_sequence::ReportMode::SummaryOnly
+        || report_sink_state_.writer || output_open_ms_.empty() || sequence_row_folded_) {
+        return;
+    }
+    fold_row_leaf(sequence_witness_.rows,
+                  static_cast<std::int64_t>(sequence_witness_.rows.count),
+                  output_open_ms_.back(), output_close_ms_.back(),
+                  output_series_.empty() ? nullptr : output_series_.data(),
+                  static_cast<std::int64_t>(outputs_slots_));
+    sequence_row_folded_ = true;
+}
+
+void BacktestEngine::finalize_summary_output_row() {
+    if (optional_report_mode_ != report_sequence::ReportMode::SummaryOnly
+        || report_sink_state_.writer) {
+        return;
+    }
+    fold_current_output_row_witness();
+    output_series_.clear();
+    output_open_ms_.clear();
+    output_close_ms_.clear();
+    output_events_.clear();
+    sequence_row_folded_ = false;
+}
+
+int BacktestEngine::set_optional_report_mode(report_sequence::ReportMode mode) {
+    // A mode is run configuration: it cannot change under a live run, stream
+    // or sink generation, and it starts a fresh witness.
+    if (report_sink_setter_status() != 0) return -1;
+    optional_report_mode_ = mode;
+    reset_optional_sequence_witness();
+    return 0;
+}
+
+report_sequence::OptionalSequenceSummary BacktestEngine::optional_sequence_summary() const {
+    fold_pending_hashes_into_witness();
+    fold_current_output_row_witness();
+    return sequence_witness_;
 }
 
 } // namespace pineforge

@@ -11764,7 +11764,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         if (!certified)
             completed_entry_units = detail::replay_position_tail(
                 host.closed_trade_count(), base,
-                [&](std::size_t index) -> const Trade& {
+                [&](std::size_t index) -> Trade {
                     return host.get_trade(static_cast<int>(index));
                 }, position_tail_spill_.get(), position_open_script_bar_,
                 include_completed, from_entry, summary.work);
@@ -28173,7 +28173,7 @@ void PineExecutionAdapter::observe_position_tail_rows() {
     }
     const auto& host = require_host();
     position_tail_summary_->observe(pine->trades_.base(), host.closed_trade_count(),
-        [&](std::size_t index) -> const Trade& { return host.get_trade(static_cast<int>(index)); });
+        [&](std::size_t index) -> Trade { return host.get_trade(static_cast<int>(index)); });
 }
 
 void PineExecutionAdapter::begin_position_tail_summary() {
@@ -28189,7 +28189,7 @@ void PineExecutionAdapter::begin_position_tail_summary() {
     const auto& host = require_host();
     position_tail_summary_->begin_position(position_open_script_bar_, pine->trades_.base(),
         host.closed_trade_count(),
-        [&](std::size_t index) -> const Trade& { return host.get_trade(static_cast<int>(index)); });
+        [&](std::size_t index) -> Trade { return host.get_trade(static_cast<int>(index)); });
     const bool is_long = detail::run_position(require_host()).signed_units > 0.0;
     for (const auto& cohort : cohorts_by_id_) {
         if (cohort.second.live_units_by_origin.empty()) continue;

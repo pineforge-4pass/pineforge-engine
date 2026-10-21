@@ -35,8 +35,8 @@
 #include "magnifier.hpp"
 #include "session_time.hpp"
 #include <pineforge/trade_ledger.hpp>
-// Suppress per-strategy function declarations (strategy_create, run_backtest,
-// etc.) whose pf_*_t parameter types conflict with the internal C++ types
+#include <pineforge/report_sequence.hpp>
+// Suppress per-strategy function declarations (strategy_create, run_backtest, etc.) whose pf_*_t parameter types conflict with the internal C++ types
 // used in codegen-emitted extern "C" blocks that include this header.
 // NOTE: this macro leaks into every TU that includes engine.hpp; include
 // pineforge.h FIRST in any TU that needs the per-strategy declarations
@@ -2532,7 +2532,7 @@ private:
     void write_report_sink_trades(const TradeC* open_rows, int count) const;
     void fill_report_sink_metrics_section(ReportC* out) const;
     template<class Write> void report_sink_record(Write write) const;
-    bool stream_report_sink_trace(const TraceEntryC& entry);
+    bool stream_report_sink_trace(const std::string& name, const TraceEntryC& entry);
     void reset_report_sink_outputs();
     std::int64_t report_sink_output_row() const;
     void write_report_sink_output_row() const;
@@ -2622,6 +2622,41 @@ protected:
     // A sink hook receives only range-end rows. Re-summing an edited tail
     // starts with this closed-row left fold, never a separately summed tail.
     double report_closed_net_profit() const;
+
+    // CR-150 o1w-seq (R14--R18): optional sequence retention. The default is
+    // the historical owning-array path, byte-identical to before. SummaryOnly
+    // keeps one fixed ordered witness per sequence instead, so trial memory
+    // does not grow with the bar, trace, row or event population. A report
+    // sink streams the complete sequence externally in either mode.
+public:
+    int set_optional_report_mode(report_sequence::ReportMode mode);
+    report_sequence::OptionalSequenceSummary optional_sequence_summary() const;
+
+private:
+    void reset_optional_sequence_witness();
+    void fold_pending_hashes_into_witness() const;
+    void fold_current_output_row_witness() const;
+    void finalize_summary_output_row();
+    static void fold_hash_leaf(report_sequence::SequenceWitness& witness,
+                               std::uint64_t hash);
+    static void fold_trace_leaf(report_sequence::SequenceWitness& witness,
+                                std::int64_t timestamp, std::int32_t bar_index,
+                                const std::string& name, double value);
+    static void fold_row_leaf(report_sequence::SequenceWitness& witness,
+                              std::int64_t row, std::int64_t open_ms,
+                              std::int64_t close_ms, const double* values,
+                              std::int64_t count);
+    static void fold_event_leaf(report_sequence::SequenceWitness& witness,
+                                const OutputEvent& event);
+    report_sequence::ReportMode optional_report_mode_ =
+        report_sequence::ReportMode::LegacyArrays;
+    // The sink writers and fill_report are const; the witness is the only
+    // state they add, and no reader observes it as part of the run's report.
+    mutable report_sequence::OptionalSequenceSummary sequence_witness_;
+    mutable std::size_t sequence_hash_folded_ = 0;
+    mutable bool sequence_row_folded_ = false;
+    report_sequence::SequenceWitness output_row_witness_base_;
+    report_sequence::SequenceWitness output_event_row_witness_;
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
