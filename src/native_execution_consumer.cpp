@@ -9066,8 +9066,10 @@ void NativeExecutionConsumer::record_report_point(
 }
 // The generic mark-to-market producer both report shapes share. One row per
 // open physical lot at `mark_price`, built by the same non-mutating builder a
-// full close uses and appended to the engine's range-end row space; the summed
-// NET row P&L comes back for a caller that re-derives a report figure from it.
+// full close uses and pinned to the engine's terminal mark descriptor; the
+// summed NET row P&L comes back for a caller that re-derives a report figure
+// from it. The rows themselves are rebuilt by each reader one at a time, so
+// this producer retains no per-lot row or string.
 //
 // Nothing here is a policy: the caller decides when to mark, what to clear
 // first and what (if anything) downstream of the rows it re-marks. The
@@ -9079,24 +9081,23 @@ double NativeExecutionConsumer::append_open_position_report_rows(
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
         int interval_index, double account_fx) const {
     const bool was_long = engine.position_side_ == PositionSide::LONG;
+    // O1 R12: pin the terminal mark and produce the rows one at a time. A row
+    // is still built here, in lot order, for the finite-row guard and the
+    // returned net mark -- the same builder, context and left fold as before
+    // -- but nothing per lot is retained. Report construction rebuilds each
+    // row from the same frozen mark when it needs the value or the fold.
+    // A second mark (without an intervening clear) replaces the generation,
+    // exactly as clear+append did at both call sites.
+    engine.range_end_trades_.begin(mark_price, mark_time_ms, interval_index,
+                                   account_fx, was_long, engine.pyramid_entries_.size());
     double marked = 0.0;
-    for (const auto& lot : engine.pyramid_entries_) {
-        execution::PhysicalExecutionContext context;
-        context.effective_time_ms = mark_time_ms;
-        context.interval_index = interval_index;
-        context.account_fx = account_fx;
-        if (!std::isnan(engine.fold_exit_trail_peak_))
-            context.preceding_exit_trail_peak = engine.fold_exit_trail_peak_;
-        Trade row = engine.build_close_trade_with_costs(
-            lot, lot.qty, mark_price, was_long,
-            engine.allocated_entry_commission(lot, lot.qty),
-            engine.calc_commission_at(mark_price, lot.qty, account_fx), context);
+    for (std::size_t index = 0; index < engine.pyramid_entries_.size(); ++index) {
+        Trade row = engine.range_end_trades_.row(index);
         if (!internal::closed_row_all_finite(row))
             throw std::logic_error("non-finite open-position report row");
-        row.open_at_end = true;
         marked += row.pnl;
-        engine.range_end_trades_.push_back(std::move(row));
     }
+    engine.range_end_trades_.set_pnl(marked);
     return marked;
 }
 
@@ -13642,7 +13643,19 @@ void NativeExecutionConsumer::finish_streamed_trade_metrics(
         shorts.fold(row);
     };
     for (const auto& row : engine.trades_) fold(internal::report_trade_row(row));
-    for (int index = 0; index < count; ++index) fold(open_rows[index]);
+    if (open_rows != nullptr || engine.report_mode_ == ReportMode::FULL) {
+        // FULL folds exactly the presented rows; a selected capture may
+        // deliberately publish none of them even when lots are open.
+        for (int index = 0; index < count; ++index) fold(open_rows[index]);
+    } else {
+        // O1 R12/R13: summary/streamed capture keeps no open-row array. The
+        // terminal rows are rebuilt one at a time from their lots, in the same
+        // report order, and folded once each.
+        if (count != 0)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "streamed trade metrics lost their open rows");
+        for (const auto& row : engine.range_end_trades_) fold(internal::report_trade_row(row));
+    }
     out->metrics.all = all.finish();
     out->metrics.longs = longs.finish();
     out->metrics.shorts = shorts.finish();
