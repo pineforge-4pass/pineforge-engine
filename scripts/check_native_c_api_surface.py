@@ -207,7 +207,7 @@ C_V1_EXCLUSIONS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {
     "closed_entry_comment": ("engine.hpp", "std::string entry_comment;", (
         ("@declarations", r"\bstrategy_\w*entry_comment\w*"),
         ("pf_trade_s", r"\b\w*comment\w*"))),
-    "closed_rows_in_place": ("engine.hpp", "const Trade& closed_trade(std::size_t i) const", (
+    "closed_rows_in_place": ("engine.hpp", "Trade closed_trade(std::size_t i) const", (
         ("@declarations", r"\bstrategy_(?:native_)?(?:closed_trade_count|closed_trade_get"
                           r"|closed_trade_row|report_trade)\w*"),)),
     "working_definition": ("native_order.hpp", "std::optional<double> best_seed", (

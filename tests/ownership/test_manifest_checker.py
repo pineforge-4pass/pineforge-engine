@@ -16,6 +16,7 @@ import argparse
 import ast
 import copy
 import ctypes
+import importlib.util
 import json
 import math
 import re
@@ -30,6 +31,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "scripts/check_selected_window_ownership.py"
 MANIFEST = ROOT / "tests/ownership/manifest.v1.json"
+SPEC = importlib.util.spec_from_file_location("selected_window_ownership", CHECKER)
+ownership = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = ownership
+SPEC.loader.exec_module(ownership)
 
 
 def emitted_schema(root: Path) -> dict:
@@ -459,6 +464,44 @@ class ManifestCheckerTests(unittest.TestCase):
 
     def test_d4_independent_reconstruction_matches_manifest(self):
         self.assertEqual(manifest_schema(self.doc), emitted_schema(ROOT))
+
+    def scalar_fixture(self, source):
+        assignment, = ast.parse(source).body
+        self.assertIsInstance(assignment, ast.Assign)
+        target, = assignment.targets
+        self.assertIsInstance(target, ast.Name)
+        self.assertEqual(target.id, "p")
+        return ownership.scalar_type(ast.Name(id="p", ctx=ast.Load()), {"p": assignment.value})
+
+    def test_d4_report_array_scalar_index_is_accepted(self):
+        for source in ("p = report.equity_curve[i]", "p = report.equity_curve[0]",
+                       "p = report.trades[i]", "p = report.trades[0]"):
+            with self.subTest(source=source):
+                self.assertEqual(self.scalar_fixture(source), {"kind": "number", "null_allowed": False})
+
+    def test_d4_unrecognized_report_array_index_is_rejected(self):
+        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
+                         {"kind": "number", "null_allowed": False})
+        for expression in ("report.unknown[i]", "other.equity_curve[i]",
+                           "report.other.equity_curve[i]", "report.equity_curve.values[i]"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ownership.InputError) as raised:
+                    self.scalar_fixture("p = " + expression)
+                self.assertEqual(str(raised.exception),
+                                 "unrecognized scalar producer expression: " + expression)
+
+    def test_d4_report_array_slice_is_rejected(self):
+        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
+                         {"kind": "number", "null_allowed": False})
+        for expression in ("report.equity_curve[i:j]", "report.equity_curve[:]",
+                           "report.equity_curve[True]", "report.equity_curve[1.0]",
+                           "report.equity_curve[i + 1]", "report.equity_curve[index()]",
+                           "report.equity_curve[i, j]"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ownership.InputError) as raised:
+                    self.scalar_fixture("p = " + expression)
+                self.assertEqual(str(raised.exception),
+                                 "unrecognized scalar producer expression: " + expression)
 
     def test_d4_manifest_leaf_removed_is_rejected(self):
         # Killer for D4-comparison-disabled; checks this specific diagnostic.
