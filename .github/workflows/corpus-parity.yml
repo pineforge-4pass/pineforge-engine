@@ -19,9 +19,9 @@ name: Corpus parity
 # probe over a 221861-bar feed -- took 1792 s, with 94 s more to judge the
 # result. The dominant term is single-core serial work, which a runner's extra
 # cores do not shorten, so the whole population cannot be held to the ~25 min
-# a required pull-request check is budgeted for. It therefore runs nightly and
-# on demand, plus on any pull request that touches the pin or the parity
-# tooling itself.
+# a required pull-request check is budgeted for. Full parity therefore runs
+# nightly (01:30 UTC), on `workflow_dispatch`, and on the full-event pipeline.
+# The pull-request early signal is the subset that `ci.yml` calls.
 #
 # PR EARLY SIGNAL. The `corpus-parity-subset` job below
 # re-runs the 54 probes scripts/corpus_parity_subset.txt names -- in parallel,
@@ -47,18 +47,6 @@ on:
         description: 'full (all 312 probes) or subset (PR early signal)'
         type: string
         default: full
-  pull_request:
-    branches: [main]
-    paths:
-      - 'corpus'
-      - '.gitmodules'
-      - 'scripts/check_corpus_parity.sh'
-      - 'scripts/corpus_parity_subset.txt'
-      - 'scripts/run_corpus.sh'
-      - 'scripts/run_strategy.py'
-      - 'scripts/verify_corpus.py'
-      - 'scripts/derive_corpus_feeds.py'
-      - '.github/workflows/corpus-parity.yml'
 
 permissions:
   contents: read
@@ -146,11 +134,12 @@ jobs:
           esac
           echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
 
-  # The whole population. Nightly, on demand, and on a pull request that
-  # touches the pin or the parity tooling. Never reached by `mode: subset`.
+  # The whole population. Nightly (01:30 UTC), on `workflow_dispatch`, and on
+  # the full-event pipeline. Pull requests use the subset that `ci.yml` calls.
+  # Never reached by `mode: subset` or a pull-request caller.
   corpus-parity:
     needs: [authz]
-    if: inputs.mode != 'subset'
+    if: inputs.mode != 'subset' && github.event_name != 'pull_request'
     runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'

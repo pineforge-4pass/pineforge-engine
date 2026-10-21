@@ -509,7 +509,8 @@ do not shorten.
 
 So the whole population cannot be held to the ~25 min pull-request CI target,
 and it runs nightly (01:30 UTC), on `workflow_dispatch`,
-and on pull requests that touch the corpus pin or the parity tooling. ccache
+and on the full-event pipeline; a pull request's early signal is the subset
+that `ci.yml` calls. ccache
 (2 GB, keyed per commit with a prefix restore) makes a re-run at an unchanged
 pin almost entirely cache hits; the Git-LFS chart feed (~176 MB, one
 full-history 1m CSV) is pulled once per job.

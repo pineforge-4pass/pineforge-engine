@@ -807,6 +807,26 @@ def gated_workflow_findings(workflow: str, name: str) -> list[str]:
     return findings
 
 
+def corpus_parity_trigger_findings(parity: str) -> list[str]:
+    """Keep full parity off pull requests, including reusable-workflow callers."""
+    findings = []
+    key = _ON_KEY.search(parity)
+    events = parity[key.end():] if key else ''
+    after = re.search(r'^[^\s#]', events, re.MULTILINE)
+    events = events[:after.start()] if after else events
+    # _events ignores comments; refuse commented-out trigger keys as well.
+    if (_events(parity) != {'schedule', 'workflow_dispatch', 'workflow_call'}
+            or re.search(r'(?m)^[ \t]*#[ \t]*[\'"]?[a-z_]+[\'"]?[ \t]*:', events)):
+        findings.append('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+                        'and workflow_call without commented-out triggers')
+    # Compare canonically: a substring test would accept `... || true`.
+    conditions = _job_values(_jobs(parity).get('corpus-parity', ''), 'if')
+    canonical = [re.sub(r'\s+', '', condition) for condition in conditions]
+    if canonical != ["inputs.mode!='subset'&&github.event_name!='pull_request'"]:
+        findings.append('corpus-parity.yml job corpus-parity must exclude pull_request callers')
+    return findings
+
+
 def native_workflow_findings(native: str, curl_action: str | None = None) -> list[str]:
     findings = authz_workflow_findings(native, 'native-live.yml', 'native-live-gate')
     if _events(native) != {'workflow_call', 'workflow_dispatch'}:
@@ -924,6 +944,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     findings += authz_workflow_findings(ci, 'ci.yml', 'build-gate')
     findings += native_workflow_findings(native, curl_action)
     findings += gated_workflow_findings(parity, 'corpus-parity.yml')
+    findings += corpus_parity_trigger_findings(parity)
     findings += gated_workflow_findings(docs, 'docs.yml')
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''

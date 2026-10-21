@@ -746,6 +746,97 @@ class PreflightFailures(unittest.TestCase):
             findings = self.mutated_file_findings(0, job, f'mode: {mode}', f'mode: {wrong}')
             self.assertIn(f'{job} must call corpus-parity.yml with mode {mode}', findings)
 
+    def test_corpus_parity_accepts_unmodified_triggers_and_full_job_guard(self):
+        sources = self.ci_sources()
+        self.assertEqual(ci_preflight.corpus_parity_trigger_findings(sources[4]), [])
+        self.assertEqual(ci_workflow_findings(*sources, others=self.other_sources()), [])
+
+    def test_corpus_parity_rejects_readded_pull_request_trigger(self):
+        sources = self.ci_sources()
+        original = sources[4]
+        trigger = ("  pull_request:\n"
+                   "    branches: [main]\n"
+                   "    paths:\n"
+                   "      - 'corpus'\n")
+        sources[4] = original.replace('on:\n', 'on:\n' + trigger, 1)
+        self.assertNotEqual(sources[4], original)
+        self.assertIn(trigger, sources[4])
+        self.assertIn('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+                      'and workflow_call without commented-out triggers',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_corpus_parity_rejects_removed_full_job_pull_request_guard(self):
+        sources = self.ci_sources()
+        original = sources[4]
+        sources[4] = in_job(original, 'corpus-parity',
+                            " && github.event_name != 'pull_request'", '')
+        self.assertNotEqual(sources[4], original)
+        self.assertIn('corpus-parity.yml job corpus-parity must exclude pull_request callers',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_corpus_parity_rejects_true_short_circuit_in_full_job_guard(self):
+        sources = self.ci_sources()
+        original = sources[4]
+        guard = " && github.event_name != 'pull_request'"
+        sources[4] = in_job(original, 'corpus-parity', guard, guard + ' || true')
+        self.assertNotEqual(sources[4], original)
+        self.assertIn(guard + ' || true', sources[4])
+        self.assertIn('corpus-parity.yml job corpus-parity must exclude pull_request callers',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_corpus_parity_rejects_added_pull_request_target_trigger(self):
+        sources = self.ci_sources()
+        original = sources[4]
+        sources[4] = original.replace('on:\n', 'on:\n  pull_request_target:\n', 1)
+        self.assertNotEqual(sources[4], original)
+        self.assertIn('  pull_request_target:\n', sources[4])
+        self.assertIn('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+                      'and workflow_call without commented-out triggers',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_corpus_parity_rejects_empty_pull_request_trigger(self):
+        sources = self.ci_sources()
+        original = sources[4]
+        sources[4] = original.replace('on:\n', 'on:\n  pull_request:\n', 1)
+        self.assertNotEqual(sources[4], original)
+        self.assertIn('  pull_request:\n', sources[4])
+        self.assertIn('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+                      'and workflow_call without commented-out triggers',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_corpus_parity_rejects_commented_out_trigger(self):
+        for event in ('pull_request', 'pull_request_target', 'push', 'schedule',
+                      'workflow_dispatch', 'workflow_call'):
+            with self.subTest(event=event):
+                sources = self.ci_sources()
+                original = sources[4]
+                trigger = f'  # {event}:\n'
+                sources[4] = original.replace('on:\n', 'on:\n' + trigger, 1)
+                self.assertNotEqual(sources[4], original)
+                self.assertIn(trigger, sources[4])
+                self.assertIn('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+                              'and workflow_call without commented-out triggers',
+                              ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_corpus_parity_rejects_removed_workflow_dispatch_trigger(self):
+        sources = self.ci_sources()
+        original = sources[4]
+        sources[4] = original.replace('  workflow_dispatch:\n', '', 1)
+        self.assertNotEqual(sources[4], original)
+        self.assertIn('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+                      'and workflow_call without commented-out triggers',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
+    def test_corpus_parity_rejects_added_push_trigger(self):
+        sources = self.ci_sources()
+        original = sources[4]
+        sources[4] = original.replace('on:\n', 'on:\n  push:\n', 1)
+        self.assertNotEqual(sources[4], original)
+        self.assertIn('  push:\n', sources[4])
+        self.assertIn('corpus-parity.yml must retain exactly schedule, workflow_dispatch '
+                      'and workflow_call without commented-out triggers',
+                      ci_workflow_findings(*sources, others=self.other_sources()))
+
     def test_full_profiles_refuse_every_label_or_class_exclusion(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
