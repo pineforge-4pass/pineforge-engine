@@ -31,6 +31,11 @@ STATUSES_API = f"repos/{REPO}/commits/{HEAD}/statuses?per_page=100"
 GATE_NAME = "Refuse unless pineforge/verify and pineforge/parity are green"
 
 
+def _without_comments(text):
+    return "\n".join(line for line in text.splitlines()
+                     if not line.strip().startswith("#"))
+
+
 def commit(sha, tree):
     return {"sha": sha, "commit": {"tree": {"sha": tree}}}
 
@@ -793,6 +798,15 @@ class WorkflowPinTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, message):
                 self.assert_gate_pin(path.read_text())
 
+    def assert_release_success_pin(self, workflow):
+        jobs = _jobs(workflow)
+        self.assertRegex(jobs["prebuilt"], r"(?m)^    needs: release$")
+        for job in ("release", "prebuilt"):
+            stripped = _without_comments(jobs[job])
+            self.assertNotRegex(stripped, r"\balways\s*\(")
+            self.assertNotRegex(stripped, r"!\s*cancelled\s*\(")
+            self.assertNotRegex(stripped, r"(?m)^\s*continue-on-error\s*:")
+
     def test_ci_release_gate_is_unconditional_and_precedes_every_release_write(self):
         self.assert_gate_pin(self.workflow())
 
@@ -830,13 +844,24 @@ class WorkflowPinTests(unittest.TestCase):
                       script)
 
     def test_prebuilt_requires_release_success_without_failure_bypasses(self):
-        jobs = _jobs(self.workflow())
-        self.assertRegex(jobs["prebuilt"], r"(?m)^    needs: release$")
-        for job in ("release", "prebuilt"):
-            with self.subTest(job=job):
-                self.assertNotRegex(jobs[job], r"\balways\s*\(")
-                self.assertNotRegex(jobs[job], r"!\s*cancelled\s*\(")
-                self.assertNotIn("continue-on-error", jobs[job])
+        self.assert_release_success_pin(self.workflow())
+
+    def test_prebuilt_failure_bypass_mutations_are_refused(self):
+        workflow = self.workflow()
+        self.assertIn("no continue-on-error", _jobs(workflow)["prebuilt"])
+        anchor = "  prebuilt:\n    needs: release\n"
+        for bypass, message in (
+            ("    continue-on-error: true\n",
+             r"^Regex matched: '    continue-on-error:'"),
+            ("    if: ${{ always() }}\n", r"^Regex matched: 'always\('"),
+        ):
+            with self.subTest(bypass=bypass):
+                self.assert_release_success_pin(workflow)
+                changed = workflow.replace(anchor, anchor + bypass, 1)
+                self.assertNotEqual(changed, workflow, "the mutation must change the input")
+                self.assertIn(bypass, _jobs(changed)["prebuilt"])
+                with self.assertRaisesRegex(AssertionError, message):
+                    self.assert_release_success_pin(changed)
 
     def test_pin_fails_when_gate_is_deleted(self):
         workflow = self.workflow()
