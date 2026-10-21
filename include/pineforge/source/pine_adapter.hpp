@@ -14,6 +14,7 @@
 #include <pineforge/detail/disk_resident_id_table.hpp>
 #include <pineforge/detail/id_pair_store.hpp>
 #include <pineforge/detail/adapter_exposure_storage.hpp>
+#include <pineforge/source/pine_adapter_a4_store.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -39,6 +40,12 @@ using SourceId = std::string;
 
 class PineStrategyHost;
 class PineScheduler;
+// Test-only accessor for the A4 ordered inventory (tests/
+// test_a4_ordered_inventory.cpp). It is a friend of PineExecutionAdapter so
+// the test reaches the stores and their private booking primitives without
+// widening the adapter's public surface and without a compiler-specific
+// private-access trick.
+struct A4InventoryFixture;
 
 // R5 lane V19-E: v4 folds the adapter's live state -- the placement rows it
 // still holds, compact records of the erased ones, the pending queues -- and
@@ -2614,26 +2621,171 @@ private:
         std::string comment;
         std::string oca_name;
     };
-    std::vector<IdBoundExit> id_bound_exits_;
-    // The close ledger: per id, the units entered under it that no close has
-    // booked yet (close_logical_units_), and the same units by opening fill
-    // in fill order (close_ledger_records_), which a booking beyond its id's
-    // own units spills over oldest first.
-    std::map<SourceId, double> close_logical_units_;
-    std::vector<CloseLedgerRecord> close_ledger_records_;
-    // The pyramiding records: one per entry fill, unmerged, with the incarnation
-    // of the opening that filled it, booked as the close ledger books
-    // (book_pyramiding_records); kept only under pyramiding above one.
+    friend struct A4InventoryFixture;
+    // A4 rows P26-P31: exact external ordered stores on the shared
+    // ScratchStore contract (pine_adapter_a4_store.hpp). Each store keeps the
+    // population, booking/pruning order and iteration order its container had,
+    // so every hash reader's byte stream is unchanged; the resident workspace
+    // is a fixed page/journal/index configuration, not a record limit.
+    struct BoundExitCodec {
+        using Row = IdBoundExit;
+        static void encode(const Row& row, a4_store::Segments& value) {
+            value.text(row.exit_id);
+            value.text(row.from_entry);
+            value.f64(row.levels.limit);
+            value.f64(row.levels.stop);
+            value.f64(row.levels.trail_points);
+            value.f64(row.levels.trail_offset);
+            value.f64(row.levels.trail_price);
+            value.f64(row.levels.profit_ticks);
+            value.f64(row.levels.loss_ticks);
+            value.f64(row.qty_percent);
+            value.f64(row.qty);
+            value.text(row.comment);
+            value.text(row.oca_name);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::uint64_t offset = 0;
+            return a4_store::read_text(store, handle, offset, row.exit_id)
+                && a4_store::read_text(store, handle, offset, row.from_entry)
+                && a4_store::read_f64(store, handle, offset, row.levels.limit)
+                && a4_store::read_f64(store, handle, offset, row.levels.stop)
+                && a4_store::read_f64(store, handle, offset, row.levels.trail_points)
+                && a4_store::read_f64(store, handle, offset, row.levels.trail_offset)
+                && a4_store::read_f64(store, handle, offset, row.levels.trail_price)
+                && a4_store::read_f64(store, handle, offset, row.levels.profit_ticks)
+                && a4_store::read_f64(store, handle, offset, row.levels.loss_ticks)
+                && a4_store::read_f64(store, handle, offset, row.qty_percent)
+                && a4_store::read_f64(store, handle, offset, row.qty)
+                && a4_store::read_text(store, handle, offset, row.comment)
+                && a4_store::read_text(store, handle, offset, row.oca_name)
+                && offset == info.value_bytes;
+        }
+    };
+    struct BalanceCodec {
+        using Key = SourceId;
+        using Row = std::pair<SourceId, double>;
+        static void encode(const Row& row, a4_store::Segments& value) {
+            value.f64(row.second);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::uint64_t offset = 0;
+            return a4_store::read_key_text(store, handle, info, row.first)
+                && a4_store::read_f64(store, handle, offset, row.second)
+                && offset == info.value_bytes;
+        }
+    };
+    struct CloseLedgerCodec {
+        using Row = CloseLedgerRecord;
+        static void encode(const Row& row, a4_store::Segments& value) {
+            value.text(row.id);
+            value.f64(row.units);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::uint64_t offset = 0;
+            return a4_store::read_text(store, handle, offset, row.id)
+                && a4_store::read_f64(store, handle, offset, row.units)
+                && offset == info.value_bytes;
+        }
+    };
+    // The pyramiding records: one per entry fill, unmerged, with the
+    // incarnation of the opening that filled it.
     struct PyramidingRecord {
         SourceId id{};
         std::uint64_t incarnation = 0;
         double units = 0.0;
     };
-    std::vector<PyramidingRecord> pyramiding_records_;
+    struct PyramidingCodec {
+        using Row = PyramidingRecord;
+        static void encode(const Row& row, a4_store::Segments& value) {
+            value.text(row.id);
+            value.u64(row.incarnation);
+            value.f64(row.units);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::uint64_t offset = 0;
+            return a4_store::read_text(store, handle, offset, row.id)
+                && a4_store::read_u64(store, handle, offset, row.incarnation)
+                && a4_store::read_f64(store, handle, offset, row.units)
+                && offset == info.value_bytes;
+        }
+    };
+    struct TombstoneCodec {
+        using Key = SourceId;
+        using Row = std::pair<SourceId, std::uint64_t>;
+        static void encode(const Row& row, a4_store::Segments& value) {
+            value.u64(row.second);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::uint64_t offset = 0;
+            return a4_store::read_key_text(store, handle, info, row.first)
+                && a4_store::read_u64(store, handle, offset, row.second)
+                && offset == info.value_bytes;
+        }
+    };
+    struct CallsiteCodec {
+        using Key = std::uint64_t;
+        using Row = std::pair<std::uint64_t, CloseCallsiteState>;
+        static void encode(const Row& row, a4_store::Segments& value) {
+            const auto& site = row.second;
+            value.text(site.first_id);
+            value.text(site.id);
+            value.text(site.comment);
+            value.u8(site.active ? 1 : 0);
+            value.u64(site.token);
+            value.u32(static_cast<std::uint32_t>(site.calls));
+            value.f64(site.target);
+            value.u64(site.queue_sequence);
+        }
+        static bool decode(const pineforge::detail::ScratchStore& store,
+                           pineforge::detail::ScratchHandle handle,
+                           const pineforge::detail::ScratchRecordInfo& info, Row& row) {
+            std::uint8_t key[8];
+            if (!a4_store::read_bounded(store, handle,
+                                        pineforge::detail::ScratchField::key, 0, key, 8))
+                return false;
+            row.first = a4_store::load_le64(key);
+            auto& site = row.second;
+            std::uint64_t offset = 0;
+            std::uint8_t active = 0;
+            std::uint32_t calls = 0;
+            if (!a4_store::read_text(store, handle, offset, site.first_id)
+                || !a4_store::read_text(store, handle, offset, site.id)
+                || !a4_store::read_text(store, handle, offset, site.comment)
+                || !a4_store::read_u8(store, handle, offset, active)
+                || !a4_store::read_u64(store, handle, offset, site.token)
+                || !a4_store::read_u32(store, handle, offset, calls)
+                || !a4_store::read_f64(store, handle, offset, site.target)
+                || !a4_store::read_u64(store, handle, offset, site.queue_sequence)
+                || offset != info.value_bytes)
+                return false;
+            site.active = active != 0;
+            site.calls = static_cast<int>(calls);
+            return true;
+        }
+    };
+    a4_store::SeqTable<BoundExitCodec> id_bound_exits_{"id-bound-exits", 0x50323631ULL};
+    // The close ledger: per id, the units entered under it that no close has
+    // booked yet (close_logical_units_), and the same units by opening fill
+    // in fill order (close_ledger_records_), which a booking beyond its id's
+    // own units spills over oldest first.
+    a4_store::KeyedTable<BalanceCodec> close_logical_units_{"close-units", 0x50323731ULL};
+    a4_store::SeqTable<CloseLedgerCodec> close_ledger_records_{"close-ledger", 0x50323831ULL};
+    a4_store::SeqTable<PyramidingCodec> pyramiding_records_{"pyramiding", 0x50323931ULL};
     // The partial strategy.exit children that filled, keyed
     // exit_id "\x1f" from_entry, to the entry incarnation they filled under.
-    std::unordered_map<SourceId, std::uint64_t> exit_tombstones_;
-    std::map<std::uint64_t, CloseCallsiteState> close_batch_callsites_;
+    a4_store::KeyedTable<TombstoneCodec> exit_tombstones_{"exit-tombstones", 0x50333031ULL};
+    a4_store::KeyedTable<CallsiteCodec> close_batch_callsites_{"close-callsites", 0x50333131ULL};
     std::int32_t close_batch_bar_ = -1;
     std::uint64_t close_batch_queue_sequence_ = 0;
     double close_batch_pending_debt_ = 0.0;

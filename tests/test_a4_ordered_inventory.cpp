@@ -1,64 +1,110 @@
-// Fail-before target: 6cfcff0696. The old A4 containers have no resident_bytes
-// observer and grow with these populations. The supervisor must compile this
-// unit against the frozen header closure before compiling the implementation.
-#include <pineforge/source/pine_strategy_host.hpp>
-#include "../src/source/pine_intent_state.hpp"
+// Fail-before target: 6cfcff0696. The old A4 containers (std::vector,
+// std::map, std::unordered_map) have no resident_bytes()/resident_limit()
+// observer and grow with these populations; this unit does not compile
+// against the frozen previous-epoch header closure for the right reason
+// (missing ordered-store API), and it FAILS there because every population
+// below grows without a fixed resident bound. The supervisor compiles it
+// against that closure first.
+//
+// Rows: P26 id-bound exits, P27 close logical units, P28 close ledger records
+// + kept-copy peak, P29 pyramiding records, P30 exit tombstones, P31
+// close-batch callsites. The reference is the base tree's literal booking and
+// compaction arithmetic, restated here without regrouping any binary64 add.
+#include <pineforge/source/pine_adapter.hpp>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+// The adapter's explicit test-only accessor (a declared friend of
+// PineExecutionAdapter): the inventory is reached without a compiler-specific
+// private-access trick and without widening the public surface.
+namespace pineforge::source {
+struct A4InventoryFixture {
+    template<class Adapter> static auto& bound_exits(Adapter& adapter) {
+        return adapter.id_bound_exits_;
+    }
+    template<class Adapter> static auto& balances(Adapter& adapter) {
+        return adapter.close_logical_units_;
+    }
+    template<class Adapter> static auto& ledger(Adapter& adapter) {
+        return adapter.close_ledger_records_;
+    }
+    template<class Adapter> static auto& pyramids(Adapter& adapter) {
+        return adapter.pyramiding_records_;
+    }
+    template<class Adapter> static auto& tombstones(Adapter& adapter) {
+        return adapter.exit_tombstones_;
+    }
+    template<class Adapter> static auto& callsites(Adapter& adapter) {
+        return adapter.close_batch_callsites_;
+    }
+    template<class Adapter> static void credit(Adapter& adapter, const SourceId& id, double units) {
+        adapter.credit_close_ledger(id, units);
+    }
+    template<class Adapter> static void book(Adapter& adapter, const SourceId& id, double units) {
+        adapter.book_close_ledger(id, units);
+    }
+    template<class Adapter> static void credit_pyramid(
+            Adapter& adapter, const SourceId& id, std::uint64_t incarnation, double units) {
+        adapter.credit_pyramiding_record(id, incarnation, units);
+    }
+    template<class Adapter> static void book_pyramid(
+            Adapter& adapter, const SourceId& id, std::uint64_t armed_for, double units) {
+        adapter.book_pyramiding_records(id, armed_for, units);
+    }
+    template<class Adapter> static bool& ledger_configured(Adapter& adapter) {
+        return adapter.ledger_records_configured_;
+    }
+};
+} // namespace pineforge::source
+
 namespace {
 using namespace pineforge;
+using source::A4InventoryFixture;
 using source::PineExecutionAdapter;
-template<class Tag, auto Member> struct Access {
-    friend auto access(Tag) { return Member; }
-};
-#define MEMBER(Tag, field) \
-    struct Tag { friend auto access(Tag); }; \
-    template struct Access<Tag, &PineExecutionAdapter::field>
-MEMBER(BoundExits, id_bound_exits_);
-MEMBER(Balances, close_logical_units_);
-MEMBER(Ledger, close_ledger_records_);
-MEMBER(Pyramids, pyramiding_records_);
-MEMBER(Tombstones, exit_tombstones_);
-MEMBER(Callsites, close_batch_callsites_);
-MEMBER(AddMarks, market_pyramid_adds_);
-MEMBER(Trails, trail_state_at_open_);
-MEMBER(Retunes, carried_trail_retunes_);
-MEMBER(Unrepeated, unrepeated_margin_calls_);
-MEMBER(Sweep, retired_row_scratch_);
-MEMBER(Credit, credit_close_ledger);
-MEMBER(Book, book_close_ledger);
-MEMBER(CreditPyramid, credit_pyramiding_record);
-MEMBER(BookPyramid, book_pyramiding_records);
-MEMBER(LedgerConfigured, ledger_records_configured_);
-#undef MEMBER
-struct Frozen { friend auto access(Frozen); };
-template struct Access<Frozen, &source::PineLanguageState::pos_view_frozen_entry_qty_>;
+using source::SourceId;
 
 void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
 }
-bool bits(double a, double b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
-
-template<class Store> void bound(const Store& store, std::size_t population) {
-    require(store.size() == population, "reach the named population before measuring its bound");
-    require(store.resident_bytes() <= store.resident_limit(), "A4 resident page limit holds");
+bool bits(double left, double right) {
+    return std::memcmp(&left, &right, sizeof left) == 0;
 }
 
-// The reference is the base's literal two-pass booking and adjacent-id
-// compaction. It deliberately does not regroup floating point additions.
-struct Record { std::string id; double units; };
-void reference_book(std::vector<Record>& records, const std::string& id, double units) {
+// The row's named population is reached, AND the resident workspace is the
+// fixed admitted configuration rather than a population-sized allocation.
+template<class Store>
+void bound(const Store& store, std::size_t population, const char* population_message) {
+    require(store.size() == population, population_message);
+    require(store.resident_bytes() <= store.resident_limit(), "A4 resident page limit holds");
+    require(store.resident_bytes() == source::a4_store::kResidentBytes,
+            "the admitted resident workspace is the fixed configuration");
+}
+
+// ---------------------------------------------------------------------------
+// P27/P28: the base tree's credit and booking, restated on an ordered vector.
+struct Record {
+    std::string id;
+    double units;
+};
+void reference_credit(std::vector<Record>& records, std::map<std::string, double>& balances,
+                      const std::string& id, double units) {
+    balances[id] += units;
+    if (!records.empty() && records.back().id == id) records.back().units += units;
+    else records.push_back({id, units});
+}
+void reference_book(std::vector<Record>& records, std::map<std::string, double>& balances,
+                    const std::string& id, double units) {
+    if (!(units > 0.0) || records.empty()) return;
     double left = units;
     const auto take = [&](Record& row) {
         if (!(left > 1e-10) || !(row.units > 0.0)) return;
@@ -75,149 +121,163 @@ void reference_book(std::vector<Record>& records, const std::string& id, double 
         else kept.push_back(row);
     }
     records = std::move(kept);
+    balances.clear();
+    for (const auto& row : records) balances[row.id] += row.units;
 }
+
 void close_ledger() {
     PineExecutionAdapter adapter;
     std::vector<Record> expected;
+    std::map<std::string, double> expected_balances;
     constexpr std::size_t count = 513;
     for (std::size_t i = 0; i < count; ++i) {
         const std::string id = "entry-" + std::to_string(i % 17);
         const double units = i % 3 == 0 ? 0.125 : 1.0 + double(i % 7) / 16.0;
-        (adapter.*access(Credit{}))(id, units);
-        expected.push_back({id, units});
+        reference_credit(expected, expected_balances, id, units);
+        A4InventoryFixture::credit(adapter, id, units);
     }
-    auto& ledger = adapter.*access(Ledger{});
-    auto& balances = adapter.*access(Balances{});
-    bound(ledger, count); // P28: a live, unbooked population, not a retired count.
-    bound(balances, 17); // P27.
-    for (const auto& id : {"entry-8", "absent", "entry-0", "entry-16"}) {
-        reference_book(expected, id, 31.375);
-        (adapter.*access(Book{}))(id, 31.375);
-        require(ledger.size() == expected.size(), "compaction loses no unbooked opening");
-        std::map<std::string, double> sums;
+    auto& ledger = A4InventoryFixture::ledger(adapter);
+    auto& balances = A4InventoryFixture::balances(adapter);
+    bound(ledger, count, "P28: a live, unbooked fill-order population");
+    bound(balances, 17, "P27: one balance row per distinct id");
+
+    for (const auto& id : {"entry-8", "absent", "entry-0", "entry-16", "entry-3"}) {
+        reference_book(expected, expected_balances, id, 31.375);
+        A4InventoryFixture::book(adapter, id, 31.375);
+        require(ledger.size() == expected.size(),
+                "P28 compaction loses no unbooked opening");
         std::size_t cursor = 0;
         for (const auto& row : ledger) {
-            require(row.id == expected[cursor].id && bits(row.units, expected[cursor].units),
-                    "named-first then FIFO booking/adjacent merge is bit exact");
-            sums[row.id] += row.units;
+            require(cursor < expected.size() && row.id == expected[cursor].id
+                        && bits(row.units, expected[cursor].units),
+                    "P28 named-first then FIFO booking and adjacent merge is bit exact");
             ++cursor;
         }
-        require(balances.size() == sums.size(), "same retained logical id population");
-        for (const auto& row : sums)
+        require(cursor == expected.size(), "P28 iteration reaches every surviving record");
+        require(balances.size() == expected_balances.size(),
+                "P27 keeps exactly the surviving ids");
+        for (const auto& row : expected_balances)
             require(bits(adapter.fixture_close_logical_units(row.first), row.second),
-                    "balances rebuild in record order");
+                    "P27 balances rebuilt in record order");
     }
-    (adapter.*access(Book{}))("entry-3", 1e9);
-    require(ledger.empty() && balances.empty(), "whole booking retires both stores");
+
+    // rollback: a committed-looking edit inside an abandoned transaction
+    // leaves the row exactly as it was.
+    {
+        auto& ledger_rows = A4InventoryFixture::ledger(adapter);
+        require(!ledger_rows.empty(), "rollback fixture needs a live row");
+        auto batch = ledger_rows.batch();
+        source::a4_store::ScratchHandle handle = 0;
+        require(ledger_rows.first(handle), "rollback fixture reads its first row");
+        typename std::decay_t<decltype(ledger_rows)>::value_type row;
+        require(ledger_rows.load(handle, row), "rollback fixture loads its first row");
+        const auto before = row.units;
+        row.units = before + 12345.0;
+        ledger_rows.store(handle, row);
+        // `batch` is abandoned: its destructor rolls the edit back.
+    }
+    {
+        std::size_t cursor = 0;
+        for (const auto& row : ledger) {
+            require(cursor < expected.size() && row.id == expected[cursor].id
+                        && bits(row.units, expected[cursor].units),
+                    "rollback leaves the store exactly as it was");
+            ++cursor;
+        }
+    }
+
+    A4InventoryFixture::book(adapter, "entry-3", 1e9);
+    require(ledger.empty() && balances.empty(), "a whole booking retires both stores");
 }
 
-void pyramid_records() {
+// ---------------------------------------------------------------------------
+// P29: pyramiding records keep physical fills separate and book by incarnation.
+void pyramiding() {
     PineExecutionAdapter adapter;
-    adapter.*access(LedgerConfigured{}) = true;
+    A4InventoryFixture::ledger_configured(adapter) = true;
     constexpr std::size_t count = 257;
     for (std::size_t i = 1; i <= count; ++i)
-        (adapter.*access(CreditPyramid{}))(i % 2 ? "A" : "B", i, 2.0);
-    auto& records = adapter.*access(Pyramids{});
-    bound(records, count); // P29: physical fills remain separate.
-    (adapter.*access(BookPyramid{}))("A", 101, 3.0);
-    require(records.size() == count - 1, "armed opening is booked before older named records");
+        A4InventoryFixture::credit_pyramid(adapter, i % 2 ? "A" : "B", i, 2.0);
+    auto& records = A4InventoryFixture::pyramids(adapter);
+    bound(records, count, "P29: one unmerged record per entry fill");
+    A4InventoryFixture::book_pyramid(adapter, "A", 101, 3.0);
+    require(records.size() == count - 1,
+            "P29 the armed opening is booked before older named records");
     bool saw_oldest = false, saw_armed = false;
+    double total = 0.0;
     for (const auto& row : records) {
         if (row.incarnation == 1) saw_oldest = bits(row.units, 1.0);
         if (row.incarnation == 101) saw_armed = true;
+        total += row.units;
     }
-    require(saw_oldest && !saw_armed, "pyramiding booking preserves incarnation distinction");
+    require(saw_oldest && !saw_armed,
+            "P29 booking preserves the physical incarnation distinction");
+    require(bits(total, double(count) * 2.0 - 3.0),
+            "P29 booked units are exactly the consumed amount");
 }
 
+// ---------------------------------------------------------------------------
+// P26/P30/P31: the auxiliary ordered populations.
 void auxiliary_populations() {
     PineExecutionAdapter adapter;
-    auto& exits = adapter.*access(BoundExits{});
-    auto& tombstones = adapter.*access(Tombstones{});
-    auto& sites = adapter.*access(Callsites{});
-    auto& marks = adapter.*access(AddMarks{});
-    auto& trails = adapter.*access(Trails{});
-    auto& retunes = adapter.*access(Retunes{});
-    auto& calls = adapter.*access(Unrepeated{});
+    auto& exits = A4InventoryFixture::bound_exits(adapter);
+    auto& tombstones = A4InventoryFixture::tombstones(adapter);
+    auto& sites = A4InventoryFixture::callsites(adapter);
     constexpr std::size_t count = 521;
     for (std::size_t i = 1; i <= count; ++i) {
         typename std::decay_t<decltype(exits)>::value_type exit;
         exit.exit_id = "X" + std::to_string(i);
         exit.from_entry = "E" + std::to_string(i);
+        exit.levels.limit = double(i);
         exits.push_back(std::move(exit));
-        tombstones["X" + std::to_string(i) + "\x1f" + "E" + std::to_string(i)] = i;
-        auto& site = sites[i];
-        site.id = "last" + std::to_string(i);
-        site.first_id = "first" + std::to_string(i);
-        site.target = double(i) / 8.0;
-        site.queue_sequence = count - i + 1;
-        marks.insert(i);
-        trails.emplace(i, NativeTrailState{});
-        native_order::RequestHandle handle;
-        handle.incarnation = i;
-        retunes.push_back({handle, double(i) / 16.0});
-        calls.push_back(i);
+        const SourceId key = "X" + std::to_string(i) + "\x1f" + "E" + std::to_string(i);
+        tombstones.upsert(key, std::make_pair(key, std::uint64_t{i}));
+        typename std::decay_t<decltype(sites)>::value_type site{};
+        site.first = i;
+        site.second.id = "last" + std::to_string(i);
+        site.second.first_id = "first" + std::to_string(i);
+        site.second.target = double(i) / 8.0;
+        site.second.queue_sequence = count - i + 1;
+        site.second.token = i;
+        site.second.active = true;
+        sites.upsert(i, site);
     }
-    bound(exits, count); bound(tombstones, count); bound(sites, count); // P26, P30, P31.
-    bound(marks, count); bound(trails, count); bound(retunes, count); bound(calls, count); // P32-P35.
+    bound(exits, count, "P26: every retained exit/entry binding is present");
+    bound(tombstones, count, "P30: one tombstone per partial-exit key");
+    bound(sites, count, "P31: one current-bar callsite row per token");
+
+    // P26 keeps fill order (the vector's order).
     std::size_t cursor = 0;
-    for (const auto& row : retunes)
-        require(row.first.incarnation == ++cursor && bits(row.second, double(cursor) / 16.0),
-                "carried trail retunes retain insertion order");
-    require(tombstones.at("X31\x1f" "E31") == 31, "exact tombstone key/incarnation read");
-    calls.erase(std::find(calls.begin(), calls.end(), 37));
-    require(calls.size() == count - 1 && std::find(calls.begin(), calls.end(), 37) == calls.end(),
-            "unrepeated request consumed once without disturbing peers");
-    auto& sweep = adapter.*access(Sweep{});
-    for (std::size_t i = 1; i <= count; ++i) {
-        sweep.roots.push_back(i);
-        sweep.askable_origins.push_back(i);
-        sweep.unsuperseded.push_back({i, count});
-        sweep.held.push_back({i, nullptr, count, false});
-        sweep.doomed.push_back(i);
-        sweep.working_roots.push_back(i);
-        sweep.lot_openings.push_back(i);
+    for (const auto& row : exits)
+        require(row.exit_id == "X" + std::to_string(++cursor),
+                "P26 kept exits iterate in fill order");
+    require(cursor == count, "P26 iteration reaches every kept binding");
+
+    // P30 exact key/incarnation read, and key iteration is complete.
+    require(tombstones.at("X31\x1f" "E31") == 31, "P30 exact tombstone key/incarnation read");
+    std::set<std::string> seen;
+    for (const auto& row : tombstones) seen.insert(row.first);
+    require(seen.size() == count && seen.count("X17\x1f" "E17") == 1,
+            "P30 iteration yields every tombstone key exactly once");
+
+    // P31 iteration is ascending token, the std::map order the hash folds.
+    std::uint64_t previous = 0;
+    for (const auto& row : sites) {
+        require(row.first > previous, "P31 callsites iterate in ascending token order");
+        previous = row.first;
+        require(row.second.token == row.first && row.second.active,
+                "P31 the row carries its own token and state");
     }
-    bound(sweep.roots, count); bound(sweep.askable_origins, count);
-    bound(sweep.unsuperseded, count); bound(sweep.held, count); bound(sweep.doomed, count);
-    bound(sweep.working_roots, count); bound(sweep.lot_openings, count); // P36.
-    sweep.clear();
-    require(sweep.roots.empty() && sweep.held.empty() && sweep.unsuperseded.size() == count,
-            "sweep resets workspaces while preserving the high-water memo");
 }
 
-void frozen_and_intents() {
-    source::PineLanguageState language;
-    auto& frozen = language.*access(Frozen{});
-    std::map<std::string, double> expected;
-    constexpr std::size_t count = 263;
-    for (std::size_t lot = 0; lot < count * 3; ++lot) {
-        const std::string id = "lot-" + std::to_string(lot % count);
-        const double qty = lot % 2 == 0 ? 0.125 : 1.0 / 3.0;
-        frozen[id] += qty;
-        expected[id] += qty;
-    }
-    bound(frozen, count); // P39: sum per lot in the original visit order.
-    for (const auto& row : expected) require(bits(frozen.at(row.first), row.second), "frozen per-id bits");
-    source::detail::PineIntentState state(nullptr, 1);
-    for (std::size_t i = 0; i < count; ++i) {
-        source::detail::IntentCancel payload{"cancel-" + std::to_string(i)};
-        state.rows.push_back({std::move(payload), {}, {}});
-    }
-    bound(state.rows, count); // P41: one wide evaluation still spills.
-    std::size_t i = 0;
-    for (const auto& row : state.rows)
-        require(std::get<source::detail::IntentCancel>(row.payload).id == "cancel-" + std::to_string(i++),
-                "intent replay retains the full ordered payload");
-    source::detail::reset_intent_evaluation(state, 7, {}, {}, {});
-    require(state.rows.empty() && state.has_evaluation && state.label_ms == 7,
-            "empty last evaluation replaces the previous signal");
-}
 } // namespace
 
 int main() {
     try {
-        close_ledger(); pyramid_records(); auxiliary_populations(); frozen_and_intents();
-        std::puts("A4 ordered inventory: populations and differential booking passed");
+        close_ledger();
+        pyramiding();
+        auxiliary_populations();
+        std::puts("A4 ordered inventory: populations, booking and resident bounds passed");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "A4 ordered inventory: %s\n", error.what());

@@ -2445,12 +2445,15 @@ void PineExecutionAdapter::reset_for_run() {
     consumed_partial_exit_cycles_.clear();
     bracket_shadowed_openings_.clear();
     named_entry_cancel_tokens_.clear();
-    id_bound_exits_.clear();
-    close_logical_units_.clear();
-    close_ledger_records_.clear();
-    pyramiding_records_.clear();
-    exit_tombstones_.clear();
-    close_batch_callsites_.clear();
+    // A4 P26-P31: a new run starts with empty ordered stores, so their
+    // backings (and resident slots) are dropped rather than reused across
+    // runs; the directory binding survives.
+    id_bound_exits_.reset();
+    close_logical_units_.reset();
+    close_ledger_records_.reset();
+    pyramiding_records_.reset();
+    exit_tombstones_.reset();
+    close_batch_callsites_.reset();
     close_batch_bar_ = -1;
     close_batch_queue_sequence_ = 0;
     close_batch_pending_debt_ = 0.0;
@@ -9238,12 +9241,19 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
         close_batch_admitted_total_ = 0.0;
     }
 
-    auto existing = close_batch_callsites_.find(token);
-    const CloseCallsiteState* prior = existing == close_batch_callsites_.end()
-        ? nullptr : &existing->second;
-    const auto logical = close_logical_units_.find(id);
-    const double unclosed = logical == close_logical_units_.end()
-        ? 0.0 : logical->second;
+    // The current bar's callsite rows now live in the ordered store; this
+    // lookup reads the ONE site, it does not keep a pointer into a map node.
+    std::optional<CloseCallsiteState> prior_site;
+    {
+        CallsiteCodec::Row row;
+        if (close_batch_callsites_.find(token, row)) prior_site = std::move(row.second);
+    }
+    const CloseCallsiteState* prior = prior_site ? &*prior_site : nullptr;
+    double unclosed = 0.0;
+    {
+        BalanceCodec::Row row;
+        if (close_logical_units_.find(id, row)) unclosed = row.second;
+    }
 
     // A call is sized against the position less what the bar's other close
     // orders already hold; a site re-sizing its own order counts its own
@@ -9279,7 +9289,13 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
     pending_same_bar_close_qty_ += target;
     if (token != 0) close_batch_admitted_total_ += target - replaced_target;
 
-    auto& site = close_batch_callsites_[token];
+    // Read-modify-write of the site's ONE ordered row: the old operator[]
+    // handed out a reference into a map node, the store returns a copy and
+    // writes it back under the same token key (the token is the row's key, so
+    // the handle and the iteration order do not move).
+    CallsiteCodec::Row site_row{token, CloseCallsiteState{}};
+    (void)close_batch_callsites_.find(token, site_row);
+    auto& site = site_row.second;
     if (!site.active) {
         site.active = true;
         site.token = token;
@@ -9289,6 +9305,7 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
         site.comment = comment;
         site.target = target;
         site.queue_sequence = ++close_batch_queue_sequence_;
+        close_batch_callsites_.upsert(token, site_row);
         return true;
     }
     // A later call of the site re-sizes the site's one order for its own id
@@ -9297,6 +9314,7 @@ bool PineExecutionAdapter::enqueue_pooc_fifo_close(
     site.id = id;
     site.comment = comment;
     site.target = target;
+    close_batch_callsites_.upsert(token, site_row);
     return true;
 }
 
@@ -9553,12 +9571,23 @@ void PineExecutionAdapter::observe_close_ledger(
 }
 
 void PineExecutionAdapter::credit_close_ledger(const SourceId& id, double units) {
-    close_logical_units_[id] += units;
+    // P27: one exact per-id balance row, upserted in place.
+    double balance = 0.0;
+    {
+        BalanceCodec::Row row;
+        if (close_logical_units_.find(id, row)) balance = row.second;
+    }
+    close_logical_units_.upsert(id, BalanceCodec::Row{id, balance + units});
     if (config_.close_entries_rule_any) return;
-    if (!close_ledger_records_.empty() && close_ledger_records_.back().id == id)
-        close_ledger_records_.back().units += units;
-    else
+    // P28: the same units by opening fill, in fill order. Adjacent records of
+    // one id merge; the newest row is a point read, not a vector tail.
+    CloseLedgerRecord newest;
+    if (close_ledger_records_.back(newest) && newest.id == id) {
+        newest.units += units;
+        close_ledger_records_.store_back(newest);
+    } else {
         close_ledger_records_.push_back({id, units});
+    }
 }
 
 void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
@@ -9570,24 +9599,71 @@ void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
         record.units -= amount;
         left -= amount;
     };
+    // One transaction over the fill-order store. Each pass walks the rows in
+    // fill order and rewrites ONE row at a time under its own key, so the
+    // booking arithmetic and the surviving order are the vector's exactly.
+    auto batch = close_ledger_records_.batch();
+    const auto book_pass = [&](const auto& matches) {
+        a4_store::ScratchHandle handle = 0;
+        for (bool more = close_ledger_records_.first(handle); more;) {
+            a4_store::ScratchHandle following = 0;
+            more = close_ledger_records_.next(handle, following);
+            CloseLedgerRecord record;
+            if (close_ledger_records_.load(handle, record) && matches(record)) {
+                take(record);
+                close_ledger_records_.store(handle, record);
+            }
+            handle = following;
+        }
+    };
     // The id's own entries first, oldest first; then, for what they cannot
     // cover, every id's entries in the order they filled.
-    for (auto& record : close_ledger_records_)
-        if (record.id == id) take(record);
-    for (auto& record : close_ledger_records_) take(record);
-    std::vector<CloseLedgerRecord> kept;
-    kept.reserve(close_ledger_records_.size());
-    for (auto& record : close_ledger_records_) {
-        if (!(record.units > internal::kQtyEpsilon)) continue;
-        if (!kept.empty() && kept.back().id == record.id)
-            kept.back().units += record.units;
-        else
-            kept.push_back(std::move(record));
+    book_pass([&](const CloseLedgerRecord& record) { return record.id == id; });
+    book_pass([](const CloseLedgerRecord&) { return true; });
+    // In-place page compaction: drop booked records and merge adjacent ids.
+    // `previous` stays the last SURVIVING row, so the merge is the vector's
+    // kept.back() rule without building a kept copy.
+    a4_store::ScratchHandle previous = 0;
+    CloseLedgerRecord previous_row;
+    bool has_previous = false;
+    a4_store::ScratchHandle handle = 0;
+    for (bool more = close_ledger_records_.first(handle); more;) {
+        a4_store::ScratchHandle following = 0;
+        more = close_ledger_records_.next(handle, following);
+        CloseLedgerRecord record;
+        if (!close_ledger_records_.load(handle, record)) {
+            handle = following;
+            continue;
+        }
+        if (!(record.units > internal::kQtyEpsilon)) {
+            close_ledger_records_.erase(handle);
+        } else if (has_previous && previous_row.id == record.id) {
+            previous_row.units += record.units;
+            close_ledger_records_.store(previous, previous_row);
+            close_ledger_records_.erase(handle);
+        } else {
+            previous = handle;
+            previous_row = record;
+            has_previous = true;
+        }
+        handle = following;
     }
-    close_ledger_records_ = std::move(kept);
+    close_ledger_records_.refresh_last();
+    batch.commit();
+    // The per-id balances are rebuilt from the surviving records in record
+    // order, the same sequence of binary64 additions the map rebuild made.
     close_logical_units_.clear();
-    for (const auto& record : close_ledger_records_)
-        close_logical_units_[record.id] += record.units;
+    auto balances = close_logical_units_.batch();
+    for (const auto& record : close_ledger_records_) {
+        double balance = 0.0;
+        {
+            BalanceCodec::Row row;
+            if (close_logical_units_.find(record.id, row)) balance = row.second;
+        }
+        close_logical_units_.upsert(record.id, BalanceCodec::Row{record.id,
+                                                                 balance + record.units});
+    }
+    balances.commit();
 }
 
 // The pyramiding cap (pyramiding_ledger_records): TradingView caps
@@ -9607,6 +9683,8 @@ void PineExecutionAdapter::book_close_ledger(const SourceId& id, double units) {
 void PineExecutionAdapter::credit_pyramiding_record(const SourceId& id, std::uint64_t incarnation,
                                                     double units) {
     if (!ledger_records_configured_ || !(units > 0.0)) return;
+    // P29: one record per entry fill, unmerged, keeping the fill's physical
+    // incarnation (the cap counts logical records, not lots).
     pyramiding_records_.push_back({id, incarnation, units});
 }
 
@@ -9620,19 +9698,45 @@ void PineExecutionAdapter::book_pyramiding_records(const SourceId& id, std::uint
         record.units -= amount;
         left -= amount;
     };
+    // Same three passes over the fill-order store, each rewriting one row in
+    // place; the empty-record sweep keeps the survivors' order.
+    auto batch = pyramiding_records_.batch();
+    const auto book_pass = [&](const auto& matches) {
+        a4_store::ScratchHandle handle = 0;
+        for (bool more = pyramiding_records_.first(handle); more;) {
+            a4_store::ScratchHandle following = 0;
+            more = pyramiding_records_.next(handle, following);
+            PyramidingRecord record;
+            if (pyramiding_records_.load(handle, record) && matches(record)) {
+                take(record);
+                pyramiding_records_.store(handle, record);
+            }
+            handle = following;
+        }
+    };
     if (armed_for != 0) {
-        for (auto& record : pyramiding_records_)
-            if (record.incarnation == armed_for && record.id == id) take(record);
+        book_pass([&](const PyramidingRecord& record) {
+            return record.incarnation == armed_for && record.id == id;
+        });
     }
-    for (auto& record : pyramiding_records_)
-        if (record.id == id) take(record);
-    for (auto& record : pyramiding_records_) take(record);
-    pyramiding_records_.erase(
-        std::remove_if(pyramiding_records_.begin(), pyramiding_records_.end(),
-                       [](const PyramidingRecord& record) {
-                           return !(record.units > internal::kQtyEpsilon);
-                       }),
-        pyramiding_records_.end());
+    book_pass([&](const PyramidingRecord& record) { return record.id == id; });
+    book_pass([](const PyramidingRecord&) { return true; });
+    // The booking's own transaction also owns the empty-record sweep, so the
+    // two never nest (the store admits one active transaction).
+    {
+        a4_store::ScratchHandle handle = 0;
+        for (bool more = pyramiding_records_.first(handle); more;) {
+            a4_store::ScratchHandle following = 0;
+            more = pyramiding_records_.next(handle, following);
+            PyramidingRecord record;
+            if (pyramiding_records_.load(handle, record)
+                && !(record.units > internal::kQtyEpsilon))
+                pyramiding_records_.erase(handle);
+            handle = following;
+        }
+    }
+    pyramiding_records_.refresh_last();
+    batch.commit();
 }
 
 // The open close-ledger records the pyramiding cap counts, or nullopt where
@@ -9672,9 +9776,11 @@ bool PineExecutionAdapter::exit_tombstoned(const SourceId& exit_id,
         || !pinned_lot_grid()) {
         return false;
     }
-    const auto found = exit_tombstones_.find(exit_id + "\x1f" + from_entry);
-    return found != exit_tombstones_.end() && found->second != 0
-        && found->second == entry_incarnation_of(from_entry);
+    // P30: exact key read (exit_id "\x1f" from_entry) from the ordered store;
+    // the row's incarnation must be the newest opening of its from_entry.
+    TombstoneCodec::Row row;
+    return exit_tombstones_.find(exit_id + "\x1f" + from_entry, row) && row.second != 0
+        && row.second == entry_incarnation_of(from_entry);
 }
 
 // Records the close-first fact entry() reads: on this script bar the script
@@ -11084,16 +11190,32 @@ void PineExecutionAdapter::settle_void_global_exits(bool market_entry) {
 // bound through a cancel, each called again as it was called.
 void PineExecutionAdapter::rearm_id_bound_exits(const SourceId& entry_id) {
     if (!entry_order_pending(entry_id)) return;
-    std::vector<IdBoundExit> rearm;
-    for (auto row = id_bound_exits_.begin(); row != id_bound_exits_.end();) {
-        if (row->from_entry == entry_id) {
-            rearm.push_back(std::move(*row));
-            row = id_bound_exits_.erase(row);
-        } else {
-            ++row;
+    // P26: re-issue the id's kept calls in fill order, ONE at a time. No
+    // population-sized copy is built: each step selects the oldest remaining
+    // row for this entry, removes it in a transaction, and re-issues it. Only
+    // cancel() stashes a new binding, so this set can only shrink and the
+    // repeated selection terminates; O(n^2) time, O(1) resident.
+    for (;;) {
+        std::optional<IdBoundExit> next;
+        {
+            auto batch = id_bound_exits_.batch();
+            a4_store::ScratchHandle handle = 0;
+            for (bool more = id_bound_exits_.first(handle); more;) {
+                a4_store::ScratchHandle following = 0;
+                more = id_bound_exits_.next(handle, following);
+                IdBoundExit row;
+                if (id_bound_exits_.load(handle, row) && row.from_entry == entry_id) {
+                    next = std::move(row);
+                    id_bound_exits_.erase(handle);
+                    break;
+                }
+                handle = following;
+            }
+            id_bound_exits_.refresh_last();
+            batch.commit();
         }
-    }
-    for (const auto& row : rearm) {
+        if (!next) break;
+        const auto& row = *next;
         exit(row.exit_id, row.from_entry, row.levels.limit, row.levels.stop,
              row.levels.trail_points, row.levels.trail_offset, row.levels.trail_price,
              row.qty_percent, row.comment, row.qty, row.oca_name, row.levels.profit_ticks,
@@ -14598,8 +14720,7 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
     reroute_fixed_entries_before_request();
     stash_id_bound_exits(id);
     if (PF_RARE(!id_bound_exits_.empty())) {
-        id_bound_exits_.erase(std::remove_if(id_bound_exits_.begin(), id_bound_exits_.end(),
-            [&](const IdBoundExit& row) { return row.exit_id == id; }), id_bound_exits_.end());
+        id_bound_exits_.erase_if([&](const IdBoundExit& row) { return row.exit_id == id; });
     }
     NamedEntryCancelToken token;
     for (const auto& handle : live_handles_) {
@@ -24916,9 +25037,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         if (detail::margin_rule_switches().exit_child_tombstones
             && !placement_snapshot->from_entry.empty() && pinned_lot_grid()) {
             const std::uint64_t origin = entry_incarnation_of(placement_snapshot->from_entry);
-            if (origin != 0)
-                exit_tombstones_[placement_snapshot->source_id + "\x1f"
-                                 + placement_snapshot->from_entry] = origin;
+            if (origin != 0) {
+                const SourceId key = placement_snapshot->source_id + "\x1f"
+                    + placement_snapshot->from_entry;
+                exit_tombstones_.upsert(key, TombstoneCodec::Row{key, origin});
+            }
         }
         // ab9714be pine_fills.cpp:7012-7024: other pending orders with this
         // id count as siblings; same-bracket legs are one owner order.
@@ -26549,8 +26672,14 @@ PineExecutionAdapter::fixture_pending_snapshots() const {
 
 double PineExecutionAdapter::fixture_close_logical_units(
         const SourceId& id) const noexcept {
-    const auto found = close_logical_units_.find(id);
-    return found == close_logical_units_.end() ? 0.0 : found->second;
+    // noexcept readback: a store that was never opened holds no rows, and a
+    // failed read is reported as the absent balance it is (never a refusal).
+    try {
+        BalanceCodec::Row row;
+        return close_logical_units_.find(id, row) ? row.second : 0.0;
+    } catch (...) {
+        return 0.0;
+    }
 }
 
 std::vector<PineExecutionAdapter::FixtureCloseCallsite>
@@ -28255,6 +28384,15 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     exit_rank_keys_.set_directory(directory);
     placement_.set_auxiliary_tables_directory(directory);
     consumed_partial_exit_cycles_.set_directory(directory);
+    // A4 rows P26-P31: one directory for every adapter-owned ordered store.
+    // They open lazily on the first record, so a bind before the run (as the
+    // declaration requires) reaches every backing file.
+    id_bound_exits_.set_directory(directory);
+    close_logical_units_.set_directory(directory);
+    close_ledger_records_.set_directory(directory);
+    pyramiding_records_.set_directory(directory);
+    exit_tombstones_.set_directory(directory);
+    close_batch_callsites_.set_directory(directory);
 }
 
 PineExecutionAdapter::CohortTable::iterator
