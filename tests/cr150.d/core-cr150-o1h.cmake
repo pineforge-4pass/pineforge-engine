@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_scratch_trial)
+pineforge_add_unit_test(test_scratch_trial)
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_source_scratch_trial)
+    pineforge_add_unit_test(test_source_scratch_trial)
+endif()

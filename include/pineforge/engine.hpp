@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <optional>
 #include <functional>
+#include <utility>
 #include <pineforge/execution_consumer.hpp>
 #include "na.hpp"
 #include "bar.hpp"
@@ -46,11 +47,13 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/detail/scratch_trial.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
 // These internal C++ capabilities change no public C POD or C signature.
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
+#define PINEFORGE_HAS_SCRATCH_TRIAL_V1 1
 namespace pineforge {
 enum class PositionSide { FLAT, LONG, SHORT };
 
@@ -2296,12 +2299,14 @@ private:
     // sink. Neither participates in trading decisions or durable hash leaves;
     // the logical tables keep their existing folds. Copies retain only policy.
     detail::ScratchTableConfig scratch_table_config_{};
+    std::optional<detail::ScratchTrialConfig> scratch_trial_config_;
     struct ScratchTableRun {
         std::shared_ptr<detail::ScratchSlab> slab;
+        detail::ScratchTrialBinding trial;
         ScratchTableRun() = default;
         ScratchTableRun(const ScratchTableRun&) noexcept {}
         ScratchTableRun& operator=(const ScratchTableRun& other) noexcept {
-            if (this != &other) slab.reset();
+            if (this != &other) { slab.reset(); trial = {}; }
             return *this;
         }
         ScratchTableRun(ScratchTableRun&&) noexcept = default;
@@ -2372,6 +2377,22 @@ private:
     void retire_report_sink_hashes();
 
 public:
+    // Arena/HPO host setup, after choosing the effective trial and before a
+    // public begin. Owns the receipt/default/proof bytes; each begin derives
+    // and constructs fresh mutable backing. This protocol takes precedence
+    // over the legacy v1 descriptor. Empty/malformed receipts select OUT,
+    // never legacy defaults. No public C POD, export or callback is added.
+    int set_scratch_trial(detail::ScratchTrialConfig config) {
+        const int status = report_sink_setter_status();
+        if (status != 0) return status;
+        scratch_trial_config_ = std::move(config);
+        scratch_table_run_.trial = {};
+        return 0;
+    }
+    const detail::ScratchTrialBinding& scratch_trial_binding() const noexcept {
+        return scratch_table_run_.trial;
+    }
+
     // The C descriptor is copied only after the lifecycle/shape checks. The
     // existing idle barrier covers begin callbacks even when the sink is OFF.
     int set_scratch_tables_v1(const pf_scratch_tables_v1* descriptor) {

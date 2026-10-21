@@ -1751,22 +1751,58 @@ bool NativeExecutionConsumer::prepare_public_begin(
     }
     try {
         auto config = engine.scratch_table_config_;
-        const auto& m = config.manifest;
-        if (config.backend == detail::ScratchTableBackend::bounded_memory
-            && m.K_q == 0 && m.B_q == 0 && m.K_e == 0 && m.B_e == 0
-            && m.K_c == 0 && m.B_c == 0 && m.U == 0 && m.B_U == 0
-            && m.V == 0 && m.B_V == 0 && m.R == 0) {
-            // Stream n is warmup, not a declared lifetime input-bar count.
-            if (args.is_stream)
-                config.manifest = detail::default_scratch_manifest();
-            else if (args.n >= 0)
-                config.manifest = detail::default_scratch_manifest(
-                    static_cast<std::uint64_t>(args.n));
-            // Invalid negative batch n keeps its existing input-validation path.
+        engine.scratch_table_run_.trial = {};
+        if (engine.scratch_trial_config_) {
+            // Read the effective inputs before the provider mutates/reset/binds
+            // any source table. A rich begin replaces installed input overrides.
+            engine.scratch_table_run_.slab.reset();
+            engine.scratch_table_run_.trial = detail::plan_scratch_trial(
+                *engine.scratch_trial_config_, args.inputs ? *args.inputs : engine.inputs_,
+                args.overrides_opaque != nullptr);
+            auto& trial = engine.scratch_table_run_.trial;
+            if (trial.classification == detail::ScratchTrialClassification::in_subset && trial.plan) {
+                // Never route a derived all-zero plan through the legacy P0
+                // sentinel, and never project live root slots into historical R.
+                config.backend = detail::ScratchTableBackend::bounded_memory;
+                config.manifest = trial.plan->tables;
+                try {
+                    (void)detail::compute_layout(config.manifest);
+                } catch (const detail::ScratchCapacityError&) {
+                    // Representational failure is an external-worker routing
+                    // result, not a new capacity refusal.
+                    trial = {detail::ScratchTrialClassification::needs_file_capable_worker,
+                             detail::ScratchTrialReason::layout_unrepresentable,
+                             detail::ScratchFactsError::arithmetic_overflow, std::nullopt, false};
+                }
+            }
+            if (trial.classification != detail::ScratchTrialClassification::in_subset || !trial.plan) {
+                // No provider, report writer, backend bind, run reset, identity
+                // consumption or bar has happened. C++ hosts route using the
+                // typed trial result; the legacy error channel stays supported.
+                present_refusal(engine, "scratch trial needs file-capable worker",
+                                RunFailureCode::setting_unsupported);
+                return false;
+            }
+        } else {
+            const auto& m = config.manifest;
+            if (config.backend == detail::ScratchTableBackend::bounded_memory
+                && m.K_q == 0 && m.B_q == 0 && m.K_e == 0 && m.B_e == 0
+                && m.K_c == 0 && m.B_c == 0 && m.U == 0 && m.B_U == 0
+                && m.V == 0 && m.B_V == 0 && m.R == 0) {
+                // Stream n is warmup, not a declared lifetime input-bar count.
+                if (args.is_stream)
+                    config.manifest = detail::default_scratch_manifest();
+                else if (args.n >= 0)
+                    config.manifest = detail::default_scratch_manifest(
+                        static_cast<std::uint64_t>(args.n));
+                // Invalid negative batch n keeps its existing input-validation path.
+            }
         }
         engine.prepare_scratch_table_run(config);
+        if (engine.scratch_trial_config_) engine.scratch_table_run_.trial.slab_bound = true;
     } catch (const std::exception& e) {
         render_exception(engine, e);
+        if (engine.scratch_trial_config_) engine.last_run_status_ = 1;
         return false;
     }
     interval_cache_.clear();

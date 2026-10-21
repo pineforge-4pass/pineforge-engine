@@ -134,6 +134,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/engine_consumer.cpp
     src/market_driver.cpp
     src/native_execution_consumer.cpp
+    src/scratch_trial.cpp
     src/native_calc_plan.cpp
     src/magnifier.cpp
     src/math.cpp
