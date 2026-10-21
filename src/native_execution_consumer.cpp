@@ -4763,9 +4763,51 @@ bool NativeExecutionConsumer::install_execution(
     return true;
 }
 
+void NativeExecutionConsumer::read_drain_handles(
+        DrainHandles kind, const native_order::EventId& applied,
+        const native_order::RequestHandle& parent,
+        detail::PagedRunRows<native_order::RequestHandle>& out) const {
+    out.clear();
+    // Copy the selector before scanning: a journal backend may evict its
+    // current event page while the live book is read.
+    std::optional<native_order::Member> member;
+    native_order::RequestHandle applied_handle;
+    std::uint64_t applied_ordinal = 0;
+    if (kind == DrainHandles::Group) {
+        const auto* event = requests_.event_at(applied);
+        const auto* payload = event ? std::get_if<native_order::ExecutionAppliedEvent>(event) : nullptr;
+        if (!payload || !payload->definition) return;
+        const auto* group = std::get_if<native_order::Member>(&payload->definition->request.group);
+        if (!group) return;
+        if (group->effect == native_order::GroupEffect::Cancel && !payload->terminal) return;
+        if (group->effect == native_order::GroupEffect::Reduce && !(payload->filled_working > 0.0)) return;
+        member = *group;
+        applied_handle = payload->handle();
+        applied_ordinal = payload->ordinal;
+    }
+    // Preserve the snapshot and queue order of the three core vector APIs;
+    // no command is applied until this external snapshot is complete.
+    for (const auto& live : requests_.live()) {
+        bool selected = false;
+        if (kind == DrainHandles::Group) {
+            const auto* other = std::get_if<native_order::Member>(&live.request().group);
+            selected = other && other->group == member->group && other->cohort != member->cohort
+                && live.handle() != applied_handle && live.birth().acceptance_ordinal < applied_ordinal;
+        } else if (kind == DrainHandles::Children) {
+            const auto* wait = std::get_if<native_order::Wait>(&live.authority);
+            selected = wait && wait->parent == parent;
+        } else {
+            selected = std::holds_alternative<native_order::BookClose>(live.authority)
+                || std::holds_alternative<native_order::OpeningClose>(live.authority)
+                || std::holds_alternative<native_order::OpeningsClose>(live.authority);
+        }
+        if (selected) out.push_back(live.handle());
+    }
+}
+
 void NativeExecutionConsumer::drain_dependency_queue(
         BacktestEngine& engine,
-        const std::vector<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
+        const detail::PagedRunRows<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
         NativeFailureOperation operation) {
     if (failed() || seeds.empty()) return;
     try {
@@ -4777,29 +4819,44 @@ void NativeExecutionConsumer::drain_dependency_queue(
             // child is live then, and the order is the book's.
             uint64_t child_priority = 0;
         };
-        std::vector<Item> queue;
+        detail::PagedRunRows<Item> queue;
         auto less_item = [](const Item& a, const Item& b) {
             if (a.cause_ordinal != b.cause_ordinal) return a.cause_ordinal < b.cause_ordinal;
             return a.child_priority < b.child_priority;
         };
+        // The old suffix sort's exact (cause, queue priority) order, using
+        // two current rows. Equal keys name the same cause/child, so swapping
+        // such copies cannot change a command or notification.
+        const auto sort_suffix = [&](std::size_t first) {
+            for (std::size_t at = first; at < queue.size(); ++at) {
+                auto best = queue[at];
+                std::size_t best_index = at;
+                for (std::size_t probe = at + 1; probe < queue.size(); ++probe) {
+                    const auto row = queue[probe];
+                    if (less_item(row, best)) { best = row; best_index = probe; }
+                }
+                if (best_index != at) {
+                    queue.set(best_index, queue[at]);
+                    queue.set(at, best);
+                }
+            }
+        };
         auto enqueue_children = [&](const native_order::EventId& cause,
                                     const native_order::RequestHandle& parent,
                                     std::size_t sort_from) {
-            auto children = requests_.waiting_children(parent);
-            for (auto& child : children) {
-                const auto* waiting = requests_.find_live(child);
-                const uint64_t priority = waiting ? waiting->priority() : child.incarnation;
-                queue.push_back(Item{cause.ordinal, cause, std::move(child), priority});
+            // Freeze this generation's children before applying any of them,
+            // in the same live-book order as waiting_children().
+            for (const auto& waiting : requests_.live()) {
+                const auto* wait = std::get_if<native_order::Wait>(&waiting.authority);
+                if (!wait || wait->parent != parent) continue;
+                queue.push_back(Item{cause.ordinal, cause, waiting.handle(), waiting.priority()});
             }
-            if (sort_from < queue.size()) {
-                std::sort(queue.begin() + static_cast<std::ptrdiff_t>(sort_from), queue.end(),
-                          less_item);
-            }
+            sort_suffix(sort_from);
         };
         for (auto& seed : seeds) {
             enqueue_children(seed.first, seed.second, queue.size());
         }
-        std::sort(queue.begin(), queue.end(), less_item);
+        sort_suffix(0);
         for (std::size_t i = 0; i < queue.size() && !failed(); ++i) {
             const native_order::EventId cause = queue[i].cause;
             const native_order::RequestHandle child = queue[i].child;
@@ -4834,7 +4891,7 @@ void NativeExecutionConsumer::drain_parent_terminal(
     // constructing the dependency queue (and its seed allocation) for that
     // ordinary no-op while retaining the exact queue path once a child exists.
     if (!requests_.has_waiting_children(parent)) return;
-    std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
+    detail::PagedRunRows<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
     try {
         seeds.push_back({cause, parent});
     } catch (const std::exception& e) {
@@ -4861,7 +4918,7 @@ void NativeExecutionConsumer::drain_after_applied(
         // The three lists below are read into the consumer's scratch, one
         // after another; each is consumed before the next is read.
         auto& recipients = drain_handles_;
-        requests_.group_recipients(applied, recipients);
+        read_drain_handles(DrainHandles::Group, applied, filler, recipients);
         for (const auto& recipient : recipients) {
             if (failed()) return;
             CoreStep step = direct_mutation_
@@ -4882,7 +4939,7 @@ void NativeExecutionConsumer::drain_after_applied(
         }
 
         auto& children = drain_handles_;
-        requests_.waiting_children(filler, children);
+        read_drain_handles(DrainHandles::Children, applied, filler, children);
         // The arm of an anchored leg reads the run's price tick (the ladder a
         // rounded anchor snaps to) exactly as acceptance does through
         // CommandContext::price_tick, and offers the host its one level
@@ -4975,7 +5032,7 @@ void NativeExecutionConsumer::drain_after_applied(
         }
 
         auto& bound = drain_handles_;
-        requests_.bound_close_handles(bound);
+        read_drain_handles(DrainHandles::Bound, applied, filler, bound);
         for (const auto& handle : bound) {
             if (failed()) return;
             const auto* live = requests_.find_live(handle);
@@ -5212,39 +5269,36 @@ std::vector<native_order::OpeningObservation> NativeExecutionConsumer::read_open
     return out;
 }
 
-// read_openings, written over `out` so a caller that keeps it reuses its
-// capacity. The rows are ordered by incarnation, ties in handle order: a
-// stable sort, whose result is unique. A short list is sorted by stable
-// insertion instead of std::stable_sort, whose libstdc++ spelling allocates
-// a merge buffer on every call; a long one keeps std::stable_sort.
+detail::PagedRunRows<native_order::OpeningObservation> NativeExecutionConsumer::opening_rows(
+        const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
+        int64_t cycle) const {
+    detail::PagedRunRows<native_order::OpeningObservation> out;
+    // Selection over (incarnation, original index) is exactly the former
+    // stable_sort, including duplicate/stale handles. One row is constructed
+    // at a time; the returned snapshot's rows and directory are external.
+    std::optional<std::pair<std::uint64_t, std::size_t>> previous;
+    for (std::size_t delivered = 0; delivered < handles.size(); ++delivered) {
+        std::optional<std::pair<std::uint64_t, std::size_t>> next;
+        for (std::size_t index = 0; index < handles.size(); ++index) {
+            const auto key = std::make_pair(handles[index].incarnation, index);
+            if (previous && key <= *previous) continue;
+            if (!next || key < *next) next = key;
+        }
+        out.push_back(read_opening(engine, handles[next->second], cycle));
+        previous = next;
+    }
+    return out;
+}
+
+// Explicit owning compatibility bridge for the still-vector-valued core
+// TargetObservation / CommandContext. Its copy remains O(handles); callers
+// that need a bounded snapshot use opening_rows() and consume one row.
 void NativeExecutionConsumer::read_openings_into(
         const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
         int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
     out.clear();
     out.reserve(handles.size());
-    for (const auto& handle : handles) {
-        native_order::OpeningObservation row;
-        row.queried_opening = handle;
-        row.queried_cycle = cycle;
-        out.push_back(std::move(row));
-    }
-    const auto by_incarnation = [](const native_order::OpeningObservation& a,
-                                   const native_order::OpeningObservation& b) {
-        return a.queried_opening.incarnation < b.queried_opening.incarnation;
-    };
-    constexpr std::size_t kInsertionSortRows = 32;
-    if (out.size() <= kInsertionSortRows) {
-        for (std::size_t i = 1; i < out.size(); ++i) {
-            if (!by_incarnation(out[i], out[i - 1])) continue;
-            native_order::OpeningObservation row = std::move(out[i]);
-            std::size_t j = i;
-            for (; j > 0 && by_incarnation(row, out[j - 1]); --j) out[j] = std::move(out[j - 1]);
-            out[j] = std::move(row);
-        }
-    } else {
-        std::stable_sort(out.begin(), out.end(), by_incarnation);
-    }
-    refresh_openings(engine, out);
+    for (const auto& row : opening_rows(engine, handles, cycle)) out.push_back(row);
 }
 
 void NativeExecutionConsumer::refresh_openings(const BacktestEngine& engine,
@@ -5552,38 +5606,30 @@ double NativeExecutionConsumer::sizing_point_price(
 std::optional<double> NativeExecutionConsumer::placement_scope_units(
         const BacktestEngine& engine, const native_order::Request& request) const {
     double units = 0.0;
-    const auto sum_incarnations = [&](const std::vector<native_order::OpeningObservation>& rows) {
-        std::vector<std::uint64_t> incarnations;
-        incarnations.reserve(rows.size());
-        for (const auto& row : rows) {
-            if (row.has_live_matching_lot) incarnations.push_back(row.queried_opening.incarnation);
-        }
-        double total = 0.0;
-        for (const auto& lot : engine.pyramid_entries_) {
-            if (std::find(incarnations.begin(), incarnations.end(), lot.entry_incarnation)
-                != incarnations.end()) {
-                total += lot.qty;
-            }
-        }
-        return total;
-    };
     if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
         for (const auto& lot : engine.pyramid_entries_) {
             if (lot.entry_incarnation == bind->opening.incarnation) units += lot.qty;
         }
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&request.owner)) {
-        units = sum_incarnations(read_openings(engine, bind->openings, bind->cycle));
+        if (bind->cycle == engine.position_cycle_seq_ && engine.position_cycle_seq_ > 0
+            && engine.position_side_ != PositionSide::FLAT) {
+            for (const auto& lot : engine.pyramid_entries_) {
+                const bool selected = std::any_of(bind->openings.begin(), bind->openings.end(),
+                    [&](const auto& opening) {
+                        return opening.run == requests_.identity()
+                            && opening.incarnation == lot.entry_incarnation;
+                    });
+                if (selected) units += lot.qty;
+            }
+        }
     } else if (const auto* bind = std::get_if<native_order::BindCohort>(&request.owner)) {
         const auto position = read_position(engine);
         const auto* nonflat = std::get_if<native_order::PositionNonflat>(&position);
         if (!nonflat) return 0.0;
-        std::vector<native_order::RequestHandle> handles;
-        handles.reserve(engine.pyramid_entries_.size());
         for (const auto& lot : engine.pyramid_entries_) {
-            native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
-            if (requests_.cohort_contains(bind->cohort, handle)) handles.push_back(handle);
+            const native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
+            if (requests_.cohort_contains(bind->cohort, handle)) units += lot.qty;
         }
-        units = sum_incarnations(read_openings(engine, handles, nonflat->cycle));
     } else {
         // Independent and WaitForApplied both bind the whole book.
         for (const auto& lot : engine.pyramid_entries_) units += lot.qty;
@@ -10876,8 +10922,9 @@ double NativeExecutionConsumer::TickVolume::value() const noexcept {
     return exact ? decimal_value(units) : sum + compensation;
 }
 
-bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
-    if (n < 0 || (n > 0 && ticks == nullptr)) {
+bool NativeExecutionConsumer::preflight_ticks(
+        BacktestEngine& engine, const void* ticks, int n, TickReader read) {
+    if (n < 0 || (n > 0 && (ticks == nullptr || read == nullptr))) {
         present_refusal(engine, "native tick array is invalid",
                         RunFailureCode::stream_input_rejected);
         return false;
@@ -10908,7 +10955,7 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
     int64_t prev_array_ts = 0;
     bool has_array_prev = false;
     for (int i = 0; i < n; ++i) {
-        const TradeTick& tick = ticks[i];
+        const TradeTick tick = read(ticks, i);
         if (!std::isfinite(tick.price) || tick.price <= 0.0) {
             present_refusal(engine, "native tick price must be finite and positive",
                             RunFailureCode::stream_input_rejected);
@@ -11197,7 +11244,9 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
     clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
-        if (!preflight_ticks(engine, &tick, 1)) return false;
+        if (!preflight_ticks(engine, &tick, 1, [](const void* rows, int i) {
+                return static_cast<const TradeTick*>(rows)[i];
+            })) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         {
             PumpScope pump(*this);
@@ -11216,18 +11265,25 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
 }
 
 bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
+    return stream_push_ticks_borrowed(engine, ticks, n, [](const void* rows, int i) {
+        return static_cast<const TradeTick*>(rows)[i];
+    });
+}
+
+bool NativeExecutionConsumer::stream_push_ticks_borrowed(
+        BacktestEngine& engine, const void* ticks, int n, TickReader read) {
     const EntryExitGuard exit_scope(*this, engine, true);
     if (refuse_dispatch_reentry()) return false;
     if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
     clear_rendered(engine);
     engine.last_run_status_ = 0;
     try {
-        if (!preflight_ticks(engine, ticks, n)) return false;
+        if (!preflight_ticks(engine, ticks, n, read)) return false;
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         {
             PumpScope pump(*this);
             for (int i = 0; i < n; ++i) {
-                if (!deliver_tick(engine, ticks[i])) return false;
+                if (!deliver_tick(engine, read(ticks, i))) return false;
                 if (!check_abort(engine, NativeFailureOperation::Input)) return false;
             }
         }
@@ -11242,6 +11298,11 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
         fail_unclassified(engine, NativeFailureOperation::Input);
         return false;
     }
+}
+
+bool native_stream_push_ticks_borrowed(
+        BacktestEngine* engine, const void* ticks, int n, NativeExecutionConsumer::TickReader read) {
+    return NativeExecutionConsumer::bound(*engine).stream_push_ticks_borrowed(*engine, ticks, n, read);
 }
 
 bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_t timestamp_ms) {
@@ -11630,6 +11691,21 @@ std::vector<NativeWorkingRequest> NativeExecutionConsumer::working_requests() co
         out.push_back(std::move(row));
     }
     return out;
+}
+
+std::size_t NativeExecutionConsumer::working_request_count() const {
+    std::size_t count = 0;
+    for (const auto& live : requests_.live()) if (!hidden_until_armed(live)) ++count;
+    return count;
+}
+
+NativeWorkingRequest NativeExecutionConsumer::working_request_at(std::size_t index) const {
+    for (const auto& live : requests_.live()) {
+        if (hidden_until_armed(live)) continue;
+        if (index-- != 0) continue;
+        return NativeWorkingRequest{live.definition, project_live_remaining(live.remaining), live.trigger_state};
+    }
+    throw std::out_of_range("working request index");
 }
 
 std::size_t NativeExecutionConsumer::cancel_all(BacktestEngine& engine) {
@@ -12211,14 +12287,21 @@ NativePhysicalPosition NativeStrategyHost::physical_position() const {
 // later. Nothing is cached and nothing is written: this cannot move a hash.
 std::vector<NativeOpenLot> NativeExecutionConsumer::open_lots(
         const BacktestEngine& engine, double mark) const {
+    // Explicit owning compatibility API. Current-book readers can request
+    // each row directly with open_lot_at(), retaining only that row.
     std::vector<NativeOpenLot> out;
     const auto n = engine.pyramid_entries_.size();
-    if (n == 0) return out;
     out.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) out.push_back(open_lot_at(engine, mark, i));
+    return out;
+}
+
+NativeOpenLot NativeExecutionConsumer::open_lot_at(
+        const BacktestEngine& engine, double mark, std::size_t i) const {
+    if (i >= engine.pyramid_entries_.size()) throw std::out_of_range("open lot index");
     const bool is_long = engine.position_side_ != PositionSide::SHORT;
     const double point_value = engine.syminfo_.pointvalue;
     const double fx = engine.active_account_currency_fx();
-    for (std::size_t i = 0; i < n; ++i) {
         const PyramidEntry& lot = engine.pyramid_entries_[i];
         NativeOpenLot row;
         row.ordinal = i;
@@ -12246,9 +12329,7 @@ std::vector<NativeOpenLot> NativeExecutionConsumer::open_lots(
         }
         row.favorable_excursion = favorable * point_value * fx;
         row.adverse_excursion = adverse * point_value * fx;
-        out.push_back(std::move(row));
-    }
-    return out;
+        return row;
 }
 
 std::vector<NativeOpenLot> NativeStrategyHost::native_open_lots(double mark) const {

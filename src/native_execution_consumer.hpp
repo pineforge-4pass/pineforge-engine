@@ -17,8 +17,55 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
+
+#define PINEFORGE_HAS_NATIVE_ROW_READBACK_V1 1
+
+namespace pineforge {
+namespace detail {
+
+// PagedRunRows' record codec for one opening observation. PositionIdentity is
+// a two-alternative std::variant, so it is not trivially copyable: the record
+// spells the alternative out instead of copying object bytes. The record
+// carries exactly the row's fields; it adds nothing a reader can observe.
+static_assert(std::is_trivially_copyable_v<native_order::RequestHandle>,
+              "an opening row's handle must stay a plain byte record");
+
+template<> struct RunRowCodec<native_order::OpeningObservation> {
+    static void write(RunRowWriter& out, const native_order::OpeningObservation& row) {
+        out.fields(row.queried_opening, row.queried_cycle);
+        const bool nonflat =
+            std::holds_alternative<native_order::PositionNonflat>(row.current_position);
+        out.fields(nonflat);
+        if (nonflat) {
+            const auto& position =
+                std::get<native_order::PositionNonflat>(row.current_position);
+            out.fields(position.cycle, static_cast<std::uint8_t>(position.side));
+        }
+        out.fields(row.has_live_matching_lot);
+    }
+    static void read(RunRowReader& in, native_order::OpeningObservation& row) {
+        in.fields(row.queried_opening, row.queried_cycle);
+        bool nonflat = false;
+        in.fields(nonflat);
+        if (nonflat) {
+            native_order::PositionNonflat position;
+            std::uint8_t side = 0;
+            in.fields(position.cycle, side);
+            position.side = static_cast<native_order::Side>(side);
+            row.current_position = position;
+        } else {
+            row.current_position = native_order::PositionFlat{};
+        }
+        in.fields(row.has_live_matching_lot);
+    }
+};
+
+} // namespace detail
+} // namespace pineforge
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
@@ -126,6 +173,11 @@ public:
     bool stream_push_bar(BacktestEngine& engine, const Bar& bar) override;
     bool stream_push_tick(BacktestEngine& engine, const TradeTick& tick) override;
     bool stream_push_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) override;
+    // Internal C transport: decode one borrowed C POD at a time, without
+    // aliasing it as a C++ TradeTick or copying the whole batch.
+    using TickReader = TradeTick (*)(const void*, int);
+    bool stream_push_ticks_borrowed(BacktestEngine& engine, const void* ticks, int n,
+                                   TickReader read);
     bool stream_advance_time(BacktestEngine& engine, int64_t timestamp_ms) override;
     bool stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) override;
 
@@ -193,6 +245,11 @@ public:
     native_order::CancelResult cancel(BacktestEngine& engine,
                                       const native_order::RequestHandle& target);
     std::vector<NativeWorkingRequest> working_requests() const;
+    // Current-book readback: one owning row per call, without a retained
+    // snapshot. Nested reads are safe. Commands between calls can change the
+    // book; callers needing the v1 frozen snapshot use working_requests().
+    std::size_t working_request_count() const;
+    NativeWorkingRequest working_request_at(std::size_t index) const;
     std::size_t cancel_all(BacktestEngine& engine);
     std::size_t cancel_where(BacktestEngine& engine, std::string_view text,
                              NativeRequestField field = NativeRequestField::Comment);
@@ -248,6 +305,12 @@ public:
         return out;
     }
     std::vector<NativeOpenLot> open_lots(const BacktestEngine& engine, double mark) const;
+    NativeOpenLot open_lot_at(const BacktestEngine& engine, double mark, std::size_t index) const;
+    // Immutable external readback, stable across nested reads and later
+    // commands. Input handle storage remains charged to the caller.
+    detail::PagedRunRows<native_order::OpeningObservation> opening_rows(
+        const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
+        int64_t cycle) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::optional<double> host_liquidation_price(const BacktestEngine& engine) const;
     // NativeStrategyHost::native_sized_units: the L3 basis arithmetic under the
@@ -1575,8 +1638,12 @@ private:
                                NativeFailureOperation operation);
     void drain_dependency_queue(
             BacktestEngine& engine,
-            const std::vector<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
+            const detail::PagedRunRows<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
             NativeFailureOperation operation);
+    enum class DrainHandles { Group, Children, Bound };
+    void read_drain_handles(DrainHandles kind, const native_order::EventId& applied,
+                           const native_order::RequestHandle& parent,
+                           detail::PagedRunRows<native_order::RequestHandle>& out) const;
     void observe_trails(BacktestEngine& engine, const NativeDriverPoint& point,
                         const native_order::MatchCursor& cursor, bool continuous,
                         double price);
@@ -1591,7 +1658,7 @@ private:
                                      int script_index, int input_index, int64_t effective,
                                      NativePriceProvenance provenance,
                                      NativePathPhase phase) const;
-    bool preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n);
+    bool preflight_ticks(BacktestEngine& engine, const void* ticks, int n, TickReader read);
     bool deliver_tick(BacktestEngine& engine, const TradeTick& tick);
     // The cooperative abort alone: check_abort_or_projection's first half, for
     // a boundary no host code has run since the last full check. Both answer
@@ -2088,14 +2155,14 @@ private:
     bool direct_mutation_ = true;
     // drain_after_applied's lists (the group recipients, the waiting
     // children, the bound closes), read one after another into this scratch:
-    // capacity only between fills, never run state, folded into nothing. A
+    // external rows only between fills, never run state, folded into nothing. A
     // drain runs inside the settlement of one fill, where no host command can
     // start another.
-    std::vector<native_order::RequestHandle> drain_handles_;
+    detail::PagedRunRows<native_order::RequestHandle> drain_handles_;
     // drain_after_applied's seeds for the dependency queue, the same kind of
     // scratch: cleared where the drain starts, read by the queue it hands
-    // them to, capacity only between fills.
-    std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> drain_seeds_;
+    // them to. Its index and rows are both external.
+    detail::PagedRunRows<std::pair<native_order::EventId, native_order::RequestHandle>> drain_seeds_;
     // consume_matched_request's precommit view, written whole for each fill
     // and shown to the host only inside that fill's precommit call (which
     // cannot start another fill), so its closed-row vector keeps capacity

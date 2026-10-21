@@ -25,9 +25,7 @@ constexpr std::uint64_t fold_word(std::uint64_t accumulator, std::uint64_t word)
     return accumulator;
 }
 
-}  // namespace
-
-Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* events,
+Plan walk_schedule(const State& before, std::uint32_t cadence, const Event* events,
                    std::size_t count, const BarClock& clock, bool want_points) {
     Plan plan;
     plan.after = before;
@@ -36,7 +34,7 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
         plan.count = 0;
         plan.after = before;
         plan.points.clear();
-        return plan;
+        return std::move(plan);
     };
     if ((cadence & ~kCadenceMask) != 0 || (cadence & kCadenceBarClose) == 0) {
         return refused(Status::BadCadence);
@@ -45,7 +43,6 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
 
     State s = before;
     std::uint64_t planned = 0;
-    std::vector<Point> rows;
 
     // Whether the timebase holds time boundaries at an instant. A clock with no
     // slot there says nothing against it, so such an instant keeps the bounded
@@ -87,7 +84,7 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
                 point.at_ms = position_ms;
                 point.phase = phase;
                 point.finality = finality;
-                rows.push_back(point);
+                plan.points.push_back(point);
             }
             ++planned;
             ++calc;
@@ -198,8 +195,26 @@ Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* even
     plan.status = Status::Ok;
     plan.count = planned;
     plan.after = s;
-    plan.points = std::move(rows);
     return plan;
+}
+
+}  // namespace
+
+Plan plan_schedule(const State& before, std::uint32_t cadence, const Event* events,
+                   std::size_t count, const BarClock& clock, bool want_points) {
+    // Validate every event and derive the final state without retaining any
+    // output. In particular, a late refusal never opens a points file.
+    Plan counted = walk_schedule(before, cadence, events, count, clock, false);
+    if (!want_points || counted.status != Status::Ok) return counted;
+
+    // The same deterministic walk now writes external rows through one
+    // current Point. No state is installed until this pass has completed;
+    // a storage error or a throwing clock leaves the consumer unchanged.
+    Plan applied = walk_schedule(before, cadence, events, count, clock, true);
+    if (applied.status != Status::Ok) return applied;
+    if (applied.count != counted.count || applied.after.tie() != counted.after.tie())
+        throw std::logic_error("calculation schedule clock changed between passes");
+    return applied;
 }
 
 std::uint64_t digest(const State& state) noexcept {

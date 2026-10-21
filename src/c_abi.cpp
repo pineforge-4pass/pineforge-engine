@@ -68,6 +68,8 @@ bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
 inline namespace engine_script_run_v19 { void native_stream_snapshot_report(BacktestEngine* engine, ReportC* out); }
 inline namespace engine_script_run_v19 { bool native_selected_query_closed(const BacktestEngine* engine) noexcept; }
 inline namespace engine_script_run_v19 {
+bool native_stream_push_ticks_borrowed(BacktestEngine*, const void*, int,
+                                      TradeTick (*)(const void*, int));
 // The private bridges behind the execution observer and selected-window
 // exports at the end of this file. The native consumer defines them and owns
 // every null, size, version and state check; the exports only delegate.
@@ -784,13 +786,11 @@ PF_API int strategy_stream_push_ticks(pf_strategy_t s,
     return pf_cabi_int(s, [&] {
         if (!s || n < 0 || (n > 0 && !ticks)) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-        std::vector<pineforge::TradeTick> native;
-        native.reserve(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i) {
-            const auto& tick = ticks[i];
-            native.push_back({tick.timestamp, tick.sequence, tick.price, tick.quantity});
-        }
-        return engine->stream_push_ticks(native.data(), n) ? 0 : -1;
+        return pineforge::native_stream_push_ticks_borrowed(engine, ticks, n,
+            [](const void* rows, int i) {
+                const auto& tick = static_cast<const pf_trade_tick_t*>(rows)[i];
+                return pineforge::TradeTick{tick.timestamp, tick.sequence, tick.price, tick.quantity};
+            }) ? 0 : -1;
     });
 }
 

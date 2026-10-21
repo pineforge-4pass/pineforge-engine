@@ -300,10 +300,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             f.u(feed.columns);
         }
     }
-    std::vector<std::string> input_keys;
-    for (const auto& pair : staged_.inputs) input_keys.push_back(pair.first);
-    std::sort(input_keys.begin(), input_keys.end()); f.u(input_keys.size());
-    for (const auto& key : input_keys) { f.s(key); f.s(staged_.inputs.at(key)); }
+    f.u(staged_.inputs.size());
+    visit_ordered_hash_map(staged_.inputs, [&](const auto& row) { f.s(row.first); f.s(row.second); });
     // Replay every logical cohort in the same lexicographic order as before,
     // including retired summaries, without materializing an id-sized vector.
     f.u(cohorts_by_id_.size());
@@ -315,14 +313,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.u(cohort.origins.size()); f.u(cohort.origins.digest());
         hash_native_handle_vector(f, cohort.opened);
         f.u(cohort.erased_opening_sides);
-        std::vector<std::uint64_t> live_origin_keys;
-        live_origin_keys.reserve(cohort.live_units_by_origin.size());
-        for (const auto& row : cohort.live_units_by_origin) live_origin_keys.push_back(row.first);
-        std::sort(live_origin_keys.begin(), live_origin_keys.end());
-        f.u(live_origin_keys.size());
-        for (const auto incarnation : live_origin_keys) {
-            f.u(incarnation); f.d(cohort.live_units_by_origin.at(incarnation));
-        }
+        f.u(cohort.live_units_by_origin.size());
+        visit_ordered_hash_map(cohort.live_units_by_origin, [&](const auto& row) {
+            f.u(row.first); f.d(row.second);
+        });
     }
     f.u(cohorts_by_id_.size());
     cohorts_by_id_.for_each_id([&](const auto& key) { f.s(key); });
@@ -332,22 +326,20 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(placement_.high_water()); f.u(placement_.erased_rows()); f.u(placement_.erased_digest());
     f.u(placement_.size());
     for (const auto& row : placement_) { f.u(row.first); hash_placement(f, row.second); }
-    std::vector<std::uint64_t> live_keys;
-    for (const auto& pair : live_by_source_key_) live_keys.push_back(pair.first);
-    std::sort(live_keys.begin(), live_keys.end()); f.u(live_keys.size());
-    for (const auto key : live_keys) { f.u(key); hash_native_handle(f, live_by_source_key_.at(key)); }
-    std::vector<std::uint64_t> bracket_keys;
-    for (const auto& pair : bracket_families_) bracket_keys.push_back(pair.first);
-    std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());
-    for (const auto key : bracket_keys) {
+    f.u(live_by_source_key_.size());
+    visit_ordered_hash_map(live_by_source_key_, [&](const auto& row) {
+        f.u(row.first); hash_native_handle(f, row.second);
+    });
+    f.u(bracket_families_.size());
+    visit_ordered_hash_map(bracket_families_, [&](const auto& row) {
         // v4: the settled prefix as its count and running digest, the
         // working tail in full, and the consumed legs of erased members.
-        const auto& family = bracket_families_.at(key);
-        f.u(key); f.u(family.settled_count()); f.u(family.settled_digest());
+        const auto& family = row.second;
+        f.u(row.first); f.u(family.settled_count()); f.u(family.settled_digest());
         hash_native_handle_vector(f, family.working_tail());
         f.u(family.consumed_facts().size());
         for (const auto& fact : family.consumed_facts()) { f.u(fact.first); f.u(fact.second); }
-    }
+    });
     f.u(pending_bracket_legs_.size());
     for (const auto& leg : pending_bracket_legs_) {
         hash_native_request(f, leg.request); hash_placement(f, leg.snapshot);
@@ -492,41 +484,21 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.u(exit_rank_keys_.size()); f.u(exit_rank_keys_digest_);
         f.u(exit_rank_peak_); f.u(exit_rank_alt_peak_);
     }
-    std::vector<std::uint64_t> current_debit_ordinals;
-    current_debit_ordinals.reserve(current_debited_applied_ordinals_.size());
-    for (const auto ordinal : current_debited_applied_ordinals_) current_debit_ordinals.push_back(ordinal);
-    std::sort(current_debit_ordinals.begin(), current_debit_ordinals.end());
-    f.u(current_debit_ordinals.size());
-    for (const auto ordinal : current_debit_ordinals) f.u(ordinal);
-    std::vector<std::uint64_t> intraday_relabel_ordinals;
-    intraday_relabel_ordinals.reserve(intraday_loss_relabel_ordinals_.size());
-    for (const auto ordinal : intraday_loss_relabel_ordinals_)
-        intraday_relabel_ordinals.push_back(ordinal);
-    std::sort(intraday_relabel_ordinals.begin(), intraday_relabel_ordinals.end());
-    f.u(intraday_relabel_ordinals.size());
-    for (const auto ordinal : intraday_relabel_ordinals) f.u(ordinal);
-    std::vector<std::string> consumed_partial_keys;
-    consumed_partial_keys.reserve(consumed_partial_exit_cycles_.size());
-    for (const auto& row : consumed_partial_exit_cycles_) consumed_partial_keys.push_back(row.first);
-    std::sort(consumed_partial_keys.begin(), consumed_partial_keys.end());
-    f.u(consumed_partial_keys.size());
-    for (const auto& key : consumed_partial_keys) {
-        f.s(key); f.i(consumed_partial_exit_cycles_.at(key));
-    }
-    std::vector<std::uint64_t> shadowed_openings(
-        bracket_shadowed_openings_.begin(), bracket_shadowed_openings_.end());
-    std::sort(shadowed_openings.begin(), shadowed_openings.end());
-    f.u(shadowed_openings.size());
-    for (const auto opening : shadowed_openings) f.u(opening);
-    std::vector<std::string> named_cancel_keys;
-    named_cancel_keys.reserve(named_entry_cancel_tokens_.size());
-    for (const auto& row : named_entry_cancel_tokens_) named_cancel_keys.push_back(row.first);
-    std::sort(named_cancel_keys.begin(), named_cancel_keys.end());
-    f.u(named_cancel_keys.size());
-    for (const auto& key : named_cancel_keys) {
-        const auto& token = named_entry_cancel_tokens_.at(key);
-        f.s(key); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
-    }
+    f.u(current_debited_applied_ordinals_.size());
+    visit_ordered_hash_set(current_debited_applied_ordinals_, [&](const auto ordinal) { f.u(ordinal); });
+    f.u(intraday_loss_relabel_ordinals_.size());
+    visit_ordered_hash_set(intraday_loss_relabel_ordinals_, [&](const auto ordinal) { f.u(ordinal); });
+    f.u(consumed_partial_exit_cycles_.size());
+    visit_ordered_hash_map(consumed_partial_exit_cycles_, [&](const auto& row) {
+        f.s(row.first); f.i(row.second);
+    });
+    f.u(bracket_shadowed_openings_.size());
+    visit_ordered_hash_set(bracket_shadowed_openings_, [&](const auto opening) { f.u(opening); });
+    f.u(named_entry_cancel_tokens_.size());
+    visit_ordered_hash_map(named_entry_cancel_tokens_, [&](const auto& row) {
+        const auto& token = row.second;
+        f.s(row.first); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
+    });
     // Folded only when an exit's id binding outlived a cancel of its order,
     // so a run that never keeps one folds what it folded before.
     if (!id_bound_exits_.empty()) {
@@ -560,13 +532,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     // The exit tombstones, folded only while there are any.
     if (!exit_tombstones_.empty()) {
-        std::vector<SourceId> keys;
-        keys.reserve(exit_tombstones_.size());
-        for (const auto& row : exit_tombstones_) keys.push_back(row.first);
-        std::sort(keys.begin(), keys.end());
         f.s("pineforge-exit-tombstones/v1");
-        f.u(keys.size());
-        for (const auto& key : keys) { f.s(key); f.u(exit_tombstones_.at(key)); }
+        f.u(exit_tombstones_.size());
+        visit_ordered_hash_map(exit_tombstones_, [&](const auto& row) { f.s(row.first); f.u(row.second); });
     }
     // The retired reservation model's two maps and two per-site maps fold as
     // the empty maps they always were outside a multi-call close site.
@@ -712,21 +680,14 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     // generic lot as PyramidEntry::market_pyramid_add; it is adapter state
     // now, so the source extension folds it. Unordered container: sort the
     // keys, exactly like trail_state_at_open_ below.
-    std::vector<std::uint64_t> market_add_keys(market_pyramid_adds_.begin(),
-                                               market_pyramid_adds_.end());
-    std::sort(market_add_keys.begin(), market_add_keys.end());
-    f.u(market_add_keys.size());
-    for (const auto key : market_add_keys) f.u(key);
-    std::vector<std::uint64_t> trail_open_keys;
-    trail_open_keys.reserve(trail_state_at_open_.size());
-    for (const auto& row : trail_state_at_open_) trail_open_keys.push_back(row.first);
-    std::sort(trail_open_keys.begin(), trail_open_keys.end());
-    f.u(trail_open_keys.size());
-    for (const auto key : trail_open_keys) {
-        const auto& state = trail_state_at_open_.at(key);
-        f.u(key); f.b(state.activated); f.d(state.best_price);
+    f.u(market_pyramid_adds_.size());
+    visit_ordered_hash_set(market_pyramid_adds_, [&](const auto key) { f.u(key); });
+    f.u(trail_state_at_open_.size());
+    visit_ordered_hash_map(trail_state_at_open_, [&](const auto& row) {
+        const auto& state = row.second;
+        f.u(row.first); f.b(state.activated); f.d(state.best_price);
         f.d(state.current_level); f.u(state.activation_ordinal);
-    }
+    });
     // The trails re-priced for the bar in flight (carried trail tick reach),
     // empty between bars; folded only while set, so every run without one
     // keeps its digest.

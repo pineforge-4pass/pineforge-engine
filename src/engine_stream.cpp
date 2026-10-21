@@ -11,10 +11,88 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
 
 namespace pineforge {
+
+// StreamActionQueue's declaration/member substitution belongs to o1-e1's
+// engine.hpp. REPORT.md contains the exact integration diff; these methods
+// deliberately require that declaration rather than silently falling back
+// to a population-sized in-memory queue.
+namespace {
+struct StreamActionCodec {
+    static void write(detail::RunRowWriter& out, const StreamOrderAction& row) {
+        out.fields(row.sequence, row.timestamp_ms, row.bar_index, row.is_entry, row.is_long,
+                   row.quantity, row.price, row.order_id, row.comment,
+                   row.entry_incarnation, row.closed_trade_index);
+    }
+    static void read(detail::RunRowReader& in, StreamOrderAction& row) {
+        in.fields(row.sequence, row.timestamp_ms, row.bar_index, row.is_entry, row.is_long,
+                  row.quantity, row.price, row.order_id, row.comment,
+                  row.entry_incarnation, row.closed_trade_index);
+    }
+};
+}
+
+struct StreamActionQueue::Impl {
+    detail::PagedRunRows<StreamOrderAction, StreamActionCodec> rows;
+    // Only the legacy reference-returning API uses this explicitly non-flat
+    // cache. Its borrowed strings must survive every other read until the
+    // next stream mutation/clear. Internal writers and copy_at never use it.
+    mutable std::map<std::size_t, StreamOrderAction> borrowed;
+};
+
+StreamActionQueue::StreamActionQueue() = default;
+StreamActionQueue::~StreamActionQueue() = default;
+StreamActionQueue::StreamActionQueue(const StreamActionQueue& other) {
+    if (other.impl_) {
+        impl_ = std::make_unique<Impl>();
+        impl_->rows = other.impl_->rows;
+    }
+}
+StreamActionQueue& StreamActionQueue::operator=(const StreamActionQueue& other) {
+    if (this != &other) { StreamActionQueue copy(other); *this = std::move(copy); }
+    return *this;
+}
+StreamActionQueue::StreamActionQueue(StreamActionQueue&&) noexcept = default;
+StreamActionQueue& StreamActionQueue::operator=(StreamActionQueue&&) noexcept = default;
+
+void StreamActionQueue::reserve(std::size_t) {
+    if (!impl_) impl_ = std::make_unique<Impl>();
+    impl_->rows.prepare();
+}
+std::size_t StreamActionQueue::size() const noexcept { return impl_ ? impl_->rows.size() : 0; }
+std::uint64_t StreamActionQueue::external_bytes() const noexcept {
+    return impl_ ? impl_->rows.external_bytes() : 0;
+}
+void StreamActionQueue::clear() noexcept {
+    if (!impl_) return;
+    impl_->rows.clear();
+    impl_->borrowed.clear();
+}
+void StreamActionQueue::push_back(const StreamOrderAction& action) {
+    reserve(0);
+    impl_->rows.push_back(action);
+    impl_->borrowed.clear();
+}
+StreamOrderAction StreamActionQueue::copy_at(std::size_t index) const {
+    if (!impl_) throw std::out_of_range("stream action index");
+    return impl_->rows.at(index);
+}
+const StreamOrderAction& StreamActionQueue::at(std::size_t index) const {
+    if (!impl_) throw std::out_of_range("stream action index");
+    const auto found = impl_->borrowed.find(index);
+    if (found != impl_->borrowed.end()) return found->second;
+    return impl_->borrowed.emplace(index, copy_at(index)).first->second;
+}
+const StreamOrderAction& StreamActionQueue::front() const { return at(0); }
+void StreamActionQueue::set(std::size_t index, const StreamOrderAction& action) {
+    if (!impl_) throw std::out_of_range("stream action index");
+    impl_->rows.set(index, action);
+    impl_->borrowed.clear();
+}
 
 void BacktestEngine::stream_observe_entry(const PyramidEntry& pe) {
     if (stream_action_sequence_ == std::numeric_limits<uint64_t>::max()) {
@@ -59,11 +137,12 @@ void BacktestEngine::stream_refresh_action_metadata(size_t first_action, size_t 
     // row or lot it names, so the stream carries the final values.
     // Refresh only events produced by this input, retaining physical hook order.
     for (size_t i = first_action; i < stream_order_actions_.size(); ++i) {
-        auto& action = stream_order_actions_[i];
+        auto action = stream_order_actions_.copy_at(i);
         if (!action.is_entry) {
             const auto& trade = trades_.at(action.closed_trade_index);
             action.order_id = trade.exit_id;
             action.comment = trade.exit_comment;
+            stream_order_actions_.set(i, action);
             continue;
         }
         bool found = false;
@@ -83,6 +162,7 @@ void BacktestEngine::stream_refresh_action_metadata(size_t first_action, size_t 
                 }
             }
         }
+        stream_order_actions_.set(i, action);
     }
 }
 

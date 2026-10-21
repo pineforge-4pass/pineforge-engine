@@ -14,12 +14,254 @@
 // derived by the kernel and never stated by a caller.
 
 #include <pineforge/native_calc_point.hpp>
+#include <pineforge/detail/id_pair_store.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
+
+namespace pineforge::detail {
+
+// Internal run workspaces shared by the schedule and execution consumer.
+// The index is external too: neither row count nor replacement history grows
+// a RAM directory. Reads return values; each iterator owns its current row,
+// so nested reads/evictions do not invalidate a row a callback is reading.
+// Strings belong to ONE current row, never to a cached population of rows.
+class RunRowWriter;
+class RunRowReader;
+template<class T> struct RunRowCodec {
+    static void write(RunRowWriter& out, const T& row);
+    static void read(RunRowReader& in, T& row);
+};
+
+class RunRowWriter {
+public:
+    // `counting` measures a record without writing it: the same codec walk
+    // advances the offset and no byte reaches the file. A caller that must
+    // decide between rewriting a record in place and appending it (set())
+    // learns its size first, so a grown record can never overwrite the row
+    // that follows it.
+    RunRowWriter(IdPairScratchFile& file, std::uint64_t offset, bool counting = false)
+        : file_(file), offset_(offset), counting_(counting) {}
+    void bytes(const void* data, std::size_t size) {
+        if (!counting_) file_.write(offset_, data, size);
+        offset_ += size;
+    }
+    template<class... T> void fields(const T&... fields) {
+        (RunRowCodec<T>::write(*this, fields), ...);
+    }
+    std::uint64_t offset() const noexcept { return offset_; }
+private:
+    IdPairScratchFile& file_;
+    std::uint64_t offset_;
+    bool counting_;
+};
+class RunRowReader {
+public:
+    RunRowReader(const IdPairScratchFile& file, std::uint64_t offset) : file_(file), offset_(offset) {}
+    void bytes(void* data, std::size_t size) {
+        file_.read(offset_, data, size);
+        offset_ += size;
+    }
+    template<class... T> void fields(T&... fields) { (RunRowCodec<T>::read(*this, fields), ...); }
+private:
+    const IdPairScratchFile& file_;
+    std::uint64_t offset_;
+};
+template<class T> void RunRowCodec<T>::write(RunRowWriter& out, const T& row) {
+    static_assert(std::is_trivially_copyable_v<T>, "nontrivial external row needs a codec");
+    out.bytes(&row, sizeof(row));
+}
+template<class T> void RunRowCodec<T>::read(RunRowReader& in, T& row) {
+    static_assert(std::is_trivially_copyable_v<T>, "nontrivial external row needs a codec");
+    in.bytes(&row, sizeof(row));
+}
+template<> struct RunRowCodec<std::string> {
+    static void write(RunRowWriter& out, const std::string& row) {
+        const auto size = static_cast<std::uint64_t>(row.size());
+        out.fields(size); out.bytes(row.data(), row.size());
+    }
+    static void read(RunRowReader& in, std::string& row) {
+        std::uint64_t size = 0;
+        in.fields(size); row.resize(static_cast<std::size_t>(size));
+        in.bytes(row.data(), row.size());
+    }
+};
+template<class A, class B> struct RunRowCodec<std::pair<A, B>> {
+    static void write(RunRowWriter& out, const std::pair<A, B>& row) {
+        out.fields(row.first, row.second);
+    }
+    static void read(RunRowReader& in, std::pair<A, B>& row) { in.fields(row.first, row.second); }
+};
+
+template<class T, class Codec = RunRowCodec<T>> class PagedRunRows {
+    // One directory entry: where the row starts and how many bytes it
+    // occupies. The length lets `set` rewrite a same-sized row in place, so a
+    // replace-heavy reader (an ordering selection swap) cannot grow the file.
+    struct Slot {
+        std::uint64_t offset = 0;
+        std::uint64_t bytes = 0;
+    };
+public:
+    using value_type = T;
+    template<bool Reverse> class iterator {
+    public:
+        using iterator_category = std::bidirectional_iterator_tag;
+        using value_type = T;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const T*;
+        using reference = const T&;
+        iterator() = default;
+        reference operator*() const {
+            if (!row_) row_.emplace(owner_->at(Reverse ? limit_ - index_ - 1 : index_));
+            return *row_;
+        }
+        pointer operator->() const { return &**this; }
+        iterator& operator++() { ++index_; row_.reset(); return *this; }
+        iterator operator++(int) { auto old = *this; ++*this; return old; }
+        iterator& operator--() { --index_; row_.reset(); return *this; }
+        iterator operator--(int) { auto old = *this; --*this; return old; }
+        bool operator==(const iterator& other) const {
+            return owner_ == other.owner_ && index_ == other.index_;
+        }
+        bool operator!=(const iterator& other) const { return !(*this == other); }
+    private:
+        friend class PagedRunRows;
+        iterator(const PagedRunRows* owner, std::size_t index)
+            : owner_(owner), index_(index), limit_(owner->size()) {}
+        const PagedRunRows* owner_ = nullptr;
+        std::size_t index_ = 0;
+        std::size_t limit_ = 0;
+        mutable std::optional<T> row_;
+    };
+    using const_iterator = iterator<false>;
+    // A std::reverse_iterator would return a reference into a destroyed
+    // temporary iterator. Reverse reads need their own current row as well.
+    using const_reverse_iterator = iterator<true>;
+
+    PagedRunRows() = default;
+    PagedRunRows(const PagedRunRows& other) {
+        if (other.memory_) memory_ = std::make_unique<std::vector<T>>();
+        for (const auto& row : other) push_back(row);
+    }
+    PagedRunRows& operator=(const PagedRunRows& other) {
+        if (this != &other) { PagedRunRows copy(other); *this = std::move(copy); }
+        return *this;
+    }
+    PagedRunRows(PagedRunRows&& other) noexcept { swap(other); }
+    PagedRunRows& operator=(PagedRunRows&& other) noexcept {
+        if (this != &other) { clear(); swap(other); }
+        return *this;
+    }
+    void swap(PagedRunRows& other) noexcept {
+        using std::swap;
+        swap(data_, other.data_); swap(index_, other.index_);
+        swap(size_, other.size_); swap(bytes_, other.bytes_); swap(memory_, other.memory_);
+    }
+    void prepare() { if (!memory_) { data_.open({}); index_.open({}); } }
+    void clear() noexcept {
+        data_.reset(); index_.reset(); size_ = 0; bytes_ = 0;
+        if (memory_) memory_->clear();
+    }
+    std::size_t size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+    // No population-dependent reservation. Kept for reader/source migration.
+    void reserve(std::size_t) { prepare(); }
+    std::size_t capacity() const noexcept { return memory_ ? memory_->capacity() : 0; }
+    std::size_t max_size() const noexcept { return std::numeric_limits<std::size_t>::max(); }
+    std::size_t resident_bytes() const noexcept {
+        return sizeof(*this) + (memory_ ? memory_->capacity() * sizeof(T) : 0);
+    }
+    std::uint64_t external_bytes() const noexcept { return bytes_ + size_ * sizeof(Slot); }
+    T at(std::size_t index) const {
+        if (index >= size_) throw std::out_of_range("run row index");
+        if (memory_) return memory_->at(index);
+        Slot slot;
+        index_.read(index * sizeof(Slot), &slot, sizeof(slot));
+        RunRowReader reader(data_, slot.offset);
+        T row{}; Codec::read(reader, row); return row;
+    }
+    T operator[](std::size_t index) const { return at(index); }
+    T front() const { return at(0); }
+    T back() const { return at(size_ - 1); }
+    void push_back(const T& row) {
+        if (memory_) { memory_->push_back(row); ++size_; return; }
+        prepare();
+        Slot slot;
+        slot.offset = bytes_;
+        RunRowWriter writer(data_, bytes_);
+        Codec::write(writer, row);
+        slot.bytes = writer.offset() - slot.offset;
+        index_.write(size_ * sizeof(Slot), &slot, sizeof(slot));
+        bytes_ = writer.offset(); ++size_;
+    }
+    void set(std::size_t index, const T& row) {
+        if (index >= size_) throw std::out_of_range("run row index");
+        if (memory_) { (*memory_)[index] = row; return; }
+        Slot slot;
+        index_.read(index * sizeof(Slot), &slot, sizeof(slot));
+        // Measure first: a record that outgrows its slot must go to the file's
+        // end, because writing it in place would run over the next row. A
+        // record that fits keeps its address (fixed-width rows always do), so
+        // a replace-heavy reader such as an ordering selection swap cannot
+        // grow the file.
+        RunRowWriter measure(data_, 0, /*counting=*/true);
+        Codec::write(measure, row);
+        if (measure.offset() <= slot.bytes) {
+            RunRowWriter in_place(data_, slot.offset);
+            Codec::write(in_place, row);
+            return;
+        }
+        Slot appended;
+        appended.offset = bytes_;
+        RunRowWriter at_end(data_, bytes_);
+        Codec::write(at_end, row);
+        appended.bytes = at_end.offset() - appended.offset;
+        index_.write(index * sizeof(Slot), &appended, sizeof(appended));
+        bytes_ = at_end.offset();
+    }
+    template<class Predicate> void erase_if(Predicate&& remove) {
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < size_; ++i) {
+            const auto row = at(i);
+            if (remove(row)) continue;
+            if (memory_) { if (kept != i) (*memory_)[kept] = row; }
+            else if (kept != i) {
+                Slot slot; index_.read(i * sizeof(Slot), &slot, sizeof(slot));
+                index_.write(kept * sizeof(Slot), &slot, sizeof(slot));
+            }
+            ++kept;
+        }
+        size_ = kept;
+        if (memory_) memory_->resize(kept);
+    }
+    const_iterator begin() const { return {this, 0}; }
+    const_iterator end() const { return {this, size_}; }
+    const_reverse_iterator rbegin() const { return {this, 0}; }
+    const_reverse_iterator rend() const { return {this, size_}; }
+    // Explicit test oracle only. Production has no flag/environment fallback.
+    void fixture_use_memory_reference() {
+        if (!empty()) throw std::logic_error("run rows oracle changed after use");
+        data_.reset(); index_.reset(); memory_ = std::make_unique<std::vector<T>>();
+    }
+private:
+    IdPairScratchFile data_, index_;
+    std::size_t size_ = 0;
+    std::uint64_t bytes_ = 0;
+    std::unique_ptr<std::vector<T>> memory_;
+};
+
+} // namespace pineforge::detail
 
 namespace pineforge::native_calc {
 
@@ -77,7 +319,7 @@ struct Plan {
     /// Calculations planned; counted even when the points are not collected.
     std::uint64_t count = 0;
     State after;
-    std::vector<Point> points;
+    detail::PagedRunRows<Point> points;
 };
 
 /// Derives the calculations `events` make an instance with `cadence` perform,

@@ -1802,6 +1802,11 @@ private:
     mutable std::string calendar_session_;
     mutable std::string calendar_timezone_;
     mutable bool calendar_parsed_ = false;
+    /* Explicitly non-flat v1 compatibility snapshots. native_c_api.h promises
+     * EVERY copied-out string survives until the next snapshot, including
+     * across other gets and commands. A one-row cache would break that ABI.
+     * Bounded current-book C++ readback is working_request_at/open_lot_at;
+     * flat C transport needs a versioned caller-owned text-buffer contract. */
     std::vector<pineforge::NativeWorkingRequest> working_cache_;
     std::vector<pineforge::NativeOpenLot> open_lot_cache_;
     /* Valid only while the C timeframe callback runs, including nested calls.
