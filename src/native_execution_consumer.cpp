@@ -4763,62 +4763,166 @@ bool NativeExecutionConsumer::install_execution(
     return true;
 }
 
+namespace {
+using DependencyScratchKey = std::array<std::uint64_t, 4>;
+enum : std::uint64_t { dependency_edge, dependency_pending };
+
+detail::ScratchBytes dependency_bytes(const void* data, std::size_t size) noexcept {
+    return {static_cast<const std::byte*>(data), size};
+}
+
+detail::ScratchBuffer dependency_buffer(void* data, std::size_t size) noexcept {
+    return {static_cast<std::byte*>(data), size};
+}
+
+detail::ScratchStatus compare_dependency_scratch(
+        void*, const detail::ScratchByteSource& a, const detail::ScratchByteSource& b,
+        int& order) noexcept {
+    DependencyScratchKey ka{}, kb{};
+    if (a.size() != sizeof ka || b.size() != sizeof kb)
+        return detail::ScratchStatus::programming_error;
+    auto status = a.read(0, dependency_buffer(ka.data(), sizeof ka));
+    if (status != detail::ScratchStatus::ok) return status;
+    status = b.read(0, dependency_buffer(kb.data(), sizeof kb));
+    if (status != detail::ScratchStatus::ok) return status;
+    order = ka < kb ? -1 : kb < ka ? 1 : 0;
+    return detail::ScratchStatus::ok;
+}
+
+void require_dependency_scratch(detail::ScratchStatus status) {
+    if (status != detail::ScratchStatus::ok)
+        throw std::logic_error("dependency scratch contract operation failed");
+}
+
+class DependencyScratchTransaction {
+public:
+    explicit DependencyScratchTransaction(detail::ScratchStore& store) : store_(store) {
+        require_dependency_scratch(store_.begin());
+    }
+    ~DependencyScratchTransaction() {
+        if (store_.transaction_active()) (void)store_.rollback();
+    }
+    void finish() { require_dependency_scratch(store_.rollback()); }
+private:
+    detail::ScratchStore& store_;
+};
+} // namespace
+
+detail::ScratchKeyOrder NativeExecutionConsumer::dependency_scratch_order() noexcept {
+    return {0x5830380000000001ULL, nullptr, compare_dependency_scratch};
+}
+
+void NativeExecutionConsumer::set_dependency_scratch(detail::ScratchStore& store) {
+    require_dependency_scratch(store.status());
+    if (store.transaction_active() || store.record_count() != 0
+        || (dependency_scratch_ && dependency_scratch_->transaction_active()))
+        throw std::logic_error("dependency scratch must be exclusively owned and empty");
+    dependency_scratch_ = &store;
+}
+
 void NativeExecutionConsumer::drain_dependency_queue(
         BacktestEngine& engine,
         const std::vector<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
         NativeFailureOperation operation) {
     if (failed() || seeds.empty()) return;
     try {
-        struct Item {
-            uint64_t cause_ordinal = 0;
-            native_order::EventId cause;
-            native_order::RequestHandle child;
-            // The child's place in the queue when it was enqueued: a waiting
-            // child is live then, and the order is the book's.
-            uint64_t child_priority = 0;
+        if (!dependency_scratch_)
+            throw std::logic_error("run owner did not provision dependency scratch");
+        auto& scratch = *dependency_scratch_;
+        DependencyScratchTransaction transaction(scratch);
+        auto& census = dependency_scratch_stats_;
+        census = {};
+        const auto put = [&](const DependencyScratchKey& key, detail::ScratchBytes value) {
+            detail::ScratchSpanSource k(dependency_bytes(key.data(), sizeof key)), v(value);
+            detail::ScratchHandle handle = detail::scratch_no_handle;
+            require_dependency_scratch(scratch.put(k, v, handle));
         };
-        std::vector<Item> queue;
-        auto less_item = [](const Item& a, const Item& b) {
-            if (a.cause_ordinal != b.cause_ordinal) return a.cause_ordinal < b.cause_ordinal;
-            return a.child_priority < b.child_priority;
+        const auto key_at = [&](detail::ScratchHandle handle) {
+            DependencyScratchKey key{};
+            require_dependency_scratch(scratch.read(handle, detail::ScratchField::key, 0,
+                dependency_buffer(key.data(), sizeof key)));
+            return key;
         };
-        auto enqueue_children = [&](const native_order::EventId& cause,
-                                    const native_order::RequestHandle& parent,
-                                    std::size_t sort_from) {
-            auto children = requests_.waiting_children(parent);
-            for (auto& child : children) {
-                const auto* waiting = requests_.find_live(child);
-                const uint64_t priority = waiting ? waiting->priority() : child.incarnation;
-                queue.push_back(Item{cause.ordinal, cause, std::move(child), priority});
-            }
-            if (sort_from < queue.size()) {
-                std::sort(queue.begin() + static_cast<std::ptrdiff_t>(sort_from), queue.end(),
-                          less_item);
-            }
+        const auto seek = [&](const DependencyScratchKey& key,
+                              detail::ScratchHandle current = detail::scratch_no_handle) {
+            detail::ScratchSpanSource probe(dependency_bytes(key.data(), sizeof key));
+            detail::ScratchHandle result = detail::scratch_no_handle;
+            const auto before = scratch.stats().page_reads;
+            const auto status = current == detail::scratch_no_handle
+                ? scratch.lower_bound(probe, result) : scratch.next(current, result);
+            ++census.lookups;
+            census.max_lookup_reads = std::max(census.max_lookup_reads,
+                                               scratch.stats().page_reads - before);
+            if (status != detail::ScratchStatus::end) require_dependency_scratch(status);
+            return result;
         };
-        for (auto& seed : seeds) {
-            enqueue_children(seed.first, seed.second, queue.size());
+        // Parent-terminal settlement only erases live rows, without callbacks.
+        // Index their frozen book priorities once, then visit only one parent's
+        // edges per enqueue. Every accepted Wait parent belongs to this run.
+        for (const auto& live : requests_.live()) {
+            ++census.book_rows;
+            const auto* wait = std::get_if<native_order::Wait>(&live.authority);
+            if (!wait) continue;
+            ++census.waiting_rows;
+            put({dependency_edge, wait->parent.incarnation, live.priority(),
+                 live.handle().incarnation}, {});
         }
-        std::sort(queue.begin(), queue.end(), less_item);
-        for (std::size_t i = 0; i < queue.size() && !failed(); ++i) {
-            const native_order::EventId cause = queue[i].cause;
-            const native_order::RequestHandle child = queue[i].child;
+        std::uint64_t sequence = 0;
+        const auto enqueue = [&](const native_order::EventId& cause,
+                                 const native_order::RequestHandle& parent,
+                                 std::size_t seed) {
+            if (parent.run != requests_.identity()) return;
+            auto handle = seek({dependency_edge, parent.incarnation, 0, 0});
+            while (handle != detail::scratch_no_handle) {
+                const auto key = key_at(handle);
+                ++census.edge_rows;
+                if (key[0] != dependency_edge || key[1] != parent.incarnation) break;
+                const native_order::RequestHandle child{requests_.identity(), key[3]};
+                const auto* live = requests_.find_live(child);
+                const auto* wait = live ? std::get_if<native_order::Wait>(&live->authority) : nullptr;
+                if (wait && wait->parent == parent) {
+                    // The cause's run identity is borrowed from the original
+                    // seed, including for descendants. No identity bytes or
+                    // request payload are copied into queue scratch.
+                    const std::array<std::uint64_t, 2> item{seed, key[3]};
+                    put({dependency_pending, cause.ordinal, key[2], sequence++},
+                        dependency_bytes(item.data(), sizeof item));
+                    ++census.queued_rows;
+                }
+                handle = seek({}, handle);
+            }
+        };
+        for (std::size_t seed = 0; seed < seeds.size(); ++seed) {
+            ++census.seed_rows;
+            enqueue(seeds[seed].first, seeds[seed].second, seed);
+        }
+        while (!failed()) {
+            const auto handle = seek({dependency_pending, 0, 0, 0});
+            if (handle == detail::scratch_no_handle) break;
+            const auto key = key_at(handle);
+            std::array<std::uint64_t, 2> item{};
+            require_dependency_scratch(scratch.read(handle, detail::ScratchField::value, 0,
+                dependency_buffer(item.data(), sizeof item)));
+            ++census.popped_rows;
+            auto cause = seeds[static_cast<std::size_t>(item[0])].first;
+            cause.ordinal = key[1];
+            const native_order::RequestHandle child{requests_.identity(), item[1]};
+            require_dependency_scratch(scratch.erase(handle));
             CoreStep step = direct_mutation_
                 ? core_step(requests_.apply_parent_terminal(cause, child, next_timeline_ordinal_))
-                : core_step(requests_.prepare_parent_terminal(cause, child,
-                                                              next_timeline_ordinal_));
+                : core_step(requests_.prepare_parent_terminal(cause, child, next_timeline_ordinal_));
             if (const auto* err = std::get_if<native_order::PreparationError>(&step)) {
                 fail_preparation(engine, *err, operation);
                 return;
             }
             if (std::holds_alternative<native_order::NoChange>(step)) continue;
             if (!settle_step(engine, std::move(step), operation, cause.ordinal)) return;
-            if (requests_.find_live(child) == nullptr && requests_.last_ordinal() != 0) {
-                native_order::EventId next_cause = cause;
-                next_cause.ordinal = requests_.last_ordinal();
-                enqueue_children(next_cause, child, i + 1);
+            if (!requests_.find_live(child) && requests_.last_ordinal() != 0) {
+                cause.ordinal = requests_.last_ordinal();
+                enqueue(cause, child, static_cast<std::size_t>(item[0]));
             }
         }
+        transaction.finish();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, operation,
                                    seeds.empty() ? 0 : seeds.front().first.ordinal});

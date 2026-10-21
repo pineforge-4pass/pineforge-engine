@@ -18,7 +18,9 @@
 #include "pine_value_admit_risk.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <iterator>
@@ -34,6 +36,211 @@ namespace pineforge {
 using namespace source;
 
 namespace {
+
+using TradeScratchKey = std::array<std::uint64_t, 4>;
+using TradeScratchHeader = std::array<std::uint64_t, 23>;
+enum : std::uint64_t {
+    scratch_incarnation, scratch_row, scratch_sort, scratch_permutation
+};
+
+detail::ScratchBytes scratch_bytes(const void* data, std::size_t size) noexcept {
+    return {static_cast<const std::byte*>(data), size};
+}
+
+detail::ScratchBuffer scratch_buffer(void* data, std::size_t size) noexcept {
+    return {static_cast<std::byte*>(data), size};
+}
+
+detail::ScratchStatus compare_trade_scratch(
+        void*, const detail::ScratchByteSource& a, const detail::ScratchByteSource& b,
+        int& order) noexcept {
+    TradeScratchKey ka{}, kb{};
+    if (a.size() != sizeof ka || b.size() != sizeof kb)
+        return detail::ScratchStatus::programming_error;
+    auto status = a.read(0, scratch_buffer(ka.data(), sizeof ka));
+    if (status != detail::ScratchStatus::ok) return status;
+    status = b.read(0, scratch_buffer(kb.data(), sizeof kb));
+    if (status != detail::ScratchStatus::ok) return status;
+    order = ka < kb ? -1 : kb < ka ? 1 : 0;
+    return detail::ScratchStatus::ok;
+}
+
+void require_trade_scratch(detail::ScratchStatus status) {
+    if (status != detail::ScratchStatus::ok)
+        throw std::logic_error("trade scratch contract operation failed");
+}
+
+// These records are temporary, including on success. Rollback restores the
+// empty store and its handle counter; no scratch state survives a callback.
+class TradeScratchTransaction {
+public:
+    explicit TradeScratchTransaction(detail::ScratchStore& store) : store_(store) {
+        require_trade_scratch(store_.begin());
+    }
+    ~TradeScratchTransaction() {
+        if (store_.transaction_active()) (void)store_.rollback();
+    }
+    void finish() { require_trade_scratch(store_.rollback()); }
+private:
+    detail::ScratchStore& store_;
+};
+
+detail::ScratchHandle scratch_seek(const detail::ScratchStore& store,
+                                  const TradeScratchKey& key) {
+    detail::ScratchSpanSource probe(scratch_bytes(key.data(), sizeof key));
+    detail::ScratchHandle handle = detail::scratch_no_handle;
+    const auto status = store.lower_bound(probe, handle);
+    if (status != detail::ScratchStatus::end) require_trade_scratch(status);
+    return handle;
+}
+
+TradeScratchKey scratch_key(const detail::ScratchReadback& store,
+                           detail::ScratchHandle handle) {
+    TradeScratchKey key{};
+    require_trade_scratch(store.read(handle, detail::ScratchField::key, 0,
+                                     scratch_buffer(key.data(), sizeof key)));
+    return key;
+}
+
+detail::ScratchHandle scratch_find(const detail::ScratchStore& store,
+                                  const TradeScratchKey& key) {
+    const auto handle = scratch_seek(store, key);
+    return handle != detail::scratch_no_handle && scratch_key(store, handle) == key
+        ? handle : detail::scratch_no_handle;
+}
+
+void scratch_put(detail::ScratchStore& store, const TradeScratchKey& key,
+                 const detail::ScratchByteSource& value) {
+    detail::ScratchSpanSource source(scratch_bytes(key.data(), sizeof key));
+    detail::ScratchHandle handle = detail::scratch_no_handle;
+    require_trade_scratch(store.put(source, value, handle));
+}
+
+void scratch_put(detail::ScratchStore& store, const TradeScratchKey& key,
+                 detail::ScratchBytes value = {}) {
+    detail::ScratchSpanSource source(value);
+    scratch_put(store, key, source);
+}
+
+template<class Visit>
+void scratch_walk(const detail::ScratchStore& store, std::uint64_t kind, Visit&& visit) {
+    auto handle = scratch_seek(store, {kind, 0, 0, 0});
+    while (handle != detail::scratch_no_handle) {
+        const auto key = scratch_key(store, handle);
+        if (key[0] != kind) break;
+        visit(handle, key);
+        detail::ScratchHandle next = detail::scratch_no_handle;
+        const auto status = store.next(handle, next);
+        if (status != detail::ScratchStatus::end) require_trade_scratch(status);
+        handle = next;
+    }
+}
+
+template<class T>
+std::uint64_t scratch_word(const T& value) noexcept {
+    static_assert(sizeof(T) <= sizeof(std::uint64_t), "trade scratch scalar");
+    std::uint64_t word = 0;
+    std::memcpy(&word, &value, sizeof value);
+    return word;
+}
+
+template<class T>
+void scratch_scalar(std::uint64_t word, T& value) noexcept {
+    static_assert(sizeof(T) <= sizeof word, "trade scratch scalar");
+    std::memcpy(&value, &word, sizeof value);
+}
+
+TradeScratchHeader scratch_trade_header(const Trade& row, std::size_t source,
+                                       std::uint8_t phase) noexcept {
+    return {source, phase, scratch_word(row.entry_time), scratch_word(row.exit_time),
+            scratch_word(row.entry_price), scratch_word(row.exit_price), scratch_word(row.qty),
+            scratch_word(row.pnl), scratch_word(row.pnl_pct), scratch_word(row.is_long),
+            scratch_word(row.entry_bar_index), scratch_word(row.exit_bar_index),
+            scratch_word(row.exit_from_bracket), scratch_word(row.max_runup),
+            scratch_word(row.max_drawdown), scratch_word(row.commission),
+            row.entry_incarnation, scratch_word(row.open_at_end), scratch_word(row.close_cause),
+            row.entry_id.size(), row.entry_comment.size(), row.exit_comment.size(),
+            row.exit_id.size()};
+}
+
+void scratch_trade_scalars(const TradeScratchHeader& header, Trade& row) noexcept {
+    scratch_scalar(header[2], row.entry_time);
+    scratch_scalar(header[3], row.exit_time);
+    scratch_scalar(header[4], row.entry_price);
+    scratch_scalar(header[5], row.exit_price);
+    scratch_scalar(header[6], row.qty);
+    scratch_scalar(header[7], row.pnl);
+    scratch_scalar(header[8], row.pnl_pct);
+    scratch_scalar(header[9], row.is_long);
+    scratch_scalar(header[10], row.entry_bar_index);
+    scratch_scalar(header[11], row.exit_bar_index);
+    scratch_scalar(header[12], row.exit_from_bracket);
+    scratch_scalar(header[13], row.max_runup);
+    scratch_scalar(header[14], row.max_drawdown);
+    scratch_scalar(header[15], row.commission);
+    row.entry_incarnation = header[16];
+    scratch_scalar(header[17], row.open_at_end);
+    scratch_scalar(header[18], row.close_cause);
+}
+
+// Scalar amendments plus borrowed original text. put streams all five spans;
+// neither a row's strings nor the replacement population is copied into RAM.
+class TradeScratchSource final : public detail::ScratchByteSource {
+public:
+    TradeScratchSource(TradeScratchHeader header, const Trade& text) noexcept
+        : header_(header), parts_{scratch_bytes(header_.data(), sizeof header_),
+            scratch_bytes(text.entry_id.data(), text.entry_id.size()),
+            scratch_bytes(text.entry_comment.data(), text.entry_comment.size()),
+            scratch_bytes(text.exit_comment.data(), text.exit_comment.size()),
+            scratch_bytes(text.exit_id.data(), text.exit_id.size())} {}
+    std::uint64_t size() const noexcept override {
+        std::uint64_t result = 0;
+        for (const auto part : parts_) result += part.size;
+        return result;
+    }
+    detail::ScratchStatus read(std::uint64_t offset,
+                              detail::ScratchBuffer destination) const noexcept override {
+        if (offset > size() || destination.size > size() - offset
+            || (destination.size && !destination.data))
+            return detail::ScratchStatus::programming_error;
+        if (!destination.size) return detail::ScratchStatus::ok;
+        for (const auto part : parts_) {
+            if (offset >= part.size) { offset -= part.size; continue; }
+            const auto count = std::min(destination.size,
+                                        part.size - static_cast<std::size_t>(offset));
+            if (count) std::memcpy(destination.data, part.data + offset, count);
+            destination.data += count;
+            destination.size -= count;
+            offset = 0;
+            if (!destination.size) break;
+        }
+        return detail::ScratchStatus::ok;
+    }
+private:
+    const TradeScratchHeader header_;
+    const std::array<detail::ScratchBytes, 5> parts_;
+};
+
+TradeScratchHeader scratch_read_trade(const detail::ScratchReadback& store,
+                                     detail::ScratchHandle handle) {
+    TradeScratchHeader header{};
+    require_trade_scratch(store.read(handle, detail::ScratchField::value, 0,
+                                     scratch_buffer(header.data(), sizeof header)));
+    return header;
+}
+
+void scratch_trade_text(const detail::ScratchReadback& store, detail::ScratchHandle handle,
+                        const TradeScratchHeader& header, Trade& row) {
+    const std::array<std::string*, 4> text{
+        &row.entry_id, &row.entry_comment, &row.exit_comment, &row.exit_id};
+    std::uint64_t offset = sizeof header;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        text[index]->resize(static_cast<std::size_t>(header[19 + index]));
+        require_trade_scratch(store.read(handle, detail::ScratchField::value, offset,
+            scratch_buffer(text[index]->data(), text[index]->size())));
+        offset += text[index]->size();
+    }
+}
 
 [[noreturn]] void reject_begin_bar(int index, const char* field, const char* detail,
                                    const char* reason) {
@@ -141,6 +348,24 @@ void return_feed_bytes(std::vector<NativeInstrumentFeed>& store,
 }
 
 }  // namespace
+
+detail::ScratchKeyOrder source::PineStrategyHost::trade_scratch_order() noexcept {
+    return {0x5830365830370001ULL, nullptr, compare_trade_scratch};
+}
+
+void source::PineStrategyHost::set_trade_scratch(detail::ScratchStore& store) {
+    require_trade_scratch(store.status());
+    if (store.transaction_active() || store.record_count() != 0
+        || (trade_scratch_ && trade_scratch_->transaction_active()))
+        throw std::logic_error("trade scratch must be exclusively owned and empty");
+    trade_scratch_ = &store;
+}
+
+detail::ScratchStore& source::PineStrategyHost::trade_scratch() {
+    if (!trade_scratch_)
+        throw std::logic_error("run owner did not provision trade scratch");
+    return *trade_scratch_;
+}
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
     : NativeStrategyHost(),
@@ -1901,9 +2126,6 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 #endif
 }
 
-static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger&,
-                                                            source::PineExecutionAdapter&);
-
 // sort_same_bar_exit_trades' first test, asked before the call (R5 lane D2-D):
 // its group grows past the last row only when the row before it is a bracket
 // exit of the same entry at the same exit time, as the last row is. Otherwise
@@ -2083,7 +2305,9 @@ void source::PineStrategyHost::order_global_exit_children(
         return;
     }
     const Trade& head = trades_[first];
-    std::vector<std::string> ids;
+    auto& scratch = trade_scratch();
+    TradeScratchTransaction transaction(scratch);
+    bool different_ids = false;
     for (std::size_t index = first; index < first + count; ++index) {
         const Trade& row = trades_[index];
         if (row.exit_time != head.exit_time || row.exit_price != head.exit_price
@@ -2091,62 +2315,113 @@ void source::PineStrategyHost::order_global_exit_children(
             || !(row.qty > 0.0) || row.open_at_end) {
             return;
         }
-        for (std::size_t earlier = first; earlier < index; ++earlier)
-            if (trades_[earlier].entry_incarnation == row.entry_incarnation) return;
-        if (std::find(ids.begin(), ids.end(), row.entry_id) == ids.end())
-            ids.push_back(row.entry_id);
+        const TradeScratchKey incarnation{scratch_incarnation, row.entry_incarnation, 0, 0};
+        if (scratch_find(scratch, incarnation) != detail::scratch_no_handle) return;
+        scratch_put(scratch, incarnation);
+        different_ids = different_ids || row.entry_id != head.entry_id;
     }
-    if (ids.size() < 2) return;
+    if (!different_ids) return;
     if (first > 0 && trades_[first - 1].exit_time == head.exit_time
         && trades_[first - 1].exit_price == head.exit_price) {
         return;
     }
-    const auto ranks = adapter_.global_exit_child_ranks(ids);
-    if (!ranks) return;
-    const auto rank_of = [&](std::size_t lot) {
-        const auto id = std::find(ids.begin(), ids.end(), trades_[first + lot].entry_id);
-        return (*ranks)[static_cast<std::size_t>(id - ids.begin())];
+    // Validate one id and each distinct pair through the existing table rule:
+    // a grown table rejects shared buckets, while the original table does
+    // not. Each query owns at most two ids, irrespective of the lot count.
+    // note_exit_rank_key retains at most 27 keys (the existing parity pin),
+    // so distinct-id work is fixed even when one id owns arbitrarily many lots.
+    std::array<std::size_t, 27> ages{};
+    std::array<std::uint32_t, 27> ranks{};
+    std::size_t age_count = 0;
+    const auto age_of = [&](std::size_t lot) {
+        const auto& keys = adapter_.exit_rank_keys_;
+        return static_cast<std::size_t>(
+            std::find(keys.begin(), keys.end(), trades_[first + lot].entry_id) - keys.begin());
     };
-    std::vector<std::size_t> children(count);
-    std::iota(children.begin(), children.end(), std::size_t{0});
-    std::stable_sort(children.begin(), children.end(),
-        [&](std::size_t a, std::size_t b) { return rank_of(a) < rank_of(b); });
+    std::vector<SourceId> ids;
+    for (std::size_t lot = 0; lot < count; ++lot) {
+        const auto age = age_of(lot);
+        if (age == adapter_.exit_rank_keys_.size()) return;
+        if (std::find(ages.begin(), ages.begin() + age_count, age) != ages.begin() + age_count)
+            continue;
+        ids.assign(1, trades_[first + lot].entry_id);
+        const auto rank = adapter_.global_exit_child_ranks(ids);
+        if (!rank) return;
+        ranks[age] = rank->front();
+        for (std::size_t earlier = 0; earlier < age_count; ++earlier) {
+            ids.resize(1);
+            ids.push_back(adapter_.exit_rank_keys_[ages[earlier]]);
+            if (!adapter_.global_exit_child_ranks(ids)) return;
+        }
+        ages[age_count++] = age;
+    }
+    const auto rank_of = [&](std::size_t lot) {
+        return ranks[age_of(lot)];
+    };
     // Children in lot order settle exactly as the kernel's one fill did.
-    if (std::is_sorted(children.begin(), children.end())) return;
-    std::vector<Trade> rows;
-    std::vector<std::size_t> sources;
+    bool ordered = true;
+    auto previous_rank = rank_of(0);
+    for (std::size_t lot = 1; lot < count; ++lot) {
+        const auto rank = rank_of(lot);
+        if (rank < previous_rank) ordered = false;
+        previous_rank = rank;
+    }
+    if (ordered) return;
+    const auto visit_children = [&](const auto& visit) {
+        for (std::size_t rank = 0; rank < adapter_.exit_rank_keys_.size(); ++rank)
+            for (std::size_t child = 0; child < count; ++child)
+                if (rank_of(child) == rank && !visit(child)) return false;
+        return true;
+    };
+    std::size_t row_count = 0;
+    const auto emit_row = [&](TradeScratchHeader header, const Trade& text) {
+        const TradeScratchSource row(header, text);
+        scratch_put(scratch, {scratch_row, row_count++, 0, 0}, row);
+    };
+    const auto header_for = [&](std::size_t source) {
+        const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
+        const auto phase = source < adapter_.trade_exit_phase_.size()
+            ? adapter_.trade_exit_phase_[source] : none;
+        return scratch_trade_header(trades_[source], source, phase);
+    };
     // The rule the adapter runs under, not the host's live copy a body writes.
     if (run.close_entries_rule_any) {
-        for (const auto lot : children) {
-            rows.push_back(trades_[first + lot]);
-            sources.push_back(first + lot);
-        }
+        visit_children([&](std::size_t lot) {
+            emit_row(header_for(first + lot), trades_[first + lot]);
+            return true;
+        });
     } else {
         const bool fees = commission_value_ != 0.0;
-        struct Slice { std::size_t lot; double qty; std::size_t child; };
-        std::vector<Slice> slices;
-        std::vector<double> left(count);
         for (std::size_t lot = 0; lot < count; ++lot) {
-            left[lot] = trades_[first + lot].qty;
-            if (tv_money_round(left[lot]) != left[lot]) return;
+            const double qty = trades_[first + lot].qty;
+            if (tv_money_round(qty) != qty) return;
         }
-        std::size_t lot = 0;
-        for (std::size_t child = 0; child < children.size(); ++child) {
-            double wanted = trades_[first + children[child]].qty;
-            while (wanted > internal::kQtyEpsilon && lot < count) {
-                const double taken = std::min(left[lot], wanted);
-                slices.push_back({lot, taken, child});
-                left[lot] = tv_money_round(left[lot] - taken);
-                wanted = tv_money_round(wanted - taken);
-                if (left[lot] <= internal::kQtyEpsilon) ++lot;
-            }
-            if (wanted > internal::kQtyEpsilon) return;
-        }
-        if (lot != count) return;
-        for (const auto& slice : slices) {
-            const Trade& whole = trades_[first + slice.lot];
-            const double transaction = trades_[first + children[slice.child]].qty;
-            const double share = slice.qty / whole.qty;
+        const auto visit_slices = [&](const auto& visit) {
+            std::size_t lot = 0;
+            double left = trades_[first].qty;
+            if (!visit_children([&](std::size_t child) {
+                    const double transaction = trades_[first + child].qty;
+                    double wanted = transaction;
+                    while (wanted > internal::kQtyEpsilon && lot < count) {
+                        const double taken = std::min(left, wanted);
+                        visit(lot, taken, transaction);
+                        left = tv_money_round(left - taken);
+                        wanted = tv_money_round(wanted - taken);
+                        if (left <= internal::kQtyEpsilon) {
+                            ++lot;
+                            if (lot < count) left = trades_[first + lot].qty;
+                        }
+                    }
+                    return !(wanted > internal::kQtyEpsilon);
+                })) return false;
+            return lot == count;
+        };
+        // Complete the exact quantity pass before calculating any replacement
+        // money, as the old slice-vector pass did.
+        if (!visit_slices([](std::size_t, double, double) {})) return;
+        visit_slices([&](std::size_t lot, double qty, double transaction) {
+            const Trade& whole = trades_[first + lot];
+            const double share = qty / whole.qty;
             double commission = 0.0;
             if (fees) {
                 const double exit_fee = calc_commission_at(whole.exit_price, whole.qty, 1.0);
@@ -2154,29 +2429,38 @@ void source::PineStrategyHost::order_global_exit_children(
                     tv_money_round(std::max(0.0, whole.commission - exit_fee) * share);
                 const double transaction_fee =
                     tv_money_round(calc_commission_at(whole.exit_price, transaction, 1.0));
-                const double exit_part = tv_money_round(transaction_fee * slice.qty / transaction);
+                const double exit_part = tv_money_round(transaction_fee * qty / transaction);
                 commission = tv_money_round(entry_part + exit_part);
             }
-            Trade row = whole;
-            row.qty = slice.qty;
+            auto header = header_for(first + lot);
+            Trade row{};
+            scratch_trade_scalars(header, row);
+            row.qty = qty;
             row.commission = commission;
             row.pnl = tv_money_round((whole.pnl + whole.commission) * share) - commission;
-            const double cost = whole.entry_price * slice.qty * syminfo_.pointvalue;
+            const double cost = whole.entry_price * qty * syminfo_.pointvalue;
             row.pnl_pct = cost > 0.0 ? row.pnl / cost * 100.0 : 0.0;
             // The lot's excursions taken by share: an approximation where the
             // slice's lot is not its child's own (excursions are not graded).
             row.max_runup = whole.max_runup * share;
             row.max_drawdown = whole.max_drawdown * share;
-            rows.push_back(std::move(row));
-            sources.push_back(first + slice.lot);
-        }
+            header[6] = scratch_word(row.qty);
+            header[7] = scratch_word(row.pnl);
+            header[8] = scratch_word(row.pnl_pct);
+            header[13] = scratch_word(row.max_runup);
+            header[14] = scratch_word(row.max_drawdown);
+            header[15] = scratch_word(row.commission);
+            emit_row(header, whole);
+        });
     }
     // settlement safety guard (an invariant), not Pine parity. Validate all
     // replacements before changing the committed rows or their tallies.
-    for (const auto& row : rows) {
+    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey&) {
+        Trade row{};
+        scratch_trade_scalars(scratch_read_trade(scratch, handle), row);
         if (!internal::closed_row_all_finite(row))
             throw std::logic_error("non-finite amended trade row");
-    }
+    });
     // strategy.wintrades / losstrades / eventrades and the gross sums count
     // rows: count the children's instead of the kernel's. net_profit_sum_ (the
     // equity) stays the kernel's whole-lot sum: the slices' PnLs can differ
@@ -2189,10 +2473,27 @@ void source::PineStrategyHost::order_global_exit_children(
         else { eventrades_count_ += sign; }
     };
     for (std::size_t index = first; index < first + count; ++index) tally(trades_[index].pnl, -1);
-    for (const auto& row : rows) tally(row.pnl, 1);
+    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey&) {
+        Trade row{};
+        scratch_trade_scalars(scratch_read_trade(scratch, handle), row);
+        tally(row.pnl, 1);
+    });
     trades_.resize(first);
-    for (auto& row : rows) trades_.push_back(std::move(row));
-    adapter_.permute_exit_phases(first, sources);
+    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey&) {
+        const auto header = scratch_read_trade(scratch, handle);
+        trades_.push_back(Trade{});
+        scratch_trade_scalars(header, trades_.back());
+        scratch_trade_text(scratch, handle, header, trades_.back());
+    });
+    const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
+    scratch_walk(scratch, scratch_row, [&](detail::ScratchHandle handle, const TradeScratchKey& key) {
+        const auto header = scratch_read_trade(scratch, handle);
+        const auto target = first + static_cast<std::size_t>(key[1]);
+        const auto phase = static_cast<std::uint8_t>(header[1]);
+        if (target >= adapter_.trade_exit_phase_.size() && phase == none) return;
+        adapter_.set_exit_phase(target, phase);
+    });
+    transaction.finish();
     native_closed_rows_amended(first);
 }
 
@@ -2201,8 +2502,8 @@ void source::PineStrategyHost::order_global_exit_children(
 // returned), so a sort that moves one answers the first row it moved, which
 // the caller hands to the kernel before the next hash read
 // (NativeStrategyHost::native_closed_rows_amended).
-static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger& trades,
-                                                            source::PineExecutionAdapter& adapter) {
+std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
+        TradeLedger& trades, source::PineExecutionAdapter& adapter) {
     if (trades.size() < 2) return std::nullopt;
     const std::size_t end = trades.size();
     std::size_t start = end - 1;
@@ -2219,26 +2520,69 @@ static std::optional<std::size_t> sort_same_bar_exit_trades(TradeLedger& trades,
         // fills on the bar OPEN precede intrabar fills chronologically. Sibling
         // bracket exits that fill within the same phase tie-break by command
         // sequence (test_l10m_corpus_parity.cpp).
-        std::vector<std::size_t> indices(end - start);
-        std::iota(indices.begin(), indices.end(), start);
-        std::stable_sort(indices.begin(), indices.end(),
-            [&](std::size_t ia, std::size_t ib) {
-                const bool open_a = adapter.is_open_phase_exit(ia);
-                const bool open_b = adapter.is_open_phase_exit(ib);
-                if (open_a != open_b) return open_a;
-                const auto sa = adapter.command_sequence_for_exit(trades[ia].exit_id, trades[ia].entry_id);
-                const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
-                return sa < sb;
+        const auto less = [&](std::size_t ia, std::size_t ib) {
+            const bool open_a = adapter.is_open_phase_exit(ia);
+            const bool open_b = adapter.is_open_phase_exit(ib);
+            if (open_a != open_b) return open_a;
+            const auto sa = adapter.command_sequence_for_exit(trades[ia].exit_id, trades[ia].entry_id);
+            const auto sb = adapter.command_sequence_for_exit(trades[ib].exit_id, trades[ib].entry_id);
+            return sa < sb;
+        };
+        const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
+        bool ordered = true;
+        for (std::size_t index = start + 1; index < end; ++index)
+            if (less(index, index - 1)) { ordered = false; break; }
+        if (ordered) return std::nullopt;
+        auto& scratch = trade_scratch();
+        TradeScratchTransaction transaction(scratch);
+        for (std::size_t source = start; source < end; ++source) {
+            const auto phase = source < adapter.trade_exit_phase_.size()
+                ? adapter.trade_exit_phase_[source] : none;
+            const auto sequence = adapter.command_sequence_for_exit(
+                trades[source].exit_id, trades[source].entry_id);
+            scratch_put(scratch,
+                {scratch_sort, adapter.is_open_phase_exit(source) ? 0U : 1U, sequence, source},
+                scratch_bytes(&phase, sizeof phase));
+        }
+        std::size_t target = start;
+        // source is the last key word, so ties retain their original order.
+        // This is a seek walk, not a store callback: the fixed mapping value
+        // is read out before put, and its source never reads the same store.
+        scratch_walk(scratch, scratch_sort,
+            [&](detail::ScratchHandle handle, const TradeScratchKey& key) {
+                std::uint8_t phase = none;
+                require_trade_scratch(scratch.read(handle, detail::ScratchField::value, 0,
+                                                   scratch_buffer(&phase, sizeof phase)));
+                const std::array<std::uint64_t, 2> mapping{key[3], phase};
+                scratch_put(scratch, {scratch_permutation, target++, 0, 0},
+                            scratch_bytes(mapping.data(), sizeof mapping));
             });
-        const bool moved = !std::is_sorted(indices.begin(), indices.end());
-        std::vector<Trade> sorted;
-        sorted.reserve(end - start);
-        for (std::size_t idx : indices) sorted.push_back(std::move(trades[idx]));
-        for (std::size_t i = 0; i < sorted.size(); ++i) trades[start + i] = std::move(sorted[i]);
-        // The adapter's exit phases are keyed by trade index: move them with
-        // the trades so the next call reads each trade's own phase.
-        adapter.permute_exit_phases(start, indices);
-        if (moved) return start;
+        // Apply disjoint permutation cycles with one moved Trade. Erasing a
+        // mapping marks that target visited in backing, without a RAM bitmap.
+        for (std::size_t cycle = start; cycle < end; ++cycle) {
+            auto handle = scratch_find(scratch, {scratch_permutation, cycle, 0, 0});
+            if (handle == detail::scratch_no_handle) continue;
+            Trade row = std::move(trades[cycle]);
+            std::size_t current = cycle;
+            for (;;) {
+                std::array<std::uint64_t, 2> mapping{};
+                require_trade_scratch(scratch.read(handle, detail::ScratchField::value, 0,
+                    scratch_buffer(mapping.data(), sizeof mapping)));
+                const auto source = static_cast<std::size_t>(mapping[0]);
+                const auto phase = static_cast<std::uint8_t>(mapping[1]);
+                if (current < adapter.trade_exit_phase_.size() || phase != none)
+                    adapter.set_exit_phase(current, phase);
+                trades[current] = source == cycle ? std::move(row) : std::move(trades[source]);
+                require_trade_scratch(scratch.erase(handle));
+                if (source == cycle) break;
+                current = source;
+                handle = scratch_find(scratch, {scratch_permutation, current, 0, 0});
+                if (handle == detail::scratch_no_handle)
+                    throw std::logic_error("incomplete trade scratch permutation");
+            }
+        }
+        transaction.finish();
+        return start;
     }
     return std::nullopt;
 }

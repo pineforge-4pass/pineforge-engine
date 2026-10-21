@@ -1380,6 +1380,7 @@ list(APPEND TEST_SOURCES test_native_match_allocations)
 # re-issued strategy.exit's allocations bounded (fails on f71cd820).
 # Source-bound.
 list(APPEND TEST_SOURCES test_adapter_command_allocations)
+list(APPEND TEST_SOURCES test_adapter_exit_scratch)
 # R5 lane PERF-L1: the NativeStrategyHost reads -- the consumer read off the
 # engine's slot, the inline book aggregate, the running lifecycle view --
 # against the lookups they replaced, inside every host hook of randomized
@@ -1395,6 +1396,9 @@ list(APPEND TEST_SOURCES test_native_lean_path)
 # bars without a heap allocation per bar (two to five at f71cd820). Source-free,
 # so it also runs in the kernel-only profile.
 list(APPEND TEST_SOURCES test_native_intrabar_scratch)
+list(APPEND TEST_SOURCES test_parent_terminal_scratch)
+list(APPEND TEST_SOURCES test_same_bar_trade_scratch)
+list(APPEND TEST_SOURCES test_global_exit_recut_scratch)
 # R5 lane PERF-L1: the interval cache's prior answers and the session-point
 # memo hold only what a fresh, memo-free resolution answers, in every host hook
 # of randomized zoned, aggregated and streamed runs. Source-free, so it also
