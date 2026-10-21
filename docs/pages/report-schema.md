@@ -228,6 +228,116 @@ define lifetimes, half-open ranges, backward traversal, cancellation and
 errors. Reader declarations do not establish runtime support and add no
 C export, mode or envelope-version change.
 
+## Selected-window/v1 named-sink JSON {#report_selected_window_named_sink_v1}
+
+`--report-policy selected-window/v1 --report-sink PATH --run-id ID --spill-dir DIR`
+is an accepted combination on a sink-v1 library. It returns the selected
+report projected to summary JSON, with complete sequences in the named sink.
+The [selected-window named-sink contract](../design/o1-report-contract.md#o1_selected_window_named_sink_v1)
+defines the file header, record types, ownership, spill directory and failures.
+This transport is independent of the native SUMMARY_ONLY mode.
+
+The existing pin is
+`tests/test_run_json_selected_sink.py::test_selected_named_sink_yields_the_summary_projection`;
+it compares the full projection with and without requested outputs.
+
+The top-level JSON fields are listed in emitted order, followed by the two
+omitted arrays:
+
+| Field | JSON type | Presence and meaning |
+| --- | --- | --- |
+| `engine` | string | Present: `"pineforge"`. |
+| `input` | object | Present: the selected run's evaluated chart metadata. |
+| `applied_inputs` | object | Present: applied strategy inputs. |
+| `applied_overrides` | object | Present: applied strategy overrides. |
+| `applied_runtime` | object | Present: selected runtime settings, including the same `report_window` object; `outputs: true` when requested. |
+| `elapsed_seconds` | number | Present: elapsed run time. |
+| `summary` | object | Present: all summary scalars listed below. |
+| `diagnostics` | object | Present: existing processed-bar/magnifier diagnostics and `phase_timing`. |
+| `report_sink` | object | Present: the six-member reference below, replacing `trades` at its position. |
+| `metrics` | object | Present: complete `all`, `longs`, `shorts`, `equity` metric blocks. |
+| `report_window` | object | Present: unchanged selected-window metadata, also in `applied_runtime` and `fingerprint.provenance.runtime`. |
+| `report_shape` | object | Present: unchanged `full/v1` description using logical sink point/trade counts. |
+| `outputs` | object | Present only with `--outputs`: exactly the six retained members below. |
+| `fingerprint` | object | Present: selected fingerprint with `version == 2` and `provenance.schema_version == 2`. |
+| `trades` | array of objects | Absent: replaced by `report_sink`; all trade records remain in the file. |
+| `equity_curve` | array of objects | Absent: dropped from the JSON; all equity records, including the selected anchor, remain in the file. |
+
+These omissions are a projection rule, not truncation or empty-array
+sentinels. Metrics and logical counts retain their selected-report meaning.
+
+`report_sink` is a reference, not an embedded sink header. Its members are
+present in exactly this order, matching `REFERENCE_KEYS` in
+`tests/test_run_json_sink_summary.py` and the selected pin's assertion:
+
+| Member | JSON type | Presence and meaning |
+| --- | --- | --- |
+| `path` | string | Present: `PATH` as passed to the writer. |
+| `schema` | string | Present: `"pf-report-sink"`. |
+| `version` | integer | Present: `1`, giving file contract `pf-report-sink/v1`. |
+| `run_id` | string | Present: the caller's `ID`; default `""`. |
+| `counts` | object of integer values | Present: enabled tags in `E`, `T`, `O`, `V`, `K`, `X`, `H` order, including zero counts; disabled tags are absent. |
+| `sha256` | string | Present: 64 lowercase hex digits over header and data lines including LF, excluding the trailer. |
+
+`E` and `T` are always enabled. `O`, `V`, `K` carry requested outputs;
+`X` and `H` carry enabled trace/hash recording. The reference counts and digest
+match the complete trailer and engine receipt.
+
+Every member of `summary` is present:
+
+| Member | JSON type | Meaning |
+| --- | --- | --- |
+| `total_trades` | integer | Selected report trade count, equal to the sink's `T` count. |
+| `wins` | integer | Trades with positive PnL. |
+| `losses` | integer | Trades with negative PnL. |
+| `win_rate_pct` | number | Wins divided by trade count times 100, rounded to four decimal places; zero for no trades. |
+| `net_pnl` | number | Selected report net profit. |
+| `avg_trade` | number | Net profit divided by trade count; zero for no trades. |
+| `best_trade` | number | Maximum trade PnL; zero for no trades. |
+| `worst_trade` | number | Minimum trade PnL; zero for no trades. |
+| `max_drawdown` | number | Nonpositive ordered trade-PnL-prefix drawdown, not equity drawdown. |
+| `bars_processed` | integer | Evaluated input bars consumed, including selected-run preroll. |
+
+Every `metrics` block is present as an object: `all`, `longs`, `shorts` and
+`equity`. Each field in the following table is present in **each** of `all`,
+`longs` and `shorts`; the type applies to every named field. Non-finite metric
+doubles serialize as `null`, preserving the existing undefined-statistic
+convention.
+
+| Members in each trade-stat block | JSON type | Presence |
+| --- | --- | --- |
+| `num_trades`, `num_wins`, `num_losses`, `num_even` | integer | Present. |
+| `max_consecutive_wins`, `max_consecutive_losses` | integer | Present. |
+| `percent_profitable`, `net_profit`, `net_profit_pct`, `gross_profit`, `gross_profit_pct`, `gross_loss`, `gross_loss_pct`, `profit_factor`, `expectancy` | number or null | Present. |
+| `avg_trade`, `avg_trade_pct`, `avg_win`, `avg_win_pct`, `avg_loss`, `avg_loss_pct`, `ratio_avg_win_avg_loss` | number or null | Present. |
+| `largest_win`, `largest_win_pct`, `largest_loss`, `largest_loss_pct`, `commission_paid` | number or null | Present. |
+| `avg_bars_in_trade`, `avg_bars_in_wins`, `avg_bars_in_losses` | number or null | Present. |
+
+| Members in `metrics.equity` | JSON type | Presence |
+| --- | --- | --- |
+| `max_equity_drawdown`, `max_equity_drawdown_pct`, `max_equity_runup`, `max_equity_runup_pct` | number or null | Present. |
+| `buy_hold_return`, `buy_hold_return_pct`, `time_in_market_pct`, `open_pl` | number or null | Present. |
+| `sharpe_tv`, `sortino_tv`, `sharpe_bar`, `sortino_bar`, `cagr`, `calmar`, `recovery_factor` | number or null | Present. |
+
+With `--outputs`, its retained members occur in the following order, matching
+`OUTPUT_KEYS` in `tests/test_run_json_sink_summary.py`. Their sizes depend on
+the script definition, not the number of observed bars/trades/events:
+
+| Member of `outputs` | JSON type | Presence and meaning |
+| --- | --- | --- |
+| `schema_version` | string | Present: `"pineforge-outputs/v1"`. |
+| `message_format` | string | Present: the manifest's format, default `"pineforge/v1"`. |
+| `manifest_sha256` | string | Present: SHA-256 of the module's original manifest bytes. |
+| `manifest` | object | Present: the parsed output manifest. |
+| `constants` | array of numbers or nulls | Present: one value per run-constant index, with existing encodings. |
+| `hlines` | array of objects | Present: one horizontal-level entry per declared hline; each has `output` (string) and `price` (number or null). |
+| `bars` | object | Absent: row-time history remains in `O` records. |
+| `series` | array of objects | Absent: slot-value history remains in `O` records. |
+| `events` | array of objects | Absent: event history remains in `V` records. |
+
+Without `--outputs`, the whole `outputs` key is absent. Run constants also
+remain in the sink's single `K` record when outputs are enabled.
+
 ## Trade fields
 
 | Field | Type | Meaning |

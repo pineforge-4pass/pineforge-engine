@@ -413,6 +413,112 @@ the output-envelope change is not permission to change them. New durable
 execution state introduced by implementation must be hashed or have a named,
 reviewed output-only waiver.
 
+### Selected-window/v1 with a named report sink {#o1_selected_window_named_sink_v1}
+
+`docker/run_json.py` accepts
+`--report-policy selected-window/v1 --report-sink PATH --run-id ID --spill-dir DIR`
+alongside the required strategy, chart and selected-window arguments. With a
+sink-v1 library this combination is supported: naming the sink is neither
+refused nor silently ignored. The caller receives the selected report
+projected to the summary JSON shape. This is the existing sink transport,
+independent of the native SUMMARY_ONLY mode described above.
+
+The projection replaces the `trades` key with a `report_sink` reference at the
+same position and drops `equity_curve`. Both arrays are **absent**, not empty
+arrays or null values. This is a projection rule, not truncation: the complete
+selected trades and presented equity points remain in the sink file.
+`report_window` and `report_shape` remain present and unchanged; in particular,
+`report_shape` retains the `full/v1` description and its logical trade/point
+counts even though the JSON arrays are omitted.
+
+The reference has exactly these keys, in the writer's order:
+
+| Key | Type and value |
+| --- | --- |
+| `path` | String: the caller's sink path. |
+| `schema` | String: `"pf-report-sink"` (the file contract is `pf-report-sink/v1`). |
+| `version` | Integer: `1`. |
+| `run_id` | String: the request's `ID`, copied unchanged from the sink header; default `""`. |
+| `counts` | Object: nonnegative integer counts keyed by each enabled record tag, including zero counts, in header descriptor order. |
+| `sha256` | String: 64 lowercase hexadecimal digits for the raw header and data-record lines, including each LF and excluding the trailer. |
+
+The remaining top-level fields are `engine`, `input`, `applied_inputs`,
+`applied_overrides`, `applied_runtime`, `elapsed_seconds`, `summary`,
+`diagnostics`, `metrics`, `report_window`, optional `outputs`, and
+`fingerprint`. Their selected-report values are preserved, with the existing
+wall-clock values in `elapsed_seconds` and `diagnostics.phase_timing`.
+`applied_runtime.report_window` and
+`fingerprint.provenance.runtime.report_window` carry the same window object
+as top-level `report_window`. The selected fingerprint's `version` and its
+provenance's `schema_version` remain 2.
+
+`summary` contains `total_trades`, `wins`, `losses`, `win_rate_pct`, `net_pnl`,
+`avg_trade`, `best_trade`, `worst_trade`, `max_drawdown` and `bars_processed`,
+with the existing selected-report folds and zero-trade rules. `metrics`
+retains the complete `all`, `longs`, `shorts` and `equity` objects, including
+the JSON names `sharpe_tv` and `sortino_tv`. Dropping the JSON curve does not
+drop equity-derived metrics.
+
+With `--outputs`, `outputs` contains exactly these six O(1) members in order:
+`schema_version`, `message_format`, `manifest_sha256`, `manifest`, `constants`,
+`hlines`. Their sizes are bounded by the script definition, independent of
+observed bars/trades/events. `outputs.bars`, `outputs.series` and
+`outputs.events` are absent; their histories remain external. Without
+`--outputs`, the entire `outputs` key is absent.
+
+The sink file is UTF-8 NDJSON: one header object, tagged array records and a
+final trailer object. The header's keys, in order, are `schema`
+(`"pf-report-sink"`), `version` (`1`), `run_id` (the caller's string), `engine`
+(the engine version string) and `records` (an array of descriptors). Each
+descriptor has `type`, `fields`, `types`, `units`, in that order; each data
+array starts with its tag and then follows that descriptor's column order.
+The enabled descriptors occur in the following order; this does not require
+data records to be grouped by tag:
+
+| Tag | Records carried for this request |
+| --- | --- |
+| `E` | All selected presented equity points (`time_ms`, `equity`, `open_profit`), including the anchor: M+1 points for M window script bars. |
+| `T` | All selected report trades in report order, including report-only `open_at_end` rows. |
+| `O` | Recorded output row times and series-slot values when `--outputs` is enabled. |
+| `V` | Recorded output events when `--outputs` is enabled. |
+| `K` | One run-constants record when `--outputs` is enabled, including for an empty output run. |
+| `X` | Trace entries when trace recording is enabled. |
+| `H` | Broker-state hashes when hash recording is enabled. |
+
+`E` and `T` are always declared; optional tags are declared only when enabled.
+The trailer has `trailer` (`"pf-report-sink"`), `version` (`1`), `counts` and
+`sha256`, in that order. The reference uses the verified trailer counts and
+digest. Before preparing the JSON, the harness checks the entire file,
+`run_id`, and the engine's complete sink receipt, including trade count.
+
+The engine creates or truncates `PATH` when it writes the header
+(`O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC`); the harness passes the named path
+without first creating a temporary sink. The named file persists for the
+caller after report/state cleanup. `--run-id` is an opaque caller identifier,
+not a generated ID. `--spill-dir DIR` supplies the engine's `scratch_dir` and
+the directory for one unlinked, prepared JSON document. The harness serializes
+and flushes that document before publishing any report bytes, and publishes
+after native cleanup succeeds. It creates no per-output column temporaries
+for this projection. `DIR` must be an existing writable directory; when
+omitted, it defaults to the system temporary directory. The named sink stays
+at `PATH`, independently of `DIR`.
+
+For any of `--report-sink`, `--run-id` or `--spill-dir`, embedded NUL or text
+that cannot encode as UTF-8 fails before library loading with
+`run_request_invalid` and `args == {"option": "arguments"}`. A library missing
+the sink API refuses an explicit named-sink request before execution with
+`strategy_library_incompatible` and `args == {"reason": "symbol_missing"}`;
+it does not fall back to owning arrays. A partial sink API or a sink version
+other than 1 fails with `engine_invariant`.
+
+The combination is pinned by
+`tests/test_run_json_selected_sink.py::test_selected_named_sink_yields_the_summary_projection`.
+That test checks both output settings, the complete projection, reference key
+order, sink counts/run ID, persistent named path and prepared-document
+directory. `REFERENCE_KEYS` and `OUTPUT_KEYS` in
+`tests/test_run_json_sink_summary.py` pin the two ordered member lists.
+See the [JSON field types and presence table](../pages/report-schema.md#report_selected_window_named_sink_v1).
+
 ## Integration and ABI inventory
 
 This slice adds data types and C++ method declarations only: **zero** new
