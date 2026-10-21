@@ -7,10 +7,11 @@ namespace pineforge::detail {
 using ScratchHandle = std::uint64_t;
 inline constexpr ScratchHandle scratch_no_handle = 0;
 
-// Borrowed, immutable, potentially larger than a resident page. read copies
-// EXACTLY destination.size bytes at offset, possibly across physical pages.
-// A zero-length read at size() is valid. Out-of-range/null nonempty buffers
-// return programming_error. On error the destination may be partially filled.
+// Borrowed, immutable, potentially larger than a resident page; size() is
+// constant while the source is alive. read copies EXACTLY destination.size
+// bytes at offset, possibly across physical pages. A zero-length read at
+// size() is valid. Out-of-range/null nonempty buffers return
+// programming_error. On error the destination may be partially filled.
 // Callers use fixed buffers; no contiguous owning copy is required anywhere.
 class ScratchByteSource {
 public:
@@ -77,15 +78,20 @@ public:
     virtual std::size_t page_size() const noexcept = 0;
     virtual std::uint64_t record_count() const noexcept = 0;
 
-    // Invalid/erased/rolled-back handle => not_found; info is unchanged.
+    // Invalid/erased/rolled-back handle => not_found; info is unchanged. read
+    // obeys the ScratchByteSource range rules for offset and destination
+    // (out-of-range or null nonempty buffer => programming_error) and returns
+    // not_found for an absent handle.
     virtual ScratchStatus point(ScratchHandle, ScratchRecordInfo& info) const noexcept = 0;
     virtual ScratchStatus read(ScratchHandle, ScratchField, std::uint64_t offset,
                                ScratchBuffer destination) const noexcept = 0;
 
-    // page is caller-owned, nonnull, exactly page_size() bytes. Emit all key
-    // chunks followed by all value chunks, each at most page_size() bytes,
-    // with contiguous offsets starting at zero. Emit one final empty chunk
-    // for an empty field. false => cancelled, with no further callback.
+    // page is caller-owned, nonnull, exactly page_size() bytes (else
+    // programming_error with no callback). Emit all key chunks followed by all
+    // value chunks, each at most page_size() bytes, with contiguous offsets
+    // starting at zero within each field. Emit exactly one final empty chunk
+    // for an empty field. false => cancelled, with no further callback; an
+    // absent handle => not_found with no callback.
     virtual ScratchStatus visit(ScratchHandle, ScratchBuffer page,
                                 ScratchChunkVisitor, void* context) const noexcept = 0;
 

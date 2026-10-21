@@ -9,6 +9,11 @@
 namespace pineforge::detail {
 
 // No capacity/refusal status and no RunFailureCode conversion in this API.
+// end: an ordered seek found no record. cancelled: a visitor returned false.
+// not_found: an absent handle, a page past the extent, or nothing to reopen.
+// programming_error: contract misuse or a request the host did not provision
+// for, including a backing that cannot extend. io_error: the medium failed.
+// corrupt: stored bytes failed validation.
 enum class ScratchStatus : std::uint32_t {
     ok = 0,
     end,
