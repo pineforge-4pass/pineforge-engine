@@ -28047,6 +28047,8 @@ void PineExecutionAdapter::order_same_point_entries() {
 
 } // namespace pineforge::source
 
+#include "exit_payload_codec.inc"
+
 namespace pineforge::source {
 
 // CR-150 L19D. These definitions are appended so existing source citations

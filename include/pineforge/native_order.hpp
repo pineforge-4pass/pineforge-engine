@@ -5,6 +5,8 @@
 #include "execution_close_scope.hpp"
 #include "market_driver.hpp"
 #include "native_order_identity.hpp"
+#include "detail/scratch_readback.hpp"
+#include "payload_readback.hpp"
 
 #include <algorithm>
 #include <array>
@@ -43,6 +45,7 @@ using Flatten = execution::Flatten;
 /// transaction larger than an opposite position still opens the remainder. An
 /// opening denial rejects the ENTIRE transaction, including that remainder.
 using Transact = order_action::Transact;
+using HandleVisitor = void (*)(void*, const RequestHandle&);
 
 /// A host-maintained, run-scoped roster identity.  Zero is invalid and is
 /// never allocated by WorkingRequestCore.
@@ -450,6 +453,43 @@ struct BindOpening {
     RequestHandle opening;
     int64_t cycle = 0;
 };
+/// Immutable membership, independent of a source scratch scope. A successful
+/// read changes out; an error leaves it unchanged. No read allocates.
+class OpeningReadback {
+public:
+    virtual ~OpeningReadback() noexcept = default;
+    virtual std::uint64_t count() const noexcept = 0;
+    virtual detail::ScratchStatus opening_at(
+        std::uint64_t index, RequestHandle& out) const noexcept = 0;
+};
+
+/// Call-local input. Enrollment freezes it before retaining a definition;
+/// neither this object nor its callback/context is retained.
+class OpeningInputCursor final : public OpeningReadback {
+public:
+    using Reader = detail::ScratchStatus (*)(void*, std::uint64_t, RequestHandle&);
+    OpeningInputCursor(std::uint64_t count, void* context, Reader reader) noexcept
+        : count_(count), context_(context), reader_(reader) {}
+    std::uint64_t count() const noexcept override { return count_; }
+    detail::ScratchStatus opening_at(
+        std::uint64_t index, RequestHandle& out) const noexcept override;
+private:
+    std::uint64_t count_;
+    void* context_;
+    Reader reader_;
+};
+
+/// Freeze and canonicalize a same-run, unique stream. Uses bounded workspace
+/// and an exclusive unlinked file; failure leaves out unchanged. Only creation
+/// of the fixed-size retained owner allocates, never a membership read.
+detail::ScratchStatus freeze_openings(
+    const RunIdentity&, const OpeningReadback&,
+    std::shared_ptr<const OpeningReadback>& out);
+
+std::uint64_t opening_count(const std::vector<RequestHandle>&,
+                           const OpeningReadback*) noexcept;
+detail::ScratchStatus opening_at(const std::vector<RequestHandle>&,
+    const OpeningReadback*, std::uint64_t, RequestHandle&) noexcept;
 /// Bind to a fixed cohort of already-live openings. Every handle must be unique,
 /// nonzero, of this run and physically live in `cycle`; enrollment rejects the
 /// ENTIRE request if any member is invalid. The accepted definition keeps the
@@ -458,6 +498,7 @@ struct BindOpening {
 struct BindOpenings {
     std::vector<RequestHandle> openings;
     int64_t cycle = 0;
+    std::shared_ptr<const OpeningReadback> external_openings;
 };
 /// Bind to a host-built roster (cohort_open / cohort_add / cohort_remove), read at
 /// the match rather than frozen at submit. The C surface pairs it with exactly one
@@ -493,6 +534,23 @@ struct Request {
     Owner owner = Independent{};
     Group group = NoGroup{};
     TriggerAnchor anchor = Absolute{};
+};
+
+/// Complete request schema, including owner text and every opening handle.
+/// intent/trigger/capacity/owner/group/anchor have an unsigned variant `tag`;
+/// label/comment are top-level byte fields. See the production freeze codec.
+class RequestReadback final : public detail::PayloadReadback {
+public:
+    RequestReadback() noexcept = default;
+    RequestReadback(const detail::ScratchStore& store, detail::ScratchHandle version) noexcept
+        : PayloadReadback(store, version, detail::PayloadSchema::request) {}
+    explicit RequestReadback(detail::PayloadReadback view) noexcept : PayloadReadback(view) {}
+    detail::ScratchStatus label(detail::PayloadField& out) const noexcept {
+        return find("label", out);
+    }
+    detail::ScratchStatus comment(detail::PayloadField& out) const noexcept {
+        return find("comment", out);
+    }
 };
 
 inline OrderIntent intent_from_physical(const execution::Action& action) {
@@ -617,6 +675,7 @@ struct OpeningsClose {
     int64_t cycle = 0;
     Side side = Side::Long;
     Enrollment enrollment;
+    std::shared_ptr<const OpeningReadback> external_openings;
 };
 struct CohortClose {
     CohortHandle cohort;
@@ -700,11 +759,26 @@ struct OpeningObservation {
     bool has_live_matching_lot = false;
 };
 
+/// Borrowed through the enclosing command/evaluation and any prepare/install
+/// pair that copies its TargetObservation, including nested reads.
+class OpeningObservationReadback {
+public:
+    virtual ~OpeningObservationReadback() noexcept = default;
+    virtual std::uint64_t count() const noexcept = 0;
+    virtual detail::ScratchStatus observation_at(
+        std::uint64_t index, OpeningObservation& out) const noexcept = 0;
+};
+
 struct TargetObservation {
     PositionIdentity current_position;
     std::optional<OpeningObservation> opening;
     std::vector<OpeningObservation> openings;
+    const OpeningObservationReadback* external_openings = nullptr;
 };
+
+std::uint64_t opening_observation_count(const TargetObservation&) noexcept;
+detail::ScratchStatus opening_observation_at(
+    const TargetObservation&, std::uint64_t, OpeningObservation&) noexcept;
 
 /// Who authored a request. Host is every request a host submits, replaces or
 /// cancels, and it is the whole existing population: it folds nothing into the
@@ -1467,6 +1541,7 @@ struct CommandContext {
     /// its held total, and refuses anything else (MatchRejectReason::
     /// UnrepresentableQuantity). Appended last, like the members above.
     bool units_are_scope_boundary = false;
+    const OpeningObservationReadback* external_openings = nullptr;
 };
 
 struct EvaluationContext {
@@ -1967,6 +2042,11 @@ public:
     void group_recipients(const EventId& applied, std::vector<RequestHandle>& out) const;
     void waiting_children(const RequestHandle& parent, std::vector<RequestHandle>& out) const;
     void bound_close_handles(std::vector<RequestHandle>& out) const;
+    /// Synchronous queue-order reads. Callbacks may read the core or write a
+    /// separate scratch store; they must not mutate this core.
+    void visit_group_recipients(const EventId&, void*, HandleVisitor) const;
+    void visit_waiting_children(const RequestHandle&, void*, HandleVisitor) const;
+    void visit_bound_close_handles(void*, HandleVisitor) const;
 
     Preparation<PreparedMutation> prepare_group_effect(const EventId& applied,
                                                        const RequestHandle& recipient,

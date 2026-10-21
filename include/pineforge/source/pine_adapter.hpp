@@ -4,6 +4,7 @@
 // native-host surface: no native kernel type learns a Pine source identifier,
 // sizing convention, or lifecycle vocabulary from it.
 #include <pineforge/native_host.hpp>
+#include <pineforge/source/exit_payload_readback.hpp>
 #include <pineforge/compat/pine/exit_activation.hpp>
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>

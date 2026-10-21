@@ -1,5 +1,7 @@
 #include <pineforge/native_order.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/native_host.hpp>
+#include "native_execution_consumer.hpp"
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
@@ -17,7 +19,198 @@
 
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
+
 namespace {
+using ReadStatus = detail::ScratchStatus;
+
+struct OpeningFile {
+    int fd = -1;
+    OpeningFile() = default;
+    OpeningFile(const OpeningFile&) = delete;
+    OpeningFile& operator=(const OpeningFile&) = delete;
+    ~OpeningFile() { if (fd >= 0) ::close(fd); }
+    ReadStatus open() noexcept {
+        char path[] = "/tmp/pineforge-openings-XXXXXX";
+        fd = ::mkstemp(path);
+        if (fd < 0) return ReadStatus::io_error;
+        if (::unlink(path) || ::fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
+            ::close(fd);
+            fd = -1;
+            return ReadStatus::io_error;
+        }
+        return ReadStatus::ok;
+    }
+};
+
+ReadStatus opening_word(int fd, std::uint64_t index, std::uint64_t& value,
+                        bool write) noexcept {
+    if (index > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
+        return ReadStatus::programming_error;
+    std::array<unsigned char, 8> bytes{};
+    if (write) {
+        for (unsigned i = 0; i != 8; ++i)
+            bytes[i] = static_cast<unsigned char>(value >> (i * 8));
+    }
+    std::size_t done = 0;
+    while (done != bytes.size()) {
+        const auto offset = static_cast<off_t>(index * 8 + done);
+        const auto n = write
+            ? ::pwrite(fd, bytes.data() + done, bytes.size() - done, offset)
+            : ::pread(fd, bytes.data() + done, bytes.size() - done, offset);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return ReadStatus::io_error;
+        done += static_cast<std::size_t>(n);
+    }
+    if (!write) {
+        value = 0;
+        for (unsigned i = 0; i != 8; ++i)
+            value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8);
+    }
+    return ReadStatus::ok;
+}
+
+class FrozenOpenings final : public OpeningReadback {
+public:
+    FrozenOpenings(RunIdentity run, std::uint64_t count) noexcept
+        : run_(run), count_(count) {}
+    std::uint64_t count() const noexcept override { return count_; }
+    ReadStatus opening_at(std::uint64_t index, RequestHandle& out) const noexcept override {
+        if (index >= count_) return ReadStatus::not_found;
+        std::uint64_t incarnation = 0;
+        const auto status = opening_word(file.fd, index, incarnation, false);
+        if (status == ReadStatus::ok) out = RequestHandle{run_, incarnation};
+        return status;
+    }
+    OpeningFile file;
+private:
+    RunIdentity run_;
+    std::uint64_t count_;
+};
+} // namespace
+
+ReadStatus OpeningInputCursor::opening_at(
+        std::uint64_t index, RequestHandle& out) const noexcept {
+    if (index >= count_) return ReadStatus::not_found;
+    if (!reader_) return ReadStatus::programming_error;
+    RequestHandle value;
+    try {
+        const auto status = reader_(context_, index, value);
+        if (status == ReadStatus::ok) out = value;
+        return status;
+    } catch (...) {
+        return ReadStatus::programming_error;
+    }
+}
+
+ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
+                           std::shared_ptr<const OpeningReadback>& out) {
+    if (input.count() == 0
+        || input.count() > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
+        return ReadStatus::programming_error;
+    // The owner is fixed size; only the anonymous file grows with membership.
+    auto frozen = std::make_shared<FrozenOpenings>(run, input.count());
+    auto status = frozen->file.open();
+    if (status != ReadStatus::ok) return status;
+    OpeningFile work;
+    status = work.open();
+    if (status != ReadStatus::ok) return status;
+    for (std::uint64_t i = 0; i != input.count(); ++i) {
+        RequestHandle handle;
+        status = input.opening_at(i, handle);
+        if (status != ReadStatus::ok) return status;
+        if (!handle.incarnation || handle.run != run) return ReadStatus::programming_error;
+        status = opening_word(frozen->file.fd, i, handle.incarnation, true);
+        if (status != ReadStatus::ok) return status;
+    }
+    // Bottom-up external merge sort. Two words of merge state, no population
+    // sized array, recursive stack, or source callback during a write.
+    const auto count = input.count();
+    for (std::uint64_t width = 1; width < count;) {
+        for (std::uint64_t start = 0; start < count;) {
+            const auto middle = start + std::min(width, count - start);
+            const auto end = middle + std::min(width, count - middle);
+            auto left = start;
+            auto right = middle;
+            for (auto dest = start; dest != end; ++dest) {
+                std::uint64_t a = 0, b = 0;
+                if (left < middle) {
+                    status = opening_word(frozen->file.fd, left, a, false);
+                    if (status != ReadStatus::ok) return status;
+                }
+                if (right < end) {
+                    status = opening_word(frozen->file.fd, right, b, false);
+                    if (status != ReadStatus::ok) return status;
+                }
+                const bool take_left = right == end || (left < middle && a <= b);
+                auto value = take_left ? a : b;
+                if (take_left) ++left;
+                else ++right;
+                status = opening_word(work.fd, dest, value, true);
+                if (status != ReadStatus::ok) return status;
+            }
+            start = end;
+        }
+        std::swap(work.fd, frozen->file.fd);
+        width = width > count / 2 ? count : width * 2;
+    }
+    std::uint64_t previous = 0;
+    for (std::uint64_t i = 0; i != count; ++i) {
+        std::uint64_t value = 0;
+        status = opening_word(frozen->file.fd, i, value, false);
+        if (status != ReadStatus::ok) return status;
+        if (i && value == previous) return ReadStatus::programming_error;
+        previous = value;
+    }
+    out = std::move(frozen);
+    return ReadStatus::ok;
+}
+
+std::uint64_t opening_count(const std::vector<RequestHandle>& owned,
+                            const OpeningReadback* external) noexcept {
+    return external ? external->count() : owned.size();
+}
+
+ReadStatus opening_at(const std::vector<RequestHandle>& owned,
+                      const OpeningReadback* external, std::uint64_t index,
+                      RequestHandle& out) noexcept {
+    if (external) return external->opening_at(index, out);
+    if (index >= owned.size()) return ReadStatus::not_found;
+    out = owned[static_cast<std::size_t>(index)];
+    return ReadStatus::ok;
+}
+
+std::uint64_t opening_observation_count(const TargetObservation& observation) noexcept {
+    return observation.external_openings
+        ? observation.external_openings->count() : observation.openings.size();
+}
+
+ReadStatus opening_observation_at(const TargetObservation& observation,
+                                 std::uint64_t index, OpeningObservation& out) noexcept {
+    if (observation.external_openings)
+        return observation.external_openings->observation_at(index, out);
+    if (index >= observation.openings.size()) return ReadStatus::not_found;
+    out = observation.openings[static_cast<std::size_t>(index)];
+    return ReadStatus::ok;
+}
+namespace {
+
+struct ObservationRows {
+    const TargetObservation& source;
+    struct Iterator {
+        const TargetObservation* source;
+        std::uint64_t index;
+        bool operator!=(const Iterator& other) const noexcept { return index != other.index; }
+        Iterator& operator++() noexcept { ++index; return *this; }
+        OpeningObservation operator*() const {
+            OpeningObservation value;
+            if (opening_observation_at(*source, index, value) != ReadStatus::ok)
+                throw detail::ScratchIoError(EIO, "native opening observation read");
+            return value;
+        }
+    };
+    Iterator begin() const noexcept { return {&source, 0}; }
+    Iterator end() const noexcept { return {&source, opening_observation_count(source)}; }
+};
 
 constexpr std::uint8_t kLivePush = 1;
 constexpr std::uint8_t kLiveErase = 2;
@@ -246,8 +439,18 @@ bool handle_less(const RequestHandle& a, const RequestHandle& b) noexcept {
     return a.incarnation < b.incarnation;
 }
 
-void canonicalize_owner(Request& request) {
+void canonicalize_owner(Request& request, const RunIdentity& run) {
     if (auto* bind = std::get_if<BindOpenings>(&request.owner)) {
+        if (bind->external_openings) {
+            if (!dynamic_cast<const FrozenOpenings*>(bind->external_openings.get())) {
+                std::shared_ptr<const OpeningReadback> frozen;
+                const auto status = freeze_openings(run, *bind->external_openings, frozen);
+                if (status != ReadStatus::ok)
+                    throw detail::ScratchIoError(EIO, "native opening freeze");
+                bind->external_openings = std::move(frozen);
+            }
+            return;
+        }
         std::sort(bind->openings.begin(), bind->openings.end(), handle_less);
     }
 }
@@ -336,35 +539,82 @@ bool same_position(const PositionIdentity& a, const PositionIdentity& b) noexcep
 std::optional<CoreFailure> observe_openings(
         const std::vector<RequestHandle>& cohort, int64_t cycle, Side side,
         const PositionIdentity& position, const std::vector<OpeningObservation>& observations,
-        std::size_t* live_count) noexcept {
+        std::size_t* live_count, const OpeningReadback* external_cohort = nullptr,
+        const OpeningObservationReadback* external_observations = nullptr) noexcept {
     *live_count = 0;
-    if (observations.size() < cohort.size()) return CoreFailure::MissingObservation;
-    if (cohort.empty() || observations.size() != cohort.size() || !valid_position(position)) {
+    const auto members = opening_count(cohort, external_cohort);
+    const auto count = external_observations ? external_observations->count() : observations.size();
+    if (count < members) return CoreFailure::MissingObservation;
+    if (!members || count != members || !valid_position(position)) {
         return CoreFailure::ObservationMismatch;
     }
+    auto read = [&](std::uint64_t i, OpeningObservation& out) noexcept {
+        if (external_observations) return external_observations->observation_at(i, out);
+        out = observations[static_cast<std::size_t>(i)];
+        return ReadStatus::ok;
+    };
+    // Accepted membership is canonical. The enrollment validator also permits
+    // an unordered borrowed input, before canonicalize_owner freezes it.
+    bool canonical = true;
+    RequestHandle previous_member;
+    for (std::uint64_t i = 0; i < members; ++i) {
+        RequestHandle member;
+        if (opening_at(cohort, external_cohort, i, member) != ReadStatus::ok)
+            return CoreFailure::MissingObservation;
+        if (i && !handle_less(previous_member, member)) canonical = false;
+        previous_member = member;
+    }
     bool ordered = true;
-    for (std::size_t i = 0; i < observations.size(); ++i) {
-        const auto& observation = observations[i];
+    OpeningObservation previous;
+    for (std::uint64_t i = 0; i < count; ++i) {
+        OpeningObservation observation;
+        if (read(i, observation) != ReadStatus::ok) return CoreFailure::MissingObservation;
         if (observation.queried_cycle != cycle
             || !same_position(observation.current_position, position)) {
             return CoreFailure::ObservationMismatch;
         }
-        const auto member = std::lower_bound(cohort.begin(), cohort.end(),
-                                              observation.queried_opening, handle_less);
-        if (member == cohort.end() || *member != observation.queried_opening) {
-            return CoreFailure::ObservationMismatch;
+        bool found = false;
+        if (canonical) {
+            std::uint64_t low = 0, high = members;
+            while (low < high) {
+                const auto middle = low + (high - low) / 2;
+                RequestHandle member;
+                if (opening_at(cohort, external_cohort, middle, member) != ReadStatus::ok)
+                    return CoreFailure::MissingObservation;
+                if (handle_less(member, observation.queried_opening)) low = middle + 1;
+                else high = middle;
+            }
+            RequestHandle member;
+            if (low < members) {
+                if (opening_at(cohort, external_cohort, low, member) != ReadStatus::ok)
+                    return CoreFailure::MissingObservation;
+                found = member == observation.queried_opening;
+            }
+        } else {
+            for (std::uint64_t j = 0; j < members; ++j) {
+                RequestHandle member;
+                if (opening_at(cohort, external_cohort, j, member) != ReadStatus::ok)
+                    return CoreFailure::MissingObservation;
+                found = found || member == observation.queried_opening;
+            }
         }
-        if (i && !handle_less(observations[i - 1].queried_opening,
-                              observation.queried_opening)) ordered = false;
+        if (!found) return CoreFailure::ObservationMismatch;
+        if (i && !handle_less(previous.queried_opening, observation.queried_opening))
+            ordered = false;
+        previous = observation;
         if (observation.has_live_matching_lot) {
             if (!position_matches(position, cycle, side)) return CoreFailure::ObservationMismatch;
             ++*live_count;
         }
     }
     if (!ordered) {
-        for (std::size_t i = 0; i < observations.size(); ++i) {
-            for (std::size_t j = 0; j < i; ++j) {
-                if (observations[i].queried_opening == observations[j].queried_opening) {
+        for (std::uint64_t i = 0; i < count; ++i) {
+            OpeningObservation a;
+            if (read(i, a) != ReadStatus::ok) return CoreFailure::MissingObservation;
+            for (std::uint64_t j = 0; j < i; ++j) {
+                OpeningObservation b;
+                if (read(j, b) != ReadStatus::ok) return CoreFailure::MissingObservation;
+                if (a.queried_opening == b.queried_opening) {
                     return CoreFailure::ObservationMismatch;
                 }
             }
@@ -377,7 +627,8 @@ std::optional<CoreFailure> observe_openings(const TargetObservation& observation
                                            const OpeningsClose& close,
                                            std::size_t* live_count) noexcept {
     return observe_openings(close.openings, close.cycle, close.side,
-                            observation.current_position, observation.openings, live_count);
+                            observation.current_position, observation.openings, live_count,
+                            close.external_openings.get(), observation.external_openings);
 }
 
 bool current_shape(const LiveRequest& live) noexcept {
@@ -1746,23 +1997,43 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
             return RequestRejectReason::InvalidOwner;
         }
     } else if (const auto* bind = std::get_if<BindOpenings>(&request.owner)) {
-        if (as_transact(request.intent) || bind->cycle <= 0 || bind->openings.empty()) {
+        const auto count = opening_count(bind->openings, bind->external_openings.get());
+        if (as_transact(request.intent) || bind->cycle <= 0 || !count
+            || (bind->external_openings && !bind->openings.empty())) {
             return RequestRejectReason::InvalidOwner;
         }
-        auto cohort = bind->openings;
-        std::sort(cohort.begin(), cohort.end(), handle_less);
-        for (std::size_t i = 0; i < cohort.size(); ++i) {
-            if (cohort[i].incarnation == 0 || cohort[i].run != identity_
-                || (i && cohort[i] == cohort[i - 1])) return RequestRejectReason::InvalidOwner;
+        // Keep the existing vector admission complexity. The external path
+        // never materializes this compatibility copy.
+        std::vector<RequestHandle> canonical;
+        const auto* cohort = &bind->openings;
+        if (!bind->external_openings) {
+            canonical = bind->openings;
+            std::sort(canonical.begin(), canonical.end(), handle_less);
+            cohort = &canonical;
         }
-        if (context.openings.empty()) return RequestRejectReason::InvalidOwner;
-        const auto& position = context.openings.front().current_position;
+        for (std::uint64_t i = 0; i < count; ++i) {
+            RequestHandle member;
+            if (opening_at(*cohort, bind->external_openings.get(), i, member)
+                    != ReadStatus::ok
+                || !member.incarnation || member.run != identity_)
+                return RequestRejectReason::InvalidOwner;
+        }
+        OpeningObservation first;
+        if (context.external_openings) {
+            if (context.external_openings->observation_at(0, first) != ReadStatus::ok)
+                return RequestRejectReason::InvalidOwner;
+        } else {
+            if (context.openings.empty()) return RequestRejectReason::InvalidOwner;
+            first = context.openings.front();
+        }
+        const auto& position = first.current_position;
         const auto* nonflat = std::get_if<PositionNonflat>(&position);
         if (!nonflat || nonflat->cycle != bind->cycle) return RequestRejectReason::InvalidOwner;
         std::size_t live_count = 0;
-        if (observe_openings(cohort, bind->cycle, nonflat->side, position,
-                              context.openings, &live_count)
-            || live_count != cohort.size()) return RequestRejectReason::InvalidOwner;
+        if (observe_openings(*cohort, bind->cycle, nonflat->side, position,
+                             context.openings, &live_count, bind->external_openings.get(),
+                             context.external_openings)
+            || live_count != count) return RequestRejectReason::InvalidOwner;
     } else if (const auto* bind = std::get_if<BindCohort>(&request.owner)) {
         if (!host_sized || host_sized->kind != HostSizedKind::Close
             || !cohort_exists(bind->cohort)) {
@@ -1955,9 +2226,16 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
         live.authority = OpeningClose{bind->opening, bind->cycle, nonflat.side,
                                       EnrollmentFromCommand{accepted}};
     } else if (const auto* bind = std::get_if<BindOpenings>(&request.owner)) {
-        const auto& nonflat = std::get<PositionNonflat>(context.openings.front().current_position);
+        OpeningObservation first;
+        if (context.external_openings) {
+            if (context.external_openings->observation_at(0, first) != ReadStatus::ok)
+                throw detail::ScratchIoError(EIO, "native opening observation");
+        } else {
+            first = context.openings.front();
+        }
+        const auto& nonflat = std::get<PositionNonflat>(first.current_position);
         live.authority = OpeningsClose{bind->openings, bind->cycle, nonflat.side,
-                                       EnrollmentFromCommand{accepted}};
+                                       EnrollmentFromCommand{accepted}, bind->external_openings};
     } else {
         const auto& cohort = std::get<BindCohort>(request.owner);
         live.authority = CohortClose{cohort.cohort};
@@ -2130,11 +2408,19 @@ std::vector<RequestHandle> WorkingRequestCore::waiting_children(const RequestHan
 void WorkingRequestCore::waiting_children(const RequestHandle& parent,
                                           std::vector<RequestHandle>& handles) const {
     handles.clear();
+    visit_waiting_children(parent, &handles, [](void* context, const RequestHandle& handle) {
+        static_cast<std::vector<RequestHandle>*>(context)->push_back(handle);
+    });
+}
+
+void WorkingRequestCore::visit_waiting_children(
+        const RequestHandle& parent, void* context, HandleVisitor visitor) const {
+    if (!visitor) throw std::invalid_argument("null native handle visitor");
     // The book is in queue order (live()), so the children come out oldest
     // first by priority -- incarnation order, until a re-price keeps a handle.
     for (const auto& live : live_) {
         if (const auto* wait = std::get_if<Wait>(&live.authority)) {
-            if (wait->parent == parent) handles.push_back(live.handle());
+            if (wait->parent == parent) visitor(context, live.handle());
         }
     }
 }
@@ -2156,12 +2442,19 @@ std::vector<RequestHandle> WorkingRequestCore::bound_close_handles() const {
 
 void WorkingRequestCore::bound_close_handles(std::vector<RequestHandle>& handles) const {
     handles.clear();
+    visit_bound_close_handles(&handles, [](void* context, const RequestHandle& handle) {
+        static_cast<std::vector<RequestHandle>*>(context)->push_back(handle);
+    });
+}
+
+void WorkingRequestCore::visit_bound_close_handles(void* context, HandleVisitor visitor) const {
+    if (!visitor) throw std::invalid_argument("null native handle visitor");
     // In queue order, as the book holds them (waiting_children).
     for (const auto& live : live_) {
         if (std::holds_alternative<BookClose>(live.authority)
             || std::holds_alternative<OpeningClose>(live.authority)
             || std::holds_alternative<OpeningsClose>(live.authority)) {
-            handles.push_back(live.handle());
+            visitor(context, live.handle());
         }
     }
 }
@@ -2175,6 +2468,14 @@ std::vector<RequestHandle> WorkingRequestCore::group_recipients(const EventId& a
 void WorkingRequestCore::group_recipients(const EventId& applied,
                                           std::vector<RequestHandle>& handles) const {
     handles.clear();
+    visit_group_recipients(applied, &handles, [](void* context, const RequestHandle& handle) {
+        static_cast<std::vector<RequestHandle>*>(context)->push_back(handle);
+    });
+}
+
+void WorkingRequestCore::visit_group_recipients(
+        const EventId& applied, void* context, HandleVisitor visitor) const {
+    if (!visitor) throw std::invalid_argument("null native handle visitor");
     const CommandEvent* event = event_at(applied);
     const auto* payload = event ? as_applied(*event) : nullptr;
     if (!payload || !payload->definition) return;
@@ -2188,7 +2489,7 @@ void WorkingRequestCore::group_recipients(const EventId& applied,
         if (live.handle() == payload->handle()) continue;
         if (live.birth().acceptance_ordinal >= payload->ordinal) continue;
         // In queue order, as the book holds them (waiting_children).
-        handles.push_back(live.handle());
+        visitor(context, live.handle());
     }
 }
 
@@ -2214,7 +2515,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
         impl->result.event_ordinal = ordinal;
         return PreparedSubmit(std::move(impl));
     }
-    canonicalize_owner(staged);
+    canonicalize_owner(staged, identity_);
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -2307,7 +2608,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         impl->plan = std::move(plan);
         return PreparedReplace(std::move(impl));
     }
-    canonicalize_owner(staged);
+    canonicalize_owner(staged, identity_);
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     // A replace that keeps the handle or carries a binding (R5 lane V19-D)
@@ -2478,7 +2779,7 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
                 SubmitResult{SubmitStatus::Rejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged);
+    canonicalize_owner(staged, identity_);
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -2568,7 +2869,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
                 ReplaceResult{ReplaceStatus::ReplaceRejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged);
+    canonicalize_owner(staged, identity_);
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     if constexpr (Kept) {
         // A replace that keeps the handle or carries a binding (R5 lane
@@ -2858,7 +3159,7 @@ bool WorkingRequestCore::refresh_allowance(
     if (std::holds_alternative<CohortClose>(live.authority)) {
         if (!context.cohort_side) return false;
         bool has_live_member = false;
-        for (const auto& opening : observation.openings)
+        for (const auto& opening : ObservationRows{observation})
             has_live_member = has_live_member || opening.has_live_matching_lot;
         if (!has_live_member) return false;
     } else if (const auto* close = std::get_if<BookClose>(&live.authority)) {
@@ -2984,7 +3285,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
 
     if (std::holds_alternative<CohortClose>(live.authority)) {
         bool has_live_member = false;
-        for (const auto& opening : observation.openings) {
+        for (const auto& opening : ObservationRows{observation}) {
             has_live_member = has_live_member || opening.has_live_matching_lot;
         }
         if (!context.cohort_side || !has_live_member) {
@@ -3129,7 +3430,7 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
 
     if (std::holds_alternative<CohortClose>(live.authority)) {
         bool has_live_member = false;
-        for (const auto& opening : observation.openings) {
+        for (const auto& opening : ObservationRows{observation}) {
             has_live_member = has_live_member || opening.has_live_matching_lot;
         }
         if (!context.cohort_side || !has_live_member) {
@@ -4242,7 +4543,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
             != scope->incarnations.end()) {
             return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
         }
-        for (const auto& observation : proposal.pre_target.openings) {
+        for (const auto& observation : ObservationRows{proposal.pre_target}) {
             if (observation.has_live_matching_lot
                 && !std::binary_search(scope->incarnations.begin(), scope->incarnations.end(),
                                         observation.queried_opening.incarnation)) {
@@ -4266,7 +4567,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
             return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
         }
         std::size_t live_count = 0;
-        for (const auto& observation : proposal.pre_target.openings) {
+        for (const auto& observation : ObservationRows{proposal.pre_target}) {
             if (!cohort_contains(cohort_auth->cohort, observation.queried_opening)) {
                 return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
             }
@@ -4710,7 +5011,7 @@ Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_v
             != scope->incarnations.end()) {
             return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
         }
-        for (const auto& observation : proposal.pre_target.openings) {
+        for (const auto& observation : ObservationRows{proposal.pre_target}) {
             if (observation.has_live_matching_lot
                 && !std::binary_search(scope->incarnations.begin(), scope->incarnations.end(),
                                         observation.queried_opening.incarnation)) {
@@ -4734,7 +5035,7 @@ Preparation<WorkingRequestCore::ExecutionValues> WorkingRequestCore::execution_v
             return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
         }
         std::size_t live_count = 0;
-        for (const auto& observation : proposal.pre_target.openings) {
+        for (const auto& observation : ObservationRows{proposal.pre_target}) {
             if (!cohort_contains(cohort_auth->cohort, observation.queried_opening)) {
                 return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
             }
@@ -6127,3 +6428,300 @@ void WorkingRequestCore::retire_group_effect_receipts() noexcept {
 
 }  // inline namespace native_order_v7
 }  // namespace pineforge::native_order
+
+namespace pineforge::detail {
+namespace {
+ScratchStatus payload_word(const PayloadField& field, PayloadType type,
+                           std::uint64_t& out) noexcept {
+    if (field.type != type || field.bytes.size() != 8) return ScratchStatus::corrupt;
+    std::array<std::byte, 8> bytes{};
+    const auto status = field.bytes.read(0, {bytes.data(), bytes.size()});
+    if (status == ScratchStatus::ok) out = payload_decode(bytes.data());
+    return status;
+}
+}
+ScratchStatus PayloadField::unsigned_value(std::uint64_t& out) const noexcept {
+    return payload_word(*this, PayloadType::unsigned_integer, out);
+}
+ScratchStatus PayloadField::signed_value(std::int64_t& out) const noexcept {
+    std::uint64_t bits = 0;
+    const auto status = payload_word(*this, PayloadType::signed_integer, bits);
+    if (status == ScratchStatus::ok) std::memcpy(&out, &bits, sizeof(out));
+    return status;
+}
+ScratchStatus PayloadField::real_value(double& out) const noexcept {
+    static_assert(sizeof(double) == sizeof(std::uint64_t));
+    std::uint64_t bits = 0;
+    const auto status = payload_word(*this, PayloadType::real, bits);
+    if (status == ScratchStatus::ok) std::memcpy(&out, &bits, sizeof(out));
+    return status;
+}
+ScratchStatus PayloadField::boolean_value(bool& out) const noexcept {
+    std::uint64_t value = 0;
+    const auto status = payload_word(*this, PayloadType::boolean, value);
+    if (status != ScratchStatus::ok) return status;
+    if (value > 1) return ScratchStatus::corrupt;
+    out = value != 0;
+    return ScratchStatus::ok;
+}
+
+ScratchStatus PayloadReadback::root(std::array<std::uint64_t, 3>& out) const noexcept {
+    if (!store_) return ScratchStatus::programming_error;
+    ScratchRecordInfo info;
+    auto status = store_->point(version_, info);
+    if (status != ScratchStatus::ok) return status;
+    if (info.key_bytes != 32 || info.value_bytes != 24) return ScratchStatus::corrupt;
+    std::array<std::uint64_t, 4> key{};
+    status = store_->read(version_, ScratchField::key, 0,
+        {reinterpret_cast<std::byte*>(key.data()), sizeof(key)});
+    if (status != ScratchStatus::ok) return status;
+    if (key[1] != payload_root_kind || key[2] != 0) return ScratchStatus::corrupt;
+    std::array<std::byte, 24> bytes{};
+    status = store_->read(version_, ScratchField::value, 0, {bytes.data(), bytes.size()});
+    if (status != ScratchStatus::ok) return status;
+    std::array<std::uint64_t, 3> value{};
+    for (unsigned i = 0; i != 3; ++i) value[i] = payload_decode(bytes.data() + i * 8);
+    if (value[0] != static_cast<std::uint64_t>(schema_) || value[1] != key[0])
+        return ScratchStatus::corrupt;
+    out = value;
+    return ScratchStatus::ok;
+}
+ScratchStatus PayloadReadback::field_count(std::uint64_t& out) const noexcept {
+    std::array<std::uint64_t, 3> value{};
+    const auto status = root(value);
+    if (status != ScratchStatus::ok) return status;
+    if (first_ > value[2]) return ScratchStatus::corrupt;
+    const auto remaining = value[2] - first_;
+    if (limit_ != std::numeric_limits<std::uint64_t>::max() && limit_ > remaining)
+        return ScratchStatus::corrupt;
+    out = std::min(remaining, limit_);
+    return ScratchStatus::ok;
+}
+ScratchStatus PayloadReadback::field(std::uint64_t index, PayloadField& out) const noexcept {
+    std::array<std::uint64_t, 3> value{};
+    auto status = root(value);
+    if (status != ScratchStatus::ok) return status;
+    if (first_ > value[2]) return ScratchStatus::corrupt;
+    const auto remaining = value[2] - first_;
+    if (limit_ != std::numeric_limits<std::uint64_t>::max() && limit_ > remaining)
+        return ScratchStatus::corrupt;
+    if (index >= std::min(remaining, limit_)) return ScratchStatus::not_found;
+    const std::array<std::uint64_t, 4> key{value[1], payload_field_kind, version_, first_ + index};
+    ScratchSpanSource probe({reinterpret_cast<const std::byte*>(key.data()), sizeof(key)});
+    ScratchHandle handle = 0;
+    status = store_->lower_bound(probe, handle);
+    if (status != ScratchStatus::ok) return status;
+    ScratchRecordInfo info;
+    status = store_->point(handle, info);
+    if (status != ScratchStatus::ok) return status;
+    if (info.key_bytes != sizeof(key) || info.value_bytes < 16) return ScratchStatus::corrupt;
+    std::array<std::uint64_t, 4> actual{};
+    status = store_->read(handle, ScratchField::key, 0,
+        {reinterpret_cast<std::byte*>(actual.data()), sizeof(actual)});
+    if (status != ScratchStatus::ok) return status;
+    if (actual != key) return ScratchStatus::corrupt;
+    std::array<std::byte, 16> header{};
+    status = store_->read(handle, ScratchField::value, 0, {header.data(), header.size()});
+    if (status != ScratchStatus::ok) return status;
+    const auto type = payload_decode(header.data());
+    const auto name_size = payload_decode(header.data() + 8);
+    if (type > static_cast<std::uint64_t>(PayloadType::object_end)
+        || name_size > info.value_bytes - 16) return ScratchStatus::corrupt;
+    PayloadField field;
+    field.type = static_cast<PayloadType>(type);
+    field.name = PayloadBytes(*store_, handle, 16, name_size);
+    field.bytes = PayloadBytes(*store_, handle, 16 + name_size,
+                              info.value_bytes - 16 - name_size);
+    out = field;
+    return ScratchStatus::ok;
+}
+ScratchStatus PayloadReadback::find(std::string_view name, PayloadField& out) const noexcept {
+    std::uint64_t count = 0, depth = 0;
+    auto status = field_count(count);
+    if (status != ScratchStatus::ok) return status;
+    for (std::uint64_t i = 0; i != count; ++i) {
+        PayloadField field;
+        status = this->field(i, field);
+        if (status != ScratchStatus::ok) return status;
+        if (depth == 0 && field.name.size() == name.size()) {
+            bool equal = true;
+            std::array<std::byte, 64> bytes{};
+            for (std::size_t offset = 0; offset < name.size();) {
+                const auto n = std::min(bytes.size(), name.size() - offset);
+                status = field.name.read(offset, {bytes.data(), n});
+                if (status != ScratchStatus::ok) return status;
+                if (std::memcmp(bytes.data(), name.data() + offset, n)) equal = false;
+                offset += n;
+            }
+            if (equal) { out = field; return ScratchStatus::ok; }
+        }
+        if (field.type == PayloadType::object_begin) ++depth;
+        if (field.type == PayloadType::object_end) {
+            if (!depth) return ScratchStatus::corrupt;
+            --depth;
+        }
+    }
+    return depth ? ScratchStatus::corrupt : ScratchStatus::not_found;
+}
+ScratchStatus PayloadReadback::subobject(
+        std::string_view name, PayloadReadback& out) const noexcept {
+    std::uint64_t count = 0, depth = 0, first = 0;
+    bool found = false;
+    auto status = field_count(count);
+    if (status != ScratchStatus::ok) return status;
+    for (std::uint64_t i = 0; i != count; ++i) {
+        PayloadField field;
+        status = this->field(i, field);
+        if (status != ScratchStatus::ok) return status;
+        if (depth == 0 && field.type == PayloadType::object_begin && field.name.size() == name.size()) {
+            bool equal = true;
+            std::array<std::byte, 64> bytes{};
+            for (std::size_t offset = 0; offset < name.size();) {
+                const auto n = std::min(bytes.size(), name.size() - offset);
+                status = field.name.read(offset, {bytes.data(), n});
+                if (status != ScratchStatus::ok) return status;
+                if (std::memcmp(bytes.data(), name.data() + offset, n)) equal = false;
+                offset += n;
+            }
+            if (equal) { found = true; first = i + 1; }
+        }
+        if (field.type == PayloadType::object_begin) ++depth;
+        if (field.type == PayloadType::object_end) {
+            if (!depth) return ScratchStatus::corrupt;
+            --depth;
+            if (found && !depth) {
+                auto view = *this;
+                view.first_ += first;
+                view.limit_ = i - first;
+                out = view;
+                return ScratchStatus::ok;
+            }
+        }
+    }
+    return depth ? ScratchStatus::corrupt : ScratchStatus::not_found;
+}
+ScratchStatus PayloadReadback::visit(
+        void* context, bool (*visitor)(void*, const PayloadField&)) const {
+    if (!visitor) return ScratchStatus::programming_error;
+    std::uint64_t count = 0;
+    auto status = field_count(count);
+    if (status != ScratchStatus::ok) return status;
+    for (std::uint64_t i = 0; i != count; ++i) {
+        PayloadField field;
+        status = this->field(i, field);
+        if (status != ScratchStatus::ok) return status;
+        if (!visitor(context, field)) return ScratchStatus::cancelled;
+    }
+    return ScratchStatus::ok;
+}
+} // namespace pineforge::detail
+
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+namespace {
+bool reader_visible(const native_order::LiveRequest& live) noexcept {
+    const auto* wait = std::get_if<native_order::WaitForApplied>(&live.request().owner);
+    return !wait || wait->visibility != native_order::NativeArmVisibility::PendingUntilArmed
+        || !std::holds_alternative<native_order::Wait>(live.authority);
+}
+NativeWorkingRequest reader_working_row(const native_order::LiveRequest& live) {
+    return {live.definition, native_order::project_remaining(live.remaining), live.trigger_state};
+}
+}
+
+detail::ScratchStatus NativeStrategyHost::visit_native_working_requests(
+        void* context, bool (*visitor)(void*, const NativeWorkingRequest&)) const {
+    if (!visitor) return detail::ScratchStatus::programming_error;
+    // A fresh host has no book. Do not instantiate its lazy consumer merely
+    // to answer an empty read.
+    if (!execution_consumer_slot_.ptr) return detail::ScratchStatus::ok;
+    const auto& core = as_native_consumer(*execution_consumer_slot_.ptr).request_core();
+    for (const auto& live : core.live()) {
+        if (!reader_visible(live)) continue;
+        const auto row = reader_working_row(live);
+        if (!visitor(context, row)) return detail::ScratchStatus::cancelled;
+    }
+    return detail::ScratchStatus::ok;
+}
+
+void NativeStrategyHost::native_visit_working_requests(
+        void* context, void (*visitor)(void*, const NativeWorkingRequest&)) const {
+    if (!visitor) throw std::invalid_argument("null native working visitor");
+    struct Call { void* context; void (*visitor)(void*, const NativeWorkingRequest&); };
+    Call call{context, visitor};
+    visit_native_working_requests(&call, [](void* context, const NativeWorkingRequest& row) {
+        const auto& call = *static_cast<Call*>(context);
+        call.visitor(call.context, row);
+        return true;
+    });
+}
+
+std::optional<NativeWorkingRequest> NativeStrategyHost::native_working_request(
+        const native_order::RequestHandle& handle) const {
+    if (!execution_consumer_slot_.ptr) return std::nullopt;
+    const auto* live = as_native_consumer(*execution_consumer_slot_.ptr).request_core().find_live(handle);
+    if (!live || !reader_visible(*live)) return std::nullopt;
+    return reader_working_row(*live);
+}
+
+detail::ScratchStatus NativeStrategyHost::visit_native_open_lots(
+        double mark, void* context, bool (*visitor)(void*, const NativeOpenLotView&)) const {
+    if (!visitor) return detail::ScratchStatus::programming_error;
+    if (pyramid_entries_.empty()) return detail::ScratchStatus::ok;
+    const bool is_long = position_side_ != PositionSide::SHORT;
+    const double point_value = syminfo_.pointvalue;
+    const double fx = active_account_currency_fx();
+    for (std::size_t i = 0; i < pyramid_entries_.size(); ++i) {
+        const auto& lot = pyramid_entries_[i];
+        NativeOpenLotView row;
+        row.ordinal = i;
+        row.entry_incarnation = lot.entry_incarnation;
+        row.cycle = position_cycle_seq_;
+        row.side = is_long ? native_order::Side::Long : native_order::Side::Short;
+        row.entry_label = lot.entry_id;
+        row.entry_comment = lot.entry_comment;
+        row.entry_time_ms = lot.time;
+        row.entry_bar_index = lot.entry_bar_index;
+        row.entry_price = lot.price;
+        row.signed_units = is_long ? lot.qty : -lot.qty;
+        row.entry_commission = open_entry_commission(lot);
+        row.mark = mark;
+        double favorable = lot.max_runup;
+        double adverse = lot.max_drawdown;
+        if (std::isfinite(mark)) {
+            const double move = (is_long ? (mark - lot.price) : (lot.price - mark)) * lot.qty;
+            row.unrealized_pnl = move * point_value * fx - row.entry_commission;
+            favorable = std::max(favorable, move);
+            adverse = std::max(adverse, -move);
+        }
+        row.favorable_excursion = favorable * point_value * fx;
+        row.adverse_excursion = adverse * point_value * fx;
+        if (!visitor(context, row)) return detail::ScratchStatus::cancelled;
+    }
+    return detail::ScratchStatus::ok;
+}
+
+void NativeStrategyHost::native_visit_open_lots(
+        double mark, void* context, void (*visitor)(void*, const NativeOpenLotView&)) const {
+    if (!visitor) throw std::invalid_argument("null native lot visitor");
+    struct Call { void* context; void (*visitor)(void*, const NativeOpenLotView&); };
+    Call call{context, visitor};
+    visit_native_open_lots(mark, &call, [](void* context, const NativeOpenLotView& row) {
+        const auto& call = *static_cast<Call*>(context);
+        call.visitor(call.context, row);
+        return true;
+    });
+}
+
+detail::ScratchStatus NativeStrategyHost::visit_native_open_lot_values(
+        void* context, bool (*visitor)(void*, std::uint64_t, double, double)) const {
+    if (!visitor) return detail::ScratchStatus::programming_error;
+    const bool is_long = position_side_ != PositionSide::SHORT;
+    for (const auto& lot : pyramid_entries_) {
+        if (!visitor(context, lot.entry_incarnation, lot.price, is_long ? lot.qty : -lot.qty))
+            return detail::ScratchStatus::cancelled;
+    }
+    return detail::ScratchStatus::ok;
+}
+} // inline namespace engine_script_run_v19
+} // namespace pineforge
