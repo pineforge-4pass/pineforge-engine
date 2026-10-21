@@ -1281,6 +1281,31 @@
    "retryable": false,
    "since": "1.7.0"
   },
+  "scratch_configuration_invalid": {
+   "args": {
+    "reason": {
+     "kind": "vocab",
+     "values": [
+      "nondecimal",
+      "nonpositive",
+      "overflow"
+     ]
+    },
+    "stage": {
+     "kind": "vocab",
+     "values": [
+      "command_scratch_byte_cap"
+     ]
+    }
+   },
+   "class": "input",
+   "description": "The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero.",
+   "english": [
+    "command scratch byte cap is not positive decimal uint64_t"
+   ],
+   "retryable": false,
+   "since": "1.7.0"
+  },
   "scratch_io_failed": {
    "args": {},
    "class": "resource",

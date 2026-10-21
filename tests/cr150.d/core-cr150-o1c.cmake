@@ -1,0 +1,5 @@
+list(APPEND TEST_SOURCES test_scratch_backing)
+list(APPEND TEST_SOURCES test_scratch_store)
+pineforge_add_unit_test(test_scratch_backing)
+pineforge_add_unit_test(test_scratch_store)
+add_test(NAME test_scratch_contract_guard COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_scratch_contract_guard.py)

@@ -15,6 +15,7 @@
 #include <pineforge/detail/id_pair_store.hpp>
 #include <pineforge/detail/adapter_exposure_storage.hpp>
 #include <pineforge/detail/scratch_sequence.hpp>
+#include <pineforge/source/exit_scratch.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -1294,6 +1295,29 @@ public:
             if (std::find(incarnations.begin(), incarnations.end(), hot_[first].incarnation)
                 != incarnations.end()) --sharing;
         }
+        remove_all_from(first, [&](const native_order::RequestHandle& handle) {
+            return std::find(doomed.begin(), doomed.end(), handle) != doomed.end();
+        });
+    }
+    void remove_selected(const detail::ExitScratchRows<native_order::RequestHandle>& doomed) {
+        if (doomed.empty() || hot_.empty()) return;
+        detail::ExitScratchIndex members(doomed.context());
+        for (const auto& handle : doomed) members.put(handle.incarnation, 0);
+        remove_selected(members, doomed.context().run);
+    }
+    void remove_selected(const detail::ExitScratchIndex& members,
+                         const native_order::RunIdentity& run) {
+        const auto contains = [&](const native_order::RequestHandle& handle) {
+            return handle.run == run
+                && members.find(handle.incarnation) != detail::ExitScratchIndex::absent;
+        };
+        std::size_t first = 0;
+        while (first < hot_.size() && !contains(hot_[first])) ++first;
+        if (first != hot_.size()) remove_all_from(first, contains);
+    }
+
+private:
+    template<class Contains> void remove_all_from(std::size_t first, Contains contains) {
         // A parked run keeps its place among the handles that stay: its
         // `at` counts the handles before it, and two runs no handle
         // separates any more are one.
@@ -1302,7 +1326,7 @@ public:
         std::size_t out = first;
         for (std::size_t in = first; in < hot_.size(); ++in) {
             for (; run < parked_.size() && parked_[run].at == in; ++run) parked_[run].at = out;
-            if (std::find(doomed.begin(), doomed.end(), hot_[in]) != doomed.end()) {
+            if (contains(hot_[in])) {
                 const auto found = counts_.find(hot_[in].incarnation);
                 if (--found->second == 0) counts_.erase(found);
                 continue;
@@ -1322,7 +1346,6 @@ public:
         }
     }
 
-private:
     // Whether a member of `handle`'s run identity can be kept as an
     // incarnation: every settled and parked member shares one.
     bool claims(const native_order::RequestHandle& handle) {
@@ -1538,6 +1561,9 @@ public:
                          compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None);
 
     void bind(NativeStrategyHost& host) noexcept;
+    // Override the run-owned store after bind/reset_for_run for an explicit
+    // host-provisioned context. Borrowed through the last nested reader.
+    void bind_exit_scratch(detail::ExitScratchContext& context);
     // Pine source state counts chart/source bars. The kernel coordinate is
     // script-bar space, so projection rows use this explicit source index and
     // never rewrite a kernel lot or trade row.
@@ -1860,7 +1886,6 @@ private:
         PineExecutionAdapter&, const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
     bool partial_exit_sibling_live(const PlacementSnapshot&,
                                   native_order::RequestHandle) const;
-
     // L8c calls this once for [trades_.base(), global_end), in forward
     // order, before retiring that prefix. scratch_directory is L6b-4's
     // already-resolved directory. This is the only dependency binding.
@@ -1879,6 +1904,7 @@ private:
     std::shared_ptr<detail::PositionTailSummary> position_tail_summary_;
     void observe_position_tail_rows();
     void begin_position_tail_summary();
+    friend detail::ExitScratchContext& detail::exit_scratch(const PineExecutionAdapter&);
     struct CohortFacts {
         native_order::CohortHandle handle{};
         OriginRoster origins;
@@ -2341,6 +2367,7 @@ private:
     // after it is not a sibling.
     void cancel_bracket_siblings(native_order::RequestHandle, std::uint64_t executed_at = 0);
     void cancel_exit_orders_for_full_close(const SourceId& from_entry);
+    void cancel_exit_orders_for_full_close(const detail::ScratchByteSource& from_entry);
     void retire_in_position_exits_at_flat(bool preserve_pending_parents,
                                           bool dormant_rows_only,
                                           const PlacementSnapshot* paired_close);
@@ -2348,6 +2375,8 @@ private:
                                    const native_order::ExecutionAppliedEvent&);
     void withdraw_anchored_relative_legs(const SourceId* exit_id,
                                          const SourceId* from_entry);
+    void withdraw_anchored_relative_readers(const detail::ScratchByteSource* exit_id,
+                                            const detail::ScratchByteSource* from_entry);
     bool anchorable_relative_exit(const PendingRelativeExit&,
                                   native_order::RequestHandle& parent,
                                   bool& parent_long) const;
@@ -2527,8 +2556,8 @@ private:
     // A held global exit with relative legs, entry by entry
     // (ExitBindingRuleSwitches::global_exit_per_entry_levels).
     bool per_entry_exit_scope() const;
-    std::vector<PerEntryExitChild> per_entry_open_entries(bool long_side) const;
-    std::vector<native_order::RequestHandle> per_entry_child_legs(
+    detail::ExitScratchRows<PerEntryExitChild> per_entry_open_entries(bool long_side) const;
+    detail::ExitScratchRows<native_order::RequestHandle> per_entry_child_legs(
         const SourceId& exit_id, std::uint64_t origin) const;
     bool per_entry_exit_call(const SourceId& exit_id, const SourceId& from_entry, double limit,
                              double stop, double trail_points, double trail_offset,
@@ -2542,7 +2571,8 @@ private:
     void per_entry_exits_after_fill(const std::optional<PlacementSnapshot>& placement,
                                     const native_order::ExecutionAppliedEvent& event);
     void end_per_entry_exit(std::size_t index);
-    void cancel_working_legs(const std::vector<native_order::RequestHandle>& legs);
+    void cancel_working_legs(
+        const detail::ExitScratchRows<native_order::RequestHandle>& legs);
     void order_per_entry_point_ties();
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);
@@ -2584,6 +2614,7 @@ private:
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
+    mutable std::shared_ptr<detail::ExitScratchContext> exit_scratch_;
     const PineScheduler* input_scheduler_ = nullptr;
     PineStrategyConfig config_{};
     StagedConfiguration staged_{};

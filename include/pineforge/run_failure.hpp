@@ -263,6 +263,10 @@ public:
         : Base(what), RunFailureInfo(code, args) {}
     coded(RunFailureCode code, const RunFailureArgs& args, const char* what)
         : Base(what), RunFailureInfo(code, args) {}
+    // Keep structured exception context (for example system_error::code())
+    // when the base cannot be reconstructed from its English text alone.
+    coded(RunFailureCode code, const RunFailureArgs& args, const Base& error)
+        : Base(error), RunFailureInfo(code, args) {}
     coded(RunFailureValue value, const std::string& what)
         : Base(what), RunFailureInfo(std::move(value)) {}
     coded(RunFailureValue value, const char* what)

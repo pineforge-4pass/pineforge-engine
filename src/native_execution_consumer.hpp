@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -20,6 +21,9 @@
 #include <utility>
 #include <vector>
 #include "report_scratch.hpp"
+
+#define PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1 1
+
 namespace pineforge {
 inline namespace engine_script_run_v19 {
 
@@ -508,6 +512,8 @@ public:
     // tests/test_native_direct_mutation.cpp can hold the two paths equal bit
     // for bit; no host reaches it.
     void set_direct_mutation(bool enabled) noexcept { direct_mutation_ = enabled; }
+    void set_dependency_scratch(detail::CommandScratchStore&);
+    static detail::ScratchKeyOrder dependency_scratch_order() noexcept;
 
     // The per-point guards in front of drain_queued_notifications,
     // recalculate_at_modeled_point and the three margin check points skip
@@ -1587,6 +1593,14 @@ private:
             BacktestEngine& engine,
             const std::vector<std::pair<native_order::EventId, native_order::RequestHandle>>& seeds,
             NativeFailureOperation operation);
+    detail::CommandScratchStore* dependency_scratch_ = nullptr;
+    // Operation census only; neither scratch records nor these counters are
+    // logical run state. The transaction is rolled back after every drain.
+    struct DependencyScratchStats {
+        std::uint64_t book_rows = 0, waiting_rows = 0, seed_rows = 0;
+        std::uint64_t edge_rows = 0, queued_rows = 0, popped_rows = 0;
+        std::uint64_t lookups = 0, max_lookup_reads = 0;
+    } dependency_scratch_stats_;
     void observe_trails(BacktestEngine& engine, const NativeDriverPoint& point,
                         const native_order::MatchCursor& cursor, bool continuous,
                         double price);

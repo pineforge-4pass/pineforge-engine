@@ -219,6 +219,48 @@ def require_once(text: str, value: str, label: str) -> None:
         raise ValueError(label + " must appear exactly once")
 
 
+def scratch_store_state_digest_leaf(root: Path) -> str:
+    """Cover the logical 24-byte prefix, independently of physical storage."""
+    # X25-X27 select order id 0x5832355832370002. The generic implementation
+    # must fold the selected runtime id, not a constant substituted for it.
+    label = ("CommandScratchStore.state_digest prefix "
+             "(24 bytes: order.id [X25-X27=0x5832355832370002], next_handle, record_count)")
+    implementation = executable_hash_text(
+        (root / "include/pineforge/detail/scratch_store_impl.hpp").read_text())
+    digest = _function_body(
+        implementation, r"\bStatus\s+digest\s*\(\s*bool\s+with_state\b", label)
+    # The count is shared with ordered_digest; only the state digest prefixes
+    # it with the ordering schema and allocator state. Check the live sequence,
+    # not mere mentions of these fields elsewhere in the implementation.
+    prefix = re.sub(r"\s+", "", digest.split("std::uint64_t leaf", 1)[0])
+    expected = (
+        "Fold fold;"
+        "if (with_state) {"
+        "fold.le64(order_.id);"
+        "fold.le64(cur_.next_handle);"
+        "}"
+        "fold.le64(cur_.record_count);"
+    )
+    require_once(prefix, re.sub(r"\s+", "", expected), label)
+    wrapper = _function_body(
+        implementation, r"\bScratchStatus\s+CommandScratchStore::state_digest\s*\(",
+        "CommandScratchStore.state_digest entry point")
+    require_once(wrapper, "state_->digest(true, page, result)",
+                 "CommandScratchStore.state_digest state-prefix dispatch")
+    encoder = _function_body(
+        implementation, r"\bvoid\s+le64\s*\(\s*std::uint64_t\s+v\s*\)",
+        "CommandScratchStore LE64 encoder")
+    if re.sub(r"\s+", "", encoder) != "Byteraw[8];st64(raw,v);bytes(raw,8);":
+        raise ValueError(label + " must use an eight-byte LE64 encoder")
+    little_endian = _function_body(
+        implementation, r"\bvoid\s+st64\s*\(", "CommandScratchStore LE64 byte order")
+    if re.sub(r"\s+", "", little_endian) != (
+        "for(inti=0;i<8;++i)p[i]=static_cast<Byte>((value>>(8*i))&0xFF);"
+    ):
+        raise ValueError(label + " must use little-endian byte order")
+    return label
+
+
 def main(root: Path = ROOT) -> int:
     try:
         engine_hash = executable_hash_text((root / "src/engine_state_hash.cpp").read_text())
@@ -295,6 +337,8 @@ def main(root: Path = ROOT) -> int:
             "f.u(static_cast<uint64_t>(value.scope));",
         ):
             require_once(consumer_hash, fold, "native request-state fold `" + fold + "`")
+
+        scratch_leaf = scratch_store_state_digest_leaf(root)
 
         # R5 N5 (RP9): a KernelRecorded run records the per-bar broker-state
         # hash row itself, in exactly one place — the per-calculation
@@ -377,7 +421,8 @@ def main(root: Path = ROOT) -> int:
               f"{len(generic)} generic members, {len(source)} source-adapter members, "
               f"{len(nested)} nested fields, {len(waivers)} waivers, "
               f"{len(SCHEDULER_CACHE_WAIVERS)} scheduler cache waivers, "
-              f"{len(PINNED_HASH_DEBT)} pinned sibling-lane debts, OK")
+              f"{len(PINNED_HASH_DEBT)} pinned sibling-lane debts, "
+              f"leaf={scratch_leaf}, OK")
         return 0
     except (OSError, ValueError) as error:
         print("check_broker_state_hash_coverage: " + str(error), file=sys.stderr)

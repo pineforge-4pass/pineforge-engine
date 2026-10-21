@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/session_time.hpp>
 #include <pineforge/source/pine_adapter.hpp>
@@ -20,6 +21,7 @@
 // The run-time symbol key overload of register_security_eval (lane XSYM-D):
 // a request site of another symbol reads the feed installed for that symbol.
 #define PINEFORGE_HAS_SYMBOL_SECURITY_EVAL_V1 1
+#define PINEFORGE_HAS_TRADE_SCRATCH_V1 1
 
 namespace pineforge::source {
 
@@ -336,6 +338,10 @@ public:
 
     virtual void on_source_bar(const Bar&) = 0;
     void configure_pine_strategy(const PineStrategyConfig&);
+    // Run-owner provisioned, exclusive scratch; use trade_scratch_order().
+    // Borrowed through the run, empty outside a recut or same-bar sort.
+    void set_trade_scratch(detail::CommandScratchStore&);
+    static detail::ScratchKeyOrder trade_scratch_order() noexcept;
     void set_strategy_override(const StrategyOverrides&);
     // A stream's historical warmup remains a configuration window until the
     // first realtime input.  The legacy stream path permits the feed to
@@ -1053,6 +1059,10 @@ private:
     void finish_adapter_evaluation();
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     void order_global_exit_children(const native_order::ExecutionAppliedEvent&);
+    detail::CommandScratchStore* trade_scratch_ = nullptr;
+    detail::CommandScratchStore& trade_scratch();
+    std::optional<std::size_t> sort_same_bar_exit_trades(
+        TradeLedger&, PineExecutionAdapter&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     // The range-end row an applied execution may complete. It stays ordered
     // after the fill's calc_on_order_fills recalculation, which can advance

@@ -40,6 +40,34 @@ class Coverage(unittest.TestCase):
     def test_current_tree_passes(self):
         self.assertEqual(self.check()[0], 0)
 
+    def test_scratch_store_state_digest_prefix_is_pinned(self):
+        # The old checker ignores this implementation, so every mutation
+        # below returns success there and this test fails. No digest literal
+        # is an oracle: mutate the live folds and derive the verdict from the
+        # coverage check, just as for the other durable-state leaves.
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        self.assertIn("leaf=CommandScratchStore.state_digest prefix (24 bytes:", output)
+        for before, after in (
+            ("fold.le64(order_.id);", ""),
+            ("fold.le64(order_.id);", "fold.le64(0);"),
+            ("fold.le64(cur_.next_handle);", ""),
+            ("fold.le64(cur_.next_handle);", "fold.le64(1);"),
+            ("fold.le64(cur_.record_count);", "fold.le64(0);"),
+            ("fold.le64(order_.id);\n            fold.le64(cur_.next_handle);",
+             "fold.le64(cur_.next_handle);\n            fold.le64(order_.id);"),
+            ("if (with_state) {\n            fold.le64(order_.id);",
+             "if (false) {\n            fold.le64(order_.id);"),
+            ("state_->digest(true, page, result)", "state_->digest(false, page, result)"),
+            ("bytes(raw, 8);", "bytes(raw, 4);"),
+            ("(value >> (8 * i)) & 0xFF", "(value >> (8 * (7 - i))) & 0xFF"),
+        ):
+            with self.subTest(before=before, after=after):
+                result, output = self.check(((
+                    "include/pineforge/detail/scratch_store_impl.hpp", before, after),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("CommandScratchStore.state_digest", output)
+
     def test_native_request_state_folds_are_pinned(self):
         # R5 L7b: the anchor rounding and the arm visibility are request
         # state folded (only when set) into the continuation the generic
@@ -131,6 +159,28 @@ class Coverage(unittest.TestCase):
             ("src/source/pine_state_hash.cpp", "adapter_.hash_state(f);",
              "adapter_.missing_hash(f);"),))
         self.assertEqual(result, 1, output)
+
+    def test_exit_scratch_fold_is_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        fold = "hash_exit_scratch(f, exit_scratch_.get());"
+        for replacement in ("", "hash_exit_scratch(f, nullptr);"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("exit_scratch_", output)
+
+    def test_trade_scratch_fold_is_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        fold = "hash_scratch_store(f, trade_scratch_);"
+        for replacement in ("", "hash_scratch_store(f, nullptr);"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("trade_scratch_", output)
 
     def test_unknown_waiver_is_rejected(self):
         result, output = self.check((
