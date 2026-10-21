@@ -138,8 +138,24 @@ int cmp_stamp(const CivilStamp& a, const CivilStamp& b) {
 }
 
 bool is_utc_zone(std::string_view tz) {
-    const std::string n = tz_util::normalize_timezone_for_posix(std::string(tz));
-    return n.empty() || n == "UTC" || n == "Etc/UTC";
+    if (tz.empty() || tz == "UTC" || tz == "Etc/UTC" || tz == "GMT" || tz == "Etc/GMT") {
+        return true;
+    }
+    // The normalizer maps only these names and signed UTC/GMT zero offsets
+    // to UTC. Inspect the zero offset without constructing strings or a
+    // stream at every boundary. POSIX names such as UTC0 keep their existing
+    // non-UTC classification (and their existing certificate refusal).
+    if (tz.size() <= 4 || (tz.substr(0, 3) != "UTC" && tz.substr(0, 3) != "GMT")
+        || (tz[3] != '+' && tz[3] != '-')) {
+        return false;
+    }
+    const std::string_view body = tz.substr(4);
+    const auto colon = body.find(':');
+    if (colon == 0 || colon == body.size() - 1) return false;
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        if (body[i] != '0' && i != colon) return false;
+    }
+    return true;
 }
 
 int64_t utc_civil_ms(const CivilStamp& c) {
@@ -263,18 +279,20 @@ std::optional<CivilResolution> resolve_stamp(const std::string& tz, const CivilS
         r.kind = CivilKind::Unique;
         return r;
     }
-    std::vector<int64_t> hits;
+    // There are exactly two candidates (one for each daylight-saving flag).
+    // Civil resolution must not acquire a vector on a prepared day miss.
+    std::array<int64_t, 2> hits{};
+    std::size_t hit_count = 0;
     for (int isdst : {0, 1}) {
         if (auto ms = mktime_candidate(c, isdst, tz)) {
-            if (std::find(hits.begin(), hits.end(), *ms) == hits.end()) hits.push_back(*ms);
+            if (hit_count == 0 || hits[0] != *ms) hits[hit_count++] = *ms;
         }
     }
-    if (hits.size() == 1) {
-        return CivilResolution{*hits.begin(), CivilKind::Unique};
+    if (hit_count == 1) {
+        return CivilResolution{hits[0], CivilKind::Unique};
     }
-    if (hits.size() >= 2) {
-        std::sort(hits.begin(), hits.end());
-        return CivilResolution{hits.front(), CivilKind::Fold};
+    if (hit_count == 2) {
+        return CivilResolution{std::min(hits[0], hits[1]), CivilKind::Fold};
     }
     auto gap = first_representable_at_or_after(c, tz);
     if (!gap) return std::nullopt;
@@ -343,20 +361,20 @@ std::optional<int64_t> resolve_civil_minutes(const std::string& tz, int64_t cm) 
     return resolve_hms(tz, civil_from_days(days), minutes);
 }
 
-std::vector<EpochSpan> merge_spans(std::vector<EpochSpan> spans) {
-    if (spans.empty()) return spans;
+void merge_spans(std::vector<EpochSpan>& spans) {
+    if (spans.empty()) return;
     std::sort(spans.begin(), spans.end(),
               [](const EpochSpan& a, const EpochSpan& b) { return a.start_ms < b.start_ms; });
-    std::vector<EpochSpan> out;
-    out.push_back(spans.front());
+    std::size_t kept = 1;
     for (std::size_t i = 1; i < spans.size(); ++i) {
-        if (out.back().end_ms < spans[i].start_ms) {
-            out.push_back(spans[i]);
-        } else if (spans[i].end_ms > out.back().end_ms) {
-            out.back().end_ms = spans[i].end_ms;
+        EpochSpan& last = spans[kept - 1];
+        if (last.end_ms < spans[i].start_ms) {
+            spans[kept++] = spans[i];
+        } else if (spans[i].end_ms > last.end_ms) {
+            last.end_ms = spans[i].end_ms;
         }
     }
-    return out;
+    spans.resize(kept);
 }
 
 int64_t first_overlap_open(int64_t open_ms,
@@ -393,17 +411,22 @@ int64_t last_span_end(const std::vector<EpochSpan>& spans, int64_t origin_ms) {
     return last;
 }
 
-std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
-                                                const CivilDate& open_date) {
-    if (!cal.valid()) return std::nullopt;
+// The caller supplies both buffers. Memo readers prepare them at bind; the
+// owning API below supplies fresh buffers and keeps its owning-return contract.
+bool resolve_session_day_into(const SessionCalendar& cal,
+                              const CivilDate& open_date,
+                              SessionDay& day,
+                              std::vector<EpochSpan>& civil_spans) {
+    civil_spans.clear();
+    day.spans.clear();
+    if (!cal.valid()) return false;
     const int origin = cal.origin_minutes();
     const int64_t cycle_start_cm = civil_minutes(open_date, origin);
     const int64_t cycle_end_cm = civil_minutes(add_days(open_date, 1), origin);
-    if (cycle_end_cm <= cycle_start_cm) return std::nullopt;
+    if (cycle_end_cm <= cycle_start_cm) return false;
 
-    std::vector<EpochSpan> civil_raw;
     if (cal.all_day()) {
-        civil_raw.push_back(EpochSpan{cycle_start_cm, cycle_end_cm});
+        civil_spans.push_back(EpochSpan{cycle_start_cm, cycle_end_cm});
     } else {
         for (int n = -1; n <= 1; ++n) {
             const CivilDate inst_date = add_days(open_date, n);
@@ -413,43 +436,48 @@ std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
                 if (!civil_window_instance(w, inst_date, start_cm, end_cm)) continue;
                 const int64_t a = std::max(start_cm, cycle_start_cm);
                 const int64_t b = std::min(end_cm, cycle_end_cm);
-                if (b > a) civil_raw.push_back(EpochSpan{a, b});
+                if (b > a) civil_spans.push_back(EpochSpan{a, b});
             }
         }
     }
-    auto civil_union = merge_spans(std::move(civil_raw));
+    merge_spans(civil_spans);
     CivilDate trading = open_date;
-    if (!civil_union.empty()) {
-        const int64_t last_cm = last_span_end(civil_union, cycle_start_cm);
+    if (!civil_spans.empty()) {
+        const int64_t last_cm = last_span_end(civil_spans, cycle_start_cm);
         trading = civil_from_days(floor_div(last_cm - 1, 1440));
     }
 
     auto cycle_start = origin_on(cal, open_date);
     auto cycle_end = origin_on(cal, add_days(open_date, 1));
-    if (!cycle_start || !cycle_end) return std::nullopt;
-    if (*cycle_end <= *cycle_start) return std::nullopt;
+    if (!cycle_start || !cycle_end) return false;
+    if (*cycle_end <= *cycle_start) return false;
 
-    std::vector<EpochSpan> resolved;
-    for (const EpochSpan& civ : civil_union) {
+    for (const EpochSpan& civ : civil_spans) {
         auto a = resolve_civil_minutes(cal.timezone(), civ.start_ms);
         auto b = resolve_civil_minutes(cal.timezone(), civ.end_ms);
         if (!a || !b || *b <= *a) continue;
-        resolved.push_back(EpochSpan{*a, *b});
+        day.spans.push_back(EpochSpan{*a, *b});
     }
-    resolved = merge_spans(std::move(resolved));
+    merge_spans(day.spans);
 
-    SessionDay day;
     day.open_date = open_date;
     day.origin_ms = *cycle_start;
     day.next_origin_ms = *cycle_end;
     day.trading_date = trading;
-    if (!resolved.empty() && day_allowed(cal, trading)) {
-        day.spans = std::move(resolved);
+    if (!day.spans.empty() && day_allowed(cal, trading)) {
         day.last_traded_ms = last_span_end(day.spans, day.origin_ms);
     } else {
-        day.spans = {};
+        day.spans.clear();
         day.last_traded_ms = day.origin_ms;
     }
+    return true;
+}
+
+std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
+                                                const CivilDate& open_date) {
+    SessionDay day;
+    std::vector<EpochSpan> civil_spans;
+    if (!resolve_session_day_into(cal, open_date, day, civil_spans)) return std::nullopt;
     return day;
 }
 
@@ -1612,6 +1640,12 @@ struct SessionDayMemo::State {
 
     bool valid = false;
     bool utc = false;
+    // Raw civil instances are merged in place. The staging day's resolved
+    // spans are merged in place too, then copied into a slot's existing
+    // buffer only after resolution succeeds. Neither buffer is moved on a
+    // miss or eviction.
+    std::vector<EpochSpan> civil_spans;
+    SessionDay resolving_day;
     std::array<DaySlot, kDaySlots> days{};
     std::array<LocalSlot, kLocalSlots> locals{};
     std::size_t next_local = 0;
@@ -1627,7 +1661,8 @@ struct SessionDayMemo::State {
     // The zone's own transitions, for cycle_certificate: a constant offset
     // (UTC, a fixed offset), or the transition instants of the TZif file libc
     // reads for the zone, together with libc's own reading on each side of
-    // every transition a certificate has needed. Read on first use.
+    // every transition a certificate has needed. Resources are loaded at
+    // bind; individual readings remain lazy scalar facts.
     enum class ZoneKind : std::uint8_t { Unread, Constant, Table, Unsupported };
     struct ZoneReading {
         bool read = false;
@@ -1703,6 +1738,13 @@ bool memo_local_day(const SessionCalendar& cal, int64_t ms, MemoState& m, int64_
     return resolved;
 }
 
+bool session_day_from_open_into(const SessionCalendar& cal,
+                                const CivilDate& open_date,
+                                SessionDay& out,
+                                SessionDayMemo::State& m) {
+    return resolve_session_day_into(cal, open_date, out, m.civil_spans);
+}
+
 const SessionDay* memo_session_day_from_open(const SessionCalendar& cal,
                                              int64_t open_day,
                                              MemoState& m) {
@@ -1711,15 +1753,16 @@ const SessionDay* memo_session_day_from_open(const SessionCalendar& cal,
     if (!slot.used || slot.open_day != open_day) {
         // Resolved before the slot is touched, and the slot is a miss while it
         // is rewritten, so a throw leaves no half-written day behind.
-        const auto day = session_day_from_open(cal, civil_from_days(open_day));
+        const bool present =
+            session_day_from_open_into(cal, civil_from_days(open_day), m.resolving_day, m);
         ++m.day_resolutions;
         slot.used = false;
-        slot.present = day.has_value();
-        if (day) {
+        slot.present = present;
+        if (present) {
             // Copy-assigned, so its spans keep the buffer bind reserved, which
             // holds any day of this calendar (session_day_span_bound): no
             // reallocation.
-            slot.day = *day;
+            slot.day = m.resolving_day;
         } else {
             slot.day.spans.clear();
         }
@@ -2266,8 +2309,11 @@ SessionDayMemo::State& SessionDayMemo::bind(const SessionCalendar& calendar) {
     fresh->utc = is_utc_zone(calendar.timezone());
     // Every day slot's span buffer, now and for good (State::DaySlot): what
     // the memo owns is the same after its first lookup as after its millionth.
-    const std::size_t spans = session_day_span_bound(calendar);
+    const std::size_t spans = session_day_span_capacity(calendar);
     for (auto& slot : fresh->days) slot.day.spans.reserve(spans);
+    fresh->civil_spans.reserve(spans);
+    fresh->resolving_day.spans.reserve(spans);
+    if (fresh->valid) zone_load(calendar, *fresh);
     state_ = std::move(fresh);
     calendar_ = &calendar;
     return *state_;
@@ -2365,27 +2411,35 @@ bool utc_calendar(const SessionCalendar& calendar, SessionDayMemo& memo) {
     return memo.state(calendar).utc;
 }
 
-std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calendar,
-                                                  int64_t ms,
-                                                  SessionDayMemo& memo) {
+bool cycle_certificate_into(const SessionCalendar& calendar,
+                            int64_t ms,
+                            SessionDayMemo& memo,
+                            CycleCertificate& out) {
+    out.spans.clear();
     MemoState& m = memo.state(calendar);
-    if (!m.valid) return std::nullopt;
+    if (!m.valid) return false;
     // The zone first, over the reach of every cycle within two days of `ms`:
     // where it holds, the cycle holding `ms` is one of them (it spans a day
     // and at most a step). Nothing is resolved for an instant it refuses.
     const int64_t seconds = floor_div(ms, kMsPerSecond);
     const int64_t reach = kCertifiedReachSeconds + 2 * kSecondsPerDay;
-    if (!zone_window_certified(calendar, m, seconds - reach, seconds + reach)) return std::nullopt;
+    if (!zone_window_certified(calendar, m, seconds - reach, seconds + reach)) return false;
     const SessionDay* day = memo_session_day_containing(calendar, ms, m);
-    if (!day || ms < day->origin_ms || ms >= day->next_origin_ms) return std::nullopt;
-    CycleCertificate out;
+    if (!day || ms < day->origin_ms || ms >= day->next_origin_ms) return false;
     out.origin_ms = day->origin_ms;
     out.next_origin_ms = day->next_origin_ms;
     out.ordinal = days_from_civil(day->trading_date.year,
                                   static_cast<unsigned>(day->trading_date.month),
                                   static_cast<unsigned>(day->trading_date.day));
-    out.spans.reserve(day->spans.size());
     for (const EpochSpan& span : day->spans) out.spans.emplace_back(span.start_ms, span.end_ms);
+    return true;
+}
+
+std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calendar,
+                                                  int64_t ms,
+                                                  SessionDayMemo& memo) {
+    CycleCertificate out;
+    if (!cycle_certificate_into(calendar, ms, memo, out)) return std::nullopt;
     return out;
 }
 

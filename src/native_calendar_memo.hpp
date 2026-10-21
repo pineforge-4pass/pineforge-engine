@@ -55,8 +55,10 @@
 // evicted takes the one it resolves again). Every slot's span buffer is
 // reserved once, when the memo binds its calendar, to the most spans a session
 // day of that calendar has (session_day_span_bound), and is only assigned into
-// after: the heap is the same after the first lookup as after the millionth,
-// whatever days they asked (retained_days, retained_span_capacity).
+// after. Bind also prepares the civil and resolved staging buffers and loads
+// the certificate's zone resources, without resolving a day. Owners call
+// state(calendar) at setup, before dispatch; every cold day and eviction then
+// reuses those buffers (retained_days, retained_span_capacity).
 
 #include <pineforge/native_calendar.hpp>
 
@@ -96,6 +98,10 @@ public:
         return bind(calendar);
     }
 
+    bool bound_to(const SessionCalendar& calendar) const noexcept {
+        return state_ && calendar_ == &calendar;
+    }
+
     // How many intervals the memo has resolved since it last bound a calendar
     // or was reset, as opposed to answered from the last few it holds: a cost
     // reading, derived like everything else here and folded nowhere.
@@ -131,6 +137,12 @@ private:
 // not valid, which resolves no day. The memo reserves it in every day slot, and
 // the consumer in every certified cycle it keeps.
 std::size_t session_day_span_bound(const SessionCalendar& calendar) noexcept;
+
+// The same configuration bound, shared by setup callers preparing their
+// output spans and the opaque memo workspace. Invalid calendars need none.
+inline std::size_t session_day_span_capacity(const SessionCalendar& calendar) noexcept {
+    return session_day_span_bound(calendar);
+}
 
 // Value for value what interval_containing(calendar, script_tf, input_tf, ms)
 // answers.
@@ -183,6 +195,16 @@ struct CycleCertificate {
 std::optional<CycleCertificate> cycle_certificate(const SessionCalendar& calendar,
                                                   int64_t ms,
                                                   SessionDayMemo& memo);
+
+// Direct writer using the same certificate authority. Prepare memo.state()
+// and reserve session_day_span_capacity(calendar) in out.spans before dispatch
+// to reuse storage even on an arbitrary first day or eviction. No owning
+// certificate is constructed on this path. False clears spans, retains their
+// buffer, and leaves scalar fields unchanged; a true empty day is still valid.
+bool cycle_certificate_into(const SessionCalendar& calendar,
+                            int64_t ms,
+                            SessionDayMemo& memo,
+                            CycleCertificate& out);
 
 // The bucket interval_containing divides a session day into for the fixed
 // timeframe `tf`, in ms; 0 for a timeframe that is not valid or not fixed.
