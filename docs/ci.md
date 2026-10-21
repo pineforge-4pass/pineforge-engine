@@ -1163,7 +1163,12 @@ refusing both PR events. The named promotion exception requires exactly
 `push` and `workflow_dispatch`, pins the push filter to `branches: [main]`,
 and requires the shared concurrency group without cancellation. Its tests
 run the resolver's own shell against fixture API responses, asserting all
-five merge values or a green notice with no metadata. The resolved PR still
+five merge values or a green notice with no metadata. The resolver uses
+`python3` and the standard-library `json` module, with the SHA and page JSON
+passed through the environment. Malformed JSON or a response that is not an
+array of page arrays of PR objects exits green with a notice and `ok=false`,
+without merge metadata. The pins retain all four PR conditions and the
+exactly-one rule; the tests fake only `gh` and need no `jq`. The resolved PR still
 passes the exact-tree and newest head-status checks before credentials.
 Both workflows require exact runner values without a fallback and carry no
 `PF_CI_LABELS`.

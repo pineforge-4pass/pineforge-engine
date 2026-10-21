@@ -1225,6 +1225,25 @@ class PreflightFailures(unittest.TestCase):
             '"$HEAD_SHA:refs/remotes/origin/pr-head"')
         self.assertIn('baseline promotion must admit a squash merge by tree equality only', findings)
 
+    def test_baseline_promotion_pins_python_selection_and_unique_match(self):
+        for before, after in (
+                ('PULLS="$pulls" python3 - <<\'PY\'', "python3 - <<'PY'"),
+                ('sha = os.environ["SHA"]', 'sha = "a" * 40'),
+                ('pages = json.loads(os.environ["PULLS"], parse_constant=reject_constant)',
+                 'pages = [[]]'),
+                ('matches = [pr for page in pages for pr in page',
+                 'matches = [pr for page in pages[:1] for pr in page'),
+                ('if pr.get("state") == "closed"', 'if True'),
+                ('and pr.get("merged_at") is not None', 'and True'),
+                ('and pr.get("merge_commit_sha") == sha', 'and True'),
+                ('and isinstance(pr.get("base"), dict)', 'and True'),
+                ('and pr["base"].get("ref") == "main"]', 'and True]'),
+                ('if len(matches) != 1:', 'if not matches:')):
+            with self.subTest(selection=after):
+                findings = self.mutated_file_findings(2, 'promote', before, after)
+                self.assertIn('baseline promotion must resolve the pushed SHA or dispatch '
+                              'inputs without a PR payload', findings)
+
     def test_new_workflows_require_spot_routing_with_hosted_exceptions(self):
         original, others = self.ci_sources(), self.other_sources()
         new = 'name: lint\non: {on}\njobs:\n  lint:\n    runs-on: {runner}\n    steps:\n      - run: "true"\n'
@@ -1705,7 +1724,7 @@ class BaselinePromotionResolution(unittest.TestCase):
                 'html_url': f'https://github.com/owner/engine/pull/{number}',
                 'merged_at': merged_at, 'base': {'ref': 'main'}}
 
-    def run_resolver(self, pages, *, sha=None, event='push', inputs=None):
+    def run_resolver(self, pages, *, sha=None, event='push', inputs=None, raw_json=None):
         workflow = (ROOT / CI_SOURCES[2]).read_text()
         script = job_script(workflow, 'promote', 'Resolve the merged PR')
         script = script.replace('${{ github.repository }}', 'owner/engine')
@@ -1713,7 +1732,7 @@ class BaselinePromotionResolution(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             gh = root / 'gh'
-            # Only the API transport is fake; bash and jq run the workflow's
+            # Only the API transport is fake; bash and python3 run the workflow's
             # actual selection and output formatting against the fixture JSON.
             gh.write_text('#!' + sys.executable + '\n'
                 'import os, pathlib, sys\n'
@@ -1726,7 +1745,8 @@ class BaselinePromotionResolution(unittest.TestCase):
             output = root / 'outputs'
             log = root / 'lookup'
             env = {**os.environ, 'EVENT_NAME': event, 'SHA': sha or self.SHA,
-                   'GH_TOKEN': 'fixture-token', 'PR_PAGES': json.dumps(pages),
+                   'GH_TOKEN': 'fixture-token',
+                   'PR_PAGES': json.dumps(pages) if raw_json is None else raw_json,
                    'INPUT_MERGE_SHA': '', 'INPUT_HEAD_SHA': '', 'INPUT_PR_NUMBER': '',
                    'INPUT_PR_URL': '', 'INPUT_MERGED_AT': '', **(inputs or {}),
                    'LOOKUP_LOG': str(log), 'GITHUB_OUTPUT': str(output),
@@ -1756,20 +1776,52 @@ class BaselinePromotionResolution(unittest.TestCase):
     def test_push_defers_with_notice_and_no_metadata_without_one_match(self):
         pr = self.merged_pr()
         second = self.merged_pr(head='c' * 40, number=466)
+        missing_merged_at = {key: value for key, value in pr.items() if key != 'merged_at'}
         cases = (
             ('another merge commit', [[dict(pr, merge_commit_sha='d' * 40)]]),
-            ('open', [[dict(pr, state='open', merged_at=None)]]),
+            ('open with merge time', [[dict(pr, state='open')]]),
             ('closed unmerged', [[dict(pr, merged_at=None)]]),
+            ('missing merge time', [[missing_merged_at]]),
             ('two matches', [[pr, second]]),
             ('two matches across pages', [[pr], [second]]),
             ('empty list', [[]]),
+            ('no pages', []),
             ('another base', [[dict(pr, base={'ref': 'release'})]]),
+            ('null base', [[dict(pr, base=None)]]),
+            ('missing base', [[{key: value for key, value in pr.items() if key != 'base'}]]),
         )
         for name, pages in cases:
             with self.subTest(case=name):
                 values, stdout, called = self.run_resolver(pages)
                 self.assertEqual(values, {'ok': 'false'})
-                self.assertIn('::notice::', stdout)
+                count = 2 if name.startswith('two matches') else 0
+                self.assertEqual(stdout, f'::notice::found {count} merged PRs with merge '
+                                 f'commit {self.SHA} and base main; skipping\n')
+                self.assertTrue(called)
+
+    def test_push_defers_on_malformed_json_without_metadata(self):
+        valid_pages = json.dumps([[self.merged_pr()]])
+        invalid_constants = [
+            json.dumps([[dict(self.merged_pr(), merged_at=None)]]).replace('null', constant)
+            for constant in ('NaN', 'Infinity', '-Infinity')]
+        for raw_json in ('', '{', valid_pages[:-1], valid_pages + '\ntrailing garbage',
+                         *invalid_constants):
+            with self.subTest(raw_json=raw_json):
+                values, stdout, called = self.run_resolver(None, raw_json=raw_json)
+                self.assertEqual(values, {'ok': 'false'})
+                self.assertEqual(stdout, '::notice::invalid merged PR response JSON; skipping\n')
+                self.assertTrue(called)
+
+    def test_push_requires_an_array_of_page_arrays_of_pr_objects(self):
+        pr = self.merged_pr()
+        for pages in (None, {}, {'pages': [[pr]]}, pr, 231, True, 'not an array',
+                      [pr], [[pr], None], [[pr], {'other': pr}],
+                      [[pr], [None]], [[pr], [231]], [[pr], ['not a PR']]):
+            with self.subTest(pages=pages):
+                values, stdout, called = self.run_resolver(pages)
+                self.assertEqual(values, {'ok': 'false'})
+                self.assertEqual(stdout,
+                                 '::notice::invalid merged PR response page array; skipping\n')
                 self.assertTrue(called)
 
     def test_push_selects_matching_pr_across_pages_among_unrelated_prs(self):
@@ -1782,6 +1834,17 @@ class BaselinePromotionResolution(unittest.TestCase):
             'merge_sha': self.SHA, 'head_sha': self.HEAD, 'pr_number': '231',
             'pr_url': 'https://github.com/owner/engine/pull/231',
             'merged_at': '2026-10-21T08:15:30Z', 'ok': 'true'})
+        self.assertNotIn('::notice::', stdout)
+        self.assertTrue(called)
+
+    def test_push_treats_json_quotes_and_shell_text_as_data(self):
+        pr = self.merged_pr()
+        pr['title'] = '\nPY\nraise SystemExit(99)\n\'"$()`\n'
+        pr['html_url'] += '?literal=$(printf injected)`printf injected`\'";'
+        values, stdout, called = self.run_resolver([[pr]])
+        self.assertEqual(values, {
+            'merge_sha': self.SHA, 'head_sha': self.HEAD, 'pr_number': '231',
+            'pr_url': pr['html_url'], 'merged_at': pr['merged_at'], 'ok': 'true'})
         self.assertNotIn('::notice::', stdout)
         self.assertTrue(called)
 

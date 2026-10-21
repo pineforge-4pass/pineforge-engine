@@ -895,8 +895,22 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         'INPUT_PR_URL: ${{ github.event.inputs.pr_url }}',
         'INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}',
     )
+    resolver_selection = (
+        'PULLS="$pulls" python3 - <<\'PY\'',
+        'sha = os.environ["SHA"]',
+        'pages = json.loads(os.environ["PULLS"], parse_constant=reject_constant)',
+        ('matches = [pr for page in pages for pr in page '
+         'if pr.get("state") == "closed" '
+         'and pr.get("merged_at") is not None '
+         'and pr.get("merge_commit_sha") == sha '
+         'and isinstance(pr.get("base"), dict) '
+         'and pr["base"].get("ref") == "main"]'),
+        'if len(matches) != 1:',
+    )
+    resolver_code = ' '.join(line.strip() for line in _code(resolved))
     if (not resolved or _step_values(resolved, 'if')
             or any(value not in resolved for value in resolver_env)
+            or any(value not in resolver_code for value in resolver_selection)
             or 'gh api --paginate --slurp' not in resolved
             or 'repos/${{ github.repository }}/commits/$SHA/pulls?per_page=100' not in resolved
             or 'github.event.pull_request' in promote):

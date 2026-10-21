@@ -145,18 +145,51 @@ jobs:
           # Search every page: a second match must defer, never pick a PR.
           pulls=$(gh api --paginate --slurp \
             "repos/${{ github.repository }}/commits/$SHA/pulls?per_page=100")
-          matches=$(jq -c --arg sha "$SHA" '
-            [.[][] | select(.state == "closed" and .merged_at != null
-              and .merge_commit_sha == $sha and .base.ref == "main")]
-          ' <<< "$pulls")
-          count=$(jq 'length' <<< "$matches")
-          if [ "$count" != "1" ]; then
-            echo "::notice::found $count merged PRs with merge commit $SHA and base main; skipping"
-            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          jq -r '.[0] | "merge_sha=\(.merge_commit_sha)", "head_sha=\(.head.sha)",
-            "pr_number=\(.number)", "pr_url=\(.html_url)", "merged_at=\(.merged_at)",
-            "ok=true"' <<< "$matches" >> "$GITHUB_OUTPUT"
+          PULLS="$pulls" python3 - <<'PY'
+          import json
+          import os
+
+          def skip(reason):
+              print(f"::notice::{reason}; skipping")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("ok=false\n")
+
+          def reject_constant(value):
+              raise ValueError(f"invalid JSON constant: {value}")
+
+          sha = os.environ["SHA"]
+          try:
+              pages = json.loads(os.environ["PULLS"], parse_constant=reject_constant)
+          except ValueError:
+              skip("invalid merged PR response JSON")
+              raise SystemExit(0)
+          if (not isinstance(pages, list)
+                  or any(not isinstance(page, list) for page in pages)
+                  or any(not isinstance(pr, dict) for page in pages for pr in page)):
+              skip("invalid merged PR response page array")
+              raise SystemExit(0)
+          matches = [pr for page in pages for pr in page
+                     if pr.get("state") == "closed"
+                     and pr.get("merged_at") is not None
+                     and pr.get("merge_commit_sha") == sha
+                     and isinstance(pr.get("base"), dict)
+                     and pr["base"].get("ref") == "main"]
+          if len(matches) != 1:
+              skip(f"found {len(matches)} merged PRs with merge commit {sha} and base main")
+              raise SystemExit(0)
+          pr = matches[0]
+          values = {
+              "merge_sha": pr["merge_commit_sha"],
+              "head_sha": pr["head"]["sha"],
+              "pr_number": pr["number"],
+              "pr_url": pr["html_url"],
+              "merged_at": pr["merged_at"],
+              "ok": "true",
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          PY
 
       # The safety property is the TREE: the snapshot describes the gated
       # head's tree, so we promote only when the merge commit now on the base
