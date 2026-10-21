@@ -506,7 +506,13 @@ class ManifestCheckerTests(unittest.TestCase):
         self.copy_tree()
         path = self.root / "docker/run_json.py"
         text = path.read_text(encoding="utf-8")
-        for block, row in (("trades", "t"), ("equity_curve", "p")):
+        # Summary scalar reconstruction resolves p before the array proof;
+        # the unknown point source therefore fails there first. The trade
+        # row t reaches the factory's exact POD-binding check.
+        for block, row, diagnostic in (
+                ("trades", "t", "unrecognized array POD binding trades"),
+                ("equity_curve", "p",
+                 "unrecognized scalar producer expression: report.unknown[i]")):
             binding = f"        {row} = report.{block}[i]\n"
             with self.subTest(block=block):
                 self.assertEqual(text.count(binding), 1)
@@ -514,7 +520,7 @@ class ManifestCheckerTests(unittest.TestCase):
                                 encoding="utf-8")
                 result = self.run_checker(copied_tree=True)
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertEqual(result.stdout, f"ownership[input]: unrecognized array POD binding {block}\n")
+                self.assertEqual(result.stdout, f"ownership[input]: {diagnostic}\n")
                 self.assertEqual(result.stderr, "")
 
     def scalar_fixture(self, source):
