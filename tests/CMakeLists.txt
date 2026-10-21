@@ -7237,3 +7237,9 @@ if(TARGET outputs_fixture_strategy)
         ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
 # --- CR-150 core-cr150-l2 end ---
+
+# LAB-o1bk: production command scratch, without a fixture factory definition.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_o1bk_production_backing)
+    pineforge_add_unit_test(test_o1bk_production_backing)
+endif()
