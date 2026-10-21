@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "1aad8236944b723ee1b1393af517aba2052c0c2a2fb0ec516c95ff1ebd9b37d3"
+    "catalogSha256": "c64f1d561821c02bdacf26c6e1cb554c1f854ea6f4f86fff14e420e457d81684"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -65,6 +65,35 @@
         "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
         "english": [
           "scratch capacity exceeded"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "scratch_configuration_invalid",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "reason": {
+            "kind": "vocab",
+            "values": [
+              "nondecimal",
+              "nonpositive",
+              "overflow"
+            ]
+          },
+          "stage": {
+            "kind": "vocab",
+            "values": [
+              "command_scratch_byte_cap"
+            ]
+          }
+        },
+        "class": "input",
+        "description": "The command-scratch byte cap from the environment or the caller is malformed: not a positive decimal, out of uint64_t range, or zero.",
+        "english": [
+          "command scratch byte cap is not positive decimal uint64_t"
         ],
         "retryable": false,
         "since": "1.7.0"
