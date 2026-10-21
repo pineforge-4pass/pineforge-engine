@@ -279,7 +279,6 @@ no::ExecutionAppliedEvent populate(Host& host, std::size_t population) {
         host.rows().push_back(std::move(row));
     }
     auto& phases = host.phases();
-    phases.reserve(2 * population + 1);
     phases.push_back(static_cast<std::uint8_t>(NativePathPhase::None));
     for (std::size_t index = 0; index < population; ++index)
         phases.push_back(static_cast<std::uint8_t>(index % 3 == 0 ? NativePathPhase::Open

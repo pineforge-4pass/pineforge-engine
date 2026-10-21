@@ -240,7 +240,6 @@ void populate(Host& host, std::size_t population, std::size_t phase_rows, bool u
         host.rows().push_back(std::move(row));
     }
     auto& phases = host.phases();
-    phases.reserve(population + 1);  // retained phase output, outside the census
     phases.push_back(static_cast<std::uint8_t>(NativePathPhase::None));
     for (std::size_t index = 0; index < phase_rows; ++index) {
         const auto phase = unchanged_phases
