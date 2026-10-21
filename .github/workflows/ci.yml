@@ -111,12 +111,90 @@ jobs:
   changes:
     needs: [authz]
     runs-on: ["self-hosted","pf-gcp-pr"]
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     outputs:
+      github_only: ${{ steps.github-only.outputs.github_only }}
       docs_only: ${{ steps.classify.outputs.docs_only }}
       verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}
     steps:
+      # Scheduling hint only: build-gate repeats this API read for itself.
+      - name: Read the PR diff independently
+        id: github-only
+        shell: python3 {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+          from urllib.request import Request, urlopen
+
+          github_only = False
+          if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+              pr = event["pull_request"]
+              number = event["number"]
+              repo = os.environ["GITHUB_REPOSITORY"]
+              head, base = pr["head"]["sha"], pr["base"]["sha"]
+              if (type(number) is not int or number <= 0 or pr["number"] != number
+                      or event["repository"]["full_name"] != repo
+                      or not re.fullmatch(r"[0-9a-f]{40}", head)
+                      or not re.fullmatch(r"[0-9a-f]{40}", base)):
+                  raise ValueError("missing or invalid PR identity")
+              endpoint = os.environ["GITHUB_API_URL"].rstrip("/") + f"/repos/{repo}/pulls/{number}"
+
+              def api(url):
+                  request = Request(url, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  })
+                  with urlopen(request) as response:
+                      return json.load(response)
+
+              def snapshot():
+                  current = api(endpoint)
+                  if (current["number"] != number or current["head"]["sha"] != head
+                          or current["base"]["sha"] != base):
+                      raise ValueError("PR changed since this event; rerun CI")
+                  count = current["changed_files"]
+                  if type(count) is not int or not 0 < count <= 3000:
+                      raise ValueError("empty or incomplete PR diff")
+                  return count
+
+              def path(value):
+                  if (not isinstance(value, str) or not value
+                          or any(ord(char) < 32 for char in value) or "\\" in value
+                          or any(part in ("", ".", "..") for part in value.split("/"))):
+                      raise ValueError("unreadable PR path")
+                  return value
+
+              count = snapshot()
+              paths, filenames = [], set()
+              for page in range(1, (count + 99) // 100 + 1):
+                  rows = api(endpoint + f"/files?per_page=100&page={page}")
+                  if not isinstance(rows, list) or len(rows) != min(100, count - len(filenames)):
+                      raise ValueError("missing or truncated PR files page")
+                  for row in rows:
+                      filename = path(row["filename"])
+                      if filename in filenames or row["status"] not in (
+                              "added", "modified", "removed", "renamed", "copied", "changed", "unchanged"):
+                          raise ValueError("duplicate or unreadable PR file")
+                      filenames.add(filename)
+                      paths.append(filename)
+                      if row["status"] == "renamed" or "previous_filename" in row:
+                          paths.append(path(row["previous_filename"]))
+              if len(filenames) != count or snapshot() != count:
+                  raise ValueError("PR diff changed while reading files")
+              github_only = bool(paths) and all(value.startswith(".github/") for value in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("github_only=" + str(github_only).lower() + "\n")
+
       # The tested commit and its parents: a pull request's merge and the base
       # it merged into, a push's commit and its parent.
       - uses: actions/checkout@v4
@@ -197,7 +275,7 @@ jobs:
 
       - name: Verify workflow wiring and source guards
         if: ${{ needs.authz.result == 'success' }}
-        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast
+        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier ${{ github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.github_only == 'true' && 'github-only' || 'fast' }}
 
       - name: Retain preflight diagnostics
         if: always()
@@ -249,9 +327,10 @@ jobs:
     # skipped build check under the unexpanded name.
     name: build (${{ matrix.platform.os }}, ${{ matrix.build_type }})
     # Proof jobs follow authz and classification alongside preflight. Only a
-    # successful docs-only answer excuses a skip in the build aggregate.
+    # successful docs-only or GitHub-only answer skips scheduling; the aggregate
+    # independently reads the PR diff before accepting the latter skip.
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true'))) }}
     # 360 minutes (the platform maximum): a full-set leg waits on the
     # test_ci_verify CTest row, 976-1288 s on the standard runners at
     # 0d76a099, which more cores do not shorten. No bound of ours may fail a
@@ -538,13 +617,12 @@ jobs:
       exclude_slow: false
       cold_cache: ${{ inputs.cold_native_cache || false }}
 
-  # Advisory TradingView parity subset on every CI run of a change that is not
-  # docs-only. The maintainers post the required pineforge/parity status from
-  # their separate parity verdict. Keep this job unfiltered by path so
-  # build-gate reports its result on every such run.
+  # Advisory TradingView parity subset, except docs-only and GitHub-only PRs.
+  # The maintainers post the required pineforge/parity status from their
+  # separate parity verdict. build-gate independently verifies GitHub-only skips.
   corpus-parity-subset:
     needs: [authz, changes]
-    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true'))) }}
     uses: ./.github/workflows/corpus-parity.yml
     with:
       mode: subset
@@ -563,8 +641,11 @@ jobs:
     name: build
     needs: [authz, changes, preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset, preflight-slow, corpus-parity]
     if: always()
-    # The aggregate runs only shell on the light pool class.
+    # The aggregate runs inline Python and shell on the light pool class.
     runs-on: ["self-hosted","pf-gcp-pr"]
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     steps:
@@ -573,12 +654,87 @@ jobs:
         run: |
           echo "::error::authz did not pass; nothing of this run's code is checked out or run"
           exit 1
+      # No checkout and no changes-job classification is used for this verdict.
+      - name: Read the PR diff independently
+        id: github-only
+        shell: python3 {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+          from urllib.request import Request, urlopen
+
+          github_only = False
+          if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+              pr = event["pull_request"]
+              number = event["number"]
+              repo = os.environ["GITHUB_REPOSITORY"]
+              head, base = pr["head"]["sha"], pr["base"]["sha"]
+              if (type(number) is not int or number <= 0 or pr["number"] != number
+                      or event["repository"]["full_name"] != repo
+                      or not re.fullmatch(r"[0-9a-f]{40}", head)
+                      or not re.fullmatch(r"[0-9a-f]{40}", base)):
+                  raise ValueError("missing or invalid PR identity")
+              endpoint = os.environ["GITHUB_API_URL"].rstrip("/") + f"/repos/{repo}/pulls/{number}"
+
+              def api(url):
+                  request = Request(url, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  })
+                  with urlopen(request) as response:
+                      return json.load(response)
+
+              def snapshot():
+                  current = api(endpoint)
+                  if (current["number"] != number or current["head"]["sha"] != head
+                          or current["base"]["sha"] != base):
+                      raise ValueError("PR changed since this event; rerun CI")
+                  count = current["changed_files"]
+                  if type(count) is not int or not 0 < count <= 3000:
+                      raise ValueError("empty or incomplete PR diff")
+                  return count
+
+              def path(value):
+                  if (not isinstance(value, str) or not value
+                          or any(ord(char) < 32 for char in value) or "\\" in value
+                          or any(part in ("", ".", "..") for part in value.split("/"))):
+                      raise ValueError("unreadable PR path")
+                  return value
+
+              count = snapshot()
+              paths, filenames = [], set()
+              for page in range(1, (count + 99) // 100 + 1):
+                  rows = api(endpoint + f"/files?per_page=100&page={page}")
+                  if not isinstance(rows, list) or len(rows) != min(100, count - len(filenames)):
+                      raise ValueError("missing or truncated PR files page")
+                  for row in rows:
+                      filename = path(row["filename"])
+                      if filename in filenames or row["status"] not in (
+                              "added", "modified", "removed", "renamed", "copied", "changed", "unchanged"):
+                          raise ValueError("duplicate or unreadable PR file")
+                      filenames.add(filename)
+                      paths.append(filename)
+                      if row["status"] == "renamed" or "previous_filename" in row:
+                          paths.append(path(row["previous_filename"]))
+              if len(filenames) != count or snapshot() != count:
+                  raise ValueError("PR diff changed while reading files")
+              github_only = bool(paths) and all(value.startswith(".github/") for value in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("github_only=" + str(github_only).lower() + "\n")
+
       - name: Require every verification lane to have passed
         shell: bash
         env:
           AUTHZ_RESULT: ${{ needs.authz.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          GITHUB_ONLY: ${{ steps.github-only.outputs.github_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
@@ -595,13 +751,14 @@ jobs:
             "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
           # The matrix result covers only the selected cells: the PR exclusion
           # creates no skipped cell to excuse. Every existing cell must pass.
-          # A proof lane passes by succeeding, or by having been skipped after
-          # the changes job succeeded and answered docs-only. A lane skipped
-          # for any other reason fails, except the pinned PR deferrals below.
+          # GitHub-only skips use this job's own API read, never changes' output.
+          # Docs-only skips and the existing PR deferrals retain their policy.
           # Fast preflight always passes; slow preflight must pass on full events.
           docs_only=false
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
-          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
+          github_only=false
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" && "${GITHUB_ONLY:-false}" == "true" ]]; then github_only=true; fi
+          passed() { [[ "$1" == "success" || ( ( "$docs_only" == "true" || "$github_only" == "true" ) && "$1" == "skipped" ) ]]; }
           deferred() { passed "$1" || [[ "$GITHUB_EVENT_NAME" == "pull_request" && "$1" == "skipped" ]]; }
           slow_preflight() { [[ "$SLOW_PREFLIGHT_RESULT" == "success" || ( "$GITHUB_EVENT_NAME" == "pull_request" && "$SLOW_PREFLIGHT_RESULT" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \

@@ -4,24 +4,46 @@ CR-233 supersedes the D1/D3 pull-request split recorded later on this page.
 Those earlier PR populations and timing estimates are historical; the current
 `ci.yml` trigger map is:
 
-| Job or matrix cell | Pull request | Push to `main`, nightly schedule, manual dispatch |
-| --- | --- | --- |
-| `authz`, `changes`, `build-gate` (check `build`) | Run with the existing authz and classification gates | Run with the same gates |
-| `preflight` | Fast documentation, source and policy stages | The same fast stages |
-| `preflight-slow` | Deferred | All remaining preflight stages |
-| `build (ubuntu-24.04, Release)` | Release smoke, CTest label `fast` | Complete Release profile |
-| `build (ubuntu-24.04, Debug)` and both macOS `build` cells | Deferred | Complete Debug/Release profiles |
-| `sanitizers`, `kernel-only`, all three `native-live` profiles | Deferred | Complete profiles, without label exclusions |
-| `corpus-parity-subset` | Existing advisory subset | Existing advisory subset |
-| `corpus-parity` caller | Deferred | Full parity |
+| Job or matrix cell | Ordinary pull request | `.github/**`-only pull request | Push to `main`, nightly schedule, manual dispatch |
+| --- | --- | --- | --- |
+| `authz`, `changes`, `build-gate` (check `build`) | Run with the existing authz and classification gates | Run; the aggregate independently reads the PR diff | Run with the same gates |
+| `preflight` | Fast documentation, source and policy stages | Workflow lint and workflow contracts only | The same fast stages |
+| `preflight-slow` | Deferred | Deferred | All remaining preflight stages |
+| `build (ubuntu-24.04, Release)` | Release smoke, CTest label `fast` | Skipped | Complete Release profile |
+| `build (ubuntu-24.04, Debug)` and both macOS `build` cells | Deferred | Deferred | Complete Debug/Release profiles |
+| `sanitizers`, `kernel-only`, all three `native-live` profiles | Deferred | Deferred | Complete profiles, without label exclusions |
+| `corpus-parity-subset` | Existing advisory subset | Skipped | Existing advisory subset |
+| `corpus-parity` caller | Deferred | Deferred | Full parity |
 
 The nightly CI schedule is 01:30 UTC. The existing docs-only classification
 still skips proof jobs on a documentation-only PR or main push. Both
 preflight tiers together retain the original full stage inventory; the slow
 tier still runs on a docs-only main push. Scheduled and manual runs execute
 every profile. `build-gate` refuses failed authz first, requires fast preflight
-and classification success, and accepts only classified docs-only skips or
-the listed PR deferrals. Failed or cancelled deferred jobs still fail it.
+and classification success, and accepts classified docs-only skips, independently
+verified GitHub-only PR skips, or the listed PR deferrals. Failed or cancelled
+deferred jobs still fail it.
+
+A GitHub-only PR changes at least one path, with every changed path under
+`.github/`, including both sides of a rename. `scripts/ci_*.py` changes,
+alone or mixed with `.github/`, follow the ordinary PR plan. `changes` reads
+the PR files API to schedule jobs; `build-gate` repeats that read inside its
+own `Read the PR diff independently` step without checkout. Only this second
+read can excuse a GitHub-only skip. Both reads bind the PR number, head and
+base to the event, check every API page against `changed_files`, and recheck
+the live snapshot after reading. Empty, missing, malformed, truncated or
+unreadable diffs, PRs that moved since the event, and diffs beyond the API's
+3,000-file limit fail closed. The two jobs receive only read access to
+contents and pull requests; the exact inline reader is the sole new token
+exception in the workflow contract.
+
+`--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
+`workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
+`docs-workflow-contract-tests`, plus the usual actionlint version check.
+It excludes source guards and the general preflight test suite. A failed
+classification selects the ordinary fast tier and fails the aggregate.
+`docs.yml` excludes `.github/**`-only PRs from its trigger so this class
+also avoids the Doxygen build.
 
 `preflight --tier fast` excludes `verifier-tests`, `kernel-residuals-tests`,
 `unittest-shards-tests` and `run-json-harness-tests`; `preflight-slow` runs
@@ -39,10 +61,10 @@ successful runs on `main` save that cache namespace.
 
 The Linux fleet remains `["self-hosted","pf-gcp-pr"]`; the build matrix
 decodes its platform's literal runner array and retains the macOS exception.
-There is no event-based runner choice or hosted fallback. The documentation
-workflow is unchanged. The standalone `corpus-parity.yml` is also unchanged:
-its existing path-filtered PR trigger can still run full parity independently
-of the deferred caller in `ci.yml`.
+There is no event-based runner choice or hosted fallback. The standalone
+`corpus-parity.yml` has only schedule, manual and reusable-workflow triggers;
+its full-parity job also refuses PR callers. Full parity cannot bypass
+`ci.yml`'s PR deferral through a separate PR trigger.
 
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
 ShellCheck and pytest, then run:

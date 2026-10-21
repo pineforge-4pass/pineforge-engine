@@ -18,7 +18,7 @@ import ci_verify
 from ci_verifier_classes import select_test_ids, verifier_class_tier
 from run_unittest_shards import discover_test_ids
 from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
-                          DOCS_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS,
+                          DOCS_ONLY_SKIP, GITHUB_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS,
                           PR_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
@@ -52,6 +52,8 @@ CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
               'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
               'corpus-parity', 'build-gate')
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
+PREFLIGHT_RUN = ('python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier '
+                 + ci_preflight.PREFLIGHT_TIER)
 
 
 def job_script(ci, job, step_name=None):
@@ -606,10 +608,27 @@ class PreflightFailures(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_commands(ROOT, tier='missing')
 
+    def test_github_only_preflight_runs_only_workflow_contract_stages(self):
+        expected = {'shellcheck-version', 'actionlint-runner-labels', 'workflow-lint',
+                    'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests'}
+        plan = check_commands(ROOT, tier='github-only')
+        self.assertEqual({name for name, _ in plan}, expected)
+        self.assertEqual(len(plan), len(expected))
+        self.assertTrue({plan_name for plan_name, _ in plan} <=
+                        {name for name, _ in check_commands(ROOT, tier='fast')})
+        original = self.ci_sources()[5]
+        self.assertEqual(ci_preflight.docs_workflow_findings(original), [])
+        for after in ('  pull_request: {}\n',
+                      "  pull_request:\n    paths-ignore: ['.github/**', 'scripts/**']\n"):
+            changed = original.replace(ci_preflight.DOCS_PR_TRIGGER, after, 1)
+            self.assertNotEqual(changed, original, 'the mutation must change the trigger')
+            self.assertIn('docs.yml must exclude only .github-only PRs from documentation builds',
+                          ci_preflight.docs_workflow_findings(changed))
+
     def test_preflight_split_refuses_slow_stages_on_pr_and_missing_deferred_stages(self):
-        for tier in ('all', 'slow', ''):
-            findings = self.mutated_file_findings(0, 'preflight', '--tier fast',
-                                                  f'--tier {tier}' if tier else '')
+        for tier in ('all', 'fast', 'slow', 'github-only', ''):
+            findings = self.mutated_file_findings(0, 'preflight', ci_preflight.PREFLIGHT_TIER,
+                                                  tier)
             self.assertIn('preflight must invoke only its fast stage plan', findings)
         for tier in ('all', 'fast', ''):
             findings = self.mutated_file_findings(0, 'preflight-slow', '--tier slow',
@@ -1344,7 +1363,7 @@ class PreflightFailures(unittest.TestCase):
         docs_skip = f'    if: {DOCS_ONLY_SKIP}\n'
         mutations = []
         for job in PROOF_JOBS:
-            skip = f'    if: {HEAVY_SKIP if job in HEAVY_CI_JOBS else DOCS_ONLY_SKIP}\n'
+            skip = f'    if: {HEAVY_SKIP if job in HEAVY_CI_JOBS else GITHUB_ONLY_SKIP}\n'
             refused = f'{job} must start alongside preflight, after authz and changes'
             mutations += [
                 (job, '    needs: [authz, changes]\n', '', refused),
@@ -1379,8 +1398,8 @@ class PreflightFailures(unittest.TestCase):
              'ci.yml job sanitizers must not continue on error'),
             ('build-gate', '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
              'ci.yml job build-gate must not continue on error'),
-            ('preflight', '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast\n',
-             '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast\n'
+            ('preflight', f'        run: {PREFLIGHT_RUN}\n',
+             f'        run: {PREFLIGHT_RUN}\n'
              '        continue-on-error: true\n', 'ci.yml job preflight must not continue on error')]
         for job, before, after, finding in mutations:
             with self.subTest(job=job, after=after):
@@ -1403,7 +1422,7 @@ class PreflightFailures(unittest.TestCase):
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         passed = ('          passed() { [[ "$1" == "success" || '
-                  '( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }\n')
+                  '( ( "$docs_only" == "true" || "$github_only" == "true" ) && "$1" == "skipped" ) ]]; }\n')
         mutations = (
             # (e) Neither an empty result nor a skipped matrix on push is the
             # PR's absent cell; accepting either must fail the exact gate pin.
@@ -1508,6 +1527,232 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn('preflight: success', result.stdout)
                 self.assertIn('matrix: skipped', result.stdout)
 
+    def github_only_event(self, rows):
+        return {'number': 233, 'repository': {'full_name': 'pfrel/pineforge-engine'},
+                'pull_request': {'number': 233, 'head': {'sha': 'a' * 40},
+                                 'base': {'sha': 'b' * 40}, 'changed_files': len(rows)}}
+
+    def github_only_aggregate(self, rows, *, files_response='fixture', event_text=None,
+                              after=None, results=None, event_name='pull_request'):
+        """Run the inline API reader, then its actual dependent aggregate shell.
+
+        Mock only transport bytes, never classification or the aggregate verdict.
+        A reader exception stops the job before the result step, as Actions does.
+        """
+        ci = self.ci_sources()[0]
+        reader = job_script(ci, 'build-gate', 'Read the PR diff independently')
+        gate = job_script(ci, 'build-gate', 'Require every verification lane to have passed')
+        event = self.github_only_event(rows)
+        current = event['pull_request']
+        endpoint = 'https://api.github.invalid/repos/pfrel/pineforge-engine/pulls/233'
+        # Run a real Python child so reader failures use its actual exit code.
+        # Only urllib transport is replaced; the workflow source runs verbatim.
+        driver = r'''
+import io
+import json
+from pathlib import Path
+import sys
+from unittest import mock
+
+fixture = json.loads(Path(sys.argv[1]).read_text())
+requests = []
+snapshots = 0
+
+def urlopen(request):
+    global snapshots
+    url = request.full_url
+    requests.append(url)
+    assert request.get_header("Authorization") == "Bearer fixture-token", "fixture token mismatch"
+    if url == fixture["endpoint"]:
+        snapshots += 1
+        current = fixture["after"] if snapshots > 1 and fixture["after"] is not None else fixture["current"]
+        return io.StringIO(json.dumps(current))
+    assert url.startswith(fixture["endpoint"] + "/files?per_page=100&page="), "fixture URL mismatch"
+    page = int(url.rsplit("=", 1)[1])
+    if fixture["files_response"] is None:
+        raise OSError("fixture: PR files API is unreadable")
+    return io.StringIO(json.dumps(fixture["rows"][(page - 1) * 100:page * 100])
+                       if fixture["files_response"] == "fixture" else fixture["files_response"])
+
+try:
+    with mock.patch("urllib.request.urlopen", side_effect=urlopen):
+        exec(compile(Path(sys.argv[2]).read_text(), "ci.yml build-gate PR diff step", "exec"), {})
+finally:
+    Path(sys.argv[3]).write_text(json.dumps({"urls": requests, "snapshots": snapshots}))
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'event.json').write_text(json.dumps(event) if event_text is None else event_text)
+            (root / 'reader.py').write_text(reader)
+            (root / 'transport.json').write_text(json.dumps({
+                'endpoint': endpoint, 'current': current, 'after': after,
+                'rows': rows, 'files_response': files_response}))
+            output = root / 'github-output'
+            env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                   'GITHUB_EVENT_NAME': event_name,
+                   'GITHUB_EVENT_PATH': str(root / 'event.json'),
+                   'GITHUB_REPOSITORY': 'pfrel/pineforge-engine',
+                   'GITHUB_API_URL': 'https://api.github.invalid',
+                   'GITHUB_OUTPUT': str(output), 'GH_TOKEN': 'fixture-token',
+                   # A forged earlier hint must not excuse a source/mixed diff.
+                   'CHANGES_GITHUB_ONLY': 'true',
+                   'AUTHZ_RESULT': 'success', 'CHANGES_RESULT': 'success',
+                   'DOCS_ONLY': 'false', 'PREFLIGHT_RESULT': 'success',
+                   'SLOW_PREFLIGHT_RESULT': 'skipped',
+                   **{variable: 'skipped' for variable in PROOF_JOBS.values()},
+                   **(results or {})}
+            read_result = subprocess.run(
+                [sys.executable, '-c', driver, str(root / 'transport.json'),
+                 str(root / 'reader.py'), str(root / 'requests.json')],
+                env=env, capture_output=True, text=True)
+            transport = json.loads((root / 'requests.json').read_text())
+            requests = transport['urls']
+            self.assertNotIn('AssertionError', read_result.stderr, read_result.stderr)
+            if read_result.returncode:
+                self.assertFalse(output.exists(), 'a failed reader must never publish a skip')
+                return read_result, requests
+            answer = output.read_text()
+            self.assertIn(answer, ('github_only=true\n', 'github_only=false\n'))
+            env['GITHUB_ONLY'] = answer.strip().split('=', 1)[1]
+            if event_name == 'pull_request':
+                self.assertEqual(transport['snapshots'], 2,
+                                 'the diff must be bound before and after the read')
+                self.assertTrue(any('/files?' in url for url in requests))
+            result = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', gate],
+                                    env=env, capture_output=True, text=True)
+            return result, requests
+
+    def test_github_only_aggregate_src_skip_fails(self):
+        original = [{'filename': '.github/workflows/ci.yml', 'status': 'modified'}]
+        changed = [dict(original[0], filename='src/c_abi.cpp')]
+        self.assertNotEqual(changed, original, 'the mutation must change the API diff input')
+        baseline, _ = self.github_only_aggregate(original)
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        result, requests = self.github_only_aggregate(changed)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any('/files?' in url for url in requests))
+        self.assertIn('matrix: skipped', result.stdout)
+
+    def test_github_only_aggregate_workflow_skip_passes(self):
+        original = [{'filename': 'src/c_abi.cpp', 'status': 'modified'}]
+        changed = [dict(original[0], filename='.github/workflows/ci.yml')]
+        self.assertNotEqual(changed, original, 'the mutation must change the API diff input')
+        baseline, _ = self.github_only_aggregate(original)
+        self.assertNotEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        result, _ = self.github_only_aggregate(changed)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The path exception excuses only skipped proofs, never a failed or
+        # cancelled proof, or an unsuccessful authz/classification/preflight.
+        baseline_results = {'AUTHZ_RESULT': 'success', 'CHANGES_RESULT': 'success',
+                            'PREFLIGHT_RESULT': 'success', 'SLOW_PREFLIGHT_RESULT': 'skipped',
+                            **{variable: 'skipped' for variable in PROOF_JOBS.values()}}
+        for variable in baseline_results:
+            for outcome in ('failure', 'cancelled', ''):
+                mutated = {**baseline_results, variable: outcome}
+                self.assertNotEqual(mutated, baseline_results, 'the mutation must change a lane result')
+                failed, _ = self.github_only_aggregate(changed, results=mutated)
+                self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+        for event in ('push', 'schedule', 'workflow_dispatch'):
+            self.assertNotEqual(event, 'pull_request', 'the mutation must change the event')
+            failed, requests = self.github_only_aggregate(changed, event_name=event)
+            self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+            self.assertEqual(requests, [], 'non-PR events cannot use the PR path exception')
+
+    def test_github_only_aggregate_mixed_ci_script_skip_fails(self):
+        original = [{'filename': '.github/workflows/ci.yml', 'status': 'modified'}]
+        baseline, _ = self.github_only_aggregate(original)
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        for filename in ('scripts/ci_preflight.py', 'scripts/ci_verify.py', 'scripts/ci_docs_only.py'):
+            with self.subTest(filename=filename):
+                changed = original + [{'filename': filename, 'status': 'modified'}]
+                self.assertNotEqual(changed, original, 'the mutation must change the API diff input')
+                result, _ = self.github_only_aggregate(changed)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('matrix: skipped', result.stdout)
+
+    def test_github_only_aggregate_empty_or_unreadable_diff_fails_closed(self):
+        original = [{'filename': '.github/workflows/ci.yml', 'status': 'modified'}]
+        all_success = {'SLOW_PREFLIGHT_RESULT': 'success',
+                       **{variable: 'success' for variable in PROOF_JOBS.values()}}
+        baseline, _ = self.github_only_aggregate(original, results=all_success)
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        # Exercise empty, missing paths, malformed paths, and missing rename
+        # origins through the real reader rather than a precomputed boolean.
+        for changed in ([], [{}], [{'filename': '', 'status': 'modified'}],
+                        [{'filename': '.github/../src/c_abi.cpp', 'status': 'modified'}],
+                        [{'filename': '.github/workflows/ci.yml', 'status': 'renamed'}]):
+            with self.subTest(rows=changed):
+                self.assertNotEqual(changed, original, 'the mutation must change the API diff input')
+                result, _ = self.github_only_aggregate(changed, results=all_success)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, '', 'the result shell must not run after reader failure')
+        for response in ('', '{', '{}', '[]', None):
+            with self.subTest(response=response):
+                self.assertNotEqual(response, json.dumps(original),
+                                    'the mutation must change the API response bytes')
+                result, _ = self.github_only_aggregate(original, files_response=response,
+                                                     results=all_success)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, '')
+        for event in ('', '{}', '{"pull_request": null}'):
+            with self.subTest(event=event):
+                self.assertNotEqual(event, json.dumps(self.github_only_event(original)),
+                                    'the mutation must change the event input')
+                result, _ = self.github_only_aggregate(original, event_text=event, results=all_success)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, '')
+
+    def test_github_only_diff_reads_every_page_and_both_rename_paths(self):
+        original = [{'filename': f'.github/workflows/check-{index}.yml', 'status': 'modified'}
+                    for index in range(101)]
+        baseline, requests = self.github_only_aggregate(original)
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        self.assertTrue(any(url.endswith('page=2') for url in requests))
+        changed = original[:-1] + [dict(original[-1], filename='scripts/ci_preflight.py')]
+        self.assertNotEqual(changed, original, 'the mutation must change the second API page')
+        result, requests = self.github_only_aggregate(changed)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any(url.endswith('page=2') for url in requests))
+        rename = [{'filename': '.github/workflows/new.yml', 'status': 'renamed',
+                   'previous_filename': '.github/workflows/old.yml'}]
+        baseline, _ = self.github_only_aggregate(rename)
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        for key in ('filename', 'previous_filename'):
+            changed = [dict(rename[0], **{key: 'scripts/ci_preflight.py'})]
+            self.assertNotEqual(changed, rename, 'the mutation must change a rename side')
+            result, _ = self.github_only_aggregate(changed)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        snapshot = {'number': 233, 'head': {'sha': 'a' * 40},
+                    'base': {'sha': 'b' * 40}, 'changed_files': len(rename)}
+        for key, value in (('head', {'sha': 'c' * 40}), ('base', {'sha': 'd' * 40}),
+                           ('changed_files', 2)):
+            changed = {**snapshot, key: value}
+            self.assertNotEqual(changed, snapshot, 'the mutation must change the second snapshot')
+            result, _ = self.github_only_aggregate(rename, after=changed)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, '')
+
+    def test_github_only_contract_refuses_previous_job_trust_and_reader_bypasses(self):
+        original = self.ci_sources()[0]
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        for job, before, after in (
+                ('build-gate', 'steps.github-only.outputs.github_only', 'needs.changes.outputs.github_only'),
+                ('build-gate', ci_preflight.GITHUB_ONLY_STEP, ''),
+                ('build-gate', 'github_only = False', 'github_only = True'),
+                ('build-gate', 'bool(paths) and all(', 'True or all('),
+                ('build-gate', 'snapshot() != count', 'False'),
+                ('build', GITHUB_ONLY_SKIP, DOCS_ONLY_SKIP),
+                ('corpus-parity-subset', GITHUB_ONLY_SKIP, DOCS_ONLY_SKIP),
+                ('preflight', ci_preflight.PREFLIGHT_TIER, "'github-only'"),
+                ('changes', 'pull-requests: read', 'pull-requests: write'),
+                ('build-gate', 'pull-requests: read', 'pull-requests: write')):
+            with self.subTest(job=job, mutation=after):
+                changed = in_job(original, job, before, after)
+                self.assertNotEqual(changed, original, 'the mutation must change the workflow input')
+                sources = self.ci_sources()
+                sources[0] = changed
+                self.assertTrue(ci_workflow_findings(*sources, others=self.other_sources()))
+
     def test_build_aggregate_excuses_only_pr_deferrals_and_classified_docs_skips(self):
         script = job_script(self.ci_sources()[0], 'build-gate',
                             'Require every verification lane to have passed')
@@ -1546,8 +1791,10 @@ class PreflightFailures(unittest.TestCase):
 
     def test_build_gate_refuses_widened_deferrals_and_lost_heavy_dependencies(self):
         mutations = [
-            ('"$GITHUB_EVENT_NAME" == "pull_request"', '"$GITHUB_EVENT_NAME" != "pull_request"'),
-            ('"$GITHUB_EVENT_NAME" == "pull_request"', '"$GITHUB_EVENT_NAME" == "push"'),
+            ('deferred() { passed "$1" || [[ "$GITHUB_EVENT_NAME" == "pull_request"',
+             'deferred() { passed "$1" || [[ "$GITHUB_EVENT_NAME" != "pull_request"'),
+            ('deferred() { passed "$1" || [[ "$GITHUB_EVENT_NAME" == "pull_request"',
+             'deferred() { passed "$1" || [[ "$GITHUB_EVENT_NAME" == "push"'),
             ('"$GITHUB_EVENT_NAME" == "pull_request" && "$1" == "skipped"',
              '"$1" == "skipped"'),
             ('&& slow_preflight && deferred "$FULL_PARITY_RESULT"',
@@ -1582,7 +1829,7 @@ class PreflightFailures(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
         step = root / 'classify.sh'
-        step.write_text(job_script(self.ci_sources()[0], 'changes'))
+        step.write_text(job_script(self.ci_sources()[0], 'changes', 'Classify the change'))
         git_env = {'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
                    'GIT_AUTHOR_NAME': 'ci', 'GIT_AUTHOR_EMAIL': 'ci@example.invalid',
                    'GIT_COMMITTER_NAME': 'ci', 'GIT_COMMITTER_EMAIL': 'ci@example.invalid'}

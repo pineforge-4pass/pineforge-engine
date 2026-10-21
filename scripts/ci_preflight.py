@@ -166,6 +166,11 @@ AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
 AUTHZ_FULL_SUCCESS = "${{ needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
 DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
+# Only the scheduling hint comes from changes. The aggregate recomputes this
+# class from the event-bound API diff inside its own job.
+GITHUB_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
+                    "(needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || "
+                    "needs.changes.outputs.github_only != 'true'))) }}")
 HEAVY_SKIP = DOCS_ONLY_SKIP.replace(" && (needs.changes",
                                    " && github.event_name != 'pull_request' && (needs.changes")
 SLOW_PREFLIGHT_IF = "${{ always() && needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
@@ -206,6 +211,11 @@ echo "$tools_dir" >> "$GITHUB_PATH"'''.splitlines())
 SLOW_PREFLIGHT_STAGES = frozenset((
     'verifier-tests', 'kernel-residuals-tests', 'unittest-shards-tests', 'run-json-harness-tests',
 ))
+GITHUB_ONLY_PREFLIGHT_STAGES = frozenset((
+    'shellcheck-version', 'actionlint-runner-labels', 'workflow-lint',
+    'ci-workflow-contract', 'docs-workflow-contract', 'docs-workflow-contract-tests',
+))
+DOCS_PR_TRIGGER = "  pull_request:\n    paths-ignore: ['.github/**']\n"
 FAST_TEST_REGISTRATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
@@ -274,6 +284,85 @@ VERIFIER_CLASSIFY_STEP = """      - name: Classify verifier self-tests
 """
 PREFLIGHT_VERIFIER_SLOW = ("${{ needs.changes.result == 'success' && "
                           "needs.changes.outputs.verifier_slow || 'true' }}")
+PREFLIGHT_TIER = ("${{ github.event_name == 'pull_request' && needs.changes.result == 'success' && "
+                  "needs.changes.outputs.github_only == 'true' && 'github-only' || 'fast' }}")
+# This is the only non-authz token reader allowed by the CI contract. The same
+# step schedules jobs in changes and independently proves skips in build-gate.
+# It executes inline without checkout, validates both rename paths, every page
+# and the live head/base/count before and after reading the PR diff.
+GITHUB_ONLY_STEP = r'''      - name: Read the PR diff independently
+        id: github-only
+        shell: python3 {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+          from urllib.request import Request, urlopen
+
+          github_only = False
+          if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+              pr = event["pull_request"]
+              number = event["number"]
+              repo = os.environ["GITHUB_REPOSITORY"]
+              head, base = pr["head"]["sha"], pr["base"]["sha"]
+              if (type(number) is not int or number <= 0 or pr["number"] != number
+                      or event["repository"]["full_name"] != repo
+                      or not re.fullmatch(r"[0-9a-f]{40}", head)
+                      or not re.fullmatch(r"[0-9a-f]{40}", base)):
+                  raise ValueError("missing or invalid PR identity")
+              endpoint = os.environ["GITHUB_API_URL"].rstrip("/") + f"/repos/{repo}/pulls/{number}"
+
+              def api(url):
+                  request = Request(url, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  })
+                  with urlopen(request) as response:
+                      return json.load(response)
+
+              def snapshot():
+                  current = api(endpoint)
+                  if (current["number"] != number or current["head"]["sha"] != head
+                          or current["base"]["sha"] != base):
+                      raise ValueError("PR changed since this event; rerun CI")
+                  count = current["changed_files"]
+                  if type(count) is not int or not 0 < count <= 3000:
+                      raise ValueError("empty or incomplete PR diff")
+                  return count
+
+              def path(value):
+                  if (not isinstance(value, str) or not value
+                          or any(ord(char) < 32 for char in value) or "\\" in value
+                          or any(part in ("", ".", "..") for part in value.split("/"))):
+                      raise ValueError("unreadable PR path")
+                  return value
+
+              count = snapshot()
+              paths, filenames = [], set()
+              for page in range(1, (count + 99) // 100 + 1):
+                  rows = api(endpoint + f"/files?per_page=100&page={page}")
+                  if not isinstance(rows, list) or len(rows) != min(100, count - len(filenames)):
+                      raise ValueError("missing or truncated PR files page")
+                  for row in rows:
+                      filename = path(row["filename"])
+                      if filename in filenames or row["status"] not in (
+                              "added", "modified", "removed", "renamed", "copied", "changed", "unchanged"):
+                          raise ValueError("duplicate or unreadable PR file")
+                      filenames.add(filename)
+                      paths.append(filename)
+                      if row["status"] == "renamed" or "previous_filename" in row:
+                          paths.append(path(row["previous_filename"]))
+              if len(filenames) != count or snapshot() != count:
+                  raise ValueError("PR diff changed while reading files")
+              github_only = bool(paths) and all(value.startswith(".github/") for value in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("github_only=" + str(github_only).lower() + "\n")
+'''
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [authz, changes, preflight, build, sanitizers, native-live, kernel-only, '
               'corpus-parity-subset, preflight-slow, corpus-parity]')
@@ -287,6 +376,7 @@ GATE_STEP = r'''      - name: Require every verification lane to have passed
           AUTHZ_RESULT: ${{ needs.authz.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          GITHUB_ONLY: ${{ steps.github-only.outputs.github_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           SANITIZER_RESULT: ${{ needs.sanitizers.result }}
@@ -303,13 +393,14 @@ GATE_STEP = r'''      - name: Require every verification lane to have passed
             "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
           # The matrix result covers only the selected cells: the PR exclusion
           # creates no skipped cell to excuse. Every existing cell must pass.
-          # A proof lane passes by succeeding, or by having been skipped after
-          # the changes job succeeded and answered docs-only. A lane skipped
-          # for any other reason fails, except the pinned PR deferrals below.
+          # GitHub-only skips use this job's own API read, never changes' output.
+          # Docs-only skips and the existing PR deferrals retain their policy.
           # Fast preflight always passes; slow preflight must pass on full events.
           docs_only=false
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
-          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
+          github_only=false
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" && "${GITHUB_ONLY:-false}" == "true" ]]; then github_only=true; fi
+          passed() { [[ "$1" == "success" || ( ( "$docs_only" == "true" || "$github_only" == "true" ) && "$1" == "skipped" ) ]]; }
           deferred() { passed "$1" || [[ "$GITHUB_EVENT_NAME" == "pull_request" && "$1" == "skipped" ]]; }
           slow_preflight() { [[ "$SLOW_PREFLIGHT_RESULT" == "success" || ( "$GITHUB_EVENT_NAME" == "pull_request" && "$SLOW_PREFLIGHT_RESULT" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
@@ -733,13 +824,21 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
         if job != 'authz' and 'authz' not in _needs(body):
             findings.append(f'{name} job {job} must need authz')
         code = '\n'.join(_code(body))
+        steps = _steps(body)
+        api_reader = (name == 'ci.yml' and job in ('changes', 'build-gate')
+                      and sum(_code(step) == _code(GITHUB_ONLY_STEP) for step in steps) == 1)
+        # The exact inline reader gets a read-only PR token; no other step or
+        # job gains a token exception from the new path class.
+        credential_code = (code.replace('\n'.join(_code(GITHUB_ONLY_STEP)), '', 1)
+                           if api_reader else code)
         inherited_env = '\n'.join(_job_values(workflow, 'env'))
         if (_holds_credentials(workflow, body)
                 or _job_values(body, 'secrets')
                 or re.search(r'\bsecrets\s*[.\[]', code + '\n' + inherited_env)
-                or (job != 'authz' and re.search(r'\bgithub\s*\.\s*token\b', code))):
+                or (job != 'authz' and re.search(r'\bgithub\s*\.\s*token\b', credential_code))):
             findings.append(f'{name} job {job} must carry no secrets, tokens or environment')
-        if job != 'authz' and _job_values(body, 'permissions') not in ([], ['contents: read']):
+        allowed_permissions = (['contents: read pull-requests: read'],) if api_reader else ([], ['contents: read'])
+        if job != 'authz' and _job_values(body, 'permissions') not in allowed_permissions:
             findings.append(f'{name} job {job} must inherit or set only contents: read')
         steps = _steps(body)
         status_function = job != 'authz' and any(
@@ -768,7 +867,8 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     gate = jobs.get(aggregate, '')
     gate_steps = _steps(gate)
     if (_job_values(gate, 'if') not in (['always()'], ['${{ always() }}'])
-            or len(gate_steps) != 2 or _code(gate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
+            or len(gate_steps) != (3 if name == 'ci.yml' else 2)
+            or _code(gate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
             or _step_values(gate_steps[-1], 'if')):
         findings.append(f'{name} {aggregate} must always run and refuse authz first')
     return findings
@@ -980,7 +1080,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         findings.append('preflight must consume verifier_slow and default to all classes')
     verifier_step = _step_named(_steps(preflight), '      - name: Verify workflow wiring and source guards')
     if (_step_values(verifier_step, 'run') != [
-            'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast']
+            f'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier {PREFLIGHT_TIER}']
             or _step_values(verifier_step, 'if') != [AUTHZ_SUCCESS]):
         findings.append('preflight must invoke only its fast stage plan')
     # No dependency/toolchain installer or extra build-driving run may hide
@@ -1006,10 +1106,13 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         if (set(_needs(jobs.get(job, ''))) != {'authz', 'changes'}
                 or len(_needs(jobs.get(job, ''))) != 2
                 or _job_values(jobs.get(job, ''), 'if') != [
-                    HEAVY_SKIP if job in HEAVY_JOBS else DOCS_ONLY_SKIP]):
+                    HEAVY_SKIP if job in HEAVY_JOBS else GITHUB_ONLY_SKIP]):
             findings.append(f'{job} must start alongside preflight, after authz and changes, '
                             'and skip only a docs-only change or its pinned PR deferral')
     changes = jobs.get('changes', '')
+    if ('      github_only: ${{ steps.github-only.outputs.github_only }}\n' not in changes
+            or not any(_code(step) == _code(GITHUB_ONLY_STEP) for step in _steps(changes))):
+        findings.append('changes must publish the event-bound GitHub-only PR scheduling hint')
     if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
             or CLASSIFY_STEP not in changes + '\n'):
         findings.append("changes must publish the base's scripts/ci_docs_only.py answer, exactly")
@@ -1043,6 +1146,9 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         if f'{policy} "${variable}"' not in gate:
             findings.append(f'build-gate must require {job} success or a docs-only skip')
     gate_steps = _steps(gate)
+    if (len(gate_steps) != 3 or _code(gate_steps[1]) != _code(GITHUB_ONLY_STEP)
+            or 'needs.changes.outputs.github_only' in gate):
+        findings.append('build-gate must independently read the event-bound PR diff before accepting skips')
     if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP):
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
     build = jobs.get('build', '')
@@ -1156,8 +1262,11 @@ def docs_workflow_findings(workflow: str) -> list[str]:
     findings = []
     events = workflow.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
-    if not re.search(r'^  pull_request:\s*(?:\{\})?\s*$', events, re.MULTILINE):
+    pr = re.search(r'^  pull_request:[^\n]*(?:\n(?:    [^\n]*|[ \t]*))*', events, re.MULTILINE)
+    if not pr:
         findings.append('docs.yml must build on pull_request')
+    elif _code(pr[0]) != _code(DOCS_PR_TRIGGER):
+        findings.append('docs.yml must exclude only .github-only PRs from documentation builds')
     deploy = workflow.split('      - name: Deploy to Cloudflare Pages\n', 1)
     deploy = deploy[1].split('\n      - name:', 1)[0] if len(deploy) == 2 else ''
     if not re.search(r"^        if: github\.event_name != 'pull_request'$",
@@ -1170,7 +1279,7 @@ def docs_workflow_self_test(workflow: str) -> int:
     if docs_workflow_findings(workflow):
         print('docs workflow contract: current workflow fails')
         return 1
-    no_pr = workflow.replace('  pull_request: {}\n', '', 1)
+    no_pr = workflow.replace(DOCS_PR_TRIGGER, '', 1)
     no_skip = workflow.replace("        if: github.event_name != 'pull_request'\n", '', 1)
     if no_pr == workflow or no_skip == workflow:
         print('docs workflow contract: could not form both mutations')
@@ -1246,7 +1355,7 @@ def run_json_harness_command(source: Path) -> list[str]:
 
 def check_commands(source: Path, output: Path | None = None,
                    *, env: dict[str, str] | None = None, tier: str = 'all') -> list[tuple]:
-    if tier not in ('all', 'fast', 'slow'):
+    if tier not in ('all', 'fast', 'slow', 'github-only'):
         raise ValueError(f'unknown preflight tier: {tier}')
     output_dir = (source / 'build-ci-preflight') if output is None else output
     workflows = sorted(str(path) for path in (source / '.github/workflows').glob('*')
@@ -1377,6 +1486,8 @@ def check_commands(source: Path, output: Path | None = None,
         ('doc-pine-coverage-tests',
          [sys.executable, str(source / 'scripts/test_check_pine_to_native_coverage.py')]),
     ]
+    if tier == 'github-only':
+        return [entry for entry in commands if entry[0] in GITHUB_ONLY_PREFLIGHT_STAGES]
     return [entry for entry in commands
             if tier == 'all' or (entry[0] in SLOW_PREFLIGHT_STAGES) == (tier == 'slow')]
 
@@ -1452,7 +1563,7 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build-ci-preflight')
-    parser.add_argument('--tier', choices=('all', 'fast', 'slow'), default='all')
+    parser.add_argument('--tier', choices=('all', 'fast', 'slow', 'github-only'), default='all')
     parser.add_argument('--check-docs-workflow', action='store_true')
     parser.add_argument('--self-test-docs-workflow', action='store_true')
     parser.add_argument('--check-ci-workflow', action='store_true')
