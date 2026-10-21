@@ -17,13 +17,15 @@
 #            PASS binding (baseline engine, merged codegen), exact head
 # Otherwise it exits green without promoting.
 #
-# It runs on `pull_request_target`: MAIN's own copy of this file (ref
-# refs/heads/main), never the PR's. The promotion identity's workload-identity
-# condition admits only `<repo>/.github/workflows/promote-baseline.yml@refs/heads/main`
-# in a run of refs/heads/main (terraform/gcp/github-wif.tf), so a pull request
-# that edits this file cannot mint it — and a `pull_request` trigger, which
-# runs the PR's copy, mints nothing at all. It checks out and runs no PR code:
-# it fetches the PR head's objects only to compare trees.
+# It runs on a push to main, using MAIN's own copy at refs/heads/main. The
+# pf-ci-release class admits this allowlisted workflow at that ref. The
+# promotion identity's WIF condition pins job_workflow_ref to
+# `<repo>/.github/workflows/promote-baseline.yml@refs/heads/main` and the run
+# ref to refs/heads/main, with no event restriction
+# (terraform/gcp/github-wif.tf:133-134), so a push to main satisfies both gates.
+# The pushed SHA must resolve to exactly one merged PR with that merge commit
+# and base main; no match or ambiguity skips promotion. It checks out and runs
+# no PR code: it fetches the PR head's objects only to compare trees.
 #
 # The plane is GCP: the
 # promotion reads the active baseline and the gate ledger from the Postgres
@@ -64,10 +66,8 @@
 name: promote-baseline
 
 on:
-  # Main's own copy of this workflow, with the merged PR's payload
-  # (merge_commit_sha, head.sha, number, html_url, merged_at).
-  pull_request_target:
-    types: [closed]
+  push:
+    branches: [main]
   # Manual re-fire, from main, for a merge whose event already passed (e.g. a
   # PR merged before this workflow was installed): the commit now on the base
   # branch, the PR head the gate cleared, and the PR.
@@ -89,8 +89,15 @@ on:
         description: "ISO-8601 merge time"
         required: true
 
+concurrency:
+  group: promote-baseline
+  cancel-in-progress: false
+
 permissions:
   contents: read
+  # commits/{sha}/pulls needs pull-request read access for the repo-scoped
+  # token, including when this unchanged workflow is installed in a private repo.
+  pull-requests: read
   # The engine's gate is two commit statuses (pineforge/verify,
   # pineforge/parity): `statuses`. The codegen axis reads check-runs: `checks`.
   statuses: read
@@ -101,7 +108,6 @@ permissions:
 
 jobs:
   promote:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
     runs-on: ["self-hosted","pf-ci","pf-ci-release"]
     steps:
       - name: Determine repo axis
@@ -112,10 +118,45 @@ jobs:
             *)         echo "repo=engine"  >> "$GITHUB_OUTPUT" ;;
           esac
 
-      # The base branch, never the PR (pull_request_target checks out main).
+      # The pushed main commit (or the dispatch ref), never the PR.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Resolve the merged PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          INPUT_MERGE_SHA: ${{ github.event.inputs.merge_commit }}
+          INPUT_HEAD_SHA: ${{ github.event.inputs.head_sha }}
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          INPUT_PR_URL: ${{ github.event.inputs.pr_url }}
+          INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            printf '%s\n' "merge_sha=$INPUT_MERGE_SHA" "head_sha=$INPUT_HEAD_SHA" \
+              "pr_number=$INPUT_PR_NUMBER" "pr_url=$INPUT_PR_URL" \
+              "merged_at=$INPUT_MERGED_AT" "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Search every page: a second match must defer, never pick a PR.
+          pulls=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/commits/$SHA/pulls?per_page=100")
+          matches=$(jq -c --arg sha "$SHA" '
+            [.[][] | select(.state == "closed" and .merged_at != null
+              and .merge_commit_sha == $sha and .base.ref == "main")]
+          ' <<< "$pulls")
+          count=$(jq 'length' <<< "$matches")
+          if [ "$count" != "1" ]; then
+            echo "::notice::found $count merged PRs with merge commit $SHA and base main; skipping"
+            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          jq -r '.[0] | "merge_sha=\(.merge_commit_sha)", "head_sha=\(.head.sha)",
+            "pr_number=\(.number)", "pr_url=\(.html_url)", "merged_at=\(.merged_at)",
+            "ok=true"' <<< "$matches" >> "$GITHUB_OUTPUT"
 
       # The safety property is the TREE: the snapshot describes the gated
       # head's tree, so we promote only when the merge commit now on the base
@@ -123,11 +164,12 @@ jobs:
       # or a rewrite, is skipped — those must be re-gated.
       - name: Verify the merged tree is the gated tree
         id: exacttree
+        if: steps.pr.outputs.ok == 'true'
         env:
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+          MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          BASE_REF: main
         run: |
           set -euo pipefail
           # The PR head's objects, to read its tree: fetched, never checked out or run.
@@ -150,7 +192,7 @@ jobs:
         if: steps.exacttree.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           AXIS: ${{ steps.axis.outputs.repo }}
         run: |
           set -euo pipefail
@@ -253,12 +295,12 @@ jobs:
           # No metadata server on a GitHub runner; mint GCS tokens from the
           # federated gcloud credential explicitly.
           PINEFORGE_GCP_TOKEN_CMD: gcloud auth print-access-token
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}
+          MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          PR_URL: ${{ github.event.pull_request.html_url || github.event.inputs.pr_url }}
-          MERGED_AT: ${{ github.event.pull_request.merged_at || github.event.inputs.merged_at }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+          MERGED_AT: ${{ steps.pr.outputs.merged_at }}
         run: |
           set -euo pipefail
           ms=$(node -e "process.stdout.write(String(Date.parse(process.env.MERGED_AT)))")

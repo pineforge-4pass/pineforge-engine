@@ -238,13 +238,13 @@ class PreflightFailures(unittest.TestCase):
             (0, "exclude_slow: ${{ github.event_name == 'pull_request' }}", 'exclude_slow: true'),
             (1, '        default: false', '        default: true'),
             (1, NATIVE_EXCLUSION, ''),
-            # Baseline promotion runs main's copy of the workflow and no PR
-            # code, and needs the newest two statuses on the PR head.
-            (2, '  pull_request_target:\n', '  pull_request:\n'),
+            # Baseline promotion starts from main's push and runs no PR code;
+            # it needs the newest two statuses on the resolved PR head.
+            (2, '  push:\n    branches: [main]\n', '  pull_request:\n'),
             (2, '  statuses: read', '  checks: read'),
             (2, '  id-token: write', '  id-token: none'),
             (2, '        with:\n          fetch-depth: 0',
-                '        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n'
+                '        with:\n          ref: ${{ steps.pr.outputs.head_sha }}\n'
                 '          fetch-depth: 0'),
             (2, '/commits/$HEAD_SHA/statuses?per_page=100', '/commits/$HEAD_SHA/check-runs'),
             (2, '.["pineforge/parity"] == "success"', 'true'),
@@ -254,18 +254,19 @@ class PreflightFailures(unittest.TestCase):
             # Squash merges: the merge commit is merge_commit_sha, admitted by
             # tree equality with the verified PR head, never by its ancestry,
             # and the campaign tool gets that tree.
-            (2, 'github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit',
-                'github.event.pull_request.head.sha || github.event.inputs.merge_commit'),
-            (2, 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}',
-                'HEAD_SHA: ${{ github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit }}'),
+            (2, 'MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}',
+                'MERGE_SHA: ${{ steps.pr.outputs.head_sha }}'),
+            (2, 'HEAD_SHA: ${{ steps.pr.outputs.head_sha }}',
+                'HEAD_SHA: ${{ steps.pr.outputs.merge_sha }}'),
             (2, '      head_sha:\n', '      pr_commit:\n'),
             (2, 'git merge-base --is-ancestor "$MERGE_SHA"', 'git merge-base --is-ancestor "$HEAD_SHA"'),
             (2, 'if [ "$merge_tree" != "$head_tree" ]; then', 'if false; then'),
             (2, 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")',
                 'head_tree=$(git rev-parse "$MERGE_SHA^{tree}")'),
-            (2, 'echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0', 'echo "ok=false" >> "$GITHUB_OUTPUT"'),
+            (2, 'echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0\n          fi\n          merge_tree=',
+                'echo "ok=false" >> "$GITHUB_OUTPUT"\n          fi\n          merge_tree='),
             (2, 'MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}',
-                'MERGE_TREE: ${{ github.event.pull_request.head.sha }}'),
+                'MERGE_TREE: ${{ steps.pr.outputs.head_sha }}'),
             (2, '--merge-commit "$MERGE_SHA"', '--merge-commit "$HEAD_SHA"'),
             (2, ' --merge-tree "$MERGE_TREE"', ''),
             (2, '--ci-head "$HEAD_SHA"', '--ci-head "$MERGE_SHA"'),
@@ -280,6 +281,19 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn(before, changed[index])
                 changed[index] = changed[index].replace(before, after, 1)
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
+
+    def test_baseline_promotion_rejects_later_pr_head_checkout(self):
+        finding = ("baseline promotion must run main's copy and require "
+                   "the latest two head statuses")
+        self.assertNotIn(finding, ci_workflow_findings(*self.ci_sources(),
+                                                      others=self.other_sources()))
+        anchor = '      - name: Mint an org App token to read the campaign tooling\n'
+        checkout = ('      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n'
+                    "        if: steps.ci.outputs.green == 'true'\n"
+                    '        with:\n'
+                    '          ref: ${{ steps.pr.outputs.head_sha }}\n')
+        findings = self.mutated_file_findings(2, 'promote', anchor, checkout + anchor)
+        self.assertIn(finding, findings)
 
     def test_build_matrix_excludes_only_macos_debug_on_pull_requests(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -1116,7 +1130,7 @@ class PreflightFailures(unittest.TestCase):
                 self.assertTrue(any('release.yml prebuilt must use exactly' in line
                                     for line in findings), findings)
 
-    def test_baseline_promotion_requires_isolation_and_its_existing_triggers(self):
+    def test_baseline_promotion_requires_isolation_and_push_dispatch_only(self):
         original, others = self.ci_sources(), self.other_sources()
         promote = original[2]
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
@@ -1129,17 +1143,17 @@ class PreflightFailures(unittest.TestCase):
                 findings = ci_workflow_findings(*changed, others=others)
                 self.assertIn(f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} '
                               '(isolated release)', findings)
-        event_finding = ('promote-baseline.yml must retain pull_request_target and '
+        event_finding = ('promote-baseline.yml must retain push and '
                          'workflow_dispatch only for pf-ci-release promotion')
-        for event in ('pull_request', 'push'):
+        for event in ('pull_request', 'pull_request_target', 'workflow_run'):
             for key in (event, f'"{event}"', f"'{event}'", event + ' '):
                 with self.subTest(event_key=key):
                     changed = original.copy()
                     changed[2] = in_job(promote, None, '\non:\n', f'\non:\n  {key}:\n')
                     findings = ci_workflow_findings(*changed, others=others)
                     self.assertIn(event_finding, findings)
-        for before, after in (('  pull_request_target:\n', '  pull_request:\n'),
-                              ('  workflow_dispatch:\n', '  push:\n'),
+        for before, after in (('  push:\n    branches: [main]\n', ''),
+                              ('  workflow_dispatch:\n', '  workflow_call:\n'),
                               ('\non:\n', '\non: >-\n'),
                               ('\non:\n', '\non:\non:\n')):
             with self.subTest(trigger_replacement=after):
@@ -1147,6 +1161,69 @@ class PreflightFailures(unittest.TestCase):
                 changed[2] = in_job(promote, None, before, after)
                 findings = ci_workflow_findings(*changed, others=others)
                 self.assertIn(event_finding, findings)
+
+    def test_baseline_promotion_requires_exact_main_push_filter_and_queue(self):
+        branch_finding = 'promote-baseline.yml must restrict push to exactly branches: [main]'
+        for replacement in ('', '    branches: [develop]\n',
+                            '    branches: [main, develop]\n', '    branches: ["*"]\n',
+                            '    branches-ignore: [develop]\n',
+                            '    branches: [main]\n    tags: ["*"]\n',
+                            '    branches: [main]\n    paths: ["scripts/**"]\n'):
+            with self.subTest(push_filter=replacement):
+                findings = self.mutated_file_findings(
+                    2, None, '    branches: [main]\n', replacement)
+                self.assertIn(branch_finding, findings)
+        concurrency = ('concurrency:\n  group: promote-baseline\n'
+                       '  cancel-in-progress: false\n')
+        for before, after in (
+                (concurrency, ''),
+                ('  group: promote-baseline\n', '  group: promote-${{ github.sha }}\n'),
+                ('  cancel-in-progress: false\n', '  cancel-in-progress: true\n'),
+                ('  cancel-in-progress: false\n', ''),
+                ('    steps:\n', '    concurrency: other-group\n    steps:\n')):
+            with self.subTest(concurrency=after):
+                findings = self.mutated_file_findings(2, None, before, after)
+                self.assertIn('baseline promotion must queue in group promote-baseline '
+                              'without cancellation', findings)
+
+    def test_baseline_promotion_keeps_resolution_and_guards_before_credentials(self):
+        for before, after in (
+                ('SHA: ${{ github.sha }}', 'SHA: ${{ github.event.before }}'),
+                ('gh api --paginate --slurp', 'gh api'),
+                ('/commits/$SHA/pulls?per_page=100', '/commits/main/pulls?per_page=100'),
+                ('        id: pr\n', '        id: unresolved\n'),
+                ('        id: pr\n', "        id: pr\n        if: github.event_name == 'workflow_dispatch'\n"),
+                ('PR_URL: ${{ steps.pr.outputs.pr_url }}',
+                 'PR_URL: ${{ github.event.pull_request.html_url }}')):
+            with self.subTest(resolver=after):
+                findings = self.mutated_file_findings(2, 'promote', before, after)
+                self.assertIn('baseline promotion must resolve the pushed SHA or dispatch '
+                              'inputs without a PR payload', findings)
+        for key, value in (('MERGE_SHA', 'merge_commit'), ('HEAD_SHA', 'head_sha'),
+                           ('PR_NUMBER', 'pr_number'), ('PR_URL', 'pr_url'),
+                           ('MERGED_AT', 'merged_at')):
+            with self.subTest(dispatch_input=key):
+                findings = self.mutated_file_findings(2, 'promote',
+                    f'          INPUT_{key}: ${{{{ github.event.inputs.{value} }}}}\n', '')
+                self.assertIn('baseline promotion must resolve the pushed SHA or dispatch '
+                              'inputs without a PR payload', findings)
+        for before, after in (
+                ("        if: steps.pr.outputs.ok == 'true'\n", ''),
+                ("        if: steps.exacttree.outputs.ok == 'true'\n",
+                 "        if: steps.pr.outputs.ok == 'true'\n"),
+                ("        if: steps.ci.outputs.green == 'true'\n", ''),
+                ('    steps:\n', "    if: github.event_name == 'workflow_dispatch'\n    steps:\n"),
+                ('      - name: Verify the merged tree is the gated tree\n',
+                 '      - run: echo unchecked-step\n'
+                 '      - name: Verify the merged tree is the gated tree\n')):
+            with self.subTest(guard=after):
+                findings = self.mutated_file_findings(2, 'promote', before, after)
+                self.assertIn('baseline promotion must guard resolution, tree and gate '
+                              'checks before credentials', findings)
+        findings = self.mutated_file_findings(2, 'promote',
+            '"+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"',
+            '"$HEAD_SHA:refs/remotes/origin/pr-head"')
+        self.assertIn('baseline promotion must admit a squash merge by tree equality only', findings)
 
     def test_new_workflows_require_spot_routing_with_hosted_exceptions(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -1615,6 +1692,111 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(summary['stages'][0]['startedAt'], finished_first['startedAt'])
         self.assertEqual(summary['stages'][0]['seconds'], finished_first['seconds'])
         self.assertEqual(summary['stages'][1]['startedAt'], running['startedAt'])
+
+
+class BaselinePromotionResolution(unittest.TestCase):
+    SHA = 'a' * 40
+    HEAD = 'b' * 40
+
+    def merged_pr(self, *, sha=None, head=None, number=231,
+                  merged_at='2026-10-21T08:15:30Z'):
+        return {'state': 'closed', 'merge_commit_sha': sha or self.SHA,
+                'head': {'sha': head or self.HEAD}, 'number': number,
+                'html_url': f'https://github.com/owner/engine/pull/{number}',
+                'merged_at': merged_at, 'base': {'ref': 'main'}}
+
+    def run_resolver(self, pages, *, sha=None, event='push', inputs=None):
+        workflow = (ROOT / CI_SOURCES[2]).read_text()
+        script = job_script(workflow, 'promote', 'Resolve the merged PR')
+        script = script.replace('${{ github.repository }}', 'owner/engine')
+        self.assertNotIn('${{', script)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / 'gh'
+            # Only the API transport is fake; bash and jq run the workflow's
+            # actual selection and output formatting against the fixture JSON.
+            gh.write_text('#!' + sys.executable + '\n'
+                'import os, pathlib, sys\n'
+                'expected = ["api", "--paginate", "--slurp", '
+                '"repos/owner/engine/commits/" + os.environ["SHA"] + "/pulls?per_page=100"]\n'
+                'if sys.argv[1:] != expected: raise SystemExit(2)\n'
+                'pathlib.Path(os.environ["LOOKUP_LOG"]).write_text("called\\n")\n'
+                'print(os.environ["PR_PAGES"])\n')
+            gh.chmod(0o755)
+            output = root / 'outputs'
+            log = root / 'lookup'
+            env = {**os.environ, 'EVENT_NAME': event, 'SHA': sha or self.SHA,
+                   'GH_TOKEN': 'fixture-token', 'PR_PAGES': json.dumps(pages),
+                   'INPUT_MERGE_SHA': '', 'INPUT_HEAD_SHA': '', 'INPUT_PR_NUMBER': '',
+                   'INPUT_PR_URL': '', 'INPUT_MERGED_AT': '', **(inputs or {}),
+                   'LOOKUP_LOG': str(log), 'GITHUB_OUTPUT': str(output),
+                   'PATH': str(root) + os.pathsep + os.environ.get('PATH', '')}
+            ran = subprocess.run(['bash', '-eu', '-c', script], env=env,
+                                 text=True, capture_output=True)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            lines = output.read_text().splitlines()
+            values = dict(line.split('=', 1) for line in lines)
+            self.assertEqual(len(values), len(lines), 'duplicate step outputs')
+            return values, ran.stdout, log.exists()
+
+    def test_push_returns_exact_five_values_for_one_merged_pr(self):
+        for sha, head, number, merged_at in (
+                (self.SHA, self.HEAD, 231, '2026-10-21T08:15:30Z'),
+                ('c' * 40, 'd' * 40, 466, '2026-10-22T03:04:05Z')):
+            with self.subTest(sha=sha, pr=number):
+                pr = self.merged_pr(sha=sha, head=head, number=number, merged_at=merged_at)
+                values, stdout, called = self.run_resolver([[pr]], sha=sha)
+                self.assertEqual(values, {
+                    'merge_sha': sha, 'head_sha': head, 'pr_number': str(number),
+                    'pr_url': f'https://github.com/owner/engine/pull/{number}',
+                    'merged_at': merged_at, 'ok': 'true'})
+                self.assertNotIn('::notice::', stdout)
+                self.assertTrue(called)
+
+    def test_push_defers_with_notice_and_no_metadata_without_one_match(self):
+        pr = self.merged_pr()
+        second = self.merged_pr(head='c' * 40, number=466)
+        cases = (
+            ('another merge commit', [[dict(pr, merge_commit_sha='d' * 40)]]),
+            ('open', [[dict(pr, state='open', merged_at=None)]]),
+            ('closed unmerged', [[dict(pr, merged_at=None)]]),
+            ('two matches', [[pr, second]]),
+            ('two matches across pages', [[pr], [second]]),
+            ('empty list', [[]]),
+            ('another base', [[dict(pr, base={'ref': 'release'})]]),
+        )
+        for name, pages in cases:
+            with self.subTest(case=name):
+                values, stdout, called = self.run_resolver(pages)
+                self.assertEqual(values, {'ok': 'false'})
+                self.assertIn('::notice::', stdout)
+                self.assertTrue(called)
+
+    def test_push_selects_matching_pr_across_pages_among_unrelated_prs(self):
+        pr = self.merged_pr()
+        pages = [[dict(pr, merge_commit_sha='c' * 40)],
+                 [dict(pr, state='closed', merged_at=None), pr],
+                 [dict(pr, base={'ref': 'release'})]]
+        values, stdout, called = self.run_resolver(pages)
+        self.assertEqual(values, {
+            'merge_sha': self.SHA, 'head_sha': self.HEAD, 'pr_number': '231',
+            'pr_url': 'https://github.com/owner/engine/pull/231',
+            'merged_at': '2026-10-21T08:15:30Z', 'ok': 'true'})
+        self.assertNotIn('::notice::', stdout)
+        self.assertTrue(called)
+
+    def test_dispatch_returns_exact_inputs_without_a_pr_lookup(self):
+        values, stdout, called = self.run_resolver(
+            [[self.merged_pr()]], sha='f' * 40, event='workflow_dispatch', inputs={
+                'INPUT_MERGE_SHA': 'd' * 40, 'INPUT_HEAD_SHA': 'e' * 40,
+                'INPUT_PR_NUMBER': '712', 'INPUT_PR_URL': 'https://github.com/owner/engine/pull/712',
+                'INPUT_MERGED_AT': '2026-10-20T01:02:03Z'})
+        self.assertEqual(values, {
+            'merge_sha': 'd' * 40, 'head_sha': 'e' * 40, 'pr_number': '712',
+            'pr_url': 'https://github.com/owner/engine/pull/712',
+            'merged_at': '2026-10-20T01:02:03Z', 'ok': 'true'})
+        self.assertNotIn('::notice::', stdout)
+        self.assertFalse(called)
 
 
 class CanonAuthz(unittest.TestCase):

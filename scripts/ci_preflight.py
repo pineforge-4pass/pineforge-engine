@@ -444,9 +444,13 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 and _events(workflow) != {'workflow_dispatch'}):
             findings.append(f'{name} must retain workflow_dispatch only for pf-ci-release jobs')
         if (name == 'promote-baseline.yml'
-                and _events(workflow) != {'pull_request_target', 'workflow_dispatch'}):
-            findings.append(f'{name} must retain pull_request_target and workflow_dispatch '
+                and _events(workflow) != {'push', 'workflow_dispatch'}):
+            findings.append(f'{name} must retain push and workflow_dispatch '
                             'only for pf-ci-release promotion')
+        if name == 'promote-baseline.yml':
+            on_body = '\n'.join(_job_block(workflow, 'on')[1:])
+            if _job_values(on_body, 'push') != ['branches: [main]']:
+                findings.append(f'{name} must restrict push to exactly branches: [main]')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
@@ -868,40 +872,85 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or NATIVE_EXCLUSION not in native):
         findings.append('native-live must default to full rows for dispatch and push')
     # Baseline promotion is pineforge-workflow's campaign/ci/promote-baseline.yml,
-    # installed unchanged. Main's own copy runs on the closed PR
-    # (pull_request_target, never the PR's copy) and runs no PR code; the
-    # engine axis needs the newest pineforge/verify and pineforge/parity
-    # statuses on the PR head.
-    if ('  pull_request_target:\n    types: [closed]' not in promote
-            or re.search(r'^  pull_request:', promote, re.MULTILINE)
-            or '  statuses: read' not in promote
+    # installed unchanged. Main's own copy runs on push to main and resolves
+    # exactly one merged PR for the pushed SHA before reading its gated head.
+    # PR objects are fetched only for tree comparison. Both events retain
+    # the newest two engine head statuses and the codegen check-run rule.
+    promote_job = _jobs(promote).get('promote', '')
+    promote_steps = _steps(promote_job)
+    resolved = _step_named(promote_steps, '        id: pr')
+    exacttree = _step_named(promote_steps, '        id: exacttree')
+    head_gate = _step_named(promote_steps, '        id: ci')
+    if (_job_values(promote, 'concurrency') != [
+            'group: promote-baseline cancel-in-progress: false']
+            or _job_values(promote_job, 'concurrency')):
+        findings.append('baseline promotion must queue in group promote-baseline without cancellation')
+    resolver_env = (
+        'GH_TOKEN: ${{ github.token }}',
+        'EVENT_NAME: ${{ github.event_name }}',
+        'SHA: ${{ github.sha }}',
+        'INPUT_MERGE_SHA: ${{ github.event.inputs.merge_commit }}',
+        'INPUT_HEAD_SHA: ${{ github.event.inputs.head_sha }}',
+        'INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}',
+        'INPUT_PR_URL: ${{ github.event.inputs.pr_url }}',
+        'INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}',
+    )
+    if (not resolved or _step_values(resolved, 'if')
+            or any(value not in resolved for value in resolver_env)
+            or 'gh api --paginate --slurp' not in resolved
+            or 'repos/${{ github.repository }}/commits/$SHA/pulls?per_page=100' not in resolved
+            or 'github.event.pull_request' in promote):
+        findings.append('baseline promotion must resolve the pushed SHA or dispatch inputs without a PR payload')
+    # The resolver is the first step after the main checkout. Tree and gate
+    # checks follow it, before any App token, private checkout or GCP auth.
+    # No extra step before them may acquire credentials or bypass a refusal.
+    if ([_step_values(step, 'id') for step in promote_steps[:5]]
+            != [['axis'], [], ['pr'], ['exacttree'], ['ci']]
+            or _job_values(promote_job, 'if')
+            or len(promote_steps) < 5
+            or not any(value.startswith('actions/checkout@')
+                       for value in _step_values(promote_steps[1], 'uses'))
+            or _step_values(promote_steps[1], 'with') != ['fetch-depth: 0']
+            or _step_values(exacttree, 'if') != ["steps.pr.outputs.ok == 'true'"]
+            or _step_values(head_gate, 'if') != ["steps.exacttree.outputs.ok == 'true'"]
+            or any(_step_values(step, 'if') != ["steps.ci.outputs.green == 'true'"]
+                   for step in promote_steps[5:])):
+        findings.append('baseline promotion must guard resolution, tree and gate checks before credentials')
+    if ('  statuses: read' not in promote
+            or '  pull-requests: read' not in promote
             or '  id-token: write' not in promote
-            or 'ref: ${{ github.event.pull_request.head' in promote
-            or '/commits/$HEAD_SHA/statuses?per_page=100' not in promote
-            or 'gh api --paginate' not in promote
-            or 'reduce (.[][]) as $s' not in promote
-            or 'if has($s.context) then . else .[$s.context] = $s.state end' not in promote
-            or '.["pineforge/verify"] == "success"' not in promote
-            or '.["pineforge/parity"] == "success"' not in promote
-            or promote.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
+            or promote.count('steps.pr.outputs.head_sha') != 3
+            or promote.count('steps.pr.outputs.pr_number') != 2
+            or promote.count('refs/pull/') != 1
+            or '/commits/$HEAD_SHA/statuses?per_page=100' not in head_gate
+            or 'gh api --paginate' not in head_gate
+            or 'reduce (.[][]) as $s' not in head_gate
+            or 'if has($s.context) then . else .[$s.context] = $s.state end' not in head_gate
+            or '.["pineforge/verify"] == "success"' not in head_gate
+            or '.["pineforge/parity"] == "success"' not in head_gate
+            or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
         findings.append("baseline promotion must run main's copy and require the latest two head statuses")
     # PRs are squash-merged, so the PR head is never an ancestor of the base
-    # branch. The merge commit (the event's merge_commit_sha, or the dispatch
+    # branch. The merge commit (the resolved merge_commit_sha, or the dispatch
     # input) must be on the base branch and carry the gated PR head's tree; the
     # campaign tool gets that tree and promotes only the pair the merge gate's
     # verdict measured for it. Every skip exits green before promotion.
-    merge_env = ('MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha'
-                 ' || github.event.inputs.merge_commit }}')
-    head_env = 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}'
+    merge_env = 'MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}'
+    head_env = 'HEAD_SHA: ${{ steps.pr.outputs.head_sha }}'
     if (promote.count(merge_env) != 2 or promote.count(head_env) != 3
-            or 'github.event.pull_request.head.sha || github.event.inputs.merge_commit' in promote
+            or promote.count('PR_NUMBER: ${{ steps.pr.outputs.pr_number }}') != 2
+            or 'PR_URL: ${{ steps.pr.outputs.pr_url }}' not in promote
+            or 'MERGED_AT: ${{ steps.pr.outputs.merged_at }}' not in promote
             or '      head_sha:\n' not in promote
-            or 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"' not in promote
+            or 'BASE_REF: main' not in exacttree
+            or 'git fetch --quiet origin "$BASE_REF" "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"'
+            not in exacttree
+            or 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"' not in exacttree
             or '--is-ancestor "$HEAD_SHA"' in promote
-            or 'merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")' not in promote
-            or 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")' not in promote
-            or 'if [ "$merge_tree" != "$head_tree" ]; then' not in promote
-            or promote.count('echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0') != 2
+            or 'merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")' not in exacttree
+            or 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")' not in exacttree
+            or 'if [ "$merge_tree" != "$head_tree" ]; then' not in exacttree
+            or exacttree.count('echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0') != 2
             or 'MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}' not in promote
             or '--merge-commit "$MERGE_SHA" --head-sha "$HEAD_SHA" --merge-tree "$MERGE_TREE"'
             not in promote

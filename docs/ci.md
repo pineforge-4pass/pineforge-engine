@@ -770,9 +770,12 @@ the PR changed no engine behaviour. The `PineForge strict CI base` ruleset
 requires these two commit statuses. GitHub Actions jobs, including `build`,
 `sanitizers`, docs and the parity subset, are advisory. Baseline promotion
 (`promote-baseline.yml`, installed from the maintainers' private campaign
-tooling) runs `main`'s own copy on the closed PR
-(`pull_request_target`) and runs no PR code. It requires both statuses to be
-successful on the verified PR head and a merge commit on `main` that carries
+tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
+It resolves the pushed SHA through the commit's associated PRs, requiring
+exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
+`main`; no match or ambiguity exits green with a notice. Manual dispatch
+retains its five merge inputs. It requires both statuses to be successful on
+the resolved PR head and a merge commit on `main` that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
 on `main`). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
@@ -958,8 +961,9 @@ request and four on every other event.
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
 manual dispatch and builds and verifies its own tarballs,
-`promote-baseline.yml` reads the `pineforge/verify` and `pineforge/parity`
-statuses on the pull request head, no workflow here starts on `workflow_run`,
+`promote-baseline.yml` starts on the push to `main`, resolves its merged PR,
+and reads the `pineforge/verify` and `pineforge/parity` statuses on that PR's
+head, no workflow here starts on `workflow_run`,
 and the ruleset requires only those two statuses. A documentation merge
 therefore does not rebuild; the `ci.yml` run on its commit is `preflight` and
 the skip. That run is `main`'s latest, the one the README badge shows, so after
@@ -1063,9 +1067,16 @@ and waits for a release arm64 class, while `macos-universal` retains
 
 L6's 15:40 addendum also moves baseline `promote` in `promote-baseline.yml`
 to `["self-hosted","pf-ci","pf-ci-release"]` for its GitHub App secrets and
-inherited `id-token: write` permission. This named exception retains its
-closed `pull_request_target` and manual dispatch triggers; only its
-`runs-on` line changes in the workflow.
+inherited `id-token: write` permission. Promotion starts on a `push` to
+`main` or a manual dispatch. The release class admits the allowlisted workflow
+at `refs/heads/main`; WIF pins its `job_workflow_ref` to that workflow on
+`refs/heads/main` without restricting the event, so the push passes both gates.
+The pushed SHA must resolve to exactly one merged PR before the tree and head
+status checks can admit promotion. A shared `promote-baseline` concurrency
+group with `cancel-in-progress: false` runs promotions one at a time. GitHub
+keeps one pending run per group, so a further merge while one promotion runs
+and another waits cancels the waiting run, which is then re-fired by manual
+dispatch.
 
 Other jobs in workflows triggered by `pull_request` or `pull_request_target`
 do not move to the release class. Docs `build` stays on `ubuntu-latest` because
@@ -1124,7 +1135,7 @@ The hosted macOS Release leg and non-PR macOS Debug leg stay on `macos-26`
 build job sets the engine label string once; hosted macOS legs ignore it.
 Release's separate matrix routes Linux x64 to `pf-ci-release`, keeps its
 hosted ARM/macOS labels and sets no `PF_CI_LABELS`.
-Promotion uses `pf-ci-release` for both closed `pull_request_target` and
+Promotion uses `pf-ci-release` for both `push` to `main` and
 `workflow_dispatch` triggers.
 
 Owner ruling of 2026-10-20, CI-HOSTED = B: all CI runs on our own machines,
@@ -1138,20 +1149,24 @@ the release workflow either; the release cut runs on `pf-ci-release`.
 
 As of 2026-10-21, #461 has merged as main `03b2406dd`: the old hosted pins
 for the engine's release and promote jobs are gone. `scripts/ci_preflight.py:135-139`
-and `scripts/ci_preflight.py:474-481` pin those jobs to `pf-ci-release`, with
+and `scripts/ci_preflight.py:478-485` pin those jobs to `pf-ci-release`, with
 the release `prebuilt` job selecting its pinned matrix. `HOSTED_JOB_RUNNERS`
 at `scripts/ci_preflight.py:130-132` now lists only docs `build` on
 `ubuntu-latest`. The existing guard for unlisted credential-bearing jobs
-still requires standard hosted routing (`scripts/ci_preflight.py:482-497`),
+still requires standard hosted routing (`scripts/ci_preflight.py:486-501`),
 and the release matrix retains its hosted ARM/macOS legs
 (`scripts/ci_preflight.py:77-89`). The remaining hosted Linux routes have yet to
 be migrated under the owner rulings above.
 
 The `release.yml` pin requires readable `workflow_dispatch`-only triggers,
-refusing both PR events. The named promotion exception requires its existing
-`pull_request_target` and `workflow_dispatch` event set and retains the
-closed-PR promotion checks. Both workflows require exact runner values without
-a fallback and carry no `PF_CI_LABELS`.
+refusing both PR events. The named promotion exception requires exactly
+`push` and `workflow_dispatch`, pins the push filter to `branches: [main]`,
+and requires the shared concurrency group without cancellation. Its tests
+run the resolver's own shell against fixture API responses, asserting all
+five merge values or a green notice with no metadata. The resolved PR still
+passes the exact-tree and newest head-status checks before credentials.
+Both workflows require exact runner values without a fallback and carry no
+`PF_CI_LABELS`.
 
 The temporary standard-runner stopgap was recorded by `3484a7c40` and
 squash-merged in `693fd9e68` (#415, CR-170) after GitHub larger-runner costs
