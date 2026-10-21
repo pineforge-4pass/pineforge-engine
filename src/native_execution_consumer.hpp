@@ -2,6 +2,7 @@
 
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
+#include "native_page_store.hpp"
 #include <pineforge/run_failure.hpp>
 #include <pineforge/native_bar_views.hpp>
 #include <pineforge/metrics_stream.hpp>
@@ -302,7 +303,76 @@ public:
     // the latest attempt that reset them, through the same fill_report.
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
+    // E09: the owning readback. It is the explicit NON-FLAT compatibility path
+    // -- one allocated row per event past `after_ordinal` -- and it now shares
+    // its order with visit_events_after below rather than materialising the
+    // three sources and sorting them. A host that reads a whole run's events
+    // should visit them instead: the vectors this used to walk are the driver
+    // and account logs' paged stores (E07/E08), so there is no resident
+    // sequence to copy from.
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
+    // E09: the paged readback. Merges the command history, the driver store and
+    // the account store -- each already ordered by (ordinal, kind) -- and
+    // delivers every row past `after_ordinal` to one visitor, in exactly the
+    // order events_after returns them: by ordinal, then Command < Driver <
+    // Account. Nothing is materialised: the three cursors are the call's own
+    // locals, so a visitor may re-enter this read (the test does) and still see
+    // the row it holds. It stops at, and answers, the first true a visitor
+    // returns. `after` below the window start begins where the window does.
+    template <class Visit>
+    bool visit_events_after(uint64_t after_ordinal, Visit&& visit) const {
+        // The three sources as they stood when the call began: a visitor that
+        // issues a command (appending to the history, or settling a fill that
+        // records an account row) sees the same stream the owning read would
+        // have materialised then, not what it appended.
+        const std::size_t command_end = requests_.history().size();
+        const std::uint64_t driver_end = driver_row_count();
+        const std::uint64_t account_end = account_row_count();
+        std::size_t command = first_command_after(after_ordinal);
+        std::uint64_t driver = first_driver_after(after_ordinal);
+        std::uint64_t account = first_account_after(after_ordinal);
+        for (;;) {
+            NativeMarketEvent row;
+            if (!next_merged_event(command, command_end, driver, driver_end,
+                                   account, account_end, row)) {
+                return false;
+            }
+            if (visit(row)) return true;
+        }
+    }
+    // The three cursors visit_events_after walks, in the sources' own order.
+    // Absolute positions, never a borrowed element: a driver point or account
+    // row lives in its paged store and is copied out through `row`.
+    std::uint64_t first_driver_after(uint64_t after_ordinal) const;
+    std::uint64_t first_account_after(uint64_t after_ordinal) const;
+    std::uint64_t driver_row_count() const noexcept;
+    std::uint64_t account_row_count() const noexcept;
+    // Advances the smallest of the three cursors and writes its row into
+    // `row`; false when all three are past the ends the caller captured.
+    bool next_merged_event(std::size_t& command, std::size_t command_end,
+                           std::uint64_t& driver, std::uint64_t driver_end,
+                           std::uint64_t& account, std::uint64_t account_end,
+                           NativeMarketEvent& row) const;
+    // E06/E07/E08/E09/E11/E12 witness: the rows each retained stream and queue
+    // holds, and the fixed scratch every paged store keeps whatever their
+    // length. Counts are logical (the rows a read returns), inline_bytes is
+    // storage this consumer allocates for paged sequences -- staging tails and
+    // compaction pages -- never a row count times a book, bar or event rate.
+    struct ResidentInventory {
+        // The rows each retained sequence holds (its population), not a
+        // resident count: a paged sequence's rows live in its file.
+        std::uint64_t driver_rows = 0;
+        std::uint64_t account_rows = 0;
+        std::uint64_t queued_notifications = 0;
+        std::uint64_t pre_open_births = 0;
+        std::uint64_t activation_births = 0;
+        // How many of those rows are in a scratch file rather than the fixed
+        // staging tail: the proof that a long population did spill.
+        std::uint64_t spilled_rows = 0;
+        // The fixed scratch every paged sequence holds, whatever its length.
+        std::uint64_t inline_bytes = 0;
+    };
+    ResidentInventory resident_inventory() const noexcept;
     // The command rows of events_after(after_ordinal), read in place (R5 lane
     // PERF-P4). The history is in ordinal order, so those rows are exactly
     // the events from first_command_after(after_ordinal) on (the history's
@@ -775,9 +845,12 @@ private:
     // queue is empty only after its own clear(), which also rewinds the head
     // (R5 lane PERF-L1), so every caller's empty drain is a branch.
     void drain_applied_notifications(BacktestEngine& engine) {
-        if (!applied_notifications_.empty() || !point_guards_)
+        if (applied_notification_count() != notification_head_ || !point_guards_)
             drain_queued_notifications(engine);
     }
+    // The queued-applied rows the store holds, drained or not (E11; defined
+    // where the store is a complete type).
+    std::uint64_t applied_notification_count() const noexcept;
     void drain_queued_notifications(BacktestEngine& engine);
     void invoke_applied_callback(BacktestEngine& engine, const AppliedNotification& notification);
     void finish_callback(BacktestEngine& engine, uint64_t ordinal);
@@ -949,8 +1022,11 @@ private:
                     && static_cast<std::uint8_t>(row.kind)
                            < static_cast<std::uint8_t>(other.kind));
         }
+        // E12: the rows are a paged store, not a resident vector -- a scan can
+        // keep one row per working request, and Q grows with the run. clear()
+        // is O(1): it retires every row and leaves the fixed staging tail.
         void clear() noexcept {
-            rows_.clear();
+            if (rows_) rows_->clear();
             head_ = 0;
             ascending_ = true;
             heaped_ = false;
@@ -960,14 +1036,24 @@ private:
         // arranging the heap on first use -- and answers the working-book
         // index that row was scanned at.
         std::size_t take_first();
-        const MatchCandidate* first() const noexcept {
-            if (ascending_) return head_ < rows_.size() ? &rows_[head_] : nullptr;
-            return rows_.empty() ? nullptr : &rows_.front();
-        }
+        // The row a take would answer next, copied out (a paged row is never
+        // borrowed); nullopt when no row is left.
+        std::optional<MatchCandidate> first() const;
+        // ResidentInventory: the fixed scratch the row store holds.
+        std::uint64_t resident_bytes() const noexcept;
 
     private:
+        // Rows still in the store, of which [0, head_) were taken and are kept
+        // only as the slot keep() fills when a row precedes the run's front.
+        std::uint64_t row_count() const noexcept {
+            return rows_ ? rows_->size() : 0;
+        }
+        std::optional<MatchCandidate> row_at(std::uint64_t index) const;
+        void set_row(std::uint64_t index, const MatchCandidate& row);
         void sift_up();
-        std::vector<MatchCandidate> rows_;
+        void sift_down(std::uint64_t index);
+        void make_heap();
+        std::unique_ptr<detail::PageStore> rows_;
         // While ascending_, the rows still to take are rows_[head_..] in
         // `precedes` order; the rows before head_ were taken.
         std::size_t head_ = 0;
@@ -1381,13 +1467,24 @@ private:
             int64_t cycle) const;
     native_order::TargetObservation read_target(
             const BacktestEngine& engine, const native_order::LiveRequest* live) const;
+    // E12: the cohort's lot handles are collected into a paged store, not a
+    // vector -- one row per opening in the roster, and a roster is Q's. The
+    // rows are consumed by read_openings_into's store overload below, in
+    // incarnation order, exactly as the vector's were.
     void read_target_into(const BacktestEngine& engine, const native_order::LiveRequest* live,
                           native_order::TargetObservation& out,
-                          std::vector<native_order::RequestHandle>& handles) const;
+                          detail::PageStore& handles) const;
     void read_openings_into(const BacktestEngine& engine,
                             const std::vector<native_order::RequestHandle>& handles,
                             int64_t cycle,
                             std::vector<native_order::OpeningObservation>& out) const;
+    void read_openings_into(const BacktestEngine& engine,
+                            const detail::PageStore& handles,
+                            int64_t cycle,
+                            std::vector<native_order::OpeningObservation>& out) const;
+    // The matcher's provenance rows a handle was scanned from, dropped: the
+    // paged form of the vector's erase-remove, with the same predicate.
+    void erase_match_provenance(const native_order::RequestHandle& handle);
     std::optional<native_order::Side> scratch_cohort_side(
         const BacktestEngine& engine, const native_order::LiveRequest& live);
     bool scratch_request_is_buy(const BacktestEngine& engine,
@@ -1767,7 +1864,14 @@ private:
     std::optional<CurrentExecutionFrame> current_frame_;
     uint64_t pre_open_birth_point_ordinal_ = 0;
     int64_t pre_open_birth_time_ms_ = 0;
-    std::vector<native_order::RequestHandle> pre_open_births_;
+    // E11: the births and notifications of the current point. Each is a paged
+    // FIFO with a fixed staging tail (native_page_store.hpp). None of the
+    // three has a proved execution bound -- the host's own commands decide
+    // how many births one PreOpen records, and a settlement burst decides how
+    // many notifications one point queues -- so each spills instead of
+    // refusing. Their content, order and multiplicity are folded exactly as
+    // the vectors were (continuation_hash): nothing is reordered or dropped.
+    std::unique_ptr<detail::PageStore> pre_open_births_;
     // The open activation scope (begin_open_activation). open_activation_scope_
     // is call-stack state, never folded; the point and the handles recorded
     // under the scope are durable until the Open's match ends, and fold into
@@ -1775,8 +1879,8 @@ private:
     bool open_activation_scope_ = false;
     uint64_t activation_birth_point_ordinal_ = 0;
     int64_t activation_birth_time_ms_ = 0;
-    std::vector<native_order::RequestHandle> activation_births_;
-    std::vector<AppliedNotification> applied_notifications_;
+    std::unique_ptr<detail::PageStore> activation_births_;
+    std::unique_ptr<detail::PageStore> applied_notifications_;
     std::size_t notification_head_ = 0;
     bool processing_input_ = false;
     InputMode input_mode_ = InputMode::Unselected;
@@ -1889,8 +1993,14 @@ private:
     double last_price_ = 0.0;
     bool has_last_price_ = false;
     int64_t last_print_time_ms_ = 0;
-    std::vector<NativeDriverPoint> driver_log_;
-    std::vector<NativeAccountObservation> account_log_;
+    // E07/E08: the driver points and account rows a readback keeps. The
+    // length is the run's, not the consumer's -- one driver point per
+    // waypoint or sample and one account row per fill -- so each is a paged
+    // store (native_page_store.hpp) with a fixed staging tail: O(1) resident
+    // under Full/Commands, and absent (null) under Window, exactly where the
+    // vectors used to be. Both are readback only; no hash folds them.
+    std::unique_ptr<detail::PageStore> driver_log_;
+    std::unique_ptr<detail::PageStore> account_log_;
     // V19-B: the newest driver point and account observation the run
     // produced, retained or not -- the stream's high water, which
     // event_high_water() answers under every retention -- and the instants
@@ -2039,17 +2149,25 @@ private:
     // itself: it runs only inside the driver's delivery of an input, and a
     // host callback cannot deliver one. Scratch, never run state, and folded
     // into nothing.
-    std::vector<const native_order::LiveRequest*> match_snapshot_;
-    std::vector<MatchProvenance> match_provenance_;
-    std::vector<std::pair<std::uint64_t, std::uint8_t>> match_skipped_;
+    // E12: no pointer snapshot of the book. Candidate selection makes no
+    // request-core mutation (see match_path), so the scan indexes the live
+    // table directly and a reallocation the scan cannot cause cannot strand a
+    // pointer. The three lists below are paged stores with a fixed staging
+    // tail, for the same reason MatchRows is: their length is Q's.
+    std::unique_ptr<detail::PageStore> match_provenance_;
+    std::unique_ptr<detail::PageStore> match_skipped_;
     // observe_trails' copy of the book's handles, the same kind of scratch:
     // match_path is its only caller.
-    std::vector<native_order::RequestHandle> match_trail_handles_;
+    std::unique_ptr<detail::PageStore> match_trail_handles_;
     // The target a matcher read builds when the cohort cache does not answer
     // it (read_target_into), and the cohort's lot handles that read collects:
     // one read at a time, each consumed before the next.
     native_order::TargetObservation match_target_;
-    std::vector<native_order::RequestHandle> match_target_handles_;
+    std::unique_ptr<detail::PageStore> match_target_handles_;
+    // read_target's own lot-handle list (the owning compatibility readback,
+    // which builds a target the caller keeps). Mutable because read_target is
+    // const; the rows are consumed before it returns.
+    mutable std::unique_ptr<detail::PageStore> read_target_handles_;
     // Whether match_path tests a priced trigger against the path before the
     // rest of its row (set_match_band_precheck). A choice between two
     // computations of the same values, so it is not run state either.

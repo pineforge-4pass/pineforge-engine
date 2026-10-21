@@ -3,6 +3,7 @@
 #include "engine_value_invalid.hpp"
 #include "engine_settlement_stage.hpp"
 #include "native_matching.hpp"
+#include "native_page_store.hpp"
 #include "selected_report_view.hpp"
 #include "report_sink_writer.hpp"
 #include <pineforge/execution_close_scope.hpp>
@@ -28,15 +29,55 @@ namespace pineforge {
 inline namespace engine_script_run_v19 {
 namespace {
 
-template<class T>
-void reserve_next(std::vector<T>& values) {
-    if (values.size() == values.max_size())
-        throw std::length_error("native observation capacity exhausted");
-    if (values.size() < values.capacity()) return;
-    const auto grown = values.capacity() > values.max_size() / 2
-        ? values.max_size() : std::max<std::size_t>(1, values.capacity() * 2);
-    values.reserve(grown);
+// E06-E09/E11/E12: the fixed staging row counts of the paged sequences this
+// consumer keeps (native_page_store.hpp). Every one is a prepared, fixed size
+// -- the rows a store holds before it spills -- never a rate, a bar count or a
+// book size. Resident memory is bounded by these counts times the row sizes,
+// whatever the run's length; the rows themselves live in the store's file.
+constexpr std::size_t kHandleStagingRows = 64;
+constexpr std::size_t kDriverStagingRows = 64;
+constexpr std::size_t kAccountStagingRows = 64;
+constexpr std::size_t kNotificationStagingRows = 32;
+constexpr std::size_t kMatchStagingRows = 64;
+
+// The store a slot owns, created on first use with its fixed staging tail.
+detail::PageStore& page_store(std::unique_ptr<detail::PageStore>& slot,
+                              std::size_t row_bytes, std::size_t staging_rows,
+                              const char* label) {
+    if (!slot) {
+        slot = std::make_unique<detail::PageStore>(row_bytes, staging_rows, label);
+    }
+    return *slot;
 }
+
+// One handle list's membership and removal, over a paged store: the lists hold
+// at most a point's births and are folded in order, so a linear scan is the
+// same test the vector's std::find made.
+bool handle_list_contains(const std::unique_ptr<detail::PageStore>& list,
+                          const native_order::RequestHandle& handle) {
+    if (!list) return false;
+    native_order::RequestHandle row;
+    for (std::uint64_t index = 0, count = list->size(); index < count; ++index) {
+        list->read(index, &row);
+        if (row == handle) return true;
+    }
+    return false;
+}
+
+void handle_list_erase(std::unique_ptr<detail::PageStore>& list,
+                       const native_order::RequestHandle& handle) {
+    if (!list || list->empty()) return;
+    list->erase_if([&](const void* row) {
+        return *static_cast<const native_order::RequestHandle*>(row) == handle;
+    });
+}
+
+// A paged store copies rows as bytes; every row type it holds must be one
+// value, never a container of its own.
+static_assert(std::is_trivially_copyable_v<NativeDriverPoint>);
+static_assert(std::is_trivially_copyable_v<NativeAccountObservation>);
+static_assert(std::is_trivially_copyable_v<native_order::RequestHandle>);
+static_assert(std::is_trivially_copyable_v<std::pair<std::uint64_t, std::uint8_t>>);
 
 // FNV-1a's prime and its powers p^k for k in [0, 8]. A zero byte leaves the
 // accumulator untouched under the XOR (h ^ 0 == h), so a run of k zero bytes
@@ -2080,31 +2121,55 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     }
     f.u(pre_open_birth_point_ordinal_);
     f.i(pre_open_birth_time_ms_);
-    f.u(pre_open_births_.size());
-    for (const auto& handle : pre_open_births_) hash_handle(f, handle);
+    // E11: the lists are paged, and the fold reads their rows in the order the
+    // vectors held them -- count first, then one handle at a time.
+    f.u(pre_open_births_ ? pre_open_births_->size() : std::uint64_t{0});
+    if (pre_open_births_) {
+        native_order::RequestHandle handle;
+        for (std::uint64_t index = 0, count = pre_open_births_->size();
+             index < count; ++index) {
+            pre_open_births_->read(index, &handle);
+            hash_handle(f, handle);
+        }
+    }
     // The open activation grants fold only while one is held, a tag word first
     // so their bits can never read as another optional fold's word: a run that
     // never opens the scope, and every state after the Open the grants were
     // recorded for, keeps its pre-scope continuation identity. The scope's own
     // open bit is call-stack state and never folds.
-    if (!activation_births_.empty()) {
+    const std::uint64_t activation_count =
+        activation_births_ ? activation_births_->size() : std::uint64_t{0};
+    if (activation_count != 0) {
         f.u(0x4f50454e41435456ULL);  // "OPENACTV"
         f.u(activation_birth_point_ordinal_);
         f.i(activation_birth_time_ms_);
-        f.u(activation_births_.size());
-        for (const auto& handle : activation_births_) hash_handle(f, handle);
+        f.u(activation_count);
+        native_order::RequestHandle handle;
+        for (std::uint64_t index = 0; index < activation_count; ++index) {
+            activation_births_->read(index, &handle);
+            hash_handle(f, handle);
+        }
     }
-    f.u(applied_notifications_.size() - notification_head_);
-    for (std::size_t i = notification_head_; i < applied_notifications_.size(); ++i) {
-        const auto& notification = applied_notifications_[i];
-        f.u(notification.history_index);
-        f.u(notification.ordinal);
-        hash_current_point(f, notification.point);
-        // Conditional: only a kernel-originated fill carries a margin receipt,
-        // so a host-only queue folds exactly what it folded before L4.
-        if (notification.margin_call_index) {
-            f.u(1);
-            f.u(*notification.margin_call_index);
+    // The pending notifications, in queue order: the rows a callback still
+    // owes fold exactly as the vector's did.
+    const std::uint64_t notification_count = applied_notification_count();
+    const std::uint64_t notification_from = std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(notification_head_), notification_count);
+    f.u(notification_count - notification_from);
+    if (applied_notifications_) {
+        AppliedNotification notification;
+        for (std::uint64_t index = notification_from; index < notification_count; ++index) {
+            applied_notifications_->read(index, &notification);
+            f.u(notification.history_index);
+            f.u(notification.ordinal);
+            hash_current_point(f, notification.point);
+            // Conditional: only a kernel-originated fill carries a margin
+            // receipt, so a host-only queue folds exactly what it folded before
+            // L4.
+            if (notification.margin_call_index) {
+                f.u(1);
+                f.u(*notification.margin_call_index);
+            }
         }
     }
     f.b(processing_input_);
@@ -2966,12 +3031,12 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     callback_phase_ = CallbackPhase::None;
     pre_open_birth_point_ordinal_ = 0;
     pre_open_birth_time_ms_ = 0;
-    pre_open_births_.clear();
+    if (pre_open_births_) pre_open_births_->clear();
     open_activation_scope_ = false;
     activation_birth_point_ordinal_ = 0;
     activation_birth_time_ms_ = 0;
-    activation_births_.clear();
-    applied_notifications_.clear();
+    if (activation_births_) activation_births_->clear();
+    if (applied_notifications_) applied_notifications_->clear();
     notification_head_ = 0;
     consuming_request_ = false;
     draining_notifications_ = false;
@@ -2995,18 +3060,15 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // (source_price_time/effective_time fallbacks) or its continuation digest.
     last_price_ = 0.0;
     last_print_time_ms_ = 0;
-    driver_log_.clear();
-    account_log_.clear();
+    // A paged log starts its next run's sequence at its first row; the file
+    // is reused, its bytes overwritten by the next flush.
+    if (driver_log_) driver_log_->clear();
+    if (account_log_) account_log_->clear();
     // v19-B: a log the run's retention does not keep holds no storage either
-    // (a reservation made before this begin, for another retention, is
-    // returned here).
+    // (the staging tail and file of a previous run are released here).
     const NativeEventRetention kept = retention_override_.value_or(spec.event_retention);
-    if (kept != NativeEventRetention::Full) {
-        std::vector<NativeDriverPoint>().swap(driver_log_);
-    }
-    if (kept == NativeEventRetention::Window) {
-        std::vector<NativeAccountObservation>().swap(account_log_);
-    }
+    if (kept != NativeEventRetention::Full) driver_log_.reset();
+    if (kept == NativeEventRetention::Window) account_log_.reset();
     last_driver_ordinal_ = 0;
     last_account_ordinal_ = 0;
     driver_marks_ = {};
@@ -3371,21 +3433,23 @@ void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
         if (driver_mark_count_ < 2) ++driver_mark_count_;
     }
     last_driver_ordinal_ = point.coordinate.ordinal;
-    // The driver log is an owning readback surface (native_events), kept only
-    // under NativeEventRetention::Full; since v19 no hash folds it.
-    if (retention() == NativeEventRetention::Full) driver_log_.push_back(point);
+    // The driver log is a readback surface (native_events), kept only under
+    // NativeEventRetention::Full; since v19 no hash folds it. E07: it is a
+    // paged store, so its resident part is the fixed staging tail and a run
+    // with many points spills instead of growing the consumer.
+    if (retention() == NativeEventRetention::Full) {
+        page_store(driver_log_, sizeof(NativeDriverPoint), kDriverStagingRows,
+                   "native driver log").push_back(&point);
+    }
 }
 
 void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
-    // The driver log alone. The command history is sized by pump_batch from
-    // what the batch records; a reservation made here before begin_ready
-    // never reached a run anyway, since begin_ready resets the request core.
-    // A run that keeps no driver points reserves none.
-    if (retention() != NativeEventRetention::Full) return;
-    if (expected_points > driver_log_.max_size()) {
-        throw std::length_error("native driver-log capacity exhausted");
-    }
-    if (expected_points > driver_log_.capacity()) driver_log_.reserve(expected_points);
+    // E07/E10: nothing to reserve. The driver log's resident part is the store's
+    // fixed staging tail, prepared when the store is created; its length is the
+    // run's and lives in the file. A batch's point count no longer sizes a
+    // residential buffer (and no count can be refused for being large), so a
+    // caller's projection is read and dropped.
+    (void)expected_points;
 }
 
 NativeEventRetention NativeExecutionConsumer::retention() const noexcept {
@@ -3403,9 +3467,16 @@ void NativeExecutionConsumer::retire_journal() noexcept {
     if (retention() != NativeEventRetention::Window || failed()) return;
     uint64_t through = events_acknowledged_ ? acknowledged_through_
                                             : std::numeric_limits<uint64_t>::max();
-    for (const auto& notification : applied_notifications_) {
-        if (notification.ordinal == 0) return;
-        through = std::min(through, notification.ordinal - 1);
+    // Every queued notification pins its cause, delivered or not: the queue is
+    // cleared as a whole when a drain ends, exactly as it always was.
+    if (applied_notifications_) {
+        AppliedNotification notification;
+        for (std::uint64_t index = 0, count = applied_notifications_->size();
+             index < count; ++index) {
+            applied_notifications_->read(index, &notification);
+            if (notification.ordinal == 0) return;
+            through = std::min(through, notification.ordinal - 1);
+        }
     }
     requests_.retire_history(through);
 #ifndef NDEBUG
@@ -3497,7 +3568,8 @@ native_order::OpeningObservation NativeExecutionConsumer::read_opening(
 native_order::TargetObservation NativeExecutionConsumer::read_target(
         const BacktestEngine& engine, const native_order::LiveRequest* live) const {
     native_order::TargetObservation out;
-    std::vector<native_order::RequestHandle> handles;
+    auto& handles = page_store(read_target_handles_, sizeof(native_order::RequestHandle),
+                               kHandleStagingRows, "native target read handles");
     read_target_into(engine, live, out, handles);
     return out;
 }
@@ -3508,7 +3580,7 @@ native_order::TargetObservation NativeExecutionConsumer::read_target(
 void NativeExecutionConsumer::read_target_into(
         const BacktestEngine& engine, const native_order::LiveRequest* live,
         native_order::TargetObservation& out,
-        std::vector<native_order::RequestHandle>& handles) const {
+        detail::PageStore& handles) const {
     out.current_position = read_position(engine);
     out.opening.reset();
     out.openings.clear();
@@ -3521,11 +3593,10 @@ void NativeExecutionConsumer::read_target_into(
         const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
         if (!position) return;
         handles.clear();
-        handles.reserve(engine.pyramid_entries_.size());
         for (const auto& lot : engine.pyramid_entries_) {
             native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
             if (requests_.cohort_contains(cohort->cohort, handle)) {
-                handles.push_back(std::move(handle));
+                handles.push_back(&handle);
             }
         }
         read_openings_into(engine, handles, position->cycle, out.openings);
@@ -3554,7 +3625,9 @@ std::optional<native_order::Side> NativeExecutionConsumer::scratch_cohort_side(
     if (!std::holds_alternative<native_order::CohortClose>(live.authority)) {
         return std::nullopt;
     }
-    read_target_into(engine, &live, match_target_, match_target_handles_);
+    read_target_into(engine, &live, match_target_,
+                     page_store(match_target_handles_, sizeof(native_order::RequestHandle),
+                                kHandleStagingRows, "native match target handles"));
     for (const auto& opening : match_target_.openings) {
         if (!opening.has_live_matching_lot) continue;
         if (const auto* position = std::get_if<native_order::PositionNonflat>(
@@ -5032,11 +5105,19 @@ void NativeExecutionConsumer::observe_trails(
     evaluation.existing_matching_bit = point.matching;
     // The book as it stood on entry, in the consumer's scratch: match_path is
     // the only caller, and nothing below reaches either function again.
-    auto& handles = match_trail_handles_;
+    auto& handles = page_store(match_trail_handles_, sizeof(native_order::RequestHandle),
+                               kHandleStagingRows, "native match trail handles");
     handles.clear();
-    handles.reserve(live_requests.size());
-    for (const auto& live : live_requests) handles.push_back(live.handle());
-    for (const auto& handle : handles) {
+    for (const auto& live : live_requests) {
+        const auto handle = live.handle();
+        handles.push_back(&handle);
+    }
+    // The book as it stood on entry, by value: the core mutations below move
+    // rows, and a paged copy of the handles is stranded by none of them.
+    native_order::RequestHandle handle;
+    for (std::uint64_t trail_index = 0, trail_count = handles.size();
+         trail_index < trail_count; ++trail_index) {
+        handles.read(trail_index, &handle);
         if (failed()) return;
         const auto* live = requests_.find_live(handle);
         if (!live) continue;
@@ -5093,14 +5174,14 @@ void NativeExecutionConsumer::match_discrete(BacktestEngine& engine, const Nativ
     if (pre_open_birth_point_ordinal_ == point.coordinate.ordinal) {
         pre_open_birth_point_ordinal_ = 0;
         pre_open_birth_time_ms_ = 0;
-        pre_open_births_.clear();
+        if (pre_open_births_) pre_open_births_->clear();
     }
     // The open activation grants end with the match of the Open they were
     // recorded for, exactly as the pre-open births above do.
     if (activation_birth_point_ordinal_ == point.coordinate.ordinal) {
         activation_birth_point_ordinal_ = 0;
         activation_birth_time_ms_ = 0;
-        activation_births_.clear();
+        if (activation_births_) activation_births_->clear();
     }
 }
 
@@ -5111,8 +5192,7 @@ bool NativeExecutionConsumer::pre_open_birth_eligible(
         || point.coordinate.path_phase != NativePathPhase::Open) {
         return false;
     }
-    return std::find(pre_open_births_.begin(), pre_open_births_.end(), handle)
-        != pre_open_births_.end();
+    return handle_list_contains(pre_open_births_, handle);
 }
 
 void NativeExecutionConsumer::record_pre_open_birth(
@@ -5125,9 +5205,12 @@ void NativeExecutionConsumer::record_pre_open_birth(
     }
     pre_open_birth_point_ordinal_ = current_frame_->point.decision.coordinate.ordinal;
     pre_open_birth_time_ms_ = current_frame_->point.decision.coordinate.effective_time_ms;
-    if (std::find(pre_open_births_.begin(), pre_open_births_.end(), handle)
-        == pre_open_births_.end()) {
-        pre_open_births_.push_back(handle);
+    // One row per handle, in the order the births were recorded: the paged
+    // list's membership test is the vector's std::find, and the fold reads the
+    // rows in this same order.
+    if (!handle_list_contains(pre_open_births_, handle)) {
+        page_store(pre_open_births_, sizeof(native_order::RequestHandle),
+                   kHandleStagingRows, "native pre-open births").push_back(&handle);
     }
 }
 
@@ -5151,7 +5234,7 @@ bool NativeExecutionConsumer::begin_open_activation(BacktestEngine& engine) {
     }
     // The grants of any earlier scope end here; the point is the one the open
     // match will present, so the helper can match it exactly.
-    activation_births_.clear();
+    if (activation_births_) activation_births_->clear();
     activation_birth_point_ordinal_ = point->decision.coordinate.ordinal;
     activation_birth_time_ms_ = point->decision.coordinate.effective_time_ms;
     open_activation_scope_ = true;
@@ -5166,24 +5249,22 @@ void NativeExecutionConsumer::end_open_activation() noexcept {
 
 bool NativeExecutionConsumer::open_activation_granted(
         const native_order::RequestHandle& handle, const NativeCoordinate& at) const noexcept {
-    if (activation_births_.empty() || activation_birth_point_ordinal_ != at.ordinal
+    if (!activation_births_ || activation_births_->empty()
+        || activation_birth_point_ordinal_ != at.ordinal
         || activation_birth_time_ms_ != at.effective_time_ms
         || at.path_phase != NativePathPhase::Open) {
         return false;
     }
-    return std::find(activation_births_.begin(), activation_births_.end(), handle)
-        != activation_births_.end();
+    return handle_list_contains(activation_births_, handle);
 }
 
 void NativeExecutionConsumer::record_activation_birth(
         BacktestEngine& engine, const native_order::RequestHandle& handle) {
     if (!open_activation_scope_) return;
-    if (std::find(activation_births_.begin(), activation_births_.end(), handle)
-        != activation_births_.end()) {
-        return;
-    }
+    if (handle_list_contains(activation_births_, handle)) return;
     try {
-        activation_births_.push_back(handle);
+        page_store(activation_births_, sizeof(native_order::RequestHandle),
+                   kHandleStagingRows, "native activation births").push_back(&handle);
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render_exception(engine, e);
@@ -5192,10 +5273,7 @@ void NativeExecutionConsumer::record_activation_birth(
 }
 
 void NativeExecutionConsumer::revoke_activation_birth(const native_order::RequestHandle& handle) {
-    if (activation_births_.empty()) return;
-    activation_births_.erase(
-        std::remove(activation_births_.begin(), activation_births_.end(), handle),
-        activation_births_.end());
+    handle_list_erase(activation_births_, handle);
 }
 
 void NativeExecutionConsumer::match_segment(
@@ -5212,22 +5290,15 @@ std::vector<native_order::OpeningObservation> NativeExecutionConsumer::read_open
     return out;
 }
 
-// read_openings, written over `out` so a caller that keeps it reuses its
-// capacity. The rows are ordered by incarnation, ties in handle order: a
-// stable sort, whose result is unique. A short list is sorted by stable
-// insertion instead of std::stable_sort, whose libstdc++ spelling allocates
-// a merge buffer on every call; a long one keeps std::stable_sort.
-void NativeExecutionConsumer::read_openings_into(
-        const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
-        int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
-    out.clear();
-    out.reserve(handles.size());
-    for (const auto& handle : handles) {
-        native_order::OpeningObservation row;
-        row.queried_opening = handle;
-        row.queried_cycle = cycle;
-        out.push_back(std::move(row));
-    }
+namespace {
+
+// The rows are ordered by incarnation, ties in handle order: a stable sort,
+// whose result is unique. A short list is sorted by stable insertion instead
+// of std::stable_sort, whose libstdc++ spelling allocates a merge buffer on
+// every call; a long one keeps std::stable_sort. Both read_openings_into
+// overloads build their rows in the same order (the roster's) and share this.
+void order_openings_by_incarnation(
+        std::vector<native_order::OpeningObservation>& out) {
     const auto by_incarnation = [](const native_order::OpeningObservation& a,
                                    const native_order::OpeningObservation& b) {
         return a.queried_opening.incarnation < b.queried_opening.incarnation;
@@ -5244,6 +5315,44 @@ void NativeExecutionConsumer::read_openings_into(
     } else {
         std::stable_sort(out.begin(), out.end(), by_incarnation);
     }
+}
+
+}  // namespace
+
+// read_openings, written over `out` so a caller that keeps it reuses its
+// capacity.
+void NativeExecutionConsumer::read_openings_into(
+        const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
+        int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
+    out.clear();
+    out.reserve(handles.size());
+    for (const auto& handle : handles) {
+        native_order::OpeningObservation row;
+        row.queried_opening = handle;
+        row.queried_cycle = cycle;
+        out.push_back(std::move(row));
+    }
+    order_openings_by_incarnation(out);
+    refresh_openings(engine, out);
+}
+
+// E12: the same rows from the matcher's paged handle list. The store holds
+// one handle per row in the roster's order, so the rows enter `out` exactly as
+// the vector's did and the ordering above is the same.
+void NativeExecutionConsumer::read_openings_into(
+        const BacktestEngine& engine, const detail::PageStore& handles,
+        int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
+    out.clear();
+    out.reserve(static_cast<std::size_t>(handles.size()));
+    native_order::RequestHandle handle;
+    for (std::uint64_t index = 0, count = handles.size(); index < count; ++index) {
+        handles.read(index, &handle);
+        native_order::OpeningObservation row;
+        row.queried_opening = handle;
+        row.queried_cycle = cycle;
+        out.push_back(std::move(row));
+    }
+    order_openings_by_incarnation(out);
     refresh_openings(engine, out);
 }
 
@@ -6293,10 +6402,11 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                 verdict == NativePrecommitVerdict::AdmitWithHostMargin, &reason)) {
             return terminal(reason, nonidentity_attempt);
         }
-        // Allocate before financial effects, with geometric growth rather than
-        // recopying the complete observation/notification prefix on each fill.
-        if (retention() != NativeEventRetention::Window) reserve_next(account_log_);
-        reserve_next(applied_notifications_);
+        // E08/E11: neither the account log nor the notification queue grows a
+        // resident buffer per fill any more -- each is a paged store whose
+        // fixed staging tail was prepared when it was created -- so there is
+        // nothing to reserve before the financial effects below, and no fill
+        // count can be refused for being large.
         AppliedNotification notification;
         notification.history_index = requests_.history_end();
         notification.ordinal = applied_id.ordinal;
@@ -6352,7 +6462,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         // The account row is a readback (native_events) kept under Full and
         // Commands; its ordinal is the stream's high water under all three.
         last_account_ordinal_ = observation.ordinal;
-        if (retention() != NativeEventRetention::Window) account_log_.push_back(observation);
+        if (retention() != NativeEventRetention::Window) {
+            page_store(account_log_, sizeof(NativeAccountObservation),
+                       kAccountStagingRows, "native account log").push_back(&observation);
+        }
         engine.bar_index_ = ctx.interval_index;
         // L9: one applied fill of its risk day. Counting only — settlement is
         // not a decision point, so no limit is evaluated here.
@@ -6390,55 +6503,135 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
     return std::nullopt;
 }
 
-// A heap on precedes keeps the row that precedes every other on top.
+// E12: the same ascending run and heap, over the paged store. A heap on
+// `precedes` keeps the row that precedes every other on top; every read and
+// write below copies one row through the store, so a row is never borrowed
+// across a comparison and the storage's length is the run's, not the process's.
+std::optional<NativeExecutionConsumer::MatchCandidate>
+NativeExecutionConsumer::MatchRows::row_at(std::uint64_t index) const {
+    if (!rows_ || index >= rows_->size()) return std::nullopt;
+    MatchCandidate row;
+    rows_->read(index, &row);
+    return row;
+}
+
+void NativeExecutionConsumer::MatchRows::set_row(
+        std::uint64_t index, const MatchCandidate& row) {
+    rows_->write(index, &row);
+}
+
+std::optional<NativeExecutionConsumer::MatchCandidate>
+NativeExecutionConsumer::MatchRows::first() const {
+    // The rows still to take start at head_ while the run is ascending and at
+    // the heap's top once it is not.
+    return ascending_ ? row_at(head_) : row_at(0);
+}
+
+std::uint64_t NativeExecutionConsumer::MatchRows::resident_bytes() const noexcept {
+    return rows_ ? rows_->resident_bytes() : 0;
+}
+
 void NativeExecutionConsumer::MatchRows::sift_up() {
-    std::push_heap(rows_.begin(), rows_.end(),
-                   [](const MatchCandidate& a, const MatchCandidate& b) { return precedes(b, a); });
+    const std::uint64_t count = row_count();
+    if (count == 0) return;
+    std::uint64_t child = count - 1;
+    auto value = row_at(child);
+    while (child > 0) {
+        const std::uint64_t parent = (child - 1) / 2;
+        const auto above = row_at(parent);
+        if (!precedes(*value, *above)) break;
+        set_row(child, *above);
+        child = parent;
+    }
+    set_row(child, *value);
+}
+
+void NativeExecutionConsumer::MatchRows::sift_down(std::uint64_t index) {
+    const std::uint64_t count = row_count();
+    auto value = row_at(index);
+    for (;;) {
+        const std::uint64_t left = index * 2 + 1;
+        if (left >= count) break;
+        std::uint64_t best = left;
+        const std::uint64_t right = left + 1;
+        if (right < count && precedes(*row_at(right), *row_at(left))) best = right;
+        if (!precedes(*row_at(best), *value)) break;
+        set_row(index, *row_at(best));
+        index = best;
+    }
+    set_row(index, *value);
+}
+
+void NativeExecutionConsumer::MatchRows::make_heap() {
+    const std::uint64_t count = row_count();
+    for (std::uint64_t index = count / 2; index > 0; --index) sift_down(index - 1);
 }
 
 void NativeExecutionConsumer::MatchRows::keep(const MatchCandidate& row) {
+    static_assert(std::is_trivially_copyable_v<MatchCandidate>);
+    if (!rows_) {
+        rows_ = std::make_unique<detail::PageStore>(
+            sizeof(MatchCandidate), kMatchStagingRows, "native match rows");
+    }
     if (ascending_) {
         // The run stays ascending with the row after its last one or, once a
         // row was taken, before its front, in the slot that row left.
-        if (head_ == rows_.size() || !precedes(row, rows_.back())) {
-            rows_.push_back(row);
+        const std::uint64_t count = row_count();
+        if (head_ == count || !precedes(row, *row_at(count - 1))) {
+            rows_->push_back(&row);
             return;
         }
-        if (head_ > 0 && precedes(row, rows_[head_])) {
-            rows_[--head_] = row;
+        if (head_ > 0 && precedes(row, *row_at(head_))) {
+            --head_;
+            set_row(head_, row);
             return;
         }
         // Out of order: the rows still to take become the heap. A scan that
         // has taken none arranges it at its first take, as before.
         const bool taken = head_ > 0;
-        rows_.erase(rows_.begin(), rows_.begin() + static_cast<std::ptrdiff_t>(head_));
+        rows_->erase_prefix(head_);
         head_ = 0;
         ascending_ = false;
         if (taken) {
-            std::make_heap(rows_.begin(), rows_.end(),
-                           [](const MatchCandidate& a, const MatchCandidate& b) {
-                               return precedes(b, a);
-                           });
+            make_heap();
             heaped_ = true;
         }
     }
-    rows_.push_back(row);
+    rows_->push_back(&row);
     if (heaped_) sift_up();
 }
 
 std::size_t NativeExecutionConsumer::MatchRows::take_first() {
-    if (ascending_) return rows_[head_++].live_index;
-    const auto below = [](const MatchCandidate& a, const MatchCandidate& b) {
-        return precedes(b, a);
-    };
+    if (ascending_) {
+        const auto row = row_at(head_);
+        ++head_;
+        return row->live_index;
+    }
     if (!heaped_) {
-        std::make_heap(rows_.begin(), rows_.end(), below);
+        make_heap();
         heaped_ = true;
     }
-    const std::size_t live_index = rows_.front().live_index;
-    std::pop_heap(rows_.begin(), rows_.end(), below);
-    rows_.pop_back();
-    return live_index;
+    const auto top = row_at(0);
+    const std::uint64_t count = row_count();
+    if (count > 1) {
+        const auto last = row_at(count - 1);
+        set_row(0, *last);
+        rows_->pop_back();
+        sift_down(0);
+    } else {
+        rows_->pop_back();
+    }
+    return top->live_index;
+}
+
+// E12: a kept-handle replace's provenance rows, dropped by handle. The paged
+// form of the vector's erase-remove, with the same predicate and order.
+void NativeExecutionConsumer::erase_match_provenance(
+        const native_order::RequestHandle& handle) {
+    if (!match_provenance_ || match_provenance_->empty()) return;
+    match_provenance_->erase_if([&](const void* raw) {
+        return static_cast<const MatchProvenance*>(raw)->handle == handle;
+    });
 }
 
 void NativeExecutionConsumer::match_path(
@@ -6479,7 +6672,13 @@ void NativeExecutionConsumer::match_path(
     using Kind = MatchKind;
     using Candidate = MatchCandidate;
     using CandidateProvenance = MatchProvenance;
-    auto& candidate_provenance = match_provenance_;
+    // E12: the provenance rows are a paged list. match_path appends one row per
+    // non-Evaluate candidate, erases the rows of a request that stopped
+    // matching at each loop head, and reads back the newest row for a key --
+    // the same three operations over the same order as the vector made.
+    auto& candidate_provenance = page_store(
+        match_provenance_, sizeof(CandidateProvenance), kMatchStagingRows,
+        "native match provenance");
     candidate_provenance.clear();
 
     auto same_optional_bits = [](const std::optional<double>& left,
@@ -6501,13 +6700,16 @@ void NativeExecutionConsumer::match_path(
             && same_optional_bits(row.trigger_level, level)
             && native_matching::double_bits(row.t) == native_matching::double_bits(t);
     };
+    // Newest first, by value: a paged row is copied out, never borrowed.
     auto retained_origin = [&](const native_order::LiveRequest& live, Kind kind, bool buy,
                                const std::optional<double>& level, double t)
-            -> const CandidateProvenance* {
-        for (auto it = candidate_provenance.rbegin(); it != candidate_provenance.rend(); ++it) {
-            if (same_provenance_key(*it, live, kind, buy, level, t)) return &*it;
+            -> std::optional<CandidateProvenance> {
+        CandidateProvenance row;
+        for (std::uint64_t index = candidate_provenance.size(); index > 0; --index) {
+            candidate_provenance.read(index - 1, &row);
+            if (same_provenance_key(row, live, kind, buy, level, t)) return row;
         }
-        return nullptr;
+        return std::nullopt;
     };
     auto level_for = [&](const native_order::LiveRequest& live, Kind kind,
                          bool buy) -> std::optional<double> {
@@ -6549,10 +6751,9 @@ void NativeExecutionConsumer::match_path(
         return std::nullopt;
     };
     auto erase_provenance_for = [&](const native_order::RequestHandle& handle) {
-        candidate_provenance.erase(
-            std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
-                [&](const CandidateProvenance& row) { return row.handle == handle; }),
-            candidate_provenance.end());
+        candidate_provenance.erase_if([&](const void* raw) {
+            return static_cast<const CandidateProvenance*>(raw)->handle == handle;
+        });
     };
     auto cause_floor = [&](const native_order::LiveRequest& live) {
         double t_min = t_cursor;
@@ -6722,27 +6923,39 @@ void NativeExecutionConsumer::match_path(
             && same_optional_bits(row.trigger_level, level_for(*live, row.kind, buy));
     };
 
-    // The (priority, kind) keys passed over at the current cursor: a set,
-    // kept as a sorted run in the consumer's scratch. A request's priority
-    // names it once (a re-price that keeps its handle takes a new one, as a
-    // replace successor takes a new incarnation).
-    auto& skipped = match_skipped_;
+    // The (priority, kind) keys passed over at the current cursor: a set. A
+    // request's priority names it once (a re-price that keeps its handle takes
+    // a new one, as a replace successor takes a new incarnation). E12: the set
+    // is a paged list, one row per skipped key; membership and insertion are
+    // the same set operations as the sorted vector's -- the list's order is
+    // never read, so it need not be sorted.
+    auto& skipped = page_store(match_skipped_,
+                               sizeof(std::pair<uint64_t, std::uint8_t>),
+                               kMatchStagingRows, "native match skips");
     skipped.clear();
     double skip_t = t_cursor;
     auto skip_key = [](uint64_t priority, Kind kind) {
         return std::pair<uint64_t, std::uint8_t>{priority, static_cast<std::uint8_t>(kind)};
     };
     auto is_skipped = [&](const std::pair<uint64_t, std::uint8_t>& key) {
-        return std::binary_search(skipped.begin(), skipped.end(), key);
+        std::pair<uint64_t, std::uint8_t> row;
+        for (std::uint64_t index = 0, count = skipped.size(); index < count; ++index) {
+            skipped.read(index, &row);
+            if (row == key) return true;
+        }
+        return false;
     };
     auto skip = [&](const std::pair<uint64_t, std::uint8_t>& key) {
-        const auto at = std::lower_bound(skipped.begin(), skipped.end(), key);
-        if (at == skipped.end() || *at != key) skipped.insert(at, key);
+        if (is_skipped(key)) return;
+        skipped.push_back(&key);
     };
     // Whether a provenance row names this request. Without one, every way the
     // full evaluation passes the request over leaves the provenance as it was.
     auto has_provenance = [&](const native_order::RequestHandle& handle) {
-        for (const auto& row : candidate_provenance) {
+        CandidateProvenance row;
+        for (std::uint64_t index = 0, count = candidate_provenance.size();
+             index < count; ++index) {
+            candidate_provenance.read(index, &row);
             if (row.handle == handle) return true;
         }
         return false;
@@ -6797,6 +7010,11 @@ void NativeExecutionConsumer::match_path(
     // live requests on; below that a scan is as cheap as keeping them.
     constexpr std::size_t kKeepRowsFrom = 4;
     auto& rows = match_rows_;
+    // The cohort lot handles one target read collects (E12): a paged list, one
+    // row per roster opening, read back by the next target build only.
+    auto& target_handles = page_store(match_target_handles_,
+                                      sizeof(native_order::RequestHandle),
+                                      kHandleStagingRows, "native match target handles");
     rows.clear();
     bool rescan_winner_only = false;
     // The request a row was scanned from. The book does not change between a
@@ -6815,13 +7033,11 @@ void NativeExecutionConsumer::match_path(
         const bool winner_only = rescan_winner_only;
         rescan_winner_only = false;
         if (!winner_only) {
-            candidate_provenance.erase(
-                std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
-                    [&](const CandidateProvenance& row) {
-                        return row.point_ordinal != P || row.t < t_cursor
-                            || !provenance_still_matches(row);
-                    }),
-                candidate_provenance.end());
+            candidate_provenance.erase_if([&](const void* raw) {
+                const auto& row = *static_cast<const CandidateProvenance*>(raw);
+                return row.point_ordinal != P || row.t < t_cursor
+                    || !provenance_still_matches(row);
+            });
         }
         if (skip_t != t_cursor) {
             skipped.clear();
@@ -6833,9 +7049,12 @@ void NativeExecutionConsumer::match_path(
         eval.existing_matching_bit = point.matching;
         std::optional<Candidate> winner;
         // Candidate selection makes no request-core mutation; only the
-        // selected winner can replace or retire a later request afterwards.
-        // Snapshot pointers through that selection pass. The ordinary route
-        // has only the two bracket siblings, so keep it on the stack.
+        // selected winner can replace or retire a later request afterwards,
+        // and that happens below, after the scan. E12: there is therefore no
+        // pointer snapshot to keep -- a Q-wide array of pointers was itself a
+        // per-point allocation -- and the scan indexes the live table it reads.
+        // The ordinary route has only the two bracket siblings, so keep it on
+        // the stack.
         std::array<const native_order::LiveRequest*, 8> inline_snapshot{};
         const auto& live_requests = requests_.live();
         const native_order::LiveRequest* const* snapshot = inline_snapshot.data();
@@ -6851,17 +7070,18 @@ void NativeExecutionConsumer::match_path(
             for (std::size_t i = 0; i < snapshot_size; ++i)
                 inline_snapshot[i] = &live_requests[i];
         } else {
-            auto& overflow_snapshot = match_snapshot_;
-            overflow_snapshot.clear();
-            overflow_snapshot.reserve(snapshot_size);
-            for (const auto& live : live_requests) overflow_snapshot.push_back(&live);
-            snapshot = overflow_snapshot.data();
+            // Straight off the book: no mutation above can reallocate it, so
+            // indexing it is the same read the snapshot made.
+            snapshot = nullptr;
         }
+        const auto snapshot_at = [&](std::size_t index) -> const native_order::LiveRequest* {
+            return snapshot != nullptr ? snapshot[index] : &live_requests[index];
+        };
         const bool keep_rows = winner_only
             || (match_row_reuse_ && live_requests.size() >= kKeepRowsFrom);
         if (!winner_only) rows.clear();
         for (std::size_t snapshot_index = 0; snapshot_index < snapshot_size; ++snapshot_index) {
-            const auto* live = snapshot[snapshot_index];
+            const auto* live = snapshot_at(snapshot_index);
             if (!live) continue;
             const auto& handle = live->handle();
             const bool cohort_close =
@@ -6874,7 +7094,7 @@ void NativeExecutionConsumer::match_path(
                 // rebuild at the selected mutation boundary below.
                 candidate_target = cached_cohort_target(engine, *live);
                 if (!candidate_target) {
-                    read_target_into(engine, live, match_target_, match_target_handles_);
+                    read_target_into(engine, live, match_target_, target_handles);
                     candidate_target = &match_target_;
                 }
                 cohort_side = side_from_target(*candidate_target);
@@ -7006,7 +7226,7 @@ void NativeExecutionConsumer::match_path(
                     : request_is_buy(engine, *live);
                 if (!row.trigger_level) row.trigger_level = level_for(*live, row.kind, buy);
                 if (!row.at_level) {
-                    if (const auto* retained = retained_origin(
+                    if (const auto retained = retained_origin(
                             *live, row.kind, buy, row.trigger_level, row.t)) {
                         row.at_level = retained->at_level;
                         row.trigger_level = retained->trigger_level;
@@ -7022,7 +7242,7 @@ void NativeExecutionConsumer::match_path(
                 provenance.t = row.t;
                 provenance.raw_price = row.price;
                 provenance.at_level = row.at_level;
-                candidate_provenance.push_back(std::move(provenance));
+                candidate_provenance.push_back(&provenance);
                 if (row.at_level && row.trigger_level) {
                     row.shared_cursor_collision = native_matching::double_bits(row.price)
                         != native_matching::double_bits(*row.trigger_level);
@@ -7035,7 +7255,7 @@ void NativeExecutionConsumer::match_path(
         if (winner_only) {
             // Every other request's row is the one the last scan built.
             winner.reset();
-            if (const auto* first = rows.first()) winner = *first;
+            if (const auto first = rows.first()) winner = *first;
         }
         if (!winner) break;
         const bool cursor_unmoved =
@@ -7086,7 +7306,7 @@ void NativeExecutionConsumer::match_path(
                         continue;
                     }
                 } else {
-                    read_target_into(engine, live, match_target_, match_target_handles_);
+                    read_target_into(engine, live, match_target_, target_handles);
                     // Handed the timeline: an unbound close carrying a
                     // binding the book still has binds here, taking an
                     // ordinal (ReplaceOptions::keep_binding, R5 lane V19-D).
@@ -7106,7 +7326,7 @@ void NativeExecutionConsumer::match_path(
             CoreStep step;
             try {
                 if (!winner_target) {
-                    read_target_into(engine, live, match_target_, match_target_handles_);
+                    read_target_into(engine, live, match_target_, target_handles);
                 }
                 const native_order::TargetObservation& observed =
                     winner_target ? *winner_target : match_target_;
@@ -7894,8 +8114,18 @@ void NativeExecutionConsumer::invoke_sub_bar_callback(
     finish_callback(engine, ordinal);
 }
 
+std::uint64_t NativeExecutionConsumer::applied_notification_count() const noexcept {
+    return applied_notifications_ ? applied_notifications_->size() : 0;
+}
+
 void NativeExecutionConsumer::enqueue_applied_notification(AppliedNotification notification) {
-    applied_notifications_.push_back(std::move(notification));
+    static_assert(std::is_trivially_copyable_v<AppliedNotification>);
+    // E11: a settlement burst decides the queue's length, so it spills rather
+    // than growing the consumer; the row is a value and the fold reads it back
+    // in this same order.
+    page_store(applied_notifications_, sizeof(AppliedNotification),
+               kNotificationStagingRows, "native applied notifications")
+        .push_back(&notification);
 }
 
 void NativeExecutionConsumer::finish_callback(BacktestEngine& engine, uint64_t ordinal) {
@@ -7984,8 +8214,12 @@ void NativeExecutionConsumer::invoke_applied_callback(
 void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine) {
     if (in_callback_ || consuming_request_ || draining_notifications_ || failed()) return;
     draining_notifications_ = true;
-    while (notification_head_ < applied_notifications_.size() && !failed()) {
-        const auto notification = applied_notifications_[notification_head_++];
+    auto& queued = page_store(applied_notifications_, sizeof(AppliedNotification),
+                              kNotificationStagingRows, "native applied notifications");
+    // The size is re-read every turn: a callback may enqueue another fill.
+    while (notification_head_ < queued.size() && !failed()) {
+        AppliedNotification notification;
+        queued.read(notification_head_++, &notification);
         raise_floor(notification.point.decision.coordinate.effective_time_ms);
         invoke_applied_callback(engine, notification);
         if (failed() || !recalculates_on_fills()) continue;
@@ -8003,9 +8237,10 @@ void NativeExecutionConsumer::drain_queued_notifications(BacktestEngine& engine)
     }
     draining_notifications_ = false;
     if (!failed()) {
-        const bool drained = !applied_notifications_.empty();
-        const auto last = drained ? applied_notifications_.back() : AppliedNotification{};
-        applied_notifications_.clear();
+        const bool drained = !queued.empty();
+        AppliedNotification last;
+        if (drained) queued.back(&last);
+        queued.clear();
         notification_head_ = 0;
         // L4: every applied fill re-arms the margin model against the book it
         // left behind. Inert for a run that declares no margin model. The
@@ -10367,28 +10602,19 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
             consumer.subscription_input_n_ = 0;
         }
     } view(*this, bars, n);
-    // A batch knows its length, so the two logs it appends to -- the driver
-    // log and the command history -- are sized for it instead of regrown by
-    // doubling, where every regrowth moves the whole log into a freshly
-    // faulted block and unmaps the old one. Capacity is not observable: no
-    // hash, readback or event reads it. A reservation the allocator refuses
-    // leaves the log growing as it always did.
+    // A batch knows its length, so the command history it appends to is sized
+    // for it instead of regrown by doubling, where every regrowth moves the
+    // whole log into a freshly faulted block and unmaps the old one. Capacity
+    // is not observable: no hash, readback or event reads it. A reservation
+    // the allocator refuses leaves the log growing as it always did.
     //
-    // The driver log is reserved exactly, up front, where its length is a
-    // fact of the spec: one script bar per input (a Passthrough pairing) and
-    // a fixed number of points per script bar -- the four modeled waypoints
-    // or a synthesized path's samples, and the after-calculation close --
-    // with a small allowance for current executions. Any other driver log (a
-    // lower feed, volume-weighted samples, an aggregated script timeframe)
-    // and every command history, whose length the host's commands decide, is
-    // sized at doubling checkpoints from the rate this batch has shown so
-    // far: to its projected end and an eighth, but never beyond
-    // kPresizeFactor times what the log already holds, so a burst early in a
-    // run cannot reserve address space in proportion to the rest of the
-    // batch.
+    // E07/E10: the driver log is not sized here any more. It is a paged store:
+    // its resident part is the fixed staging tail prepared with the store, and
+    // its points live in its file whatever the batch's length. A batch's point
+    // count is therefore neither a reservation nor a capacity claim, and no
+    // projected rate can refuse one.
     constexpr std::size_t kPresizeFactor = 16;
     const std::size_t total = n > 0 ? static_cast<std::size_t>(n) : 0;
-    const std::size_t driver_base = driver_log_.size();
     const std::size_t history_base = requests_.history().size();
     const auto hint = [](auto&& reserve) {
         try {
@@ -10396,25 +10622,8 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         } catch (const std::bad_alloc&) {
         }
     };
-    if (const auto* spec = spec_ptr(); spec && total > 0
-        && pairing_.pairing == native_calendar::TimeframePairing::Passthrough) {
-        std::size_t per_bar = 0;
-        if (spec->intrabar.is_none()) {
-            per_bar = 4;
-        } else if (const auto* synthesized = spec->intrabar.synthesized_path();
-                   synthesized && !synthesized->volume_weighted) {
-            per_bar = static_cast<std::size_t>(synthesized->samples);
-        }
-        if (per_bar != 0) {
-            if (spec->close_execution == NativeCloseExecution::AfterCalculation) ++per_bar;
-            const std::size_t points = per_bar * total;
-            hint([&] {
-                reserve_driver_log(std::min(driver_base + points + points / 64 + 16,
-                                            driver_log_.max_size()));
-            });
-        }
-    }
-    // The capacity to give a log after `consumed` inputs, or 0 to leave it.
+    // The capacity to give the command history after `consumed` inputs, or 0
+    // to leave it.
     const auto presize = [total](std::size_t base, std::size_t size, std::size_t capacity,
                                  std::size_t consumed, std::size_t max_size) -> std::size_t {
         if (size <= base || size > max_size / (2 * kPresizeFactor)) return 0;
@@ -10430,17 +10639,12 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
         return size + grown > capacity ? bound : 0;
     };
     std::size_t checkpoint = 64;
-    // At each doubling checkpoint of the inputs consumed, size both logs for
-    // the rest of the batch at the rate it has shown so far.
+    // At each doubling checkpoint of the inputs consumed, size the command
+    // history for the rest of the batch at the rate it has shown so far.
     const auto presize_logs = [&](std::size_t consumed_inputs) {
         if (consumed_inputs != checkpoint || checkpoint >= total) return;
         const std::size_t consumed = checkpoint;
         checkpoint *= 2;
-        if (const std::size_t points = presize(driver_base, driver_log_.size(),
-                                               driver_log_.capacity(), consumed,
-                                               driver_log_.max_size())) {
-            hint([&] { reserve_driver_log(points); });
-        }
         // v19-B: under Window the journal is a window, whose length says
         // nothing about the batch's; only a retained journal is presized.
         if (retention() == NativeEventRetention::Window) return;
@@ -11460,12 +11664,8 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     const bool kept_handle = predicted_status == native_order::ReplaceStatus::Replaced
         && options.keep_handle;
     if (kept_handle) {
-        match_provenance_.erase(
-            std::remove_if(match_provenance_.begin(), match_provenance_.end(),
-                           [&](const MatchProvenance& row) { return row.handle == target; }),
-            match_provenance_.end());
-        pre_open_births_.erase(std::remove(pre_open_births_.begin(), pre_open_births_.end(), target),
-                               pre_open_births_.end());
+        erase_match_provenance(target);
+        handle_list_erase(pre_open_births_, target);
     }
     // A replace is a new definition and a renewed birth, so a replace that
     // lands outside the open activation scope ends the grant its old handle
@@ -11751,82 +11951,176 @@ std::size_t NativeExecutionConsumer::first_command_after(uint64_t after_ordinal)
     return static_cast<std::size_t>(std::distance(history.begin(), it));
 }
 
-std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t after_ordinal) const {
+// E07/E08/E09: the three cursors the merged read walks. Each source is already
+// in (ordinal, kind) order, so a read is a three-way merge, not a materialised
+// slice per source followed by a sort: the driver and account rows live in
+// paged stores and are copied one at a time.
+
+std::uint64_t NativeExecutionConsumer::driver_row_count() const noexcept {
+    return driver_log_ ? driver_log_->size() : 0;
+}
+
+std::uint64_t NativeExecutionConsumer::account_row_count() const noexcept {
+    return account_log_ ? account_log_->size() : 0;
+}
+
+// The first retained driver point whose ordinal is past the cursor. Both logs
+// are in ordinal order, so a bisection over the store is the upper_bound the
+// vector answered.
+std::uint64_t NativeExecutionConsumer::first_driver_after(uint64_t after_ordinal) const {
+    if (!driver_log_ || driver_log_->empty()) return 0;
+    std::uint64_t first = 0;
+    std::uint64_t last = driver_log_->size();
+    NativeDriverPoint point;
+    while (first < last) {
+        const std::uint64_t middle = first + (last - first) / 2;
+        driver_log_->read(middle, &point);
+        if (point.coordinate.ordinal <= after_ordinal) {
+            first = middle + 1;
+        } else {
+            last = middle;
+        }
+    }
+    return first;
+}
+
+std::uint64_t NativeExecutionConsumer::first_account_after(uint64_t after_ordinal) const {
+    if (!account_log_ || account_log_->empty()) return 0;
+    std::uint64_t first = 0;
+    std::uint64_t last = account_log_->size();
+    NativeAccountObservation observation;
+    while (first < last) {
+        const std::uint64_t middle = first + (last - first) / 2;
+        account_log_->read(middle, &observation);
+        if (observation.ordinal <= after_ordinal) {
+            first = middle + 1;
+        } else {
+            last = middle;
+        }
+    }
+    return first;
+}
+
+bool NativeExecutionConsumer::next_merged_event(
+        std::size_t& command, std::size_t command_end,
+        std::uint64_t& driver, std::uint64_t driver_end,
+        std::uint64_t& account, std::uint64_t account_end,
+        NativeMarketEvent& row) const {
     const auto& history = requests_.history();
-    const auto command_begin = history.begin()
-        + static_cast<std::ptrdiff_t>(first_command_after(after_ordinal));
-
-    auto driver_begin = driver_log_.end();
-    if (!driver_log_.empty() && driver_log_.back().coordinate.ordinal > after_ordinal) {
-        auto it = driver_log_.end();
-        while (it != driver_log_.begin()) {
-            auto prev = std::prev(it);
-            if (prev->coordinate.ordinal <= after_ordinal) {
-                driver_begin = it;
-                break;
-            }
-            it = prev;
-            if (std::distance(it, driver_log_.end()) > 32) {
-                driver_begin = std::upper_bound(driver_log_.begin(), it, after_ordinal,
-                    [](uint64_t ordinal, const NativeDriverPoint& point) {
-                        return ordinal < point.coordinate.ordinal;
-                    });
-                break;
-            }
+    // The ends were captured when the read began: appends a visitor makes are
+    // not part of the stream it is reading.
+    const bool has_command = command < std::min(command_end, history.size());
+    const bool has_driver = driver_log_ && driver < std::min(driver_end, driver_log_->size());
+    const bool has_account = account_log_ && account < std::min(account_end, account_log_->size());
+    if (!has_command && !has_driver && !has_account) return false;
+    std::uint64_t command_ordinal_value = 0;
+    if (has_command) command_ordinal_value = command_ordinal(history[command]);
+    NativeDriverPoint point;
+    std::uint64_t driver_ordinal = 0;
+    if (has_driver) {
+        driver_log_->read(driver, &point);
+        driver_ordinal = point.coordinate.ordinal;
+    }
+    NativeAccountObservation observation;
+    std::uint64_t account_ordinal = 0;
+    if (has_account) {
+        account_log_->read(account, &observation);
+        account_ordinal = observation.ordinal;
+    }
+    // The smallest (ordinal, kind) of the three; the kind values are
+    // NativeEventKind's, so Command < Driver < Account breaks a tie exactly as
+    // events_after's comparator did.
+    constexpr int kCommand = static_cast<int>(NativeEventKind::Command);
+    constexpr int kDriver = static_cast<int>(NativeEventKind::Driver);
+    constexpr int kAccount = static_cast<int>(NativeEventKind::Account);
+    int pick = -1;
+    std::uint64_t pick_ordinal = 0;
+    const auto consider = [&](int kind, std::uint64_t ordinal) {
+        if (pick < 0 || ordinal < pick_ordinal
+            || (ordinal == pick_ordinal && kind < pick)) {
+            pick = kind;
+            pick_ordinal = ordinal;
         }
-        if (it == driver_log_.begin()) driver_begin = driver_log_.begin();
-    }
-
-    auto account_begin = account_log_.end();
-    if (!account_log_.empty() && account_log_.back().ordinal > after_ordinal) {
-        auto it = account_log_.end();
-        while (it != account_log_.begin()) {
-            auto prev = std::prev(it);
-            if (prev->ordinal <= after_ordinal) {
-                account_begin = it;
-                break;
-            }
-            it = prev;
-            if (std::distance(it, account_log_.end()) > 32) {
-                account_begin = std::upper_bound(account_log_.begin(), it, after_ordinal,
-                    [](uint64_t ordinal, const NativeAccountObservation& account) {
-                        return ordinal < account.ordinal;
-                    });
-                break;
-            }
-        }
-        if (it == account_log_.begin()) account_begin = account_log_.begin();
-    }
-
-    const std::size_t command_count = static_cast<std::size_t>(std::distance(command_begin, history.end()));
-    const std::size_t driver_count = static_cast<std::size_t>(std::distance(driver_begin, driver_log_.end()));
-    const std::size_t account_count = static_cast<std::size_t>(std::distance(account_begin, account_log_.end()));
-
-    std::vector<NativeMarketEvent> out;
-    out.reserve(command_count + driver_count + account_count);
-
-    for (auto it = command_begin; it != history.end(); ++it) {
-        const auto& event = *it;
-        const uint64_t ordinal = command_ordinal(event);
-        out.emplace_back(NativeMarketEvent{NativeEventKind::Command, ordinal, event, std::nullopt, std::nullopt});
-    }
-    for (auto it = driver_begin; it != driver_log_.end(); ++it) {
-        const auto& point = *it;
-        out.emplace_back(NativeMarketEvent{NativeEventKind::Driver, point.coordinate.ordinal, std::nullopt, point, std::nullopt});
-    }
-    for (auto it = account_begin; it != account_log_.end(); ++it) {
-        const auto& account = *it;
-        out.emplace_back(NativeMarketEvent{NativeEventKind::Account, account.ordinal, std::nullopt, std::nullopt, account});
-    }
-    const auto cmp = [](const NativeMarketEvent& a, const NativeMarketEvent& b) {
-        if (a.ordinal != b.ordinal) return a.ordinal < b.ordinal;
-        return static_cast<std::uint8_t>(a.kind) < static_cast<std::uint8_t>(b.kind);
     };
-    if (account_count > 0) {
-        std::sort(out.begin(), out.end(), cmp);
-    } else if (driver_count > 0 && command_count > 0) {
-        std::inplace_merge(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(command_count), out.end(), cmp);
+    if (has_command) consider(kCommand, command_ordinal_value);
+    if (has_driver) consider(kDriver, driver_ordinal);
+    if (has_account) consider(kAccount, account_ordinal);
+    if (pick == kCommand) {
+        row.kind = NativeEventKind::Command;
+        row.ordinal = command_ordinal_value;
+        row.command = history[command];
+        row.driver.reset();
+        row.account.reset();
+        ++command;
+    } else if (pick == kDriver) {
+        row.kind = NativeEventKind::Driver;
+        row.ordinal = driver_ordinal;
+        row.command.reset();
+        row.driver = point;
+        row.account.reset();
+        ++driver;
+    } else {
+        row.kind = NativeEventKind::Account;
+        row.ordinal = account_ordinal;
+        row.command.reset();
+        row.driver.reset();
+        row.account = observation;
+        ++account;
     }
+    return true;
+}
+
+std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(
+        uint64_t after_ordinal) const {
+    // The compatibility path's own allocation, sized by what the three sources
+    // hold past the cursor: every count is O(1).
+    const std::size_t commands = requests_.history().size() - first_command_after(after_ordinal);
+    const std::uint64_t drivers = driver_row_count() - first_driver_after(after_ordinal);
+    const std::uint64_t accounts = account_row_count() - first_account_after(after_ordinal);
+    std::vector<NativeMarketEvent> out;
+    out.reserve(commands + static_cast<std::size_t>(drivers)
+                + static_cast<std::size_t>(accounts));
+    visit_events_after(after_ordinal, [&](const NativeMarketEvent& row) {
+        out.push_back(row);
+        return false;
+    });
+    return out;
+}
+
+NativeExecutionConsumer::ResidentInventory
+NativeExecutionConsumer::resident_inventory() const noexcept {
+    ResidentInventory out;
+    out.driver_rows = driver_row_count();
+    out.account_rows = account_row_count();
+    if (applied_notifications_) {
+        const std::uint64_t queued = applied_notifications_->size();
+        const std::uint64_t head = std::min<std::uint64_t>(
+            static_cast<std::uint64_t>(notification_head_), queued);
+        // The rows a callback still owes, not the ones already delivered.
+        out.queued_notifications = queued - head;
+    }
+    out.pre_open_births = pre_open_births_ ? pre_open_births_->size() : 0;
+    out.activation_births = activation_births_ ? activation_births_->size() : 0;
+    std::uint64_t bytes = 0;
+    std::uint64_t spilled = 0;
+    const auto add = [&bytes, &spilled](const std::unique_ptr<detail::PageStore>& store) {
+        if (!store) return;
+        bytes += store->resident_bytes();
+        spilled += store->spilled_rows();
+    };
+    add(driver_log_);
+    add(account_log_);
+    add(pre_open_births_);
+    add(activation_births_);
+    add(applied_notifications_);
+    add(match_provenance_);
+    add(match_skipped_);
+    add(match_trail_handles_);
+    add(match_target_handles_);
+    add(read_target_handles_);
+    bytes += match_rows_.resident_bytes();
+    out.spilled_rows = spilled;
+    out.inline_bytes = bytes;
     return out;
 }
 
@@ -12007,7 +12301,6 @@ void NativeExecutionConsumer::verify_closed_rows(const BacktestEngine& engine) c
 // After every roster command: fold its receipt once, then retire its row
 // under Window retention. Full/Commands keep their explicit history readback.
 void NativeExecutionConsumer::note_cohort_receipts() noexcept {
-    const auto& receipts = requests_.cohort_receipts();
     const std::size_t base = requests_.cohort_receipt_base();
     const std::size_t total = requests_.cohort_receipt_count();
 #ifndef NDEBUG
@@ -12017,7 +12310,18 @@ void NativeExecutionConsumer::note_cohort_receipts() noexcept {
     f.run_base = requests_.identity().run_number;
     f.h = cohort_receipts_.h;
     for (std::size_t index = cohort_receipts_.count; index < total; ++index) {
-        hash_cohort_receipt(f, receipts[index - base]);
+        // E06: the fold follows each commit, so the rows it has not folded are
+        // the newest ones -- the core's fixed resident staging of the window --
+        // and it takes no store read on the kernel's path. A reader that fell
+        // behind that staging reads the row back instead; the row is the same
+        // one, and a store fault terminates here exactly as the other scratch
+        // reads inside a noexcept fold do.
+        native_order::CohortReceipt receipt;
+        if (!requests_.cohort_receipt_resident(index - base, receipt)
+            && !requests_.cohort_receipt_at(index - base, receipt)) {
+            std::abort();
+        }
+        hash_cohort_receipt(f, receipt);
     }
     cohort_receipts_.h = f.h;
     cohort_receipts_.count = total;

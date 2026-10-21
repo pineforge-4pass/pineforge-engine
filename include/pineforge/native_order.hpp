@@ -23,7 +23,7 @@
 #include <variant>
 #include <vector>
 
-namespace pineforge::detail { class ScratchSlab; }
+namespace pineforge::detail { class ScratchSlab; class PageStore; }
 
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
@@ -1735,18 +1735,42 @@ public:
     /// whose members have been removed. Walking allocates nothing and does
     /// no I/O; empty rows are synthesized from the dense handle sequence.
     CohortView cohorts() const noexcept;
-    /// The retained cohort-receipt window, in command order. Its absolute
-    /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
-    /// standalone core retains all rows until its reader retires them; the
-    /// Window consumer retires each row after folding it into its digest.
-    const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
-        return cohort_receipts_;
-    }
+    /// E06: the retained cohort-receipt window, in command order, materialised.
+    /// Its absolute positions are [cohort_receipt_base(),
+    /// cohort_receipt_count()). The storage is the core's own: a fixed staging
+    /// sequence of the newest rows and a paged store (detail::PageStore) for
+    /// the older ones, so a Full run's window costs the core no row-count
+    /// growth. This accessor is the compatibility readback -- it allocates the
+    /// whole window -- and it answers exactly the rows (and order) the vector
+    /// it replaced did; cohort_receipt_at reads one row and
+    /// cohort_receipt_resident one of the resident rows, both without it.
+    class CohortReceiptWindow {
+    public:
+        CohortReceiptWindow() = default;
+        std::size_t size() const noexcept { return rows_.size(); }
+        bool empty() const noexcept { return rows_.empty(); }
+        std::size_t capacity() const noexcept { return rows_.capacity(); }
+        const CohortReceipt& operator[](std::size_t index) const { return rows_[index]; }
+        const CohortReceipt& front() const { return rows_.front(); }
+        const CohortReceipt& back() const { return rows_.back(); }
+        std::vector<CohortReceipt>::const_iterator begin() const noexcept { return rows_.begin(); }
+        std::vector<CohortReceipt>::const_iterator end() const noexcept { return rows_.end(); }
+
+    private:
+        friend class WorkingRequestCore;
+        std::vector<CohortReceipt> rows_;
+    };
+    CohortReceiptWindow cohort_receipts() const;
     std::size_t cohort_receipt_base() const noexcept { return cohort_receipts_base_; }
     /// Every cohort receipt this run committed, retained or not.
-    std::size_t cohort_receipt_count() const noexcept {
-        return cohort_receipts_base_ + cohort_receipts_.size();
-    }
+    std::size_t cohort_receipt_count() const noexcept;
+    /// One retained row by its position relative to cohort_receipt_base().
+    /// False when `position` is past the window. May read the paged store.
+    bool cohort_receipt_at(std::size_t position, CohortReceipt& out) const;
+    /// One retained row, only while it is in the fixed resident staging -- the
+    /// rows the core has most recently appended. A viewer that folds each row
+    /// as it commits (the consumer) finds every row it has not folded here.
+    bool cohort_receipt_resident(std::size_t position, CohortReceipt& out) const noexcept;
     /// Drop the prefix strictly below the absolute position through, clamped
     /// to the window. The reader must have folded these rows first. Does not
     /// change rosters, command counters, prepared-command validity or totals.
@@ -2341,10 +2365,32 @@ private:
     // its member capacity as well. next_cohort_handle_ records the complete
     // dense sequence of allocated handles, including every empty roster.
     std::map<std::uint64_t, CohortRoster> cohorts_;
+    // E06: the newest receipts, the fixed resident staging of the retained
+    // window (at most kCohortReceiptStaging rows; older rows are spilled).
     std::vector<CohortReceipt> cohort_receipts_;
+    // The rows that left the staging, oldest first. Created at the first spill
+    // and never sized by the run: the window's length is the file's. A
+    // shared_ptr, like successor_roots_, so this public header keeps a
+    // forward-declared private type (the page store is defined in src/).
+    std::shared_ptr<detail::PageStore> cohort_receipt_spill_;
     // Storage cursor only: the consumer hashes the lifetime count and every
     // receipt, independently of how many of their rows have been retired.
     std::size_t cohort_receipts_base_ = 0;
+    // The resident row count of the cohort-receipt window: a prepared, fixed
+    // size, not a function of commands, bars or events.
+    static constexpr std::size_t kCohortReceiptStaging = 256;
+    /// Move the oldest staged rows into the paged store until the staging is
+    /// within its bound, so a push never grows the core's rows.
+    void spill_cohort_receipts();
+
+public:
+    /// The same bound, readable by a witness that checks the window's resident
+    /// part stays within it however many receipts the run commits.
+    static constexpr std::size_t cohort_receipt_staging() noexcept {
+        return kCohortReceiptStaging;
+    }
+
+private:
 };
 
 // A non-owning read view. Iteration preserves CohortRoster references for

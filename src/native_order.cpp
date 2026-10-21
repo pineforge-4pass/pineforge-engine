@@ -1,5 +1,6 @@
 #include <pineforge/native_order.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include "native_page_store.hpp"
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
@@ -955,6 +956,7 @@ void WorkingRequestCore::clear_unbound() noexcept {
     next_cohort_handle_ = 1;
     cohorts_.clear();
     cohort_receipts_.clear();
+    cohort_receipt_spill_.reset();
     cohort_receipts_base_ = 0;
     epoch_ = 0;
     if (instance_) instance_->expired = true;
@@ -1260,6 +1262,7 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
     }
     cohort_receipts_.push_back(std::move(receipt));
+    spill_cohort_receipts();
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
 }
 
@@ -1285,6 +1288,7 @@ void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin
         receipt.status = CohortReceiptStatus::UnknownOrigin;
     }
     cohort_receipts_.push_back(std::move(receipt));
+    spill_cohort_receipts();
     if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
 }
 
@@ -1299,13 +1303,83 @@ bool WorkingRequestCore::cohort_contains(
     return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
 }
 
+// E06: the window is a fixed staging prefix plus a paged store. The two parts
+// are one sequence in command order: the store holds the oldest retained rows,
+// the vector the newest, so a reader walks [base, base + store rows) then the
+// vector. Spilling keeps the staging within its bound: the oldest staged rows
+// are appended to the store, which never grows the core's resident rows.
+void WorkingRequestCore::spill_cohort_receipts() {
+    if (cohort_receipts_.size() <= kCohortReceiptStaging) return;
+    if (!cohort_receipt_spill_) {
+        cohort_receipt_spill_ = std::make_shared<detail::PageStore>(
+            sizeof(CohortReceipt), kCohortReceiptStaging, "native cohort receipts");
+    }
+    std::size_t move = cohort_receipts_.size() - kCohortReceiptStaging;
+    for (std::size_t index = 0; index < move; ++index) {
+        cohort_receipt_spill_->push_back(&cohort_receipts_[index]);
+    }
+    cohort_receipts_.erase(cohort_receipts_.begin(),
+                           cohort_receipts_.begin() + static_cast<std::ptrdiff_t>(move));
+}
+
+std::size_t WorkingRequestCore::cohort_receipt_count() const noexcept {
+    // Staged rows follow the spilled ones; the base counts what was retired.
+    const std::size_t spilled = cohort_receipt_spill_ ? cohort_receipt_spill_->size() : 0;
+    return cohort_receipts_base_ + spilled + cohort_receipts_.size();
+}
+
+bool WorkingRequestCore::cohort_receipt_at(std::size_t position,
+                                           CohortReceipt& out) const {
+    const std::size_t spilled = cohort_receipt_spill_ ? cohort_receipt_spill_->size() : 0;
+    if (position < spilled) {
+        cohort_receipt_spill_->read(position, &out);
+        return true;
+    }
+    if (position - spilled >= cohort_receipts_.size()) return false;
+    out = cohort_receipts_[position - spilled];
+    return true;
+}
+
+bool WorkingRequestCore::cohort_receipt_resident(std::size_t position,
+                                                 CohortReceipt& out) const noexcept {
+    const std::size_t spilled = cohort_receipt_spill_ ? cohort_receipt_spill_->size() : 0;
+    if (position < spilled) return false;
+    const std::size_t offset = position - spilled;
+    if (offset >= cohort_receipts_.size()) return false;
+    out = cohort_receipts_[offset];
+    return true;
+}
+
+WorkingRequestCore::CohortReceiptWindow WorkingRequestCore::cohort_receipts() const {
+    CohortReceiptWindow window;
+    const std::size_t count = cohort_receipt_count() - cohort_receipts_base_;
+    window.rows_.reserve(count);
+    for (std::size_t position = 0; position < count; ++position) {
+        CohortReceipt row;
+        if (!cohort_receipt_at(position, row)) break;
+        window.rows_.push_back(row);
+    }
+    return window;
+}
+
 std::size_t WorkingRequestCore::retire_cohort_receipts(std::size_t through) noexcept {
     if (through <= cohort_receipts_base_) return 0;
-    const std::size_t count = std::min(through - cohort_receipts_base_, cohort_receipts_.size());
-    cohort_receipts_.erase(cohort_receipts_.begin(),
-                           cohort_receipts_.begin() + static_cast<std::ptrdiff_t>(count));
-    cohort_receipts_base_ += count;
-    return count;
+    const std::size_t retained = cohort_receipt_count() - cohort_receipts_base_;
+    std::size_t count = std::min(through - cohort_receipts_base_, retained);
+    const std::size_t retired = count;
+    // Retire the oldest rows first: the store's prefix, then the staging's.
+    if (cohort_receipt_spill_) {
+        const std::size_t spilled = cohort_receipt_spill_->size();
+        const std::size_t from_store = std::min<std::size_t>(count, spilled);
+        cohort_receipt_spill_->erase_prefix(from_store);
+        count -= from_store;
+    }
+    if (count != 0) {
+        cohort_receipts_.erase(cohort_receipts_.begin(),
+                               cohort_receipts_.begin() + static_cast<std::ptrdiff_t>(count));
+    }
+    cohort_receipts_base_ += retired;
+    return retired;
 }
 
 bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
@@ -1533,6 +1607,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     next_cohort_handle_ = other.next_cohort_handle_;
     cohorts_ = std::move(other.cohorts_);
     cohort_receipts_ = std::move(other.cohort_receipts_);
+    cohort_receipt_spill_ = std::move(other.cohort_receipt_spill_);
     cohort_receipts_base_ = other.cohort_receipts_base_;
     instance_ = std::move(other.instance_);
     if (instance_) {
@@ -1559,6 +1634,7 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.next_cohort_handle_ = 1;
     other.cohorts_.clear();
     other.cohort_receipts_.clear();
+    other.cohort_receipt_spill_.reset();
     other.cohort_receipts_base_ = 0;
     other.instance_.reset();
     return *this;
