@@ -24,7 +24,7 @@ TREE = "c" * 40
 OTHER_HEAD = "d" * 40
 OTHER_TREE = "e" * 40
 WATCHER_FIRST_SHA = "f" * 40
-MAIN_API = f"repos/{REPO}/commits/main"
+MAIN_API = f"repos/{REPO}/branches/main"
 PULLS_API = f"repos/{REPO}/commits/{SHA}/pulls"
 STATUSES_API = f"repos/{REPO}/commits/{HEAD}/statuses?per_page=100"
 GATE_NAME = "Refuse unless pineforge/verify and pineforge/parity are green"
@@ -34,8 +34,10 @@ def commit(sha, tree):
     return {"sha": sha, "commit": {"tree": {"sha": tree}}}
 
 
-def pull(head=HEAD, number=17, merged_at="2026-10-20T12:00:00Z"):
-    return {"number": number, "merged_at": merged_at, "head": {"sha": head}}
+def pull(head=HEAD, number=17, merged_at="2026-10-20T12:00:00Z", *,
+         base_ref="main", merge_sha=SHA):
+    return {"number": number, "merged_at": merged_at, "head": {"sha": head},
+            "base": {"ref": base_ref}, "merge_commit_sha": merge_sha}
 
 
 def status(context, state="success"):
@@ -109,7 +111,7 @@ class GateTests(unittest.TestCase):
         self.proof.return_value = receipt
 
     def assert_no_pr_fallback(self):
-        self.assertEqual(self.api.calls, [(MAIN_API, False, ".sha")],
+        self.assertEqual(self.api.calls, [(MAIN_API, False, ".commit.sha")],
                          "phase 2 must never read PR heads or their statuses")
 
     def run_gate(self, *, repo=REPO, sha=SHA, ref="refs/heads/main"):
@@ -135,7 +137,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(stdout, (
             f"release gate green: PR #17 head {HEAD}; pineforge/verify=success; "
             f"pineforge/parity=success; tree {TREE}\n"))
-        self.assertIn((MAIN_API, False, ".sha"), self.api.calls)
+        self.assertIn((MAIN_API, False, ".commit.sha"), self.api.calls)
         self.assertIn((PULLS_API, True, None), self.api.calls)
         self.assertIn((STATUSES_API, True, None), self.api.calls)
 
@@ -239,7 +241,7 @@ class GateTests(unittest.TestCase):
         wrong_api = f"repos/{REPO}/commits/{OTHER_HEAD}/statuses?per_page=100"
         self.api.responses[wrong_api] = json.dumps(successes())
         self.api.statuses([])
-        self.assert_refused(f"API {STATUSES_API} returned an empty payload")
+        self.assert_refused(f"PR #17 head {HEAD}: missing pineforge/verify")
         self.assertIn((STATUSES_API, True, None), self.api.calls)
         self.assertFalse(any(endpoint == wrong_api for endpoint, _, _ in self.api.calls))
 
@@ -255,7 +257,58 @@ class GateTests(unittest.TestCase):
 
     def test_no_associated_pull_requests_refuses(self):
         self.api.responses[PULLS_API] = "[]"
-        self.assert_refused(f"API {PULLS_API} returned an empty payload")
+        self.assert_refused(f"no merged pull request associated with {SHA}")
+
+    def test_main_merged_into_another_base_is_ignored(self):
+        backport = pull(OTHER_HEAD, number=18, base_ref="release")
+        self.api.responses[PULLS_API] = json.dumps([backport, pull()])
+        self.api.responses[f"repos/{REPO}/commits/{OTHER_HEAD}"] = json.dumps(
+            commit(OTHER_HEAD, TREE))
+        code, stdout, stderr = self.run_gate()
+        self.assertEqual(code, 0, stderr)
+        self.assertIn(f"PR #17 head {HEAD}", stdout)
+        self.assertNotIn((f"repos/{REPO}/commits/{OTHER_HEAD}", False, None), self.api.calls)
+
+    def test_a_different_merge_commit_sha_is_ignored(self):
+        other_merge = pull(OTHER_HEAD, number=18, merge_sha=OTHER_HEAD)
+        self.api.responses[PULLS_API] = json.dumps([other_merge, pull()])
+        self.api.responses[f"repos/{REPO}/commits/{OTHER_HEAD}"] = json.dumps(
+            commit(OTHER_HEAD, TREE))
+        code, stdout, stderr = self.run_gate()
+        self.assertEqual(code, 0, stderr)
+        self.assertIn(f"PR #17 head {HEAD}", stdout)
+        self.assertNotIn((f"repos/{REPO}/commits/{OTHER_HEAD}", False, None), self.api.calls)
+
+    def test_only_unrelated_merged_pull_requests_refuse(self):
+        self.api.responses[PULLS_API] = json.dumps([
+            pull(base_ref="release"), pull(number=18, merge_sha=OTHER_HEAD)])
+        self.assert_refused(f"no merged pull request associated with {SHA}")
+
+    def test_missing_pull_request_base_or_merge_sha_refuses(self):
+        for field, message in (("base", "invalid pull request base.ref"),
+                               ("merge_commit_sha", "invalid merge_commit_sha")):
+            with self.subTest(field=field):
+                self.api = FakeAPI()
+                row = pull()
+                del row[field]
+                self.api.responses[PULLS_API] = json.dumps([row])
+                self.assert_refused(f"API {PULLS_API} returned {message}: None")
+
+    def test_malformed_pull_request_base_ref_refuses(self):
+        for base in (None, "main", [], {}, {"ref": None}, {"ref": 17}, {"ref": ""}):
+            with self.subTest(base=base):
+                self.api = FakeAPI()
+                row = pull()
+                row["base"] = base
+                self.api.responses[PULLS_API] = json.dumps([row])
+                self.assert_refused(f"API {PULLS_API} returned invalid pull request base.ref: {base!r}")
+
+    def test_malformed_pull_request_merge_commit_sha_refuses(self):
+        for merge_sha in (None, 17, [], {}, "", "a" * 7, "z" * 40, "A" * 40):
+            with self.subTest(merge_sha=merge_sha):
+                self.api = FakeAPI()
+                self.api.responses[PULLS_API] = json.dumps([pull(merge_sha=merge_sha)])
+                self.assert_refused(f"API {PULLS_API} returned invalid merge_commit_sha: {merge_sha!r}")
 
     def test_non_main_ref_refuses_before_any_api_call(self):
         self.assert_refused("release requires refs/heads/main, got refs/tags/v2.0.0",
@@ -265,7 +318,7 @@ class GateTests(unittest.TestCase):
     def test_sha_must_equal_the_live_main_head(self):
         self.api.responses[MAIN_API] = OTHER_HEAD + "\n"
         self.assert_refused(f"release sha {SHA} is not current main head {OTHER_HEAD}")
-        self.assertEqual(self.api.calls, [(MAIN_API, False, ".sha")])
+        self.assertEqual(self.api.calls, [(MAIN_API, False, ".commit.sha")])
 
     def test_raised_rate_limit_is_named_and_preserves_the_stderr(self):
         self.api.responses[PULLS_API] = subprocess.CalledProcessError(
@@ -346,6 +399,18 @@ class GateTests(unittest.TestCase):
                 self.api.responses[STATUSES_API] = "\n".join(
                     http_response(200, body) for body in pages)
                 self.assert_refused(f"API {STATUSES_API} returned an empty payload")
+
+    def test_empty_json_array_pages_can_surround_valid_list_evidence(self):
+        for endpoint in (PULLS_API, STATUSES_API):
+            for headers in (False, True):
+                with self.subTest(endpoint=endpoint, headers=headers):
+                    self.api = FakeAPI()
+                    pages = ["[]", self.api.responses[endpoint], "[]"]
+                    self.api.responses[endpoint] = "\n".join(
+                        http_response(200, page) if headers else page for page in pages)
+                    code, stdout, stderr = self.run_gate()
+                    self.assertEqual(code, 0, (stdout, stderr))
+                    self.assertEqual(stderr, "")
 
     def test_a_later_page_api_failure_refuses_without_retry(self):
         for response, message in (
@@ -550,6 +615,7 @@ class GateTests(unittest.TestCase):
                 (PULLS_API, json.dumps([pull(), pull()]), "duplicate pull request #17"),
                 (f"repos/{REPO}/commits/{HEAD}", json.dumps({"sha": HEAD}),
                  "missing or invalid commit.tree.sha"),
+                (f"repos/{REPO}/commits/{HEAD}", "{}", "an empty payload"),
                 (STATUSES_API, "null", "an empty payload"),
                 (STATUSES_API, "[null]", "invalid status row"),
                 (STATUSES_API, json.dumps([{key: value for key, value in successes()[0].items()
@@ -576,9 +642,10 @@ class GateTests(unittest.TestCase):
         other_repo = "another/project"
         other_sha, other_head, other_tree = "1" * 40, "2" * 40, "3" * 40
         self.api.responses = {
-            f"repos/{other_repo}/commits/main": other_sha,
+            f"repos/{other_repo}/branches/main": other_sha,
             f"repos/{other_repo}/commits/{other_sha}": json.dumps(commit(other_sha, other_tree)),
-            f"repos/{other_repo}/commits/{other_sha}/pulls": json.dumps([pull(other_head, number=902)]),
+            f"repos/{other_repo}/commits/{other_sha}/pulls": json.dumps([
+                pull(other_head, number=902, merge_sha=other_sha)]),
             f"repos/{other_repo}/commits/{other_head}": json.dumps(commit(other_head, other_tree)),
             f"repos/{other_repo}/commits/{other_head}/statuses?per_page=100": json.dumps(successes()),
         }
@@ -589,6 +656,13 @@ class GateTests(unittest.TestCase):
 
 
 class APICommandTests(unittest.TestCase):
+    def test_json_reader_accepts_an_empty_array_with_or_without_pagination(self):
+        for paginate in (False, True):
+            with self.subTest(paginate=paginate):
+                api = mock.Mock(return_value="[]")
+                self.assertEqual(ci_release_gate._read_json(api, PULLS_API, paginate=paginate), [])
+                api.assert_called_once_with(PULLS_API, paginate=paginate)
+
     def test_gh_adapter_paginates_the_statuses_list(self):
         with mock.patch.object(ci_release_gate.subprocess, "run") as run:
             run.return_value.stdout = "[]\n"
@@ -599,8 +673,8 @@ class APICommandTests(unittest.TestCase):
     def test_gh_adapter_reads_live_main_sha_with_jq(self):
         with mock.patch.object(ci_release_gate.subprocess, "run") as run:
             run.return_value.stdout = SHA + "\n"
-            self.assertEqual(ci_release_gate.gh_api(MAIN_API, jq=".sha"), SHA + "\n")
-        run.assert_called_once_with(["gh", "api", MAIN_API, "--include", "--jq", ".sha"],
+            self.assertEqual(ci_release_gate.gh_api(MAIN_API, jq=".commit.sha"), SHA + "\n")
+        run.assert_called_once_with(["gh", "api", MAIN_API, "--include", "--jq", ".commit.sha"],
                                     check=True, capture_output=True, text=True)
 
     def test_gh_adapter_does_not_retry_a_failed_read(self):

@@ -118,7 +118,7 @@ def _read_json(api: API, endpoint: str, *, paginate: bool = False):
             decoder = json.JSONDecoder()
             while raw:
                 page, end = decoder.raw_decode(raw)
-                if not page:
+                if not page and not isinstance(page, list):
                     raise ReleaseGateError(f"API {endpoint} returned an empty payload")
                 if not isinstance(page, list):
                     raise ReleaseGateError(
@@ -127,7 +127,8 @@ def _read_json(api: API, endpoint: str, *, paginate: bool = False):
                 raw = raw[end:].lstrip()
     except json.JSONDecodeError as exc:
         raise ReleaseGateError(f"API {endpoint} returned invalid JSON: {exc}") from exc
-    if not result:
+    # Empty arrays are valid list answers; callers decide if evidence is missing.
+    if not result and not isinstance(result, list):
         raise ReleaseGateError(f"API {endpoint} returned an empty payload")
     return result
 
@@ -163,10 +164,18 @@ def _merged_pulls(api: API, repo: str, sha: str) -> list[tuple[int, str]]:
         except (TypeError, ValueError) as exc:
             raise ReleaseGateError(
                 f"API {endpoint} returned invalid merged_at: {row['merged_at']!r}") from exc
+        base, merge_sha = row.get("base"), row.get("merge_commit_sha")
+        if (not isinstance(base, dict) or not isinstance(base.get("ref"), str)
+                or not base["ref"]):
+            raise ReleaseGateError(f"API {endpoint} returned invalid pull request base.ref: {base!r}")
+        if not _is_sha(merge_sha):
+            raise ReleaseGateError(f"API {endpoint} returned invalid merge_commit_sha: {merge_sha!r}")
         number, head = row.get("number"), row.get("head")
         if (type(number) is not int or number <= 0 or not isinstance(head, dict)
                 or not _is_sha(head.get("sha"))):
             raise ReleaseGateError(f"API {endpoint} returned invalid pull request: {row!r}")
+        if base["ref"] != "main" or merge_sha != sha:
+            continue
         if any(number == previous for previous, _ in merged):
             raise ReleaseGateError(f"API {endpoint} returned duplicate pull request #{number}")
         merged.append((number, head["sha"]))
@@ -234,8 +243,8 @@ def gate(repo: str, sha: str, ref: str, *, api: API, git: Git = git_is_ancestor)
     if not _is_sha(sha):
         raise ReleaseGateError(f"invalid release sha: {sha!r}")
 
-    endpoint = f"repos/{repo}/commits/main"
-    current = _read_text(api, endpoint, jq=".sha")
+    endpoint = f"repos/{repo}/branches/main"
+    current = _read_text(api, endpoint, jq=".commit.sha")
     if not _is_sha(current):
         raise ReleaseGateError(f"API {endpoint} returned invalid main sha: {current!r}")
     if current != sha:

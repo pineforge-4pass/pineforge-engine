@@ -1257,10 +1257,14 @@ jobs does not establish a runtime fix or dismiss a sanitizer failure.
 The release guard requires exactly `pineforge/verify` and `pineforge/parity`
 to be `success`; lite variants never satisfy either requirement. Phase 1 is
 the **transitional** merged-PR-head path for main commits that predate the
-main watcher. It requires exactly one associated merged PR whose head tree
-matches the released tree, then reads that head's full contexts through the
-statuses API. Zero matches refuse; multiple matches refuse and name every
-matching PR, with no preference for the newest.
+main watcher. The guard reads `repos/{repo}/branches/main` (`.commit.sha`)
+and requires the release sha to equal that branch's current head. It requires
+exactly one associated merged PR targeting `main`, with `merge_commit_sha`
+equal to the release sha and a head tree matching the released tree, then
+reads that head's full contexts through the statuses API. PRs targeting other
+bases or naming a different merge commit are ignored; malformed fields refuse.
+Zero matches refuse; multiple matches refuse and name every matching PR, with
+no preference for the newest.
 
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
 `scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
@@ -1275,7 +1279,9 @@ The reader seam defines normalized context states, not a receipt storage format.
 
 Every API call is a read using the release job's own App token. Rate limits
 and upstream 5xx responses refuse immediately, naming the failure, without
-sleeping or retrying; empty or unparseable evidence also refuses.
+sleeping or retrying; empty or unparseable evidence also refuses. An empty JSON
+array is a valid list response; each caller refuses if its required PR or
+context evidence is absent. An empty single-object payload still refuses.
 
 Prebuilt jobs build the commit sha emitted after the release job's atomic
 push, and assert that the release tag still resolves to that sha before
