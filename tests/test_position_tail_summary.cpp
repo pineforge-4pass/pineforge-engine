@@ -248,7 +248,8 @@ void barriers_reversals_and_amendments() {
 
     // Re-cut a row without changing the final count. Invalidation must not
     // rely on detecting a smaller count or only on the next append.
-    f.reference.back().qty = f.resident.back().qty = 0.375;
+    f.reference.back().qty = 0.375;
+    f.resident.modify(f.resident.size() - 1, [](Trade& t) { t.qty = 0.375; });
     f.summary.invalidate();
     f.all_queries();
     assert(f.fallback != 0);
@@ -394,7 +395,8 @@ void random_sequences() {
                     f.all_queries();
                 }
                 if (i == 7 && cycle % 3 == 0) {
-                    f.reference.back().qty = f.resident.back().qty = 0.75;
+                    f.reference.back().qty = 0.75;
+                    f.resident.modify(f.resident.size() - 1, [](Trade& t) { t.qty = 0.75; });
                     f.summary.invalidate();
                     f.all_queries();
                 }
