@@ -12,7 +12,8 @@ namespace pineforge::detail {
 // end: an ordered seek found no record. cancelled: a visitor returned false.
 // not_found: an absent handle, a page past the extent, or nothing to reopen.
 // programming_error: contract misuse or a request the host did not provision
-// for, including a backing that cannot extend. io_error: the medium failed.
+// for, including backing exhaustion. io_error: the medium failed or a backing
+// refused growth past its per-run extent-growth byte cap.
 // corrupt: stored bytes failed validation.
 enum class ScratchStatus : std::uint32_t {
     ok = 0,
@@ -66,6 +67,8 @@ struct ScratchIoCharge {
     ScratchStatus status;
 };
 
+// Runs synchronously inside store/backing calls; it must not call any member
+// of the store or of the backing.
 struct ScratchIoObserver {
     void* context = nullptr;
     void (*charge)(void*, const ScratchIoCharge&) noexcept = nullptr;
@@ -79,6 +82,18 @@ struct ScratchIoObserver {
 // protect previously committed pages. No operation throws or allocates an
 // O(page_count) userspace directory. Production backing must extend/spill;
 // backing exhaustion is a programming_error, never a capacity run failure.
+// An optional per-run byte cap measures extent growth from the run's initial
+// extent (page_count * page_size), including zero-filled gaps, not write traffic.
+// Before a growth write changes anything, refuse it with io_error if its
+// proposed extent minus the initial extent exceeds the cap. Writes below the
+// current extent, including rollback writes, never fail because of this cap.
+// Nothing written outlives the backing object: disk/tmpfs files are unlinked
+// no later than its destruction (created unlinked where the OS allows), and a
+// memfd closes with it. No other object or process reopens the file. Reopen
+// means a new ScratchStore on the same live backing; it does not replay the
+// journal and promises no persistence or crash recovery. If a destroyed store's
+// rollback is refused, contents are unspecified and the host discards the
+// backing. Per-run commits use buffered.
 class ScratchBacking {
 public:
     virtual ~ScratchBacking() noexcept = default;

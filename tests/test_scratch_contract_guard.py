@@ -6,7 +6,8 @@ prove what the contract does; this guard pins what the headers must never
 contain, so a later lane cannot weaken the contract by editing them:
 
 * ScratchStatus is a closed vocabulary. There is no capacity, refusal or
-  exhaustion member: a put that cannot be served is a programming_error.
+  exhaustion member: exhaustion is programming_error; backing io_error,
+  including a per-run extent-growth cap overrun, is preserved by put/erase.
 * No exception machinery, no growing container, no heap call and no
   RunFailureCode conversion appears in code (comments and strings are removed
   before scanning).

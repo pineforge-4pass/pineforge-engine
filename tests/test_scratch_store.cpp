@@ -1487,7 +1487,7 @@ bool torn_write_during_transaction(std::uint64_t nth, bool torn, bool explicit_r
     rig.backing.arm_write(nth, torn);
     const ScratchStatus failure = random_ops(*s, pending, rng, 600);
     require(rig.backing.write_faults() == 1, "the injected write fault was reached inside the edits");
-    require_status(failure, ScratchStatus::programming_error, "a mutation reports programming_error");
+    require_status(failure, ScratchStatus::io_error, "a mutation preserves the backing's io_error");
     const bool damaged = torn && rig.backing.tore_existing_page();
     check_rollback_only(*s, 512);
     if (explicit_rollback) {
@@ -2807,10 +2807,10 @@ private:
     std::uint64_t size_;
 };
 
-// There is no capacity status: a put the store cannot serve is
-// programming_error whatever the cause, and in a transaction it leaves the
-// transaction rollback-only. Three named causes: an exhausted backing, a
-// source that fails to deliver its bytes, and no memory for the workspace.
+// There is no capacity status. These three causes remain programming_error:
+// an exhausted backing, a source that fails to deliver its bytes, and no
+// memory for the workspace. A backing io_error is preserved instead; either
+// failed mutation leaves its transaction rollback-only.
 void named_failure_causes_are_programming_errors() {
     const std::vector<Text> probes = numeric_probes();
     {
@@ -2863,6 +2863,107 @@ void named_failure_causes_are_programming_errors() {
         expect_unusable(store, ScratchStatus::programming_error, "no memory for the workspace");
         require(rig.counters.reads == 0 && rig.counters.writes == 0 && rig.counters.syncs == 0,
                 "a store without a workspace performs no backing I/O");
+    }
+}
+
+// An extent-growth cap, independent of the store and of write traffic. Once
+// armed, overwrites below the existing extent remain serviceable, including
+// rollback writes after a refused growth attempt.
+class CappedBacking final : public ScratchBacking {
+public:
+    CappedBacking(FixedMemoryScratchBacking& inner, ScratchIoObserver observer)
+        : ScratchBacking(inner.kind(), inner.page_size(), observer), inner_(inner) {}
+    std::uint64_t page_count() const noexcept override { return inner_.page_count(); }
+    void start_run(std::uint64_t growth_limit_bytes) {
+        initial_extent_ = page_count();
+        growth_limit_bytes_ = growth_limit_bytes;
+    }
+    std::uint64_t cap_refusals() const { return cap_refusals_; }
+
+protected:
+    ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {
+        return inner_.read_page(id, destination);
+    }
+    ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
+        if (id >= page_count() && id + 1 - initial_extent_ > growth_limit_bytes_ / page_size()) {
+            ++cap_refusals_;
+            return ScratchStatus::io_error;
+        }
+        return inner_.write_page(id, source);
+    }
+    ScratchStatus do_sync(ScratchDurability durability) noexcept override {
+        return inner_.sync(durability);
+    }
+
+private:
+    FixedMemoryScratchBacking& inner_;
+    std::uint64_t initial_extent_ = 0;
+    std::uint64_t growth_limit_bytes_ = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t cap_refusals_ = 0;
+};
+
+void extent_cap_reports_io_error_without_partial_state() {
+    enum class Operation { put, erase, commit };
+    constexpr std::size_t page_size = 512;
+    const std::vector<Text> probes = numeric_probes();
+    for (const Operation operation : {Operation::put, Operation::erase, Operation::commit}) {
+        std::vector<std::byte> storage(page_size * 2048);
+        FixedMemoryScratchBacking memory(ScratchBuffer{storage.data(), storage.size()}, page_size);
+        Counters counters;
+        CappedBacking backing(memory, counters.observer());
+        Model committed(cmp_numeric_text);
+        {
+            // A larger cache defers new-page writes until commit in that case.
+            ScratchStore store(config_for(page_size, operation == Operation::commit ? 64 : 2,
+                                          1, 1, order_numeric(), ScratchOpenMode::create_empty), &backing);
+            require_status(store.status(), ScratchStatus::ok, "open a capped store");
+            begin_ok(store);
+            if (operation != Operation::commit) {
+                for (std::uint64_t k = 0; k < 24; ++k)
+                    put_ok(store, committed, key_u64(k), make_value(k, 0, 90));
+            }
+            commit_ok(store);
+            verify(store, committed, page_size, probes, 1, true, "before the capped transaction");
+
+            const std::uint64_t initial_extent = backing.page_count();
+            backing.start_run(page_size); // permit one page of growth, then refuse
+            begin_ok(store);
+            ScratchStatus failure = ScratchStatus::ok;
+            if (operation == Operation::put) {
+                for (std::uint64_t k = 100; k < 228 && failure == ScratchStatus::ok; ++k) {
+                    ScratchHandle handle = 0xBAD;
+                    failure = put_text(store, key_u64(k), make_value(k, 1, page_size * 5), handle);
+                    if (failure != ScratchStatus::ok)
+                        require(handle == 0xBAD, "a capped put leaves its output unchanged");
+                }
+                require_status(failure, ScratchStatus::io_error, "put preserves an extent-cap io_error");
+            } else if (operation == Operation::erase) {
+                for (const Row& row : committed.rows) {
+                    failure = store.erase(row.handle);
+                    if (failure != ScratchStatus::ok) break;
+                }
+                require_status(failure, ScratchStatus::io_error, "erase preserves an extent-cap io_error");
+            } else {
+                Model pending = committed;
+                for (std::uint64_t k = 0; k < 3; ++k)
+                    put_ok(store, pending, key_u64(k), make_value(k, 1, 90));
+                failure = store.commit(ScratchDurability::buffered);
+                require_status(failure, ScratchStatus::io_error, "commit preserves an extent-cap io_error");
+            }
+            require(backing.cap_refusals() == 1, "the backing reached the cap and the store did not retry");
+            require(backing.page_count() == initial_extent + 1, "one growth write landed before refusal");
+            check_rollback_only(store, page_size);
+            const std::uint64_t writes_before_rollback = counters.writes;
+            rollback_ok(store); // leave the cap armed: rollback must not need growth
+            require(!store.transaction_active(), "rollback ends the capped transaction");
+            if (operation != Operation::commit)
+                require(counters.writes > writes_before_rollback, "rollback restored journaled pages");
+            require(backing.cap_refusals() == 1, "rollback overwrites are still serviceable at the cap");
+            verify(store, committed, page_size, probes, 1, true, "the cap left no partial logical state");
+        }
+        ScratchStore reopened(config_for(page_size, 4, 1, 1, order_numeric(), ScratchOpenMode::reopen), &backing);
+        require_status(reopened.status(), ScratchStatus::ok, "reopen the same live capped backing");
+        verify(reopened, committed, page_size, probes, 1, true, "the cap published no partial state");
     }
 }
 
@@ -2983,6 +3084,7 @@ void differential_random_walk() {
 int main() {
     try {
         oracle_matches_published_vectors();
+        extent_cap_reports_io_error_without_partial_state();
         ascending_after_insert_and_erase();
         handles_are_successive_stable_and_never_recycled();
         forced_eviction_then_reread_by_handle();
