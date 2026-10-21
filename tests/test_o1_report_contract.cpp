@@ -120,22 +120,6 @@ static_assert(std::is_same<decltype(std::declval<const pineforge::report::TradeS
 static_assert(std::is_same<decltype(std::declval<const pineforge::report::EquityPointSourceV1&>().at(0)),
                           pf_equity_point_t>::value,
               "indexed point reads must return values");
-static_assert(std::is_same<decltype(&pineforge::BacktestEngine::completed_trade_source_v1),
-                          std::unique_ptr<const pineforge::report::TradeSourceV1>
-                              (pineforge::BacktestEngine::*)() const>::value,
-              "completed history must use the single value/page/visitor family");
-static_assert(std::is_same<decltype(&pineforge::BacktestEngine::report_trade_source_v1),
-                          std::unique_ptr<const pineforge::report::TradeSourceV1>
-                              (pineforge::BacktestEngine::*)() const>::value,
-              "report rows must use the same reader family");
-static_assert(std::is_same<decltype(&pineforge::BacktestEngine::report_equity_source_v1),
-                          std::unique_ptr<const pineforge::report::EquityPointSourceV1>
-                              (pineforge::BacktestEngine::*)() const>::value,
-              "report points must use the single point reader family");
-static_assert(std::is_same<decltype(&pineforge::BacktestEngine::held_report_equity_point_v1),
-                          pineforge::report::HeldEquityPointV1
-                              (pineforge::BacktestEngine::*)() const>::value,
-              "summary tail access must return one detached point");
 
 using PointStatsV1 = pf_equity_stats_t (*)(
     const pineforge::report::EquityPointSourceV1&, std::int64_t, double,

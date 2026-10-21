@@ -194,7 +194,7 @@ summary of it.
   hosts ever agreed. A tzdata release that rewrites the zone's rules still moves the digest,
   because the run then read different rules (`tests/test_native_continuation_portable.cpp`,
   measured equal on macOS/arm64 and Linux/aarch64 at tzdata 2026c).
-  `broker_state_hash()` (`engine.hpp:2304`)
+  `broker_state_hash()` (`engine.hpp:2283`)
   folds that hash with position and lot state under the pinned domain
   `pineforge-broker-state/v19` (`engine_state_hash.cpp:41`), the closed rows as their count and
   a running digest each final row folds into once; it is the one exported to C as

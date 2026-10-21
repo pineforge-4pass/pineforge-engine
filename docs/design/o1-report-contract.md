@@ -260,14 +260,16 @@ folds; a per-trial scratch curve is never the SUMMARY_ONLY implementation.
 Include `<pineforge/report_pages.hpp>` for `LogicalIndexV1` (`uint64_t`),
 `TradeRowV1`, `TradeTextV1`, `VisitResultV1`, `TradeVisitorV1`,
 `EquityVisitorV1`, `TradeSourceV1`, `EquityPointSourceV1` and
-`HeldEquityPointV1`. Include `<pineforge/engine.hpp>` to acquire a reader:
+`HeldEquityPointV1`. The four engine methods below are planned entry points
+for `<pineforge/engine.hpp>`; they are not declared on `BacktestEngine`.
+Their signatures, lifetime and mode rules below remain the planned contract:
 
 | Native method | Logical population and availability |
 | --- | --- |
-| `completed_trade_source_v1()` | Exact semantic completed rows, excluding report-only range-end rows. Available in every mode at a committed script callback boundary and after execution. Its `size()` counts the whole history, including retired rows. |
-| `report_trade_source_v1()` | Frozen final report rows: completed rows followed by range-end rows, in exactly the existing report order. Available when trades were captured in FULL/STREAMED. Its `size()` equals `metadata.trades.logical_count`, not `report.trades_len`. SUMMARY_ONLY fails explicitly. |
-| `report_equity_source_v1()` | Frozen final presented points, including the selected anchor. Available when equity was captured in FULL/STREAMED. Its `size()` equals `metadata.equity_curve.logical_count`, not the resident array length. SUMMARY_ONLY and an uncaptured curve fail explicitly. |
-| `held_report_equity_point_v1()` | One detached final presented point in every mode, including SUMMARY_ONLY; explicitly absent for zero logical points. It is not a captured curve. |
+| `completed_trade_source_v1()` | **planned: provider owed by the ledger lane.** Exact semantic completed rows, excluding report-only range-end rows. Available in every mode at a committed script callback boundary and after execution. Its `size()` counts the whole history, including retired rows. |
+| `report_trade_source_v1()` | **planned: provider owed by the ledger lane.** Frozen final report rows: completed rows followed by range-end rows, in exactly the existing report order. Available when trades were captured in FULL/STREAMED. Its `size()` equals `metadata.trades.logical_count`, not `report.trades_len`. SUMMARY_ONLY fails explicitly. |
+| `report_equity_source_v1()` | **planned: provider owed by the metrics lane.** Frozen final presented points, including the selected anchor. Available when equity was captured in FULL/STREAMED. Its `size()` equals `metadata.equity_curve.logical_count`, not the resident array length. SUMMARY_ONLY and an uncaptured curve fail explicitly. |
+| `held_report_equity_point_v1()` | **planned: provider owed by the metrics lane.** One detached final presented point in every mode, including SUMMARY_ONLY; explicitly absent for zero logical points. It is not a captured curve. |
 
 Source accessors return `std::unique_ptr<const ...>` **by value**. The caller
 owns only a fixed-size reader adapter, never a row/page/sequence allocation.
@@ -318,7 +320,7 @@ interval**, starting at `from+count-1` and finishing at `from`. The full
 newest-first position-tail scan is therefore:
 
 ```cpp
-auto rows = engine.completed_trade_source_v1();
+auto rows = engine.completed_trade_source_v1(); // planned: provider owed by the ledger lane
 auto result = rows->visit_backward(0, rows->size(), context, visitor);
 ```
 
@@ -593,14 +595,14 @@ not an alternate public contract or a compatibility alias header.
 | `StorageKindV1`, `StorageActionV1`, `StorageEventV1`, `StorageObserverV1`, `storage_context`, `storage_observer` | Not adopted as report-policy API. Allocation instrumentation belongs to the implementation lanes' allocation and growth tests; no substitute public names or new durable state are introduced here. |
 | `SummaryV1`, `report_summary_v1()`, `visit_report_summary_v1(...)`, `SummaryVisitorV1` | `ReportEnvelopeV1` / `pf_report_envelope_v1`, read with `fill_report_envelope_v1(...)`. Reuse its frozen payload/metadata; no second summary type or summary visitor. |
 | `SummaryV1.mode`, `total_trades`, `equity_point_count`, optional sequence counts | `metadata.mode`, `metadata.trades.logical_count` (and `report.total_trades`), `metadata.equity_curve.logical_count`, and the corresponding five optional sequence `logical_count` fields. |
-| `SummaryV1.completed_trades` | `completed_trade_source_v1()->size()`, excluding the report-only suffix; no second count is added to the 128-byte metadata. |
+| `SummaryV1.completed_trades` | **planned: provider owed by the ledger lane.** `completed_trade_source_v1()->size()`, excluding the report-only suffix; no second count is added to the 128-byte metadata. |
 | Other `SummaryV1` report counters, timeframe fields, `net_profit`, `metrics` | Existing `envelope.report` fields, with the exact round-1 field table above. |
 | `SummaryV1.summary_avg_trade`, `summary_best_trade`, `summary_worst_trade`, `summary_max_drawdown` | Existing JSON `summary.avg_trade`, `summary.best_trade`, `summary.worst_trade`, `summary.max_drawdown`, respectively; no additional C POD. Drawdown stays the trade-PnL-prefix fold. |
 | `LogicalIndexV1`, `TradeTextV1`, `TradeRowV1`, `VisitResultV1`, `TradeSourceV1`, `EquityPointSourceV1` | Same names under `pineforge::report`, declared in `report_pages.hpp`. Indexed rows/points remain values. |
 | `TradeVisitorV1`, `EquityVisitorV1` | Same names, but callbacks take detached row/point **values**, replacing the old draft's const-reference arguments. |
-| `completed_trade_source_v1()`, `report_trade_source_v1()`, `report_equity_source_v1()` | Same method names; return caller-owned `std::unique_ptr<const ...>` adapters by value, replacing borrowed reference returns. No resident page/row pointer is exposed. |
+| `completed_trade_source_v1()`, `report_trade_source_v1()`, `report_equity_source_v1()` | **planned: provider owed by the ledger lane for each trade source and by the metrics lane for the point source.** Same method names; return caller-owned `std::unique_ptr<const ...>` adapters by value, replacing borrowed reference returns. No resident page/row pointer is exposed. |
 | `metrics::compute_equity_stats(const report::EquityPointSourceV1&, ...)` | Same overload names, declared in `metrics_stream.hpp`, using the sole point family and unchanged point/observation denominators. |
 
-`TradeSourceV1::visit_backward(...)`, `HeldEquityPointV1` and
-`BacktestEngine::held_report_equity_point_v1()` are round-2 additions with no
-a1ctr or round-1 name replaced.
+`TradeSourceV1::visit_backward(...)`, `HeldEquityPointV1` and the planned
+`BacktestEngine::held_report_equity_point_v1()` (planned: provider owed by the
+metrics lane) are round-2 additions with no a1ctr or round-1 name replaced.

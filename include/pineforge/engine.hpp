@@ -2099,27 +2099,6 @@ public:
     // Release the owned payload with free_report(&out->report).
     int fill_report_envelope_v1(ReportEnvelopeV1* out) const;
 
-    // O1 reader declarations only. Returned unique_ptr values own fixed-size
-    // reader adapters, never a row/curve array or a resident page. Adapters
-    // borrow this engine until its next execution/config mutation/destruction;
-    // detached row/point/caller-buffer values survive adapter/page retirement.
-    // Successful acquisition is non-null, including for a captured empty
-    // sequence; absence/unavailability is an error, never a null sentinel.
-    // Exact semantic completed rows exclude report-only range-end rows and
-    // are readable in every mode at a committed script callback boundary.
-    std::unique_ptr<const report::TradeSourceV1> completed_trade_source_v1() const;
-    // Final report order includes range-end rows; equity includes the selected
-    // anchor. FULL/STREAMED sources read captured output through bounded pages.
-    // SUMMARY_ONLY throws std::logic_error for these two omitted sequences,
-    // never a fictitious empty source or an implicit FULL materialization.
-    // An uncaptured/disabled equity source also throws in FULL/STREAMED.
-    // Reading a report source/tail before validated completion also throws.
-    std::unique_ptr<const report::TradeSourceV1> report_trade_source_v1() const;
-    std::unique_ptr<const report::EquityPointSourceV1> report_equity_source_v1() const;
-    // Single final presented point, by value, in every mode. An empty logical
-    // curve has present=false; this never changes the sequence capture flags.
-    report::HeldEquityPointV1 held_report_equity_point_v1() const;
-
     // Returns the error message captured by the most recent run() if it
     // failed, or an empty string if the run completed normally. Cleared at
     // the start of every run(). The C ABI exposes this via

@@ -213,17 +213,21 @@ Callbacks receive detached values; no API returns a reference or pointer into
 a resident page that may be retired. Invalid ranges/buffers and backing
 failures fail explicitly.
 
-Native engine accessors return caller-owned reader adapters by value:
-`completed_trade_source_v1()` covers semantic completed history in every
-mode, excluding the range-end suffix; `report_trade_source_v1()` covers the
-whole captured final report; `report_equity_source_v1()` covers captured
-final presented points, including a selected anchor. Report readers require
-validated completion. SUMMARY_ONLY rejects the two omitted report sources
-explicitly rather than returning fictitious empty readers.
+The planned native engine accessors return caller-owned reader adapters by
+value; these entry points are not declared on `BacktestEngine`:
+`completed_trade_source_v1()` (**planned: provider owed by the ledger lane**)
+covers semantic completed history in every mode, excluding the range-end
+suffix; `report_trade_source_v1()` (**planned: provider owed by the ledger lane**)
+covers the whole captured final report;
+`report_equity_source_v1()` (**planned: provider owed by the metrics lane**)
+covers captured final presented points, including a selected anchor. Report
+readers require validated completion. SUMMARY_ONLY rejects the two omitted
+report sources explicitly rather than returning fictitious empty readers.
 
-`held_report_equity_point_v1()` returns one final `HeldEquityPointV1` by value
-in every mode. `present=false` means zero logical points; otherwise `index`
-is the last logical index and `value` is the exact final presented point.
+`held_report_equity_point_v1()` (**planned: provider owed by the metrics lane**)
+returns one final `HeldEquityPointV1` by value in every mode. `present=false`
+means zero logical points; otherwise `index` is the last logical index and
+`value` is the exact final presented point.
 This held value does not change SUMMARY_ONLY's `captured=0` or NULL/0 curve.
 During execution the metrics owner holds the editable tail and pre-tail
 fold snapshot until presentation finalizes it; summary/replay passes use
@@ -231,8 +235,8 @@ the same point visitor without creating a private curve tape.
 
 The [reader contract and old-draft name mapping](../design/o1-report-contract.md)
 define lifetimes, half-open ranges, backward traversal, cancellation and
-errors. Reader declarations do not establish runtime support and add no
-C export, mode or envelope-version change.
+errors. Reader declarations and planned engine accessors do not establish
+runtime support and add no C export, mode or envelope-version change.
 
 ## Selected-window/v1 named-sink JSON {#report_selected_window_named_sink_v1}
 
