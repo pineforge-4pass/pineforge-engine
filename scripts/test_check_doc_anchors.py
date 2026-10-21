@@ -36,6 +36,8 @@ from __future__ import annotations
 import contextlib
 import io
 from pathlib import Path
+import re
+import shlex
 import tempfile
 import unittest
 
@@ -93,6 +95,9 @@ class Tree:
         (self.root / 'include/pineforge').mkdir(parents=True)
         (self.root / 'src').mkdir(parents=True)
         (self.root / 'docs/pages').mkdir(parents=True)
+        self.baseline = self.root / 'scripts/doc_anchor_baseline.txt'
+        self.baseline.parent.mkdir(parents=True)
+        self.baseline.write_text('')
         (self.root / 'include/pineforge/native_host.hpp').write_text(HEADER)
         (self.root / 'src/native_host_driver.cpp').write_text(SOURCE)
         self.page = self.root / 'docs/pages' / name
@@ -405,6 +410,198 @@ class CitedLine(unittest.TestCase):
             self.assertEqual(code, 1, out)
             self.assertIn('native_host.hpp:22-26  [SCOPE]', out)
             self.assertIn('outside `GroupEffect`', out)
+
+
+class BaselineRatchet(unittest.TestCase):
+    """An exact outstanding miss is allowed; growth and obsolete entries fail."""
+
+    def prepare(self, t: Tree, *, correct: bool = False,
+                fragment: bool = False) -> list[guard.Anchor]:
+        source = t.root / 'src/file.cpp'
+        source.write_text('int unrelated = 0;\nint claimed = 0;\nint control = 0;\n')
+        lines = source.read_text().splitlines()
+        symbol, mode = guard.symbol_of(lines[1].split()[1])
+        target = guard.occurrences(lines, symbol, mode)[0]
+        control, control_mode = guard.symbol_of(lines[-1].split()[1])
+        control_line = guard.occurrences(lines, control, control_mode)[0]
+        first = target if correct else target - 1
+        claim = lines[target - 1].strip().rstrip(';') if fragment else symbol
+        citation = f'file.cpp:{first}-{target}' if not correct else f'file.cpp:{target}'
+        t.page.write_text(f'The subject `{claim}` {citation}.\n'
+                          f'The control `{control}` file.cpp:{control_line}.\n')
+        return guard.collect(t.page, t.page.read_text())
+
+    @staticmethod
+    def citation(t: Tree, anchor: guard.Anchor) -> str:
+        start, length = anchor.digits
+        return f'{anchor.path}:{t.page.read_text()[start:start + length]}'
+
+    @staticmethod
+    def location(t: Tree, anchor: guard.Anchor) -> str:
+        return f'{anchor.page.relative_to(t.root).as_posix()}:{anchor.doc_line}'
+
+    def entry(self, t: Tree, anchor: guard.Anchor) -> str:
+        claim = anchor.symbol or guard.fragment_of(anchor.span)
+        return shlex.join([self.location(t, anchor), self.citation(t, anchor),
+                           ' '.join(claim.split()), '2026-10-22'])
+
+    @staticmethod
+    def holds(t: Tree, anchor: guard.Anchor) -> bool:
+        resolved = guard.Tree(t.root)
+        lines = resolved.lines(resolved.resolve(anchor.path))
+        if anchor.symbol:
+            return anchor.first in guard.occurrences(lines, anchor.symbol, anchor.mode)
+        return guard.fragment_of(anchor.span) in ' '.join(lines[anchor.first - 1].split())
+
+    @staticmethod
+    def identity(entry: str) -> tuple[str, str, str]:
+        doc, cited, claim, added = shlex.split(entry)
+        return doc, cited, ' '.join(claim.split())
+
+    def check(self, t: Tree, anchors: list[guard.Anchor],
+              entries: list[str]) -> tuple[str, list[guard.Anchor], set[str]]:
+        missing = [anchor for anchor in anchors if not self.holds(t, anchor)]
+        outstanding = {self.identity(self.entry(t, anchor)) for anchor in missing}
+        listed = {self.identity(entry) for entry in entries}
+        bad = [anchor for anchor in missing
+               if self.identity(self.entry(t, anchor)) not in listed]
+        stale = {entry for entry in entries if self.identity(entry) not in outstanding}
+        code, out = t.run('--list')
+        self.assertEqual(code, int(bool(bad or stale)), out)
+        for anchor in anchors:
+            row = f'{self.location(t, anchor)}  {self.citation(t, anchor)}  [SYMMISS]'
+            if anchor in bad:
+                self.assertIn(row, out)
+            else:
+                self.assertNotIn(row, out)
+            if self.holds(t, anchor):
+                self.assertRegex(out, re.escape(self.location(t, anchor)) + r'  OK +'
+                                 + re.escape(self.citation(t, anchor)) + r'\s')
+        for entry in stale:
+            self.assertIn(entry, out)
+            self.assertIn('no longer misses', out)
+            self.assertIn('must be removed', out)
+        self.assertIn(f'anchors judged={len(anchors)}', out)
+        self.assertIn(f'ok={len(anchors) - len(missing)}', out)
+        self.assertIn(f'bad-strict-not-baselined={len(bad)}', out)
+        self.assertIn(f'baselined-and-still-missing={len(missing) - len(bad)}', out)
+        self.assertIn(f'baseline entries stale={len(stale)}', out)
+        return out, bad, stale
+
+    def test_growth_is_red(self) -> None:
+        for fragment in (False, True):
+            with self.subTest(fragment=fragment), tree('') as t:
+                anchors = self.prepare(t, fragment=fragment)
+                subject, control = anchors
+                self.assertFalse(self.holds(t, subject))
+                self.assertTrue(self.holds(t, control))
+                resolved = guard.Tree(t.root)
+                lines = resolved.lines(resolved.resolve(subject.path))
+                # The pre-3b whole-range rule would accept this same fixture.
+                if subject.symbol:
+                    hits = guard.occurrences(lines, subject.symbol, subject.mode)
+                else:
+                    needle = guard.fragment_of(subject.span)
+                    hits = [n for n, line in enumerate(lines, 1)
+                            if needle in ' '.join(line.split())]
+                self.assertTrue(any(subject.first < n <= subject.last for n in hits))
+                self.check(t, anchors, [])
+
+    def test_a_stale_baseline_entry_is_red(self) -> None:
+        for fragment in (False, True):
+            with self.subTest(fragment=fragment), tree('') as t:
+                anchors = self.prepare(t, correct=True, fragment=fragment)
+                self.assertTrue(all(self.holds(t, anchor) for anchor in anchors))
+                entries = [self.entry(t, anchors[0])]
+                t.baseline.write_text('\n'.join(entries) + '\n')
+                self.assertTrue(t.baseline.is_file())
+                self.check(t, anchors, entries)
+
+    def test_a_listed_still_bad_anchor_is_green(self) -> None:
+        for fragment in (False, True):
+            with self.subTest(fragment=fragment), tree('') as t:
+                anchors = self.prepare(t, fragment=fragment)
+                subject, control = anchors
+                self.assertFalse(self.holds(t, subject))
+                self.assertTrue(self.holds(t, control))
+                entries = [self.entry(t, subject)]
+                t.baseline.write_text('\n'.join(entries) + '\n')
+                before = t.baseline.read_text()
+                self.check(t, anchors, entries)
+                self.assertEqual(t.baseline.read_text(), before)
+
+    def test_fragment_whitespace_and_literal_quotes_are_preserved(self) -> None:
+        with tree('') as t:
+            anchors = self.prepare(t, fragment=True)
+            subject, control = anchors
+            source = guard.Tree(t.root).resolve(subject.path)
+            lines = source.read_text().splitlines()
+            lines[subject.last - 1] = 'const char* claimed = "chart\'s prints";'
+            source.write_text('\n'.join(lines) + '\n')
+            claim = source.read_text().splitlines()[subject.last - 1]
+            t.page.write_text(t.page.read_text().replace(f'`{subject.span}`', f'`{claim}`'))
+            anchors = guard.collect(t.page, t.page.read_text())
+            fields = shlex.split(self.entry(t, anchors[0]))
+            fields[2] = ' \t '.join(fields[2].split())
+            entries = [shlex.join(fields)]
+            t.baseline.write_text('# fixture baseline\n\n' + '\n'.join(entries) + '\n')
+            self.assertFalse(self.holds(t, anchors[0]))
+            self.assertTrue(self.holds(t, anchors[-1]))
+            self.check(t, anchors, entries)
+
+    def test_every_anchor_identity_field_must_match(self) -> None:
+        for field in ('doc path', 'doc line', 'cited file', 'citation', 'claim'):
+            with self.subTest(field=field), tree('') as t:
+                anchors = self.prepare(t)
+                subject, control = anchors
+                fields = shlex.split(self.entry(t, subject))
+                if field == 'doc path':
+                    fields[0] = f'docs/pages/other.md:{subject.doc_line}'
+                elif field == 'doc line':
+                    fields[0] = self.location(t, control)
+                elif field == 'cited file':
+                    fields[1] = 'src/' + self.citation(t, subject)
+                elif field == 'citation':
+                    fields[1] = f'{subject.path}:{subject.first}-{subject.last + 1}'
+                else:
+                    fields[2] = control.symbol
+                entries = [shlex.join(fields)]
+                t.baseline.write_text('\n'.join(entries) + '\n')
+                self.check(t, anchors, entries)
+
+    def test_a_single_line_and_an_equal_ended_range_are_distinct(self) -> None:
+        with tree('') as t:
+            anchors = self.prepare(t)
+            subject, control = anchors
+            original = self.citation(t, subject)
+            single = f'{subject.path}:{subject.first}'
+            t.page.write_text(t.page.read_text().replace(original, single))
+            anchors = guard.collect(t.page, t.page.read_text())
+            fields = shlex.split(self.entry(t, anchors[0]))
+            fields[1] = f'{single}-{anchors[0].first}'
+            entries = [shlex.join(fields)]
+            t.baseline.write_text('\n'.join(entries) + '\n')
+            self.check(t, anchors, entries)
+            t.page.write_text(t.page.read_text().replace(single, fields[1]))
+            anchors = guard.collect(t.page, t.page.read_text())
+            self.check(t, anchors, entries)
+
+    def test_a_missing_or_unreadable_baseline_is_red(self) -> None:
+        for unreadable in (False, True):
+            with self.subTest(unreadable=unreadable), tree('') as t:
+                anchors = self.prepare(t, correct=True)
+                t.baseline.unlink()
+                if unreadable:
+                    t.baseline.mkdir()
+                existed_before = t.baseline.exists()
+                code, out = t.run('--list')
+                self.assertEqual(code, int(not t.baseline.is_file()), out)
+                self.assertIn(str(t.baseline), out)
+                for anchor in anchors:
+                    self.assertTrue(self.holds(t, anchor))
+                    self.assertRegex(out, re.escape(self.location(t, anchor)) + r'  OK +'
+                                     + re.escape(self.citation(t, anchor)) + r'\s')
+                self.assertEqual(t.baseline.exists(), existed_before)
 
 
 class Fixing(unittest.TestCase):
