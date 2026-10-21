@@ -1,0 +1,69 @@
+{
+  "comment": "Hand-computed scratch certificate wire v1 vectors (lane V). No production encoder or decoder produced any byte here. Each 'layout' lists the bytes of docs/design/scratch-facts.md in wire order: version 01, then S,F,E,H,J, each set as a complete byte (00/01), an unsigned 64-bit little-endian count, then per entry an unsigned 64-bit little-endian length followed by raw bytes. 'certificate' is the concatenation of its layout blocks, retyped independently; tests assert the equality.",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "doc_worked_vector",
+      "note": "The worked vector of docs/design/scratch-facts.md, 82 bytes: S={ab} F={one empty string} E={x} H={} J={q}, every set complete. 1 + (1+8+8+2) + (1+8+8+0) + (1+8+8+1) + (1+8) + (1+8+8+1) = 82.",
+      "classification": "in_subset",
+      "layout": [
+        "01",
+        "01", "0100000000000000", "0200000000000000", "6162",
+        "01", "0100000000000000", "0000000000000000",
+        "01", "0100000000000000", "0100000000000000", "78",
+        "01", "0000000000000000",
+        "01", "0100000000000000", "0100000000000000", "71"
+      ],
+      "certificate": "0101010000000000000002000000000000006162010100000000000000000000000000000101000000000000000100000000000000780100000000000000010100000000000000010000000000000071",
+      "sets": [
+        {"complete": true, "strings": ["ab"]},
+        {"complete": true, "strings": [""]},
+        {"complete": true, "strings": ["x"]},
+        {"complete": true, "strings": []},
+        {"complete": true, "strings": ["q"]}
+      ]
+    },
+    {
+      "name": "incomplete_exit_out_of_subset",
+      "note": "E is a dynamic exit-ID set (complete=00). S={L} F={empty string} H={empty,L} J={L}. 1 + 18 + 17 + 18 + (1+8+8+8+1) + 18 = 98 bytes. An out_of_subset label is accepted over any certificate.",
+      "classification": "out_of_subset",
+      "layout": [
+        "01",
+        "01", "0100000000000000", "0100000000000000", "4c",
+        "01", "0100000000000000", "0000000000000000",
+        "00", "0100000000000000", "0100000000000000", "58",
+        "01", "0200000000000000", "0000000000000000", "0100000000000000", "4c",
+        "01", "0100000000000000", "0100000000000000", "4c"
+      ],
+      "certificate": "0101010000000000000001000000000000004c0101000000000000000000000000000000000100000000000000010000000000000058010200000000000000000000000000000001000000000000004c01010000000000000001000000000000004c",
+      "sets": [
+        {"complete": true, "strings": ["L"]},
+        {"complete": true, "strings": [""]},
+        {"complete": false, "strings": ["X"]},
+        {"complete": true, "strings": ["", "L"]},
+        {"complete": true, "strings": ["L"]}
+      ]
+    },
+    {
+      "name": "sorted_multi_entry_and_nul_byte",
+      "note": "S={B,a} in unsigned-byte order (0x42 before 0x61), E={a NUL b} proves NUL is an ordinary byte, F and H are empty, J={B,a}. 1 + (1+8+16+2) + 9 + (1+8+8+3) + 9 + (1+8+16+2) = 93 bytes.",
+      "classification": "in_subset",
+      "layout": [
+        "01",
+        "01", "0200000000000000", "0100000000000000", "42", "0100000000000000", "61",
+        "01", "0000000000000000",
+        "01", "0100000000000000", "0300000000000000", "610062",
+        "01", "0000000000000000",
+        "01", "0200000000000000", "0100000000000000", "42", "0100000000000000", "61"
+      ],
+      "certificate": "01010200000000000000010000000000000042010000000000000061010000000000000001010000000000000003000000000000006100620100000000000000010200000000000000010000000000000042010000000000000061",
+      "sets": [
+        {"complete": true, "strings": ["B", "a"]},
+        {"complete": true, "strings": []},
+        {"complete": true, "strings": ["a\u0000b"]},
+        {"complete": true, "strings": []},
+        {"complete": true, "strings": ["B", "a"]}
+      ]
+    }
+  ]
+}
