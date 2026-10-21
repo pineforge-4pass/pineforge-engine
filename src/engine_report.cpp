@@ -7,6 +7,7 @@
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
+#include "report_value_invalid.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -54,7 +55,7 @@ void BacktestEngine::trace(const std::string& name, double value) {
 // release. strategy_stream_fill_report, the explicit snapshot, runs this same
 // function asking for the rows' own owner (NativeExecutionConsumer::
 // fill_snapshot_report), so a live stream's rows survive such a refusal.
-void BacktestEngine::fill_report(ReportC* out) const {
+void BacktestEngine::fill_report(ReportC* out) const try {
     const ReportSinkCallScope sink_call(*this);
     // A recursive capture/observer read is refused before any row gate;
     // the terminal helper consumes its reentry latch.
@@ -102,6 +103,14 @@ void BacktestEngine::fill_report(ReportC* out) const {
     out->broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
     if (hn > 0) std::copy(broker_state_hashes_.begin(), broker_state_hashes_.end(), out->broker_state_hash);
     finish_report_sink(out);
+} catch (const std::exception& error) {
+    // A C wrapper can ask for partial rows after execution already failed.
+    // A later invalid metric must not replace that latched typed failure.
+    if (!last_error().empty()
+        && classify_run_failure(error).code == RunFailureCode::report_result_invalid) {
+        throw coded<std::runtime_error>(run_failure_value_of(*this), last_error());
+    }
+    throw;
 }
 
 // Copy ``trades_`` — followed by ``range_end_trades_``, the report-only rows
@@ -121,21 +130,26 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             "array report requires the sealed trade rows in the report sink");
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();
-    out->total_trades = n;
+    out->total_trades = 0;
+    out->trades_len = 0;
+    out->net_profit = 0.0;
     if (report_sink_state_.enabled) {
         // The hook can re-mark open lots, but closed history is immutable.
         // Never materialize that history merely to discard it at finalization.
         const int open_count = (int)range_end_trades_.size();
         out->net_profit = report_closed_net_profit();
-        out->trades_len = open_count;
+        out->total_trades = n_closed;
         out->trades = open_count > 0 ? new TradeC[open_count] : nullptr;
         for (int i = 0; i < open_count; ++i) {
-            out->trades[i] = report_trade_row(range_end_trades_[i]);
-            out->net_profit += out->trades[i].pnl;
+            const TradeC row = report_trade_row(range_end_trades_[i]);
+            report::validate_trade(row);
+            out->trades[i] = row;
+            out->trades_len = i + 1;
+            out->total_trades = n_closed + i + 1;
+            out->net_profit = report::finite_value(out->net_profit + row.pnl, "summary.net_pnl");
         }
         return;
     }
-    out->trades_len = n;
 
     if (n > 0) {
         out->trades = new TradeC[n];
@@ -144,6 +158,7 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         for (int i = 0; i < n; i++) {
             const Trade& t = (i < n_closed) ? trades_[i]
                                             : range_end_trades_[i - n_closed];
+            report::validate_trade(t);
             out->trades[i].entry_time = t.entry_time;
             out->trades[i].exit_time = t.exit_time;
             out->trades[i].entry_price = t.entry_price;
@@ -158,13 +173,14 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->trades[i].entry_bar_index = t.entry_bar_index;
             out->trades[i].exit_bar_index = t.exit_bar_index;
             out->trades[i].open_at_end = t.open_at_end ? 1 : 0;
-            net_profit += t.pnl;
+            // A partial report keeps each fully initialized row, including
+            // this one if only the following aggregate overflows.
+            out->trades_len = out->total_trades = i + 1;
+            net_profit = report::finite_value(net_profit + t.pnl, "summary.net_pnl");
+            out->net_profit = net_profit;
         }
-
-        out->net_profit = net_profit;
     } else {
         out->trades = nullptr;
-        out->net_profit = 0.0;
     }
 }
 
@@ -176,10 +192,13 @@ double BacktestEngine::report_closed_net_profit() const {
         if (!consumer || consumer->closed_trade_prefix().base != trades_.base())
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                 "report trade fold is missing its sealed prefix");
-        sum = consumer->closed_trade_prefix().pnl;
+        sum = report::finite_value(consumer->closed_trade_prefix().pnl, "summary.net_pnl");
     }
     // Continue the original left fold; the decision counters use other seeds.
-    for (const auto& trade : trades_) sum += trade.pnl;
+    for (const auto& trade : trades_) {
+        report::validate_trade(trade);
+        sum = report::finite_value(sum + trade.pnl, "summary.net_pnl");
+    }
     return sum;
 }
 

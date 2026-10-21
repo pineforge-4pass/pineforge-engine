@@ -8,13 +8,19 @@ each field to its meaning and units.
 @see #pf_report_t for the verbatim struct declaration.
 
 The published engine/codegen **1.6.0** image declares selected-window contract
-revision `1.3`. From 1.6.1 (unreleased), the image declares `1.3-parity`
-instead: it emits the four typed codes (`strategy_value_invalid`,
-`engine_command_value_invalid`, `report_result_invalid` and
-`report_post_execution_failed`), with value parity with the 1.4.0 reference on
-tested cases, and no completeness claim.
+revision `1.3`. The published 1.5.0 image declared `1.3-parity` (earlier
+images carried no revision member), the 1.6.0 image declared `1.3` without a
+completeness proof, and engine 1.6.1 (released, no hub image) declares
+`1.3-parity`; from 1.6.2
+(unreleased) the image declares `1.3` again, now with the EN-115 completeness
+proof: the section-4 producers and manifest are
+present, value ownership is `complete`, and it emits the four typed codes
+(`strategy_value_invalid`, `engine_command_value_invalid`,
+`report_result_invalid` and `report_post_execution_failed`). A build declaring
+`1.3` pairs only with a `complete` receipt; `1.3-parity` remains the parity
+build's literal, and a tuple holding both is invalid.
 The `--capabilities-json` probe's
-`capabilities.selected_window_contract_revisions` is `["1.3-parity"]` for a
+`capabilities.selected_window_contract_revisions` is `["1.3"]` for a
 supported runtime and `[]` otherwise. The declaration lives in that capability
 record; the selected-window wire version remains 1, the phase version 1 and the
 fingerprint/schema version 2.
@@ -125,9 +131,11 @@ currency, net of entry fees — already scaled by `qty` and the point value.
 
 In JSON reports, each trade's `entry_price`, `exit_price`, `qty`, `pnl`,
 `pnl_pct`, `max_runup`, `max_drawdown` and `commission`, and the summary's
-`net_pnl`, `avg_trade`, `best_trade`, `worst_trade` and `max_drawdown`, must be
-finite or the run fails with `report_result_invalid`, `field` naming the
-corresponding `trades.<leaf>` or `summary.<leaf>` and `reason` equal to `nonfinite`.
+`win_rate_pct`, `net_pnl`, `avg_trade`, `best_trade`, `worst_trade` and
+`max_drawdown`, and each equity-curve point's `equity` and `open_profit`, must
+be finite or the run fails with `report_result_invalid`, `field` naming the
+corresponding `trades.<leaf>`, `summary.<leaf>`, `equity_curve.equity` or
+`equity_curve.open_profit` and `reason` equal to `nonfinite`.
 In ordinary mode without `--run-phase-fd`, a non-finite double elsewhere in the
 report document fails with `report_result_invalid`, `field` equal to
 `report.document` and `reason` equal to `nonfinite`.
@@ -255,7 +263,130 @@ this schema has to change (`scripts/test_report_schema_keys.py` pins the
 loss, `avg_win` with no winning trades, `sharpe_monthly` with fewer than two
 monthly returns or zero deviation, `calmar` with zero drawdown. A `0.0`
 in the report is always a real computed zero. See the per-field doxygen
-in `<pineforge/pineforge.h>` for the exact rule on every field.
+in `<pineforge/pineforge.h>` for the existing field domains; the rule below
+is authoritative for `cagr` on a span under one day and when its compounded
+form overflows, which that doxygen does not describe.
+
+Report arithmetic that produces a nonfinite value, including overflow, fails with `report_result_invalid` and reason `nonfinite`.
+The engine checks computed values before they can become a metric absence.
+
+For `cagr`, a measured span under one day is annualized by its simple
+proportional form: `cagr` is a finite number, and the wire carries
+`simple_proportional_subday` under `diagnostics.annualization.cagr`. From one
+day on `cagr` keeps its compounded form unless that is not finite; the simple
+form is then used and the wire carries `simple_proportional_overflow` under the
+same key. `calmar` is computed from that `cagr` and carries the same string
+under `diagnostics.annualization.calmar` whenever it is not null. `calmar`,
+`sharpe_bar` and `sortino_bar` are not null on account of the span, and
+`sharpe_bar` and `sortino_bar` have no reason key.
+
+The exact public paths, native members and reason keys are, with `E` the final
+equity (the last equity-curve mark), `E0` the initial capital and
+`span_years = span_ms / (365.25 * 86400 * 1000)`; a valid run has
+`span_years > 0`, `E0 > 0` and `E > 0`:
+
+| Field (public wire key) | Path | C ABI field | Rule | Reason key path | Reason value |
+| --- | --- | --- | --- | --- | --- |
+| `cagr`, span under one day | `metrics.equity.cagr` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::cagr` | Simple proportional form `(E/E0 - 1) * (1/span_years) * 100`, always, when `0 < span_ms < 86 400 000` on a valid run; a finite number, never `null` on account of the span. | `diagnostics.annualization.cagr` | `simple_proportional_subday` |
+| `cagr`, one day or more | `metrics.equity.cagr` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::cagr` | Compounded form `(pow(E/E0, 1/span_years) - 1) * 100`, unchanged, when `span_ms >= 86 400 000` (exactly one day included) and it is finite. | None. | None; no reason. |
+| `cagr`, one day or more, compounded form not finite | `metrics.equity.cagr` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::cagr` | The simple proportional form above, used when `span_ms >= 86 400 000` and the compounded form is not finite (overflow). | `diagnostics.annualization.cagr` | `simple_proportional_overflow` |
+| `calmar`, span under one day | `metrics.equity.calmar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::calmar` | `cagr / max_equity_drawdown_pct` with the simple proportional `cagr` above; `null` at zero drawdown as before. The reason key is present exactly when the `cagr` reason key is present and `calmar` is not `null`. | `diagnostics.annualization.calmar` | `simple_proportional_subday` |
+| `calmar`, one day or more | `metrics.equity.calmar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::calmar` | `cagr / max_equity_drawdown_pct` with the compounded `cagr` above; `null` at zero drawdown as before. | None. | None; no reason. |
+| `calmar`, one day or more, compounded form not finite | `metrics.equity.calmar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::calmar` | `cagr / max_equity_drawdown_pct` with the simple proportional `cagr` used because the compounded form is not finite; `null` at zero drawdown as before. The reason key is present exactly when the `cagr` reason key is present and `calmar` is not `null`. | `diagnostics.annualization.calmar` | `simple_proportional_overflow` |
+| `sharpe_bar` | `metrics.equity.sharpe_bar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::sharpe_bar` | The observed-bar-density formula on every span; never `null` on account of the span. | None. | None; no reason. |
+| `sortino_bar` | `metrics.equity.sortino_bar` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::sortino_bar` | The same density scaling with downside deviation, on every span; never `null` on account of the span. | None. | None; no reason. |
+| `sharpe_tv`, `sortino_tv` (not in the set) | `metrics.equity.sharpe_tv`, `metrics.equity.sortino_tv` (`metrics.equity` only; absent from `summary` and `metrics.all`). | `pf_equity_stats_t::sharpe_monthly`, `pf_equity_stats_t::sortino_monthly` | Calendar-month returns with fixed sqrt(12), independent of `span_ms`; existing null domain. | None. | None; no reason. |
+
+No field other than `cagr` and `calmar` receives an annualization reason.
+In native `ReportC` and C ABI `pf_report_t`, these members are inside
+`metrics.equity`; a defined absence is a NaN and carries no reason, and neither
+form of `cagr` or of `calmar` carries one. The
+separate runner JSON uses `metrics.equity.cagr`, `metrics.equity.calmar`,
+`metrics.equity.sharpe_bar` and `metrics.equity.sortino_bar` for the four
+fields, encoding an absence as the string `"NaN"` with no reason.
+Its monthly keys are `metrics.equity.sharpe_monthly` and
+`metrics.equity.sortino_monthly`, with the same string encoding for an absence.
+
+The span is `span_ms = equity_curve[-1].time_ms - equity_curve[0].time_ms`:
+the last equity-curve point's `time_ms` minus the first point's, using the
+script-bar OPEN timestamps in UTC epoch milliseconds and an unsigned
+difference before conversion to double. The clock is independent of elapsed
+wall time and the chart timezone. In selected-window mode, point 0 is the
+anchor at the requested start T, so the span starts at T even if the first
+window bar is later. A positive span strictly less than one day
+(`0 < span_ms < 86 400 000`) gives `cagr` its simple proportional form;
+exactly one day and more keep the compounded form unchanged, with no reason
+unless that form is not finite. Empty curves, nonpositive spans, nonpositive
+capital and nonpositive final equity keep their existing absences without
+a reason. The reason object is present only when `cagr` took a simple form and is
+outside the canonical result digest, which still has exactly
+135 scalar leaves. It has the key `cagr` and, when `metrics.equity.calmar` is
+not null, the key `calmar` with the same string; `calmar` is null at zero
+drawdown, and then has no key. `sharpe_bar` and `sortino_bar` have none on any
+span. If `cagr` took its compounded form, `diagnostics.annualization` is absent,
+whatever `calmar` is.
+
+On a valid run no span makes `cagr`, `calmar`, `sharpe_bar` or `sortino_bar`
+null: `calmar` and the bar ratios keep their own existing domains (zero
+drawdown; fewer than two returns, or zero deviation), which carry no reason.
+The sub-day form evaluates no power, so it cannot overflow. From one day on the
+compounded form is evaluated first and, when it is not finite, the simple form is
+used. Any other computed nonfinite result, including a simple form that is
+itself not finite, remains the typed failure `report_result_invalid`, reason
+`nonfinite`, naming the exact field, for example `metrics.equity.cagr`.
+
+The two forms are not on one scale, and the switch between them has a known,
+accepted consequence: a ranking of runs by `cagr` can invert against a ranking
+by return across a switch. For the same return the compounded form is far above
+the simple form on spans under a year, so a run just over one day can outrank a
+run just under one day that gained more; and a run whose compounded form just
+overflows takes the simple form, many orders of magnitude below the compounded
+value of a run with a slightly smaller return. The reason key tells a reader
+which form produced a value. The inversion is rare in practice.
+
+For a sub-day run, the relevant JSON members are (a seven-minute curve that
+falls from 10,000 to 9,800 and rises to 10,800, so `cagr` is
+`0.08 * (1 / span_years) * 100`, the maximum equity drawdown is 2 percent and
+`calmar` is `cagr / 2`, both rounded here):
+
+```json
+{
+  "metrics": {
+    "equity": {
+      "cagr": 601097.14,
+      "calmar": 300548.57
+    }
+  },
+  "diagnostics": {
+    "annualization": {
+      "cagr": "simple_proportional_subday",
+      "calmar": "simple_proportional_subday"
+    }
+  }
+}
+```
+
+The report writer names the form from the curve it holds: under one day a finite
+`cagr` on a positive span is flagged, and from one day on it repeats the kernel's
+compounded arithmetic on the curve's marks and flags the run when that value
+is not finite. The initial capital it needs is the first mark only where the run
+proves it (the selected-window anchor; in an ordinary run a first mark with no
+open profit and no trade entered at it); with no proof it names nothing. In that
+case (a run of one day or more whose compounded form is not finite, with an
+unproven first mark) the reported `cagr` is still the simple proportional value
+the kernel computed; only the `simple_proportional_overflow` flag is absent. It adds
+the `calmar` key beside the `cagr` key from `metrics.equity.calmar` alone: the
+same string when that value is not null, no key when it is null.
+
+`sharpe_bar` / `sortino_bar` use their observed-density construction on every
+span, and `sharpe_tv` / `sortino_tv` retain calendar-month
+resampling with fixed sqrt(12), independent of the measured span. The monthly
+pair is already null on sub-day spans and receives no extra reason. Any
+overflow outside `cagr`, and a `cagr` overflow that the simple form does not
+absorb, fail with `report_result_invalid` and
+reason `nonfinite`, naming the exact field. An executed trade or equity mark
+must be finite. See the [revision 3.1 clarification](../design/selected-window-wire-v1.3-revision-3.1.md)
+for the field set and wire placement.
 
 ## Equity curve (ABI v2)
 
