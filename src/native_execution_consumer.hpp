@@ -89,6 +89,15 @@ inline constexpr bool kRetireEveryPointDefault = false;
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
+    enum class CommandScratchBinding : std::size_t {
+        Trade, Dependency, Exit, Count
+    };
+    // Each successful borrowed binding retains the same run owner. Separate
+    // slots keep both runs alive if a later binding during begin throws.
+    // These own storage/workspace, not a second copy of broker state.
+    void retain_command_scratch_owner(CommandScratchBinding,
+                                      std::shared_ptr<void> owner) noexcept;
+
     // The digests the spec fold takes of the run spec's three bar arrays
     // (intrabar path, declared series, auxiliary feed). See spec_bar_digests_.
     struct SpecBarDigests {
@@ -1716,6 +1725,11 @@ private:
     uint64_t spec_digest(const NativeRunSpec& spec, uint64_t run_base) const noexcept;
     void forget_spec_digests() const noexcept;
 
+    // Retained through native run-state and host-state destruction. The source
+    // adapter dies before its base engine's consumer; keeping the owner here
+    // also preserves the generated source-host object layout.
+    std::array<std::shared_ptr<void>,
+               static_cast<std::size_t>(CommandScratchBinding::Count)> command_scratch_owners_;
     NativeLifecycle state_{NativeUnconfigured{}};
     // native_host()'s answer for the engine the last public begin named.
     // Derived, never folded.

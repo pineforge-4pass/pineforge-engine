@@ -1,6 +1,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/checked_settings.hpp>
 #include <pineforge/query_refusal.hpp>
+#include <pineforge/source/exit_scratch.hpp>
 #include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
@@ -16,26 +17,90 @@
 #include "pine_run_failure.hpp"
 #include "pine_value_admit_decl.hpp"
 #include "pine_value_admit_risk.hpp"
+#include "pine_command_scratch_production.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
+#include <unistd.h>
 
 namespace pineforge {
 using namespace source;
 
 namespace {
+
+::pineforge::detail::ScratchStoreConfig command_scratch_config(
+        std::size_t page_size, ::pineforge::detail::ScratchKeyOrder order) noexcept {
+    return {2, page_size, 1, 1, order,
+            ::pineforge::detail::ScratchOpenMode::create_empty};
+}
+
+std::size_t command_scratch_page_size() {
+    errno = 0;
+    const long size = ::sysconf(_SC_PAGESIZE);
+    if (size <= 0)
+        throw std::system_error(errno ? errno : EINVAL, std::generic_category(),
+                                "command scratch platform page size");
+    return static_cast<std::size_t>(size);
+}
+
+struct SourceCommandScratchRun {
+    // Backings precede their stores/context, so borrowers die first.
+    // The native consumer retains this run through source-adapter destruction.
+    // Geometry is fixed independently of the bar and order populations.
+    const std::size_t page_size = command_scratch_page_size();
+    std::unique_ptr<::pineforge::detail::ScratchBacking> trade_backing =
+        source::detail::make_command_scratch_backing(page_size);
+    std::unique_ptr<::pineforge::detail::ScratchBacking> dependency_backing =
+        source::detail::make_command_scratch_backing(page_size);
+    std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing =
+        source::detail::make_command_scratch_backing(page_size);
+    ::pineforge::detail::ScratchStore trade{
+        command_scratch_config(page_size, PineStrategyHost::trade_scratch_order()),
+        trade_backing.get()};
+    ::pineforge::detail::ScratchStore dependency{
+        command_scratch_config(page_size, NativeExecutionConsumer::dependency_scratch_order()),
+        dependency_backing.get()};
+    ::pineforge::detail::ScratchStore exit{
+        command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
+        exit_backing.get()};
+    source::detail::ExitScratchContext exit_context{exit, {}};
+
+    SourceCommandScratchRun() {
+        for (const auto* store : {&trade, &dependency, &exit}) {
+            if (store->status() != ::pineforge::detail::ScratchStatus::ok)
+                throw std::logic_error("run command scratch store failed to open");
+        }
+        // This head exposes owning NativeOpenLot rows and snapshot readers,
+        // rather than the reference tree's NativeOpenLotView visitor API.
+        exit_context.lots = [](const NativeStrategyHost& host, double mark, void* context,
+                               bool (*visit)(void*, const NativeOpenLot&)) {
+            for (const auto& lot : host.native_open_lots(mark))
+                if (!visit(context, lot)) return ::pineforge::detail::ScratchStatus::cancelled;
+            return ::pineforge::detail::ScratchStatus::ok;
+        };
+        exit_context.working = [](const NativeStrategyHost& host, void* context,
+                                  bool (*visit)(void*, const NativeWorkingRequest&)) {
+            for (const auto& request : host.native_working_requests())
+                if (!visit(context, request)) return ::pineforge::detail::ScratchStatus::cancelled;
+            return ::pineforge::detail::ScratchStatus::ok;
+        };
+    }
+};
 
 using TradeScratchKey = std::array<std::uint64_t, 4>;
 using TradeScratchHeader = std::array<std::uint64_t, 23>;
@@ -562,6 +627,13 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     const auto& scratch = scratch_tables_for_run();
     ::pineforge::detail::bind_tree_scratch_tables(adapter_, scratch);
     ::pineforge::detail::bind_id_pair_scratch_tables(adapter_, scratch);
+    auto command_scratch = std::make_shared<SourceCommandScratchRun>();
+    auto& consumer = NativeExecutionConsumer::bound(*this);
+    using ScratchBinding = NativeExecutionConsumer::CommandScratchBinding;
+    set_trade_scratch(command_scratch->trade);
+    consumer.retain_command_scratch_owner(ScratchBinding::Trade, command_scratch);
+    consumer.set_dependency_scratch(command_scratch->dependency);
+    consumer.retain_command_scratch_owner(ScratchBinding::Dependency, command_scratch);
     // Reserve placement evidence by incarnation once for the disclosed batch:
     // two legs per bar, including re-issued brackets' historical projections.
     if (args.n > 0 && static_cast<std::size_t>(args.n)
@@ -604,6 +676,13 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     const bool failed_before = native_state().kind == NativeLifecycleKind::Failed;
     NativeSetupResult setup;
     try {
+        // project() establishes the actual run identity and installs a
+        // standalone store. Replace it with the host's service afterwards,
+        // before configure or any run/bar callback can read the adapter.
+        // Keeping this in the feed-return guard also covers binding failure.
+        command_scratch->exit_context.run = spec.identity;
+        adapter_.bind_exit_scratch(command_scratch->exit_context);
+        consumer.retain_command_scratch_owner(ScratchBinding::Exit, command_scratch);
         setup = NativeExecutionConsumer::bound(*this).configure(*this, std::move(spec));
     } catch (...) {
         return_feed_bytes(symbol_feeds_, spec.instrument_feeds);

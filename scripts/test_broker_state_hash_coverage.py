@@ -171,6 +171,54 @@ class Coverage(unittest.TestCase):
                 self.assertEqual(result, 1, output)
                 self.assertIn("exit_scratch_", output)
 
+    def test_exit_scratch_context_fields_are_required(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        self.assertIn("6 exit-context fields", output)
+        for field, fold in checker.EXIT_SCRATCH_CONTEXT_FOLDS.items():
+            for replacement in ("", "if (false) { " + fold + " }"):
+                with self.subTest(field=field, replacement=replacement):
+                    result, output = self.check(((
+                        "src/source/pine_state_hash.cpp", fold, replacement),))
+                    self.assertEqual(result, 1, output)
+                    self.assertIn("ExitScratchContext." + field, output)
+        for before, after in (
+            ("hash_source_run_identity(f, scratch->run);",
+             "hash_source_run_identity(f, {});"),
+            ("f.u(scratch->next_scope);", "f.u(0);"),
+            ("f.b(scratch->versions != nullptr);", "f.b(false);"),
+            ("f.b(scratch->lots != nullptr);", "f.b(false);"),
+            ("f.b(scratch->working != nullptr);", "f.b(false);"),
+            ("hash_scratch_store(f, &scratch->store);", "hash_scratch_store(f, nullptr);"),
+        ):
+            with self.subTest(before=before):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", before, after),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("ExitScratchContext", output)
+
+    def test_new_exit_scratch_context_field_is_not_silently_ignored(self):
+        for declaration in (
+            "    std::uint64_t injected_exit_state = 0;\n",
+            "    bool (*injected_exit_reader)(void*) = nullptr;\n",
+        ):
+            with self.subTest(declaration=declaration):
+                result, output = self.check(((
+                    "include/pineforge/source/exit_scratch.hpp",
+                    "struct ExitScratchContext {\n",
+                    "struct ExitScratchContext {\n" + declaration),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("ExitScratchContext fields: unclassified=", output)
+                self.assertIn("injected_exit_", output)
+
+    def test_exit_scratch_observation_waivers_cannot_go_stale(self):
+        result, output = self.check(((
+            "include/pineforge/source/exit_scratch.hpp",
+            "    void* observation = nullptr;\n", ""),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("ExitScratchContext fields:", output)
+        self.assertIn("observation", output)
+
     def test_trade_scratch_fold_is_required(self):
         result, output = self.check()
         self.assertEqual(result, 0, output)

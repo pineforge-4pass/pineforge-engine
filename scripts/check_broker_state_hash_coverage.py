@@ -70,6 +70,24 @@ SOURCE_HEADERS = (
     "include/pineforge/source/pine_language_state.hpp",
 )
 
+# The run owner is storage/lifetime, not another broker-state leaf. Its exit
+# context is folded through the adapter's existing borrowed binding. Pin every
+# decision-relevant context field, including callback *presence*, never an
+# address or a shared_ptr reference count.
+EXIT_SCRATCH_CONTEXT_FOLDS = {
+    "store": "hash_scratch_store(f, &scratch->store);",
+    "run": "hash_source_run_identity(f, scratch->run);",
+    "next_scope": "f.u(scratch->next_scope);",
+    "versions": "f.b(scratch->versions != nullptr);",
+    "lots": "f.b(scratch->lots != nullptr);",
+    "working": "f.b(scratch->working != nullptr);",
+}
+EXIT_SCRATCH_OBSERVATION_WAIVERS = {
+    "observation": "Borrowed instrumentation context; no trading decision reads it.",
+    "observe_rows": "Reports temporary scope row counts; does not supply trading state.",
+    "observe_lookup": "Reports lookup work; does not supply trading state.",
+}
+
 
 def clean(text: str) -> str:
     return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", text))
@@ -261,6 +279,33 @@ def scratch_store_state_digest_leaf(root: Path) -> str:
     return label
 
 
+def exit_scratch_context_fields(root: Path, source_hash: str) -> int:
+    label = "ExitScratchContext"
+    header = clean((root / "include/pineforge/source/exit_scratch.hpp").read_text())
+    context = _named_body(header, "struct", label)
+    fields = _data_fields(context, trailing_underscore=False)
+    # Function-pointer members are deliberately excluded by the general
+    # declaration parser. Here their presence changes the available service,
+    # so classify them too, including any newly added reader.
+    fields.update(re.findall(r"\(\s*\*\s*([A-Za-z_]\w*)\s*\)", context))
+    classified = set(EXIT_SCRATCH_CONTEXT_FOLDS) | set(EXIT_SCRATCH_OBSERVATION_WAIVERS)
+    if fields != classified:
+        raise ValueError(label + " fields: unclassified="
+                         + repr(sorted(fields - classified)) + ", stale="
+                         + repr(sorted(classified - fields)))
+    fold = _function_body(source_hash, r"\bvoid\s+hash_exit_scratch\s*\(", label + " fold")
+    require_once(fold, "f.b(scratch != nullptr);", label + " binding presence")
+    require_once(fold, "if (!scratch) return;", label + " unbound guard")
+    for field, statement in EXIT_SCRATCH_CONTEXT_FOLDS.items():
+        require_once(fold, statement, label + "." + field + " fold")
+    adapter = _function_body(
+        source_hash, r"\bvoid\s+source::PineExecutionAdapter::hash_state\s*\(",
+        "source adapter hash")
+    require_once(adapter, "hash_exit_scratch(f, exit_scratch_.get());",
+                 label + " adapter exit_scratch_ binding fold")
+    return len(EXIT_SCRATCH_CONTEXT_FOLDS)
+
+
 def main(root: Path = ROOT) -> int:
     try:
         engine_hash = executable_hash_text((root / "src/engine_state_hash.cpp").read_text())
@@ -339,6 +384,7 @@ def main(root: Path = ROOT) -> int:
             require_once(consumer_hash, fold, "native request-state fold `" + fold + "`")
 
         scratch_leaf = scratch_store_state_digest_leaf(root)
+        exit_context_fields = exit_scratch_context_fields(root, source_hash)
 
         # R5 N5 (RP9): a KernelRecorded run records the per-bar broker-state
         # hash row itself, in exactly one place — the per-calculation
@@ -422,6 +468,7 @@ def main(root: Path = ROOT) -> int:
               f"{len(nested)} nested fields, {len(waivers)} waivers, "
               f"{len(SCHEDULER_CACHE_WAIVERS)} scheduler cache waivers, "
               f"{len(PINNED_HASH_DEBT)} pinned sibling-lane debts, "
+              f"{exit_context_fields} exit-context fields, "
               f"leaf={scratch_leaf}, OK")
         return 0
     except (OSError, ValueError) as error:

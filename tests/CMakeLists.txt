@@ -7451,3 +7451,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
     set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
+
+# LAB-O1SEAMS s1c: real run setup, exit readers, restart and backing teardown.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
+    list(APPEND TEST_SOURCES test_run_setup_exit_scratch_binding)
+    pineforge_add_unit_test(test_run_setup_exit_scratch_binding)
+endif()

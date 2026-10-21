@@ -12597,6 +12597,11 @@ NativeExecutionConsumer::~NativeExecutionConsumer() {
     drop_presentation();
 }
 
+void NativeExecutionConsumer::retain_command_scratch_owner(
+        CommandScratchBinding binding, std::shared_ptr<void> owner) noexcept {
+    command_scratch_owners_[static_cast<std::size_t>(binding)] = std::move(owner);
+}
+
 // Frees through BacktestEngine::free_report, which deletes exactly what
 // capture_presentation (and fill_trades_section before it) allocated, then
 // zeroes what free_report leaves (the scalars, the metrics, the lengths of
