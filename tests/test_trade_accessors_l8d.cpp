@@ -99,7 +99,7 @@ void present(Probe& probe, int index, const Trade& expected, int cause) {
     text(entry, expected.entry_id);
     text(exit, expected.exit_id);
     text(comment, expected.exit_comment);
-    const Trade& resident = probe.get_report_trade(index);
+    const Trade& resident = probe.materialize_report_trade(index);
     CHECK(entry == resident.entry_id.c_str());
     CHECK(exit == resident.exit_id.c_str());
     CHECK(comment == resident.exit_comment.c_str());

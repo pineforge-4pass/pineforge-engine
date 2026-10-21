@@ -15,7 +15,6 @@ document). Ordinary stdout is not filtered here: stdout-spoof controls pin
 the extra line explicitly, and do not claim a single-line guarantee.
 """
 
-import io
 import json
 import sys
 from pathlib import Path
@@ -275,18 +274,22 @@ def test_real_report_validation_summary_read(harness, mode, factory, reason):
 @pytest.mark.parametrize("factory,reason", FAULTS)
 def test_encoder_failure_after_report_chunks(harness, mode, factory, reason):
     fault = Fault(factory, "serialization.encoder")
-    real_iterencode = json.JSONEncoder.iterencode
+    real_encode = json.JSONEncoder.encode
+    real_write = run_json._BoundedJSONFile.write
 
-    def iterencode(encoder, document, *args, **kwargs):
-        is_report = isinstance(document, dict) and "summary" in document and "trades" in document
-        for chunk in real_iterencode(encoder, document, *args, **kwargs):
-            if is_report:
-                fault.prefix += chunk
-            yield chunk
-            if is_report and chunk == '"summary"':
-                fault.trip()
+    def encode(encoder, document):
+        if document == "summary":
+            fault.trip()
+        return real_encode(encoder, document)
 
-    with mock.patch.object(json.JSONEncoder, "iterencode", iterencode):
+    def write(buffer, text):
+        fault.prefix += text
+        return real_write(buffer, text)
+
+    # The streaming serializer still uses the standard encoder for each
+    # field. Fail on the actual summary key after real artifact writes.
+    with mock.patch.object(json.JSONEncoder, "encode", encode), \
+            mock.patch.object(run_json._BoundedJSONFile, "write", write):
         result = run_with_library(harness, mode, configure=fault.bind)
     assert fault.hits == 1
     assert len(fault.prefix) > 32  # actual chunks existed before the failure
@@ -313,17 +316,15 @@ def test_encoder_failure_after_report_chunks(harness, mode, factory, reason):
 @pytest.mark.parametrize("factory,reason", FAULTS)
 def test_report_buffer_write_failure(harness, mode, factory, reason):
     fault = Fault(factory, "serialization.buffer_write")
+    real_write = run_json._BoundedJSONFile.write
 
-    class Buffer(io.StringIO):
-        def write(self, text):
-            if text == '"summary"':
-                fault.prefix = self.getvalue()
-                fault.trip()
-            return super().write(text)
+    def write(buffer, text):
+        if text == '"summary"':
+            fault.trip()
+        fault.prefix += text
+        return real_write(buffer, text)
 
-    # The real json.dump writes its real chunks into this standard IO buffer.
-    # Failure-line and provenance buffers contain no report summary key.
-    with mock.patch.object(io, "StringIO", Buffer):
+    with mock.patch.object(run_json._BoundedJSONFile, "write", write):
         result = run_with_library(harness, mode, configure=fault.bind)
     assert fault.hits == 1
     assert len(fault.prefix) > 32

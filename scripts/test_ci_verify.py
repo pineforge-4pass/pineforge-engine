@@ -1203,8 +1203,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 105)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 85)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 111)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 91)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -1214,7 +1214,13 @@ class CAbiRuntimeInventory(unittest.TestCase):
         self.assertIn('strategy_configure_native_fx_curve_v1', runtime)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', header)
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', runtime)
-        for name in ('strategy_set_symbol_feed', 'strategy_set_symbol_feed_borrowed_v1',
+        for name in ('strategy_set_report_sink_fd_v1',
+                     'strategy_report_sink_summary_v1',
+                     'strategy_set_scratch_tables_v1',
+                     'pf_run_abort_install_sigterm_v1',
+                     'pf_run_abort_requested_v1',
+                     'pf_run_abort_restore_sigterm_v1',
+                     'strategy_set_symbol_feed', 'strategy_set_symbol_feed_borrowed_v1',
                      'strategy_set_symbol_feed_column',
                      'strategy_set_symbol_facts', 'strategy_set_recorded_series'):
             self.assertIn(name, header)
@@ -1782,7 +1788,8 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 963})
+                         {'debug': 876, 'sanitizers': 867, 'native': 963,
+                          'release': 895, 'kernel': 337})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
                 code, summary, scripted, _ = self.run_profile(
@@ -2816,7 +2823,8 @@ class PrivateFixtureFloors(unittest.TestCase):
             self.assertEqual(validate_config(parse_args(['kernel'])).min_tests,
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 963})
+                         {'debug': 876, 'sanitizers': 867, 'native': 963,
+                          'release': 895, 'kernel': 337})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
         # F9: the flag must MOVE the value. A test that only reads the
@@ -3211,7 +3219,7 @@ class PrivateFixtureFloors(unittest.TestCase):
 class PrExclusionWithFixturesAbsent(unittest.TestCase):
     """N1: the --exclude-label branch in the public PR jobs (fixtures absent).
 
-    The PR Debug and sanitizers jobs run `ctest -LE slow` on a tree without
+    The PR Release, Debug, kernel and sanitizers jobs run `ctest -LE slow` on a tree without
     the private fixtures: the pinned placeholders are still selected and
     SKIP, and the old rule (ran == selected) failed on every one of them --
     D2's probe of the real Driver (debug, 882 registered, 5 slow, 290 pinned
@@ -3228,6 +3236,39 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
 
     def pinned_probe(self, count: int) -> list:
         return sorted(ci_verify.private_fixture_rows(ROOT))[:count]
+
+    def test_release_and_kernel_exclusions_hold_registration_selection_and_pinned_skips(self):
+        # D1 floors are independent policy literals, not read back from the
+        # implementation being tested. Exercise the real enforcement branch
+        # without repeating an engine configure/build or scripted source guard.
+        for profile, floor in (('release', 895), ('kernel', 337)):
+            pinned = self.pinned_probe(1)
+            cases = (
+                (floor, floor - 5, floor - 5, pinned, 'passed', ''),
+                (floor - 1, floor - 6, floor - 6, pinned, 'failed', 'registration floor'),
+                (floor, floor, floor, pinned, 'failed', 'expected a nonempty'),
+                (floor, 0, 0, (), 'failed', ''),
+                (floor, floor - 5, floor - 6, pinned, 'failed', 'ran + pinned skips'),
+                (floor, floor - 5, floor - 5, ['unapproved_skip'],
+                 'failed', 'skipped but not pinned'),
+            )
+            for registered, selected, total, skipped, status, message in cases:
+                with self.subTest(profile=profile, registered=registered, selected=selected,
+                                  total=total, skipped=skipped), \
+                        tempfile.TemporaryDirectory() as temporary, \
+                        mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}):
+                    cfg = ci_verify.build_config(
+                        [profile, '--exclude-label', 'slow', '--build-dir', temporary],
+                        stream_output=False)
+                    driver = ci_verify.Driver(cfg)
+                    driver.enforce_test_floor(
+                        Completed(0, ctest_output(total, skipped)),
+                        registered=registered, selected=selected)
+                    stage = next(item for item in driver.stages if item['name'] == 'ctest-exclusion')
+                    self.assertEqual(stage['status'], status, stage)
+                    if message:
+                        self.assertIn(message, stage['error'])
+                    self.assertNotIn('ctest-floor', [item['name'] for item in driver.stages])
 
     def test_green_the_d2_probe_shape_passes(self):
         # Control (a): the PR shape's own numbers. RED before the fix: exit 1,
@@ -3964,7 +4005,8 @@ class CTestDeadlines(unittest.TestCase):
                 self.assertEqual(result, Completed(code, b'row output', b'diagnostic'))
 
     def test_commands_keep_every_profile_inventory_and_only_explicit_label_exclusion(self):
-        for profile in ('native', 'live-sanitizers', 'live-tsan'):
+        for profile in ('release', 'debug', 'kernel', 'sanitizers',
+                        'native', 'live-sanitizers', 'live-tsan'):
             cfg = ci_verify.build_config([profile])
             argv = ci_verify.ctest_command(cfg, cfg.build_dir, jobs=16, junit=True)
             self.assertNotIn('-R', argv)

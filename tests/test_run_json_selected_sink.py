@@ -1,4 +1,4 @@
-"""CR-150 L9S: selected full/v1 bytes from the sink versus the frozen array producer.
+"""CR-150 L9S: selected full/v1 bytes from the sink versus the current array producer.
 
 Only native calls and the planner are replaced in the unit rows. The sink
 reader, report builders, fingerprint checks, phase writer and serialization
@@ -36,14 +36,16 @@ import test_run_json_sink_summary as summaries
 
 # Reuse the existing immutable producer and its SHA-256 guard.
 frozen = sinks.frozen
+arena_stats = sinks.arena_stats
 
 
 class SelectedSinkLibrary(selected.FakeLib):
     """The same ReportC values, exposed through arrays or a real v1 sink."""
 
     def __init__(self, plan, *, pnls=(10., -7., -0.), outputs=False, fault=None,
-                 bad_field=None, **kwargs):
+                 bad_field=None, arena_stats=None, **kwargs):
         super().__init__(plan, **kwargs)
+        sinks.configure_arena_stats(self, arena_stats)
         self.pnls, self.outputs, self.fault, self.bad_field = pnls, outputs, fault, bad_field
         self.path, self.installed, self.queried, self.closed = None, [], 0, []
         self.incarnation_reads = []
@@ -201,6 +203,9 @@ def invoke(tmp_path, monkeypatch, *, runner=run_json, library=None, plan=None,
 
     with monkeypatch.context() as patch:
         patch.setattr(runner, "load_strategy", lambda path: library)
+        if runner is not run_json:
+            patch.setattr(runner, "build_report_dict", sinks.frozen_builder_with_arena_stats(
+                runner.build_report_dict, library.arena_stats))
         patch.setattr(runner.time, "time", lambda: 10.)
         patch.setattr(planner, "SelectedPrimaryPlanner", lambda path: types.SimpleNamespace(
             plan=lambda *args, **kwargs: dict(plan)))
@@ -230,13 +235,17 @@ def masked_bytes(text):
 
 @pytest.mark.parametrize("outputs", [False, True])
 @pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
-def test_selected_sink_matches_frozen_array_bytes(tmp_path, monkeypatch, frozen, outputs, pnls):
-    before = invoke(tmp_path, monkeypatch, runner=frozen, outputs=outputs,
-                    library=SelectedSinkLibrary(selected.full_plan(), pnls=pnls, outputs=outputs))
+def test_selected_sink_matches_frozen_array_bytes(
+        tmp_path, monkeypatch, outputs, pnls, arena_stats):
+    before = invoke(tmp_path, monkeypatch, outputs=outputs,
+                    library=sinks.without_report_sink(SelectedSinkLibrary(
+                        selected.full_plan(), pnls=pnls, outputs=outputs, arena_stats=arena_stats)))
     after = invoke(tmp_path, monkeypatch, outputs=outputs,
-                   library=SelectedSinkLibrary(selected.full_plan(), pnls=pnls, outputs=outputs))
+                   library=SelectedSinkLibrary(
+                       selected.full_plan(), pnls=pnls, outputs=outputs, arena_stats=arena_stats))
     assert after[3].installed, "L9S missing: selected mode never installs the sink"
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, ""), (before, after)
+    assert not before[3].installed
     assert masked_bytes(after[1]) == masked_bytes(before[1])
     assert after[3].queried == 1 and not after[3].incarnation_reads
     assert after[3].closed == after[3].installed
@@ -248,22 +257,31 @@ def test_selected_sink_matches_frozen_array_bytes(tmp_path, monkeypatch, frozen,
     assert report["trades"] == json.loads(before[1])["trades"]
 
 
-def test_selected_empty_window_is_the_array_anchor_only_report(tmp_path, monkeypatch, frozen):
+def test_selected_empty_window_is_the_array_anchor_only_report(
+        tmp_path, monkeypatch, arena_stats):
     plan = selected.empty_window_plan()
-    before = invoke(tmp_path, monkeypatch, runner=frozen, plan=plan,
-                    library=SelectedSinkLibrary(plan, pnls=()))
-    after = invoke(tmp_path, monkeypatch, plan=plan, library=SelectedSinkLibrary(plan, pnls=()))
+    before = invoke(tmp_path, monkeypatch, plan=plan,
+                    library=sinks.without_report_sink(
+                        SelectedSinkLibrary(plan, pnls=(), arena_stats=arena_stats)))
+    after = invoke(tmp_path, monkeypatch, plan=plan,
+                   library=SelectedSinkLibrary(plan, pnls=(), arena_stats=arena_stats))
     assert after[3].installed
     assert (before[0], after[0]) == (0, 0), (before[1], after[1])
+    assert not before[3].installed
     assert masked_bytes(after[1]) == masked_bytes(before[1])
     assert len(json.loads(after[1])["equity_curve"]) == plan["window_script_bars"] + 1
 
 
-def test_selected_unresolved_capital_keeps_the_same_fingerprint(tmp_path, monkeypatch, frozen):
+def test_selected_unresolved_capital_keeps_the_same_fingerprint(
+        tmp_path, monkeypatch, arena_stats):
     normalize = selected.unresolved_capital_normalizer()
-    before = invoke(tmp_path, monkeypatch, runner=frozen, normalize=normalize)
-    after = invoke(tmp_path, monkeypatch, normalize=normalize)
+    before = invoke(tmp_path, monkeypatch, normalize=normalize,
+                    library=sinks.without_report_sink(
+                        SelectedSinkLibrary(selected.full_plan(), arena_stats=arena_stats)))
+    after = invoke(tmp_path, monkeypatch, normalize=normalize,
+                   library=SelectedSinkLibrary(selected.full_plan(), arena_stats=arena_stats))
     assert after[3].installed and before[0] == after[0] == 0, (before[1], after[1])
+    assert not before[3].installed
     assert masked_bytes(after[1]) == masked_bytes(before[1])
 
 
@@ -271,17 +289,19 @@ NAMED_RUN_ID = 'l9s "named"\n漢'
 
 
 @pytest.mark.parametrize("outputs", [False, True])
-def test_selected_named_sink_yields_the_summary_projection(tmp_path, monkeypatch, frozen, outputs):
+def test_selected_named_sink_yields_the_summary_projection(
+        tmp_path, monkeypatch, outputs, arena_stats):
     """A selected request that names a sink is no longer run_request_invalid. Its report is the
-    frozen array producer's selected report projected to DESIGN 4.3: trades become report_sink,
+    current array producer's selected report projected to DESIGN 4.3: trades become report_sink,
     the curve is dropped, outputs keep their six O(1) members, report_window and report_shape
     stay. The reference reader checks the file the engine was told to write."""
     path, spill = tmp_path / "selected report 漢.ndjson", tmp_path / "spill"
     spill.mkdir()
     plan = selected.full_plan()
-    before = invoke(tmp_path, monkeypatch, runner=frozen, plan=plan, outputs=outputs,
-                    library=SelectedSinkLibrary(plan, outputs=outputs))
-    library, directories = NamedSinkLibrary(plan, outputs=outputs), []
+    before = invoke(tmp_path, monkeypatch, plan=plan, outputs=outputs,
+                    library=sinks.without_report_sink(
+                        SelectedSinkLibrary(plan, outputs=outputs, arena_stats=arena_stats)))
+    library, directories = NamedSinkLibrary(plan, outputs=outputs, arena_stats=arena_stats), []
     temporary = run_json.tempfile.TemporaryFile
 
     def track(*args, **kwargs):
@@ -293,6 +313,7 @@ def test_selected_named_sink_yields_the_summary_projection(tmp_path, monkeypatch
                    extra=["--report-sink", str(path), "--run-id", NAMED_RUN_ID,
                           "--spill-dir", str(spill)])
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, ""), (before[1], after[1])
+    assert not before[3].installed
     reference = summaries.read_reference(path)
     expected = summaries.project_summary(json.loads(masked_bytes(before[1])), reference)
     assert masked_bytes(after[1]) == json.dumps(expected, separators=(",", ":"), allow_nan=False)
@@ -338,8 +359,11 @@ def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkey
     monkeypatch.setattr(run_json, "_new_report_sink", counting_sink)
     status, text, stderr, library, _ = invoke(tmp_path, monkeypatch)
     assert library.installed and status == 0 and stderr == "", text
-    # Anchor validation, then the full streaming serialization pass.
-    assert equity_passes == [1, library.counts["E"]]
+    # R13 retains main's full finite-result check and annualization reads.
+    # Both endpoint reads finish their digest checks, followed by the
+    # one-point anchor check and the full streaming serialization pass.
+    count = library.counts["E"]
+    assert equity_passes == [count, count, count, 1, count]
 
 
 @pytest.mark.parametrize("fault", [
@@ -352,7 +376,13 @@ def test_selected_sink_faults_never_publish_a_report(tmp_path, monkeypatch, faul
     assert library.installed, "the selected sink must be exercised"
     document = json.loads(text)
     assert status == 1 and stderr == ""
-    assert document["code"] == "engine_invariant" and "summary" not in document
+    # Main's finite-result guard precedes selected anchor consistency checks.
+    # A nonfinite native E is null on this wire, with the same typed R as
+    # the array route's malformed-anchor test in test_run_json_selected_window.
+    expected_code = "report_result_invalid" if fault == "anchor-null" else "engine_invariant"
+    assert document["code"] == expected_code and "summary" not in document
+    if fault == "anchor-null":
+        assert document["args"] == {"field": "equity_curve.equity", "reason": "nonfinite"}
     assert len(text.splitlines()) == 1 and writers[0].phase == "result_assembly"
     assert library.closed == library.installed
     assert not Path(library.installed[0]).exists()
@@ -434,7 +464,8 @@ def test_selected_output_close_failure_precedes_stdout(tmp_path, monkeypatch):
 
     def track(*args, **kwargs):
         file = temporary(*args, **kwargs)
-        if kwargs["mode"] == "w+":
+        if kwargs["mode"] == "w+b":
+            assert kwargs["buffering"] == 0
             file = CloseFailure(file)
         files.append(file)
         return file
@@ -447,19 +478,23 @@ def test_selected_output_close_failure_precedes_stdout(tmp_path, monkeypatch):
     assert files and all(file.closed for file in files)
 
 
-def test_selected_old_module_keeps_the_array_report(tmp_path, monkeypatch, frozen):
+def test_selected_old_module_keeps_the_array_report(tmp_path, monkeypatch, arena_stats):
     def library():
-        result = SelectedSinkLibrary(selected.full_plan())
+        result = SelectedSinkLibrary(selected.full_plan(), arena_stats=arena_stats)
         for name in ("pf_report_sink_version", "strategy_set_report_sink_v1",
                      "strategy_report_sink_receipt_v1"):
             delattr(result, name)
         return result
 
-    before = invoke(tmp_path, monkeypatch, runner=frozen, library=library())
+    before = invoke(tmp_path, monkeypatch,
+                    library=SelectedSinkLibrary(selected.full_plan(), arena_stats=arena_stats))
     after = invoke(tmp_path, monkeypatch, library=library())
     assert before[0] == after[0] == 0, (before[1], after[1])
+    assert before[3].installed
     assert not after[3].installed
     assert masked_bytes(before[1]) == masked_bytes(after[1])
+    for name in sinks.ARENA_DIAGNOSTICS:
+        assert (name in json.loads(after[1])["diagnostics"]) == (arena_stats is not None)
 
 
 NATIVE_DRIVER = r'''
@@ -468,9 +503,10 @@ sys.path.insert(0, sys.argv[1])
 spec = importlib.util.spec_from_file_location("l9s_producer", sys.argv[2])
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+''' + sinks.NATIVE_FILE_SCRATCH_FIXTURE + r'''
 if os.environ.get("PINEFORGE_L9S_PLANNER_SO"):
     runner.trusted_planner_path = lambda: os.environ["PINEFORGE_L9S_PLANNER_SO"]
-if sys.argv[3] != "frozen":
+if sys.argv[3] != "array":
     original = runner.build_report_dict
     def scalars_only(report, *args, **kwargs):
         assert not report.trades and report.trades_len == 0, "legacy trade array was read"
@@ -537,17 +573,15 @@ def native_argv(tmp_path, module, *, start=0, count=97, script_tf="1", empty=Fal
 
 
 def native_compare(tmp_path, module, argv):
-    frozen_path = tmp_path / "selected-frozen-run-json.py"
-    frozen_path.write_bytes(sinks._frozen_source_bytes())
     results = []
-    for mode, producer in (("frozen", frozen_path), ("stream", ROOT / "docker/run_json.py")):
+    for mode in ("array", "stream"):
         parent, child = socket.socketpair()
         try:
             result = subprocess.run(
                 [sys.executable, "-B", "-c", NATIVE_DRIVER, str(ROOT / "docker"),
-                 str(producer), mode, "--so", str(module), *map(str, argv),
+                 str(ROOT / "docker/run_json.py"), mode, "--so", str(module), *map(str, argv),
                  "--run-phase-fd", str(child.fileno())],
-                cwd=ROOT, capture_output=True, text=True, pass_fds=(child.fileno(),), timeout=180)
+                cwd=ROOT, capture_output=True, text=True, pass_fds=(child.fileno(),))
             child.close()
             with parent.makefile("r") as records:
                 actual_phases = [json.loads(line)["phase"] for line in records]
@@ -592,6 +626,6 @@ def test_native_selected_corpus_frozen_bytes(tmp_path):
     for case in cases:
         argv = case["argv"]
         assert "--report-policy" in argv and "selected-window/v1" in argv, case
-        assert "--report-sink" not in argv, "the frozen full-report comparison has no named sink"
+        assert "--report-sink" not in argv, "the array full-report comparison has no named sink"
         assert Path(case["so"]).is_file(), case
         native_compare(tmp_path, case["so"], argv)

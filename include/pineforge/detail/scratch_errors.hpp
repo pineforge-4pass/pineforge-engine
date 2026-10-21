@@ -49,15 +49,18 @@ public:
 
 // Preserve errno and the existing system_error English; only table scratch
 // failures use this code. The report sink retains report_sink_failed.
-class ScratchIoError final : public std::system_error, public RunFailureInfo {
+class AuxiliaryScratchIoError final : public std::system_error, public RunFailureInfo {
 public:
-    ScratchIoError(int error, const char* operation)
+    AuxiliaryScratchIoError(int error, const char* operation)
         : std::system_error(error, std::generic_category(), operation),
+          RunFailureInfo(RunFailureCode::scratch_io_failed, {}) {}
+    explicit AuxiliaryScratchIoError(const std::system_error& error)
+        : std::system_error(error),
           RunFailureInfo(RunFailureCode::scratch_io_failed, {}) {}
 };
 
 [[noreturn]] inline void raise_scratch_io_error(int error, const char* operation) {
-    throw ScratchIoError(error, operation);
+    throw AuxiliaryScratchIoError(error, operation);
 }
 
 } // namespace pineforge::detail

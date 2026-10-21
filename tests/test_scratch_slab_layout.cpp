@@ -47,7 +47,7 @@ void io_failure(Operation operation) {
     bool caught = false;
     try {
         operation();
-    } catch (const detail::ScratchIoError& error) {
+    } catch (const detail::AuxiliaryScratchIoError& error) {
         caught = true;
         const auto value = classify_run_failure(error);
         require(value.code == RunFailureCode::scratch_io_failed, "typed scratch I/O code");

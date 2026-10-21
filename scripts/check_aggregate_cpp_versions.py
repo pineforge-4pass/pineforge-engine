@@ -42,7 +42,10 @@ def check(root: Path = ROOT) -> None:
     generic_hash = clean((root / "src/engine_state_hash.cpp").read_text())
     stream_hash = clean((root / "src/engine_stream.cpp").read_text())
     epochs = re.findall(r"inline\s+namespace\s+(engine_script_run_v\d+)\s*\{", clean(engine))
-    if epochs != ["engine_script_run_v19"]:
+    # The row source forward-declares its owner in the first block; the
+    # aggregate and public hash sink live in the second block of the SAME
+    # epoch. Pin both blocks so either one drifting still fails closed.
+    if epochs != ["engine_script_run_v19", "engine_script_run_v19"]:
         raise ValueError("BacktestEngine requires engine_script_run_v19")
     if "PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V19 1" not in native:
         raise ValueError("native host capability must remain v19")

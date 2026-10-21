@@ -225,7 +225,7 @@ void a_s2_absorbed_close_opposite_flattens_entire_roster() {
         CHECK(bits(applied.closed_units) == bits(1e16));
         CHECK(bits(applied.filled_working) == bits(1e16));
         REQUIRE(h.rows().size() == 1);
-        CHECK(bits(h.rows().begin()->qty) == bits(1e16));
+        CHECK(bits(h.rows()[h.rows().base()].qty) == bits(1e16));
         REQUIRE(h.lots().size() == 1);
         CHECK(h.lots().front().entry_incarnation == 222);
         CHECK(bits(h.lots().front().qty) == bits(.1));

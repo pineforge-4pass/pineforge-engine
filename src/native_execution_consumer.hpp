@@ -364,7 +364,7 @@ public:
     // rows the digest has taken and answers whether they still match: the
     // Debug check a run's end makes, and a witness's probe.
     uint64_t closed_rows_digest(const TradeLedger& rows) const;
-    bool closed_rows_digest_holds(const TradeLedger& rows) const noexcept;
+    bool closed_rows_digest_holds(const TradeLedger& rows) const;
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
     void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }
@@ -388,6 +388,9 @@ public:
         return true;
     }
     std::size_t closed_rows_final() const noexcept { return closed_rows_final_; }
+    std::size_t resident_closed_row_checkpoints() const noexcept {
+        return closed_row_prefix_.size();
+    }
     const ClosedTradePrefix& closed_trade_prefix() const noexcept { return closed_trade_prefix_; }
     std::size_t closed_rows_sealable(const TradeLedger& rows, std::size_t phase_final,
         std::uint64_t money_folded, std::int64_t script_bar_open,
@@ -401,6 +404,8 @@ public:
     // presented open-lot view. The engine owns the no-copy report path.
     void finish_streamed_trade_metrics(const BacktestEngine& engine, ReportC* out,
                                       const TradeC* open_rows, int count) const;
+    pf_report_sink_summary_v1 finish_report_sink_summary(const BacktestEngine& engine,
+        const TradeC* open_rows, int count) const;
     void fold_sealed_exit_phase(std::uint8_t phase);
     std::uint64_t replay_sealed_exit_phases(std::uint64_t seed) const noexcept;
     void restart_exit_phases() noexcept { exit_phases_restarted_ = closed_trade_prefix_.base != 0; }
@@ -1627,6 +1632,10 @@ private:
         return false;
     }
     void latch_abort(BacktestEngine& engine, NativeFailureOperation operation, uint64_t ordinal);
+    // SIGTERM is deliberately absent from the mid-bar abort checks above.
+    // Called before the first host callback, between completed input bars,
+    // or after all supplied inputs and the batch's natural final seal return.
+    bool check_sigterm_abort(BacktestEngine& engine, bool strategy_started);
     void latch_projection_mismatch(BacktestEngine& engine, NativeFailureOperation operation,
                                    uint64_t ordinal);
     // One pump: a batch's whole input loop, or one public stream input. While
@@ -1685,7 +1694,7 @@ private:
     void revoke_activation_birth(const native_order::RequestHandle&);
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
-    void verify_closed_rows(const BacktestEngine& engine) const noexcept;
+    void verify_closed_rows(const BacktestEngine& engine) const;
     void rewind_closed_rows(std::size_t first) const;
     void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
                                const TradeC& row) const;
@@ -1974,18 +1983,33 @@ private:
     mutable std::uint64_t closed_rows_digest_ = 1469598103934665603ULL;
     mutable std::size_t closed_rows_digested_ = 0;
     std::size_t closed_rows_final_ = 0;
-    // The digest after each digested row, so an amendment (closed_rows_amended)
-    // rewinds to the row before it in O(1): one word per resident final row.
-    // Index zero stores the digest after global row closed_trade_prefix_.base.
-    mutable std::vector<std::uint64_t> closed_row_prefix_;
+    // Only the newest checkpoints stay resident. An older amendment restarts
+    // at the sealed seed and replays exact rows from the external ledger.
+    static constexpr std::size_t kClosedRowCheckpoints = 64;
+    mutable std::vector<std::uint64_t> closed_row_prefix_ = [] {
+        std::vector<std::uint64_t> values;
+        values.reserve(kClosedRowCheckpoints);
+        return values;
+    }();
     ClosedTradePrefix closed_trade_prefix_;
     std::optional<std::int64_t> closed_trade_seal_bar_;
+    // Report output only: neither this fold nor ClosedTradeReport participates
+    // in StateFold, closed_rows_digest or the source host extension hash.
+    // Persistent state advances at seal only; finalization folds a COPY.
+    struct ReportTradeSummary {
+        pf_report_sink_summary_v1 value{};
+        double cumulative = 0.0;
+        double peak = 0.0;
+        bool has_trade = false;
+        void fold(const TradeC& row) noexcept;
+    };
     struct ClosedTradeReport {
         explicit ClosedTradeReport(double capital)
             : all(metrics::TradeFilter::ALL, capital),
               longs(metrics::TradeFilter::LONG, capital),
               shorts(metrics::TradeFilter::SHORT, capital) {}
         metrics::TradeStatsAccumulator all, longs, shorts;
+        ReportTradeSummary summary;
         // Selected carry-in validation must still inspect sealed entry times.
         std::int64_t first_entry_time = std::numeric_limits<std::int64_t>::max();
     };
@@ -2178,6 +2202,9 @@ public:
     // the ledger; the returned storage is never attached to a caller's report.
     static bool report_sink_open_trades(const BacktestEngine& engine,
                                         const TradeC*& rows, int& count) noexcept;
+    // Final completed-bar boundary, before a success trailer commits the sink.
+    // True means the invocation was aborted and the writer was abandoned.
+    static bool abort_before_sink_trailer(BacktestEngine& engine);
     // Explicit ordinary-curve reconstruction for internal array consumers.
     // Sink removal refuses while scratch is live and never invokes this bridge.
     static void restore_report_sink_equity_curve(BacktestEngine& engine);
@@ -2276,13 +2303,14 @@ private:
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
     // Sink captures keep scalars and, for an ordinary observer capture, one
-    // owned equity point. Closed rows live in the sealed prefix folds plus
+    // inline equity point. Closed rows live in the sealed prefix folds plus
     // the resident ledger; the editable open-lot view is owned separately.
     // Sink OFF keeps its original independently owned arrays.
     ReportC presentation_{};
     std::unique_ptr<TradeC[]> presentation_open_trades_;
     int presentation_open_trades_len_ = 0;
     bool presentation_sink_trades_ = false;
+    pf_equity_point_t presentation_equity_tail_{};
     // The equity length the metrics read: the engine's recorded point count taken
     // before present_report ran (fill_metrics_section's `n`), which a
     // presentation may leave behind in presentation_.equity_curve_len, the length

@@ -1,13 +1,16 @@
 #pragma once
 #include <atomic>
+#include <deque>
 #include <vector>
 #include <string>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <ctime>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <set>
 #include <algorithm>
 #include <unordered_map>
@@ -35,8 +38,8 @@
 #include "magnifier.hpp"
 #include "session_time.hpp"
 #include <pineforge/trade_ledger.hpp>
-// Suppress per-strategy function declarations (strategy_create, run_backtest,
-// etc.) whose pf_*_t parameter types conflict with the internal C++ types
+#include <pineforge/report_sequence.hpp>
+// Suppress per-strategy function declarations (strategy_create, run_backtest, etc.) whose pf_*_t parameter types conflict with the internal C++ types
 // used in codegen-emitted extern "C" blocks that include this header.
 // NOTE: this macro leaks into every TU that includes engine.hpp; include
 // pineforge.h FIRST in any TU that needs the per-strategy declarations
@@ -44,6 +47,9 @@
 #define PINEFORGE_NO_STRATEGY_DECLS
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
+#include <pineforge/report_mode.h>
+#include <pineforge/report_pages.hpp>
+#include <pineforge/metrics_fold.hpp>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
@@ -51,6 +57,7 @@
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
+#define PINEFORGE_HAS_EQUITY_METRICS_FOLD_V1 1
 namespace pineforge {
 namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
@@ -299,6 +306,119 @@ struct ReportC {
     int64_t   broker_state_hash_len;
 };
 
+// Same words/values as docs/design/o1-report-contract.md in o1w-contract.
+// The envelope lane owns the versioned provider API and its eligibility gate.
+// O1 report envelope v1. Data and method declarations do not advertise
+// runtime support; the legacy ReportC layout remains ABI 4.
+enum class ReportMode : std::uint32_t {
+    FULL = PF_REPORT_MODE_FULL,
+    SUMMARY_ONLY = PF_REPORT_MODE_SUMMARY_ONLY,
+    STREAMED = PF_REPORT_MODE_STREAMED
+};
+
+struct ReportEnvelopeV1 {
+    pf_report_metadata_v1 metadata;
+    ReportC report;
+};
+
+static_assert(sizeof(ReportC) == sizeof(pf_report_t),
+              "legacy C and C++ report sizes must match");
+static_assert(offsetof(ReportEnvelopeV1, report)
+                  == offsetof(pf_report_envelope_v1, report),
+              "versioned report payload offsets must match");
+static_assert(sizeof(ReportEnvelopeV1) == sizeof(pf_report_envelope_v1),
+              "versioned C and C++ report sizes must match");
+
+// Reopened here so the row source and the engine it borrows live in the same
+// ABI epoch (the inline namespace is the same one that holds BacktestEngine).
+inline namespace engine_script_run_v19 {
+class BacktestEngine;
+
+// O1 R12: the terminal range-end row source.
+//
+// A run that ends with P physical lots open reports one row per lot. A row is
+// a pure function of (lot, terminal mark, account FX) through the same
+// non-mutating builder a full close uses, so this object keeps only the mark
+// descriptor and the already-folded row PnL; every reader builds one row at a
+// time, in lot order. Resident storage is constant in P: no row array and no
+// per-lot string copy.
+//
+// materialize() is the legacy borrowed-pointer boundary. Only the C accessors
+// that hand out a string pointer (materialize_report_trade and its callers)
+// need a row that outlives the call; it keeps exactly those rows, as
+// the old vector did, and is documented non-flat. Report construction, folds
+// and sink emission never call it.
+class OpenReportRowSource {
+public:
+    OpenReportRowSource() = default;
+    explicit OpenReportRowSource(const BacktestEngine* owner) : owner_(owner) {}
+    OpenReportRowSource(const OpenReportRowSource&) = default;
+    OpenReportRowSource& operator=(const OpenReportRowSource&) = default;
+    // A new run's terminal mark replaces the previous one; the C accessors'
+    // retained rows belong to the replaced generation.
+    void clear() noexcept;
+    void begin(double mark_price, std::int64_t mark_time_ms, int interval_index,
+               double account_fx, bool was_long, std::size_t count) noexcept;
+    // The exact left fold append_open_position_report_rows returned.
+    void set_pnl(double pnl) noexcept { pnl_ = pnl; }
+    bool empty() const noexcept { return size() == 0; }
+    std::size_t size() const noexcept { return present_ ? count_ : synthetic_.size(); }
+    double pnl() const noexcept { return pnl_; }
+    // One detached row, built exactly as the range-end append builds it.
+    Trade row(std::size_t index) const;
+    // Legacy borrowed-pointer materialization, for the C string accessors and
+    // for tests that seed a row with no live lot.
+    const Trade& materialize(std::size_t index) const;
+    const Trade& operator[](std::size_t index) const { return materialize(index); }
+    // Reference-oracle seeding only: a synthetic report row with no live lot.
+    // Production writers pin a terminal mark instead; the two never coexist
+    // because begin() replaces the generation.
+    void push_back(const Trade& row) { synthetic_.push_back(row); pnl_ += row.pnl; }
+    void push_back(Trade&& row) { pnl_ += row.pnl; synthetic_.push_back(std::move(row)); }
+    class const_iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = Trade;
+        using difference_type = std::ptrdiff_t;
+        using reference = Trade;
+        using pointer = void;
+        const_iterator() = default;
+        Trade operator*() const { return source_->row(index_); }
+        const_iterator& operator++() { ++index_; return *this; }
+        const_iterator operator++(int) { auto old = *this; ++*this; return old; }
+        bool operator==(const const_iterator& other) const {
+            return source_ == other.source_ && index_ == other.index_;
+        }
+        bool operator!=(const const_iterator& other) const { return !(*this == other); }
+    private:
+        friend class OpenReportRowSource;
+        const_iterator(const OpenReportRowSource* source, std::size_t index)
+            : source_(source), index_(index) {}
+        const OpenReportRowSource* source_ = nullptr;
+        std::size_t index_ = 0;
+    };
+    const_iterator begin() const { return const_iterator(this, 0); }
+    const_iterator end() const { return const_iterator(this, size()); }
+private:
+    const BacktestEngine* owner_ = nullptr;
+    bool present_ = false;
+    bool was_long_ = false;
+    double mark_price_ = 0.0;
+    std::int64_t mark_time_ms_ = 0;
+    int interval_index_ = 0;
+    double account_fx_ = 1.0;
+    std::size_t count_ = 0;
+    double pnl_ = 0.0;
+    // A deque gives every retained row a stable address, so a reference a C
+    // accessor handed out survives the next row's materialization, as a
+    // reference into the old vector did.
+    mutable std::deque<Trade> materialized_;
+    // Reference-oracle rows with no live lot (tests only; production leaves
+    // this empty).
+    std::vector<Trade> synthetic_;
+};
+}  // inline namespace engine_script_run_v19
+
 using ExitLegLifecycle = exit_legs::Lifecycle;
 
 // default_qty_type constants (matches TradingView)
@@ -389,6 +509,9 @@ protected:
     // behaviour changed for this.
     friend class NativeExecutionConsumer;
     friend class NativeStrategyHost;
+    // The terminal range-end row source rebuilds rows through the engine's
+    // non-mutating close builder and reads the live lots.
+    friend class OpenReportRowSource;
     struct NativeConsumerBindTag { explicit NativeConsumerBindTag() = default; };
     explicit BacktestEngine(NativeConsumerBindTag);
     IExecutionConsumer& execution_consumer();
@@ -551,7 +674,8 @@ protected:
     // spec asks for them (NativeRunSpec::report_open_position_at_end). They
     // are merged behind trades_ by fill_trades_section and never enter
     // trades_, the realized sums, or the live position (a stream continues it).
-    std::vector<Trade> range_end_trades_;
+    // R12: the source stores only the terminal mark; see OpenReportRowSource.
+    OpenReportRowSource range_end_trades_{this};
 
     // Best favorable price is updated by the physical open/add helpers for
     // every host. Source policy may consume the same value through
@@ -585,6 +709,8 @@ protected:
     double min_equity_ = 0.0;    // trough equity for runup
 
     // --- Per-script-bar equity curve (metrics + pf_report_t exposure) ---
+    // SUMMARY_ONLY uses exactly one editable point; the fixed prefix lives
+    // outside the broker-state region below.
     std::vector<pf_equity_point_t> equity_curve_;
     int64_t bars_in_market_ = 0;     // script bars with an open position at close
     double first_bar_open_ = std::numeric_limits<double>::quiet_NaN();  // buy&hold basis
@@ -605,6 +731,61 @@ protected:
     int eventrades_count_ = 0;
 
     // @broker-state end
+
+    // Output-only O1W state, deliberately outside the broker-state region.
+    // Like equity_curve_, it never supplies an execution decision. The
+    // derived broker-prefix helper restores the ALREADY HASHED four extrema;
+    // it adds no broker leaf and changes no existing hash domain.
+    ReportMode pending_equity_report_mode_ = ReportMode::FULL;
+    ReportMode active_equity_report_mode_ = ReportMode::FULL;
+    metrics::EquityMetricsFold summary_equity_fold_;
+    mutable metrics::EquityFoldSnapshot summary_equity_snapshot_;
+    mutable bool summary_equity_snapshot_valid_ = false;
+    mutable bool summary_equity_ratios_ready_ = false;
+    std::optional<metrics::EquityRatioResult> summary_equity_ratios_;
+    double summary_broker_equity_prefix_[4]{};
+
+public:
+    // Equity component of the versioned mode setter. The envelope owner must
+    // first establish replay/presentation eligibility and all OTHER sequence
+    // policies. This helper alone does not advertise a complete mode provider.
+    // Status values follow the versioned contract: accepted=0, invalid=-1,
+    // busy=-3, conflict=-4. Configuration takes effect at the next run begin.
+    int set_equity_report_mode(ReportMode mode);
+    ReportMode equity_report_mode() const { return active_equity_report_mode_; }
+    std::int64_t equity_logical_point_count() const {
+        return active_equity_report_mode_ == ReportMode::SUMMARY_ONLY
+            ? summary_equity_fold_.first_pass().point_count
+            : static_cast<std::int64_t>(equity_curve_.size());
+    }
+    // Frozen presented first pass from the latest equity-metric assembly.
+    // The envelope copies its count with captured=0/external=0. No curve
+    // pointer is exposed. A pending second pass cannot certify completion.
+    const metrics::EquityFoldSnapshot* equity_summary_snapshot() const {
+        return summary_equity_snapshot_valid_ ? &summary_equity_snapshot_ : nullptr;
+    }
+    bool equity_summary_ratios_ready() const { return summary_equity_ratios_ready_; }
+    bool install_equity_ratio_result(const metrics::EquityRatioResult& result) {
+        if (!summary_equity_snapshot_valid_ || !result.matches(summary_equity_snapshot_))
+            return false;
+        summary_equity_ratios_ = result;
+        summary_equity_ratios_ready_ = true;
+        return true;
+    }
+
+protected:
+    // Consumer terminal/range-end integration calls this BEFORE its legacy
+    // full-array refold. No history is reread. The prefix excludes the held
+    // point, including when a host just rewrote last_equity_point().
+    bool refold_summary_equity_tail() {
+        if (active_equity_report_mode_ != ReportMode::SUMMARY_ONLY) return false;
+        max_equity_ = summary_broker_equity_prefix_[0];
+        min_equity_ = summary_broker_equity_prefix_[1];
+        max_drawdown_ = summary_broker_equity_prefix_[2];
+        max_runup_ = summary_broker_equity_prefix_[3];
+        if (!equity_curve_.empty()) fold_equity_extreme(equity_curve_.back().equity);
+        return true;
+    }
 
     // Host-installed excursion capability (RULING A48).  Transient run
     // wiring, not durable broker state: reset_run_state clears it and the
@@ -1380,12 +1561,37 @@ protected:
     // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
     // make the curve differ between magnifier on/off.
     void record_equity_point(int64_t script_bar_ts) {
-        if (prepare_equity_point()) first_bar_open_ = current_bar_.open;
+        const bool summary = active_equity_report_mode_ == ReportMode::SUMMARY_ONLY;
+        if (summary ? equity_curve_.empty() : prepare_equity_point())
+            first_bar_open_ = current_bar_.open;
         pf_equity_point_t p;
         p.time_ms = script_bar_ts;
         p.open_profit = open_profit(current_bar_.close);
         p.equity = initial_capital_ + net_profit_sum_ + p.open_profit;
-        store_equity_point(p);
+        if (summary) {
+            if (!equity_curve_.empty()) {
+                const auto& held = equity_curve_.back();
+                summary_equity_fold_.replace_last(
+                    held, metrics::equity_month_key(held.time_ms, chart_timezone_));
+                auto& prefix = summary_broker_equity_prefix_;
+                const double eq = held.equity;
+                if (eq > prefix[0]) prefix[0] = prefix[1] = eq;
+                if (eq < prefix[1]) prefix[1] = eq;
+                const double dd = prefix[0] - eq;
+                if (dd > prefix[2]) prefix[2] = dd;
+                const double ru = eq - prefix[1];
+                if (ru > prefix[3]) prefix[3] = ru;
+            }
+            summary_equity_fold_.fold(
+                p, metrics::equity_month_key(p.time_ms, chart_timezone_),
+                true, position_side_ != PositionSide::FLAT);
+            if (equity_curve_.empty()) equity_curve_.push_back(p);
+            else equity_curve_.back() = p;
+            summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
+            summary_equity_ratios_.reset();
+        } else {
+            store_equity_point(p);
+        }
         if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
@@ -1814,16 +2020,21 @@ public:
              MagnifierDistribution magnifier_dist = MagnifierDistribution::ENDPOINTS);
 
     int trade_count() const { return (int)trades_.size(); }
-    const Trade& get_trade(int i) const { return trades_[i]; }
+    Trade get_trade(int i) const { return trades_.read(static_cast<std::size_t>(i)); }
     // The same closed rows under the `closed_trade_*` name a host reads them
     // by (RP6). The per-field `closed_trade_*` family below stays protected
-    // Pine plumbing: one whole row by reference answers all of it, and a host
+    // Pine plumbing: one owning row value answers all of it, and a host
     // that owns its report needs the row, not twenty wrappers. Range-end
     // report rows are NOT here — report_trade_count() / get_report_trade()
-    // below span both spaces. Unchecked, like get_trade above: index against
-    // closed_trade_count().
+    // below span both spaces. Index against closed_trade_count(); each read
+    // owns its exact value, including a row below the published base.
     std::size_t closed_trade_count() const noexcept { return trades_.size(); }
-    const Trade& closed_trade(std::size_t i) const { return trades_[i]; }
+    Trade closed_trade(std::size_t i) const { return trades_.read(i); }
+    // Newest first, preserving global indices across resident and external
+    // rows. Start cursor at closed_trade_count(); false means cursor == 0.
+    bool previous_closed_trade(std::size_t& cursor, Trade& value) const {
+        return trades_.previous(cursor, value);
+    }
     // The REPORT's row space: trades_ followed by range_end_trades_, in the
     // order fill_trades_section lays pf_report_t::trades out. trade_count()
     // / get_trade() stay the Pine-visible closed trades (strategy.closedtrades
@@ -1833,11 +2044,24 @@ public:
     int report_trade_count() const {
         return (int)(trades_.size() + range_end_trades_.size());
     }
-    const Trade& get_report_trade(int i) const {
+    // A range-end row is rebuilt from its terminal lot mark on every value read.
+    Trade get_report_trade(int i) const {
         const int n_closed = (int)trades_.size();
         return i < n_closed ? trades_[(size_t)i]
-                            : range_end_trades_[(size_t)(i - n_closed)];
+                            : range_end_trades_.row((std::size_t)(i - n_closed));
     }
+    // The legacy C string ABI promises pointer lifetime until the next run.
+    // Asking for that borrowed storage explicitly materializes the requested
+    // row. Ordinary report/value readers never enter this compatibility path.
+    const Trade& materialize_report_trade(int i) const {
+        const int n_closed = static_cast<int>(trades_.size());
+        return i < n_closed ? trades_.materialize(static_cast<std::size_t>(i))
+                            : range_end_trades_.materialize(static_cast<std::size_t>(i - n_closed));
+    }
+    // Why a report row closed, from the row's own recorded facts; the report
+    // index form below adds the row-space bounds. Kept together so a caller
+    // holding a row value does not need a reference into the row space.
+    static int classify_report_close_cause(const Trade& row);
 
     // ABI v4 live-runtime surface (task 9): classify why a REPORT-row
     // closed trade exited -- report-row scope (spans trades_ then
@@ -1860,6 +2084,20 @@ public:
 
     void fill_report(ReportC* out) const;
     static void free_report(ReportC* report);
+
+    // O1 report envelope v1 (include/pineforge/report_mode.h). Select before
+    // execution; inspect the returned status constant (PF_REPORT_MODE_ACCEPTED
+    // on success). Rejection is atomic. SUMMARY_ONLY must never fall back to
+    // FULL.
+    //
+    // SUMMARY_ONLY and STREAMED keep the logical trade total and the exact
+    // folds, and return no resident TradeC array: trade rows are rebuilt one
+    // at a time from the closed ledger and the terminal lot mark.
+    int set_report_mode_v1(ReportMode mode);
+    // Initialize metadata.struct_size/version before reading. A successful
+    // read copies a frozen report without replay or outward side effects.
+    // Release the owned payload with free_report(&out->report).
+    int fill_report_envelope_v1(ReportEnvelopeV1* out) const;
 
     // Returns the error message captured by the most recent run() if it
     // failed, or an empty string if the run completed normally. Cleared at
@@ -2317,6 +2555,7 @@ private:
         bool enabled = false;
         bool trade_history_streamable = false;
         std::string path, run_id, scratch_dir;
+        int fd = -1; // borrowed stream; -1 selects the owned path writer
         std::uint32_t active_calls = 0;
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
@@ -2325,6 +2564,7 @@ private:
         std::unique_ptr<report_sink::ScratchCurveWriter> equity_scratch;
         bool equity_tail_stored = false; // scratch includes the held tail
         pf_report_sink_receipt_v1 receipt{};
+        pf_report_sink_summary_v1 summary{}; // report output, shares the sink hash waiver
         // Derived report-tail prefix, in max/min/drawdown/runup order. The
         // resulting extrema already have their broker-state folds; this
         // reconstructible prefix shares report_sink_state_'s output waiver.
@@ -2350,6 +2590,12 @@ private:
     // @broker-state begin
     mutable ReportSinkState report_sink_state_;
     // @broker-state end
+    // O1 capture policy for reports built after it is set. Deliberately
+    // outside the broker-state region: it changes no fill, fold, hash leaf or
+    // continuation digest (two runs over the same input with different report
+    // modes must hash identically), and reset_run_state leaves it in place
+    // like the sink descriptor.
+    ReportMode report_mode_ = ReportMode::FULL;
 
     class ReportSinkCallScope {
         ReportSinkState& state;
@@ -2378,7 +2624,7 @@ private:
     void write_report_sink_trades(const TradeC* open_rows, int count) const;
     void fill_report_sink_metrics_section(ReportC* out) const;
     template<class Write> void report_sink_record(Write write) const;
-    bool stream_report_sink_trace(const TraceEntryC& entry);
+    bool stream_report_sink_trace(const std::string& name, const TraceEntryC& entry);
     void reset_report_sink_outputs();
     std::int64_t report_sink_output_row() const;
     void write_report_sink_output_row() const;
@@ -2416,7 +2662,9 @@ public:
 
     // The additive C ABI delegates here; receipt queries never bind a consumer.
     int set_report_sink_v1(const pf_report_sink_v1* sink);
+    int set_report_sink_fd_v1(const pf_report_sink_fd_v1* sink);
     int report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept;
+    int report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept;
     // Codegen opts in only for modules that do not read closedtrades.*.
     // L6B1 still retains every row; L8c consumes this policy at sealing.
     void set_trade_history_streamable(bool streamable);
@@ -2466,6 +2714,41 @@ protected:
     // A sink hook receives only range-end rows. Re-summing an edited tail
     // starts with this closed-row left fold, never a separately summed tail.
     double report_closed_net_profit() const;
+
+    // CR-150 o1w-seq (R14--R18): optional sequence retention. The default is
+    // the historical owning-array path, byte-identical to before. SummaryOnly
+    // keeps one fixed ordered witness per sequence instead, so trial memory
+    // does not grow with the bar, trace, row or event population. A report
+    // sink streams the complete sequence externally in either mode.
+public:
+    int set_optional_report_mode(report_sequence::ReportMode mode);
+    report_sequence::OptionalSequenceSummary optional_sequence_summary() const;
+
+private:
+    void reset_optional_sequence_witness();
+    void fold_pending_hashes_into_witness() const;
+    void fold_current_output_row_witness() const;
+    void finalize_summary_output_row();
+    static void fold_hash_leaf(report_sequence::SequenceWitness& witness,
+                               std::uint64_t hash);
+    static void fold_trace_leaf(report_sequence::SequenceWitness& witness,
+                                std::int64_t timestamp, std::int32_t bar_index,
+                                const std::string& name, double value);
+    static void fold_row_leaf(report_sequence::SequenceWitness& witness,
+                              std::int64_t row, std::int64_t open_ms,
+                              std::int64_t close_ms, const double* values,
+                              std::int64_t count);
+    static void fold_event_leaf(report_sequence::SequenceWitness& witness,
+                                const OutputEvent& event);
+    report_sequence::ReportMode optional_report_mode_ =
+        report_sequence::ReportMode::LegacyArrays;
+    // The sink writers and fill_report are const; the witness is the only
+    // state they add, and no reader observes it as part of the run's report.
+    mutable report_sequence::OptionalSequenceSummary sequence_witness_;
+    mutable std::size_t sequence_hash_folded_ = 0;
+    mutable bool sequence_row_folded_ = false;
+    report_sequence::SequenceWitness output_row_witness_base_;
+    report_sequence::SequenceWitness output_event_row_witness_;
 };
 
 inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;

@@ -4,6 +4,7 @@
 // directory. Like L19a's successor-root file, scratch files are private,
 // unlinked at creation, close-on-exec, and accessed with pread/pwrite.
 #include <pineforge/detail/id_pair_ordered_fold.hpp>
+#include <pineforge/detail/id_pair_slab_fold.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 
 #include <algorithm>
@@ -28,6 +29,8 @@
 
 namespace pineforge::detail {
 
+// IdPairScratchFile and its errno-preserving auxiliary failure live in
+// id_pair_scratch_file.hpp, shared with the ordered-fold implementation above.
 // One 40-byte record plus both strings per distinct key ever seen, and a
 // 16-byte on-disk hash slot at <= 1/2 load (32..64 bytes/key after warmup).
 // Replacing a value, erasing and recurring reuse the original record.
@@ -35,6 +38,17 @@ namespace pineforge::detail {
 // Hash collisions are always resolved by comparing the complete byte strings.
 template<class Value, bool MaintainSortedFold = false>
 class IdPairStore {
+public:
+    // Observe the actual comparison and byte-fold sites, including the old
+    // slab selection loop, so a lab can measure fail-before with these
+    // observation-only hunks applied to the previous implementation.
+    struct FixtureFoldWork {
+        std::uint64_t row_comparisons = 0;
+        std::uint64_t byte_steps = 0; // All 257 seeds, not just input bytes.
+        std::uint64_t compositions = 0;
+    };
+
+private:
     static_assert(std::is_integral_v<Value> && sizeof(Value) == 8,
                   "id auxiliary values are fixed-width 64-bit integers");
     using MemoryKey = std::pair<std::string, std::optional<std::string>>;
@@ -62,11 +76,12 @@ class IdPairStore {
     struct NoFold {};
     struct FoldState {
         IdPairOrderedFold ordered;
-        BrokerStateByteFold bounded;
+        IdPairSlabFold bounded;
         Header pending_header;
         Slot pending_slot;
         std::uint64_t pending_offset = 0, pending_at = 0;
         bool pending = false, slot_pending = false;
+        FixtureFoldWork* fixture_work = nullptr;
     };
 
 public:
@@ -225,6 +240,13 @@ public:
             throw std::logic_error("id table scratch resource pair is invalid");
         const auto count = scratch_layout_detail::slots(limit);
         if (slab) slab->require_extend(index, count * sizeof(Slot));
+        if constexpr (MaintainSortedFold) {
+            if (slab) {
+                fold_.bounded.configure(slab->region(data).capacity, limit, count);
+                // Fits the OLD 16*Q budget for every admitted manifest.
+                slab->require_extend(index, fold_.bounded.storage_bytes());
+            }
+        }
         slab_ = slab;
         data_resource_ = data;
         index_resource_ = index;
@@ -324,6 +346,10 @@ public:
     void fixture_count_io(IdPairScratchFile::FixtureIO* io) noexcept {
         data_.fixture_count_io(io); index_.fixture_count_io(io);
         if constexpr (MaintainSortedFold) fold_.ordered.fixture_count_io(io);
+    }
+    void fixture_count_fold_work(FixtureFoldWork* work) noexcept {
+        static_assert(MaintainSortedFold, "fold work requires the ordered-fold table");
+        fold_.fixture_work = work;
     }
 
     // Explicit per-instance fixture seams, never chosen by a production binder.
@@ -439,10 +465,28 @@ private:
         else data_.write(offset, source, length);
     }
     void read_index(std::uint64_t offset, void* destination, std::size_t length) const {
+        if constexpr (MaintainSortedFold) {
+            if (slab_) {
+                Slot slot;
+                slot.offset_plus_one = fold_.bounded.read_slot(*slab_, index_resource_, offset / sizeof(Slot));
+                if (slot.offset_plus_one != 0)
+                    read_data(slot.offset_plus_one - 1, &slot.hash, sizeof(slot.hash));
+                std::memcpy(destination, &slot, length);
+                return;
+            }
+        }
         if (slab_) slab_->read_at(index_resource_, offset, destination, length);
         else index_.read(offset, destination, length);
     }
     void write_index(std::uint64_t offset, const void* source, std::size_t length) {
+        if constexpr (MaintainSortedFold) {
+            if (slab_) {
+                Slot slot;
+                std::memcpy(&slot, source, length);
+                fold_.bounded.write_slot(*slab_, index_resource_, offset / sizeof(Slot), slot.offset_plus_one);
+                return;
+            }
+        }
         if (slab_) slab_->write_at(index_resource_, offset, source, length);
         else index_.write(offset, source, length);
     }
@@ -655,6 +699,7 @@ private:
             return static_cast<unsigned>(byte) + 1;
         }
         int compare(std::uint64_t row, std::string_view key) {
+            if (owner.fold_.fixture_work) ++owner.fold_.fixture_work->row_comparisons;
             const auto h = header(row);
             const auto common = std::min<std::uint64_t>(h.first_size, key.size());
             for (std::uint64_t at = 0; at < common;) {
@@ -668,6 +713,7 @@ private:
             return h.first_size < key.size() ? -1 : (h.first_size > key.size() ? 1 : 0);
         }
         int compare_rows(std::uint64_t first, std::uint64_t second) {
+            if (owner.fold_.fixture_work) ++owner.fold_.fixture_work->row_comparisons;
             const auto x = header(first), y = header(second);
             const auto common = std::min(x.first_size, y.first_size);
             for (std::uint64_t at = 0; at < common;) {
@@ -714,20 +760,29 @@ private:
             if (x.first_size == y.first_size) throw std::logic_error("id fold duplicate row");
             return IdPairOrderedFold::differing_symbol(common, symbol(first, common), symbol(second, common));
         }
+        void bytes(BrokerStateByteFold& fold, const void* data, std::size_t size) {
+            if (owner.fold_.fixture_work)
+                owner.fold_.fixture_work->byte_steps += 257 * static_cast<std::uint64_t>(size);
+            fold.bytes(data, size);
+        }
+        void compose(BrokerStateByteFold& before, const BrokerStateByteFold& after) {
+            if (owner.fold_.fixture_work) ++owner.fold_.fixture_work->compositions;
+            before.then(after);
+        }
         void append(std::uint64_t row, BrokerStateByteFold& fold) {
             const auto h = header(row);
             if ((h.flags & kLive) == 0) return;
             // BrokerStateHashSink::s uses u(size), followed by the raw key;
             // ::i uses the native int64 representation. No endian rewrite.
-            fold.bytes(&h.first_size, sizeof(h.first_size));
+            bytes(fold, &h.first_size, sizeof(h.first_size));
             for (std::uint64_t at = 0; at < h.first_size;) {
                 const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(a.size(), h.first_size - at));
                 owner.read_data(row + sizeof(Header) + at, a.data(), n);
-                fold.bytes(a.data(), n);
+                bytes(fold, a.data(), n);
                 at += n;
             }
             const auto value = static_cast<std::int64_t>(h.value);
-            fold.bytes(&value, sizeof(value));
+            bytes(fold, &value, sizeof(value));
         }
     };
     void publish_fold(std::string_view key, std::uint64_t offset, const Header& header) {
@@ -737,35 +792,12 @@ private:
                       std::uint64_t at, Slot slot) {
         FoldReader reader{*this, offset, header};
         if (slab_) {
-            // The slab's fixed Header/Slot layout has no radix-node region.
-            // Rebuild its exact root at mutation time using borrowed offsets
-            // and two fixed comparison buffers. No files, allocations, new
-            // manifest capacity or change to first-seen iteration are needed.
-            // Disk mode retains the incremental radix update below; both
-            // backends apply a resident, arbitrary-seed map at hash time.
-            BrokerStateByteFold next;
-            const auto end = offset == data_bytes_
-                ? offset + sizeof(Header) + header.first_size + header.second_size : data_bytes_;
-            std::optional<std::uint64_t> previous;
-            for (;;) {
-                std::optional<std::uint64_t> selected;
-                for (std::uint64_t row = 0; row < end;) {
-                    const auto h = reader.header(row);
-                    if ((h.flags & kLive) != 0
-                        && (!previous || reader.compare_rows(row, *previous) > 0)
-                        && (!selected || reader.compare_rows(row, *selected) < 0))
-                        selected = row;
-                    row += sizeof(Header) + h.first_size + h.second_size;
-                }
-                if (!selected) break;
-                reader.append(*selected, next);
-                previous = selected;
-            }
+            fold_.bounded.update(*slab_, index_resource_, used_,
+                                 slot.offset_plus_one != 0, key, offset, reader);
             // Admission already checked these exact spans; slab writes copy
             // without file IO. No pending overlay is needed for this backend.
             write_data(offset, &header, sizeof(header));
             if (slot.offset_plus_one != 0) write_index(at * sizeof(Slot), &slot, sizeof(slot));
-            fold_.bounded = next;
             return;
         }
         fold_.ordered.update(key, offset, directory_, reader);

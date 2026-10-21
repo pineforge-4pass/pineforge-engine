@@ -666,7 +666,7 @@ void restarts_and_reuse(Directory& directory) {
     const auto old = streamed.ledger()[base].pnl;
     for (auto* host : {&baseline, &streamed}) {
         (void)host->consumer().closed_rows_digest(host->ledger());
-        host->ledger()[base].pnl += 0.125;
+        host->ledger().modify(base, [](Trade& row) { row.pnl += 0.125; });
         require(!host->consumer().closed_rows_digest_holds(host->ledger()),
                 "Debug witness missed an unannounced resident amendment");
         host->native_closed_rows_amended(base);
@@ -675,7 +675,7 @@ void restarts_and_reuse(Directory& directory) {
                 == streamed.consumer().closed_rows_digest(streamed.ledger()),
             "closed-row amendment did not restart from its immutable prefix");
     for (auto* host : {&baseline, &streamed}) {
-        host->ledger()[base].pnl = old;
+        host->ledger().modify(base, [&](Trade& row) { row.pnl = old; });
         host->native_closed_rows_amended(base);
         (void)host->consumer().closed_rows_digest(host->ledger());
     }

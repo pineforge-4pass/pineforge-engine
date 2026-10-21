@@ -15,17 +15,20 @@
 namespace pineforge::source::detail {
 
 struct PositionTailBinding {
-    // L6b-4: already-bound directory, positional binary I/O, no fallback.
+    // L6b-4: positional binary I/O; an empty directory selects TMPDIR.
     class File {
     public:
-        explicit File(const std::string& directory) : file_(directory) {}
+        explicit File(const std::string& directory)
+            : file_(directory, pineforge::detail::ScratchStore::position_tail) {}
+        int descriptor() const noexcept { return file_.descriptor(); }
         void write(std::uint64_t offset, const void* bytes, std::size_t count) {
             file_.write(static_cast<std::int64_t>(offset), bytes, count);
         }
         void read(std::uint64_t offset, void* bytes, std::size_t count) const {
             file_.read(static_cast<std::int64_t>(offset), bytes, count);
         }
-        void clear() { file_.truncate(0); }
+        void clear() { file_.clear(); }
+        void release() noexcept { file_.release(); }
     private:
         report_sink::ScratchFile file_;
     };

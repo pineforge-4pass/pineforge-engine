@@ -171,9 +171,9 @@ public:
         const auto& item = region(resource);
         if (offset > item.capacity || length > item.capacity - offset
             || offset > item.logical_extent || length > item.logical_extent - offset)
-            throw ScratchIoError(EIO, "scratch read outside logical extent");
+            throw AuxiliaryScratchIoError(EIO, "scratch read outside logical extent");
         if (length == 0) return;
-        if (!destination) throw ScratchIoError(EINVAL, "scratch read null destination");
+        if (!destination) throw AuxiliaryScratchIoError(EINVAL, "scratch read null destination");
         std::memcpy(destination, item.base + static_cast<std::size_t>(offset), length);
     }
     void read_at(const Region& item, std::uint64_t offset,
@@ -187,7 +187,7 @@ public:
         if (offset > item.capacity || length > item.capacity - offset)
             throw ScratchCapacityError(resource);
         if (length == 0) return;
-        if (!source) throw ScratchIoError(EINVAL, "scratch write null source");
+        if (!source) throw AuxiliaryScratchIoError(EINVAL, "scratch write null source");
         std::memcpy(item.base + static_cast<std::size_t>(offset), source, length);
         item.logical_extent = std::max(item.logical_extent,
                                       offset + static_cast<std::uint64_t>(length));

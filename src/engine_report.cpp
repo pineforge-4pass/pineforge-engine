@@ -7,6 +7,9 @@
 #include "selected_report_view.hpp"
 #include <pineforge/metrics_stream.hpp>
 #include "report_scratch.hpp"
+
+#include <pineforge/metrics.hpp>
+#include "report_value_invalid.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -33,9 +36,20 @@ void BacktestEngine::trace(const std::string& name, double value) {
     TraceEntryC e;
     e.timestamp = current_bar_.timestamp;
     e.bar_index = bar_index_;
-    e.name_id = intern_trace_name(name);
+    e.name_id = 0;
     e.value = value;
-    if (!stream_report_sink_trace(e)) trace_buffer_.push_back(e);
+    // A sink carries the name text in each X record, so the resident interned
+    // name table is not consulted (R16: streaming is O(1) in distinct names).
+    if (stream_report_sink_trace(name, e)) {
+        fold_trace_leaf(sequence_witness_.traces, e.timestamp, e.bar_index, name, value);
+        return;
+    }
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        fold_trace_leaf(sequence_witness_.traces, e.timestamp, e.bar_index, name, value);
+        return;
+    }
+    e.name_id = intern_trace_name(name);
+    trace_buffer_.push_back(e);
 }
 
 
@@ -54,7 +68,7 @@ void BacktestEngine::trace(const std::string& name, double value) {
 // release. strategy_stream_fill_report, the explicit snapshot, runs this same
 // function asking for the rows' own owner (NativeExecutionConsumer::
 // fill_snapshot_report), so a live stream's rows survive such a refusal.
-void BacktestEngine::fill_report(ReportC* out) const {
+void BacktestEngine::fill_report(ReportC* out) const try {
     const ReportSinkCallScope sink_call(*this);
     // A recursive capture/observer read is refused before any row gate;
     // the terminal helper consumes its reentry latch.
@@ -77,6 +91,11 @@ void BacktestEngine::fill_report(ReportC* out) const {
             {{"shape", "live_selected_sink"}},
             "native selected report: a live sink report is unavailable before capture");
     }
+    // Finalize the optional sequences the run accumulated. Both calls are
+    // idempotent: the summary witness counts each row/hash once, and the sink
+    // path has already streamed and retired them.
+    fold_pending_hashes_into_witness();
+    fold_current_output_row_witness();
     fill_trades_section(out);
 
     out->input_bars_processed = diag_input_bars_processed_;
@@ -92,23 +111,51 @@ void BacktestEngine::fill_report(ReportC* out) const {
     fill_metrics_section(out);  // reads out->trades — keep after fill_trades_section
 
     fill_security_diag_section(out);
-    fill_trace_section(out);
+    if (report_mode_ == ReportMode::FULL) {
+        fill_trace_section(out);
 
-    // ABI v4 task 6: per-script-bar broker-state hash, empty unless
-    // recording was enabled via set_broker_state_hash_recording. Owns the
-    // allocation; freed by free_report.
-    const int64_t hn = (int64_t)broker_state_hashes_.size();
-    out->broker_state_hash_len = hn;
-    out->broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
-    if (hn > 0) std::copy(broker_state_hashes_.begin(), broker_state_hashes_.end(), out->broker_state_hash);
+        // ABI v4 task 6: per-script-bar broker-state hash, empty unless
+        // recording was enabled via set_broker_state_hash_recording. Owns the
+        // allocation; freed by free_report. SummaryOnly keeps the fixed ordered
+        // witness and publishes no owning array (R14).
+        if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+            out->broker_state_hash_len = 0;
+            out->broker_state_hash = nullptr;
+        } else {
+            const int64_t hn = (int64_t)broker_state_hashes_.size();
+            out->broker_state_hash_len = hn;
+            out->broker_state_hash = hn > 0 ? new uint64_t[hn] : nullptr;
+            if (hn > 0) std::copy(broker_state_hashes_.begin(), broker_state_hashes_.end(), out->broker_state_hash);
+        }
+    } else {
+        // SUMMARY_ONLY captures no optional history. STREAMED already emitted
+        // trace entries as they were recorded and writes the hash sequence to
+        // the sink at finish; neither keeps a resident report array here.
+        out->trace = nullptr;
+        out->trace_len = 0;
+        out->trace_names = nullptr;
+        out->trace_names_len = 0;
+        out->broker_state_hash = nullptr;
+        out->broker_state_hash_len = 0;
+    }
     finish_report_sink(out);
+} catch (const std::exception& error) {
+    // A C wrapper can ask for partial rows after execution already failed.
+    // A later invalid metric must not replace that latched typed failure.
+    if (!last_error().empty()
+        && classify_run_failure(error).code == RunFailureCode::report_result_invalid) {
+        throw coded<std::runtime_error>(run_failure_value_of(*this), last_error());
+    }
+    throw;
 }
 
 // Copy ``trades_`` — followed by ``range_end_trades_``, the report-only rows
 // of a position still open after the final bar
 // (NativeExecutionConsumer::append_open_position_report_rows) — into a
 // freshly heap-allocated TradeC[] on ``out`` and accumulate ``net_profit``.
-// A sink allocates only the range-end view. free_report owns either array.
+// A FULL sink allocates only the range-end view. The SUMMARY_ONLY and STREAMED
+// routes allocate no TradeC array at all: they keep the logical total and fold
+// the same rows one at a time. free_report owns the FULL arrays.
 void BacktestEngine::fill_trades_section(ReportC* out) const {
     const std::size_t closed = trades_.size();
     const std::size_t open = range_end_trades_.size();
@@ -121,29 +168,66 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             "array report requires the sealed trade rows in the report sink");
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();
-    out->total_trades = n;
+    out->total_trades = 0;
+    out->trades_len = 0;
+    out->net_profit = 0.0;
+    if (report_mode_ != ReportMode::FULL) {
+        // O1 R13: summary and streamed capture keep the logical total and the
+        // exact left fold and materialize no TradeC row array. Every row
+        // enters once, in report order: the closed rows first, then one
+        // rebuilt range-end row per open lot. A streamed run's closed rows
+        // are already at the sink cursor, so only their fold prefix is read.
+        out->trades = nullptr;
+        double net = 0.0;
+        if (report_sink_state_.enabled) {
+            net = report_closed_net_profit();
+            out->net_profit = net;
+            out->total_trades = n_closed;
+        } else {
+            for (const auto& trade : trades_) {
+                report::validate_trade(trade);
+                ++out->total_trades;
+                net = report::finite_value(net + trade.pnl, "summary.net_pnl");
+                out->net_profit = net;
+            }
+        }
+        for (const auto& row : range_end_trades_) {
+            report::validate_trade(row);
+            ++out->total_trades;
+            net = report::finite_value(net + row.pnl, "summary.net_pnl");
+            out->net_profit = net;
+        }
+        return;
+    }
     if (report_sink_state_.enabled) {
         // The hook can re-mark open lots, but closed history is immutable.
         // Never materialize that history merely to discard it at finalization.
         const int open_count = (int)range_end_trades_.size();
         out->net_profit = report_closed_net_profit();
-        out->trades_len = open_count;
+        out->total_trades = n_closed;
         out->trades = open_count > 0 ? new TradeC[open_count] : nullptr;
         for (int i = 0; i < open_count; ++i) {
-            out->trades[i] = report_trade_row(range_end_trades_[i]);
-            out->net_profit += out->trades[i].pnl;
+            const Trade row = range_end_trades_.row((std::size_t)i);
+            report::validate_trade(row);
+            out->trades[i] = report_trade_row(row);
+            out->trades_len = i + 1;
+            out->total_trades = n_closed + i + 1;
+            out->net_profit = report::finite_value(
+                out->net_profit + out->trades[i].pnl, "summary.net_pnl");
         }
         return;
     }
-    out->trades_len = n;
 
     if (n > 0) {
         out->trades = new TradeC[n];
         double net_profit = 0.0;
 
         for (int i = 0; i < n; i++) {
-            const Trade& t = (i < n_closed) ? trades_[i]
-                                            : range_end_trades_[i - n_closed];
+            // Closed and terminal rows are detached values. Only the FULL
+            // route's owning output array retains per-row report storage.
+            const Trade t = (i < n_closed) ? trades_[i]
+                : range_end_trades_.row(static_cast<std::size_t>(i - n_closed));
+            report::validate_trade(t);
             out->trades[i].entry_time = t.entry_time;
             out->trades[i].exit_time = t.exit_time;
             out->trades[i].entry_price = t.entry_price;
@@ -158,13 +242,14 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->trades[i].entry_bar_index = t.entry_bar_index;
             out->trades[i].exit_bar_index = t.exit_bar_index;
             out->trades[i].open_at_end = t.open_at_end ? 1 : 0;
-            net_profit += t.pnl;
+            // A partial report keeps each fully initialized row, including
+            // this one if only the following aggregate overflows.
+            out->trades_len = out->total_trades = i + 1;
+            net_profit = report::finite_value(net_profit + t.pnl, "summary.net_pnl");
+            out->net_profit = net_profit;
         }
-
-        out->net_profit = net_profit;
     } else {
         out->trades = nullptr;
-        out->net_profit = 0.0;
     }
 }
 
@@ -176,10 +261,13 @@ double BacktestEngine::report_closed_net_profit() const {
         if (!consumer || consumer->closed_trade_prefix().base != trades_.base())
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                 "report trade fold is missing its sealed prefix");
-        sum = consumer->closed_trade_prefix().pnl;
+        sum = report::finite_value(consumer->closed_trade_prefix().pnl, "summary.net_pnl");
     }
     // Continue the original left fold; the decision counters use other seeds.
-    for (const auto& trade : trades_) sum += trade.pnl;
+    for (const auto& trade : trades_) {
+        report::validate_trade(trade);
+        sum = report::finite_value(sum + trade.pnl, "summary.net_pnl");
+    }
     return sum;
 }
 
@@ -206,7 +294,19 @@ void BacktestEngine::compute_report_sink_trade_metrics(
         shorts.fold(row);
     };
     for (const auto& trade : trades_) fold(report_trade_row(trade));
-    for (int i = 0; i < count; ++i) fold(open_rows[i]);
+    if (open_rows != nullptr || report_mode_ == ReportMode::FULL) {
+        // FULL still folds the caller's presented rows (a selected capture
+        // may deliberately publish none of them).
+        for (int i = 0; i < count; ++i) fold(open_rows[i]);
+    } else {
+        // O1 R12/R13: no resident open-row array in summary/streamed capture;
+        // rebuild each terminal row from its lot in the same order and fold it
+        // once.
+        if (count != 0)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "report trade metrics lost their open rows");
+        for (const auto& row : range_end_trades_) fold(report_trade_row(row));
+    }
     out->metrics.all = all.finish();
     out->metrics.longs = longs.finish();
     out->metrics.shorts = shorts.finish();
@@ -256,20 +356,111 @@ void compute_report_metrics(pf_metrics_t& result,
 }  // namespace internal
 
 
+int BacktestEngine::set_equity_report_mode(ReportMode mode) {
+    if (mode != ReportMode::FULL && mode != ReportMode::SUMMARY_ONLY
+        && mode != ReportMode::STREAMED) return -1;
+    if (report_sink_setter_status() != 0) return -3;
+    if (mode == ReportMode::SUMMARY_ONLY && report_sink_state_.enabled) return -4;
+    pending_equity_report_mode_ = mode;
+    return 0;
+}
+
 // Compute metrics after fill_trades_section. Sink-off owns its full arrays;
 // a sink folds closed rows from the ledger plus its presented open-lot view
-// and reads equity history from scratch.
+// and reads equity history from scratch. Summary uses only fixed folds.
 // Metric history derives from recorded points, NOT script_bars_processed:
 // an exception mid-run can truncate the curve (metrics then describe the
 // truncated prefix; consumers must check strategy_get_last_error).
 // No ScopedTimezone may be held here: compute_equity_stats takes the
 // non-recursive global tz lock when chart_timezone_ is non-UTC.
 void BacktestEngine::fill_metrics_section(ReportC* out) const {
+    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY) {
+        // Only the independently held report point is presented. A whole-array
+        // presenter requires an adapter at the versioned mode admission gate.
+        auto presented_fold = summary_equity_fold_;
+        pf_equity_point_t presented{};
+        const auto* held = last_equity_point();
+        if (held) presented = *held;
+        out->equity_curve = held ? &presented : nullptr;
+        out->equity_curve_len = held ? 1 : 0;
+        try {
+            present_report(out);
+            if (out->equity_curve != (held ? &presented : nullptr)
+                || out->equity_curve_len != (held ? 1 : 0))
+                throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
+                    {{"shape", "summary_equity_tail"}},
+                    "summary equity presentation must preserve its held-point view");
+            if (held)
+                presented_fold.replace_last(presented,
+                    metrics::equity_month_key(presented.time_ms, chart_timezone_));
+            summary_equity_snapshot_ = presented_fold.first_pass();
+            summary_equity_snapshot_valid_ = true;
+            const auto* ratios = summary_equity_ratios_
+                && summary_equity_ratios_->matches(summary_equity_snapshot_)
+                ? &*summary_equity_ratios_ : nullptr;
+            summary_equity_ratios_ready_ =
+                !summary_equity_snapshot_.needs_second_pass() || ratios;
+            // While the legacy trade producer is present, use its presented
+            // rows exactly once. R13's omitted-row producer supplies these
+            // three fixed blocks before equity assembly instead.
+            if (out->trades || out->total_trades == 0) {
+                out->metrics.all = metrics::compute_trade_stats(
+                    out->trades, out->trades_len, metrics::TradeFilter::ALL, initial_capital_);
+                out->metrics.longs = metrics::compute_trade_stats(
+                    out->trades, out->trades_len, metrics::TradeFilter::LONG, initial_capital_);
+                out->metrics.shorts = metrics::compute_trade_stats(
+                    out->trades, out->trades_len, metrics::TradeFilter::SHORT, initial_capital_);
+            } else {
+                compute_report_sink_trade_metrics(out, nullptr, 0);
+            }
+            if (out->metrics.all.num_trades != out->total_trades)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                    "summary trade metrics differ from the logical trade count");
+            const metrics::EquityMetricInputs inputs{
+                initial_capital_, first_bar_open_, current_bar_.close, out->net_profit};
+            out->metrics = metrics::finalize_metrics(
+                summary_equity_snapshot_, inputs, out->metrics.all,
+                out->metrics.longs, out->metrics.shorts, ratios);
+        } catch (...) {
+            // Never let free_report delete the borrowed stack point.
+            out->equity_curve = nullptr;
+            out->equity_curve_len = 0;
+            summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
+            throw;
+        }
+        // Omitted output is explicit in the envelope's capture flags and
+        // logical count; this ABI-4 length describes only a resident array.
+        out->equity_curve = nullptr;
+        out->equity_curve_len = 0;
+        return;
+    }
     if (report_sink_state_.equity_scratch && !report_sink_state_.selected_equity_stream) {
         fill_report_sink_metrics_section(out);
+        if (report_mode_ != ReportMode::FULL) {
+            // The scratch curve owns the point sequence. The held one-point
+            // array only carried the presented tail into the metric fold, so
+            // summary/streamed capture returns no resident curve.
+            delete[] out->equity_curve;
+            out->equity_curve = nullptr;
+            out->equity_curve_len = 0;
+        }
         return;
     }
     const int64_t n = (int64_t)equity_curve_.size();
+    if (report_mode_ != ReportMode::FULL) {
+        // O1 R13: no owning copy of the recorded points. The metric folds walk
+        // the recorded sequence in place, in the same order and grouping the
+        // FULL route folds its copy. Presentation of an owning array belongs
+        // to the FULL route; an exact summary replay is a separate provider
+        // contract (docs/design/o1-report-contract.md), not an array copy.
+        out->equity_curve = nullptr;
+        out->equity_curve_len = 0;
+        compute_report_metrics(out->metrics, nullptr, 0, equity_curve_.data(), n,
+                               out->net_profit, initial_capital_, chart_timezone_,
+                               first_bar_open_, current_bar_.close, bars_in_market_);
+        compute_report_sink_trade_metrics(out, nullptr, 0);
+        return;
+    }
     out->equity_curve_len = n;
     if (n > 0) {
         out->equity_curve = new pf_equity_point_t[n];
@@ -321,6 +512,15 @@ void BacktestEngine::fill_security_diag_section(ReportC* out) const {
 // window because no trace() calls run after fill_report). Owns both
 // allocations; freed by ``free_report``.
 void BacktestEngine::fill_trace_section(ReportC* out) const {
+    // SummaryOnly keeps the ordered witness, not the sequence (R15). A sink
+    // has already streamed every X record, so no resident array is owed.
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        out->trace = nullptr;
+        out->trace_len = 0;
+        out->trace_names = nullptr;
+        out->trace_names_len = 0;
+        return;
+    }
     int trace_n = (int)trace_buffer_.size();
     out->trace_len = trace_n;
     if (trace_n > 0) {
@@ -466,6 +666,11 @@ void BacktestEngine::clear_output_record() {
     output_sequence_ = 0;
     output_row_seq_base_ = 0;
     output_cleared_sequence_ = 0;
+    sequence_witness_.rows = report_sequence::SequenceWitness{};
+    sequence_witness_.events = report_sequence::SequenceWitness{};
+    sequence_row_folded_ = false;
+    output_row_witness_base_ = report_sequence::SequenceWitness{};
+    output_event_row_witness_ = report_sequence::SequenceWitness{};
     std::fill(output_ordinals_.begin(), output_ordinals_.end(), 0u);
     std::fill(output_constants_.begin(), output_constants_.end(), kUnwrittenOutput);
     std::fill(output_constant_written_.begin(), output_constant_written_.end(), uint8_t{0});
@@ -521,12 +726,17 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
     if (output_open_ms_.empty() || open_ms > output_open_ms_.back()) {
         if (report_sink_output_row() + 1 >= INT_MAX)
             refuse_output_limit("too_many_rows", "outputs: the row count is at its limit");
+        // Closing the previous row: fold it into the ordered witness and drop
+        // it (summary), or stream and drop it (sink). R17 keeps one row.
+        finalize_summary_output_row();
         retire_report_sink_output_row();
         output_series_.resize(output_series_.size() + slots, kUnwrittenOutput);
         output_open_ms_.push_back(open_ms);
         output_close_ms_.push_back(close_ms);
         std::fill(output_ordinals_.begin(), output_ordinals_.end(), 0u);
         output_row_seq_base_ = output_sequence_;
+        output_row_witness_base_ = sequence_witness_.rows;
+        output_event_row_witness_ = sequence_witness_.events;
         return;
     }
     if (open_ms < output_open_ms_.back()) {
@@ -540,6 +750,19 @@ void BacktestEngine::output_bar(int64_t open_ms, int64_t close_ms) {
             RunFailureCode::outputs_rejected, {{"reason", "recalculated_after_clear"}},
             "outputs: bar " + std::to_string(report_sink_output_row())
                 + " was recalculated after its events were cleared");
+    }
+    // A recalculation retracts this row's provisional events: the summary
+    // witness returns to its value when the row opened (O(1) rollback).
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
+        && !report_sink_state_.writer) {
+        sequence_witness_.events = output_event_row_witness_;
+        // A report read may have folded this still-open row (a live stream
+        // snapshot). Its values are about to change, so retire that fold and
+        // let the next finalization fold the recalculated row.
+        if (sequence_row_folded_) {
+            sequence_witness_.rows = output_row_witness_base_;
+            sequence_row_folded_ = false;
+        }
     }
     std::fill(output_series_.end() - static_cast<std::ptrdiff_t>(slots), output_series_.end(),
               kUnwrittenOutput);
@@ -572,8 +795,6 @@ void BacktestEngine::record_output_event(int output, double value, const std::st
     if (output_open_ms_.empty()) refuse_output("output_event with no open bar");
     if (output < 0 || output >= outputs_count_)
         refuse_output("output " + std::to_string(output) + " is out of range");
-    if (output_events_.size() >= static_cast<size_t>(INT_MAX))
-        refuse_output_limit("too_many_events", "outputs: the event queue is full");
     if (output_sequence_ == std::numeric_limits<uint64_t>::max())
         refuse_output("event sequence overflow");
     OutputEvent event;
@@ -595,6 +816,18 @@ void BacktestEngine::record_output_event(int output, double value, const std::st
         event.message = *message;
         event.message_hash64 = output_message_hash(*message);
     }
+    // SummaryOnly publishes no event array (R18): the record is folded into
+    // the ordered witness at once, and a same-row recalculation restores the
+    // witness snapshot, so the fixed state does not grow with events.
+    if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
+        && !report_sink_state_.writer) {
+        fold_event_leaf(sequence_witness_.events, event);
+        output_sequence_ = event.sequence;
+        ++output_ordinals_[static_cast<size_t>(output)];
+        return;
+    }
+    if (output_events_.size() >= static_cast<size_t>(INT_MAX))
+        refuse_output_limit("too_many_events", "outputs: the event queue is full");
     output_events_.push_back(std::move(event));
     output_sequence_ = output_events_.back().sequence;
     ++output_ordinals_[static_cast<size_t>(output)];
@@ -651,7 +884,15 @@ const BacktestEngine::OutputEvent* BacktestEngine::output_event_at(int index) co
 }
 
 void BacktestEngine::output_events_clear() {
-    if (output_events_.empty()) return;
+    if (output_events_.empty()) {
+        // SummaryOnly has no queue: the folded witness already holds the
+        // cleared events, exactly as the sink published them before clearing.
+        if (optional_report_mode_ == report_sequence::ReportMode::SummaryOnly
+            && !report_sink_state_.writer) {
+            output_cleared_sequence_ = std::max(output_cleared_sequence_, output_sequence_);
+        }
+        return;
+    }
     write_report_sink_events();
     output_cleared_sequence_ = std::max(output_cleared_sequence_, output_events_.back().sequence);
     output_events_.clear();
@@ -664,8 +905,9 @@ double BacktestEngine::output_constant_value(int index) const {
 
 }  // namespace pineforge
 
-// CR-150 L6B1: path sink runtime. Kept after the existing report/output code
+// CR-150 L6B1/L22A: sink runtime. Kept after the existing report/output code
 // so the line-pinned documentation above retains its source coordinates.
+#include <pineforge/detail/scratch_arena.hpp>
 #include "report_sink_writer.hpp"
 
 namespace pineforge {
@@ -674,7 +916,8 @@ BacktestEngine::ReportSinkState::ReportSinkState() = default;
 BacktestEngine::ReportSinkState::~ReportSinkState() = default;
 BacktestEngine::ReportSinkState::ReportSinkState(const ReportSinkState& other)
     : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
-      path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
+      path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir),
+      fd(other.fd) {}
 BacktestEngine::ReportSinkState&
 BacktestEngine::ReportSinkState::operator=(const ReportSinkState& other) {
     if (this != &other) *this = ReportSinkState(other);
@@ -720,6 +963,37 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
             next.scratch_dir = slash == std::string::npos ? "."
                 : slash == 0 ? "/" : next.path.substr(0, slash);
         }
+        detail::ScratchArena::attach_from_environment();
+    }
+    if (report_sink_state_.equity_scratch) {
+        if (next.enabled) {
+            // Replacing next-run configuration must not discard the current
+            // generation's record-time curve and validation latches.
+            next.equity_scratch = std::move(report_sink_state_.equity_scratch);
+            next.equity_tail_stored = report_sink_state_.equity_tail_stored;
+            next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
+        } else {
+            // Removing the sink restores the existing array-report contract.
+            NativeExecutionConsumer::restore_report_sink_equity_curve(*this);
+        }
+    }
+    report_sink_state_ = std::move(next);
+    return 0;
+}
+
+int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor) {
+    if (descriptor && (descriptor->struct_size != sizeof(*descriptor)
+        || descriptor->version != 1 || descriptor->fd < 0)) return -1;
+    const int status = report_sink_setter_status();
+    if (status != 0) return status;
+    ReportSinkState next;
+    next.trade_history_streamable = report_sink_state_.trade_history_streamable;
+    if (descriptor) {
+        next.enabled = true;
+        next.fd = descriptor->fd;
+        next.run_id = descriptor->run_id ? descriptor->run_id : "";
+        // No path parent or scratch directory exists for a borrowed stream.
+        detail::ScratchArena::attach_from_environment();
     }
     if (report_sink_state_.equity_scratch) {
         // Replacing next-run configuration must not discard the current
@@ -742,6 +1016,19 @@ int BacktestEngine::report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const
     return 0;
 }
 
+int BacktestEngine::report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept {
+    if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
+    pf_report_sink_summary_v1 local{};
+    if (report_sink_state_.enabled) {
+        local = report_sink_state_.summary;
+        local.complete = report_sink_state_.receipt.complete;
+    }
+    local.struct_size = sizeof local;
+    local.version = 1;
+    *out = local;
+    return 0;
+}
+
 void BacktestEngine::set_trade_history_streamable(bool streamable) {
     if (report_sink_setter_status() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
@@ -757,6 +1044,9 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
 
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
+    // A begin owns a fresh run: the optional-sequence witnesses start empty
+    // beside the arrays the run resets.
+    reset_optional_sequence_witness();
     sink.writer.reset();
     sink.equity_scratch.reset();
     sink.equity_tail_stored = false;
@@ -768,7 +1058,27 @@ void BacktestEngine::begin_report_sink() {
     sink.selected_released_extremes[3] = 0.0;
 #endif
     sink.receipt = {};
+    sink.summary = {};
     sink.output_base = 0;
+    // Run preparation, before callbacks/bar zero, also when no sink is set.
+    active_equity_report_mode_ = pending_equity_report_mode_;
+    summary_equity_fold_ = {};
+    summary_equity_snapshot_ = {};
+    summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
+    summary_equity_ratios_.reset();
+    summary_broker_equity_prefix_[0] = summary_broker_equity_prefix_[1] = initial_capital_;
+    summary_broker_equity_prefix_[2] = summary_broker_equity_prefix_[3] = 0.0;
+    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY) {
+        if (sink.enabled)
+            throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
+                {{"shape", "summary_with_sequence_sink"}},
+                "summary equity mode conflicts with a sequence sink");
+        // Drop a prior FULL run's capacity and prepare the only held point.
+        std::vector<pf_equity_point_t> held;
+        held.reserve(1);
+        equity_curve_.swap(held);
+        return; // No curve writer, region, file, or sink publication.
+    }
     if (!sink.enabled) return;
     // The new run owns these histories. Drop capacity left by a previous
     // sink-off run before callbacks, even if outputs are disabled this time.
@@ -779,10 +1089,16 @@ void BacktestEngine::begin_report_sink() {
     std::vector<int64_t>().swap(output_close_ms_);
     std::vector<OutputEvent>().swap(output_events_);
     sink.receipt.trades_retained = sink.trade_history_streamable ? 0u : 1u;
-    const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1,
-        sink.path.c_str(), sink.run_id.c_str(), sink.scratch_dir.c_str()};
     try {
-        sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        if (sink.fd >= 0) {
+            const pf_report_sink_fd_v1 descriptor{sizeof(pf_report_sink_fd_v1), 1,
+                sink.fd, sink.run_id.c_str()};
+            sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        } else {
+            const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1,
+                sink.path.c_str(), sink.run_id.c_str(), sink.scratch_dir.c_str()};
+            sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
+        }
         sink.writer->write_header({outputs_enabled_, trace_enabled_, broker_state_hash_recording_,
                                    outputs_slots_, outputs_constants_});
         pf_selected_window_config_v1 window{};
@@ -805,9 +1121,7 @@ void BacktestEngine::begin_report_sink() {
         }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        throw coded<std::runtime_error>(code, {}, error.what());
+        throw coded<std::runtime_error>(error.run_failure(), error.what());
     }
 }
 
@@ -842,6 +1156,10 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             const TradeC* open_rows = out->trades;
             int open_count = out->trades_len;
             NativeExecutionConsumer::report_sink_open_trades(*this, open_rows, open_count);
+            auto summary = consumer->finish_report_sink_summary(*this, open_rows, open_count);
+            if (summary.count_t != out->total_trades)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                    "report summary count differs from the report trade count");
             write_report_sink_trades(open_rows, open_count);
             if (outputs_enabled_) {
                 write_report_sink_output_row();
@@ -849,6 +1167,14 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
                 ++sink.receipt.count_k;
             }
             write_report_sink_hashes();
+            if (summary.count_t != sink.receipt.count_t)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                    "report summary count differs from the sink trade count");
+            // The last input bar is already complete. A SIGTERM received
+            // during report assembly still abandons a whole-record prefix,
+            // before any success trailer or complete receipt is published.
+            if (NativeExecutionConsumer::abort_before_sink_trailer(
+                    const_cast<BacktestEngine&>(*this))) return;
             const auto trailer = sink.writer->write_trailer();
             sink.receipt.count_e = trailer.count_e;
             sink.receipt.count_t = trailer.count_t;
@@ -858,6 +1184,10 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             sink.receipt.count_x = trailer.count_x;
             sink.receipt.count_h = trailer.count_h;
             std::memcpy(sink.receipt.sha256_hex, trailer.sha256_hex, sizeof trailer.sha256_hex);
+            summary.struct_size = sizeof summary;
+            summary.version = 1;
+            summary.complete = 1;
+            sink.summary = summary;
             sink.receipt.complete = 1;
         }
     } catch (const report_sink::WriterError& error) {
@@ -866,9 +1196,7 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         *out = {};
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         note_run_failure(engine, failure.what(), classify_run_failure(failure));
         throw failure;
     } catch (const std::exception& error) {
@@ -901,15 +1229,42 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
 void BacktestEngine::write_report_sink_trades(const TradeC* open_rows, int count) const {
     auto& sink = report_sink_state_;
     const auto closed_count = static_cast<int64_t>(trades_.size());
-    const int64_t total = closed_count + count;
+    // A captured presentation supplies its own open rows; the summary and
+    // streamed routes rebuild them from the terminal mark, one at a time.
+    // Nothing here keeps a TradeC array for the range-end rows.
+    const bool lazy_open_rows = report_mode_ != ReportMode::FULL && open_rows == nullptr;
+    const int64_t open_count = lazy_open_rows
+        ? static_cast<int64_t>(range_end_trades_.size())
+        : static_cast<int64_t>(count);
+    const int64_t total = closed_count + open_count;
     if (sink.receipt.count_t < static_cast<int64_t>(trades_.base())
         || sink.receipt.count_t > total)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
             "report trade sink cursor is outside the resident window");
     for (int64_t i = sink.receipt.count_t; i < total; ++i) {
-        const TradeC row = i < closed_count
-            ? report_trade_row(trades_[static_cast<std::size_t>(i)])
-            : open_rows[static_cast<std::size_t>(i - closed_count)];
+        const int64_t open_index = i - closed_count;
+        // Value copies, never a pointer into the ledger: the row source owns
+        // whatever representation its lane chooses, and a by-value accessor
+        // would leave a pointer to a temporary here.
+        Trade closed;
+        Trade rebuilt;
+        const Trade* identity = nullptr;
+        TradeC row{};
+        if (i < closed_count) {
+            closed = trades_[static_cast<std::size_t>(i)];
+            identity = &closed;
+            row = report_trade_row(closed);
+        } else if (lazy_open_rows) {
+            rebuilt = range_end_trades_.row(static_cast<std::size_t>(open_index));
+            identity = &rebuilt;
+            row = report_trade_row(rebuilt);
+        } else {
+            // FULL: the presented row's values, with a detached identity from
+            // the same terminal mark. Sink emission retains no legacy row.
+            rebuilt = range_end_trades_.row(static_cast<std::size_t>(open_index));
+            identity = &rebuilt;
+            row = open_rows[static_cast<std::size_t>(open_index)];
+        }
         pf_trade_t wire{};
         wire.entry_time = row.entry_time;
         wire.exit_time = row.exit_time;
@@ -925,10 +1280,9 @@ void BacktestEngine::write_report_sink_trades(const TradeC* open_rows, int count
         wire.entry_bar_index = row.entry_bar_index;
         wire.exit_bar_index = row.exit_bar_index;
         wire.open_at_end = row.open_at_end;
-        const Trade& identity = get_report_trade(static_cast<int>(i));
-        sink.writer->write_t(i + INT64_C(1), wire, identity.entry_incarnation,
-            closed_trade_close_cause(static_cast<int>(i)), identity.entry_id,
-            identity.exit_id, identity.exit_comment);
+        sink.writer->write_t(i + INT64_C(1), wire, identity->entry_incarnation,
+            classify_report_close_cause(*identity), identity->entry_id,
+            identity->exit_id, identity->exit_comment);
         ++sink.receipt.count_t;
     }
 }
@@ -1004,9 +1358,7 @@ void BacktestEngine::report_sink_record(Write write) const {
     try {
         write();
     } catch (const report_sink::WriterError& error) {
-        const auto code = error.reason() == report_sink::WriterFailure::io
-            ? RunFailureCode::report_sink_failed : RunFailureCode::engine_invariant;
-        const auto failure = coded<std::runtime_error>(code, {}, error.what());
+        const auto failure = coded<std::runtime_error>(error.run_failure(), error.what());
         auto& engine = const_cast<BacktestEngine&>(*this);
         engine.last_run_status_ = 1;
         note_run_failure(engine, failure.what(), classify_run_failure(failure));
@@ -1014,12 +1366,16 @@ void BacktestEngine::report_sink_record(Write write) const {
     }
 }
 
-bool BacktestEngine::stream_report_sink_trace(const TraceEntryC& entry) {
+bool BacktestEngine::stream_report_sink_trace(const std::string& name,
+                                              const TraceEntryC& entry) {
     auto& sink = report_sink_state_;
     if (!sink.writer || sink.receipt.complete) return false;
-    const pf_trace_entry_t wire{entry.timestamp, entry.bar_index, entry.name_id, entry.value};
+    // The X record carries the name text itself; name_id is report-array
+    // provenance and this streaming path keeps no resident name table (R16).
+    // The caller's name view outlives the write.
+    const pf_trace_entry_t wire{entry.timestamp, entry.bar_index, 0, entry.value};
     report_sink_record([&] {
-        sink.writer->write_x(wire, trace_names_[static_cast<std::size_t>(entry.name_id)]);
+        sink.writer->write_x(wire, name);
         ++sink.receipt.count_x;
     });
     return true;
@@ -1058,6 +1414,7 @@ void BacktestEngine::write_report_sink_events() const {
             wire.message = event.has_message ? event.message.c_str() : nullptr;
             sink.writer->write_v(wire, event.message);
             ++sink.receipt.count_v;
+            fold_event_leaf(sequence_witness_.events, event);
         }
     });
 }
@@ -1070,6 +1427,8 @@ void BacktestEngine::write_report_sink_output_row() const {
         sink.writer->write_o(sink.output_base, output_open_ms_.back(), output_close_ms_.back(),
                              values, outputs_slots_);
         ++sink.receipt.count_o;
+        fold_row_leaf(sequence_witness_.rows, sink.output_base, output_open_ms_.back(),
+                      output_close_ms_.back(), values, outputs_slots_);
         write_report_sink_events();
     });
 }
@@ -1090,6 +1449,9 @@ void BacktestEngine::retire_report_sink_output_row() {
 void BacktestEngine::write_report_sink_hashes() const {
     auto& sink = report_sink_state_;
     if (!sink.writer || sink.receipt.complete) return;
+    // The witness covers exactly the leaves this call writes, in order, and a
+    // repeated call after fill_report's fold adds nothing twice.
+    fold_pending_hashes_into_witness();
     report_sink_record([&] {
         for (const auto hash : broker_state_hashes_) {
             sink.writer->write_h(hash);
@@ -1100,11 +1462,173 @@ void BacktestEngine::write_report_sink_hashes() const {
 
 void BacktestEngine::retire_report_sink_hashes() {
     auto& sink = report_sink_state_;
-    if (!sink.writer || sink.receipt.complete) return;
-    // The previous point is now final, including any Pine terminal rewrite.
-    // Its successor is appended by the existing native or marking-host path.
-    write_report_sink_hashes();
-    broker_state_hashes_.clear();
+    if (sink.writer && !sink.receipt.complete) {
+        // The previous point is now final, including any Pine terminal
+        // rewrite. Its successor is appended by the existing native or
+        // marking-host path.
+        write_report_sink_hashes();
+        broker_state_hashes_.clear();
+        sequence_hash_folded_ = 0;
+        return;
+    }
+    if (!sink.writer && optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
+        // No stream requested: fold the finalized leaf into the ordered
+        // witness and retire it, so the recorded vector stays one leaf deep.
+        fold_pending_hashes_into_witness();
+        broker_state_hashes_.clear();
+        sequence_hash_folded_ = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CR-150 o1w-seq (R14--R18): the fixed ordered witnesses.
+//
+// Every fold below is over the record's semantic fields, in record order, on
+// an explicit little-endian byte spelling. Nothing here reads the report mode
+// or an array, so the same run folds the same digest whether the sequence was
+// streamed to a sink or consumed as a summary. The witnesses are the only
+// state the summary mode adds; each is O(1).
+namespace {
+
+// FNV-1a's prime over an explicit little-endian spelling. The digest starts at
+// zero because a witness is an opaque ordered equality check, not a hash of
+// independent bytes.
+constexpr std::uint64_t kSequenceDigestPrime = 1099511628211ULL;
+
+void sequence_fold_byte(std::uint64_t& digest, std::uint8_t byte) {
+    digest ^= byte;
+    digest *= kSequenceDigestPrime;
+}
+
+void sequence_fold_u64(std::uint64_t& digest, std::uint64_t value) {
+    for (int shift = 0; shift < 64; shift += 8)
+        sequence_fold_byte(digest, static_cast<std::uint8_t>(value >> shift));
+}
+
+void sequence_fold_i64(std::uint64_t& digest, std::int64_t value) {
+    sequence_fold_u64(digest, static_cast<std::uint64_t>(value));
+}
+
+void sequence_fold_u32(std::uint64_t& digest, std::uint32_t value) {
+    sequence_fold_u64(digest, value);
+}
+
+void sequence_fold_i32(std::uint64_t& digest, std::int32_t value) {
+    sequence_fold_u64(digest, static_cast<std::uint32_t>(value));
+}
+
+void sequence_fold_f64(std::uint64_t& digest, double value) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof bits);
+    sequence_fold_u64(digest, bits);
+}
+
+void sequence_fold_text(std::uint64_t& digest, const std::string& text) {
+    sequence_fold_u64(digest, static_cast<std::uint64_t>(text.size()));
+    for (const unsigned char byte : text) sequence_fold_byte(digest, byte);
+}
+
+}  // namespace
+
+void BacktestEngine::reset_optional_sequence_witness() {
+    sequence_witness_ = report_sequence::OptionalSequenceSummary{};
+    sequence_hash_folded_ = 0;
+    sequence_row_folded_ = false;
+    output_row_witness_base_ = report_sequence::SequenceWitness{};
+    output_event_row_witness_ = report_sequence::SequenceWitness{};
+}
+
+void BacktestEngine::fold_hash_leaf(report_sequence::SequenceWitness& witness,
+                                    std::uint64_t hash) {
+    ++witness.count;
+    sequence_fold_u64(witness.digest, hash);
+}
+
+void BacktestEngine::fold_trace_leaf(report_sequence::SequenceWitness& witness,
+                                     std::int64_t timestamp, std::int32_t bar_index,
+                                     const std::string& name, double value) {
+    ++witness.count;
+    sequence_fold_i64(witness.digest, timestamp);
+    sequence_fold_i32(witness.digest, bar_index);
+    sequence_fold_text(witness.digest, name);
+    sequence_fold_f64(witness.digest, value);
+}
+
+void BacktestEngine::fold_row_leaf(report_sequence::SequenceWitness& witness,
+                                   std::int64_t row, std::int64_t open_ms,
+                                   std::int64_t close_ms, const double* values,
+                                   std::int64_t count) {
+    ++witness.count;
+    sequence_fold_i64(witness.digest, row);
+    sequence_fold_i64(witness.digest, open_ms);
+    sequence_fold_i64(witness.digest, close_ms);
+    sequence_fold_i64(witness.digest, count);
+    for (std::int64_t i = 0; i < count; ++i)
+        sequence_fold_f64(witness.digest, values[i]);
+}
+
+void BacktestEngine::fold_event_leaf(report_sequence::SequenceWitness& witness,
+                                     const OutputEvent& event) {
+    ++witness.count;
+    sequence_fold_u64(witness.digest, event.sequence);
+    sequence_fold_i32(witness.digest, event.output_index);
+    sequence_fold_i32(witness.digest, event.bar_index);
+    sequence_fold_i64(witness.digest, event.bar_open_ms);
+    sequence_fold_i64(witness.digest, event.bar_close_ms);
+    sequence_fold_u32(witness.digest, event.ordinal_in_bar);
+    sequence_fold_u32(witness.digest, event.phase);
+    sequence_fold_u32(witness.digest, event.confirmed);
+    sequence_fold_f64(witness.digest, event.value);
+    sequence_fold_u64(witness.digest, event.message_hash64);
+    sequence_fold_u32(witness.digest, event.has_message ? 1u : 0u);
+    if (event.has_message) sequence_fold_text(witness.digest, event.message);
+}
+
+void BacktestEngine::fold_pending_hashes_into_witness() const {
+    for (std::size_t i = sequence_hash_folded_; i < broker_state_hashes_.size(); ++i)
+        fold_hash_leaf(sequence_witness_.hashes, broker_state_hashes_[i]);
+    sequence_hash_folded_ = broker_state_hashes_.size();
+}
+
+void BacktestEngine::fold_current_output_row_witness() const {
+    if (optional_report_mode_ != report_sequence::ReportMode::SummaryOnly
+        || report_sink_state_.writer || output_open_ms_.empty() || sequence_row_folded_) {
+        return;
+    }
+    fold_row_leaf(sequence_witness_.rows,
+                  static_cast<std::int64_t>(sequence_witness_.rows.count),
+                  output_open_ms_.back(), output_close_ms_.back(),
+                  output_series_.empty() ? nullptr : output_series_.data(),
+                  static_cast<std::int64_t>(outputs_slots_));
+    sequence_row_folded_ = true;
+}
+
+void BacktestEngine::finalize_summary_output_row() {
+    if (optional_report_mode_ != report_sequence::ReportMode::SummaryOnly
+        || report_sink_state_.writer) {
+        return;
+    }
+    fold_current_output_row_witness();
+    output_series_.clear();
+    output_open_ms_.clear();
+    output_close_ms_.clear();
+    output_events_.clear();
+    sequence_row_folded_ = false;
+}
+
+int BacktestEngine::set_optional_report_mode(report_sequence::ReportMode mode) {
+    // A mode is run configuration: it cannot change under a live run, stream
+    // or sink generation, and it starts a fresh witness.
+    if (report_sink_setter_status() != 0) return -1;
+    optional_report_mode_ = mode;
+    reset_optional_sequence_witness();
+    return 0;
+}
+
+report_sequence::OptionalSequenceSummary BacktestEngine::optional_sequence_summary() const {
+    fold_pending_hashes_into_witness();
+    fold_current_output_row_witness();
+    return sequence_witness_;
 }
 
 } // namespace pineforge
@@ -1169,3 +1693,213 @@ void compute_selected_report_metrics(
 }
 
 }  // namespace pineforge::internal
+
+
+// ---------------------------------------------------------------------------
+// CR-150 O1W R12/R13: the terminal range-end row source and the versioned
+// report envelope. Appended at the end of the file, after every function the
+// file held before.
+namespace pineforge {
+
+// A terminal mark replaces the previous generation wholesale, exactly as the
+// row vector's clear + append did. Retained C-accessor rows belong to the
+// replaced generation and are dropped with it.
+void OpenReportRowSource::clear() noexcept {
+    present_ = false;
+    was_long_ = false;
+    mark_price_ = 0.0;
+    mark_time_ms_ = 0;
+    interval_index_ = 0;
+    account_fx_ = 1.0;
+    count_ = 0;
+    pnl_ = 0.0;
+    materialized_.clear();
+    synthetic_.clear();
+}
+
+void OpenReportRowSource::begin(
+        double mark_price, std::int64_t mark_time_ms, int interval_index,
+        double account_fx, bool was_long, std::size_t count) noexcept {
+    clear();
+    present_ = count != 0;
+    was_long_ = was_long;
+    mark_price_ = mark_price;
+    mark_time_ms_ = mark_time_ms;
+    interval_index_ = interval_index;
+    account_fx_ = account_fx;
+    count_ = count;
+}
+
+// The exact row the range-end append used to push: the same non-mutating
+// builder, the same context fields and the same open_at_end mark. Only the
+// storage changed; every field, including the four identity strings, is
+// rebuilt from the lot and the frozen terminal mark.
+Trade OpenReportRowSource::row(std::size_t index) const {
+    if (!present_) {
+        if (index >= synthetic_.size())
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "range-end report row index is outside the seeded rows");
+        return synthetic_[index];
+    }
+    if (owner_ == nullptr || index >= count_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "range-end report row index is outside the terminal mark");
+    const BacktestEngine& engine = *owner_;
+    // The mark names the lots it was taken over. A lot retired after the mark
+    // (before its report row was read) would otherwise rebuild a different
+    // row; the producers only mark a terminal, frozen book, so this is an
+    // invariant, not a runtime refusal of a valid run.
+    if (index >= engine.pyramid_entries_.size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "range-end report lot was retired after its terminal mark");
+    const PyramidEntry& lot = engine.pyramid_entries_[index];
+    execution::PhysicalExecutionContext context;
+    context.effective_time_ms = mark_time_ms_;
+    context.interval_index = interval_index_;
+    context.account_fx = account_fx_;
+    if (!std::isnan(engine.fold_exit_trail_peak_))
+        context.preceding_exit_trail_peak = engine.fold_exit_trail_peak_;
+    Trade built = engine.build_close_trade_with_costs(
+        lot, lot.qty, mark_price_, was_long_,
+        engine.allocated_entry_commission(lot, lot.qty),
+        engine.calc_commission_at(mark_price_, lot.qty, account_fx_), context);
+    built.open_at_end = true;
+    return built;
+}
+
+// The legacy borrowed-pointer boundary (the C entry/exit string accessors).
+// Rows are retained from the front as they are first asked for; this is the
+// only place a range-end row outlives its reader, and no report, fold or sink
+// path calls it.
+const Trade& OpenReportRowSource::materialize(std::size_t index) const {
+    if (!present_) {
+        if (index >= synthetic_.size())
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "range-end report row index is outside the seeded rows");
+        return synthetic_[index];
+    }
+    if (owner_ == nullptr || index >= count_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "range-end report row index is outside the terminal mark");
+    while (materialized_.size() <= index) materialized_.push_back(row(materialized_.size()));
+    return materialized_[index];
+}
+
+int BacktestEngine::set_report_mode_v1(ReportMode mode) {
+    switch (mode) {
+        case ReportMode::FULL:
+        case ReportMode::SUMMARY_ONLY:
+        case ReportMode::STREAMED:
+            break;
+        default:
+            // Unknown words are invalid, never aliases for FULL.
+            return PF_REPORT_MODE_INVALID;
+    }
+    // A live execution, dispatch or stream owns the report configuration.
+    if (report_sink_setter_status() != 0) return PF_REPORT_MODE_BUSY;
+    const bool sink = report_sink_state_.enabled;
+    if (mode == ReportMode::FULL && sink) return PF_REPORT_MODE_CONFLICT;
+    if (mode == ReportMode::SUMMARY_ONLY && sink) return PF_REPORT_MODE_CONFLICT;
+    if (mode == ReportMode::STREAMED && !sink) return PF_REPORT_MODE_CONFLICT;
+    report_mode_ = mode;
+    return PF_REPORT_MODE_ACCEPTED;
+}
+
+namespace {
+
+// One sequence's logical count and capture policy. Disabled optional sources
+// carry zero in all three fields; a captured empty sequence keeps captured=1.
+pf_report_sequence_v1 report_sequence_v1(std::int64_t logical_count,
+                                         bool enabled, bool sum_only, bool streamed) {
+    pf_report_sequence_v1 sequence{};
+    if (!enabled) return sequence;
+    sequence.logical_count = logical_count;
+    // FULL captures in place, STREAMED captures externally, SUMMARY_ONLY
+    // captures nothing (an empty captured sequence still reports captured=1).
+    sequence.captured = sum_only ? 0u : 1u;
+    sequence.external = streamed ? 1u : 0u;
+    return sequence;
+}
+
+}  // namespace
+
+int BacktestEngine::fill_report_envelope_v1(ReportEnvelopeV1* out) const {
+    if (out == nullptr || out->metadata.struct_size != sizeof(pf_report_metadata_v1)
+        || out->metadata.version != PF_REPORT_ENVELOPE_VERSION)
+        return PF_REPORT_MODE_INVALID;
+    // Filling over an unfreed payload would lose its owner.
+    const ReportC& existing = out->report;
+    if (existing.trades != nullptr || existing.trades_len != 0
+        || existing.security_diag != nullptr || existing.security_diag_len != 0
+        || existing.trace != nullptr || existing.trace_len != 0
+        || existing.trace_names != nullptr || existing.trace_names_len != 0
+        || existing.equity_curve != nullptr || existing.equity_curve_len != 0
+        || existing.broker_state_hash != nullptr || existing.broker_state_hash_len != 0)
+        return PF_REPORT_MODE_INVALID;
+    // A successful read reports a frozen generation; a live attempt refuses.
+    if (report_sink_setter_status() != 0) return PF_REPORT_MODE_BUSY;
+    // The capture policy and the configured sink must still agree; a sink
+    // removed or installed after the setter makes the shape ambiguous.
+    const bool sink_enabled = report_sink_state_.enabled;
+    if ((report_mode_ == ReportMode::FULL && sink_enabled)
+        || (report_mode_ == ReportMode::SUMMARY_ONLY && sink_enabled)
+        || (report_mode_ == ReportMode::STREAMED && !sink_enabled))
+        return PF_REPORT_MODE_CONFLICT;
+
+    ReportEnvelopeV1 local{};
+    local.metadata.struct_size = sizeof(pf_report_metadata_v1);
+    local.metadata.version = PF_REPORT_ENVELOPE_VERSION;
+    local.metadata.mode = static_cast<pf_report_mode_v1_t>(report_mode_);
+    local.report = ReportC{};
+    try {
+        fill_report(&local.report);
+    } catch (...) {
+        free_report(&local.report);
+        throw;
+    }
+
+    const bool streamed = report_mode_ == ReportMode::STREAMED;
+    const bool summary = report_mode_ == ReportMode::SUMMARY_ONLY;
+    const auto& sink = report_sink_state_;
+    // Logical counts are independent of resident array lengths; a retired
+    // sink row is counted at the cursor, a resident one where it lives.
+    std::int64_t equity_count = sink.equity_scratch
+        ? sink.equity_scratch->size() : static_cast<std::int64_t>(equity_curve_.size());
+    if (local.report.equity_curve_len > equity_count)
+        equity_count = local.report.equity_curve_len;
+    const std::int64_t trace_count =
+        sink.receipt.count_x + static_cast<std::int64_t>(trace_buffer_.size());
+    const std::int64_t output_rows =
+        sink.receipt.count_o + static_cast<std::int64_t>(output_open_ms_.size());
+    const std::int64_t output_events =
+        sink.receipt.count_v + static_cast<std::int64_t>(output_events_.size());
+    const std::int64_t hash_count = broker_state_hash_recording_
+        ? sink.receipt.count_h + static_cast<std::int64_t>(broker_state_hashes_.size())
+        : 0;
+
+    local.metadata.trades = report_sequence_v1(
+        local.report.total_trades, true, summary, streamed);
+    local.metadata.equity_curve = report_sequence_v1(
+        equity_count, equity_count > 0 || sink.equity_scratch != nullptr, summary, streamed);
+    local.metadata.broker_state_hash = report_sequence_v1(
+        hash_count, broker_state_hash_recording_, summary, streamed);
+    local.metadata.trace = report_sequence_v1(
+        trace_count, trace_enabled_, summary, streamed);
+    local.metadata.trace_names = report_sequence_v1(
+        static_cast<std::int64_t>(trace_names_.size()), trace_enabled_, summary, streamed);
+    local.metadata.output_rows = report_sequence_v1(
+        output_rows, outputs_enabled_, summary, streamed);
+    local.metadata.output_events = report_sequence_v1(
+        output_events, outputs_enabled_, summary, streamed);
+
+    const auto* consumer = execution_consumer_slot_.ptr && execution_consumer_slot_.native
+        ? static_cast<const NativeExecutionConsumer*>(execution_consumer_slot_.ptr.get())
+        : nullptr;
+    const bool completed = last_run_status_ == 0 && last_error_.empty() && consumer
+        && consumer->state_kind() == NativeLifecycleKind::Completed;
+    local.metadata.complete = completed ? 1u : 0u;
+    *out = local;
+    return PF_REPORT_MODE_ACCEPTED;
+}
+
+}  // namespace pineforge

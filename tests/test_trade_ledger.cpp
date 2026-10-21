@@ -1,6 +1,7 @@
 // CR-150 L8a: exercise the frozen ledger contract and its retaining native path.
 #include <pineforge/trade_ledger.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_sequence.hpp>
 #include "native_current_fixture.hpp"
 
 #include <cstring>
@@ -114,10 +115,15 @@ void retaining_tail() {
         else ledger.push_back(std::move(t));
     }
     matches(ledger, expected);
-    ledger.at(64).exit_comment = expected.at(64).exit_comment = "amended";
-    ledger[65].exit_time = expected[65].exit_time = T;
+    expected.at(64).exit_comment = "amended";
+    ledger.replace(64, expected.at(64));
+    expected[65].exit_time = T;
+    ledger.replace(65, expected[65]);
     std::size_t index = 0;
-    for (Trade& t : ledger) t.exit_id = expected[index++].exit_id = "sorted-tail";
+    for (auto& t : expected) {
+        t.exit_id = "sorted-tail";
+        ledger.replace(index++, t);
+    }
     ledger.resize(400);
     expected.resize(400);
     for (int n = 600; n < 630; ++n) {
@@ -197,14 +203,14 @@ void copies_and_moves() {
     }
     original.seal(2);
     TradeLedger copy(original);
-    original.at(2).entry_id = "original changed";
+    original.modify(2, [](Trade& t) { t.entry_id = "original changed"; });
     matches(copy, expected, 2);
     TradeLedger assigned;
     assigned.push_back(row(99));
     assigned = copy;
     assigned = assigned;
     matches(assigned, expected, 2);
-    copy[3].exit_comment = "copy changed";
+    copy.modify(3, [](Trade& t) { t.exit_comment = "copy changed"; });
     matches(assigned, expected, 2);
     TradeLedger moved(std::move(assigned));
     matches(moved, expected, 2);
@@ -221,6 +227,190 @@ void copies_and_moves() {
     matches(moved, {row(51)});
     destination = std::move(destination);
     matches(destination, expected, 2);
+}
+
+void external_values_and_backward_walk() {
+    TradeLedger ledger;
+    std::vector<Trade> expected;
+    for (int n = 0; n < 1025; ++n) {
+        expected.push_back(row(n));
+        ledger.push_back(expected.back());
+    }
+    REQUIRE(ledger.size() == 1025);
+    CHECK(ledger.resident_size() == TradeLedger::kResidentRows);
+    REQUIRE(ledger.resident_base() > 64);
+    const Trade retained = ledger.read(0);
+    expected[0].pnl = -0.0;
+    expected[0].entry_comment = std::string("new\0external", 12);
+    ledger.replace(0, expected[0]);
+    same_trade(retained, row(0));
+    same_trade(ledger.read(0), expected[0]);
+    ledger.visit(0, ledger.size(), [&](std::size_t i, const Trade& value) {
+        // Nested reads cannot invalidate the visitor's owning row.
+        const Trade newest = ledger.read(ledger.size() - 1);
+        same_trade(value, expected[i]);
+        same_trade(newest, expected.back());
+        return true;
+    });
+    std::size_t cursor = ledger.size(), second = ledger.size();
+    Trade value{}, interleaved{};
+    while (ledger.previous(cursor, value)) {
+        same_trade(value, expected[cursor]);
+        REQUIRE(ledger.previous(second, interleaved));
+        same_trade(value, interleaved);
+    }
+    CHECK(cursor == 0 && second == 0);
+    CHECK(!ledger.previous(cursor, value));
+    ledger.seal(900);
+    same_trade(ledger.read(0), expected[0]);
+    cursor = 901;
+    REQUIRE(ledger.previous(cursor, value));
+    same_trade(value, expected[900]);
+    REQUIRE(ledger.previous(cursor, value)); // cross the sealed base
+    same_trade(value, expected[899]);
+    // A rewind crosses the physical resident window without crossing the
+    // publication boundary. Replacements retain their global row numbers.
+    ledger.resize(902);
+    expected.resize(902);
+    ledger.push_back(row(77));
+    expected.push_back(row(77));
+    matches(ledger, expected, 900);
+    CHECK(ledger.resident_size() <= TradeLedger::kResidentRows);
+}
+
+struct ReaderProbe : Host {
+    using BacktestEngine::avg_trade_percent;
+    using BacktestEngine::avg_winning_trade_percent;
+    using BacktestEngine::avg_losing_trade_percent;
+    using BacktestEngine::closed_trade_profit;
+    using BacktestEngine::closed_trade_profit_percent;
+    using BacktestEngine::closed_trade_commission;
+    using BacktestEngine::closed_trade_entry_bar_index;
+    using BacktestEngine::closed_trade_exit_bar_index;
+    using BacktestEngine::closed_trade_entry_comment;
+    using BacktestEngine::closed_trade_exit_comment;
+    using BacktestEngine::closed_trade_entry_id;
+    using BacktestEngine::closed_trade_exit_id;
+    using BacktestEngine::closed_trade_entry_incarnation;
+    using BacktestEngine::closed_trade_entry_price;
+    using BacktestEngine::closed_trade_exit_price;
+    using BacktestEngine::closed_trade_entry_time;
+    using BacktestEngine::closed_trade_exit_time;
+    using BacktestEngine::closed_trade_size;
+    using BacktestEngine::closed_trade_max_runup;
+    using BacktestEngine::closed_trade_max_runup_percent;
+    using BacktestEngine::closed_trade_max_drawdown;
+    using BacktestEngine::closed_trade_max_drawdown_percent;
+    using BacktestEngine::closed_trade_direction;
+    using BacktestEngine::fill_trades_section;
+    void seed(const Trade& value) {
+        trades_.push_back(value);
+        if (value.pnl > 0) ++win_trades_count_;
+        else if (value.pnl < 0) ++loss_trades_count_;
+    }
+    const TradeLedger& ledger() const { return trades_; }
+};
+
+void migrated_historical_readers() {
+    ReaderProbe host;
+    std::vector<Trade> expected;
+    double sum = 0.0, wins = 0.0, losses = 0.0;
+    std::size_t winning = 0, losing = 0;
+    for (int n = 0; n < 1025; ++n) {
+        expected.push_back(row(n));
+        host.seed(expected.back());
+        const auto& value = expected.back();
+        sum += value.pnl_pct;
+        if (value.pnl > 0) { wins += value.pnl_pct; ++winning; }
+        else if (value.pnl < 0) { losses += value.pnl_pct; ++losing; }
+    }
+    REQUIRE(host.closed_trade_count() == 1025);
+    REQUIRE(host.ledger().resident_base() > 2);
+    for (int i = 0; i < 3; ++i) {
+        const auto& value = expected[static_cast<std::size_t>(i)];
+        same_trade(host.get_trade(i), value);
+        same_trade(host.closed_trade(static_cast<std::size_t>(i)), value);
+        same_trade(host.get_report_trade(i), value);
+        CHECK(same_double(host.closed_trade_profit(i), value.pnl));
+        CHECK(same_double(host.closed_trade_profit_percent(i), value.pnl_pct));
+        CHECK(same_double(host.closed_trade_commission(i), value.commission));
+        CHECK(host.closed_trade_entry_bar_index(i) == value.entry_bar_index);
+        CHECK(host.closed_trade_exit_bar_index(i) == value.exit_bar_index);
+        CHECK(host.closed_trade_entry_comment(i) == value.entry_comment);
+        CHECK(host.closed_trade_exit_comment(i) == value.exit_comment);
+        CHECK(host.closed_trade_entry_id(i) == value.entry_id);
+        CHECK(host.closed_trade_exit_id(i) == value.exit_id);
+        CHECK(host.closed_trade_entry_incarnation(i) == value.entry_incarnation);
+        CHECK(same_double(host.closed_trade_entry_price(i), value.entry_price));
+        CHECK(same_double(host.closed_trade_exit_price(i), value.exit_price));
+        CHECK(host.closed_trade_entry_time(i) == value.entry_time);
+        CHECK(host.closed_trade_exit_time(i) == value.exit_time);
+        CHECK(same_double(host.closed_trade_size(i), value.qty));
+        CHECK(same_double(host.closed_trade_max_runup(i), value.max_runup));
+        CHECK(same_double(host.closed_trade_max_drawdown(i), value.max_drawdown));
+        const double cost = value.entry_price * value.qty;
+        CHECK(same_double(host.closed_trade_max_runup_percent(i), value.max_runup / cost * 100.0));
+        CHECK(same_double(host.closed_trade_max_drawdown_percent(i), value.max_drawdown / cost * 100.0));
+        const auto cause = value.open_at_end ? ex::CloseCause::RangeEnd : value.close_cause;
+        CHECK(host.closed_trade_close_cause(i) == static_cast<int>(cause));
+        CHECK(host.closed_trade_direction(i) == (value.is_long ? "long" : "short"));
+    }
+    CHECK(same_double(host.avg_trade_percent(), sum / static_cast<double>(expected.size())));
+    CHECK(same_double(host.avg_winning_trade_percent(), wins / static_cast<double>(winning)));
+    CHECK(same_double(host.avg_losing_trade_percent(), losses / static_cast<double>(losing)));
+    std::size_t cursor = host.closed_trade_count();
+    Trade value{};
+    while (host.previous_closed_trade(cursor, value)) same_trade(value, expected[cursor]);
+    ReportC report{};
+    host.fill_trades_section(&report);
+    REQUIRE(report.trades_len == 1025);
+    for (int i = 0; i < report.trades_len; ++i) {
+        const auto& original = expected[static_cast<std::size_t>(i)];
+        CHECK(same_double(report.trades[i].pnl, original.pnl));
+        CHECK(same_double(report.trades[i].commission, original.commission));
+        CHECK(report.trades[i].entry_time == original.entry_time);
+        CHECK(report.trades[i].exit_time == original.exit_time);
+    }
+    BacktestEngine::free_report(&report);
+    CHECK(host.ledger().resident_size() <= TradeLedger::kResidentRows);
+}
+
+void phase_pages_and_stable_permutation() {
+    detail::ScratchSequence<std::uint32_t> phases;
+    constexpr std::size_t population = 100003;
+    for (std::size_t i = 0; i < population; ++i)
+        phases.push_back(static_cast<std::uint32_t>(i % 5));
+    REQUIRE(phases.size() == population);
+    CHECK(phases.resident_capacity() * sizeof(std::uint32_t) == 64 * 1024);
+    phases.set(0, 4); // force an old-page amendment
+    CHECK(phases[population - 1] == (population - 1) % 5);
+    CHECK(phases[0] == 4);
+    phases.erase(phases.begin(), phases.begin() + 70000);
+    CHECK(phases.size() == population - 70000);
+    CHECK(phases[0] == 70000 % 5);
+    phases.resize(3);
+    phases.push_back(17);
+    CHECK(phases[3] == 17);
+    phases.clear();
+    phases.push_back(23);
+    CHECK(phases.size() == 1 && phases[0] == 23);
+
+    struct Ordered { std::uint32_t key, ordinal; };
+    detail::ScratchSequence<Ordered> indices;
+    std::vector<Ordered> oracle;
+    for (std::size_t i = 0; i < population; ++i) {
+        const Ordered value{static_cast<std::uint32_t>((population - i) % 17),
+                            static_cast<std::uint32_t>(i)};
+        indices.push_back(value);
+        oracle.push_back(value);
+    }
+    const auto before = [](Ordered a, Ordered b) { return a.key < b.key; };
+    std::stable_sort(oracle.begin(), oracle.end(), before);
+    indices.stable_sort(before);
+    for (std::size_t i = 0; i < population; ++i) {
+        const auto actual = indices[i];
+        CHECK(actual.key == oracle[i].key && actual.ordinal == oracle[i].ordinal);
+    }
 }
 
 struct Snapshot {
@@ -294,6 +484,9 @@ int main() {
     test("retaining tail matches vector", retaining_tail);
     test("global resident window", global_window);
     test("copy and move ownership", copies_and_moves);
+    test("external values and backwards global rows", external_values_and_backward_walk);
+    test("migrated readers on external-only rows", migrated_historical_readers);
+    test("phase pages and stable permutation", phase_pages_and_stable_permutation);
     test("sink-off native retention and reuse", native_retention_and_reuse);
     std::printf("test_trade_ledger: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -13,12 +13,16 @@
 #include "engine_internal.hpp"
 #include <pineforge/order_action.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_file.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <map>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -329,14 +333,109 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
 inline namespace engine_script_run_v19 {
 
 struct TradeLedger::State {
-    std::vector<Trade> rows;
-    size_type first = 0;
+    // The directory is itself external: fixed-width row descriptors are
+    // addressed by global index; variable strings live in the payload file.
+    // Updating an old mutable row replaces its descriptor after its new
+    // payload has been written. No in-memory vector of offsets is needed.
+    struct StringExtent { std::uint64_t offset = 0, length = 0; };
+    struct Record {
+        std::int64_t entry_time = 0, exit_time = 0;
+        double entry_price = 0, exit_price = 0, qty = 0, pnl = 0, pnl_pct = 0;
+        std::int32_t entry_bar_index = -1, exit_bar_index = -1;
+        StringExtent entry_id, entry_comment, exit_comment, exit_id;
+        double max_runup = 0, max_drawdown = 0, commission = 0;
+        std::uint64_t entry_incarnation = 0;
+        execution::CloseCause close_cause = execution::CloseCause::Unspecified;
+        bool is_long = false, exit_from_bracket = false, open_at_end = false;
+    };
+    static_assert(std::is_trivially_copyable_v<Record>);
+    static_assert(sizeof(int) == sizeof(std::int32_t));
+    // Strings are never retained by the window. It holds fixed descriptors;
+    // even the newest row's four payloads already live in scratch.
+    std::array<Record, kResidentRows> rows{};
+    size_type first = 0, end = 0, resident_first = 0, count = 0, head = 0;
+    detail::ScratchFile index, payload;
+    std::uint64_t payload_end = 0;
+    std::string directory;
+    mutable std::map<size_type, Trade> materialized;
 
-    size_type offset(size_type global) const {
-        if (global < first || global - first >= rows.size())
+    State() {
+        index.bound_cache();
+        payload.bound_cache();
+    }
+    static std::uint64_t record_offset(size_type global) {
+        if (global > std::numeric_limits<std::uint64_t>::max() / sizeof(Record))
+            throw detail::ScratchIoError(EFBIG, "trade ledger offset");
+        return static_cast<std::uint64_t>(global) * sizeof(Record);
+    }
+    void check(size_type global, bool mutable_row = false) const {
+        if (global >= end || (mutable_row && global < first))
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                            "trade ledger: row outside resident window");
-        return global - first;
+    }
+    size_type slot(size_type global) const {
+        return (head + global - resident_first) % kResidentRows;
+    }
+    StringExtent put_string(const std::string& text) {
+        detail::ScratchFile::check_extent(payload_end, text.size());
+        const StringExtent result{payload_end, static_cast<std::uint64_t>(text.size())};
+        if (!text.empty()) payload.write(payload_end, text.data(), text.size());
+        payload_end += text.size();
+        return result;
+    }
+    std::string get_string(StringExtent text) const {
+        if (text.length > std::numeric_limits<size_type>::max()
+            || text.offset > payload_end || text.length > payload_end - text.offset)
+            throw detail::ScratchIoError(EIO, "trade ledger string extent");
+        std::string result(static_cast<size_type>(text.length), '\0');
+        if (!result.empty()) payload.read(text.offset, result.data(), result.size());
+        return result;
+    }
+    Record store(size_type global, const Trade& row) {
+        index.open("pineforge-trade-index");
+        payload.open("pineforge-trade-payload");
+        Record record{};
+        record.entry_time = row.entry_time; record.exit_time = row.exit_time;
+        record.entry_price = row.entry_price; record.exit_price = row.exit_price;
+        record.qty = row.qty; record.pnl = row.pnl; record.pnl_pct = row.pnl_pct;
+        record.entry_bar_index = row.entry_bar_index; record.exit_bar_index = row.exit_bar_index;
+        record.entry_id = put_string(row.entry_id);
+        record.entry_comment = put_string(row.entry_comment);
+        record.exit_comment = put_string(row.exit_comment);
+        record.exit_id = put_string(row.exit_id);
+        record.max_runup = row.max_runup; record.max_drawdown = row.max_drawdown;
+        record.commission = row.commission; record.entry_incarnation = row.entry_incarnation;
+        record.close_cause = row.close_cause; record.is_long = row.is_long;
+        record.exit_from_bracket = row.exit_from_bracket; record.open_at_end = row.open_at_end;
+        index.write(record_offset(global), &record, sizeof(record));
+        return record;
+    }
+    Trade decode(const Record& record) const {
+        Trade row{};
+        row.entry_time = record.entry_time; row.exit_time = record.exit_time;
+        row.entry_price = record.entry_price; row.exit_price = record.exit_price;
+        row.qty = record.qty; row.pnl = record.pnl; row.pnl_pct = record.pnl_pct;
+        row.entry_bar_index = record.entry_bar_index; row.exit_bar_index = record.exit_bar_index;
+        row.entry_id = get_string(record.entry_id);
+        row.entry_comment = get_string(record.entry_comment);
+        row.exit_comment = get_string(record.exit_comment);
+        row.exit_id = get_string(record.exit_id);
+        row.max_runup = record.max_runup; row.max_drawdown = record.max_drawdown;
+        row.commission = record.commission; row.entry_incarnation = record.entry_incarnation;
+        row.close_cause = record.close_cause; row.is_long = record.is_long;
+        row.exit_from_bracket = record.exit_from_bracket; row.open_at_end = record.open_at_end;
+        return row;
+    }
+    Trade load(size_type global) const {
+        Record record{};
+        index.read(record_offset(global), &record, sizeof(record));
+        return decode(record);
+    }
+    void evict() {
+        rows[head] = Record{};
+        head = (head + 1) % kResidentRows;
+        ++resident_first;
+        --count;
     }
 };
 
@@ -344,12 +443,16 @@ TradeLedger::TradeLedger() : state_(std::make_unique<State>()) {}
 TradeLedger::~TradeLedger() = default;
 
 TradeLedger::TradeLedger(const TradeLedger& other)
-    : state_(std::make_unique<State>(*other.state_)) {}
+    : TradeLedger() {
+    set_scratch_directory(other.state_->directory);
+    for (size_type i = 0; i < other.size(); ++i) push_back(other.read(i));
+    seal(other.base());
+}
 
 TradeLedger& TradeLedger::operator=(const TradeLedger& other) {
     if (this != &other) {
-        auto next = std::make_unique<State>(*other.state_);
-        state_.swap(next);
+        TradeLedger next(other);
+        state_.swap(next.state_);
     }
     return *this;
 }
@@ -367,97 +470,127 @@ TradeLedger& TradeLedger::operator=(TradeLedger&& other) {
 }
 
 void TradeLedger::clear() {
-    state_->rows.clear();
-    state_->first = 0;
+    auto next = std::make_unique<State>();
+    next->directory = state_->directory;
+    next->index.set_directory(next->directory);
+    next->payload.set_directory(next->directory);
+    state_.swap(next);
 }
 
-void TradeLedger::reserve(size_type count) {
-    // The hint is a resident row count. Keep the settlement preallocation's
-    // geometric growth inside the opaque storage, including its overflow guard.
-    auto& rows = state_->rows;
-    if (count > rows.max_size())
-        throw std::length_error("execution effect capacity exhausted");
-    if (count <= rows.capacity()) return;
-    const size_type grown = rows.capacity() > rows.max_size() / 2
-        ? rows.max_size() : rows.capacity() * 2;
-    rows.reserve(std::max(count, grown));
+void TradeLedger::set_scratch_directory(const std::string& directory) {
+    state_->index.set_directory(directory);
+    state_->payload.set_directory(directory);
+    state_->directory = directory;
 }
+const std::string& TradeLedger::scratch_directory() const { return state_->directory; }
 
-TradeLedger::size_type TradeLedger::size() const {
-    return state_->first + state_->rows.size();
-}
+void TradeLedger::reserve(size_type) {}
 
+TradeLedger::size_type TradeLedger::size() const { return state_->end; }
 TradeLedger::size_type TradeLedger::base() const { return state_->first; }
+TradeLedger::size_type TradeLedger::resident_size() const {
+    return state_->count + state_->materialized.size();
+}
+TradeLedger::size_type TradeLedger::resident_base() const { return state_->resident_first; }
 bool TradeLedger::empty() const { return size() == 0; }
 
-Trade& TradeLedger::operator[](size_type global) { return at(global); }
-const Trade& TradeLedger::operator[](size_type global) const { return at(global); }
-
-Trade& TradeLedger::at(size_type global) {
-    return state_->rows[state_->offset(global)];
+Trade TradeLedger::read(size_type global) const {
+    state_->check(global);
+    return global >= state_->resident_first ? state_->decode(state_->rows[state_->slot(global)])
+                                           : state_->load(global);
 }
 
-const Trade& TradeLedger::at(size_type global) const {
-    return state_->rows[state_->offset(global)];
+Trade TradeLedger::operator[](size_type global) const { return at(global); }
+Trade TradeLedger::at(size_type global) const {
+    state_->check(global, true);
+    return read(global);
 }
 
-Trade& TradeLedger::back() {
-    if (state_->rows.empty())
+Trade TradeLedger::back() const {
+    if (size() == base())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: no resident last row");
-    return state_->rows.back();
+    return read(size() - 1);
 }
 
-const Trade& TradeLedger::back() const {
-    if (state_->rows.empty())
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                       "trade ledger: no resident last row");
-    return state_->rows.back();
+void TradeLedger::replace(size_type global, const Trade& row) {
+    state_->check(global, true);
+    const auto record = state_->store(global, row);
+    if (global >= state_->resident_first) state_->rows[state_->slot(global)] = record;
+    const auto legacy = state_->materialized.find(global);
+    if (legacy != state_->materialized.end()) legacy->second = row;
+}
+
+void TradeLedger::modify(size_type global, const std::function<void(Trade&)>& edit) {
+    Trade row = at(global);
+    edit(row);
+    replace(global, row);
 }
 
 void TradeLedger::push_back(const Trade& trade) {
     if (size() == std::numeric_limits<size_type>::max())
         throw std::length_error("trade ledger: logical end exhausted");
-    state_->rows.push_back(trade);
+    const auto record = state_->store(size(), trade);
+    if (state_->count == kResidentRows) state_->evict();
+    state_->rows[(state_->head + state_->count) % kResidentRows] = record;
+    ++state_->count;
+    ++state_->end;
 }
 
-void TradeLedger::push_back(Trade&& trade) {
-    if (size() == std::numeric_limits<size_type>::max())
-        throw std::length_error("trade ledger: logical end exhausted");
-    state_->rows.push_back(std::move(trade));
-}
+void TradeLedger::push_back(Trade&& trade) { push_back(static_cast<const Trade&>(trade)); }
 
 void TradeLedger::resize(size_type global_end) {
     if (global_end < state_->first)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: rewind below resident window");
-    state_->rows.resize(global_end - state_->first);
+    if (global_end < size()) {
+        // Re-cuts may rewind far below the descriptor window. All row bytes
+        // are already external; discard the bounded descriptor cache.
+        while (state_->count != 0) state_->evict();
+        state_->end = state_->resident_first = global_end;
+        state_->materialized.erase(state_->materialized.lower_bound(global_end),
+                                    state_->materialized.end());
+    } else {
+        while (size() < global_end) push_back(Trade{});
+    }
 }
 
-TradeLedger::iterator TradeLedger::begin() { return state_->rows.data(); }
-TradeLedger::const_iterator TradeLedger::begin() const { return state_->rows.data(); }
-
-TradeLedger::iterator TradeLedger::end() {
-    auto& rows = state_->rows;
-    return rows.empty() ? rows.data() : rows.data() + rows.size();
+Trade TradeLedger::const_iterator::operator*() const { return ledger_->read(index_); }
+TradeLedger::const_iterator TradeLedger::begin() const { return {this, base()}; }
+TradeLedger::const_iterator TradeLedger::end() const { return {this, size()}; }
+void TradeLedger::visit(size_type first, size_type end, const Visitor& visitor) const {
+    if (first > end || end > size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: invalid visit range");
+    for (size_type i = first; i < end; ++i) {
+        const Trade row = read(i);
+        if (!visitor(i, row)) break;
+    }
 }
 
-TradeLedger::const_iterator TradeLedger::end() const {
-    const auto& rows = state_->rows;
-    return rows.empty() ? rows.data() : rows.data() + rows.size();
+bool TradeLedger::previous(size_type& cursor, Trade& value) const {
+    if (cursor > size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                       "trade ledger: invalid backward cursor");
+    if (cursor == 0) return false;
+    value = read(cursor - 1);
+    --cursor;
+    return true;
+}
+
+const Trade& TradeLedger::materialize(size_type global) const {
+    state_->check(global, true);
+    const auto found = state_->materialized.find(global);
+    if (found != state_->materialized.end()) return found->second;
+    return state_->materialized.emplace(global, read(global)).first->second;
 }
 
 void TradeLedger::seal(size_type global_end) {
     if (global_end < state_->first || global_end > size())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: seal outside resident window");
-    const size_type count = global_end - state_->first;
-    if (count == 0) return;
-    auto& rows = state_->rows;
-    rows.erase(rows.begin(), rows.begin()
-               + static_cast<std::vector<Trade>::difference_type>(count));
+    while (state_->count != 0 && state_->resident_first < global_end) state_->evict();
     state_->first = global_end;
-    if (rows.empty()) std::vector<Trade>().swap(rows);
 }
 
 } // inline namespace engine_script_run_v19

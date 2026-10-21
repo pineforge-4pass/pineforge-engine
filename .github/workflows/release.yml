@@ -77,7 +77,7 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
 
     outputs:
       tag:        ${{ steps.bump.outputs.tag }}
@@ -95,7 +95,7 @@ jobs:
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
-          owner: pineforge-4pass
+          owner: ${{ github.repository_owner }}
           repositories: pineforge-engine
 
       - name: Checkout (full history)
@@ -340,7 +340,7 @@ jobs:
       matrix:
         include:
           - triple: linux-x86_64
-            runner: ubuntu-22.04
+            runner: ["self-hosted","pf-ci","pf-ci-release"]
             cmake_extra: ""
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
@@ -468,7 +468,7 @@ jobs:
   notify-hub:
     needs: [release, prebuilt]
     if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
+    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
     steps:
       - name: Mint org App token (hub dispatch)
         id: app
@@ -476,7 +476,7 @@ jobs:
         with:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
-          owner: pineforge-4pass
+          owner: ${{ github.repository_owner }}
           repositories: pineforge-release
 
       # client_payload = {version: vX.Y.Z[-rc.N], prerelease: true|false,

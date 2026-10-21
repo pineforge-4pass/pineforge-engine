@@ -312,7 +312,7 @@ struct Host final : NativeStrategyHost {
     mutable std::int64_t actual_length_at_presentation = 0;
     mutable std::array<pf_equity_point_t, kSelectedPresentationWindowPoints> tail_at_presentation{};
     mutable std::uint64_t hash_at_capture = 0;
-    mutable int scratch_descriptor_at_presentation = -1;
+    mutable metrics::ScratchCurveRegion scratch_at_presentation{-1, 0, 0};
     // The execution input as the presentation hook sees it, before any edit.
     mutable std::vector<pf_equity_point_t> held_at_presentation;
     mutable std::vector<TradeC> open_rows_at_presentation;
@@ -321,6 +321,14 @@ struct Host final : NativeStrategyHost {
     std::vector<pf_equity_point_t> held_curve() const { return equity_curve_; }
     std::size_t recorded_capacity() const { return equity_curve_.capacity(); }
     std::int64_t held_bars_in_market() const { return bars_in_market_; }
+    void change_metric_inputs_after_capture() {
+        // A sealed report owns its values. A report read must not consult the
+        // mutable execution fields again, even when the arrays are unchanged.
+        initial_capital_ = 17.0;
+        bars_in_market_ = 123456;
+        first_bar_open_ = 7.0;
+        current_bar_.close = 19.0;
+    }
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
         ++calculations;
         if (auto* held = last_equity_point()) {
@@ -353,7 +361,7 @@ struct Host final : NativeStrategyHost {
         length_at_presentation = legacy_full_curve ? out->equity_curve_len
             : std::min(out->equity_curve_len, kSelectedPresentationWindowPoints);
         held_at_presentation = equity_curve_;
-        scratch_descriptor_at_presentation = report_sink_equity_scratch_region().descriptor;
+        scratch_at_presentation = report_sink_equity_scratch_region();
         if (legacy_full_curve) {
             // Preserve the old unrestricted hook for sink-OFF regressions.
             if (edit_middle && out->equity_curve_len > 2) {
@@ -576,12 +584,13 @@ void compare_selected_run(Directory& directory, const char* name, int start,
     const auto cut = hide ? window_len : window_len - after_shrink
         + std::min(after_shrink, tail_cut);
     CHECK(array.value.equity_curve_len == logical_len - cut);
-    CHECK(streamed.scratch_descriptor_at_presentation >= 0);
-    if (streamed.scratch_descriptor_at_presentation >= 0) {
+    CHECK(streamed.scratch_at_presentation.scratch != nullptr);
+    if (streamed.scratch_at_presentation.scratch) {
         std::vector<pf_equity_point_t> raw(static_cast<std::size_t>(logical_len));
+        auto region = streamed.scratch_at_presentation;
+        region.point_count = logical_len;
         report_sink::read_scratch_points(
-            {streamed.scratch_descriptor_at_presentation, 0, logical_len}, 0,
-            raw.data(), logical_len);
+            region, 0, raw.data(), logical_len);
         CHECK(array.value.equity_curve != nullptr);
         if (array.value.equity_curve)
             CHECK(std::memcmp(raw.data(), array.value.equity_curve,
@@ -674,7 +683,7 @@ struct LiveReportHost final : NativeStrategyHost {
     std::array<std::int64_t, 2> live_held_times{};
     mutable int live_presentations = 0;
     mutable int captures = 0;
-    mutable int scratch_descriptor_at_capture = -1;
+    mutable metrics::ScratchCurveRegion scratch_at_capture{-1, 0, 0};
 
     void on_native_bar(const Bar&, const NativeDecisionContext& context) override {
         ++calculations;
@@ -725,6 +734,7 @@ struct LiveReportHost final : NativeStrategyHost {
         }
         const auto prefix_after = report_sink_equity_scratch_region();
         CHECK(prefix_after.descriptor == prefix_before.descriptor);
+        CHECK(prefix_after.scratch == prefix_before.scratch);
         CHECK(prefix_after.byte_offset == prefix_before.byte_offset);
         CHECK(prefix_after.point_count == prefix_before.point_count);
         CHECK(same_points(held_before, equity_curve_));
@@ -737,7 +747,7 @@ struct LiveReportHost final : NativeStrategyHost {
             ++live_presentations;
         } else {
             ++captures;
-            scratch_descriptor_at_capture = report_sink_equity_scratch_region().descriptor;
+            scratch_at_capture = report_sink_equity_scratch_region();
         }
     }
 };
@@ -793,12 +803,13 @@ void live_selected_reads_preserve_capture(Directory& directory) {
           == static_cast<std::int64_t>(array_counts.window_script_bars) + 1);
     CHECK(summary.value.equity_curve == nullptr && summary.value.equity_curve_len == 0);
     CHECK(summary.value.trades == nullptr && summary.value.trades_len == 0);
-    CHECK(streamed.scratch_descriptor_at_capture >= 0 && array.value.equity_curve != nullptr);
-    if (streamed.scratch_descriptor_at_capture >= 0 && array.value.equity_curve) {
+    CHECK(streamed.scratch_at_capture.scratch != nullptr && array.value.equity_curve != nullptr);
+    if (streamed.scratch_at_capture.scratch && array.value.equity_curve) {
         std::vector<pf_equity_point_t> raw(static_cast<std::size_t>(array.value.equity_curve_len));
+        auto region = streamed.scratch_at_capture;
+        region.point_count = array.value.equity_curve_len;
         report_sink::read_scratch_points(
-            {streamed.scratch_descriptor_at_capture, 0, array.value.equity_curve_len},
-            0, raw.data(), array.value.equity_curve_len);
+            region, 0, raw.data(), array.value.equity_curve_len);
         CHECK(std::memcmp(raw.data(), array.value.equity_curve,
                           raw.size() * sizeof(pf_equity_point_t)) == 0);
     }
@@ -952,11 +963,13 @@ void empty_selected_windows_follow_array_path(Directory& directory) {
         CHECK(summary.value.equity_curve == nullptr && summary.value.equity_curve_len == 0);
         compare_sink_records(baseline, array.value, read(path));
         CHECK(receipt(streamed).count_e == 1 && receipt(streamed).complete == 1);
-        CHECK(streamed.scratch_descriptor_at_presentation >= 0);
-        if (streamed.scratch_descriptor_at_presentation >= 0) {
+        CHECK(streamed.scratch_at_presentation.scratch != nullptr);
+        if (streamed.scratch_at_presentation.scratch) {
             pf_equity_point_t stored{};
+            auto region = streamed.scratch_at_presentation;
+            region.point_count = 1;
             report_sink::read_scratch_points(
-                {streamed.scratch_descriptor_at_presentation, 0, 1}, 0, &stored, 1);
+                region, 0, &stored, 1);
             CHECK(std::memcmp(&stored, &anchor, sizeof stored) == 0);
         }
         CHECK(streamed.set_report_sink_v1(nullptr) == 0);
@@ -968,6 +981,44 @@ void empty_selected_windows_follow_array_path(Directory& directory) {
             CHECK(std::memcmp(restored.value.equity_curve, array.value.equity_curve,
                               sizeof anchor) == 0);
         else CHECK(false);
+    }
+}
+
+// O1W R04 expected RED on the unchanged tree: the second read recomputes exposure,
+// trade percentages and CAGR using the changed execution fields. The report
+// arrays and the one presentation are unchanged throughout this check.
+void captured_metrics_are_frozen(Directory& directory) {
+    for (const int start : {0, 2, 4, 5}) {
+        for (const bool sink_on : {false, true}) {
+            Host host;
+            host.open_position = start <= 2;
+            host.edit_tail = true;
+            host.edit_middle = true;
+            host.shrink = true;
+            if (sink_on) {
+                const auto path = directory.file(
+                    ("frozen-" + std::to_string(start) + ".ndjson").c_str());
+                const pf_report_sink_v1 sink{
+                    sizeof sink, 1, path.c_str(), "O1W", directory.path.c_str()};
+                CHECK(host.set_report_sink_v1(&sink) == 0);
+            }
+            selected_run(host, start, false, 1);
+            CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+            pf_selected_window_counts_v1 counts{};
+            counts.struct_size = sizeof counts;
+            counts.version = 1;
+            CHECK(native_selected_window_counts_v1(&host, &counts) == 0);
+            CHECK(counts.window_script_bars == static_cast<std::uint64_t>(5 - start));
+            Report before, after;
+            host.fill_report(&before.value);
+            CHECK(host.presentations == 1);
+            host.change_metric_inputs_after_capture();
+            host.fill_report(&after.value);
+            CHECK(same_metrics(before.value.metrics, after.value.metrics));
+            CHECK(host.presentations == 1);
+            CHECK(before.value.net_profit == after.value.net_profit);
+            CHECK(before.value.total_trades == after.value.total_trades);
+        }
     }
 }
 
@@ -1257,7 +1308,7 @@ struct StorageHost final : NativeStrategyHost {
         // Snapshot the actual record-time prefix before capture transfers its
         // owner. These reads and checks precede the allocation measurement.
         prefix_before_capture = recorded_prefix();
-        if (prefix_before_capture.descriptor >= 0 && prefix_before_capture.point_count > 0) {
+        if (prefix_before_capture.scratch && prefix_before_capture.point_count > 0) {
             report_sink::read_scratch_points(prefix_before_capture, 0, &anchor_before_capture, 1);
             report_sink::read_scratch_points(
                 prefix_before_capture, prefix_before_capture.point_count - 1,
@@ -1424,11 +1475,11 @@ CaptureStorage selected_capture_storage(Directory& directory, const char* name, 
     const auto recorded_capacity =
         std::max(host.peak_recorded_capacity, host.recorded_capacity()) * sizeof(pf_equity_point_t);
     const auto prefix = host.prefix_before_capture;
-    CHECK(prefix.descriptor >= 0);
+    CHECK(prefix.scratch != nullptr);
     // The real record-time file contains anchor + M-1 released observations
     // before capture. An implementation that spills only at capture fails.
     CHECK(prefix.point_count == m);
-    if (prefix.descriptor >= 0 && prefix.point_count == m) {
+    if (prefix.scratch && prefix.point_count == m) {
         const pf_equity_point_t expected_anchor{kT, kCapital, 0.0};
         const pf_equity_point_t expected_last{
             bars[static_cast<std::size_t>(m - 2)].timestamp, kCapital, 0.0};
@@ -1569,6 +1620,62 @@ int accept_trade_observer(void*, const pf_execution_boundary_v1*,
                           pf_boundary_receipt_v1* result) {
     result->frame_bytes = result->handed_bytes = 0;
     return 0;
+}
+
+// Expected RED on 583c2217d2: each selected read allocates a SpillCurve reader
+// and trade folds; an observed read allocates a scratch reader and trade folds.
+// A completed sink report needs neither once its metrics have been frozen.
+void frozen_sink_reads_need_no_metric_storage(Directory& directory) {
+    const Bar bars[] = {
+        {50.0, 50.0, 50.0, 50.0, 1.0, kT},
+        {50.0, 50.0, 50.0, 50.0, 1.0, kT + kMinute},
+        {100.0, 100.0, 100.0, 100.0, 1.0, kT + 2 * kMinute},
+        {100.0, 110.0, 100.0, 110.0, 1.0, kT + 3 * kMinute},
+        {110.0, 110.0, 104.5, 104.5, 1.0, kT + 4 * kMinute}};
+    const pf_selected_window_config_v1 window{
+        sizeof window, 1, kT + 2 * kMinute, kT + 5 * kMinute};
+    const pf_execution_observer_v1 observer{
+        sizeof observer, 1, nullptr, accept_trade_observer};
+    for (const bool selected : {false, true}) {
+        Host host;
+        host.open_position = host.edit_tail = true;
+        CHECK(host.configure_native(spec(1)).status == NativeSetupStatus::Applied);
+        if (selected) CHECK(native_set_selected_window_v1(&host, &window) == 0);
+        CHECK(NativeExecutionConsumer::set_execution_observer_v1(&host, &observer) == 0);
+        const auto path = directory.file(
+            selected ? "no-metric-read-selected.ndjson" : "no-metric-read-observed.ndjson");
+        const pf_report_sink_v1 sink{
+            sizeof sink, 1, path.c_str(), "O1W", directory.path.c_str()};
+        CHECK(host.set_report_sink_v1(&sink) == 0);
+        host.run(bars, static_cast<int>(std::size(bars)));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.calculations == static_cast<int>(std::size(bars)));
+        CHECK(host.presentations == 1);
+        Report first, second;
+        host.fill_report(&first.value); // Finish publication outside the read measurement.
+        CHECK(first.value.script_bars_processed == static_cast<std::int64_t>(std::size(bars)));
+        CHECK(first.value.total_trades == 1);
+        CHECK(receipt(host).complete == 1);
+        const auto allocations_before = global_allocation::allocations;
+        const auto refusals_before = global_allocation::refused;
+        const bool previous_refusing = global_allocation::refusing;
+        bool allocated = false;
+        global_allocation::refusing = true;
+        try {
+            host.fill_report(&second.value);
+        } catch (const std::bad_alloc&) {
+            allocated = true;
+        } catch (...) {
+            global_allocation::refusing = previous_refusing;
+            throw;
+        }
+        global_allocation::refusing = previous_refusing;
+        CHECK(!allocated);
+        CHECK(global_allocation::allocations == allocations_before);
+        CHECK(global_allocation::refused == refusals_before);
+        CHECK(same_metrics(first.value.metrics, second.value.metrics));
+        CHECK(host.presentations == 1);
+    }
 }
 
 // Stream the independent array oracle's E/T expectations too, avoiding a
@@ -1784,6 +1891,123 @@ void sink_trade_capture_and_reads_are_bounded(Directory& directory) {
         CHECK(small.largest_request <= large.largest_request + window);
     }
 }
+
+struct RandomCaptureHost final : NativeStrategyHost {
+    const std::vector<pf_equity_point_t>* points = nullptr;
+    std::size_t next = 0;
+    int cut = 0;
+    mutable int presentations = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        if (points && next < points->size()) equity_curve_.push_back((*points)[next++]);
+    }
+    void present_report(ReportC* report) const override {
+        ++presentations;
+        const auto held = std::min<std::int64_t>(2, report->equity_curve_len);
+        auto* tail = report->equity_curve + report->equity_curve_len - held;
+        for (std::int64_t i = 0; i < held; ++i) {
+            tail[i].equity -= 0.75;
+            tail[i].open_profit = -0.0;
+        }
+        report->equity_curve_len -= std::min<std::int64_t>(cut, held);
+    }
+};
+
+void random_captures_match_frozen_array(Directory& directory) {
+    std::uint64_t random = 0x192b746ae58231d1ULL;
+    const auto draw = [&]() {
+        random ^= random << 13;
+        random ^= random >> 7;
+        random ^= random << 17;
+        return random;
+    };
+    for (int trial = 0; trial < 72; ++trial) {
+        const auto m = static_cast<int>(trial < 2 ? trial : draw() % 65);
+        const auto step = trial % 2 == 0 ? kMinute : 20 * kDay;
+        const char* zone = trial % 3 == 0 ? "America/New_York"
+            : trial % 3 == 1 ? "Asia/Tokyo" : "UTC";
+        std::vector<Bar> bars;
+        std::vector<pf_equity_point_t> observations;
+        for (int i = 0; i < std::max(1, m); ++i) {
+            const auto time = m == 0 ? kT - kMinute : kT + i * step;
+            const double equity = m == 0 ? kCapital
+                : static_cast<double>(draw() % 20001) / 8.0 - 200.0;
+            observations.push_back({time, equity, -0.0});
+            bars.push_back({100.0, 104.5, 99.0, 104.5, 1.0, time});
+        }
+        std::vector<pf_equity_point_t> expected{{kT, kCapital, 0.0}};
+        if (m > 0) expected.insert(expected.end(), observations.begin(), observations.end());
+        const auto held = std::min<std::size_t>(2, expected.size());
+        for (std::size_t i = expected.size() - held; i < expected.size(); ++i) {
+            expected[i].equity -= 0.75;
+            expected[i].open_profit = -0.0;
+        }
+        const auto metric_count = static_cast<std::int64_t>(expected.size());
+        const int cut = trial % 3;
+        const auto published_count = metric_count
+            - std::min<std::int64_t>(cut, static_cast<std::int64_t>(held));
+        pf_metrics_t reference{};
+        reference.all = trade_stats_reference::compute_trade_stats(
+            nullptr, 0, metrics::TradeFilter::ALL, kCapital);
+        reference.longs = trade_stats_reference::compute_trade_stats(
+            nullptr, 0, metrics::TradeFilter::LONG, kCapital);
+        reference.shorts = trade_stats_reference::compute_trade_stats(
+            nullptr, 0, metrics::TradeFilter::SHORT, kCapital);
+        reference.equity = equity_stats_reference::compute_equity_stats(
+            expected.data(), metric_count, kCapital, zone,
+            m > 0 ? 100.0 : kNaN, m > 0 ? 104.5 : kNaN, 0, 0.0);
+        reference.equity.time_in_market_pct = m > 0 ? 0.0 : kNaN;
+        const pf_selected_window_config_v1 window{
+            sizeof window, 1, kT, kT + std::max(1, m) * step};
+        for (const bool sink_on : {false, true}) {
+            RandomCaptureHost host;
+            host.points = &observations;
+            host.cut = cut;
+            auto run_spec = spec(1);
+            run_spec.report_policy = NativeReportPolicy::HostRecorded;
+            CHECK(host.configure_native(run_spec).status == NativeSetupStatus::Applied);
+            host.set_chart_timezone(zone);
+            CHECK(native_set_selected_window_v1(&host, &window) == 0);
+            std::string path;
+            if (sink_on) {
+                path = directory.file(
+                    ("random-capture-" + std::to_string(trial) + ".ndjson").c_str());
+                const pf_report_sink_v1 sink{
+                    sizeof sink, 1, path.c_str(), "O1W", directory.path.c_str()};
+                CHECK(host.set_report_sink_v1(&sink) == 0);
+            }
+            host.run(bars.data(), static_cast<int>(bars.size()));
+            CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+            CHECK(host.next == observations.size());
+            pf_selected_window_counts_v1 counts{};
+            counts.struct_size = sizeof counts;
+            counts.version = 1;
+            CHECK(native_selected_window_counts_v1(&host, &counts) == 0);
+            CHECK(counts.window_script_bars == static_cast<std::uint64_t>(m));
+            Report actual, again;
+            host.fill_report(&actual.value);
+            host.fill_report(&again.value);
+            CHECK(sizeof(actual.value.metrics) == 768);
+            CHECK(same_metrics(actual.value.metrics, reference));
+            CHECK(same_metrics(actual.value.metrics, again.value.metrics));
+            CHECK(host.presentations == 1);
+            if (sink_on) {
+                CHECK(actual.value.equity_curve == nullptr && actual.value.equity_curve_len == 0);
+                CHECK(receipt(host).count_e == published_count);
+                const auto lines = record_lines(read(path), "E");
+                CHECK(lines.size() == static_cast<std::size_t>(published_count));
+                for (std::size_t i = 0; i < lines.size()
+                     && i < static_cast<std::size_t>(published_count); ++i)
+                    CHECK(lines[i] == equity_line(expected[i]));
+            } else {
+                CHECK(actual.value.equity_curve_len == published_count);
+                CHECK(actual.value.equity_curve != nullptr);
+                if (actual.value.equity_curve)
+                    CHECK(std::memcmp(actual.value.equity_curve, expected.data(),
+                                      expected.size() * sizeof(pf_equity_point_t)) == 0);
+            }
+        }
+    }
+}
 }
 
 int main() {
@@ -1820,6 +2044,9 @@ int main() {
                              false, false, false, refills, true,
                              kSelectedPresentationWindowPoints);
         legacy_sink_off_hooks_stay_full();
+        captured_metrics_are_frozen(directory);
+        frozen_sink_reads_need_no_metric_storage(directory);
+        random_captures_match_frozen_array(directory);
         live_selected_reads_preserve_capture(directory);
         selected_recorder_refusals_stay_at_capture(directory);
         selected_recorder_drops_reused_array_capacity(directory);

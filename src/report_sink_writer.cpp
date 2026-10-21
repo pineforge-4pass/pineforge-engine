@@ -10,7 +10,13 @@
 #include <cmath>
 #include <cstring>
 #include <fcntl.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
 #include <system_error>
+#if defined(__linux__)
+#include <sys/vfs.h>
+#endif
 #include <unistd.h>
 
 namespace pineforge {
@@ -19,40 +25,139 @@ namespace {
 
 constexpr std::int64_t safe_integer = INT64_C(9007199254740991);
 constexpr std::size_t max_line = 1024 * 1024;
+constexpr std::size_t io_window = 64 * 1024;
+constexpr std::size_t io_alignment = 4096;
 constexpr std::array<char, 7> tags{{'E', 'T', 'O', 'V', 'K', 'X', 'H'}};
 
 [[noreturn]] void invalid(const char* message) {
     throw WriterError(WriterFailure::invalid_input, message);
 }
 
-void check_line(const std::string& line) {
-    if (line.size() >= max_line) invalid("report sink line exceeds 1 MiB including LF");
-}
+// The existing wire contract bounds a line, including LF, to 1 MiB.
+// Reserve that scratch once, and check before copying each field.
+struct Line {
+    std::array<char, max_line> bytes{};
+    std::size_t used = 0;
+    void clear() noexcept { used = 0; }
+    void append(std::string_view value) {
+        if (value.size() >= bytes.size() - used)
+            invalid("report sink line exceeds 1 MiB including LF");
+        if (!value.empty()) std::memcpy(bytes.data() + used, value.data(), value.size());
+        used += value.size();
+    }
+    void append(char value) { append(std::string_view(&value, 1)); }
+    std::string_view view() const { return {bytes.data(), used}; }
+};
 
-std::string integer(std::int64_t value) {
+template<class Out>
+void integer(Out& out, std::int64_t value) {
     if (value < -safe_integer || value > safe_integer)
         invalid("report sink i64 exceeds the exact JSON integer bound");
     char buffer[32];
     const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
     if (result.ec != std::errc{}) invalid("report sink integer conversion failed");
-    return {buffer, result.ptr};
+    out.append(std::string_view(buffer, static_cast<std::size_t>(result.ptr - buffer)));
 }
 
-std::string unsigned_integer(std::uint64_t value) {
+template<class Out>
+void unsigned_integer(Out& out, std::uint64_t value) {
     if (value > static_cast<std::uint64_t>(safe_integer))
         invalid("report sink u64 exceeds the exact JSON integer bound");
-    return integer(static_cast<std::int64_t>(value));
+    integer(out, static_cast<std::int64_t>(value));
 }
 
-std::string wire_string(std::string_view value) {
+template<class Out>
+void real(Out& out, double value) {
+    if (!std::isfinite(value)) { out.append("null"); return; }
+    char buffer[64];
+    const auto converted = std::to_chars(buffer, buffer + sizeof(buffer), value,
+                                         std::chars_format::scientific);
+    if (converted.ec != std::errc{})
+        invalid("report sink shortest scientific conversion failed");
+    const std::string_view text(buffer, static_cast<std::size_t>(converted.ptr - buffer));
+    const auto exponent_at = text.find('e');
+    if (exponent_at == std::string_view::npos) invalid("report sink scientific exponent is absent");
+    const bool negative = text.front() == '-';
+    std::array<char, 24> digits{};
+    std::size_t count = 0;
+    for (std::size_t i = negative ? 1 : 0; i < exponent_at; ++i)
+        if (text[i] != '.') digits[count++] = text[i];
+    int exponent = 0;
+    for (std::size_t i = exponent_at + 2; i < text.size(); ++i)
+        exponent = 10 * exponent + (text[i] - '0');
+    if (text[exponent_at + 1] == '-') exponent = -exponent;
+    if (negative) out.append('-');
+    if (exponent >= -4 && exponent < 16) {
+        const int point = exponent + 1;
+        if (point <= 0) {
+            out.append("0.");
+            for (int i = 0; i < -point; ++i) out.append('0');
+            out.append(std::string_view(digits.data(), count));
+        } else if (static_cast<std::size_t>(point) >= count) {
+            out.append(std::string_view(digits.data(), count));
+            for (auto i = count; i < static_cast<std::size_t>(point); ++i) out.append('0');
+            out.append(".0");
+        } else {
+            out.append(std::string_view(digits.data(), static_cast<std::size_t>(point)));
+            out.append('.');
+            out.append(std::string_view(digits.data() + point, count - point));
+        }
+    } else {
+        out.append(digits[0]);
+        if (count > 1) {
+            out.append('.');
+            out.append(std::string_view(digits.data() + 1, count - 1));
+        }
+        out.append(exponent < 0 ? "e-" : "e+");
+        const int magnitude = exponent < 0 ? -exponent : exponent;
+        if (magnitude < 10) out.append('0');
+        integer(out, magnitude);
+    }
+}
+
+template<class Out>
+void string(Out& out, std::string_view utf8) {
+    static constexpr char hex[] = "0123456789abcdef";
+    out.append('"');
+    for (std::size_t i = 0; i < utf8.size();) {
+        const auto byte = static_cast<unsigned char>(utf8[i]);
+        if (byte < 0x20) {
+            const char escaped[] = {'\\', 'u', '0', '0', hex[byte >> 4], hex[byte & 15]};
+            out.append(std::string_view(escaped, sizeof(escaped)));
+            ++i;
+        } else if (byte < 0x80) {
+            if (byte == '"' || byte == '\\') out.append('\\');
+            out.append(static_cast<char>(byte));
+            ++i;
+        } else {
+            std::size_t length = 0;
+            if (byte >= 0xc2 && byte <= 0xdf) length = 2;
+            else if (byte >= 0xe0 && byte <= 0xef) length = 3;
+            else if (byte >= 0xf0 && byte <= 0xf4) length = 4;
+            bool valid = length != 0 && length <= utf8.size() - i;
+            for (std::size_t j = 1; valid && j < length; ++j) {
+                const auto next = static_cast<unsigned char>(utf8[i + j]);
+                valid = next >= 0x80 && next <= 0xbf;
+            }
+            if (valid) {
+                const auto second = static_cast<unsigned char>(utf8[i + 1]);
+                if ((byte == 0xe0 && second < 0xa0) || (byte == 0xed && second >= 0xa0)
+                        || (byte == 0xf0 && second < 0x90) || (byte == 0xf4 && second >= 0x90))
+                    valid = false;
+            }
+            if (valid) { out.append(utf8.substr(i, length)); i += length; }
+            else { out.append("\xef\xbf\xbd"); ++i; }
+        }
+    }
+    out.append('"');
+}
+
+void wire_string(Line& out, std::string_view value) {
     if (value.size() >= max_line) invalid("report sink string exceeds the line bound");
-    auto result = escaped_string(value);
-    check_line(result);
-    return result;
+    string(out, value);
 }
 
-struct Column { const char* field; const char* type; const char* unit; };
-
+struct Column { std::string_view field, type, unit; };
 constexpr Column equity_columns[] = {
     {"time_ms", "i64", "unix_ms"}, {"equity", "f64?", "account_ccy"},
     {"open_profit", "f64?", "account_ccy"},
@@ -86,7 +191,7 @@ bool enabled(char tag, const RecordSet& records) {
     return true;
 }
 
-template <class Emit>
+template<class Emit>
 void columns(char tag, const RecordSet& records, Emit emit) {
     switch (tag) {
     case 'E': for (const auto& column : equity_columns) emit(column); break;
@@ -98,167 +203,110 @@ void columns(char tag, const RecordSet& records, Emit emit) {
         emit(Column{"row", "i64", ""});
         emit(Column{"open_ms", "i64?", "unix_ms"});
         emit(Column{"close_ms", "i64?", "unix_ms"});
-        for (std::int64_t i = 0; i < records.series_slots; ++i) {
-            const auto name = "v" + integer(i);
-            emit(Column{name.c_str(), "f64?", ""});
-        }
         break;
-    case 'K':
-        for (std::int64_t i = 0; i < records.constant_count; ++i) {
-            const auto name = "c" + integer(i);
-            emit(Column{name.c_str(), "f64?", ""});
+    }
+    if (tag == 'O' || tag == 'K') {
+        const auto count = tag == 'O' ? records.series_slots : records.constant_count;
+        for (std::int64_t i = 0; i < count; ++i) {
+            char name[32];
+            name[0] = tag == 'O' ? 'v' : 'c';
+            const auto end = std::to_chars(name + 1, name + sizeof(name), i);
+            if (end.ec != std::errc{}) invalid("report sink integer conversion failed");
+            emit(Column{std::string_view(name, static_cast<std::size_t>(end.ptr - name)), "f64?", ""});
         }
-        break;
     }
 }
 
-void append_descriptor(std::string& line, char tag, const RecordSet& records) {
-    line += "{\"type\":\"";
-    line += tag;
-    line += '"';
-    const char* keys[] = {",\"fields\":[", ",\"types\":[", ",\"units\":["};
-    for (unsigned list = 0; list < 3; ++list) {
-        line += keys[list];
-        bool first = true;
-        columns(tag, records, [&](const Column& column) {
-            if (!first) line += ',';
-            first = false;
-            line += escaped_string(list == 0 ? column.field : list == 1 ? column.type : column.unit);
-            check_line(line);
-        });
-        line += ']';
-    }
-    line += '}';
-    check_line(line);
-}
-
-std::string header(const std::string& run_id, const RecordSet& records) {
+void header(Line& line, const std::string& run_id, const RecordSet& records) {
     if (records.series_slots < 0 || records.constant_count < 0
             || records.series_slots > static_cast<std::int64_t>(max_line)
             || records.constant_count > static_cast<std::int64_t>(max_line))
         invalid("report sink descriptor count exceeds the line bound");
-    std::string line = "{\"schema\":\"pf-report-sink\",\"version\":1,\"run_id\":";
-    line += wire_string(run_id);
-    line += ",\"engine\":";
-    line += escaped_string(PINEFORGE_VERSION_STRING);
-    line += ",\"records\":[";
-    bool first = true;
+    line.clear();
+    line.append("{\"schema\":\"pf-report-sink\",\"version\":1,\"run_id\":");
+    wire_string(line, run_id);
+    line.append(",\"engine\":"); string(line, PINEFORGE_VERSION_STRING);
+    line.append(",\"records\":[");
+    bool first_record = true;
     for (const char tag : tags) {
         if (!enabled(tag, records)) continue;
-        if (!first) line += ',';
-        first = false;
-        append_descriptor(line, tag, records);
+        if (!first_record) line.append(',');
+        first_record = false;
+        line.append("{\"type\":\""); line.append(tag); line.append('"');
+        const char* keys[] = {",\"fields\":[", ",\"types\":[", ",\"units\":["};
+        for (unsigned list = 0; list < 3; ++list) {
+            line.append(keys[list]);
+            bool first = true;
+            columns(tag, records, [&](const Column& column) {
+                if (!first) line.append(',');
+                first = false;
+                string(line, list == 0 ? column.field : list == 1 ? column.type : column.unit);
+            });
+            line.append(']');
+        }
+        line.append('}');
     }
-    line += "]}";
-    check_line(line);
-    return line;
+    line.append("]}");
 }
 
+void nullable_time(Line& line, std::int64_t time) {
+    if (time == INT64_MIN) line.append("null");
+    else integer(line, time);
+}
+
+void hash64(Line& line, std::uint64_t value) {
+    static constexpr char digits[] = "0123456789abcdef";
+    char text[] = "\"0000000000000000\"";
+    for (int i = 16; i > 0; --i) {
+        text[i] = digits[value & 15];
+        value >>= 4;
+    }
+    line.append(std::string_view(text, 18));
+}
+
+void append_values(Line& line, const double* values, std::int64_t count, std::int64_t expected) {
+    if (count != expected || count < 0 || (count > 0 && !values))
+        invalid("report sink values differ from the header field count");
+    for (std::int64_t i = 0; i < count; ++i) { line.append(','); real(line, values[i]); }
+    line.append(']');
+}
+
+// Only the standalone public helpers return owning strings. The writer uses
+// the same formatters directly with its fixed Line instead.
+struct StringOutput {
+    std::string value;
+    void append(std::string_view text) { value.append(text.data(), text.size()); }
+    void append(char text) { value += text; }
+};
 } // namespace
 
 std::string f64(double value) {
-    if (!std::isfinite(value)) return "null";
-    char buffer[64];
-    const auto converted = std::to_chars(buffer, buffer + sizeof(buffer), value,
-                                         std::chars_format::scientific);
-    if (converted.ec != std::errc{})
-        invalid("report sink shortest scientific conversion failed");
-    const std::string_view text(buffer, static_cast<std::size_t>(converted.ptr - buffer));
-    const auto exponent_at = text.find('e');
-    if (exponent_at == std::string_view::npos) invalid("report sink scientific exponent is absent");
-    const bool negative = text.front() == '-';
-    std::string digits;
-    for (std::size_t i = negative ? 1 : 0; i < exponent_at; ++i)
-        if (text[i] != '.') digits += text[i];
-    int exponent = 0;
-    for (std::size_t i = exponent_at + 2; i < text.size(); ++i)
-        exponent = 10 * exponent + (text[i] - '0');
-    if (text[exponent_at + 1] == '-') exponent = -exponent;
-    std::string result = negative ? "-" : "";
-    if (exponent >= -4 && exponent < 16) {
-        const int point = exponent + 1;
-        if (point <= 0) {
-            result += "0.";
-            result.append(static_cast<std::size_t>(-point), '0');
-            result += digits;
-        } else if (static_cast<std::size_t>(point) >= digits.size()) {
-            result += digits;
-            result.append(static_cast<std::size_t>(point) - digits.size(), '0');
-            result += ".0";
-        } else {
-            result.append(digits, 0, static_cast<std::size_t>(point));
-            result += '.';
-            result.append(digits, static_cast<std::size_t>(point), std::string::npos);
-        }
-    } else {
-        result += digits.front();
-        if (digits.size() > 1) {
-            result += '.';
-            result.append(digits, 1, std::string::npos);
-        }
-        result += exponent < 0 ? "e-" : "e+";
-        const int magnitude = exponent < 0 ? -exponent : exponent;
-        if (magnitude < 10) result += '0';
-        result += integer(magnitude);
-    }
-    return result;
+    StringOutput out;
+    real(out, value);
+    return std::move(out.value);
 }
 
 std::string escaped_string(std::string_view utf8) {
-    static constexpr char hex[] = "0123456789abcdef";
-    std::string result = "\"";
-    for (std::size_t i = 0; i < utf8.size();) {
-        const auto byte = static_cast<unsigned char>(utf8[i]);
-        if (byte < 0x20) {
-            result += "\\u00";
-            result += hex[byte >> 4];
-            result += hex[byte & 15];
-            ++i;
-        } else if (byte < 0x80) {
-            if (byte == '"' || byte == '\\') result += '\\';
-            result += static_cast<char>(byte);
-            ++i;
-        } else {
-            std::size_t length = 0;
-            if (byte >= 0xc2 && byte <= 0xdf) length = 2;
-            else if (byte >= 0xe0 && byte <= 0xef) length = 3;
-            else if (byte >= 0xf0 && byte <= 0xf4) length = 4;
-            bool valid = length != 0 && length <= utf8.size() - i;
-            for (std::size_t j = 1; valid && j < length; ++j) {
-                const auto next = static_cast<unsigned char>(utf8[i + j]);
-                valid = next >= 0x80 && next <= 0xbf;
-            }
-            if (valid) {
-                const auto second = static_cast<unsigned char>(utf8[i + 1]);
-                if ((byte == 0xe0 && second < 0xa0) || (byte == 0xed && second >= 0xa0)
-                        || (byte == 0xf0 && second < 0x90) || (byte == 0xf4 && second >= 0x90))
-                    valid = false;
-            }
-            if (valid) {
-                result.append(utf8.data() + i, length);
-                i += length;
-            } else {
-                result += "\xef\xbf\xbd";
-                ++i;
-            }
-        }
-    }
-    result += '"';
-    return result;
+    StringOutput out;
+    string(out, utf8);
+    return std::move(out.value);
 }
 
 struct LineWriter::State {
     enum class Phase { configured, writing, complete, failed };
-    std::string path;
-    std::string run_id;
-    std::string scratch_dir;
+    std::string path, run_id, scratch_dir;
     int descriptor = -1;
+    bool borrowed = false;
+    bool socket = false;
     Phase phase = Phase::configured;
     RecordSet records{};
     Trailer trailer{};
     Sha256 hash;
-    std::array<char, 64 * 1024> buffer{};
+    Line scratch;
+    std::array<char, io_window + io_alignment - 1> storage{};
+    char* buffer;
     std::size_t used = 0;
+    off_t offset = 0;
     bool has_equity_time = false;
     std::int64_t equity_time = 0;
 
@@ -273,87 +321,156 @@ struct LineWriter::State {
             const auto slash = path.find_last_of('/');
             scratch_dir = slash == std::string::npos ? "." : slash == 0 ? "/" : path.substr(0, slash);
         }
+        const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
+        buffer = reinterpret_cast<char*>((address + io_alignment - 1) & ~(io_alignment - 1));
+    }
+
+    explicit State(const pf_report_sink_fd_v1& sink) {
+        if (sink.struct_size != sizeof(pf_report_sink_fd_v1) || sink.version != 1
+                || sink.fd < 0)
+            invalid("invalid report sink fd descriptor");
+        descriptor = sink.fd;
+        borrowed = true;
+        run_id = sink.run_id ? sink.run_id : "";
+        const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
+        buffer = reinterpret_cast<char*>((address + io_alignment - 1) & ~(io_alignment - 1));
     }
 
     ~State() {
         // Resource release only: abandoned buffered bytes never cause a
         // successful trailer or an unchecked destructor-time write.
-        if (descriptor >= 0) ::close(descriptor);
+        if (!borrowed && descriptor >= 0) ::close(descriptor);
     }
-
     void require_writing() const {
         if (phase != Phase::writing)
             throw WriterError(WriterFailure::invalid_state, "report sink is not accepting records");
     }
-
     void fail() noexcept {
-        if (phase != Phase::complete) {
-            phase = Phase::failed;
-            used = 0;
-        }
+        if (phase != Phase::complete) { phase = Phase::failed; used = 0; }
     }
-
     [[noreturn]] void io_error(const char* operation, int number) {
         fail();
         throw WriterError(WriterFailure::io, std::string("report sink ") + operation + ": "
                           + std::error_code(number, std::generic_category()).message(), number);
     }
 
+    void validate_stream() {
+        struct stat info{};
+        int result;
+        do { result = ::fstat(descriptor, &info); } while (result < 0 && errno == EINTR);
+        if (result < 0) io_error("fstat failed", errno);
+        socket = S_ISSOCK(info.st_mode);
+        if (!socket && !S_ISFIFO(info.st_mode))
+            io_error("fd is not a FIFO or stream socket", EINVAL);
+        if (socket) {
+            int type = 0;
+            socklen_t length = sizeof type;
+            do { result = ::getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &type, &length); }
+            while (result < 0 && errno == EINTR);
+            if (result < 0) io_error("getsockopt failed", errno);
+            if (type != SOCK_STREAM) io_error("fd is not a stream socket", EINVAL);
+        }
+    }
+
+    void wait_writable() {
+        pollfd ready{descriptor, POLLOUT, 0};
+        int result;
+        do { result = ::poll(&ready, 1, -1); } while (result < 0 && errno == EINTR);
+        if (result < 0) io_error("poll failed", errno);
+        if (ready.revents & POLLNVAL) io_error("poll invalid fd", EBADF);
+        if (ready.revents & (POLLERR | POLLHUP)) io_error("stream peer closed", EPIPE);
+    }
+
+    void uncached() {
+        struct stat info{};
+        if (::fstat(descriptor, &info) != 0) io_error("stat failed", errno);
+        if (!S_ISREG(info.st_mode)) io_error("requires a disk-backed regular file", EINVAL);
+#if defined(__linux__)
+        struct statfs filesystem{};
+        if (::fstatfs(descriptor, &filesystem) != 0) io_error("filesystem query failed", errno);
+        if (filesystem.f_type == 0x01021994L || filesystem.f_type == 0x858458f6L)
+            io_error("requires disk backing, not tmpfs or ramfs", EINVAL);
+        const int flags = ::fcntl(descriptor, F_GETFL);
+        if (flags < 0 || ::fcntl(descriptor, F_SETFL, flags | O_DIRECT) < 0)
+            io_error("uncached I/O setup failed", errno);
+#elif defined(__APPLE__)
+        if (::fcntl(descriptor, F_NOCACHE, 1) < 0) io_error("uncached I/O setup failed", errno);
+#else
+        io_error("uncached I/O is unavailable", ENOTSUP);
+#endif
+    }
     void flush() {
+        if (!used) return;
+        const auto aligned = (used + io_alignment - 1) & ~(io_alignment - 1);
+        std::memset(buffer + used, 0, aligned - used);
         std::size_t written = 0;
-        while (written < used) {
-            const auto count = ::write(descriptor, buffer.data() + written, used - written);
+        const auto extent = borrowed ? used : aligned;
+        while (written < extent) {
+            const auto count = borrowed
+                ? (socket
+                    ? ::send(descriptor, buffer + written, extent - written, MSG_NOSIGNAL)
+                    : ::write(descriptor, buffer + written, extent - written))
+                : ::pwrite(descriptor, buffer + written, extent - written, offset + written);
             if (count < 0) {
-                if (errno == EINTR) continue;
-                io_error("write failed", errno);
+                const int number = errno;
+                if (number == EINTR) continue;
+                if (number == EAGAIN || number == EWOULDBLOCK) {
+                    wait_writable();
+                    continue;
+                }
+                io_error("write failed", number);
             }
             if (count == 0) io_error("write made no progress", EIO);
             written += static_cast<std::size_t>(count);
         }
-        used = 0;
+        if (borrowed) {
+            used = 0;
+            return;
+        }
+        if (::ftruncate(descriptor, offset + used) != 0) io_error("truncate failed", errno);
+        // Direct I/O bypasses data cache. Synchronize every fixed in-flight
+        // window before reuse. No buffered fallback or advisory eviction.
+        int status;
+#if defined(__linux__)
+        do { status = ::fdatasync(descriptor); } while (status < 0 && errno == EINTR);
+#else
+        do { status = ::fsync(descriptor); } while (status < 0 && errno == EINTR);
+#endif
+        if (status < 0) io_error("synchronize failed", errno);
+        if (used == io_window) { offset += used; used = 0; }
+        // Keep a partial window for an aligned rewrite on the next append;
+        // padding never appears inside the logical stream.
     }
-
     void append(std::string_view bytes) {
         while (!bytes.empty()) {
-            const auto take = std::min(buffer.size() - used, bytes.size());
-            std::memcpy(buffer.data() + used, bytes.data(), take);
+            const auto take = std::min(io_window - used, bytes.size());
+            std::memcpy(buffer + used, bytes.data(), take);
             used += take;
             bytes.remove_prefix(take);
-            if (used == buffer.size()) flush();
+            if (used == io_window) flush();
         }
     }
-
-    void line(const std::string& value, bool hashed = true) {
-        check_line(value);
-        if (hashed) {
-            hash.update(value);
-            hash.update("\n");
-        }
-        append(value);
-        append("\n");
+    void line(bool hashed = true) {
+        if (hashed) { hash.update(scratch.view()); hash.update("\n"); }
+        append(scratch.view()); append("\n");
     }
-
     std::array<std::int64_t, 7> counts() const {
         return {{trailer.count_e, trailer.count_t, trailer.count_o, trailer.count_v,
                  trailer.count_k, trailer.count_x, trailer.count_h}};
     }
-
     template<class Build>
     void record(char tag, std::int64_t& count, Build build) {
         try {
             require_writing();
             if (!enabled(tag, records)) invalid("report sink record is absent from the header");
             if (count == safe_integer) invalid("report sink record count exceeds its bound");
-            line(build());
-            ++count;
-        } catch (...) {
-            fail();
-            throw;
-        }
+            scratch.clear(); build(scratch); line(); ++count;
+        } catch (...) { fail(); throw; }
     }
 };
 
 LineWriter::LineWriter(const pf_report_sink_v1& sink) : state_(std::make_unique<State>(sink)) {}
+LineWriter::LineWriter(const pf_report_sink_fd_v1& sink) : state_(std::make_unique<State>(sink)) {}
 LineWriter::~LineWriter() = default;
 
 void LineWriter::write_header(const RecordSet& records) {
@@ -361,19 +478,21 @@ void LineWriter::write_header(const RecordSet& records) {
     try {
         if (state.phase != State::Phase::configured)
             throw WriterError(WriterFailure::invalid_state, "report sink header was already attempted");
-        const auto line = header(state.run_id, records);
-        int descriptor;
-        do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666); }
-        while (descriptor < 0 && errno == EINTR);
-        if (descriptor < 0) state.io_error("open failed", errno);
-        state.descriptor = descriptor;
+        header(state.scratch, state.run_id, records);
+        if (state.borrowed) {
+            state.validate_stream();
+        } else {
+            int descriptor;
+            do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666); }
+            while (descriptor < 0 && errno == EINTR);
+            if (descriptor < 0) state.io_error("open failed", errno);
+            state.descriptor = descriptor;
+            state.uncached();
+        }
         state.records = records;
         state.phase = State::Phase::writing;
-        state.line(line);
-    } catch (...) {
-        state.fail();
-        throw;
-    }
+        state.line();
+    } catch (...) { state.fail(); throw; }
 }
 
 void LineWriter::write_e(const pf_equity_point_t& point) {
@@ -383,16 +502,16 @@ void LineWriter::write_e(const pf_equity_point_t& point) {
         if (state.trailer.count_e == safe_integer) invalid("report sink E count exceeds its bound");
         if (state.has_equity_time && point.time_ms < state.equity_time)
             invalid("report sink equity times are not ordered");
-        const auto line = "[\"E\"," + integer(point.time_ms) + ',' + f64(point.equity)
-            + ',' + f64(point.open_profit) + ']';
-        state.line(line);
+        auto& line = state.scratch;
+        line.clear();
+        line.append("[\"E\","); integer(line, point.time_ms);
+        line.append(','); real(line, point.equity);
+        line.append(','); real(line, point.open_profit);
+        line.append(']'); state.line();
         ++state.trailer.count_e;
         state.has_equity_time = true;
         state.equity_time = point.time_ms;
-    } catch (...) {
-        state.fail();
-        throw;
-    }
+    } catch (...) { state.fail(); throw; }
 }
 
 void LineWriter::write_t(std::int64_t n, const pf_trade_t& trade,
@@ -404,21 +523,33 @@ void LineWriter::write_t(std::int64_t n, const pf_trade_t& trade,
         state.require_writing();
         if (state.trailer.count_t == safe_integer || n != state.trailer.count_t + 1)
             invalid("report sink trade row numbers must start at one and be contiguous");
-        std::string line = "[\"T\"," + integer(n) + (trade.is_long ? ",\"long\"," : ",\"short\",");
-        line += integer(trade.entry_time) + ',' + integer(trade.exit_time);
+        auto& line = state.scratch;
+        line.clear();
+        line.append("[\"T\","); integer(line, n);
+        line.append(trade.is_long ? ",\"long\"," : ",\"short\",");
+        integer(line, trade.entry_time); line.append(','); integer(line, trade.exit_time);
         const double values[] = {trade.entry_price, trade.exit_price, trade.qty, trade.pnl,
                                  trade.pnl_pct, trade.max_runup, trade.max_drawdown, trade.commission};
-        for (const double value : values) line += ',' + f64(value);
-        line += ',' + integer(trade.entry_bar_index) + ',' + integer(trade.exit_bar_index);
-        line += trade.open_at_end ? ",true," : ",false,";
-        line += unsigned_integer(entry_incarnation) + ',' + integer(close_cause);
+        for (const double value : values) { line.append(','); real(line, value); }
+        line.append(','); integer(line, trade.entry_bar_index);
+        line.append(','); integer(line, trade.exit_bar_index);
+        line.append(trade.open_at_end ? ",true," : ",false,");
+        unsigned_integer(line, entry_incarnation); line.append(','); integer(line, close_cause);
         for (const auto value : {entry_id, exit_id, exit_comment}) {
-            line += ',' + wire_string(value);
-            check_line(line);
+            line.append(','); wire_string(line, value);
         }
-        line += ']';
-        state.line(line);
-        ++state.trailer.count_t;
+        line.append(']'); state.line(); ++state.trailer.count_t;
+    } catch (...) { state.fail(); throw; }
+}
+
+void LineWriter::abandon() {
+    auto& state = *state_;
+    try {
+        state.require_writing();
+        // line() can cross the fixed buffer boundary. Flush its retained
+        // suffix here so EOF follows LF, never a partially emitted record.
+        state.flush();
+        state.fail();
     } catch (...) {
         state.fail();
         throw;
@@ -432,105 +563,83 @@ Trailer LineWriter::write_trailer() {
         state.require_writing();
         state.flush();
         const auto digest = state.hash.hex_digest();
-        std::string line = "{\"trailer\":\"pf-report-sink\",\"version\":1,\"counts\":{";
+        auto& line = state.scratch;
+        line.clear();
+        line.append("{\"trailer\":\"pf-report-sink\",\"version\":1,\"counts\":{");
         const auto counts = state.counts();
         bool first = true;
         for (std::size_t i = 0; i < tags.size(); ++i) {
             if (!enabled(tags[i], state.records)) continue;
-            if (!first) line += ',';
+            if (!first) line.append(',');
             first = false;
-            line += '"';
-            line += tags[i];
-            line += "\":";
-            line += integer(counts[i]);
+            line.append('"'); line.append(tags[i]); line.append("\":"); integer(line, counts[i]);
         }
-        line += "},\"sha256\":\"" + digest + "\"}";
-        state.line(line, false);
-        state.flush();
+        line.append("},\"sha256\":\""); line.append(digest); line.append("\"}");
+        state.line(false); state.flush();
         std::memcpy(state.trailer.sha256_hex, digest.c_str(), digest.size() + 1);
         state.phase = State::Phase::complete;
         return state.trailer;
-    } catch (...) {
-        state.fail();
-        throw;
-    }
+    } catch (...) { state.fail(); throw; }
 }
-
-namespace {
-std::string nullable_time(std::int64_t time) {
-    return time == INT64_MIN ? "null" : integer(time);
-}
-
-std::string hash64(std::uint64_t value) {
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string result = "\"0000000000000000\"";
-    for (int i = 16; i > 0; --i) {
-        result[static_cast<std::size_t>(i)] = digits[value & 15];
-        value >>= 4;
-    }
-    return result;
-}
-
-void append_values(std::string& line, const double* values, std::int64_t count,
-                   std::int64_t expected) {
-    if (count != expected || count < 0 || (count > 0 && !values))
-        invalid("report sink values differ from the header field count");
-    for (std::int64_t i = 0; i < count; ++i) {
-        line += ',' + f64(values[i]);
-        check_line(line);
-    }
-    line += ']';
-}
-} // namespace
 
 void LineWriter::write_o(std::int64_t row, std::int64_t open_ms, std::int64_t close_ms,
                          const double* values, std::int64_t count) {
     auto& state = *state_;
-    state.record('O', state.trailer.count_o, [&] {
+    state.record('O', state.trailer.count_o, [&](Line& line) {
         if (row != state.trailer.count_o)
             invalid("report sink output rows must start at zero and be contiguous");
-        std::string line = "[\"O\"," + integer(row) + ',' + nullable_time(open_ms)
-            + ',' + nullable_time(close_ms);
+        line.append("[\"O\","); integer(line, row);
+        line.append(','); nullable_time(line, open_ms);
+        line.append(','); nullable_time(line, close_ms);
         append_values(line, values, count, state.records.series_slots);
-        return line;
     });
 }
 
 void LineWriter::write_v(const pf_output_event_v1_t& event, std::string_view message) {
     auto& state = *state_;
-    state.record('V', state.trailer.count_v, [&] {
-        std::string line = "[\"V\"," + unsigned_integer(event.sequence)
-            + ',' + integer(event.output_index) + ',' + integer(event.bar_index)
-            + ',' + nullable_time(event.bar_open_ms) + ',' + nullable_time(event.bar_close_ms)
-            + ',' + integer(event.ordinal_in_bar) + ',' + integer(event.phase)
-            + ',' + integer(event.confirmed) + ',' + f64(event.value)
-            + ',' + hash64(event.message_hash64) + ',';
-        line += event.message ? wire_string(message) : "null";
-        return line + ']';
+    state.record('V', state.trailer.count_v, [&](Line& line) {
+        line.append("[\"V\","); unsigned_integer(line, event.sequence);
+        line.append(','); integer(line, event.output_index);
+        line.append(','); integer(line, event.bar_index);
+        line.append(','); nullable_time(line, event.bar_open_ms);
+        line.append(','); nullable_time(line, event.bar_close_ms);
+        line.append(','); integer(line, event.ordinal_in_bar);
+        line.append(','); integer(line, event.phase);
+        line.append(','); integer(line, event.confirmed);
+        line.append(','); real(line, event.value);
+        line.append(','); hash64(line, event.message_hash64);
+        line.append(',');
+        if (event.message) wire_string(line, message);
+        else line.append("null");
+        line.append(']');
     });
 }
 
 void LineWriter::write_k(const double* values, std::int64_t count) {
     auto& state = *state_;
-    state.record('K', state.trailer.count_k, [&] {
+    state.record('K', state.trailer.count_k, [&](Line& line) {
         if (state.trailer.count_k != 0) invalid("report sink constants were already written");
-        std::string line = "[\"K\"";
+        line.append("[\"K\"");
         append_values(line, values, count, state.records.constant_count);
-        return line;
     });
 }
 
 void LineWriter::write_x(const pf_trace_entry_t& entry, std::string_view name) {
     auto& state = *state_;
-    state.record('X', state.trailer.count_x, [&] {
-        return "[\"X\"," + integer(entry.timestamp) + ',' + integer(entry.bar_index)
-            + ',' + wire_string(name) + ',' + f64(entry.value) + ']';
+    state.record('X', state.trailer.count_x, [&](Line& line) {
+        line.append("[\"X\","); integer(line, entry.timestamp);
+        line.append(','); integer(line, entry.bar_index);
+        line.append(','); wire_string(line, name);
+        line.append(','); real(line, entry.value);
+        line.append(']');
     });
 }
 
 void LineWriter::write_h(std::uint64_t hash) {
     auto& state = *state_;
-    state.record('H', state.trailer.count_h, [&] { return "[\"H\"," + hash64(hash) + ']'; });
+    state.record('H', state.trailer.count_h, [&](Line& line) {
+        line.append("[\"H\","); hash64(line, hash); line.append(']');
+    });
 }
 
 } // namespace report_sink

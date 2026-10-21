@@ -238,10 +238,19 @@ def line_of(out):
 def harness(tmp_path, monkeypatch):
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
+    native_cdll = ctypes.CDLL
 
     def run(lib, *extra, ohlcv=None, cdll=None):
         argv = ["run_json.py", "--so", "fake.so", "--ohlcv", str(ohlcv or tape), *extra]
-        monkeypatch.setattr(ctypes, "CDLL", cdll or (lambda path: lib))
+        strategy_cdll = cdll or (lambda path: lib)
+
+        def load(path, *args, **kwargs):
+            # Report artifacts use the process libc with use_errno=True.
+            # Only the strategy library is a fixture.
+            return (native_cdll(path, *args, **kwargs) if path is None
+                    else strategy_cdll(path, *args, **kwargs))
+
+        monkeypatch.setattr(ctypes, "CDLL", load)
         monkeypatch.setattr(sys, "argv", argv)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -516,7 +525,9 @@ def test_a_report_write_error_adds_no_failure_line(tmp_path, monkeypatch, error)
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
     lib = fake_lib()
-    monkeypatch.setattr(ctypes, "CDLL", lambda path: lib)
+    native_cdll = ctypes.CDLL
+    monkeypatch.setattr(ctypes, "CDLL", lambda path, *args, **kwargs: (
+        native_cdll(path, *args, **kwargs) if path is None else lib))
     out, err = FailingStdout(error), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         status = run_json.main(["--so", "fake.so", "--ohlcv", str(tape)])
@@ -530,7 +541,9 @@ def test_a_report_write_error_adds_no_failure_line(tmp_path, monkeypatch, error)
 def test_a_closed_pipe_leaves_nothing_for_the_flush_at_exit(tmp_path, monkeypatch):
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
-    monkeypatch.setattr(ctypes, "CDLL", lambda path: fake_lib())
+    native_cdll = ctypes.CDLL
+    monkeypatch.setattr(ctypes, "CDLL", lambda path, *args, **kwargs: (
+        native_cdll(path, *args, **kwargs) if path is None else fake_lib()))
     read_end, write_end = os.pipe()
     os.close(read_end)  # the reader is gone: every write is EPIPE
     stdout, err = open(write_end, "w", encoding="ascii"), io.StringIO()
@@ -1254,14 +1267,51 @@ def settings_args(**kw):
     return [a for k, v in kw.items() for a in (f"--{k}", json.dumps(v))]
 
 
-def test_valid_settings_go_through_the_checked_api(harness):
-    _, legacy = harness(fake_lib(), *settings_args(inputs={"Length": "5"},
-                                                   overrides={"initial_capital": "20000"}))
-    lib = checked_lib()
-    status, out = harness(lib, *settings_args(inputs={"Length": "5"},
-                                              overrides={"initial_capital": "20000"}))
+def test_valid_settings_go_through_the_checked_api(harness, tmp_path):
+    source = tmp_path / "settings.cpp"
+    source.write_text('''class GeneratedStrategy {
+    GeneratedStrategy() {
+        pineforge::source::PineStrategyConfig cfg{};
+        cfg.initial_capital = 10000.0;
+        configure_pine_strategy(cfg);
+    }
+    void init() { get_input_int("Length", 10); }
+};''', encoding="utf-8")
+    # Both routes describe the same strategy and effective values. Release
+    # provenance needs the full typed receipt, including every override;
+    # the name-only admission fixture cannot certify a fingerprint.
+    receipt = legacy_receipt(receipt_row("Length", "int", "10", "5"))
+    receipt["overrides"] = [
+        receipt_row("initial_capital", "float", "10000", "20000"),
+        receipt_row("commission_value", "float", "0"),
+        receipt_row("default_qty_value", "float", "1"),
+        receipt_row("pyramiding", "int", "1"),
+        receipt_row("slippage", "int", "0"),
+        receipt_row("process_orders_on_close", "bool", "false"),
+        receipt_row("calc_on_order_fills", "bool", "false"),
+        receipt_row("close_entries_rule", "string", "FIFO"),
+        receipt_row("default_qty_type", "string", "fixed"),
+        receipt_row("commission_type", "string", "percent"),
+    ]
+    for row in receipt["inputs"] + receipt["overrides"]:
+        row.update(options=[], option_values=[], min=None, max=None, step=None)
+    args = ["--generated-cpp", str(source),
+            *settings_args(inputs={"Length": "5"},
+                           overrides={"initial_capital": "20000"})]
+    legacy_lib = checked_lib(receipt=receipt, drop=CHECKED_EXPORTS)
+    legacy_status, legacy = harness(legacy_lib, *args)
+    assert legacy_status == 0
+    assert ("strategy_set_input", ST, b"Length", b"5") in legacy_lib.calls
+    assert ("strategy_set_override", ST, b"initial_capital", b"20000") in legacy_lib.calls
+    lib = checked_lib(receipt=receipt)
+    status, out = harness(lib, *args)
     assert status == 0
     assert report_of(out) == report_of(legacy)
+    fingerprint = report_of(out)["fingerprint"]
+    assert fingerprint is not None
+    assert fingerprint["provenance"]["inputs"]["Length"] == {
+        "type": "int", "default": 10, "value": 5}
+    assert fingerprint["provenance"]["applied"]["overrides"] == {"initial_capital": 20000.0}
     names = lib.names()
     assert "strategy_create" not in names and "strategy_set_input" not in names
     assert [c[:4] for c in lib.calls if c[0] in ("strategy_set_input_checked",
