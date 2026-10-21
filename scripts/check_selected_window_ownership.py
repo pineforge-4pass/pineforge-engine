@@ -866,6 +866,13 @@ def scalar_type(node, environment, resolving=frozenset()):
             return result
     if isinstance(node, ast.Name) and node.id in environment and node.id not in resolving:
         return scalar_type(environment[node.id], environment, resolving | {node.id})
+    # One indexed read from the report arrays reconstructed below, never a slice.
+    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name) and node.value.value.id == "report"
+            and node.value.attr in {"trades", "equity_curve"}
+            and (isinstance(node.slice, ast.Name)
+                 or (isinstance(node.slice, ast.Constant) and type(node.slice.value) is int))):
+        return {"kind": "number", "null_allowed": False}
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         name = node.func.id
         if name in {"int", "len", "sum"}:
