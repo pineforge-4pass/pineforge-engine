@@ -48,13 +48,16 @@ FORBIDDEN_CODE = (
     ("bad_alloc", re.compile(r"\bbad_alloc\b")),
     ("growing container or owner",
      re.compile(r"\bstd::(?:vector|map|multimap|set|multiset|unordered_\w+|deque|list|"
-                r"forward_list|string|function|shared_ptr|unique_ptr)\b")),
-    ("heap call", re.compile(r"\b(?:malloc|calloc|realloc|free)\s*\(")),
+                r"forward_list|string|wstring|u16string|u32string|queue|stack|priority_queue|"
+                r"function|shared_ptr|unique_ptr|make_unique|make_shared|allocate_shared|pmr)\b")),
+    ("heap call", re.compile(r"\b(?:malloc|calloc|realloc|free|aligned_alloc|posix_memalign|"
+                             r"strdup|strndup)\s*\(")),
     ("run failure conversion", re.compile(r"\bRunFail\w*|\brun_failure\w*")),
 )
 FORBIDDEN_INCLUDE = re.compile(
     r"^\s*#\s*include\s*<(?:vector|map|set|string|unordered_map|unordered_set|deque|list|"
-    r"functional|memory|exception|stdexcept|system_error)>", re.MULTILINE)
+    r"queue|stack|sstream|functional|memory|memory_resource|exception|stdexcept|system_error)>",
+    re.MULTILINE)
 STATUS_ENUM = re.compile(r"enum\s+class\s+ScratchStatus\s*:\s*std::uint32_t\s*\{(.*?)\}", re.DOTALL)
 
 
@@ -112,7 +115,13 @@ def self_test() -> list[str]:
     expect("new expression" in violations("int* p = new int;"), "new is detected")
     expect("delete expression" in violations("void f(int* p) { delete p; }"), "delete is detected")
     expect("heap call" in violations("void f() { void* p = malloc(4); }"), "malloc is detected")
+    expect("heap call" in violations("void f() { void* p = aligned_alloc(8, 64); }"), "aligned_alloc is detected")
+    expect("growing container or owner" in violations("std::wstring w;"), "wstring is detected")
+    expect("growing container or owner" in violations("auto p = std::make_unique<int>(1);"),
+           "make_unique is detected")
+    expect("growing container or owner" in violations("std::pmr::vector<int> v;"), "pmr is detected")
     expect("forbidden standard header" in violations("#include <vector>\n"), "include is detected")
+    expect("forbidden standard header" in violations("#include <queue>\n"), "queue include is detected")
     expect("run failure conversion" in violations("RunFailureCode code;"), "conversion is detected")
     expect(violations("// throw new std::vector\nint a;") == [], "comments are ignored")
     expect(violations('const char* s = "throw new";') == [], "string literals are ignored")

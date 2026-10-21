@@ -1,9 +1,11 @@
 // CR-150 O1C. Predicted first red on 6cfcff0696: the frozen closure has no
-// pineforge/detail/scratch_store.hpp (fatal error: file not found). Against the
-// DRAFT v0 declarations alone (e43d7bcc7) this body compiles and the first red
-// is the link of ScratchStore, which that commit declares and does not define.
-// The complete body must be compiled there on the lab; no fail-before or
-// passing execution is claimed by this edit-only lane.
+// pineforge/detail/scratch_store.hpp (fatal error: file not found). The DRAFT v0
+// declarations (e43d7bcc7) lack stats() and the geometry floor constants, so
+// against them the first red is the compile error at the first use of stats().
+// Against the stage-one headers (5134128e9), which declare ScratchStore and do
+// not define it, the body compiles and the first red is the link. The complete
+// body must be compiled there on the lab; no fail-before or passing execution
+// is claimed by this edit-only lane.
 //
 // Every expected value below comes from an independent oracle (a sorted model
 // with its own comparator and its own FNV-1a fold), never from the store, and
@@ -466,22 +468,44 @@ struct Counters {
 };
 
 // Wraps a fixed-memory backing and can fail one write (optionally tearing it:
-// the first half of the new bytes lands, then io_error), every read, or every
-// sync. Everything the store sends is charged through the observer given here.
+// the first half of the new bytes lands, then io_error), one sync, every read,
+// or every sync. It can also accept the data and full sync levels that the
+// memory backing refuses, and log every write and sync attempt in order.
+// Everything the store sends is charged through the observer given here.
 class FaultBacking final : public ScratchBacking {
 public:
+    // One attempt the store made: a write of page `id`, or a sync.
+    struct Event {
+        char kind;
+        std::uint64_t id;
+    };
+
     FaultBacking(FixedMemoryScratchBacking& inner, ScratchIoObserver observer)
-        : ScratchBacking(inner.kind(), inner.page_size(), observer), inner_(inner) {}
+        : ScratchBacking(inner.kind(), inner.page_size(), observer), inner_(inner), merged_(inner.page_size()) {}
     std::uint64_t page_count() const noexcept override { return inner_.page_count(); }
 
     void arm_write(std::uint64_t nth, bool torn_write) {
         fail_write_at_ = nth;
         torn_ = torn_write;
         writes_since_arm_ = 0;
+        extent_at_arm_ = inner_.page_count();
+        torn_seen_ = false;
     }
+    // True when the last armed write was torn onto a page that existed when it was armed.
+    bool tore_existing_page() const { return torn_seen_ && torn_id_ < extent_at_arm_; }
     void disarm_write() { fail_write_at_ = 0; }
+    void arm_sync(std::uint64_t nth) {
+        fail_sync_at_ = nth;
+        syncs_since_arm_ = 0;
+    }
     void fail_reads(bool on) { fail_reads_ = on; }
     void fail_syncs(bool on) { fail_syncs_ = on; }
+    void accept_durable_syncs(bool on) { durable_syncs_ = on; }
+    void record_events(bool on) {
+        if (on) events_.clear();
+        recording_ = on;
+    }
+    const std::vector<Event>& events() const { return events_; }
     std::uint64_t write_faults() const { return write_faults_; }
     std::uint64_t read_faults() const { return read_faults_; }
     std::uint64_t sync_faults() const { return sync_faults_; }
@@ -495,6 +519,7 @@ protected:
         return inner_.read_page(id, destination);
     }
     ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
+        if (recording_) events_.push_back(Event{'w', id});
         if (fail_write_at_ != 0) {
             ++writes_since_arm_;
             if (writes_since_arm_ == fail_write_at_) {
@@ -507,31 +532,51 @@ protected:
         return inner_.write_page(id, source);
     }
     ScratchStatus do_sync(ScratchDurability durability) noexcept override {
+        if (recording_) events_.push_back(Event{'s', 0});
         if (fail_syncs_) {
             ++sync_faults_;
             return ScratchStatus::io_error;
         }
+        if (fail_sync_at_ != 0 && ++syncs_since_arm_ == fail_sync_at_) {
+            fail_sync_at_ = 0;
+            ++sync_faults_;
+            return ScratchStatus::io_error;
+        }
+        if (durable_syncs_ && durability != ScratchDurability::buffered) return ScratchStatus::ok;
         return inner_.sync(durability);
     }
 
 private:
+    // The first half of the new bytes lands on the old page; no allocation, so
+    // a tear is also legal while the heap is closed.
     void tear(ScratchPageId id, ScratchBytes source) noexcept {
-        std::vector<std::byte> merged(page_size(), std::byte{0});
-        if (inner_.read_page(id, ScratchBuffer{merged.data(), merged.size()}) != ScratchStatus::ok)
-            std::fill(merged.begin(), merged.end(), std::byte{0});
-        std::memcpy(merged.data(), source.data, merged.size() / 2);
-        (void)inner_.write_page(id, ScratchBytes{merged.data(), merged.size()});
+        std::fill(merged_.begin(), merged_.end(), std::byte{0});
+        if (inner_.read_page(id, ScratchBuffer{merged_.data(), merged_.size()}) != ScratchStatus::ok)
+            std::fill(merged_.begin(), merged_.end(), std::byte{0});
+        std::memcpy(merged_.data(), source.data, merged_.size() / 2);
+        (void)inner_.write_page(id, ScratchBytes{merged_.data(), merged_.size()});
+        torn_id_ = id;
+        torn_seen_ = true;
     }
 
     FixedMemoryScratchBacking& inner_;
+    std::vector<std::byte> merged_;
     bool torn_ = true;
+    bool torn_seen_ = false;
     bool fail_reads_ = false;
     bool fail_syncs_ = false;
+    bool durable_syncs_ = false;
+    bool recording_ = false;
     std::uint64_t fail_write_at_ = 0;
     std::uint64_t writes_since_arm_ = 0;
+    std::uint64_t fail_sync_at_ = 0;
+    std::uint64_t syncs_since_arm_ = 0;
+    std::uint64_t extent_at_arm_ = 0;
+    std::uint64_t torn_id_ = 0;
     std::uint64_t write_faults_ = 0;
     mutable std::uint64_t read_faults_ = 0;
     std::uint64_t sync_faults_ = 0;
+    std::vector<Event> events_;
 };
 
 struct Rig {
@@ -1423,7 +1468,10 @@ void rollback_after_partial_writes() {
     s.check_io("after rollbacks");
 }
 
-void torn_write_during_transaction(std::uint64_t nth, bool torn, bool explicit_rollback) {
+// The nth backing write of a long transaction is refused, clean or torn. The
+// commit phase has its own sweep (failed_commit_publishes_nothing). Returns
+// whether a torn write landed on a page that existed before the transaction.
+bool torn_write_during_transaction(std::uint64_t nth, bool torn, bool explicit_rollback) {
     Rig rig(512, 6000);
     const std::vector<Text> probes = numeric_probes();
     Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
@@ -1437,16 +1485,10 @@ void torn_write_during_transaction(std::uint64_t nth, bool torn, bool explicit_r
     Rng rng(1000 + nth);
     begin_ok(*s);
     rig.backing.arm_write(nth, torn);
-    bool in_commit = false;
-    ScratchStatus failure = random_ops(*s, pending, rng, 600);
-    if (failure == ScratchStatus::ok) {
-        in_commit = true;
-        failure = s->commit(ScratchDurability::buffered);
-    }
-    require(rig.backing.write_faults() == 1, "the injected write fault was reached");
-    require(failure != ScratchStatus::ok, "a failed backing write is never reported as success");
-    require_status(failure, in_commit ? ScratchStatus::io_error : ScratchStatus::programming_error,
-                   in_commit ? "a commit reports the failing backing call" : "a mutation reports programming_error");
+    const ScratchStatus failure = random_ops(*s, pending, rng, 600);
+    require(rig.backing.write_faults() == 1, "the injected write fault was reached inside the edits");
+    require_status(failure, ScratchStatus::programming_error, "a mutation reports programming_error");
+    const bool damaged = torn && rig.backing.tore_existing_page();
     check_rollback_only(*s, 512);
     if (explicit_rollback) {
         rollback_ok(*s);
@@ -1456,60 +1498,83 @@ void torn_write_during_transaction(std::uint64_t nth, bool torn, bool explicit_r
         put_ok(*s, next, key_u64(mix(31337)), "still usable");
         commit_ok(*s);
         verify(*s, next, 512, probes, 1, true, "usable after a torn write");
-        return;
+        return damaged;
     }
     s.close();
     s.open(config_for(512, 4, 2, 1, order_numeric(), ScratchOpenMode::reopen));
     require_status(s->status(), ScratchStatus::ok, "reopen after an abandoned rollback-only transaction");
     verify(*s, before, 512, probes, 1, true, "reopen sees the last commit, not the torn transaction");
+    return damaged;
 }
 
 void rollback_survives_torn_writes_at_every_phase() {
     const std::array<std::uint64_t, 12> positions{{1, 2, 3, 4, 6, 9, 14, 21, 34, 55, 89, 144}};
+    std::size_t damaged = 0;
     for (const std::uint64_t nth : positions) {
-        torn_write_during_transaction(nth, true, true);
+        if (torn_write_during_transaction(nth, true, true)) ++damaged;
         torn_write_during_transaction(nth, false, true);
-        torn_write_during_transaction(nth, true, false);
+        if (torn_write_during_transaction(nth, true, false)) ++damaged;
     }
+    require(damaged >= 6, "torn writes really landed on pages that existed before the transaction");
+}
+
+struct CommitRun {
+    bool failed = false;
+    std::uint64_t writes = 0;
+};
+
+// The same committed base and the same edits every time, so that the fault
+// positions are the commit's own write numbers. nth == 0 injects nothing. The
+// last write of a commit is its superblock, which a torn write lands whole.
+CommitRun commit_fault_run(std::uint64_t nth, bool torn, bool explicit_rollback) {
+    CommitRun run;
+    const std::vector<Text> probes = numeric_probes();
+    Rig rig(512, 6000);
+    Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+    require_status(s->status(), ScratchStatus::ok, "open");
+    Model model(cmp_numeric_text);
+    build_base(*s, model, 150, 21);
+    const Model before = model;
+    begin_ok(*s);
+    Model pending = model;
+    Rng rng(500);
+    require_status(random_ops(*s, pending, rng, 25), ScratchStatus::ok, "edits before the commit");
+    if (nth != 0) rig.backing.arm_write(nth, torn);
+    const std::uint64_t writes_before = rig.counters.writes;
+    const ScratchStatus status = s->commit(ScratchDurability::buffered);
+    run.writes = rig.counters.writes - writes_before;
+    if (status == ScratchStatus::ok) {
+        require(rig.backing.write_faults() == 0, "a commit that succeeded did not meet a fault");
+        verify(*s, pending, 512, probes, 1, true, "after the commit");
+        return run;
+    }
+    run.failed = true;
+    require(rig.backing.write_faults() == 1, "only the injected fault can fail this commit");
+    require_status(status, ScratchStatus::io_error, "commit reports the failing backing call");
+    check_rollback_only(*s, 512);
+    if (explicit_rollback) {
+        rollback_ok(*s);
+        verify(*s, before, 512, probes, 1, true, "rolled back after a failed commit");
+    }
+    s.close();
+    s.open(config_for(512, 5, 2, 2, order_numeric(), ScratchOpenMode::reopen));
+    require_status(s->status(), ScratchStatus::ok, "reopen after a failed commit");
+    verify(*s, before, 512, probes, 1, true, "a failed commit published nothing");
+    return run;
 }
 
 void failed_commit_publishes_nothing() {
-    const std::vector<Text> probes = numeric_probes();
+    const CommitRun good = commit_fault_run(0, false, true);
+    require(!good.failed && good.writes >= 2, "an unfaulted commit succeeds and writes at least a journal link and a superblock");
     for (const bool explicit_rollback : {true, false}) {
-        bool succeeded = false;
-        for (std::uint64_t nth = 1; nth <= 300 && !succeeded; ++nth) {
-            Rig rig(512, 6000);
-            Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
-            require_status(s->status(), ScratchStatus::ok, "open");
-            Model model(cmp_numeric_text);
-            build_base(*s, model, 150, 21);
-            const Model before = model;
-            begin_ok(*s);
-            Model pending = model;
-            Rng rng(500 + nth);
-            require_status(random_ops(*s, pending, rng, 25), ScratchStatus::ok, "edits before the commit");
-            rig.backing.arm_write(nth, nth % 2 == 0);
-            const ScratchStatus status = s->commit(ScratchDurability::buffered);
-            if (status == ScratchStatus::ok) {
-                require(rig.backing.write_faults() == 0, "a commit that succeeded did not meet the fault");
-                rig.backing.disarm_write();
-                verify(*s, pending, 512, probes, 1, true, "the commit that no fault index reached");
-                succeeded = true;
-                continue;
+        for (const bool torn : {false, true}) {
+            for (std::uint64_t nth = 1; nth <= good.writes; ++nth) {
+                const CommitRun run = commit_fault_run(nth, torn, explicit_rollback);
+                require(run.failed, "a refused write inside the commit fails it");
             }
-            require(rig.backing.write_faults() == 1, "only the injected fault can fail this commit");
-            require_status(status, ScratchStatus::io_error, "commit reports the failing backing call");
-            check_rollback_only(*s, 512);
-            if (explicit_rollback) {
-                rollback_ok(*s);
-                verify(*s, before, 512, probes, 1, true, "rolled back after a failed commit");
-            }
-            s.close();
-            s.open(config_for(512, 5, 2, 2, order_numeric(), ScratchOpenMode::reopen));
-            require_status(s->status(), ScratchStatus::ok, "reopen after a failed commit");
-            verify(*s, before, 512, probes, 1, true, "a failed commit published nothing");
+            const CommitRun beyond = commit_fault_run(good.writes + 1, torn, explicit_rollback);
+            require(!beyond.failed, "a fault past the commit's last write is never reached");
         }
-        require(succeeded, "the sweep reached a commit that no fault index could break");
     }
 }
 
@@ -1568,6 +1633,7 @@ void durability_failure_and_transaction_state_machine() {
 void expect_unusable(ScratchStore& store, ScratchStatus open_status, const char* why) {
     const std::string w(why);
     require_status(store.status(), open_status, w + ": open status");
+    const ScratchStoreStats before = store.stats();
     require(!store.transaction_active() && store.record_count() == 0, w + ": an unusable store holds nothing");
     require_status(store.begin(), ScratchStatus::programming_error, w + ": begin");
     ScratchHandle first = 0xBAD;
@@ -1582,7 +1648,37 @@ void expect_unusable(ScratchStore& store, ScratchStatus open_status, const char*
     require_status(store.ordered_digest(ScratchBuffer{page.data(), page.size()}, digest),
                    ScratchStatus::programming_error, w + ": digest");
     require(digest == 0x77, w + ": digest output untouched");
-    (void)store.stats();
+    std::uint64_t state = 0x78;
+    require_status(store.state_digest(ScratchBuffer{page.data(), page.size()}, state),
+                   ScratchStatus::programming_error, w + ": state digest");
+    require(state == 0x78, w + ": state digest output untouched");
+
+    const Text key = key_u64(1);
+    ScratchSpanSource key_source(bytes_of(key));
+    ScratchHandle handle = 0xBAD;
+    require_status(store.put(key_source, key_source, handle), ScratchStatus::programming_error, w + ": put");
+    require(handle == 0xBAD, w + ": put output untouched");
+    require_status(store.erase(1), ScratchStatus::programming_error, w + ": erase");
+    require_status(store.commit(ScratchDurability::buffered), ScratchStatus::programming_error, w + ": commit");
+    require_status(store.rollback(), ScratchStatus::programming_error, w + ": rollback");
+    ScratchRecordInfo info{};
+    require_status(store.point(1, info), ScratchStatus::programming_error, w + ": point");
+    std::array<std::byte, 4> part{};
+    require_status(store.read(1, ScratchField::key, 0, ScratchBuffer{part.data(), part.size()}),
+                   ScratchStatus::programming_error, w + ": read");
+    ScratchHandle next = 0xBAD;
+    require_status(store.next(1, next), ScratchStatus::programming_error, w + ": next");
+    require(next == 0xBAD, w + ": next output untouched");
+    ScratchHandle found = 0xBAD;
+    require_status(store.lower_bound(key_source, found), ScratchStatus::programming_error, w + ": lower_bound");
+    require(found == 0xBAD, w + ": lower_bound output untouched");
+    const auto no_chunks = [](void*, const ScratchChunkView&) noexcept -> bool { return true; };
+    require_status(store.visit(1, ScratchBuffer{page.data(), page.size()}, no_chunks, nullptr),
+                   ScratchStatus::programming_error, w + ": visit");
+    const ScratchStoreStats after = store.stats();
+    require(after.page_reads == before.page_reads && after.page_writes == before.page_writes
+                && after.syncs == before.syncs,
+            w + ": calls on an unusable store issued no backing call");
 }
 
 void commit_then_reopen_and_abandon() {
@@ -1857,7 +1953,9 @@ void digest_covers_every_stored_byte() {
 }
 
 constexpr std::size_t kSlots = 600;
-constexpr std::size_t kMaxValue = 192;
+// Above a few hundred bytes a 512-byte page store keeps a value as a chain of
+// whole pages, so the closed-heap workload reaches both kinds of storage.
+constexpr std::size_t kMaxValue = 1300;
 
 struct HashCtx {
     Fnv fnv;
@@ -1887,6 +1985,15 @@ bool hash_visitor(void* context, const ScratchRecordView& view) noexcept {
         ctx->failed = true;
         return false;
     }
+    return true;
+}
+
+struct VisitCtx {
+    Fnv fnv;
+};
+
+bool visit_hash_chunk(void* context, const ScratchChunkView& view) noexcept {
+    static_cast<VisitCtx*>(context)->fnv.raw(view.bytes.data, view.bytes.size);
     return true;
 }
 
@@ -1947,6 +2054,48 @@ struct StoreTarget {
         if (store.ordered_digest(page, value) != ScratchStatus::ok) ++failures;
         return value;
     }
+    std::uint64_t state_digest() {
+        std::uint64_t value = 0;
+        if (store.state_digest(page, value) != ScratchStatus::ok) ++failures;
+        return value;
+    }
+    // Up to 40 value bytes at an offset inside the value, folded with the offset.
+    std::uint64_t read_hash(ScratchHandle handle, std::uint64_t offset) {
+        ScratchRecordInfo info{};
+        if (store.point(handle, info) != ScratchStatus::ok) {
+            ++failures;
+            return 0;
+        }
+        const std::uint64_t at = info.value_bytes == 0 ? 0 : offset % info.value_bytes;
+        std::array<std::byte, 40> part{};
+        const std::size_t n = static_cast<std::size_t>(std::min<std::uint64_t>(part.size(), info.value_bytes - at));
+        if (store.read(handle, ScratchField::value, at, ScratchBuffer{part.data(), n}) != ScratchStatus::ok) {
+            ++failures;
+            return 0;
+        }
+        Fnv f;
+        f.le64(at);
+        f.raw(part.data(), n);
+        return f.value;
+    }
+    // The key bytes and then the value bytes, whatever the chunking.
+    std::uint64_t visit_hash(ScratchHandle handle) {
+        VisitCtx ctx;
+        if (store.visit(handle, page, &visit_hash_chunk, &ctx) != ScratchStatus::ok) ++failures;
+        return ctx.fnv.value;
+    }
+    ScratchHandle first_handle() {
+        ScratchHandle handle = 0;
+        const ScratchStatus status = store.first(handle);
+        if (status != ScratchStatus::ok && status != ScratchStatus::end) ++failures;
+        return handle;
+    }
+    ScratchHandle next_handle(ScratchHandle current) {
+        ScratchHandle handle = 0;
+        const ScratchStatus status = store.next(current, handle);
+        if (status != ScratchStatus::ok && status != ScratchStatus::end) ++failures;
+        return handle;
+    }
 };
 
 struct ModelTarget {
@@ -1986,6 +2135,33 @@ struct ModelTarget {
         return f.value;
     }
     std::uint64_t digest() { return expected_ordered_digest(model); }
+    std::uint64_t state_digest() { return expected_state_digest(model, 1); }
+    std::uint64_t read_hash(ScratchHandle handle, std::uint64_t offset) {
+        const Row* row = model.by_handle(handle);
+        if (row == nullptr) return 0;
+        const std::uint64_t size = row->value.size();
+        const std::uint64_t at = size == 0 ? 0 : offset % size;
+        const std::size_t n = static_cast<std::size_t>(std::min<std::uint64_t>(40, size - at));
+        Fnv f;
+        f.le64(at);
+        f.text(row->value.substr(static_cast<std::size_t>(at), n));
+        return f.value;
+    }
+    std::uint64_t visit_hash(ScratchHandle handle) {
+        const Row* row = model.by_handle(handle);
+        Fnv f;
+        if (row != nullptr) {
+            f.text(row->key);
+            f.text(row->value);
+        }
+        return f.value;
+    }
+    ScratchHandle first_handle() { return model.rows.empty() ? 0 : model.rows.front().handle; }
+    ScratchHandle next_handle(ScratchHandle current) {
+        for (std::size_t i = 0; i + 1 < model.rows.size(); ++i)
+            if (model.rows[i].handle == current) return model.rows[i + 1].handle;
+        return 0;
+    }
 };
 
 // One generator for both targets, so a divergence is a store defect and never
@@ -2007,12 +2183,12 @@ std::uint64_t run_workload(Target& t, std::uint64_t seed, std::size_t ops) {
         const std::uint64_t pick = rng.below(100);
         const std::size_t k = static_cast<std::size_t>(rng.below(kSlots));
         const std::uint64_t key = k * 7919 + 13;
-        if (pick < 55) {
+        if (pick < 50) {
             const std::size_t length = static_cast<std::size_t>(rng.below(kMaxValue + 1));
             fill_bytes(value.data(), length, rng.next());
             slot[k] = t.put(key, value.data(), length);
             trace.le64(slot[k]);
-        } else if (pick < 78) {
+        } else if (pick < 70) {
             if (slot[k] != 0) {
                 t.erase(slot[k]);
                 slot[k] = 0;
@@ -2020,14 +2196,26 @@ std::uint64_t run_workload(Target& t, std::uint64_t seed, std::size_t ops) {
             } else {
                 trace.le64(0);
             }
-        } else if (pick < 88) {
+        } else if (pick < 78) {
             trace.le64(slot[k] != 0 ? t.value_length(slot[k]) : 99);
-        } else if (pick < 94) {
+        } else if (pick < 84) {
             trace.le64(t.lower_bound_handle(key));
-        } else if (pick < 97) {
+        } else if (pick < 86) {
             trace.le64(t.walk_hash());
-        } else {
+        } else if (pick < 88) {
             trace.le64(t.digest());
+        } else if (pick < 92) {
+            const std::uint64_t offset = rng.next();
+            trace.le64(slot[k] != 0 ? t.read_hash(slot[k], offset) : 98);
+        } else if (pick < 96) {
+            trace.le64(slot[k] != 0 ? t.visit_hash(slot[k]) : 97);
+        } else {
+            ScratchHandle at = t.first_handle();
+            for (int step = 0; step < 3 && at != 0; ++step) {
+                trace.le64(at);
+                at = t.next_handle(at);
+            }
+            trace.le64(at);
         }
         if (op % 40 == 39) {
             if (rng.below(4) == 0) {
@@ -2039,9 +2227,13 @@ std::uint64_t run_workload(Target& t, std::uint64_t seed, std::size_t ops) {
                 trace.le64(3);
             }
             open = false;
+            trace.le64(t.state_digest());
         }
     }
-    if (open) t.commit();
+    if (open) {
+        t.commit();
+        trace.le64(t.state_digest());
+    }
     trace.le64(t.digest());
     return trace.value;
 }
@@ -2072,6 +2264,10 @@ void no_heap_after_construction() {
     require(rig.counters.writes >= 200, "the heap-closed workload really spilled through a two-page cache");
 }
 
+// "Bounded" can only be tested as a plateau on a finite run: the extent may keep
+// a fixed allowance for rare larger transactions after the measurement point,
+// but it must not grow in proportion to the work done. The allowances below are
+// this fixture's measure of that, not a limit the contract states.
 void space_is_reused_under_churn() {
     Rig rig(512, 1024);
     Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
@@ -2083,6 +2279,7 @@ void space_is_reused_under_churn() {
     commit_ok(*s);
     std::uint64_t next_key = 1000;
     std::uint64_t quarter_extent = 0;
+    std::uint64_t late_extent = 0;
     std::uint64_t churned_bytes = 0;
     constexpr std::size_t kTxns = 3750;
     for (std::size_t t = 0; t < kTxns; ++t) {
@@ -2110,6 +2307,7 @@ void space_is_reused_under_churn() {
             rollback_ok(*s);
         }
         if (t == kTxns / 4) quarter_extent = s->stats().backing_pages;
+        if (t == 3 * kTxns / 4) late_extent = s->stats().backing_pages;
     }
     const std::uint64_t end_extent = s->stats().backing_pages;
     require(rig.counters.writes > kTxns, "every one of the commits wrote to the backing");
@@ -2117,6 +2315,7 @@ void space_is_reused_under_churn() {
             "the logical bytes written exceed the whole fixed backing several times over, so only reuse survives");
     require(end_extent <= quarter_extent + quarter_extent / 4 + 16,
             "under steady churn of a bounded live set the backing extent plateaus");
+    require(end_extent <= late_extent + 12, "the last quarter of the churn added next to nothing");
     require(model.rows.size() == 64 && s->record_count() == 64, "the live set stayed at 64 records");
     verify(*s, model, 512, numeric_probes(), 1, true, "after 30000 churn operations");
 }
@@ -2141,6 +2340,209 @@ void rollback_does_not_leak_space() {
     const std::uint64_t late = s->stats().backing_pages;
     require(late <= early + early / 4 + 16, "repeated begin/put/rollback does not grow the backing without bound");
     verify(*s, model, 512, numeric_probes(), 1, true, "after 3000 rolled-back transactions");
+}
+
+// Handle numbers are never reissued, so a live set that keeps replacing its
+// records walks through handle numbers without end. Whatever maps those numbers
+// to records must be given back behind the live range, or the backing grows
+// with the handles ever issued although the live set does not. A 512-byte page
+// maps a few dozen handles, so twenty thousand of them are hundreds of pages.
+void handle_table_space_follows_the_live_range() {
+    Rig rig(512, 1024);
+    Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+    require_status(s->status(), ScratchStatus::ok, "open");
+    Model model(cmp_numeric_text);
+    begin_ok(*s);
+    for (std::uint64_t k = 0; k < 8; ++k) put_ok(*s, model, key_u64(k), make_value(k, 0, 40));
+    commit_ok(*s);
+    constexpr std::size_t kRounds = 20000;
+    std::uint64_t next_key = 8;
+    std::uint64_t quarter_extent = 0;
+    for (std::size_t round = 0; round < kRounds; ++round) {
+        begin_ok(*s);
+        erase_ok(*s, model, model.rows.front().handle);
+        put_ok(*s, model, key_u64(next_key), make_value(next_key, round, 40));
+        ++next_key;
+        commit_ok(*s);
+        if (round == kRounds / 4) quarter_extent = s->stats().backing_pages;
+    }
+    const std::uint64_t end_extent = s->stats().backing_pages;
+    require(model.next_handle > kRounds, "more handle numbers were issued than the whole backing has pages for");
+    require(rig.counters.writes > kRounds, "every replacement reached the backing");
+    require(quarter_extent != 0, "the extent was sampled a quarter of the way through");
+    require(end_extent <= quarter_extent + 4, "the backing extent follows the live range, not the handles ever issued");
+    require(model.rows.size() == 8 && s->record_count() == 8, "the live set stayed at eight records");
+    verify(*s, model, 512, numeric_probes(), 1, true, "after twenty thousand replacements");
+}
+
+struct RetryRun {
+    std::uint64_t commit_writes = 0;
+    std::uint64_t rollback_writes = 0;
+    std::uint64_t faults = 0;
+};
+
+// A store whose journal pool is already populated, then a transaction that
+// spills through a two-page cache. commit_fault_at == 0 only counts the writes
+// of a good commit. Otherwise the commit's own write number commit_fault_at (its
+// superblock) is refused, which leaves a published-looking superblock behind,
+// and rollback_fault_at refuses that write number of the rollback, torn or
+// clean. A rollback that fails must be retryable, and after the retry the
+// store must hold exactly its last committed state, also across a reopen.
+RetryRun rollback_retry_run(std::uint64_t commit_fault_at, std::uint64_t rollback_fault_at, bool torn) {
+    RetryRun run;
+    Rig rig(512, 1024);
+    Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+    require_status(s->status(), ScratchStatus::ok, "open");
+    Model model(cmp_numeric_text);
+    const std::vector<Text> probes = numeric_probes();
+    build_base(*s, model, 40, 11);
+    Rng rng(5);
+    begin_ok(*s);
+    require_status(random_ops(*s, model, rng, 60), ScratchStatus::ok, "edits that fill the journal pool");
+    commit_ok(*s);
+
+    Model pending = model;
+    begin_ok(*s);
+    require_status(random_ops(*s, pending, rng, 60), ScratchStatus::ok, "edits that will be undone");
+    if (commit_fault_at == 0) {
+        const std::uint64_t before = rig.counters.writes;
+        commit_ok(*s);
+        run.commit_writes = rig.counters.writes - before;
+        verify(*s, pending, 512, probes, 1, true, "after the counted commit");
+        return run;
+    }
+    rig.backing.arm_write(commit_fault_at, true);
+    require_status(s->commit(ScratchDurability::buffered), ScratchStatus::io_error, "the superblock write is refused");
+    require(rig.backing.write_faults() == 1, "the commit's fault fired");
+    check_rollback_only(*s, 512);
+    if (rollback_fault_at != 0) rig.backing.arm_write(rollback_fault_at, torn);
+    const std::uint64_t before = rig.counters.writes;
+    ScratchStatus status = s->rollback();
+    if (status != ScratchStatus::ok) {
+        require_status(status, ScratchStatus::io_error, "a refused write is reported as the backing gave it");
+        run.faults = rig.backing.write_faults() - 1;
+        require(s->transaction_active(), "a rollback that failed leaves the transaction active");
+        check_rollback_only(*s, 512);
+        status = s->rollback();
+    }
+    require_status(status, ScratchStatus::ok, "the retried rollback completes");
+    run.rollback_writes = rig.counters.writes - before;
+    require(!s->transaction_active(), "the retried rollback ends the transaction");
+    verify(*s, model, 512, probes, 1, true, "after the retried rollback");
+    s.close();
+    s.open(config_for(512, 3, 1, 1, order_numeric(), ScratchOpenMode::reopen));
+    require_status(s->status(), ScratchStatus::ok, "reopen after the retried rollback");
+    verify(*s, model, 512, probes, 1, true, "a reopen sees only the last successful commit");
+    return run;
+}
+
+void rollback_can_be_retried_after_a_refused_write() {
+    const RetryRun counted = rollback_retry_run(0, 0, false);
+    require(counted.commit_writes >= 2, "a commit writes at least the journal link and the superblock");
+    const RetryRun clean = rollback_retry_run(counted.commit_writes, 0, false);
+    require(clean.faults == 0 && clean.rollback_writes >= 6,
+            "an unfaulted rollback restores several pages and blanks the superblock it found");
+    std::uint64_t fired = 0;
+    for (const bool torn : {false, true}) {
+        for (std::uint64_t nth = 1; nth <= clean.rollback_writes; ++nth) {
+            const RetryRun run = rollback_retry_run(counted.commit_writes, nth, torn);
+            require(run.faults == 1, "a refused write fired at every position of the rollback");
+            fired += run.faults;
+        }
+    }
+    require(fired == 2 * clean.rollback_writes, "every position of the rollback was refused once, torn and clean");
+}
+
+// data and full ask the medium for durability after every journal and data
+// write and before the superblock that publishes, and once more after it. The
+// memory backing refuses those levels, so this rig accepts them and logs every
+// write and sync the commit issues.
+void durable_commit_publishes_between_two_syncs() {
+    for (const ScratchDurability level : {ScratchDurability::data, ScratchDurability::full}) {
+        Rig rig(512, 512);
+        rig.backing.accept_durable_syncs(true);
+        Session s(rig, config_for(512, 3, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+        require_status(s->status(), ScratchStatus::ok, "open");
+        Model model(cmp_numeric_text);
+        for (std::uint64_t round = 0; round < 4; ++round) {
+            begin_ok(*s);
+            for (std::uint64_t k = 0; k < 25; ++k)
+                put_ok(*s, model, key_u64(round * 1000 + k), make_value(k, round, 70 + k));
+            rig.backing.record_events(true);
+            require_status(s->commit(level), ScratchStatus::ok, "a durable commit on a backing that accepts the level");
+            rig.backing.record_events(false);
+            const std::vector<FaultBacking::Event>& events = rig.backing.events();
+            std::size_t syncs = 0;
+            std::size_t first_sync = events.size();
+            std::size_t last_sync = 0;
+            std::size_t superblock_writes = 0;
+            std::size_t superblock_at = 0;
+            for (std::size_t i = 0; i < events.size(); ++i) {
+                if (events[i].kind == 's') {
+                    if (syncs++ == 0) first_sync = i;
+                    last_sync = i;
+                } else if (events[i].id < 2) {
+                    ++superblock_writes;
+                    superblock_at = i;
+                }
+            }
+            require(syncs == 2, "a durable commit asks the medium to sync twice");
+            require(superblock_writes == 1, "exactly one superblock write publishes the commit");
+            require(first_sync > 0, "journal and data pages are written before the first sync");
+            for (std::size_t i = 0; i < first_sync; ++i)
+                require(events[i].kind == 'w' && events[i].id >= 2, "only journal and data pages precede the first sync");
+            require(first_sync < superblock_at && superblock_at < last_sync, "the superblock is written between the syncs");
+            require(last_sync + 1 == events.size(), "nothing follows the final sync");
+        }
+        verify(*s, model, 512, numeric_probes(), 1, true, "after four durable commits");
+        s.close();
+        s.open(config_for(512, 4, 1, 1, order_numeric(), ScratchOpenMode::reopen));
+        require_status(s->status(), ScratchStatus::ok, "reopen after durable commits");
+        verify(*s, model, 512, numeric_probes(), 1, true, "a reopen sees the durable commits");
+    }
+
+    // A refusal of the final sync leaves the new superblock on the medium, so
+    // the commit must report it and rollback must take the publication back.
+    Rig rig(512, 512);
+    rig.backing.accept_durable_syncs(true);
+    Session s(rig, config_for(512, 3, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+    require_status(s->status(), ScratchStatus::ok, "open");
+    Model model(cmp_numeric_text);
+    const std::vector<Text> probes = numeric_probes();
+    begin_ok(*s);
+    for (std::uint64_t k = 0; k < 20; ++k) put_ok(*s, model, key_u64(k), make_value(k, 0, 60));
+    commit_ok(*s);
+    begin_ok(*s);
+    Model pending = model;
+    for (std::uint64_t k = 100; k < 120; ++k) put_ok(*s, pending, key_u64(k), make_value(k, 1, 60));
+    rig.backing.arm_sync(2);
+    require_status(s->commit(ScratchDurability::data), ScratchStatus::io_error,
+                   "a refused final sync is reported as the backing gave it");
+    require(rig.backing.sync_faults() == 1, "the final sync was the call that failed");
+    check_rollback_only(*s, 512);
+    rollback_ok(*s);
+    verify(*s, model, 512, probes, 1, true, "after the refused final sync is rolled back");
+    s.close();
+    s.open(config_for(512, 4, 1, 1, order_numeric(), ScratchOpenMode::reopen));
+    require_status(s->status(), ScratchStatus::ok, "reopen after the refused final sync");
+    verify(*s, model, 512, probes, 1, true, "the refused publication was taken back");
+
+    // A refusal of the first sync comes before anything is published.
+    begin_ok(*s);
+    pending = model;
+    for (std::uint64_t k = 200; k < 215; ++k) put_ok(*s, pending, key_u64(k), make_value(k, 2, 60));
+    rig.backing.fail_syncs(true);
+    require_status(s->commit(ScratchDurability::full), ScratchStatus::io_error,
+                   "a refused first sync is reported as the backing gave it");
+    rig.backing.fail_syncs(false);
+    require(rig.backing.sync_faults() == 2, "the refused first sync was the call that failed");
+    check_rollback_only(*s, 512);
+    rollback_ok(*s);
+    verify(*s, model, 512, probes, 1, true, "after the refused first sync is rolled back");
+    s.close();
+    s.open(config_for(512, 3, 1, 1, order_numeric(), ScratchOpenMode::reopen));
+    require_status(s->status(), ScratchStatus::ok, "reopen after the refused first sync");
+    verify(*s, model, 512, probes, 1, true, "the refused first sync published nothing");
 }
 
 void keys_and_values_larger_than_the_cache() {
@@ -2174,6 +2576,10 @@ void keys_and_values_larger_than_the_cache() {
             ScratchHandle handle = 0;
             require_status(s->put(key_source, value_source, handle), ScratchStatus::ok, "put from a formula source");
             require(handle == model.put(keys[i], pattern_text(size, 1000 + i)), "formula-sourced handle");
+            const std::uint64_t resident = s->stats().resident_bytes;
+            require(value_source.max_request <= resident, "no request was larger than the store's whole workspace");
+            if (size > resident)
+                require(value_source.reads >= 2, "a value larger than the whole workspace was pulled in pieces");
         } else {
             put_ok(*s, model, keys[i], pattern_text(size, 1000 + i));
         }
@@ -2345,11 +2751,10 @@ void misuse_and_error_surface() {
 
     // A failing medium is io_error, never an empty success or a cancellation.
     {
-        Rng rng(5);
-        for (int i = 0; i < 8; ++i) {
-            ScratchRecordInfo info{};
-            (void)s->point(model.rows[static_cast<std::size_t>(rng.below(model.rows.size()))].handle, info);
-        }
+        // A reopened store has an empty cache, so the walk must go to the medium.
+        s.close();
+        s.open(config_for(512, 2, 1, 1, order_numeric(&probe), ScratchOpenMode::reopen));
+        require_status(s->status(), ScratchStatus::ok, "reopen before the failing medium");
         const std::uint64_t faults_before = rig.backing.read_faults();
         rig.backing.fail_reads(true);
         CountCtx count;
@@ -2384,6 +2789,80 @@ void misuse_and_error_surface() {
         check_rollback_only(*s, 512);
         rollback_ok(*s);
         verify(*s, model, 512, numeric_probes(), 1, true, "after a comparator failure");
+    }
+}
+
+// A source that is asked for its bytes and cannot give them.
+class FailingSource final : public ScratchByteSource {
+public:
+    explicit FailingSource(std::uint64_t size) : size_(size) {}
+    std::uint64_t size() const noexcept override { return size_; }
+    ScratchStatus read(std::uint64_t, ScratchBuffer) const noexcept override {
+        ++reads;
+        return ScratchStatus::io_error;
+    }
+    mutable std::uint64_t reads = 0;
+
+private:
+    std::uint64_t size_;
+};
+
+// There is no capacity status: a put the store cannot serve is
+// programming_error whatever the cause, and in a transaction it leaves the
+// transaction rollback-only. Three named causes: an exhausted backing, a
+// source that fails to deliver its bytes, and no memory for the workspace.
+void named_failure_causes_are_programming_errors() {
+    const std::vector<Text> probes = numeric_probes();
+    {
+        Rig rig(512, 6);
+        Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+        require_status(s->status(), ScratchStatus::ok, "open over a six-page backing");
+        begin_ok(*s);
+        ScratchStatus failure = ScratchStatus::ok;
+        std::uint64_t served = 0;
+        for (std::uint64_t k = 0; k < 400 && failure == ScratchStatus::ok; ++k) {
+            ScratchHandle handle = 0;
+            failure = put_text(*s, key_u64(k), make_value(k, 0, 90), handle);
+            if (failure == ScratchStatus::ok) ++served;
+        }
+        require(served >= 1, "the first put fits in six pages");
+        require_status(failure, ScratchStatus::programming_error,
+                       "an exhausted backing is programming_error, never a capacity status");
+        check_rollback_only(*s, 512);
+        rollback_ok(*s);
+        Model empty(cmp_numeric_text);
+        verify(*s, empty, 512, probes, 1, true, "after the exhausted backing is rolled back");
+    }
+    {
+        Rig rig(512, 256);
+        Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+        require_status(s->status(), ScratchStatus::ok, "open");
+        begin_ok(*s);
+        const Text key = key_u64(2);
+        ScratchSpanSource key_source(bytes_of(key));
+        FailingSource value_source(300);
+        ScratchHandle handle = 0xBAD;
+        require_status(s->put(key_source, value_source, handle), ScratchStatus::programming_error,
+                       "a source that cannot deliver its bytes is programming_error");
+        require(handle == 0xBAD, "a refused put leaves its output");
+        require(value_source.reads >= 1, "the store really asked the source for its bytes");
+        check_rollback_only(*s, 512);
+        rollback_ok(*s);
+        Model empty(cmp_numeric_text);
+        verify(*s, empty, 512, probes, 1, true, "after the failing source is rolled back");
+    }
+    {
+        Rig rig(512, 16);
+        const ScratchStoreConfig config =
+            config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty);
+        const std::size_t refused_before = global_allocation::refused;
+        global_allocation::refusing = true;
+        ScratchStore store(config, &rig.backing);
+        global_allocation::refusing = false;
+        require(global_allocation::refused > refused_before, "the workspace allocation was really refused");
+        expect_unusable(store, ScratchStatus::programming_error, "no memory for the workspace");
+        require(rig.counters.reads == 0 && rig.counters.writes == 0 && rig.counters.syncs == 0,
+                "a store without a workspace performs no backing I/O");
     }
 }
 
@@ -2519,9 +2998,13 @@ int main() {
         no_heap_after_construction();
         space_is_reused_under_churn();
         rollback_does_not_leak_space();
+        handle_table_space_follows_the_live_range();
+        rollback_can_be_retried_after_a_refused_write();
+        durable_commit_publishes_between_two_syncs();
         keys_and_values_larger_than_the_cache();
         equal_keys_upsert_and_key_bytes();
         misuse_and_error_surface();
+        named_failure_causes_are_programming_errors();
         geometry_and_open_validation();
         differential_random_walk();
         std::puts("test_scratch_store: order, handles, eviction, reentrancy, rollback, reopen, digests, no heap");

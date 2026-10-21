@@ -79,7 +79,9 @@ gate and an I/O audit can read these without an implementation detail.
 Supported geometry is exactly: at least two cache pages, a power-of-two page
 size of at least 512 bytes that equals the backing's page size, at least one
 journal slot and at least one index slot, a nonzero order id and a comparator.
-Anything else leaves `status()` at `programming_error` and performs no I/O.
+A definition may bound the page size and the cache from above and must say so;
+the reference definition refuses a page size above 1 MiB or a cache above 16 Mi
+pages. Anything else leaves `status()` at `programming_error` and performs no I/O.
 Cache and slot counts are not part of the stored format: a reopen may use
 different ones.
 
@@ -91,7 +93,10 @@ including handle allocation, and reads inside it include the pending edits.
 publishes a committed state only when it returns `ok`; `buffered` permits an
 orderly close and reopen, `data` and `full` additionally call the backing's
 durability hook, journal and data before publication. A memory backing does not
-advertise durability: asking it for `data` or `full` fails the commit.
+advertise durability: asking it for `data` or `full` fails the commit. For
+those two levels the hook is called once more after the new state is published,
+so an `ok` means the publication itself reached the medium; if that last call is
+refused the commit reports it and `rollback` takes the publication back.
 
 A failed `put`, `erase` or `commit` leaves the transaction active and
 rollback-only. From then on only `rollback` is accepted; `begin`, `put`, `erase`,
@@ -102,6 +107,14 @@ spilled meanwhile, and the space the aborted transaction used stays reusable:
 repeated begin, put and rollback cycles do not grow the backing without bound.
 A mutation attempted from inside a read, comparison or source callback returns
 `programming_error` with no effect at all; it does not poison the transaction.
+A `rollback` that the backing refuses reports the failing call's status and
+leaves the transaction active and rollback-only; calling `rollback` again
+resumes where it stopped and completes once the backing answers. A nested
+`begin` and a `commit` that names an unknown durability level are refused
+before any work and change nothing. The state of the transaction is judged
+before any handle or key: outside a transaction, or in a rollback-only one,
+even an absent handle gets `programming_error` and not `not_found`. The store
+never retries a failed backing call.
 
 Destroying a store with an active transaction never commits it, so reopening
 yields the last successful commit. A commit whose publication was torn or
@@ -143,13 +156,19 @@ caller-owned page: all key chunks, then all value chunks, each at most one page,
 offsets contiguous from zero in each field, the last chunk of a field marked
 final, and one empty final chunk for an empty field. `for_each` pushes one
 `ScratchRecordView` per live record, whose key and value are byte sources that
-resolve logical bytes rather than cache pointers.
+resolve logical bytes rather than cache pointers. A nonempty field never gets an
+empty chunk: the chunk that reaches its size is the one marked final. A source
+read at an offset beyond the size is a `programming_error` even for an empty
+destination.
 
 A visitor that returns `false` cancels the walk with `cancelled`, including on
 the last record, and receives no further call. An error is never reported as
 cancellation or as an empty stream. A visitor may issue nested reads, walks and
 digests on the same store with disjoint fixed buffers; the outer views stay
-valid. Views, sources and chunk bytes live only until their callback returns.
+valid. A probe given to `lower_bound` may itself be a source backed by this
+store, such as a key a walk delivered; the reads the comparator then makes nest
+like any other read. Views, sources and chunk bytes live only until their
+callback returns.
 
 An owning-return compatibility wrapper may exist only as a non-flat test oracle.
 It must not be used by a per-run or per-bar path, advertised as O(1), or
@@ -193,12 +212,12 @@ sized by the config and allocated once, in the constructor. `journal_slots` and
 them.
 
 Its limits, which a replacement need not share: a page size of at most 1 MiB, a
-page count of at most 16 Mi, records below 2^61 bytes and handle numbers below
+cache of at most 16 Mi pages, records below 2^61 bytes and handle numbers below
 2^62; index nodes are not merged after erasures; cell pages never return to the
 page pool; the journal pool keeps as many pages as the largest transaction so
-far touched; and the interior nodes of the handle table are not reclaimed, so
-the backing grows by well under one byte per handle ever issued even when the
-live set is bounded.
+far touched; a journal write the backing refuses forfeits the one pool page it
+was aimed at; and the handle table never shrinks in height, so a root that grew
+over an empty node leaves that node in place.
 
 ## Statuses
 
@@ -242,8 +261,8 @@ unchanged, and a comparator's failure unchanged.
 Each row names the clause, the fixture function that holds it and the failure
 before the contract holds. Against the frozen base the three headers are absent,
 so every body fails to compile with the missing-header diagnostic; against the
-first published declarations alone the store fixture compiles and fails at the
-link of `ScratchStore`, which they declare and do not define.
+declarations alone, without `scratch_store_impl.hpp`, the store fixture compiles
+and fails at the link of `ScratchStore`, which they declare and do not define.
 
 | Clause | Fixture | Fails before because |
 | --- | --- | --- |
@@ -259,6 +278,10 @@ link of `ScratchStore`, which they declare and do not define.
 | Digest independent of page size, cache, journal and batching; digest covers every byte | `digest_is_throughput_neutral`, `digest_covers_every_stored_byte` | no store to open |
 | No heap allocation or refusal after construction | `no_heap_after_construction` | no store to open |
 | Bounded backing under churn and repeated rollback | `space_is_reused_under_churn`, `rollback_does_not_leak_space` | no store to open |
+| Backing follows the live range although handle numbers are never reissued | `handle_table_space_follows_the_live_range` | no store to open |
+| A rollback refused at every write position, torn and clean, is retried to the last commit | `rollback_can_be_retried_after_a_refused_write` | no store to open |
+| Durable commit: hook before and after publication, a refused first or final sync is taken back | `durable_commit_publishes_between_two_syncs` | no store to open |
+| An exhausted backing, a failing source and a refused workspace are programming errors | `named_failure_causes_are_programming_errors` | no store to open |
 | Keys and values larger than the cache, formula sources | `keys_and_values_larger_than_the_cache` | no store to open |
 | Equal keys, key bytes, empty key and value | `equal_keys_upsert_and_key_bytes` | no store to open |
 | Buffer misuse, cancellation, failing medium, failing comparator | `misuse_and_error_surface` | no store to open |

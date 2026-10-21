@@ -69,7 +69,10 @@ public:
     // and ordering id. Cache/slot counts may differ on reopen. Supported
     // geometry is exactly page_count>=2, a power-of-two page_size>=512 equal
     // to the backing page size, journal_slots>=1 and index_slots>=1, with a
-    // nonzero order id and a comparator. Failures surface through status():
+    // nonzero order id and a comparator. A definition may bound page_size and
+    // page_count from above and must say so; the reference definition refuses
+    // a page_size above 1 MiB or a page_count above 16 Mi. Failures surface
+    // through status():
     // bad geometry, null backing, create_empty on a used backing, an ordering
     // id mismatch or workspace allocation failure => programming_error; reopen
     // of an empty backing => not_found; reopen without a valid committed state
@@ -99,7 +102,8 @@ public:
     // erase and commit return programming_error with no effect. A mutation
     // attempted from inside any read, comparison or source callback returns
     // programming_error with no effect at all (it does not poison the
-    // transaction).
+    // transaction). So do a nested begin and a commit that names an unknown
+    // durability level: refused before any work, they change nothing.
     ScratchStatus begin() noexcept;
 
     // Requires begin. Upsert by comparator equality: the equal record keeps its
@@ -121,16 +125,21 @@ public:
     // Requires begin. An absent handle (including scratch_no_handle) => not_found
     // with no edit and no rollback-only effect. A call outside a transaction
     // or any other failure => programming_error, which in a transaction makes
-    // it rollback-only.
+    // it rollback-only. The state of the transaction is judged first: outside
+    // a transaction, or in a rollback-only one, even an absent handle gets
+    // programming_error.
     ScratchStatus erase(ScratchHandle) noexcept;
 
     // Only success publishes a committed state. buffered permits orderly
     // close/reopen; data/full additionally invoke the selected durability hook
-    // in journal/data-before-publication order. Requires an active transaction
-    // that is not rollback-only (else programming_error, no effect). Failed
-    // mutation/commit leaves an active, rollback-only transaction and reports
-    // the failing backing call's status. No implicit commit in destructor:
-    // abandoning a transaction and reopening yields the last successful commit.
+    // in journal/data-before-publication order and once more after the new
+    // state is published, so ok means the publication itself reached the
+    // medium. Requires an active transaction that is not rollback-only (else
+    // programming_error, no effect). Failed mutation/commit leaves an active,
+    // rollback-only transaction and reports the failing backing call's status;
+    // a failed backing call is never retried by the store. No implicit commit
+    // in destructor: abandoning a transaction and reopening yields the last
+    // successful commit.
     ScratchStatus commit(ScratchDurability durability) noexcept;
 
     // Restore ALL pre-begin logical bytes, handles, count, allocation state and
@@ -139,7 +148,10 @@ public:
     // reusable: repeated begin/put/rollback cycles do not grow the backing
     // without bound. Outputs/handles first obtained in the aborted transaction
     // must be discarded (its allocation numbers are issued again). rollback
-    // requires an active transaction and a serviceable backing.
+    // requires an active transaction and a serviceable backing. A rollback the
+    // backing refuses reports the failing call's status and leaves the
+    // transaction active and rollback-only; calling rollback again resumes
+    // where it stopped and completes once the backing answers.
     ScratchStatus rollback() noexcept;
 
     // While the active transaction is rollback-only, every read, walk and
@@ -156,7 +168,9 @@ public:
     // leave the output unchanged. next requires a presently live handle (else
     // not_found) and finds its immediate ordered successor. lower_bound finds
     // first key >= probe under the caller comparator (inclusive of
-    // equivalence). A comparator failure is returned unchanged.
+    // equivalence). A comparator failure is returned unchanged. A probe may
+    // itself be a source backed by this store, such as a key a walk delivered:
+    // the reads the comparator then makes nest like any other read.
     ScratchStatus first(ScratchHandle& result) const noexcept;
     ScratchStatus next(ScratchHandle current, ScratchHandle& result) const noexcept;
     ScratchStatus lower_bound(const ScratchByteSource& probe,
