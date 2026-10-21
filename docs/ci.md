@@ -893,17 +893,6 @@ the report. The flat-peak gate holds that in CI, so a regression fails a build
 instead of being noticed releases later. It has two arms, one command each,
 both in `scripts/ci_flat_peak_gate.py`:
 
-The growth gate is a required lane of `build-gate`: both `mem` (`ctest -L mem`)
-and `census` (battery plus full corpus under Valgrind) run on Linux
-`pf-linux-x64-16` for same-repository PRs, pushes to main and manual CI
-dispatches, and in the reusable release gate; neither enters the macOS matrix.
-Fork PRs retain their exclusion, so a non-docs fork skip fails `build-gate`.
-Only a skip after `changes` succeeded with `docs_only == 'true'` is accepted.
-A missing script, non-zero exit, absent positive-count PASS summary, memory
-growth or incomplete proof fails the lane and the aggregate. The required
-maintainer statuses `pineforge/verify` and `pineforge/parity` are unchanged;
-this workflow dependency does not change the repository ruleset.
-
 | Arm | Runs | Passes only when |
 | --- | --- | --- |
 | `mem` | a Release build with `PINEFORGE_BUILD_FLAT_MEMORY_TESTS=ON`, then `ctest -L mem`: the row `test_flat_memory_rss_macd`, the harness `tests/flat_memory_rss_e2e.py` over the cases `a`, `g`, `h` and `borrowed` (the bars, selected-window and magnifier ladders, and the borrowed-feed source check), run through a staged copy of `docker/run_json.py` beside the planner library the build made (`flat_memory_prefix`) | `ctest -N -L mem` lists exactly that row, ctest ran it and printed `ctest ran N rows (floor M)` with N at least M, it was not skipped, and the harness's own `RUN.COMPLETE` and four `case-*.json` say PASS with every ladder's rungs measured |
@@ -927,6 +916,17 @@ target stages the layout in the build directory, a copy of `docker/` as `bin/`
 Both `mem` rows carry `l4-pending`: they are red until the work that makes a
 run's rest flat has landed, so the gate is red on any tree before it, which is
 what it is for.
+
+The growth gate is a required lane of `build-gate`: both `mem` (`ctest -L mem`)
+and `census` (battery plus full corpus under Valgrind) run on Linux
+`pf-linux-x64-16` for same-repository PRs, pushes to main and manual CI
+dispatches, and in the reusable release gate; neither enters the macOS matrix.
+Fork PRs retain their exclusion, so a non-docs fork skip fails `build-gate`.
+Only a skip after `changes` succeeded with `docs_only == 'true'` is accepted.
+A missing script, non-zero exit, absent positive-count PASS summary, memory
+growth or incomplete proof fails the lane and the aggregate. The required
+maintainer statuses `pineforge/verify` and `pineforge/parity` are unchanged;
+this workflow dependency does not change the repository ruleset.
 
 Where it runs:
 
@@ -1040,9 +1040,7 @@ workflows -- `docs.yml`,
 `release.yml` is exempt, by name and while its `on:` block names only events no
 fork can raise (a push, the schedule, a dispatch; a dispatch alone today).
 The flat-peak arms and `build-gate` forbid explicit job or step timeouts;
-other jobs retain their inherited platform-maximum declarations. The gate's
-own older MAIN-only/timeout wiring checks remain a CR150-CX follow-up and
-currently fail preflight for this configuration. A
+other jobs retain their inherited platform-maximum declarations. A
 heavy job moved back to the standard runner, a test or matrix entry that lets a
 fork's pull request onto a larger runner, a call to a workflow outside
 `.github/workflows/`, a changed time limit, a `ci_verify.py` call without
