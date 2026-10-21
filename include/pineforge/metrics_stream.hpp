@@ -4,6 +4,7 @@
 // with scratch storage in 3.8:902-909 and selected observations in 3.6:745-773.
 // Existing array entry points in metrics.hpp remain unchanged.
 #include <pineforge/metrics.hpp>
+#include <pineforge/report_pages.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -129,6 +130,29 @@ pf_equity_stats_t compute_equity_stats(
     const std::string& chart_tz, double first_open, double last_close,
     std::int64_t bars_in_market, double net_profit,
     std::int64_t observation_count);
+
+// O1 report-point provider overloads: declarations only, metrics-lane bodies.
+// FULL/STREAMED can reread captured final points in the same five ordered
+// walks through visit()/bounded pages. n counts points, observation_count
+// counts observations (selected M+1 points, M observations). Preserve every
+// formula, float operation grouping, calendar/NaN guard and presented value.
+// Source/read failures propagate; never adapt by materializing an array.
+//
+// SUMMARY_ONLY does not create a captured provider or a private curve tape.
+// Its fixed execution replay passes use the same by-value EquityVisitorV1
+// inputs and held-point rule, then freeze the witnessed metrics for envelope
+// reads. Release the non-recursive timezone guard before execution dispatch.
+pf_equity_stats_t compute_equity_stats(
+    const report::EquityPointSourceV1& curve, std::int64_t n,
+    double initial_capital, const std::string& chart_tz,
+    double first_open, double last_close, std::int64_t bars_in_market,
+    double net_profit);
+
+pf_equity_stats_t compute_equity_stats(
+    const report::EquityPointSourceV1& curve, std::int64_t n,
+    double initial_capital, const std::string& chart_tz,
+    double first_open, double last_close, std::int64_t bars_in_market,
+    double net_profit, std::int64_t observation_count);
 
 } // namespace metrics
 } // namespace pineforge
