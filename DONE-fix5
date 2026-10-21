@@ -1,0 +1,7 @@
+Fix round 5 — edit-only handoff against c8c258f9fcd7995660a3e27c9ab7b4cdbefeaf55.
+Failed proof: rj-20261021t073256-477ed9.
+Repair scratch-file reuse, compatibility opening allocation, and visibility mutation masking.
+Refresh the six execution anchors and all shifted consumer citations by hand.
+See REPORT.md for each stage's cause/fix and UNVERIFIED remote proof requirements.
+No local build, test, script, checker, generator, lab job, staging or commit.
+Supervisor commits the diff and runs the required remote verification.

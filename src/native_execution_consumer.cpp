@@ -5291,14 +5291,20 @@ detail::PagedRunRows<native_order::OpeningObservation> NativeExecutionConsumer::
 }
 
 // Explicit owning compatibility bridge for the still-vector-valued core
-// TargetObservation / CommandContext. Its copy remains O(handles); callers
-// that need a bounded snapshot use opening_rows() and consume one row.
+// TargetObservation / CommandContext. Stable insertion reuses their vector;
+// callers needing a bounded snapshot use opening_rows() and consume one row.
 void NativeExecutionConsumer::read_openings_into(
         const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
         int64_t cycle, std::vector<native_order::OpeningObservation>& out) const {
     out.clear();
     out.reserve(handles.size());
-    for (const auto& row : opening_rows(engine, handles, cycle)) out.push_back(row);
+    for (const auto& handle : handles) {
+        const auto at = std::upper_bound(out.begin(), out.end(), handle.incarnation,
+            [](std::uint64_t key, const auto& row) {
+                return key < row.queried_opening.incarnation;
+            });
+        out.insert(at, read_opening(engine, handle, cycle));
+    }
 }
 
 void NativeExecutionConsumer::refresh_openings(const BacktestEngine& engine,
@@ -11701,9 +11707,9 @@ std::size_t NativeExecutionConsumer::working_request_count() const {
 
 NativeWorkingRequest NativeExecutionConsumer::working_request_at(std::size_t index) const {
     for (const auto& live : requests_.live()) {
-        if (hidden_until_armed(live)) continue;
-        if (index-- != 0) continue;
-        return NativeWorkingRequest{live.definition, project_live_remaining(live.remaining), live.trigger_state};
+        if (!hidden_until_armed(live) && index-- == 0) {
+            return NativeWorkingRequest{live.definition, project_live_remaining(live.remaining), live.trigger_state};
+        }
     }
     throw std::out_of_range("working request index");
 }

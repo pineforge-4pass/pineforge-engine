@@ -170,7 +170,7 @@ public:
     }
     void prepare() { if (!memory_) { data_.open({}); index_.open({}); } }
     void clear() noexcept {
-        data_.reset(); index_.reset(); size_ = 0; bytes_ = 0;
+        size_ = 0; bytes_ = 0; // Reuse both files, overwriting from offset zero.
         if (memory_) memory_->clear();
     }
     std::size_t size() const noexcept { return size_; }

@@ -441,3 +441,77 @@ No local build, preflight, test, measurement or corpus sweep ran, as
 instructed. Release/Debug compilation, C++ unit tests and full corpus
 verification remain for the supervisor. No staging or commit was
 performed, and the pre-existing dirty `corpus` submodule was untouched.
+
+## Fix round 5
+
+Input / unchanged HEAD: `c8c258f9fcd7995660a3e27c9ab7b4cdbefeaf55`.
+Read the complete failing-stage logs and all three summaries from
+`/Users/haoliangwen/.local/state/pineforge-top-core/lanes/core-cr150-o1e3b/lab-fail-rj-20261021t073256-477ed9/`
+before editing. The two Release CTest log copies are byte-identical.
+Release built successfully, then failed 3/1018 rows; Debug built successfully,
+then failed the same three rows out of 999. Preflight reported 1772/1778
+good anchors, with exactly the six execution citations below failing.
+
+| Stage | Cause | Fix |
+|---|---|---|
+| preflight doc-anchors, exit 1 | Round 4 inserted four source lines without moving six ambiguous execution citations. | Move only citation digits to the prose's intended occurrences: commission function definition 1694 (both pages), marked-equity function definition 1757, staged stream-observation condition 1394, and trail-peak conditions 1124 / 1139. No execution source or build-file edit. |
+| release ctest, exit 8 | Direct-mutation bracket bookkeeping reopened scratch files after every clear; synthetic cohort matching created a fresh paged opening snapshot per target read; a duplicate visibility-guard token masked the mutation control. | Reuse the existing page files on clear, fill the reusable compatibility vector directly in stable order, and preserve indexed visibility filtering through a positive visible-row branch. Details below; all tests and guards unchanged. |
+| debug ctest, exit 8 | The same three causes, with the same assertions and visibility mutation failure as Release. | The same source repairs, without profile-specific code or altered bounds. |
+
+### Allocation causes and preserved contracts
+
+- `PagedRunRows::clear()` in `src/native_calc_plan.hpp:172` closed both
+  scratch files. Thus the retained drain handle/seed objects still allocated
+  temporary path strings when their next writes reopened the files.
+  Release's bracket excess is exactly `3034 - 50 = 373 * 8`; Debug's is
+  `3036 - 52 = 373 * 8`. Clear now resets the logical row/byte counts and
+  retains the two descriptors; new rows overwrite from offset zero.
+  Destruction still closes both files through their existing destructors.
+  Resident storage stays fixed, with no directory or row cache added.
+- `read_openings_into()` in `src/native_execution_consumer.cpp:5296`
+  routed the caller's already reusable vector through a new `opening_rows()`
+  file pair. Synthetic cohort matching bypasses the quiet-path target cache,
+  exposing 42240 allocations over 55 bars in both logs. The bridge now
+  reserves the same caller vector and inserts each observation at its upper
+  bound by incarnation. Equal incarnations remain in original input order,
+  including duplicate handles and stale runs, exactly as the stable snapshot.
+  Projection still uses `read_opening`; the bounded paged snapshot API is
+  unchanged. The vector remains the explicitly non-flat compatibility API.
+- The `reserve_effects(StreamActionQueue&, size_t)` overload is unchanged.
+  Its queue reservation prepares files idempotently, and both settlement
+  calls are gated by stream observation; the failing books are bare hosts.
+  The regression is in the page lifecycle / opening bridge, not overload
+  resolution, vector growth bounds, or the allocation counter.
+
+### Visibility mutation cause
+
+`test_native_cpp_versions` removes the first exact guard token and expects
+the source checker to reject the result. E13's indexed reader duplicated
+the legacy enumeration's token, so removing the first left the second and
+the mutation was incorrectly accepted. The original enumeration guard at
+`src/native_execution_consumer.cpp:11692` remains byte-identical and unique.
+The indexed reader at line 11708 selects only visible rows, decrementing
+the requested index only for those rows. No test/checker/expected fixture
+was edited, and pending-until-armed requests remain hidden in every reader.
+
+The opening bridge adds six source lines. All downstream consumer citations,
+including shorthand ranges, were moved by six across the six affected docs.
+The execution anchors above move by four from round 4. Documentation changes
+are numeric citations only; existing prose and content pins are retained.
+No durable field, hash leaf, callback order, export or dependency changed.
+
+### UNVERIFIED
+
+- Fresh preflight, doc anchors, both complete Release/Debug CTest runs,
+  including the two allocation counters and the visibility mutation control.
+- C++ compilation/linkage, settlement/ABI matrices, checker self-tests,
+  prior fail-before diagnostics, and E13/E15/E17/E18 memory-bound verdicts.
+- Full corpus/parity verification, byte-identical hash/trade results and
+  descriptor/resource behaviour under repeated clear, move and reuse.
+
+Only source/log reads, file edits and read-only git operations ran here.
+No compiler, build, test, script, checker, generator or lab job ran on this
+Mac. No test, assertion, guard or skip was changed. No staging, commit or
+push: the supervisor commits this diff under the explicit edit-only rule.
+The pre-existing dirty `corpus` submodule remains untouched. `DONE-fix5`
+marks the edit-only handoff, not a verification PASS.
