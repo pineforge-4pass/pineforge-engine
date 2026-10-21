@@ -237,3 +237,79 @@ from_entry values are string literals); the Python emitter still passing
 engine test compiling and every expected error code; both hand-typed golden
 transcriptions (layout vs certificate, Python vs C++). These are the first
 things the lab four-step and the paired codegen job must report.
+
+## Fix round 1
+
+Authoring base HEAD: `644952b31dbdd48edf28c5aade79eb79cfee98ba`.
+Read the fetched `rj-20261021t043026-cf7626` logs before editing:
+`../lab-fail-rj-20261021t043026-cf7626/out_release_build-release_ci-logs_ctest.log`
+(lines 1937-1938, 2044, 2361-2363) and
+`../lab-fail-rj-20261021t043026-cf7626/out_debug_build-debug_ci-logs_ctest.log`
+(lines 1941-1942, 2006, 2323-2325). Both fail only `test_scratch_receipt`,
+with "layout and certificate are two transcriptions of one vector".
+
+Re-derived all three vectors entry by entry from
+`docs/design/scratch-facts.md:50-62`, including its worked example at :68-74.
+The version is `01`; every set is a complete byte, an eight-byte LE count,
+then an eight-byte LE length and raw bytes for each entry. The words for
+0/1/2/3 are respectively `0000000000000000`, `0100000000000000`,
+`0200000000000000`, `0300000000000000`. In the table, each entry is
+`length:raw-hex`; `0:` contributes its length word and no payload.
+
+| Vector / set | Complete byte | Count | Entries | Set bytes |
+| --- | --- | --- | --- | --- |
+| doc_worked_vector / S | 01 | 1 | 2:6162 | 19 |
+| doc_worked_vector / F | 01 | 1 | 0: | 17 |
+| doc_worked_vector / E | 01 | 1 | 1:78 | 18 |
+| doc_worked_vector / H | 01 | 0 | none | 9 |
+| doc_worked_vector / J | 01 | 1 | 1:71 | 18 |
+| incomplete_exit_out_of_subset / S | 01 | 1 | 1:4c | 18 |
+| incomplete_exit_out_of_subset / F | 01 | 1 | 0: | 17 |
+| incomplete_exit_out_of_subset / E | 00 | 1 | 1:58 | 18 |
+| incomplete_exit_out_of_subset / H | 01 | 2 | 0:, 1:4c | 26 |
+| incomplete_exit_out_of_subset / J | 01 | 1 | 1:4c | 18 |
+| sorted_multi_entry_and_nul_byte / S | 01 | 2 | 1:42, 1:61 | 27 |
+| sorted_multi_entry_and_nul_byte / F | 01 | 0 | none | 9 |
+| sorted_multi_entry_and_nul_byte / E | 01 | 1 | 3:610062 | 20 |
+| sorted_multi_entry_and_nul_byte / H | 01 | 0 | none | 9 |
+| sorted_multi_entry_and_nul_byte / J | 01 | 2 | 1:42, 1:61 | 27 |
+
+Totals including the version byte:
+
+- `doc_worked_vector`: `1 + 19 + 17 + 18 + 9 + 18 = 82`.
+- `incomplete_exit_out_of_subset`: `1 + 18 + 17 + 18 + 26 + 18 = 98`.
+- `sorted_multi_entry_and_nul_byte`: `1 + 27 + 9 + 20 + 9 + 27 = 93`.
+
+All three `layout` transcriptions already match those bytes and totals.
+Only two `certificate` transcriptions were wrong: the worked vector had
+80 bytes and the sorted/NUL vector had 91. Each field below contained seven
+zero bytes (`00000000000000`) instead of eight (`0000000000000000`).
+Restored one missing `00` per field; offsets are zero-based in the corrected
+wire, with the insertion assigned to the end of the affected field.
+
+| Certificate | Field | Correct field offsets | Restored byte offset |
+| --- | --- | --- | --- |
+| doc_worked_vector | F empty-string length | 29-36 | 36 |
+| doc_worked_vector | H count | 56-63 | 63 |
+| sorted_multi_entry_and_nul_byte | F count | 29-36 | 36 |
+| sorted_multi_entry_and_nul_byte | H count | 58-65 | 65 |
+
+The incomplete-exit vector is correct at 98 bytes and is unchanged.
+`tests/test_scratch_receipt.cpp` contains no duplicate of these certificate
+literals, so it is unchanged. The runtime, decoder, assertions, expected
+totals, layouts and roster data are unchanged.
+
+Files touched: `tests/data/scratch_receipt_golden.json` (only the two
+certificate fields above), this appended `REPORT.md` section, and the new
+`DONE-fix1` marker.
+
+Read-only byte/arithmetic audit: PASS. An independent reconstruction from
+the stated rosters matches both transcriptions in full at 82/98/93 bytes.
+Removing only the four `00` bytes at the table's offsets reproduces the
+original HEAD certificates exactly. Comparing the JSON objects against HEAD
+confirms that only those two certificate fields changed; every layout,
+note, roster and the entire incomplete-exit vector are unchanged.
+`git diff --check`: PASS.
+
+No compile, CTest, preflight, ci_verify or corpus sweep was run in this
+edit-only lane; the supervisor's four-step lab re-proof remains pending.
