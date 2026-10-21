@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "1aad8236944b723ee1b1393af517aba2052c0c2a2fb0ec516c95ff1ebd9b37d3"
+    "catalogSha256": "550d56baebc7986a7bc2a5a33fb979a4b7774cca3c88b22668b3806ad7297852"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -238,7 +238,10 @@
             "magnifier_volume_weighted",
             "bench",
             "ohlcv_bin",
-            "verify_bin"
+            "verify_bin",
+            "report_sink",
+            "run_id",
+            "spill_dir"
           ]
         }
       ]

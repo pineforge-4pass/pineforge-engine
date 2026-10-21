@@ -52,10 +52,11 @@
 #define PINEFORGE_HAS_SCRIPT_RUN_PREPARE_V1 1
 #define PINEFORGE_HAS_NATIVE_LIVE_V1 1
 namespace pineforge {
+namespace metrics { struct ScratchCurveRegion; }
 enum class PositionSide { FLAT, LONG, SHORT };
-
-// One physical emulator lot entry/exit, in actual execution order. A reversal
-// may produce several exits followed by an entry. No range-end report rows.
+namespace report_sink { class ScratchCurveWriter; }
+namespace report { class SelectedReportStream; }
+// Physical emulator lot entry/exit in execution order; no range-end report rows. A reversal may produce several exits followed by an entry.
 struct StreamOrderAction {
     uint64_t sequence = 0;
     int64_t timestamp_ms = 0;
@@ -1384,7 +1385,7 @@ protected:
         p.time_ms = script_bar_ts;
         p.open_profit = open_profit(current_bar_.close);
         p.equity = initial_capital_ + net_profit_sum_ + p.open_profit;
-        equity_curve_.push_back(p);
+        store_equity_point(p);
         if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
@@ -2319,6 +2320,10 @@ private:
         std::uint32_t active_calls = 0;
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
+        // Shared ordinary/selected record-time curve. Selected capture moves
+        // this owner to its immutable presentation snapshot.
+        std::unique_ptr<report_sink::ScratchCurveWriter> equity_scratch;
+        bool equity_tail_stored = false; // scratch includes the held tail
         pf_report_sink_receipt_v1 receipt{};
         // Derived report-tail prefix, in max/min/drawdown/runup order. The
         // resulting extrema already have their broker-state folds; this
@@ -2327,16 +2332,20 @@ private:
         // Report cursor only, covered by report_sink_state_'s existing
         // broker-hash waiver. No execution decision reads it; copies reset it.
         std::int64_t output_base = 0;
-        ReportSinkState() = default;
-        ReportSinkState(const ReportSinkState& other)
-            : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
-              path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
-        ReportSinkState& operator=(const ReportSinkState& other) {
-            if (this != &other) *this = ReportSinkState(other);
-            return *this;
-        }
-        ReportSinkState(ReportSinkState&&) noexcept = default;
-        ReportSinkState& operator=(ReportSinkState&&) noexcept = default;
+        // Selected report validation only, under report_sink_state_'s output
+        // waiver. Released FINAL points are latched here, never broker inputs.
+        std::unique_ptr<report::SelectedReportStream> selected_equity_stream;
+        // Independent full-run reference for selected tail refolds, including
+        // observations outside [T, E) that the selected scratch must omit.
+        // Always present so test/module and library NDEBUG settings agree on
+        // the C++ layout; only Debug updates/reads these report-only values.
+        double selected_released_extremes[4]{};
+        ReportSinkState();
+        ~ReportSinkState();
+        ReportSinkState(const ReportSinkState& other);
+        ReportSinkState& operator=(const ReportSinkState& other);
+        ReportSinkState(ReportSinkState&&) noexcept;
+        ReportSinkState& operator=(ReportSinkState&&) noexcept;
     };
     // @broker-state begin
     mutable ReportSinkState report_sink_state_;
@@ -2361,6 +2370,13 @@ private:
     int report_sink_setter_status() const;
     void begin_report_sink();
     void finish_report_sink(ReportC* out) const;
+    void stage_report_sink_equity_point(const pf_equity_point_t& point) const;
+    void stage_report_sink_equity_tail(const ReportC* out) const;
+    void compute_report_sink_metrics(ReportC* out, std::int64_t equity_count) const;
+    void compute_report_sink_trade_metrics(ReportC* out,
+                                           const TradeC* open_rows, int count) const;
+    void write_report_sink_trades(const TradeC* open_rows, int count) const;
+    void fill_report_sink_metrics_section(ReportC* out) const;
     template<class Write> void report_sink_record(Write write) const;
     bool stream_report_sink_trace(const TraceEntryC& entry);
     void reset_report_sink_outputs();
@@ -2413,10 +2429,15 @@ protected:
         return scratch_table_run_.slab;
     }
 
-    // L6b-2: the last point remains editable until its successor is recorded.
-    // The array remains the metric/capture source until L6b-4/L7c/L17 land.
+    // The last point stays editable until its successor is recorded. Sinks
+    // using the kernel recorder keep only this tail; sink OFF keeps the array.
     pf_equity_point_t* last_equity_point() noexcept;
     const pf_equity_point_t* last_equity_point() const noexcept;
+    // Sink execution prefix, excluding the editable held point. A selected
+    // prefix starts with its anchor and contains only released window points.
+    // The returned descriptor is borrowed; observing flushes pending writes.
+    metrics::ScratchCurveRegion report_sink_equity_scratch_region() const;
+    void store_equity_point(const pf_equity_point_t& point);
     bool prepare_equity_point(); // release the prior point; true for the first
     void fold_report_equity_extreme(double equity);
     void refold_equity_tail();
@@ -2442,7 +2463,12 @@ protected:
     void fold_trade_percent_prefix(const Trade& trade);
     // The streaming owner clears this prefix with the run's closed rows.
     void reset_trade_percent_prefix();
+    // A sink hook receives only range-end rows. Re-summing an edited tail
+    // starts with this closed-row left fold, never a separately summed tail.
+    double report_closed_net_profit() const;
 };
+
+inline constexpr std::size_t kReportSinkHeldEquityPoints = 1;
 
 } // inline namespace engine_script_run_v19
 } // namespace pineforge

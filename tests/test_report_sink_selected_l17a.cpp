@@ -115,8 +115,11 @@ struct Host final : NativeStrategyHost {
             report->equity_curve[report->equity_curve_len - 1].equity = 1023.5;
             report->equity_curve[report->equity_curve_len - 1].open_profit = -0.0;
         }
+        // CR-150 L17b: relative cut (one tail point), the only shrink a sink-on
+        // hook can express over the bounded tail window; sink OFF removes the
+        // same one point from the full curve, so the two runs stay comparable.
         if (shrink_presented_curve && report->equity_curve_len > 1)
-            report->equity_curve_len = 1;
+            --report->equity_curve_len;
         // Capture precedes the selected seal. Query the terminal broker state
         // here; after run() returns the public hash query must refuse it.
         broker_hash_at_capture = broker_state_hash();

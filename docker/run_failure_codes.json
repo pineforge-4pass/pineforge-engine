@@ -1170,7 +1170,10 @@
       "magnifier_volume_weighted",
       "bench",
       "ohlcv_bin",
-      "verify_bin"
+      "verify_bin",
+      "report_sink",
+      "run_id",
+      "spill_dir"
      ]
     }
    },

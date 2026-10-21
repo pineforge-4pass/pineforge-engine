@@ -2,6 +2,8 @@
 if(UNIX)
     list(APPEND TEST_SOURCES test_id_pair_store)
     pineforge_add_unit_test(test_id_pair_store)
+    list(APPEND TEST_SOURCES test_id_pair_ordered_fold)
+    pineforge_add_unit_test(test_id_pair_ordered_fold)
 endif()
 if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     list(APPEND TEST_SOURCES test_adapter_auxiliary_disk)

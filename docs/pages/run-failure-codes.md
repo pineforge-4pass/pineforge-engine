@@ -151,7 +151,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `run_aborted` | `engine_fault` | yes | none | The run was aborted on request. |
 | `run_mode_unsupported` | `unsupported` | no | `feature` (vocab, 11 values) | A feature the requested run mode does not support. |
 | `run_options_rejected` | `input` | no | `input_tf` (timeframe, optional), `option` (vocab, 11 values), `script_tf` (timeframe, optional) | The run's own options (timeframes, intrabar path, magnifier, path order) were refused. |
-| `run_request_invalid` | `input` | no | `option` (vocab, 22 values) | The harness command line or one of its JSON options is invalid. |
+| `run_request_invalid` | `input` | no | `option` (vocab, 25 values) | The harness command line or one of its JSON options is invalid. |
 | `scratch_capacity_exceeded` | `resource` | no | `resource` (vocab, 10 values) | The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying. |
 | `scratch_io_failed` | `resource` | no | none | The engine could not create, resize, read or write scratch-table storage. The run has no successful completion. |
 | `security_feed_refused` | `input` | no | `reason` (vocab, 11 values) | An auxiliary or native request.security feed was refused. |
