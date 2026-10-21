@@ -39,28 +39,17 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
-# CI/native routing follows ci-labels.md, canon SHA-256 ac875205d8bdae2d7e0c23aca438118a0e9da2efb297de4e6b2cd80e7416f5b3.
-# Matrix values are JSON strings decoded to arrays, including the macOS exception.
-LIGHT_LABELS = '["self-hosted","pf-ci","pf-ci-x64"]'
-LINUX_LABELS = '["self-hosted","pf-ci","pf-ci-x64-16"]'
-RELEASE_RUNNER = '["self-hosted","pf-ci","pf-ci-release"]'
-LIGHT_RUNNER = LIGHT_LABELS
-LINUX_RUNNER = LINUX_LABELS
+# GCP fleet routing (owner #1056): all non-release jobs use -pr on every ref;
+# release, Linux x64 release artifacts and baseline promotion use isolated -main.
+# CI build matrix values are JSON strings decoded to arrays, including macOS.
+PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
+RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
 MATRIX_RUNNER = '${{ fromJSON(matrix.runner) }}'
-MATRIX_LINUX_RUNNER = f"'{LINUX_LABELS}'"
-# corpus-parity.yml is outside this migration. Preserve its existing pin;
-# never use this legacy expression for a CI/native job.
-CORPUS_RUNNER = '''>-
-      ${{ github.event_name != 'pull_request_target' &&
-          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-          (github.event_name != 'pull_request' ||
-           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}'''
+MATRIX_LINUX_RUNNER = f"'{PR_RUNNER}'"
 HOSTED_MATRIX_RUNNER = '${{ matrix.runner }}'
 # The build job's whole strategy, exactly (comments and blank lines aside):
 # D3 excludes only macOS Debug on PRs; every other event keeps all four legs.
-# Linux x64 legs are pinned to the heavy pool ["self-hosted","pf-ci","pf-ci-x64-16"]; macOS stays on macos-26.
+# Linux x64 legs use pf-gcp-pr on every ref; macOS stays on macos-26.
 BUILD_STRATEGY = ('    strategy:\n'
                   '      fail-fast: false\n'
                   '      matrix:\n'
@@ -112,24 +101,23 @@ PARITY_COMMAND = f'JOBS={CORES} ./scripts/{PARITY}'
 # timeout-minutes: owner #827 removed every declaration on 2026-10-20.
 # GitHub's own 6 h platform maximum is the only bound; docs/ci.md says so.
 JOB_RUNNERS = {
-    'ci.yml': {'authz': (LIGHT_RUNNER, None),
-               'changes': (LIGHT_RUNNER, None),
-               'preflight': (LINUX_RUNNER, None),
+    'ci.yml': {'authz': (PR_RUNNER, None),
+               'changes': (PR_RUNNER, None),
+               'preflight': (PR_RUNNER, None),
                'build': (MATRIX_RUNNER, VERIFY),
-               'sanitizers': (LINUX_RUNNER, VERIFY),
-               'kernel-only': (LINUX_RUNNER, VERIFY),
-               'build-gate': (LIGHT_RUNNER, None)},
-    'native-live.yml': {'authz': (LIGHT_RUNNER, None),
-                         'native-live': (LINUX_RUNNER, VERIFY),
-                         'native-live-gate': (LIGHT_RUNNER, None)},
-    'corpus-parity.yml': {'corpus-parity': (CORPUS_RUNNER, PARITY),
-                          'corpus-parity-subset': (CORPUS_RUNNER, PARITY)},
+               'sanitizers': (PR_RUNNER, VERIFY),
+               'kernel-only': (PR_RUNNER, VERIFY),
+               'build-gate': (PR_RUNNER, None)},
+    'native-live.yml': {'authz': (PR_RUNNER, None),
+                         'native-live': (PR_RUNNER, VERIFY),
+                         'native-live-gate': (PR_RUNNER, None)},
+    'corpus-parity.yml': {'authz': (PR_RUNNER, None),
+                          'corpus-parity': (PR_RUNNER, PARITY),
+                          'corpus-parity-subset': (PR_RUNNER, PARITY)},
+    'docs.yml': {'authz': (PR_RUNNER, None), 'build': (PR_RUNNER, None)},
 }
-# The docs deployment accepts pull_request, so retains its exact hosted routing.
-# L6's 15:40 addendum separately moves baseline promotion to pf-ci-release.
-HOSTED_JOB_RUNNERS = {
-    'docs.yml': {'build': 'ubuntu-latest'},
-}
+# Keep the mechanism for any future workflow with a pinned hosted exception.
+HOSTED_JOB_RUNNERS = {}
 # LB-435 plus addendum 2: isolate releases and the named promotion exception.
 # The strategy pin keeps the existing macOS and Linux ARM hosted legs.
 RELEASE_JOB_RUNNERS = {
@@ -137,8 +125,8 @@ RELEASE_JOB_RUNNERS = {
                     'notify-hub': RELEASE_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
-# Credential-bearing jobs outside the release pins retain standard hosted
-# labels. Existing hosted exceptions above are pinned separately.
+# Credential-bearing jobs outside the release pins and gated docs build retain
+# standard hosted labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'macos-26')
 # Refuse paid labels and the old matrix key in every workflow, including the
 # release matrix. Scan code so nested/flow mappings count too.
@@ -160,6 +148,13 @@ DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.cha
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
 AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
+# The canon header is text, not a decoded array: the fleet comment and the
+# space after the comma bind every authz job byte for byte.
+AUTHZ_JOB_HEADER = '''    name: authz
+    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+'''
 AUTHZ_REFUSE_STEP = '''      - name: Refuse an unauthorised run before anything else
         if: ${{ needs.authz.result != 'success' }}
         run: |
@@ -426,14 +421,14 @@ def _runner_value(value: str) -> str | list[str]:
 
 
 def runner_findings(workflows: dict[str, str]) -> list[str]:
-    """Pin canon CI/native arrays, isolated releases and existing docs/corpus routes."""
+    """Pin GCP non-release/release routes and the existing hosted exceptions."""
     findings = []
     for name, workflow in workflows.items():
         code = '\n'.join(re.sub(r'\s+#.*$', '', line) for line in _code(workflow))
         if _LARGER_RUNNER_LABEL.search(code):
-            findings.append(f'{name} must not use larger-runner labels; use ci-spot or hosted exceptions')
+            findings.append(f'{name} must not use larger-runner labels; use the GCP fleet or hosted exceptions')
         if _LARGER_RUNNER_KEY.search(code):
-            findings.append(f'{name} must not define a larger_runner key; use ci-spot or hosted exceptions')
+            findings.append(f'{name} must not define a larger_runner key; use the GCP fleet or hosted exceptions')
         timed = JOB_RUNNERS.get(name, {})
         fixed_hosted = HOSTED_JOB_RUNNERS.get(name, {})
         fixed_release = RELEASE_JOB_RUNNERS.get(name, {})
@@ -442,11 +437,11 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
         pinned.update(fixed_release)
         if (fixed_release and name != 'promote-baseline.yml'
                 and _events(workflow) != {'workflow_dispatch'}):
-            findings.append(f'{name} must retain workflow_dispatch only for pf-ci-release jobs')
+            findings.append(f'{name} must retain workflow_dispatch only for pf-gcp-main jobs')
         if (name == 'promote-baseline.yml'
                 and _events(workflow) != {'pull_request_target', 'workflow_dispatch'}):
             findings.append(f'{name} must retain pull_request_target and workflow_dispatch '
-                            'only for pf-ci-release promotion')
+                            'only for pf-gcp-main promotion')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
@@ -472,16 +467,19 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
             hosted_platform = (len(runs_on) == 1 and (runs_on[0] == 'macos-26' or
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
             if job in fixed_release:
-                if runs_on != [fixed_release[job]]:
+                # A quoted JSON scalar does not select a YAML label array.
+                if _job_values(body, 'runs-on', unquote=False) != [fixed_release[job]]:
                     findings.append(f'{name} job {job} must run on {fixed_release[job]} '
                                     '(isolated release)')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
                                     'on an isolated release job')
-            elif job in fixed_hosted or credentials or (job not in pinned and hosted_platform):
-                # PR deployment jobs retain their exact original labels;
-                # unlisted credential jobs retain standard hosted routing.
+            elif (job in fixed_hosted
+                  or (credentials and (name, job) != ('docs.yml', 'build'))
+                  or (job not in pinned and hosted_platform)):
+                # Authz-gated docs deployment is pinned to the fleet below;
+                # other credential jobs retain their hosted routing.
                 if job in fixed_hosted:
                     hosted_ok = runs_on == [fixed_hosted[job]]
                     if not hosted_ok:
@@ -496,8 +494,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS on a hosted job')
             else:
-                runner = pinned.get(job, LINUX_RUNNER if [_runner_value(value) for value in runs_on]
-                                    == [_runner_value(LINUX_RUNNER)] else LIGHT_RUNNER)
+                runner = pinned.get(job, PR_RUNNER)
                 expected_runner = _runner_value(' '.join(runner.split()))
                 # A quoted JSON-looking scalar is a runner label, not a YAML
                 # array. Only the matrix's explicit fromJSON decodes a string.
@@ -505,14 +502,19 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                   if isinstance(expected_runner, list) else runs_on)
                 if [_runner_value(value) for value in actual_runners] != [expected_runner]:
                     findings.append(f'{name} job {job} must run on {runner}')
-                labels = LINUX_LABELS if runner in (LINUX_RUNNER, MATRIX_RUNNER, CORPUS_RUNNER) else LIGHT_LABELS
-                env = _job_block(body, 'env')
-                label_values = [_key_value(line, 'PF_CI_LABELS') for line in env[1:]
-                                if _key_value(line, 'PF_CI_LABELS') is not None]
-                if job != 'authz' and (len(_job_values(body, 'env')) != 1
-                        or _job_values('\n'.join(env[1:]), 'PF_CI_LABELS') != [labels]
-                        or label_values != [f"'{labels}'"]):
-                    findings.append(f'{name} job {job} must set job env PF_CI_LABELS to {labels} exactly once')
+                # Keep docs' existing ban on routing metadata after moving
+                # its deployment from hosted runners to its pinned GCP job.
+                if (name, job) == ('docs.yml', 'build'):
+                    environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                    if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                        findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                        'on a gated docs job')
+                # PF_CI_LABELS no longer supplies a routing pin: the six ci.yml,
+                # two native-live.yml and two corpus-parity.yml declarations
+                # still contain pre-migration light/heavy metadata at this HEAD.
+                # No workflow interpolates it and no repository code consumes
+                # it. The old pool's matching-metadata requirement does not
+                # apply to GCP routing; runs-on and the matrix pins below do.
             if job not in timed:
                 continue
             _, command = timed[job]
@@ -527,7 +529,7 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
     if _job_block(build, 'strategy') != _code(BUILD_STRATEGY):
-        findings.append('ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types, '
+        findings.append('ci.yml build must use exactly the pf-gcp-pr Linux and hosted macos-26 build types, '
                         'excluding only macOS Debug on pull_request')
     if _job_values(build, 'name') != [BUILD_NAME]:
         findings.append(f'ci.yml build legs must keep their names: {BUILD_NAME}')
@@ -606,6 +608,7 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     steps = _steps(authz)
     step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
     if (not jobs or next(iter(jobs)) != 'authz'
+            or not authz.startswith('\n' + AUTHZ_JOB_HEADER)
             or _job_values(authz, 'name') != ['authz']
             or _job_values(authz, 'permissions') != ['{}']
             or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
@@ -657,6 +660,39 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
             or len(gate_steps) != 2 or _code(gate_steps[0]) != _code(AUTHZ_REFUSE_STEP)
             or _step_values(gate_steps[-1], 'if')):
         findings.append(f'{name} {aggregate} must always run and refuse authz first')
+    return findings
+
+
+# Corpus needs persisted checkout credentials for its HTTPS submodule clone,
+# and docs deploys with Cloudflare secrets: the full authz contract forbids both.
+def gated_workflow_findings(workflow: str, name: str) -> list[str]:
+    """Pin canon authz and its fleet-only dependants without those restrictions."""
+    findings = []
+    jobs = _jobs(workflow)
+    authz = jobs.get('authz', '')
+    steps = _steps(authz)
+    step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
+    if (not jobs or _unparsed(workflow) or next(iter(jobs)) != 'authz'
+            or not authz.startswith('\n' + AUTHZ_JOB_HEADER)
+            # Extra job keys such as continue-on-error can bypass refusal
+            # without changing either the header or the single step's hash.
+            or _code(authz) != _code(AUTHZ_JOB_HEADER) + ['    steps:'] + _code(step)
+            or _job_values(authz, 'name') != ['authz']
+            or _job_values(authz, 'permissions') != ['{}']
+            or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
+            or hashlib.sha256(step.encode()).hexdigest() != AUTHZ_STEP_SHA256):
+        findings.append(f'{name} must start with the verbatim canon authz job')
+    events = _events(workflow)
+    if events is None or 'pull_request_target' in events:
+        findings.append(f'{name} must use readable events without pull_request_target')
+    for job, body in jobs.items():
+        if job != 'authz' and 'authz' not in _needs(body):
+            findings.append(f'{name} job {job} must need authz')
+        # Literal arrays may differ in whitespace; quoted JSON scalars and
+        # expressions cannot stand in for the fleet's two scheduler labels.
+        runners = _job_values(body, 'runs-on', unquote=False)
+        if [_runner_value(value) for value in runners] != [_runner_value(PR_RUNNER)]:
+            findings.append(f'{name} job {job} must run on {PR_RUNNER}')
     return findings
 
 
@@ -774,6 +810,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                                 'promote-baseline.yml': promote, **(others or {})})
     findings += authz_workflow_findings(ci, 'ci.yml', 'build-gate')
     findings += native_workflow_findings(native, curl_action)
+    findings += gated_workflow_findings(parity, 'corpus-parity.yml')
+    findings += gated_workflow_findings(docs, 'docs.yml')
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
     for trigger in ('push:\n    branches: [main]', 'pull_request:', 'workflow_dispatch:'):

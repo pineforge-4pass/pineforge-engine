@@ -17,12 +17,13 @@ import ci_preflight
 import ci_verify
 from ci_verifier_classes import select_test_ids, verifier_class_tier
 from run_unittest_shards import discover_test_ids
-from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES, CORPUS_RUNNER,
-                          DOCS_ONLY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS, LIGHT_LABELS, LIGHT_RUNNER,
-                          LINUX_LABELS, LINUX_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
+from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
+                          DOCS_ONLY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS,
+                          PR_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
-                          ci_workflow_findings, native_workflow_findings, run_checks)
+                          ci_workflow_findings, gated_workflow_findings,
+                          native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
 PR_SLOW_FLAG = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
@@ -34,6 +35,20 @@ KERNEL_VERIFY = ('run: python3 scripts/ci_verify.py kernel --build-dir build-ker
 CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt',
               '.github/workflows/corpus-parity.yml', '.github/workflows/docs.yml')
+# Independent of the guard's tables: deleting a pin must not delete its test.
+GCP_JOBS = {
+    'ci.yml': ('pr', ('authz', 'changes', 'preflight', 'build', 'sanitizers',
+                      'kernel-only', 'build-gate')),
+    'native-live.yml': ('pr', ('authz', 'native-live', 'native-live-gate')),
+    'corpus-parity.yml': ('pr', ('authz', 'corpus-parity', 'corpus-parity-subset')),
+    'docs.yml': ('pr', ('authz', 'build')),
+    'release.yml': ('main', ('release', 'prebuilt', 'notify-hub')),
+    'promote-baseline.yml': ('main', ('promote',)),
+}
+BUILD_RUNNER_FINDING = ('ci.yml build must use exactly the pf-gcp-pr Linux and hosted macos-26 build types, '
+                        'excluding only macOS Debug on pull_request')
+RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Linux x64 '
+                          'and hosted ARM/macOS matrix')
 
 
 def job_script(ci, job, step_name=None):
@@ -61,6 +76,13 @@ def in_job(workflow, job, before, after):
     return workflow[:at] + after + workflow[at + len(before):]
 
 
+def routed_line(before, value):
+    """Keep the CI matrix's JSON string shape when replacing a literal array."""
+    if before.startswith("            runner: '") and value.startswith('['):
+        value = "'" + value + "'"
+    return before.split(': ', 1)[0] + ': ' + value + '\n'
+
+
 class PreflightFailures(unittest.TestCase):
     def ci_sources(self):
         return [(ROOT / path).read_text() for path in CI_SOURCES]
@@ -71,6 +93,37 @@ class PreflightFailures(unittest.TestCase):
         return {path.name: path.read_text()
                 for path in sorted((ROOT / '.github/workflows').iterdir())
                 if path.suffix in ('.yml', '.yaml') and path.name not in named}
+
+    def workflow_sources(self):
+        return {Path(path).name: contents for path, contents in zip(CI_SOURCES, self.ci_sources())
+                if path.endswith(('.yml', '.yaml'))} | self.other_sources()
+
+    def gcp_sites(self):
+        """All 19 fleet sites, including the two matrix values."""
+        for name, (fleet, jobs) in GCP_JOBS.items():
+            runner = PR_RUNNER if fleet == 'pr' else RELEASE_RUNNER
+            for job in jobs:
+                if (name, job) == ('ci.yml', 'build'):
+                    yield name, job, fleet, f'            runner: {MATRIX_LINUX_RUNNER}\n', BUILD_RUNNER_FINDING
+                elif (name, job) == ('release.yml', 'prebuilt'):
+                    yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
+                else:
+                    value = ('["self-hosted", "pf-gcp-pr"]'
+                             if job == 'authz' or name == 'docs.yml' else runner)
+                    finding = f'{name} job {job} must run on {runner}'
+                    if fleet == 'main':
+                        finding += ' (isolated release)'
+                    yield name, job, fleet, f'    runs-on: {value}\n', finding
+
+    def routed_file_findings(self, name, job, before, after):
+        workflows = self.workflow_sources()
+        changed = in_job(workflows[name], job, before, after)
+        self.assertNotEqual(changed, workflows[name], 'the mutation must change the input')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / name
+            path.write_text(changed)
+            workflows[name] = path.read_text()
+            return ci_preflight.runner_findings(workflows)
 
     def mutated_file_findings(self, index, job, before, after):
         """Write a mutation, then let the contract consume the file read back."""
@@ -83,30 +136,40 @@ class PreflightFailures(unittest.TestCase):
             sources[index] = path.read_text()
             return ci_workflow_findings(*sources, others=self.other_sources())
 
+    def assert_gated_mutation(self, index, job, before, after, finding):
+        """The direct pin and CI's contract must both read and refuse the mutation."""
+        sources = self.ci_sources()
+        changed = in_job(sources[index], job, before, after)
+        self.assertNotEqual(changed, sources[index], 'the mutation must change the input')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / Path(CI_SOURCES[index]).name
+            path.write_text(changed)
+            sources[index] = path.read_text()
+            self.assertIn(finding, gated_workflow_findings(sources[index], path.name))
+            self.assertIn(finding, ci_workflow_findings(*sources, others=self.other_sources()))
+
     def test_pool_jobs_reject_hosted_runners_and_fallbacks_from_mutated_files(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
-        for index in (0, 1):
+        for index in (0, 1, 4, 5):
             name = Path(CI_SOURCES[index]).name
             for job, (runner, _) in JOB_RUNNERS[name].items():
                 # The matrix expression is pinned together with its include values.
-                marker = '    runs-on: ' + (runner if job != 'authz' else
-                                            '["self-hosted", "pf-ci", "pf-ci-x64"]')
+                marker = '    runs-on: ' + ('["self-hosted", "pf-gcp-pr"]'
+                                            if job == 'authz' or name == 'docs.yml' else runner)
                 for replacement in ('ubuntu-24.04', 'ubuntu-latest', 'pf-linux-x64-16',
-                                    "'" + (LINUX_LABELS if job == 'build' else runner) + "'",
-                                    "${{ fromJSON('" + LINUX_LABELS + "') || 'ubuntu-24.04' }}"):
+                                    "'" + (PR_RUNNER if job == 'build' else runner) + "'",
+                                    "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"):
                     with self.subTest(workflow=name, job=job, runner=replacement):
                         findings = self.mutated_file_findings(index, job, marker,
                                                               '    runs-on: ' + replacement)
                         self.assertIn(f'{name} job {job} must run on {runner}', findings)
         for replacement in ("'ubuntu-24.04'", "'" + '["ubuntu-24.04"]' + "'",
-                            "${{ fromJSON('" + LINUX_LABELS + "') || 'ubuntu-24.04' }}"):
+                            "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"):
             with self.subTest(matrix_runner=replacement):
                 findings = self.mutated_file_findings(0, 'build',
                     '            runner: ' + MATRIX_LINUX_RUNNER,
                     '            runner: ' + replacement)
-                self.assertIn('ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types, '
-                              'excluding only macOS Debug on pull_request',
-                              findings)
+                self.assertIn(BUILD_RUNNER_FINDING, findings)
 
     def test_authz_and_every_dependency_are_required_from_mutated_files(self):
         original = self.ci_sources()
@@ -137,6 +200,97 @@ class PreflightFailures(unittest.TestCase):
                       '  pull_request:\n    paths: [src/**]\n'):
             findings = self.mutated_file_findings(0, None, '  pull_request:\n', after)
             self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_gated_workflows_accept_current_text(self):
+        sources = self.ci_sources()
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            with self.subTest(workflow=name):
+                self.assertEqual(gated_workflow_findings(sources[index], name), [])
+        self.assertEqual(ci_workflow_findings(*sources, others=self.other_sources()), [])
+
+    def test_gated_workflows_refuse_a_removed_authz_job(self):
+        sources = self.ci_sources()
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            authz = '  authz:' + _jobs(sources[index])['authz']
+            with self.subTest(workflow=name):
+                self.assert_gated_mutation(index, None, authz, '',
+                    f'{name} must start with the verbatim canon authz job')
+
+    def test_gated_workflows_require_authz_for_every_dependent_job(self):
+        for index, job in ((4, 'corpus-parity'), (4, 'corpus-parity-subset'), (5, 'build')):
+            name = Path(CI_SOURCES[index]).name
+            for after in ('', '    needs: [wrong-authz]\n'):
+                with self.subTest(workflow=name, job=job, dependency=after):
+                    self.assert_gated_mutation(index, job, '    needs: [authz]\n', after,
+                        f'{name} job {job} must need authz')
+
+    def test_gated_workflows_refuse_a_one_character_authz_script_change(self):
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            with self.subTest(workflow=name):
+                self.assert_gated_mutation(index, 'authz',
+                    '          set -eu\n', '          set -ev\n',
+                    f'{name} must start with the verbatim canon authz job')
+
+    def test_gated_corpus_refuses_hosted_fallback_expressions(self):
+        fallback = "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"
+        for job in ('corpus-parity', 'corpus-parity-subset'):
+            with self.subTest(job=job):
+                self.assert_gated_mutation(4, job, f'    runs-on: {PR_RUNNER}\n',
+                    f'    runs-on: {fallback}\n',
+                    f'corpus-parity.yml job {job} must run on {PR_RUNNER}')
+
+    def test_gated_docs_refuses_a_hosted_build_runner(self):
+        self.assert_gated_mutation(5, 'build',
+            '    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
+            '    runs-on: ubuntu-latest\n',
+            f'docs.yml job build must run on {PR_RUNNER}')
+
+    def test_gated_workflows_refuse_pull_request_target_and_unreadable_events(self):
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            for after in ('\non:\n  pull_request_target:\n', '\non: *unreadable\n'):
+                with self.subTest(workflow=name, events=after):
+                    self.assert_gated_mutation(index, None, '\non:\n', after,
+                        f'{name} must use readable events without pull_request_target')
+
+    def test_gated_workflows_require_authz_first(self):
+        sources = self.ci_sources()
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            original = sources[index]
+            authz = '  authz:' + _jobs(original)['authz']
+            reordered = in_job(original, None, authz, '').rstrip('\n') + '\n' + authz
+            unreadable = in_job(original, None, '\njobs:\n',
+                '\njobs:\n  "pre-build":\n    runs-on: ["self-hosted", "pf-gcp-pr"]\n'
+                '    steps:\n      - run: "true"\n')
+            for after in (reordered, unreadable):
+                with self.subTest(workflow=name, job_order=after):
+                    self.assert_gated_mutation(index, None, original, after,
+                        f'{name} must start with the verbatim canon authz job')
+
+    def test_gated_workflows_refuse_authz_job_overrides_and_extra_steps(self):
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            mutations = [
+                ('    name: authz\n', '    name: renamed\n'),
+                ('    permissions: {}\n', '    permissions: read-all\n'),
+                ('    steps:\n', '    steps:\n      - run: "true"\n'),
+            ]
+            mutations += [('    steps:\n', override + '    steps:\n') for override in (
+                '    needs: [build]\n',
+                '    if: always()\n',
+                '    env: {}\n',
+                '    uses: ./.github/workflows/ci.yml\n',
+                '    strategy: {}\n',
+                '    continue-on-error: true\n',
+            )]
+            for before, after in mutations:
+                with self.subTest(workflow=name, override=after):
+                    self.assert_gated_mutation(index, 'authz', before, after,
+                        f'{name} must start with the verbatim canon authz job')
 
     def test_aggregates_refuse_first_even_when_authz_is_skipped_from_mutated_files(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
@@ -331,10 +485,7 @@ class PreflightFailures(unittest.TestCase):
                 changed = original.copy()
                 changed[0] = in_job(changed[0], 'build', before, after)
                 self.assertNotEqual(changed[0], original[0])
-                self.assertIn(
-                    'ci.yml build must use exactly the ci-spot Linux and hosted macos-26 build types, '
-                    'excluding only macOS Debug on pull_request',
-                    ci_workflow_findings(*changed, others=others))
+                self.assertIn(BUILD_RUNNER_FINDING, ci_workflow_findings(*changed, others=others))
 
     def test_slow_exclusion_is_exactly_pr_matrix_kernel_and_sanitizers(self):
         original = self.ci_sources()
@@ -472,97 +623,105 @@ class PreflightFailures(unittest.TestCase):
 
     def test_ci_contract_pins_spot_runners_time_limits_and_parallelism(self):
         original, others = self.ci_sources(), self.other_sources()
-        self.assertEqual(LIGHT_LABELS, '["self-hosted","pf-ci","pf-ci-x64"]')
-        self.assertEqual(LINUX_LABELS, '["self-hosted","pf-ci","pf-ci-x64-16"]')
-        self.assertEqual(json.loads(LINUX_RUNNER), ['self-hosted', 'pf-ci', 'pf-ci-x64-16'])
-        self.assertEqual(json.loads(LIGHT_RUNNER), ['self-hosted', 'pf-ci', 'pf-ci-x64'])
+        self.assertEqual(PR_RUNNER, '["self-hosted","pf-gcp-pr"]')
+        self.assertEqual(json.loads(PR_RUNNER), ['self-hosted', 'pf-gcp-pr'])
+        self.assertEqual(MATRIX_LINUX_RUNNER, '\'["self-hosted","pf-gcp-pr"]\'')
         self.assertEqual(MATRIX_RUNNER, '${{ fromJSON(matrix.runner) }}')
         self.assertEqual(HOSTED_MATRIX_RUNNER, '${{ matrix.runner }}')
-        self.assertEqual(RELEASE_RUNNER, '["self-hosted","pf-ci","pf-ci-release"]')
-        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS,
-                         {'docs.yml': {'build': 'ubuntu-latest'}})
+        self.assertEqual(RELEASE_RUNNER, '["self-hosted","pf-gcp-main"]')
+        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS, {})
+        self.assertEqual(JOB_RUNNERS['corpus-parity.yml'], {
+            'authz': (PR_RUNNER, None),
+            'corpus-parity': (PR_RUNNER, ci_preflight.PARITY),
+            'corpus-parity-subset': (PR_RUNNER, ci_preflight.PARITY),
+        })
+        self.assertEqual(JOB_RUNNERS['docs.yml'], {
+            'authz': (PR_RUNNER, None), 'build': (PR_RUNNER, None),
+        })
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS, {
             'release.yml': {
-                'release': '["self-hosted","pf-ci","pf-ci-release"]',
+                'release': '["self-hosted","pf-gcp-main"]',
                 'prebuilt': '${{ matrix.runner }}',
-                'notify-hub': '["self-hosted","pf-ci","pf-ci-release"]'},
+                'notify-hub': '["self-hosted","pf-gcp-main"]'},
             'promote-baseline.yml': {
-                'promote': '["self-hosted","pf-ci","pf-ci-release"]'},
+                'promote': '["self-hosted","pf-gcp-main"]'},
         })
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         mutations = (
             # Each scoped pool job must keep its canon array without a hosted fallback.
-            (0, 'preflight', LINUX_RUNNER, 'pf-linux-x64-16', 'ci.yml job preflight must run on'),
-            (0, 'sanitizers', LINUX_RUNNER, 'macos-26-xlarge', 'ci.yml job sanitizers must run on'),
-            (0, 'kernel-only', LINUX_RUNNER, 'ubuntu-latest', 'ci.yml job kernel-only must run on'),
+            (0, 'preflight', PR_RUNNER, 'pf-linux-x64-16', f'ci.yml job preflight must run on {PR_RUNNER}'),
+            (0, 'sanitizers', PR_RUNNER, 'macos-26-xlarge', f'ci.yml job sanitizers must run on {PR_RUNNER}'),
+            (0, 'kernel-only', PR_RUNNER, 'ubuntu-latest', f'ci.yml job kernel-only must run on {PR_RUNNER}'),
             # Target runs-on exactly, never an earlier matrix reference or name.
             (0, 'build', f'    runs-on: {MATRIX_RUNNER}\n',
-             '    runs-on: macos-26-large\n', 'ci.yml job build must run on'),
+             '    runs-on: macos-26-large\n', f'ci.yml job build must run on {MATRIX_RUNNER}'),
             (0, 'build', f'    runs-on: {MATRIX_RUNNER}\n',
-             '    runs-on: ${{ matrix.larger_runner }}\n', 'ci.yml job build must run on'),
-            (1, 'native-live', LINUX_RUNNER, 'pf-linux-x64-16', 'native-live.yml job native-live must run on'),
-            (4, 'corpus-parity', CORPUS_RUNNER, 'pf-linux-x64-16', 'corpus-parity.yml job corpus-parity must run on'),
-            (4, 'corpus-parity-subset', CORPUS_RUNNER, 'pf-linux-x64-16',
-             'corpus-parity.yml job corpus-parity-subset must run on'),
+             '    runs-on: ${{ matrix.larger_runner }}\n', f'ci.yml job build must run on {MATRIX_RUNNER}'),
+            (1, 'native-live', PR_RUNNER, 'pf-linux-x64-16', f'native-live.yml job native-live must run on {PR_RUNNER}'),
+            (4, 'corpus-parity', PR_RUNNER, 'pf-linux-x64-16', f'corpus-parity.yml job corpus-parity must run on {PR_RUNNER}'),
+            (4, 'corpus-parity-subset', PR_RUNNER, 'pf-linux-x64-16',
+             f'corpus-parity.yml job corpus-parity-subset must run on {PR_RUNNER}'),
             # An event-based paid-runner route is forbidden, even for trusted events.
-            (0, 'preflight', LINUX_RUNNER,
+            (0, 'preflight', PR_RUNNER,
              "${{ github.event_name == 'push' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
-             'ci.yml job preflight must run on'),
-            (1, 'native-live', LINUX_RUNNER,
+             f'ci.yml job preflight must run on {PR_RUNNER}'),
+            (1, 'native-live', PR_RUNNER,
              "${{ github.event_name == 'workflow_dispatch' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
-             'native-live.yml job native-live must run on'),
-            (4, 'corpus-parity', CORPUS_RUNNER,
+             f'native-live.yml job native-live must run on {PR_RUNNER}'),
+            (4, 'corpus-parity', PR_RUNNER,
              "${{ github.event_name == 'schedule' && 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
-             'corpus-parity.yml job corpus-parity must run on'),
-            (0, 'sanitizers', LINUX_RUNNER,
+             f'corpus-parity.yml job corpus-parity must run on {PR_RUNNER}'),
+            (0, 'sanitizers', PR_RUNNER,
              "${{ github.event.pull_request.head.repo.full_name == github.repository "
              "&& 'pf-linux-x64-16' || 'ubuntu-24.04' }}",
-             'ci.yml job sanitizers must run on'),
+             f'ci.yml job sanitizers must run on {PR_RUNNER}'),
             (0, 'native-live', 'uses: ./.github/workflows/native-live.yml',
              'uses: someone/else/.github/workflows/native-live.yml@main',
-             'ci.yml job native-live calls a workflow the runner contract cannot see'),
+             'ci.yml job native-live calls a workflow the runner contract cannot see; '
+             'call one under ./.github/workflows/'),
             # The routing includes and PR-only macOS Debug exclusion are exact.
             (0, 'build', 'os: [ubuntu-24.04, macos-26]', 'os: [ubuntu-24.04, macos-26-large]',
-             'ci.yml build must use exactly the ci-spot Linux'),
+             BUILD_RUNNER_FINDING),
             (0, 'build', '        build_type: [Release, Debug]\n',
              '        build_type: [Release, Debug]\n        include:\n'
              '          - os: ubuntu-24.04\n            build_type: Debug\n',
-             'ci.yml build must use exactly the ci-spot Linux'),
+             BUILD_RUNNER_FINDING),
             (0, 'build', '        build_type: [Release, Debug]\n',
              '        build_type: [Release, Debug]\n        include:\n'
              '          - os: ubuntu-24.04\n            larger_runner: ubuntu-24.04\n',
-             'ci.yml must not define a larger_runner key'),
+             'ci.yml must not define a larger_runner key; use the GCP fleet or hosted exceptions'),
             # Block forms of runs-on, and job ids the parser must still see.
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on:\n      group: pineforge-ci-large\n',
-             'docs.yml job build must run on'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
+             '    runs-on:\n      group: pineforge-ci-large\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', '    runs-on:\n      - macos-26-xlarge\n',
-             'promote-baseline.yml job promote must run on'),
+             f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on:\n      group: pineforge-ci-large\n'
-             '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
+             '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner and time limit'),
             (0, None, '  build-gate:\n', '  extra:\n    "runs-on": pf-linux-x64-16\n'
-             '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    "runs-on": pf-linux-x64-16\n',
-             'docs.yml job build must run on'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on : macos-26-xlarge\n',
-             'docs.yml job build must run on'),
+             '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner and time limit'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '    "runs-on": pf-linux-x64-16\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '    runs-on : macos-26-xlarge\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', "    'runs-on': macos-26-xlarge\n",
-             'promote-baseline.yml job promote must run on'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '',
-             'docs.yml job build must run on'),
+             f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (5, None, '\njobs:\n', '\njobs:\n  pre_build:\n    runs-on: macos-26-xlarge\n    steps:\n'
-             '      - run: "true"\n\n', 'docs.yml job pre_build needs a pinned runner'),
+             '      - run: "true"\n\n', 'docs.yml job pre_build needs a pinned runner and time limit'),
             (5, None, '\njobs:\n', '\njobs:\n  "pre-build":\n    runs-on: macos-26-xlarge\n    steps:\n'
              '      - run: "true"\n\n', 'docs.yml has jobs lines the runner contract cannot read'),
-            (4, 'corpus-parity-subset', f'runs-on: {CORPUS_RUNNER}', 'runs-on:\n      group: pineforge-ci-large',
-             'corpus-parity.yml job corpus-parity-subset must run on'),
-            (0, 'build-gate', LIGHT_RUNNER, 'pf-linux-x64-16',
-             'ci.yml job build-gate must run on'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on: pf-linux-x64-16\n',
-             'docs.yml job build must run on'),
+            (4, 'corpus-parity-subset', f'runs-on: {PR_RUNNER}', 'runs-on:\n      group: pineforge-ci-large',
+             f'corpus-parity.yml job corpus-parity-subset must run on {PR_RUNNER}'),
+            (0, 'build-gate', PR_RUNNER, 'pf-linux-x64-16',
+             f'ci.yml job build-gate must run on {PR_RUNNER}'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '    runs-on: pf-linux-x64-16\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', '    runs-on: macos-26-xlarge\n',
-             'promote-baseline.yml job promote must run on'),
+             f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
-             '      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner'),
+             '      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner and time limit'),
             # No job or step may declare timeout-minutes (owner #827,
             # 2026-10-20). Seed the deleted 360 line before each timeout
             # mutation: changing its value still fails; removing it passes.
@@ -575,8 +734,8 @@ class PreflightFailures(unittest.TestCase):
             (0, 'kernel-only', 'timeout-minutes: 360', 'timeout-minutes: 45',
              'ci.yml job kernel-only must declare no timeout-minutes (owner #827)'),
             (0, 'build-gate', '    timeout-minutes: 360\n', '', None),
-            (0, 'changes', LIGHT_RUNNER, 'pf-linux-x64-16',
-             'ci.yml job changes must run on'),
+            (0, 'changes', PR_RUNNER, 'pf-linux-x64-16',
+             f'ci.yml job changes must run on {PR_RUNNER}'),
             (0, 'changes', '    timeout-minutes: 360\n', '    timeout-minutes: 300\n',
              'ci.yml job changes must declare no timeout-minutes (owner #827)'),
             (1, 'native-live', 'timeout-minutes: 360', 'timeout-minutes: 60',
@@ -588,72 +747,72 @@ class PreflightFailures(unittest.TestCase):
             (4, 'corpus-parity-subset', 'timeout-minutes: 360', 'timeout-minutes: 10',
              'corpus-parity.yml job corpus-parity-subset must declare no timeout-minutes (owner #827)'),
             # A fixed count cannot follow the runner's available cores.
-            (0, 'build', f'--jobs {CORES}', '--jobs 4', 'ci.yml job build must size'),
-            (0, 'sanitizers', f'--jobs {CORES}', '--jobs 4', 'ci.yml job sanitizers must size'),
-            (0, 'kernel-only', f'--jobs {CORES}', '--jobs "$(nproc)"', 'ci.yml job kernel-only must size'),
-            (1, 'native-live', f'--jobs {CORES}', '--jobs 4', 'native-live.yml job native-live must size'),
+            (0, 'build', f'--jobs {CORES}', '--jobs 4', 'ci.yml job build must size its parallelism to the runner'),
+            (0, 'sanitizers', f'--jobs {CORES}', '--jobs 4', 'ci.yml job sanitizers must size its parallelism to the runner'),
+            (0, 'kernel-only', f'--jobs {CORES}', '--jobs "$(nproc)"', 'ci.yml job kernel-only must size its parallelism to the runner'),
+            (1, 'native-live', f'--jobs {CORES}', '--jobs 4', 'native-live.yml job native-live must size its parallelism to the runner'),
             (4, 'corpus-parity', f'JOBS={CORES} ./scripts', './scripts',
-             'corpus-parity.yml job corpus-parity must size'),
+             'corpus-parity.yml job corpus-parity must size its parallelism to the runner'),
             (4, 'corpus-parity-subset', '          BUILD_DIR: build-corpus-parity-subset\n',
              '          BUILD_DIR: build-corpus-parity-subset\n          JOBS: "4"\n',
-             'corpus-parity.yml job corpus-parity-subset must size'),
+             'corpus-parity.yml job corpus-parity-subset must size its parallelism to the runner'),
             # ... through a multi-line run block, an = spelling, or a later flag.
             (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES}',
              'run: |\n          python3 scripts/ci_verify.py kernel --build-dir build-kernel',
-             'ci.yml job kernel-only must size'),
-            (0, 'sanitizers', f'--jobs {CORES}', '--jobs=4', 'ci.yml job sanitizers must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
+            (0, 'sanitizers', f'--jobs {CORES}', '--jobs=4', 'ci.yml job sanitizers must size its parallelism to the runner'),
             (0, 'build', f'--jobs {CORES} --ccache', f'--jobs {CORES} --ccache --jobs=4',
-             'ci.yml job build must size'),
+             'ci.yml job build must size its parallelism to the runner'),
             (0, 'kernel-only', f'--jobs {CORES} --ccache', f'--jobs {CORES} --ccache --job 4',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'sanitizers', f'--jobs {CORES} --ccache', f'--jobs {CORES} --ccache --jo=4',
-             'ci.yml job sanitizers must size'),
+             'ci.yml job sanitizers must size its parallelism to the runner'),
             (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache',
              'working-directory: scripts\n        run: python3 ci_verify.py kernel --build-dir ../build-kernel --ccache',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', f'run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache',
-             'run: $VERIFY', 'ci.yml job kernel-only must size'),
+             'run: $VERIFY', 'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', KERNEL_VERIFY + '\n',
              KERNEL_VERIFY + '\n\n'
              '      - run: PYTHONPATH=scripts python3 -m ci_verify kernel --build-dir build-kernel --ccache\n',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             # A second, unsized call however it is chained, blocked or carried.
             (0, 'kernel-only', KERNEL_VERIFY,
              f'run: >-\n          python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs {CORES} --ccache'
              '\n\n          python3 scripts/ci_verify.py release --build-dir build-rel --ccache',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', KERNEL_VERIFY + '\n',
              KERNEL_VERIFY + '\n\n      - uses: nick-fields/retry@v3\n        with:\n'
              '          command: python3 scripts/ci_verify.py release --build-dir build-rel --ccache\n',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', KERNEL_VERIFY,
              KERNEL_VERIFY + ' && python3 scripts/ci_verify.py release --build-dir build-rel --ccache',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', KERNEL_VERIFY,
              KERNEL_VERIFY + '; python3 scripts/ci_verify.py release --build-dir build-rel --ccache',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', KERNEL_VERIFY + '\n',
              KERNEL_VERIFY + '\n\n      - run: python3 -X dev scripts/ci_verify.py release --build-dir build-rel --ccache\n',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', KERNEL_VERIFY + '\n',
              KERNEL_VERIFY + '\n\n      - run: $pythonLocation/bin/python3 scripts/ci_verify.py release '
              '--build-dir build-rel --ccache\n',
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (0, 'kernel-only', KERNEL_VERIFY, KERNEL_VERIFY + " ${{ '--jobs 4' }}",
-             'ci.yml job kernel-only must size'),
+             'ci.yml job kernel-only must size its parallelism to the runner'),
             (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
              f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'
              ' && JOBS=4 ./scripts/check_corpus_parity.sh --subset',
-             'corpus-parity.yml job corpus-parity-subset must size'),
+             'corpus-parity.yml job corpus-parity-subset must size its parallelism to the runner'),
             (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
              'run: |\n          JOBS=4 ./scripts/check_corpus_parity.sh --subset',
-             'corpus-parity.yml job corpus-parity-subset must size'),
+             'corpus-parity.yml job corpus-parity-subset must size its parallelism to the runner'),
             (4, 'corpus-parity', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh',
              'run: |\n          export JOBS=4\n          ./scripts/check_corpus_parity.sh',
-             'corpus-parity.yml job corpus-parity must size'),
+             'corpus-parity.yml job corpus-parity must size its parallelism to the runner'),
             # The build legs keep their names: build (<image>, <type>).
             (0, 'build', '    name: build (${{ matrix.os }}, ${{ matrix.build_type }})\n', '',
-             'ci.yml build legs must keep their names'),
+             'ci.yml build legs must keep their names: build (${{ matrix.os }}, ${{ matrix.build_type }})'),
         )
         for index, job, before, after, finding in mutations:
             with self.subTest(file=CI_SOURCES[index], job=job, after=after):
@@ -671,7 +830,7 @@ class PreflightFailures(unittest.TestCase):
                 if timeout_mutation:
                     self.assertEqual(findings, [] if finding is None else [finding])
                 else:
-                    self.assertTrue(any(finding in line for line in findings), findings)
+                    self.assertIn(finding, findings)
 
     def test_verifier_looking_step_name_cannot_hide_an_unsized_call_from_mutated_file(self):
         original = self.ci_sources()
@@ -688,78 +847,139 @@ class PreflightFailures(unittest.TestCase):
         findings = self.mutated_file_findings(0, 'kernel-only', before, after)
         self.assertIn('ci.yml job kernel-only must size its parallelism to the runner', findings)
 
-    def test_every_spot_job_requires_the_exact_fragment_and_job_label_string(self):
-        original = self.ci_sources()
-        workflows = {Path(path).name: contents for path, contents in zip(CI_SOURCES, original)
-                     if path.endswith(('.yml', '.yaml'))}
-        workflows.update(self.other_sources())
-        routes = {
-            'ci.yml': {'changes': LIGHT_LABELS, 'preflight': LINUX_LABELS,
-                       'build': LINUX_LABELS, 'sanitizers': LINUX_LABELS,
-                       'kernel-only': LINUX_LABELS, 'build-gate': LIGHT_LABELS},
-            'native-live.yml': {'native-live': LINUX_LABELS, 'native-live-gate': LIGHT_LABELS},
-            'corpus-parity.yml': {'corpus-parity': LINUX_LABELS,
-                                  'corpus-parity-subset': LINUX_LABELS},
-        }
-        self.assertEqual(ci_preflight.runner_findings(workflows), [])
-        for name, jobs in routes.items():
-            for job, labels in jobs.items():
-                marker = f"      PF_CI_LABELS: '{labels}'\n"
-                other_class = LIGHT_LABELS if labels == LINUX_LABELS else LINUX_LABELS
-                for replacement in (
-                        '', marker + marker,
-                        f'      PF_CI_LABELS: {labels}\n',
-                        f"      PF_CI_LABELS: '{other_class}'\n",
-                        "      PF_CI_LABELS: '[\"self-hosted\",\"pf-ci\",\"pf-ci-small\"]'\n",
-                        "      PF_CI_LABELS: '[\"self-hosted\",\"pf-ci\",\"pf-ci-x64\",\"pf-ci-x64-16\"]'\n"):
-                    with self.subTest(name=name, job=job, env=replacement):
-                        changed = in_job(workflows[name], job, marker, replacement)
-                        findings = ci_preflight.runner_findings(dict(workflows, **{name: changed}))
-                        self.assertTrue(any(f'{name} job {job} must set job env PF_CI_LABELS' in line
-                                            for line in findings), findings)
-                # A second env mapping must fail even when the first has the right string.
-                changed = in_job(workflows[name], job, '    env:\n', '    env:\n' + marker + '    env:\n')
-                findings = ci_preflight.runner_findings(dict(workflows, **{name: changed}))
-                self.assertTrue(any(f'{name} job {job} must set job env PF_CI_LABELS' in line
-                                    for line in findings), findings)
-                matrix = (name, job) == ('ci.yml', 'build')
-                runner = (MATRIX_LINUX_RUNNER if matrix else
-                          LINUX_RUNNER if labels == LINUX_LABELS else LIGHT_RUNNER)
-                if name == 'corpus-parity.yml':
-                    runner = CORPUS_RUNNER
-                    dependabot_guard = ("          github.actor != 'dependabot[bot]' && "
-                                        "github.triggering_actor != 'dependabot[bot]' &&\n")
-                    replacements = (
-                        runner.replace(dependabot_guard, '', 1),
-                        runner.replace("github.actor != 'dependabot[bot]' && ", '', 1),
-                        runner.replace(" && github.triggering_actor != 'dependabot[bot]'", '', 1),
-                        runner.replace("'ubuntu-24.04'", "'ubuntu-latest'"),
-                        runner.replace(' && github.event.pull_request.head.repo.fork == false', ''),
-                        runner.replace("github.event_name != 'pull_request_target' &&", 'true &&'),
-                        runner.replace('"schedule","release"', '"schedule","release","workflow_run"'))
-                else:
-                    replacements = ('ubuntu-24.04', 'ubuntu-latest',
-                                    "${{ fromJSON('" + labels + "') || 'ubuntu-24.04' }}")
-                replacements += (
-                    runner.replace(labels, '["self-hosted","pf-ci","pf-ci-small"]'),
-                    runner.replace(labels, other_class),
-                    runner.replace(labels, '["self-hosted","pf-ci","pf-ci-x64","pf-ci-x64-16"]'))
-                for replacement in replacements:
-                    with self.subTest(name=name, job=job, runner=replacement):
-                        changed = in_job(workflows[name], job, runner, replacement)
-                        findings = ci_preflight.runner_findings(dict(workflows, **{name: changed}))
-                        expected = (f'{name} build must use exactly' if matrix else
-                                    f'{name} job {job} must run on')
-                        self.assertTrue(any(expected in line for line in findings), findings)
-        # A step's env cannot stand in for the job env the runner pre-job hook reads.
-        changed = in_job(workflows['ci.yml'], 'preflight',
-                         f"      PF_CI_LABELS: '{LINUX_LABELS}'\n", '')
+    def test_gcp_sites_reject_cross_class_routes(self):
+        sites = list(self.gcp_sites())
+        self.assertEqual(len(sites), 19)
+        self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
+        for name, job, fleet, before, finding in sites:
+            runner = RELEASE_RUNNER if fleet == 'pr' else PR_RUNNER
+            with self.subTest(workflow=name, job=job, wrong_fleet=runner):
+                findings = self.routed_file_findings(name, job, before, routed_line(before, runner))
+                self.assertIn(finding, findings)
+
+    def test_gcp_sites_reject_retired_and_void_labels(self):
+        for name, job, fleet, before, finding in self.gcp_sites():
+            runner = PR_RUNNER if fleet == 'pr' else RELEASE_RUNNER
+            for label in ('pf-ci', 'pf-ci-x64', 'pf-ci-x64-16', 'pf-ci-release',
+                          'pf-gcp-engine-pr', 'pf-gcp-engine-main', 'pf-gcp-small'):
+                # Refuse the wrong class alone and extra labels on a valid class.
+                for value in (f'["self-hosted","{label}"]', runner[:-1] + f',"{label}"]'):
+                    with self.subTest(workflow=name, job=job, runner=value):
+                        findings = self.routed_file_findings(name, job, before, routed_line(before, value))
+                        self.assertIn(finding, findings)
+            for value in ('["self-hosted","pf-ci","pf-ci-x64"]',
+                          '["self-hosted","pf-ci","pf-ci-x64-16"]',
+                          '["self-hosted","pf-ci","pf-ci-release"]',
+                          '["self-hosted","pf-gcp-pr","pf-gcp-main"]'):
+                with self.subTest(workflow=name, job=job, runner=value):
+                    findings = self.routed_file_findings(name, job, before, routed_line(before, value))
+                    self.assertIn(finding, findings)
+
+    def test_gcp_sites_reject_hosted_fallbacks(self):
+        for name, job, fleet, before, finding in self.gcp_sites():
+            runner = PR_RUNNER if fleet == 'pr' else RELEASE_RUNNER
+            for value in ('ubuntu-24.04', 'ubuntu-latest',
+                          "${{ fromJSON('" + runner + "') || 'ubuntu-24.04' }}"):
+                with self.subTest(workflow=name, job=job, runner=value):
+                    findings = self.routed_file_findings(name, job, before, routed_line(before, value))
+                    self.assertIn(finding, findings)
+
+    def test_gcp_sites_require_the_literal_or_matrix_string_shape(self):
+        for name, job, fleet, before, finding in self.gcp_sites():
+            runner = PR_RUNNER if fleet == 'pr' else RELEASE_RUNNER
+            # CI explicitly decodes its matrix string; every other fleet
+            # site needs an array rather than a quoted JSON-looking scalar.
+            values = (runner,) if (name, job) == ('ci.yml', 'build') else (
+                "'" + runner + "'", json.dumps(runner))
+            for value in values:
+                with self.subTest(workflow=name, job=job, runner=value):
+                    after = before.split(': ', 1)[0] + ': ' + value + '\n'
+                    findings = self.routed_file_findings(name, job, before, after)
+                    self.assertIn(finding, findings)
+
+    def test_gcp_sites_require_every_routed_job(self):
+        workflows = self.workflow_sources()
+        for name, (_, jobs) in GCP_JOBS.items():
+            for job in jobs:
+                with self.subTest(workflow=name, missing_job=job):
+                    before = '  ' + job + ':' + _jobs(workflows[name])[job]
+                    findings = self.routed_file_findings(name, None, before, '')
+                    self.assertIn(f'{name} is missing job {job}', findings)
+
+    def test_authz_header_spacing_and_comment_are_verbatim(self):
+        comment = ('    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; '
+                   'release-class jobs only on pf-gcp-main.\n')
+        for index in (0, 1, 4, 5):
+            name = Path(CI_SOURCES[index]).name
+            for before, after in (
+                    ('    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
+                     '    runs-on: ["self-hosted","pf-gcp-pr"]\n'),
+                    (comment, comment.replace('#1050', '#1056')),
+                    (comment, comment.replace('only on', 'on')),
+                    (comment, '')):
+                with self.subTest(workflow=name, replacement=after):
+                    findings = self.mutated_file_findings(index, 'authz', before, after)
+                    self.assertEqual(findings, [f'{name} must start with the verbatim canon authz job'])
+
+    def test_corpus_routes_reject_the_legacy_conditional(self):
+        legacy = '''>-
+      ${{ github.event_name != 'pull_request_target' &&
+          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
+          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
+          (github.event_name != 'pull_request' ||
+           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
+          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}'''
+        # The whole expression and variations of its former event/bot/fork
+        # guards are all invalid now: each corpus route must be a literal.
+        replacements = (
+            legacy,
+            legacy.replace('["self-hosted","pf-ci","pf-ci-x64-16"]', PR_RUNNER),
+            legacy.replace("          github.actor != 'dependabot[bot]' && "
+                           "github.triggering_actor != 'dependabot[bot]' &&\n", ''),
+            legacy.replace("github.actor != 'dependabot[bot]' && ", ''),
+            legacy.replace(" && github.triggering_actor != 'dependabot[bot]'", ''),
+            legacy.replace("'ubuntu-24.04'", "'ubuntu-latest'"),
+            legacy.replace(' && github.event.pull_request.head.repo.fork == false', ''),
+            legacy.replace("github.event_name != 'pull_request_target' &&", 'true &&'),
+            legacy.replace('"schedule","release"', '"schedule","release","workflow_run"'),
+        )
+        for job in ('corpus-parity', 'corpus-parity-subset'):
+            for value in replacements:
+                with self.subTest(job=job, expression=value):
+                    before = f'    runs-on: {PR_RUNNER}\n'
+                    findings = self.routed_file_findings('corpus-parity.yml', job, before,
+                                                         routed_line(before, value))
+                    self.assertIn(f'corpus-parity.yml job {job} must run on {PR_RUNNER}', findings)
+
+    def test_legacy_metadata_cannot_replace_runner_pins(self):
+        workflows = self.workflow_sources()
+        # Docs has no legacy PF_CI_LABELS declaration; the ten original
+        # metadata-bearing jobs keep this independent population check.
+        sites = [site for site in self.gcp_sites()
+                 if site[2] == 'pr' and site[1] != 'authz' and site[0] != 'docs.yml']
+        self.assertEqual(len(sites), 10)
+        for name, job, _, before, finding in sites:
+            env = ci_preflight._job_block(_jobs(workflows[name])[job], 'env')
+            markers = [line + '\n' for line in env if ci_preflight._key_value(line, 'PF_CI_LABELS') is not None]
+            self.assertEqual(len(markers), 1)
+            # These old declarations are not scheduler inputs. Removing or
+            # updating one cannot excuse a wrong literal or matrix runner.
+            for replacement in ('', f"      PF_CI_LABELS: '{PR_RUNNER}'\n",
+                                f"      PF_CI_LABELS: '{RELEASE_RUNNER}'\n"):
+                with self.subTest(workflow=name, job=job, metadata=replacement):
+                    changed = in_job(workflows[name], job, markers[0], replacement)
+                    self.assertEqual(ci_preflight.runner_findings(dict(workflows, **{name: changed})), [])
+                    changed = in_job(changed, job, before, routed_line(before, RELEASE_RUNNER))
+                    findings = ci_preflight.runner_findings(dict(workflows, **{name: changed}))
+                    self.assertIn(finding, findings)
+        # A step-level declaration also cannot stand in for the actual runner.
+        before = f'    runs-on: {PR_RUNNER}\n'
+        changed = in_job(workflows['ci.yml'], 'preflight', before, routed_line(before, RELEASE_RUNNER))
         changed = in_job(changed, 'preflight', '      - uses: actions/checkout@v4\n',
                          '      - uses: actions/checkout@v4\n        env:\n'
-                         f"          PF_CI_LABELS: '{LINUX_LABELS}'\n")
+                         f"          PF_CI_LABELS: '{PR_RUNNER}'\n")
         findings = ci_preflight.runner_findings(dict(workflows, **{'ci.yml': changed}))
-        self.assertTrue(any('ci.yml job preflight must set job env PF_CI_LABELS' in line
-                            for line in findings), findings)
+        self.assertIn(f'ci.yml job preflight must run on {PR_RUNNER}', findings)
 
     def test_ci_contract_pins_the_docs_only_skip(self):
         """Each proof job waits for authz and changes and skips only its docs-only
@@ -1001,7 +1221,8 @@ class PreflightFailures(unittest.TestCase):
                  f'            --jobs {CORES} --ccache {PR_SLOW_FLAG}'),
                 (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
                  f'run: |\n          JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'),
-                (5, 'build', '    runs-on: ubuntu-latest\n', '    "runs-on": ubuntu-latest\n'),
+                (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
+                 '    "runs-on": ["self-hosted", "pf-gcp-pr"]\n'),
                 (0, 'preflight', '      PF_CI_LABELS:', '      "PF_CI_LABELS":'),
                 (0, 'build', '        os: [ubuntu-24.04, macos-26]\n',
                  '        os: [ubuntu-24.04, macos-26]  # the images\n'),
@@ -1043,9 +1264,9 @@ class PreflightFailures(unittest.TestCase):
 
     def test_paid_labels_and_larger_runner_keys_are_refused_even_in_release(self):
         original, others = self.ci_sources(), self.other_sources()
-        spot = f'    runs-on: {LIGHT_RUNNER}\n'
+        spot = f'    runs-on: {PR_RUNNER}\n'
         lint = ('name: lint\non: workflow_dispatch\njobs:\n  lint:\n' + spot
-                + f"    env:\n      PF_CI_LABELS: '{LIGHT_LABELS}'\n"
+                + f"    env:\n      PF_CI_LABELS: '{PR_RUNNER}'\n"
                 + '    steps:\n      - run: "true"\n')
         mutations = [(f'    runs-on: "{label}"\n', 'must not use larger-runner labels')
                      for label in ('pf-linux-x64-16', 'macos-26-xlarge', 'macos-26-large',
@@ -1064,7 +1285,7 @@ class PreflightFailures(unittest.TestCase):
                     changed = in_job(workflow, job, before, replacement.replace(spot, before))
                     findings = ci_workflow_findings(
                         *original, others=dict(others, **{name: changed}))
-                    self.assertTrue(any(f'{name} {finding}' in line for line in findings), findings)
+                    self.assertIn(f'{name} {finding}; use the GCP fleet or hosted exceptions', findings)
 
     def test_release_jobs_require_isolation_and_reject_pr_triggers(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -1078,7 +1299,7 @@ class PreflightFailures(unittest.TestCase):
                     findings = ci_workflow_findings(
                         *original, others=dict(others, **{'release.yml': opened}))
                     self.assertIn('release.yml must retain workflow_dispatch only '
-                                  'for pf-ci-release jobs', findings)
+                                  'for pf-gcp-main jobs', findings)
         for spelling in ('on: >-\n  workflow_dispatch:\n',
                          'on:\n  workflow_dispatch:\non:\n  workflow_dispatch:\n',
                          'on:\n  push:\n'):
@@ -1086,9 +1307,9 @@ class PreflightFailures(unittest.TestCase):
                 opened = release.replace('on:\n  workflow_dispatch:\n', spelling, 1)
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': opened}))
                 self.assertIn('release.yml must retain workflow_dispatch only '
-                              'for pf-ci-release jobs', findings)
+                              'for pf-gcp-main jobs', findings)
         for job in ('release', 'notify-hub'):
-            for runner in ('ubuntu-latest', 'ubuntu-24.04', LIGHT_RUNNER,
+            for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER,
                            f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
                 with self.subTest(job=job, runner=runner):
                     changed = in_job(release, job, f'    runs-on: {RELEASE_RUNNER}\n',
@@ -1113,14 +1334,13 @@ class PreflightFailures(unittest.TestCase):
             with self.subTest(release_runner=after):
                 changed = in_job(release, 'prebuilt', before, after)
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': changed}))
-                self.assertTrue(any('release.yml prebuilt must use exactly' in line
-                                    for line in findings), findings)
+                self.assertIn(RELEASE_MATRIX_FINDING, findings)
 
     def test_baseline_promotion_requires_isolation_and_its_existing_triggers(self):
         original, others = self.ci_sources(), self.other_sources()
         promote = original[2]
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        for runner in ('ubuntu-latest', 'ubuntu-24.04', LIGHT_RUNNER,
+        for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER,
                        f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
             with self.subTest(runner=runner):
                 changed = original.copy()
@@ -1130,7 +1350,7 @@ class PreflightFailures(unittest.TestCase):
                 self.assertIn(f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} '
                               '(isolated release)', findings)
         event_finding = ('promote-baseline.yml must retain pull_request_target and '
-                         'workflow_dispatch only for pf-ci-release promotion')
+                         'workflow_dispatch only for pf-gcp-main promotion')
         for event in ('pull_request', 'push'):
             for key in (event, f'"{event}"', f"'{event}'", event + ' '):
                 with self.subTest(event_key=key):
@@ -1167,15 +1387,14 @@ class PreflightFailures(unittest.TestCase):
             with self.subTest(on=on, runner=runner):
                 findings = ci_workflow_findings(
                     *original, others=dict(others, **{'lint.yml': new.format(on=on, runner=runner)}))
-                self.assertEqual(any('lint.yml job lint must run on' in line
-                                     for line in findings), refused, findings)
+                self.assertEqual(f'lint.yml job lint must run on {PR_RUNNER}' in findings, refused, findings)
         # A decoy on key inside a multi-line string is no exemption.
         decoy = ('name: "lint\non: push"\non:\n  pull_request:\njobs:\n  lint:\n'
                  '    runs-on: pf-linux-x64-16\n    steps:\n      - run: "true"\n')
-        self.assertTrue(any('lint.yml job lint must run on' in line for line in
-                            ci_workflow_findings(*original, others=dict(others, **{'lint.yml': decoy}))))
-        spot = new.format(on='[pull_request, push, workflow_dispatch]', runner=LIGHT_RUNNER)
-        spot = spot.replace('    steps:\n', f"    env:\n      PF_CI_LABELS: '{LIGHT_LABELS}'\n    steps:\n")
+        self.assertIn(f'lint.yml job lint must run on {PR_RUNNER}',
+                      ci_workflow_findings(*original, others=dict(others, **{'lint.yml': decoy})))
+        spot = new.format(on='[pull_request, push, workflow_dispatch]', runner=PR_RUNNER)
+        spot = spot.replace('    steps:\n', f"    env:\n      PF_CI_LABELS: '{PR_RUNNER}'\n    steps:\n")
         self.assertEqual(ci_workflow_findings(*original, others=dict(others, **{'lint.yml': spot})), [])
         for on, condition in (('pull_request_target', ''),
                                ('[pull_request]', "    if: github.actor == 'dependabot[bot]'\n"),
@@ -1184,11 +1403,10 @@ class PreflightFailures(unittest.TestCase):
             hosted = hosted.replace('  lint:\n', '  lint:\n' + condition)
             with self.subTest(hosted_event=on, condition=condition):
                 findings = ci_workflow_findings(*original, others=dict(others, **{'lint.yml': hosted}))
-                self.assertTrue(any('lint.yml job lint must run on' in line
-                                    for line in findings), findings)
-                changed = hosted.replace('runs-on: ubuntu-latest', f'runs-on: {LIGHT_RUNNER}', 1)
+                self.assertIn(f'lint.yml job lint must run on {PR_RUNNER}', findings)
+                changed = hosted.replace('runs-on: ubuntu-latest', f'runs-on: {PR_RUNNER}', 1)
                 changed = changed.replace('    steps:\n',
-                                          f"    env:\n      PF_CI_LABELS: '{LIGHT_LABELS}'\n    steps:\n", 1)
+                                          f"    env:\n      PF_CI_LABELS: '{PR_RUNNER}'\n    steps:\n", 1)
                 self.assertEqual(ci_workflow_findings(
                     *original, others=dict(others, **{'lint.yml': changed})), [])
 
@@ -1218,34 +1436,33 @@ class PreflightFailures(unittest.TestCase):
             with self.subTest(reason=reason, hosted=True):
                 self.assertEqual(ci_workflow_findings(
                     *original, others=dict(others, **{'deploy.yml': hosted})), [])
-            for runner, labels in ((LIGHT_RUNNER, LIGHT_LABELS), (LINUX_RUNNER, LINUX_LABELS)):
+            for runner in (PR_RUNNER, RELEASE_RUNNER):
                 pool = in_job(hosted, 'deploy', '    runs-on: ubuntu-24.04\n',
                               f'    runs-on: {runner}\n')
-                marker = f"      PF_CI_LABELS: '{labels}'\n"
+                marker = f"      PF_CI_LABELS: '{runner}'\n"
                 if '\n    env:\n' in _jobs(pool)['deploy']:
                     pool = in_job(pool, 'deploy', '\n    env:\n', '\n    env:\n' + marker)
                 else:
                     pool = in_job(pool, 'deploy', '\n    steps:\n', '\n    env:\n' + marker + '    steps:\n')
-                with self.subTest(reason=reason, pool=labels):
+                with self.subTest(reason=reason, pool=runner):
                     findings = ci_workflow_findings(*original, others=dict(others, **{'deploy.yml': pool}))
-                    self.assertTrue(any('deploy.yml job deploy must keep production credentials '
-                                        'on a hosted standard runner' in line for line in findings), findings)
+                    self.assertIn('deploy.yml job deploy must keep production credentials '
+                                  'on a hosted standard runner', findings)
 
     def test_github_token_alone_and_credential_comments_keep_the_pool(self):
         original, others = self.ci_sources(), self.other_sources()
         for reference in ('secrets.GITHUB_TOKEN', "secrets['GITHUB_TOKEN']"):
-            for runner, labels in ((LIGHT_RUNNER, LIGHT_LABELS), (LINUX_RUNNER, LINUX_LABELS)):
-                workflow = ('name: token\non: workflow_dispatch\npermissions:\n  contents: write\n'
-                            'jobs:\n  token:\n'
-                            f'    runs-on: {runner}\n'
-                            '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
-                            '    env:\n'
-                            f"      PF_CI_LABELS: '{labels}'\n"
-                            f'      TOKEN: ${{{{ {reference} }}}}\n'
-                            '    steps:\n      - run: "true"\n')
-                with self.subTest(reference=reference, labels=labels):
-                    self.assertEqual(ci_workflow_findings(
-                        *original, others=dict(others, **{'token.yml': workflow})), [])
+            workflow = ('name: token\non: workflow_dispatch\npermissions:\n  contents: write\n'
+                        'jobs:\n  token:\n'
+                        f'    runs-on: {PR_RUNNER}\n'
+                        '    # secrets.DEPLOY_KEY, id-token: write, environment: production\n'
+                        '    env:\n'
+                        f"      PF_CI_LABELS: '{PR_RUNNER}'\n"
+                        f'      TOKEN: ${{{{ {reference} }}}}\n'
+                        '    steps:\n      - run: "true"\n')
+            with self.subTest(reference=reference):
+                self.assertEqual(ci_workflow_findings(
+                    *original, others=dict(others, **{'token.yml': workflow})), [])
 
     def test_today_release_and_deployment_jobs_pass_only_on_their_pinned_routes(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -1257,13 +1474,16 @@ class PreflightFailures(unittest.TestCase):
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
                 before = (HOSTED_MATRIX_RUNNER if job == 'prebuilt' else
-                          'ubuntu-latest' if name == 'docs.yml' else RELEASE_RUNNER)
+                          '["self-hosted", "pf-gcp-pr"]' if name == 'docs.yml' else RELEASE_RUNNER)
+                after = 'ubuntu-latest' if name == 'docs.yml' else PR_RUNNER
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
-                              f'    runs-on: {LIGHT_RUNNER}\n')
+                              f'    runs-on: {after}\n')
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: pool}))
-                self.assertTrue(any(f'{name} job {job} must run on' in line for line in findings), findings)
-                marker = f"      PF_CI_LABELS: '{LIGHT_LABELS}'\n"
+                finding = (f'{name} job {job} must run on {PR_RUNNER}' if name == 'docs.yml' else
+                           f'{name} job {job} must run on {before} (isolated release)')
+                self.assertIn(finding, findings)
+                marker = f"      PF_CI_LABELS: '{PR_RUNNER}'\n"
                 # Anchor job keys: four spaces alone also match the tail of
                 # a step-level env key, which would leave the job env empty.
                 if '\n    env:\n' in _jobs(workflows[name])[job]:
@@ -1273,10 +1493,10 @@ class PreflightFailures(unittest.TestCase):
                                     '\n    env:\n' + marker + '    steps:\n')
                 env = ci_preflight._job_block(_jobs(hosted)[job], 'env')
                 self.assertEqual(ci_preflight._job_values('\n'.join(env[1:]), 'PF_CI_LABELS'),
-                                 [LIGHT_LABELS], f'{name} job {job} fixture must set job-level PF_CI_LABELS')
+                                 [PR_RUNNER], f'{name} job {job} fixture must set job-level PF_CI_LABELS')
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: hosted}))
-                route = 'a hosted job' if name == 'docs.yml' else 'an isolated release job'
+                route = 'a gated docs job' if name == 'docs.yml' else 'an isolated release job'
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
     def test_release_dry_run_never_reaches_the_hub_dispatch(self):
@@ -1373,32 +1593,31 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn('runners and time limits OK', output)
         for mutation, finding in (
-                (('preflight', LINUX_RUNNER, 'ubuntu-latest'),
-                 'ci.yml job preflight must run on'),
+                (('preflight', PR_RUNNER, 'ubuntu-latest'),
+                 f'ci.yml job preflight must run on {PR_RUNNER}'),
                 (('preflight', '    steps:\n',
                   '    environment: production\n    steps:\n'),
                  'ci.yml job preflight must keep production credentials on a hosted standard runner'),
-                (('preflight', LINUX_RUNNER,
-                  "${{ fromJSON('" + LINUX_LABELS + "') || 'ubuntu-24.04' }}"),
-                 'ci.yml job preflight must run on'),
-                (('preflight', f"      PF_CI_LABELS: '{LINUX_LABELS}'\n", ''),
-                 'ci.yml job preflight must set job env PF_CI_LABELS'),
-                (('preflight', f"      PF_CI_LABELS: '{LINUX_LABELS}'\n",
-                  "      PF_CI_LABELS: '[\"self-hosted\",\"pf-ci\",\"pf-ci-small\"]'\n"),
-                 'ci.yml job preflight must set job env PF_CI_LABELS'),
-                (('sanitizers', LINUX_RUNNER,
-                  LINUX_RUNNER.replace(LINUX_LABELS, '["self-hosted","pf-ci","pf-ci-small"]')),
-                 'ci.yml job sanitizers must run on'),
-                (('sanitizers', LINUX_RUNNER, 'pf-linux-x64-16'), 'ci.yml job sanitizers must run on'),
+                (('preflight', PR_RUNNER,
+                  "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"),
+                 f'ci.yml job preflight must run on {PR_RUNNER}'),
+                (('preflight', PR_RUNNER, RELEASE_RUNNER),
+                 f'ci.yml job preflight must run on {PR_RUNNER}'),
+                (('preflight', PR_RUNNER, '["self-hosted","pf-gcp-pr","pf-gcp-main"]'),
+                 f'ci.yml job preflight must run on {PR_RUNNER}'),
+                (('sanitizers', PR_RUNNER, '["self-hosted","pf-gcp-small"]'),
+                 f'ci.yml job sanitizers must run on {PR_RUNNER}'),
+                (('sanitizers', PR_RUNNER, 'pf-linux-x64-16'),
+                 f'ci.yml job sanitizers must run on {PR_RUNNER}'),
                 (('build', 'os: [ubuntu-24.04, macos-26]', 'os: [ubuntu-24.04, macos-26-xlarge]'),
-                 'ci.yml must not use larger-runner labels'),
+                 'ci.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
                 (('build', '        build_type: [Release, Debug]\n',
                   '        build_type: [Release, Debug]\n        larger_runner: ubuntu-24.04\n'),
-                 'ci.yml must not define a larger_runner key')):
+                 'ci.yml must not define a larger_runner key; use the GCP fleet or hosted exceptions')):
             with self.subTest(mutation=mutation):
                 code, output = self.contract_stage(mutation)
                 self.assertEqual(code, 1, output)
-                self.assertIn(finding, output)
+                self.assertIn(finding, output.splitlines())
 
     def run_preflight(self, commands):
         directory = tempfile.TemporaryDirectory()
@@ -1714,12 +1933,14 @@ class ActionlintRunnerLabels(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn('all literal self-hosted labels declared', output)
 
-    def test_actionlint_runner_labels_accepts_all_pfrel_runner_labels(self):
-        workflow = self.tree / '.github/workflows/pfrel-labels.yml'
+    def test_actionlint_runner_labels_accepts_both_gcp_runner_labels(self):
+        workflow = self.tree / '.github/workflows/gcp-labels.yml'
         workflow.write_text(
-            'on: workflow_dispatch\njobs:\n  labels:\n'
-            '    runs-on: ["self-hosted", "pf-ci", "pf-ci-release", '
-            '"pf-ci-x64", "pf-ci-x64-16"]\n'
+            'on: workflow_dispatch\njobs:\n  pr:\n'
+            '    runs-on: ["self-hosted", "pf-gcp-pr"]\n'
+            '    steps:\n      - run: "true"\n'
+            '  main:\n'
+            '    runs-on: ["self-hosted", "pf-gcp-main"]\n'
             '    steps:\n      - run: "true"\n')
         code, output = self.runner_labels()
         self.assertEqual(code, 0, output)
@@ -1733,14 +1954,21 @@ class ActionlintRunnerLabels(unittest.TestCase):
 
     def test_actionlint_runner_labels_rejects_removed_label(self):
         original = self.config.read_text()
-        changed = original.replace('    - pf-ci-release\n', '', 1)
-        self.assertNotEqual(changed, original)
-        self.config.write_text(changed)
-        code, output = self.runner_labels()
-        self.assertNotEqual(code, 0, output)
-        self.assertIn('label "pf-ci-release" is not declared in .github/actionlint.yaml', output)
-        self.assertIn('release.yml job release:', output)
-        self.assertIn('promote-baseline.yml job promote:', output)
+        for label, sites in (
+                ('pf-gcp-pr', (('ci.yml', 'authz'), ('native-live.yml', 'authz'),
+                               ('corpus-parity.yml', 'authz'), ('corpus-parity.yml', 'corpus-parity'),
+                               ('docs.yml', 'authz'), ('docs.yml', 'build'))),
+                ('pf-gcp-main', (('release.yml', 'release'), ('promote-baseline.yml', 'promote')))):
+            with self.subTest(label=label):
+                changed = original.replace(f'    - {label}\n', '', 1)
+                self.assertNotEqual(changed, original)
+                self.config.write_text(changed)
+                code, output = self.runner_labels()
+                self.assertNotEqual(code, 0, output)
+                for name, job in sites:
+                    self.assertIn(f'{name} job {job}: label "{label}" is not declared '
+                                  'in .github/actionlint.yaml', output.splitlines())
+        self.config.write_text(original)
 
     def test_actionlint_runner_labels_rejects_new_literal_label(self):
         for suffix in ('.yml', '.yaml'):
@@ -1748,23 +1976,24 @@ class ActionlintRunnerLabels(unittest.TestCase):
                 workflow = self.tree / f'.github/workflows/undeclared{suffix}'
                 workflow.write_text(
                     'on: workflow_dispatch\njobs:\n  undeclared:\n'
-                    '    runs-on: ["self-hosted", "pf-ci-undeclared"]\n'
+                    '    runs-on: ["self-hosted", "pf-gcp-undeclared"]\n'
                     '    steps:\n      - run: "true"\n')
                 code, output = self.runner_labels()
                 self.assertNotEqual(code, 0, output)
-                self.assertIn('label "pf-ci-undeclared" is not declared in '
-                              '.github/actionlint.yaml', output)
-                self.assertIn(workflow.name + ' job undeclared:', output)
+                self.assertIn(workflow.name + ' job undeclared: label "pf-gcp-undeclared" is not declared '
+                              'in .github/actionlint.yaml', output.splitlines())
                 workflow.unlink()
 
     def test_actionlint_runner_labels_rejects_unparseable_config(self):
         for config in ('self-hosted-runner: [\n',
-                       'self-hosted-runner:\n  labels: pf-ci\n'):
+                       'self-hosted-runner:\n  labels: pf-gcp-pr\n'):
             with self.subTest(config=config):
                 self.config.write_text(config)
                 code, output = self.runner_labels()
                 self.assertNotEqual(code, 0, output)
-                self.assertIn('.github/actionlint.yaml: cannot parse config:', output)
+                self.assertIn('.github/actionlint.yaml: cannot parse config: expected '
+                              'self-hosted-runner.labels as a block list of literal labels',
+                              output.splitlines())
 
 
 class PinnedLiveCurl(unittest.TestCase):
