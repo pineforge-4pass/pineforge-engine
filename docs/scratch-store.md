@@ -130,7 +130,10 @@ outside a transaction or an exhausted handle domain, returns `programming_error`
 and leaves its output untouched. That is a defect in the caller or in the
 provisioning, not a run failure and not a retry. The host provisions the
 backing: a production backing extends or spills, and a fixed test backing is
-sized by its test for the whole workload. The guard test fails if the closed
+sized by its test for the whole workload. A backing MAY additionally carry a
+per-run byte cap; exceeding that cap is a deliberate, typed scratch I/O failure
+and is reported with the status `io_error`, which keeps `programming_error`
+meaning exactly "host did not provision, or the backing is exhausted". The guard test fails if the closed
 status vocabulary gains a member or if a contract header gains an exception,
 a growing container or a heap call.
 
@@ -181,7 +184,9 @@ size, ids are below `scratch_no_page`, a read at or past the extent is
 `not_found`, and a successful write extends the extent to cover the id and
 zero-fills any gap. A failed write may have changed its target, which is why a
 transaction must protect previously committed pages. No operation throws.
-Exhaustion is a `programming_error`, never a capacity code.
+Exhaustion is a `programming_error`, never a capacity code. A backing that
+carries a per-run byte cap reports an overrun as the typed scratch I/O failure
+`io_error`, never as a capacity code and never as `programming_error`.
 
 Every attempted `read_page`, `write_page` and `sync` is reported once to the
 `ScratchIoObserver`, errors and refused arguments included, with the backing's
@@ -252,7 +257,8 @@ unchanged, and a comparator's failure unchanged.
 7. Use `state_digest` for state hashing and `ordered_digest` for content
    comparison. Do not hash physical placement.
 8. Choose the backing kind explicitly and provision its extent. Do not map
-   `programming_error` to a capacity or retry code.
+   `programming_error` to a capacity or retry code, and do not retry an
+   `io_error` from a per-run byte cap.
 9. Use `test_memory` only in tests, and commit with `buffered` there.
 10. Add a status, a field or a header only additively and announce it.
 

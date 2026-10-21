@@ -116,7 +116,9 @@ public:
     // never refuses, implicitly commits, grows RAM, or throws. ANY unserviceable
     // put returns programming_error (including exhausted backing, backing I/O
     // failure, input/comparison failure, a call outside a transaction or
-    // handle domain exhaustion); no run failure is prescribed. A failure inside
+    // handle domain exhaustion), except that a per-run byte-cap overrun on a
+    // backing that carries a cap returns io_error; no run failure is prescribed.
+    // A failure inside
     // a transaction makes it rollback-only; partial new bytes cannot damage
     // the pre-begin state. Discard outputs from aborted puts.
     ScratchStatus put(const ScratchByteSource& key, const ScratchByteSource& value,
