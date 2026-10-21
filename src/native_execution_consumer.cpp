@@ -72,12 +72,12 @@ void handle_list_erase(std::unique_ptr<detail::PageStore>& list,
     });
 }
 
-// A paged store copies rows as bytes; every row type it holds must be one
-// value, never a container of its own.
+// Page-store rows are values; the skip key uses plain C++17 scalar members.
+struct MatchSkipKey { std::uint64_t priority; std::uint8_t kind; };
 static_assert(std::is_trivially_copyable_v<NativeDriverPoint>);
 static_assert(std::is_trivially_copyable_v<NativeAccountObservation>);
 static_assert(std::is_trivially_copyable_v<native_order::RequestHandle>);
-static_assert(std::is_trivially_copyable_v<std::pair<std::uint64_t, std::uint8_t>>);
+static_assert(std::is_trivially_copyable_v<MatchSkipKey>);
 
 // FNV-1a's prime and its powers p^k for k in [0, 8]. A zero byte leaves the
 // accumulator untouched under the XOR (h ^ 0 == h), so a run of k zero bytes
@@ -6930,22 +6930,22 @@ void NativeExecutionConsumer::match_path(
     // the same set operations as the sorted vector's -- the list's order is
     // never read, so it need not be sorted.
     auto& skipped = page_store(match_skipped_,
-                               sizeof(std::pair<uint64_t, std::uint8_t>),
+                               sizeof(MatchSkipKey),
                                kMatchStagingRows, "native match skips");
     skipped.clear();
     double skip_t = t_cursor;
     auto skip_key = [](uint64_t priority, Kind kind) {
-        return std::pair<uint64_t, std::uint8_t>{priority, static_cast<std::uint8_t>(kind)};
+        return MatchSkipKey{priority, static_cast<std::uint8_t>(kind)};
     };
-    auto is_skipped = [&](const std::pair<uint64_t, std::uint8_t>& key) {
-        std::pair<uint64_t, std::uint8_t> row;
+    auto is_skipped = [&](const MatchSkipKey& key) {
+        MatchSkipKey row;
         for (std::uint64_t index = 0, count = skipped.size(); index < count; ++index) {
             skipped.read(index, &row);
-            if (row == key) return true;
+            if (row.priority == key.priority && row.kind == key.kind) return true;
         }
         return false;
     };
-    auto skip = [&](const std::pair<uint64_t, std::uint8_t>& key) {
+    auto skip = [&](const MatchSkipKey& key) {
         if (is_skipped(key)) return;
         skipped.push_back(&key);
     };
@@ -7420,7 +7420,7 @@ void NativeExecutionConsumer::match_path(
                     transfer.t = winner->t;
                     transfer.raw_price = winner->price;
                     transfer.at_level = winner->at_level;
-                    candidate_provenance.push_back(std::move(transfer));
+                    candidate_provenance.push_back(&transfer);
                 }
             }
             continue;
