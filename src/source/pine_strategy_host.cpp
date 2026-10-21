@@ -1313,14 +1313,7 @@ bool source::PineStrategyHost::adapter_has_open_entry_id(
         [&](const PyramidEntry& row) { return row.entry_id == id && row.qty > 0.0; });
 }
 
-const std::vector<source::PineStrategyHost::FixtureIntentRow>&
-source::PineStrategyHost::source_pending_view() const {
-    source_pending_view_cache_.clear();
-    source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
-        + adapter_.pending_entries_.size() + adapter_.pending_bracket_legs_.size()
-        + adapter_.pending_coof_requests_.size()
-        + adapter_.delayed_market_orders_.size()
-        + adapter_.source_shadow_pending_.size() + adapter_.live_handles_.size());
+bool source::PineStrategyHost::visit_source_pending(const SourcePendingVisitor& visit) const {
     const auto append = [&](const PlacementSnapshot& snapshot, const std::string& label) {
         FixtureIntentKind type = FixtureIntentKind::MARKET;
         switch (snapshot.family) {
@@ -1423,7 +1416,7 @@ source::PineStrategyHost::source_pending_view() const {
                 snapshot.sizing.price, snapshot.sizing.mark, snapshot.sizing.fx};
             row.market_admission.bind(std::move(observation));
         }
-        source_pending_view_cache_.push_back(std::move(row));
+        return visit(row);
     };
     for (const auto& command : adapter_.pending_same_bar_commands_) {
         // ab9714be strategy.close under process_orders_on_close is held in the
@@ -1435,18 +1428,18 @@ source::PineStrategyHost::source_pending_view() const {
             && !command.snapshot.birth.at_terminal_fill()) {
             continue;
         }
-        append(command.snapshot, command.request.label);
+        if (!append(command.snapshot, command.request.label)) return false;
     }
     for (const auto& pending : adapter_.pending_entries_)
-        append(pending.snapshot, pending.request.label);
+        if (!append(pending.snapshot, pending.request.label)) return false;
     for (const auto& delayed : adapter_.delayed_market_orders_)
-        append(delayed.snapshot, delayed.request.label);
+        if (!append(delayed.snapshot, delayed.request.label)) return false;
     for (const auto& leg : adapter_.pending_bracket_legs_)
-        append(leg.snapshot, leg.request.label);
+        if (!append(leg.snapshot, leg.request.label)) return false;
     for (const auto& pending : adapter_.pending_coof_requests_)
-        append(pending.snapshot, pending.request.label);
+        if (!append(pending.snapshot, pending.request.label)) return false;
     for (const auto& shadow : adapter_.source_shadow_pending_)
-        append(shadow.snapshot, shadow.label);
+        if (!append(shadow.snapshot, shadow.label)) return false;
     for (const auto& handle : adapter_.live_handles_) {
         const auto found = adapter_.placement_.find(handle.incarnation);
         if (found == adapter_.placement_.end()) continue;
@@ -1456,9 +1449,35 @@ source::PineStrategyHost::source_pending_view() const {
             && !found->second.birth.at_terminal_fill()) {
             continue;
         }
-        append(found->second, found->second.source_id);
+        if (!append(found->second, found->second.source_id)) return false;
     }
-    return source_pending_view_cache_;
+    return true;
+}
+
+std::size_t source::PineStrategyHost::source_pending_page(
+        std::size_t offset, FixtureIntentRow* rows, std::size_t capacity) const {
+    if (capacity == 0) return 0;
+    if (!rows)
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "pending readback requires its caller's page");
+    std::size_t skip = offset;
+    std::size_t count = 0;
+    visit_source_pending([&](const FixtureIntentRow& row) {
+        if (skip != 0) { --skip; return true; }
+        rows[count++] = row;
+        return count != capacity;
+    });
+    return count;
+}
+
+std::vector<source::PineStrategyHost::FixtureIntentRow>
+source::PineStrategyHost::source_pending_view() const {
+    std::vector<FixtureIntentRow> rows;
+    visit_source_pending([&](const FixtureIntentRow& row) {
+        rows.push_back(row);
+        return true;
+    });
+    return rows;
 }
 
 void source::PineStrategyHost::source_stream_entry_comment(

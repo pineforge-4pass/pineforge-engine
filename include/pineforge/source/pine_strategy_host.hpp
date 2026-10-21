@@ -6,6 +6,7 @@
 #include <pineforge/source/pine_scheduler.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -782,7 +783,16 @@ protected:
                                    std::int64_t bar_ms) const {
         return pineforge::pine_session_ispostmarket(session, timezone, bar_ms, script_tf_);
     }
-    const std::vector<FixtureIntentRow>& source_pending_view() const;
+    // Ordered, synchronous readback over the source queues and live requests.
+    // A row is borrowed only until the visitor returns. Nested const reads
+    // are allowed; commands/mutation from the visitor are not.
+    using SourcePendingVisitor = std::function<bool(const FixtureIntentRow&)>;
+    bool visit_source_pending(const SourcePendingVisitor& visit) const;
+    std::size_t source_pending_page(std::size_t offset, FixtureIntentRow* rows,
+                                    std::size_t capacity) const;
+    // Explicitly non-flat fixture oracle. Production reads use the visitor or
+    // a caller-sized page; this owning result is never retained by the host.
+    std::vector<FixtureIntentRow> source_pending_view() const;
     // request.security registration, as generated configure_security_evaluators()
     // spells it. The kernel registers the aggregating evaluator; Pine's
     // publication semantics for the site (barmerge.lookahead, barmerge.gaps,
@@ -1286,9 +1296,6 @@ protected:
     // requested-context TA cadence. True only inside
     // publish_security_eval_state_at_calling_boundary's own scope.
     bool security_history_publication_replay_ = false;
-
-    // Read-only test projection cache; no future execution can observe it.
-    mutable std::vector<FixtureIntentRow> source_pending_view_cache_;
 
     // Held units the applied request's precommit saw (the owner's pre-fill
     // position_qty_); cleared after the applied notification.

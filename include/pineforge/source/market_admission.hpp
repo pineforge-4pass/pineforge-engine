@@ -207,6 +207,9 @@ public:
     Allocation reserve();
     void abandon(uint64_t sequence) noexcept;
     void append(Event event);
+    // Synchronous ordered read, without copying the event window. Nested const
+    // reads are allowed; mutation and retaining event references are not.
+    bool visit_events(const std::function<bool(const Event&)>& visit) const;
     const std::vector<Event>& events() const { return events_; }
     uint64_t sequence_frontier() const { return next_sequence_; }
     void reset();
@@ -296,6 +299,14 @@ private:
     ReviewEvent event_;
     std::function<void(ReviewEvent)> complete_;
 };
+// Direct lookups stream the same ordered reflection, retaining only the
+// selected field. Absence has the same value-initialized result as the oracle.
+uint64_t read_unsigned(const Draft& draft, const std::string& path);
+int64_t read_integer(const Draft& draft, const std::string& path);
+double read_double(const Draft& draft, const std::string& path);
+std::string read_string(const Draft& draft, const std::string& path);
+// Explicitly non-flat diagnostic snapshot (including mutation-test oracles).
+// Per-run policy and hash readers must use reflect/direct lookup instead.
 std::vector<Field> fields(const Draft& draft);
 uint64_t read_unsigned(const std::vector<Field>& fields, const std::string& path);
 int64_t read_integer(const std::vector<Field>& fields, const std::string& path);

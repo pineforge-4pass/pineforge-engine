@@ -1,6 +1,8 @@
 #include <pineforge/source/market_admission.hpp>
+#include <pineforge/compat/pine/market_admission.hpp>
 #include <pineforge/run_failure.hpp>
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <stdexcept>
 #include <type_traits>
@@ -162,6 +164,11 @@ void Journal::append(Event event) {
     // Consume only after insertion succeeds. Allocation failure leaves a caller
     // free to retry this still-outstanding event; retain never restores an ID.
     outstanding_sequences_.erase(pending);
+}
+bool Journal::visit_events(const std::function<bool(const Event&)>& visit) const {
+    for (const auto& event : events_)
+        if (!visit(event)) return false;
+    return true;
 }
 void Journal::retain(const std::vector<uint64_t>& retained) {
     events_.erase(std::remove_if(events_.begin(),events_.end(),[&](const auto& e){
@@ -363,14 +370,119 @@ std::vector<Field> fields(const Draft& draft) {
     std::vector<Field> result;reflect(draft,"draft",[&](const auto& field){result.push_back(field);});return result;
 }
 namespace {
+template<class T>T read_field(const Draft& draft,const std::string& path) {
+    T result{};
+    bool found = false;
+    reflect(draft,"draft",[&](const Field& field) {
+        if (!found && field.path == path) {
+            result = std::get<T>(field.value);
+            found = true;
+        }
+    });
+    return result;
+}
 template<class T>T read_field(const std::vector<Field>& fields,const std::string& path) {
     for(const auto& field:fields)if(field.path==path)return std::get<T>(field.value);
     return T{}; // absent optional payload; the presence leaf is always reflected
 }
 }
+uint64_t read_unsigned(const Draft& d,const std::string& p){return read_field<uint64_t>(d,p);}
+int64_t read_integer(const Draft& d,const std::string& p){return read_field<int64_t>(d,p);}
+double read_double(const Draft& d,const std::string& p){return read_field<double>(d,p);}
+std::string read_string(const Draft& d,const std::string& p){return read_field<std::string>(d,p);}
 uint64_t read_unsigned(const std::vector<Field>& f,const std::string& p){return read_field<uint64_t>(f,p);}
 int64_t read_integer(const std::vector<Field>& f,const std::string& p){return read_field<int64_t>(f,p);}
 double read_double(const std::vector<Field>& f,const std::string& p){return read_field<double>(f,p);}
 std::string read_string(const std::vector<Field>& f,const std::string& p){return read_field<std::string>(f,p);}
 } // inline namespace market_admission_v2
 } // namespace pineforge::admission
+
+namespace pineforge::compat::pine {
+namespace {
+bool history_entry_like(int type) { return type == 0 || type == 1 || type == 3; }
+bool history_unpriced(const admission::CommandObservation& o) {
+    return std::isnan(o.prices.limit) && std::isnan(o.prices.stop);
+}
+bool history_fixed_market(const admission::CommandObservation& o) {
+    return std::isfinite(o.requested_quantity) && o.requested_quantity > 1e-10
+        && history_unpriced(o) && o.oca_name.empty() && (o.quantity_type < 0 || o.quantity_type == 0);
+}
+bool history_terminal(const admission::CommandObservation& o) {
+    return !std::isnan(o.requested_quantity) && history_unpriced(o)
+        && o.configuration.process_on_close && o.configuration.calc_on_fills
+        && !o.configuration.fill_recalculation && o.placement_side == 0;
+}
+}
+uint64_t HistoryView::pair_cause(int bar) const { return cause(bar, true); }
+uint64_t HistoryView::default_cause(int bar) const { return cause(bar, false); }
+uint64_t HistoryView::cause(int bar, bool pair) const {
+    using namespace admission;
+    uint64_t result = 0;
+    journal_->visit_events([&](const Event& event) {
+        if (const auto* command = std::get_if<CommandEvent>(&event)) {
+            const auto& e = *command;
+            const auto& o = *e.observation;
+            if (e.outcome == Outcome::IgnoredTradingWindow
+                || e.outcome == Outcome::IgnoredIntradayLoss
+                || e.outcome == Outcome::RejectedIntradayCap) return true;
+            const auto assign = [&](int affected_bar, bool pair_table) {
+                if (affected_bar == bar && pair_table == pair) result = o.command;
+            };
+            const auto removed = [&](uint64_t incarnation) {
+                return std::find(e.removed.begin(), e.removed.end(), incarnation) != e.removed.end();
+            };
+            if (o.kind == CommandKind::Entry) {
+                if (default_gross_scope(o.configuration)) {
+                    int count = 0;
+                    bool noncandidate = false;
+                    for (const auto& old : e.before) if (old.bar == o.bar && history_entry_like(old.type)) {
+                        ++count;
+                        if (!awaits_default_review(old.draft)) noncandidate = true;
+                    }
+                    if (!original_default_call(o) || noncandidate || count >= 2) assign(o.bar, false);
+                }
+                for (const auto& old : e.before) if (removed(old.incarnation)) {
+                    const bool entry = history_entry_like(old.type);
+                    if ((original_pair_call(o) && entry)
+                        || (history_fixed_market(o) && history_terminal(o))) assign(o.bar, true);
+                    if (original_default_call(o) && entry) assign(o.bar, false);
+                    if (entry && old.placement_side == 0) assign(old.bar, true);
+                    if (awaits_default_review(old.draft)) assign(old.bar, false);
+                }
+                if ((e.outcome == Outcome::RejectedAffordability
+                     || e.outcome == Outcome::OpeningRejectedReductionAdmitted)
+                    && history_terminal(o)) assign(o.bar, true);
+            } else if (o.kind == CommandKind::Raw) {
+                if (default_gross_scope(o.configuration)) assign(o.bar, false);
+                for (const auto& old : e.before) if (removed(old.incarnation) && history_entry_like(old.type)) {
+                    if (awaits_default_review(old.draft)) assign(old.bar, false);
+                    if (old.placement_side == 0) assign(old.bar, true);
+                    if (o.configuration.process_on_close && o.configuration.calc_on_fills
+                        && !o.configuration.fill_recalculation) assign(o.bar, true);
+                }
+            } else {
+                for (const auto& old : e.before) {
+                    if (awaits_default_review(old.draft)) assign(old.bar, false);
+                    if (removed(old.incarnation) && history_entry_like(old.type)) {
+                        if (old.placement_side == 0) assign(old.bar, true);
+                        if (o.configuration.process_on_close && o.configuration.calc_on_fills
+                            && !o.configuration.fill_recalculation) assign(o.bar, true);
+                    }
+                }
+            }
+        } else if (const auto* review = std::get_if<ReviewEvent>(&event)) {
+            const auto checkpoint = review->receipt.checkpoint;
+            const bool pair_table = checkpoint != Checkpoint::DefaultGross;
+            if (pair_table == pair) {
+                if (checkpoint != Checkpoint::TerminalGross)
+                    for (const auto& order : review->reviewed)
+                        if (order.bar == bar) result = 0;
+                if ((checkpoint != Checkpoint::DefaultGross || review->reviewed.empty())
+                    && bar < review->receipt.bar) result = 0;
+            }
+        }
+        return true;
+    });
+    return result;
+}
+} // namespace pineforge::compat::pine
