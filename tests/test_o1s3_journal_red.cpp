@@ -1206,21 +1206,10 @@ void s3_journal_islands_fixed_under_pins_red() {
                  + 4 * sizeof(void*))
             + 4 * (sizeof(no::CommandEvent) + sizeof(no::LiveRequest))
             + 2 * sizeof(ad::CommandCapture) + 512;
-        constexpr std::size_t caller_pages = sizeof outer + sizeof inner;
         const auto w = native_store.stats().resident_bytes + admission_store.stats().resident_bytes;
         heap.constructed();
         const auto census = [&] {
             heap.flat(native_store, admission_store, w, frames);
-            // Caller pages are stack-owned, so add them ONCE, outside the
-            // heap. The fixed stack owners are explicitly named here too.
-            const auto stack = sizeof consumer + sizeof adapter + sizeof driver + sizeof held_draft
-                             + sizeof native_store + sizeof admission_store + caller_pages;
-            std::printf("s3 census: heap=%zu peak=%zu bound=%zu W=%llu calls=%zu bytes=%zu "
-                        "backing=%llu/%llu\n", global_allocation::live_bytes, heap_peak,
-                        heap.fixed + frames + stack, static_cast<unsigned long long>(w),
-                        heap_calls, heap_requested,
-                        static_cast<unsigned long long>(native_store.stats().backing_bytes),
-                        static_cast<unsigned long long>(admission_store.stats().backing_bytes));
         };
         const auto parent = driver.submit(parent_input);
         no::Request child_input{no::Reduce{no::OwnerOpenedUnits{}}, "child", ""};
@@ -2270,7 +2259,6 @@ int main(int argc, char** argv) {
     for (const auto& test : cases) {
         if (argc == 2 && std::strcmp(argv[1], test.name) != 0) continue;
         ++executed;
-        std::printf("CASE %s\n", test.name);
         try { test.run(); }
         catch (const std::exception& error) {
             ++failures;
@@ -2285,182 +2273,6 @@ int main(int argc, char** argv) {
     return failures == 0 ? 0 : 1;
 }
 
-/*
-EDIT-ONLY HANDOFF (source inspection; NOT executed receipts)
+// The supervisor handoff for this file (spec citation resolution, CMake registration lines,
+// interface assumptions) is kept outside the source, in lab-o1s3.handoff.txt beside the brief.
 
-HEAD: 87ba09a7013383847afd002755be046424a0c010, branch lab-o1s3.
-Only new tests/test_o1s3_journal_red.cpp is delivered. No production, header,
-CMake, existing test or fixture changes; no staging/commit/push, build, compiler,
-test, corpus, script, network, node, python, here-document or scratch file.
-
-Clause / compile selection / exact required test / predicted first red:
-S3-O / 1 / s3_separate_journal_owners_and_reset_red
-  compile: bind_journal_codec is undeclared; explicit separate-owner binding.
-S3-NR / 2 / s3_native_codec_all_values_cross_page_red
-  compile: encode_journal_record is undeclared; decoder overload also absent.
-S3-AR / 3 / s3_admission_codec_allocations_and_order_red
-  compile: bind_journal_codec is undeclared; admission codec overloads absent.
-S3-M / 4 / s3_journal_islands_fixed_under_pins_red
-  compile: bind_journal_codec is undeclared; streamed append/readback absent.
-S3-NW / 5 / s3_native_window_dependency_frontier_red
-  compile: bind_journal_codec is undeclared; the original owners otherwise exist.
-S3-AW / 6 / s3_admission_window_requires_closed_prefix_red
-  assertion: nonempty retire_prefix accepts the independently incorrect digest.
-S3-ND / 7 / s3_native_digest_survives_nonzero_base_red
-  compile: bind_journal_codec is undeclared; existing continuation leaves observed.
-S3-AD / 8 / s3_admission_digest_refuses_zero_refold_red
-  assertion: real reflected-path allocations expose an intermediate zero
-  restart; filtering also silently reduces the v4 lifetime count.
-S34-R / 9 / s34_readback_never_collects_population_red
-  compile: bind_journal_codec is undeclared; streamed append/readback absent.
-S34-B / 10 / s34_backing_physical_charge_and_lifetime_red
-  compile: bind_journal_codec is undeclared; streamed append/readback absent.
-
-No assigned clause is omitted. S34-T, S34-S and all s4 tests are intentionally
-outside this file. Read-only s4 citation resolution below is not an s4 test.
-
-Binding/interpretation limits to carry to the implementing lane:
-* Spec lines 757--762: "A C++ binding of the fieldwise codec to the frozen
-  owning live()/history()/events() surfaces is not declared by this document."
-  The five deliberately undeclared names at the file header are minimal test
-  calls for that missing binding, NOT new production declarations. journal_readback
-  means logical retained journal records (opaque ScratchHandle, original value
-  bytes, journal order), not a projection of internal index/undo metadata.
-* S3-AW's forged digest interprets "exact, fully folded" and "mismatched
-  retirement" at spec line 590 as requiring validation of the digest as well
-  as count/final sequence. This head validates the latter two but accepts any
-  digest with a nonempty tail (src/source/market_admission.cpp:184). If that
-  proof is owned by a future binding, place this check there; do not weaken it.
-* Diagnostic owning decode/events() is outside the heap census. Production
-  read/hash/drain witnesses use ScratchReadback and fixed pages. Requested heap
-  bytes, store resident bytes and observer-charged extent are distinct witnesses;
-  these tests do not claim an allocator A, physical M, RSS gate or measured ABI
-  receipt. Those remain the implementing/measuring lanes' obligations.
-* NativeRunning in the unit fixture is the EXISTING lifecycle alternative,
-  installed with test-only member access; acknowledgements run through the real
-  method and its Running guard. No broker-field/API declaration is supplied.
-* S34-B covers the existing disk factory make_command_scratch_backing in
-  src/source/pine_command_scratch_production.hpp:23, as well as test_memory.
-  It does not invent memfd/tmpfs implementations. The physical proof remains
-  separate from both media's userspace/extent witnesses.
-
-SPEC CITATION RESOLUTION ON THIS HEAD
-Paths abbreviated ONLY in this comment:
-  NOH = include/pineforge/native_order.hpp
-  NOC = src/native_order.cpp
-  NEH = src/native_execution_consumer.hpp
-  NEC = src/native_execution_consumer.cpp
-  PAH = include/pineforge/source/pine_adapter.hpp
-  PAC = src/source/pine_adapter.cpp
-  PSH = include/pineforge/source/pine_strategy_host.hpp
-  PSC = src/source/pine_strategy_host.cpp
-  HASH = src/source/pine_state_hash.cpp
-
-Absent / structurally changed citations:
-* NOH:2302 WorkingRequestCore::history_ and NOH:2306 ordinal_index_ do NOT
-  exist. This head owns JournalStore through journal_ at NOH:2518; its definition
-  starts NOC:1463, ordinal lookup is journal_->find_ordinal at NOC:2572.
-* include/pineforge/engine.hpp:415 OpenReportRowSource::materialized_ and
-  :2059 materialize() do NOT exist (no match under include/ or src/).
-  The cited S4-RE descriptor/row(index) producer is absent too: NEC:9048
-  append_open_position_report_rows instead constructs Trade rows and pushes
-  range_end_trades_ at NEC:9068, with the nonfinite refusal at NEC:9065.
-  record_open_position_report_rows still exists, now NEC:9097; its descriptor
-  claim from the other base must NOT be inferred on this head.
-
-Moved/cross-base citation targets (old cited location -> current named symbol):
-* NOH:2301 -> live_ NOH:2509; NEH:1739 -> requests_ NEH:1728.
-* PAH:1851 -> admission_journal PAH:1833. PSH:1072 adapter_ is unchanged.
-* PAC:3507 -> remember PAC:3465; PAC:3522 -> retire PAC:3509.
-* PSC:1444/:1454 pending observer -> queued instructions PSC:1428,
-  live projection PSC:1450 (source_pending_view begins PSC:1317).
-* NOH:1706 queue view -> live() NOH:1793; NOH:781 -> priority() NOH:856.
-* NOH:1312 -> CommandEvent NOH:1387; NOH:1021 -> ReplacedEvent NOH:1096
-  (its independent definition fields NOH:1098/:1099).
-* NOH:726 -> RequestDefinition NOH:801; NOH:755 -> kept_binding NOH:830.
-* NOH:1710 journal positions -> history() NOH:1808, history_base NOH:1810,
-  history_end NOH:1813, history_at NOH:1816.
-* PAC:5017/:21429/:21493 admission append sites -> PAC:5004/:21349/:21413.
-* include/pineforge/detail/scratch_store.hpp:44 Stats citation resolves to
-  ScratchStoreStats :45 and resident_bytes :46; the :55 fixed-workspace
-  obligation resolves to the no-subsequent-allocation statement at :60.
-* NOH:2320/:2329/:2337 native allocation islands -> issued_ NOH:2534,
-  successor_roots_ :2535, repriced_ :2543, receipt_store_ :2548,
-  cohorts_ :2553, cohort_receipts_ :2554.
-* PAH:2598/:2600/:2601 queues/indexes -> placement_ PAH:2563,
-  live_by_source_key_ :2564, pending_bracket_legs_ :2566, pending_entries_ :2567,
-  pending_same_bar_commands_ :2575, live_handles_ :2587.
-* PAH:995 positions_ is unchanged; items_ is :993. PAH:979 position lookup
-  resolves to append_positions_of :978 and positions_of :987.
-* NOC:5878/:5879 -> successor Row's 16-byte assertion NOC:7678,
-  kTailRows=64 NOC:7679.
-* NEC:3432 -> retire_journal NEC:3402 (notification frontier NEC:3406);
-  NOC:1107/:1129 -> pending_chain_floor NOC:2596, retire_history NOC:2630.
-* PSC:406 -> run-begin acknowledge(0) PSC:411.
-* NEC:10475 -> projected-batch presize NEC:10418, Window exclusion NEC:10446,
-  native reserve call NEC:10451.
-* PAC:24254/:24264 -> on_bar_close PAC:24174, terminal boundary PAC:24180,
-  finish_admission_bar PAC:24184, fold PAC:24185, retire PAC:24186.
-* PSC:3084 -> completed process-on-close retirement PSC:3141.
-* PAC:4373 -> command gate PAC:4360. compat/pine/market_admission.cpp:141
-  last_rejected_command_bar and :153 admission_history remain at those lines.
-* PAC:28338/:28339/:28340/:28342/:28343 five predicates ->
-  PAC:28186/:28187/:28188/:28190/:28191, respectively.
-* PAC:28270 -> front-placement shortcut PAC:28120; PAC:28277 -> named
-  workset construction PAC:28125; PAC:28303 -> enumeration PAC:28151.
-* NOC:1073 -> find_live NOC:2552; NOC:1190 -> canonical_cohort_origin
-  NOC:2729 (issued() NOC:2714); NOC:1197 -> root read NOC:2740;
-  NOC:1291 -> cohort_contains NOC:2830.
-* PAH:1882 source-cohort fields -> opened PAH:1848 and live_units_by_origin
-  PAH:1858. PAC:28217/:28225 -> OriginRoster::operator[] PAC:28057 and
-  append_positions_of PAC:28065; retire_before is PAC:28073.
-* NEC:949 -> hash_event_record NEC:954; NEC:11894 -> note_committed_events
-  NEC:11853 (record fold NEC:11885); NEC:12074 -> note_cohort_receipts
-  NEC:12009; NEC:2048/:2051 debug count check -> NEC:2021/:2023.
-* HASH:803 -> v4 field reflection HASH:813; HASH:774 parent leaves ->
-  HASH:782/:783; HASH:793 cursor mismatch recovery -> HASH:799/:806.
-* include/pineforge/engine.hpp:481 -> BrokerStateHashSink :351 (double
-  normalization :360). NEC:150 -> WordSink NEC:127.
-* HASH:307 -> roster hash HASH:310 (size/digest :315).
-  PAC:1530 -> AdapterLookupIndex PAC:1535; PAC:1559/:1576 allocation
-  islands -> cohort_sides PAC:1554, unbound :1573, legs_by_origin :1574,
-  immediate_closes_by_bar :1575.
-* NOC:1096 -> history_at NOC:2577; NOC:1080 -> event_at NOC:2570.
-* include/pineforge/native_host.hpp:1330 -> native_events :1370, window
-  floor documented :1369 and :1387.
-* docs/scratch-store.md:218--224 observer contract -> working-tree :166--172;
-  docs/scratch-store.md:351 unspecified media -> working-tree :287.
-* Unmoved cited declarations: native_order_identity.hpp:125 RunIdentity;
-  source/market_admission.hpp:75/:145/:181/:193; source/market_admission.cpp:
-  154 append, 157 invariant, 166 retain, 171 reset, 184 retire_prefix,
-  266 birth reflection, 286 command reflection, 326 event reflection;
-  HASH:21 hash_admission_field.
-
-EXACT CMAKE REGISTRATION FOR THE SEPARATE REGISTRATION LANE
-Put this in tests/CMakeLists.txt, not the repository-root list. Each target can
-be built alone to record its own first red; do NOT treat a failed full build as
-executed evidence for the remaining clauses.
-
-set(_o1s3_row 0)
-foreach(_o1s3_case IN ITEMS
-    s3_separate_journal_owners_and_reset_red
-    s3_native_codec_all_values_cross_page_red
-    s3_admission_codec_allocations_and_order_red
-    s3_journal_islands_fixed_under_pins_red
-    s3_native_window_dependency_frontier_red
-    s3_admission_window_requires_closed_prefix_red
-    s3_native_digest_survives_nonzero_base_red
-    s3_admission_digest_refuses_zero_refold_red
-    s34_readback_never_collects_population_red
-    s34_backing_physical_charge_and_lifetime_red)
-    math(EXPR _o1s3_row "${_o1s3_row} + 1")
-    add_executable(${_o1s3_case} test_o1s3_journal_red.cpp)
-    target_link_libraries(${_o1s3_case} PRIVATE pineforge)
-    target_compile_features(${_o1s3_case} PRIVATE cxx_std_17)
-    target_compile_definitions(${_o1s3_case} PRIVATE PINEFORGE_O1S3_CLAUSE=${_o1s3_row})
-    target_compile_options(${_o1s3_case} PRIVATE -ffp-contract=off -UNDEBUG)
-    add_test(NAME ${_o1s3_case} COMMAND ${_o1s3_case} ${_o1s3_case})
-endforeach()
-unset(_o1s3_case)
-unset(_o1s3_row)
-*/
