@@ -22,7 +22,8 @@ from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
                           PR_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
-                          ci_workflow_findings, native_workflow_findings, run_checks)
+                          ci_workflow_findings, gated_workflow_findings,
+                          native_workflow_findings, run_checks)
 
 ROOT = Path(__file__).resolve().parents[1]
 PR_SLOW_FLAG = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
@@ -39,7 +40,8 @@ GCP_JOBS = {
     'ci.yml': ('pr', ('authz', 'changes', 'preflight', 'build', 'sanitizers',
                       'kernel-only', 'build-gate')),
     'native-live.yml': ('pr', ('authz', 'native-live', 'native-live-gate')),
-    'corpus-parity.yml': ('pr', ('corpus-parity', 'corpus-parity-subset')),
+    'corpus-parity.yml': ('pr', ('authz', 'corpus-parity', 'corpus-parity-subset')),
+    'docs.yml': ('pr', ('authz', 'build')),
     'release.yml': ('main', ('release', 'prebuilt', 'notify-hub')),
     'promote-baseline.yml': ('main', ('promote',)),
 }
@@ -97,7 +99,7 @@ class PreflightFailures(unittest.TestCase):
                 if path.endswith(('.yml', '.yaml'))} | self.other_sources()
 
     def gcp_sites(self):
-        """All 16 fleet sites, including the two matrix values."""
+        """All 19 fleet sites, including the two matrix values."""
         for name, (fleet, jobs) in GCP_JOBS.items():
             runner = PR_RUNNER if fleet == 'pr' else RELEASE_RUNNER
             for job in jobs:
@@ -106,7 +108,8 @@ class PreflightFailures(unittest.TestCase):
                 elif (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
                 else:
-                    value = '["self-hosted", "pf-gcp-pr"]' if job == 'authz' else runner
+                    value = ('["self-hosted", "pf-gcp-pr"]'
+                             if job == 'authz' or name == 'docs.yml' else runner)
                     finding = f'{name} job {job} must run on {runner}'
                     if fleet == 'main':
                         finding += ' (isolated release)'
@@ -133,14 +136,26 @@ class PreflightFailures(unittest.TestCase):
             sources[index] = path.read_text()
             return ci_workflow_findings(*sources, others=self.other_sources())
 
+    def assert_gated_mutation(self, index, job, before, after, finding):
+        """The direct pin and CI's contract must both read and refuse the mutation."""
+        sources = self.ci_sources()
+        changed = in_job(sources[index], job, before, after)
+        self.assertNotEqual(changed, sources[index], 'the mutation must change the input')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / Path(CI_SOURCES[index]).name
+            path.write_text(changed)
+            sources[index] = path.read_text()
+            self.assertIn(finding, gated_workflow_findings(sources[index], path.name))
+            self.assertIn(finding, ci_workflow_findings(*sources, others=self.other_sources()))
+
     def test_pool_jobs_reject_hosted_runners_and_fallbacks_from_mutated_files(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
-        for index in (0, 1, 4):
+        for index in (0, 1, 4, 5):
             name = Path(CI_SOURCES[index]).name
             for job, (runner, _) in JOB_RUNNERS[name].items():
                 # The matrix expression is pinned together with its include values.
-                marker = '    runs-on: ' + (runner if job != 'authz' else
-                                            '["self-hosted", "pf-gcp-pr"]')
+                marker = '    runs-on: ' + ('["self-hosted", "pf-gcp-pr"]'
+                                            if job == 'authz' or name == 'docs.yml' else runner)
                 for replacement in ('ubuntu-24.04', 'ubuntu-latest', 'pf-linux-x64-16',
                                     "'" + (PR_RUNNER if job == 'build' else runner) + "'",
                                     "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"):
@@ -185,6 +200,97 @@ class PreflightFailures(unittest.TestCase):
                       '  pull_request:\n    paths: [src/**]\n'):
             findings = self.mutated_file_findings(0, None, '  pull_request:\n', after)
             self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_gated_workflows_accept_current_text(self):
+        sources = self.ci_sources()
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            with self.subTest(workflow=name):
+                self.assertEqual(gated_workflow_findings(sources[index], name), [])
+        self.assertEqual(ci_workflow_findings(*sources, others=self.other_sources()), [])
+
+    def test_gated_workflows_refuse_a_removed_authz_job(self):
+        sources = self.ci_sources()
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            authz = '  authz:' + _jobs(sources[index])['authz']
+            with self.subTest(workflow=name):
+                self.assert_gated_mutation(index, None, authz, '',
+                    f'{name} must start with the verbatim canon authz job')
+
+    def test_gated_workflows_require_authz_for_every_dependent_job(self):
+        for index, job in ((4, 'corpus-parity'), (4, 'corpus-parity-subset'), (5, 'build')):
+            name = Path(CI_SOURCES[index]).name
+            for after in ('', '    needs: [wrong-authz]\n'):
+                with self.subTest(workflow=name, job=job, dependency=after):
+                    self.assert_gated_mutation(index, job, '    needs: [authz]\n', after,
+                        f'{name} job {job} must need authz')
+
+    def test_gated_workflows_refuse_a_one_character_authz_script_change(self):
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            with self.subTest(workflow=name):
+                self.assert_gated_mutation(index, 'authz',
+                    '          set -eu\n', '          set -ev\n',
+                    f'{name} must start with the verbatim canon authz job')
+
+    def test_gated_corpus_refuses_hosted_fallback_expressions(self):
+        fallback = "${{ fromJSON('" + PR_RUNNER + "') || 'ubuntu-24.04' }}"
+        for job in ('corpus-parity', 'corpus-parity-subset'):
+            with self.subTest(job=job):
+                self.assert_gated_mutation(4, job, f'    runs-on: {PR_RUNNER}\n',
+                    f'    runs-on: {fallback}\n',
+                    f'corpus-parity.yml job {job} must run on {PR_RUNNER}')
+
+    def test_gated_docs_refuses_a_hosted_build_runner(self):
+        self.assert_gated_mutation(5, 'build',
+            '    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
+            '    runs-on: ubuntu-latest\n',
+            f'docs.yml job build must run on {PR_RUNNER}')
+
+    def test_gated_workflows_refuse_pull_request_target_and_unreadable_events(self):
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            for after in ('\non:\n  pull_request_target:\n', '\non: *unreadable\n'):
+                with self.subTest(workflow=name, events=after):
+                    self.assert_gated_mutation(index, None, '\non:\n', after,
+                        f'{name} must use readable events without pull_request_target')
+
+    def test_gated_workflows_require_authz_first(self):
+        sources = self.ci_sources()
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            original = sources[index]
+            authz = '  authz:' + _jobs(original)['authz']
+            reordered = in_job(original, None, authz, '').rstrip('\n') + '\n' + authz
+            unreadable = in_job(original, None, '\njobs:\n',
+                '\njobs:\n  "pre-build":\n    runs-on: ["self-hosted", "pf-gcp-pr"]\n'
+                '    steps:\n      - run: "true"\n')
+            for after in (reordered, unreadable):
+                with self.subTest(workflow=name, job_order=after):
+                    self.assert_gated_mutation(index, None, original, after,
+                        f'{name} must start with the verbatim canon authz job')
+
+    def test_gated_workflows_refuse_authz_job_overrides_and_extra_steps(self):
+        for index in (4, 5):
+            name = Path(CI_SOURCES[index]).name
+            mutations = [
+                ('    name: authz\n', '    name: renamed\n'),
+                ('    permissions: {}\n', '    permissions: read-all\n'),
+                ('    steps:\n', '    steps:\n      - run: "true"\n'),
+            ]
+            mutations += [('    steps:\n', override + '    steps:\n') for override in (
+                '    needs: [build]\n',
+                '    if: always()\n',
+                '    env: {}\n',
+                '    uses: ./.github/workflows/ci.yml\n',
+                '    strategy: {}\n',
+                '    continue-on-error: true\n',
+            )]
+            for before, after in mutations:
+                with self.subTest(workflow=name, override=after):
+                    self.assert_gated_mutation(index, 'authz', before, after,
+                        f'{name} must start with the verbatim canon authz job')
 
     def test_aggregates_refuse_first_even_when_authz_is_skipped_from_mutated_files(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
@@ -523,8 +629,15 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(MATRIX_RUNNER, '${{ fromJSON(matrix.runner) }}')
         self.assertEqual(HOSTED_MATRIX_RUNNER, '${{ matrix.runner }}')
         self.assertEqual(RELEASE_RUNNER, '["self-hosted","pf-gcp-main"]')
-        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS,
-                         {'docs.yml': {'build': 'ubuntu-latest'}})
+        self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS, {})
+        self.assertEqual(JOB_RUNNERS['corpus-parity.yml'], {
+            'authz': (PR_RUNNER, None),
+            'corpus-parity': (PR_RUNNER, ci_preflight.PARITY),
+            'corpus-parity-subset': (PR_RUNNER, ci_preflight.PARITY),
+        })
+        self.assertEqual(JOB_RUNNERS['docs.yml'], {
+            'authz': (PR_RUNNER, None), 'build': (PR_RUNNER, None),
+        })
         self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS, {
             'release.yml': {
                 'release': '["self-hosted","pf-gcp-main"]',
@@ -578,22 +691,23 @@ class PreflightFailures(unittest.TestCase):
              '          - os: ubuntu-24.04\n            larger_runner: ubuntu-24.04\n',
              'ci.yml must not define a larger_runner key; use the GCP fleet or hosted exceptions'),
             # Block forms of runs-on, and job ids the parser must still see.
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on:\n      group: pineforge-ci-large\n',
-             'docs.yml job build must run on ubuntu-latest (hosted)'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
+             '    runs-on:\n      group: pineforge-ci-large\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', '    runs-on:\n      - macos-26-xlarge\n',
              f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on:\n      group: pineforge-ci-large\n'
              '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner and time limit'),
             (0, None, '  build-gate:\n', '  extra:\n    "runs-on": pf-linux-x64-16\n'
              '    steps:\n      - run: "true"\n\n  build-gate:\n', 'ci.yml job extra needs a pinned runner and time limit'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    "runs-on": pf-linux-x64-16\n',
-             'docs.yml job build must run on ubuntu-latest (hosted)'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on : macos-26-xlarge\n',
-             'docs.yml job build must run on ubuntu-latest (hosted)'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '    "runs-on": pf-linux-x64-16\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '    runs-on : macos-26-xlarge\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', "    'runs-on': macos-26-xlarge\n",
              f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '',
-             'docs.yml job build must run on ubuntu-latest (hosted)'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (5, None, '\njobs:\n', '\njobs:\n  pre_build:\n    runs-on: macos-26-xlarge\n    steps:\n'
              '      - run: "true"\n\n', 'docs.yml job pre_build needs a pinned runner and time limit'),
             (5, None, '\njobs:\n', '\njobs:\n  "pre-build":\n    runs-on: macos-26-xlarge\n    steps:\n'
@@ -602,8 +716,8 @@ class PreflightFailures(unittest.TestCase):
              f'corpus-parity.yml job corpus-parity-subset must run on {PR_RUNNER}'),
             (0, 'build-gate', PR_RUNNER, 'pf-linux-x64-16',
              f'ci.yml job build-gate must run on {PR_RUNNER}'),
-            (5, 'build', '    runs-on: ubuntu-latest\n', '    runs-on: pf-linux-x64-16\n',
-             'docs.yml job build must run on ubuntu-latest (hosted)'),
+            (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n', '    runs-on: pf-linux-x64-16\n',
+             f'docs.yml job build must run on {PR_RUNNER}'),
             (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n', '    runs-on: macos-26-xlarge\n',
              f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} (isolated release)'),
             (0, None, '  build-gate:\n', '  extra:\n    runs-on: ubuntu-24.04\n    steps:\n'
@@ -735,7 +849,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        self.assertEqual(len(sites), 16)
+        self.assertEqual(len(sites), 19)
         self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
         for name, job, fleet, before, finding in sites:
             runner = RELEASE_RUNNER if fleet == 'pr' else PR_RUNNER
@@ -795,7 +909,7 @@ class PreflightFailures(unittest.TestCase):
     def test_authz_header_spacing_and_comment_are_verbatim(self):
         comment = ('    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; '
                    'release-class jobs only on pf-gcp-main.\n')
-        for index in (0, 1):
+        for index in (0, 1, 4, 5):
             name = Path(CI_SOURCES[index]).name
             for before, after in (
                     ('    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
@@ -839,7 +953,10 @@ class PreflightFailures(unittest.TestCase):
 
     def test_legacy_metadata_cannot_replace_runner_pins(self):
         workflows = self.workflow_sources()
-        sites = [site for site in self.gcp_sites() if site[2] == 'pr' and site[1] != 'authz']
+        # Docs has no legacy PF_CI_LABELS declaration; the ten original
+        # metadata-bearing jobs keep this independent population check.
+        sites = [site for site in self.gcp_sites()
+                 if site[2] == 'pr' and site[1] != 'authz' and site[0] != 'docs.yml']
         self.assertEqual(len(sites), 10)
         for name, job, _, before, finding in sites:
             env = ci_preflight._job_block(_jobs(workflows[name])[job], 'env')
@@ -1104,7 +1221,8 @@ class PreflightFailures(unittest.TestCase):
                  f'            --jobs {CORES} --ccache {PR_SLOW_FLAG}'),
                 (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
                  f'run: |\n          JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'),
-                (5, 'build', '    runs-on: ubuntu-latest\n', '    "runs-on": ubuntu-latest\n'),
+                (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
+                 '    "runs-on": ["self-hosted", "pf-gcp-pr"]\n'),
                 (0, 'preflight', '      PF_CI_LABELS:', '      "PF_CI_LABELS":'),
                 (0, 'build', '        os: [ubuntu-24.04, macos-26]\n',
                  '        os: [ubuntu-24.04, macos-26]  # the images\n'),
@@ -1356,13 +1474,15 @@ class PreflightFailures(unittest.TestCase):
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
                 before = (HOSTED_MATRIX_RUNNER if job == 'prebuilt' else
-                          'ubuntu-latest' if name == 'docs.yml' else RELEASE_RUNNER)
+                          '["self-hosted", "pf-gcp-pr"]' if name == 'docs.yml' else RELEASE_RUNNER)
+                after = 'ubuntu-latest' if name == 'docs.yml' else PR_RUNNER
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
-                              f'    runs-on: {PR_RUNNER}\n')
+                              f'    runs-on: {after}\n')
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: pool}))
-                route = 'hosted' if name == 'docs.yml' else 'isolated release'
-                self.assertIn(f'{name} job {job} must run on {before} ({route})', findings)
+                finding = (f'{name} job {job} must run on {PR_RUNNER}' if name == 'docs.yml' else
+                           f'{name} job {job} must run on {before} (isolated release)')
+                self.assertIn(finding, findings)
                 marker = f"      PF_CI_LABELS: '{PR_RUNNER}'\n"
                 # Anchor job keys: four spaces alone also match the tail of
                 # a step-level env key, which would leave the job env empty.
@@ -1376,7 +1496,7 @@ class PreflightFailures(unittest.TestCase):
                                  [PR_RUNNER], f'{name} job {job} fixture must set job-level PF_CI_LABELS')
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: hosted}))
-                route = 'a hosted job' if name == 'docs.yml' else 'an isolated release job'
+                route = 'a gated docs job' if name == 'docs.yml' else 'an isolated release job'
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
     def test_release_dry_run_never_reaches_the_hub_dispatch(self):
@@ -1836,7 +1956,8 @@ class ActionlintRunnerLabels(unittest.TestCase):
         original = self.config.read_text()
         for label, sites in (
                 ('pf-gcp-pr', (('ci.yml', 'authz'), ('native-live.yml', 'authz'),
-                               ('corpus-parity.yml', 'corpus-parity'))),
+                               ('corpus-parity.yml', 'authz'), ('corpus-parity.yml', 'corpus-parity'),
+                               ('docs.yml', 'authz'), ('docs.yml', 'build'))),
                 ('pf-gcp-main', (('release.yml', 'release'), ('promote-baseline.yml', 'promote')))):
             with self.subTest(label=label):
                 changed = original.replace(f'    - {label}\n', '', 1)

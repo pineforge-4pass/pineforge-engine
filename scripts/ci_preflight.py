@@ -111,13 +111,13 @@ JOB_RUNNERS = {
     'native-live.yml': {'authz': (PR_RUNNER, None),
                          'native-live': (PR_RUNNER, VERIFY),
                          'native-live-gate': (PR_RUNNER, None)},
-    'corpus-parity.yml': {'corpus-parity': (PR_RUNNER, PARITY),
+    'corpus-parity.yml': {'authz': (PR_RUNNER, None),
+                          'corpus-parity': (PR_RUNNER, PARITY),
                           'corpus-parity-subset': (PR_RUNNER, PARITY)},
+    'docs.yml': {'authz': (PR_RUNNER, None), 'build': (PR_RUNNER, None)},
 }
-# The docs deployment accepts pull_request, so retains its exact hosted routing.
-HOSTED_JOB_RUNNERS = {
-    'docs.yml': {'build': 'ubuntu-latest'},
-}
+# Keep the mechanism for any future workflow with a pinned hosted exception.
+HOSTED_JOB_RUNNERS = {}
 # LB-435 plus addendum 2: isolate releases and the named promotion exception.
 # The strategy pin keeps the existing macOS and Linux ARM hosted legs.
 RELEASE_JOB_RUNNERS = {
@@ -125,8 +125,8 @@ RELEASE_JOB_RUNNERS = {
                     'notify-hub': RELEASE_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
-# Credential-bearing jobs outside the release pins retain standard hosted
-# labels. Existing hosted exceptions above are pinned separately.
+# Credential-bearing jobs outside the release pins and gated docs build retain
+# standard hosted labels. Existing hosted exceptions above are pinned separately.
 STANDARD_RUNNERS = ('ubuntu-24.04', 'macos-26')
 # Refuse paid labels and the old matrix key in every workflow, including the
 # release matrix. Scan code so nested/flow mappings count too.
@@ -149,7 +149,7 @@ DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.cha
 # file is needed on CI runners. Changing the script requires a new canon pin.
 AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
 # The canon header is text, not a decoded array: the fleet comment and the
-# space after the comma bind both authz jobs byte for byte.
+# space after the comma bind every authz job byte for byte.
 AUTHZ_JOB_HEADER = '''    name: authz
     # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
     runs-on: ["self-hosted", "pf-gcp-pr"]
@@ -475,9 +475,11 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
                                     'on an isolated release job')
-            elif job in fixed_hosted or credentials or (job not in pinned and hosted_platform):
-                # PR deployment jobs retain their exact original labels;
-                # unlisted credential jobs retain standard hosted routing.
+            elif (job in fixed_hosted
+                  or (credentials and (name, job) != ('docs.yml', 'build'))
+                  or (job not in pinned and hosted_platform)):
+                # Authz-gated docs deployment is pinned to the fleet below;
+                # other credential jobs retain their hosted routing.
                 if job in fixed_hosted:
                     hosted_ok = runs_on == [fixed_hosted[job]]
                     if not hosted_ok:
@@ -500,6 +502,13 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                   if isinstance(expected_runner, list) else runs_on)
                 if [_runner_value(value) for value in actual_runners] != [expected_runner]:
                     findings.append(f'{name} job {job} must run on {runner}')
+                # Keep docs' existing ban on routing metadata after moving
+                # its deployment from hosted runners to its pinned GCP job.
+                if (name, job) == ('docs.yml', 'build'):
+                    environments = _job_values(workflow, 'env') + _job_values(body, 'env')
+                    if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
+                        findings.append(f'{name} job {job} must not set PF_CI_LABELS '
+                                        'on a gated docs job')
                 # PF_CI_LABELS no longer supplies a routing pin: the six ci.yml,
                 # two native-live.yml and two corpus-parity.yml declarations
                 # still contain pre-migration light/heavy metadata at this HEAD.
@@ -654,6 +663,39 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     return findings
 
 
+# Corpus needs persisted checkout credentials for its HTTPS submodule clone,
+# and docs deploys with Cloudflare secrets: the full authz contract forbids both.
+def gated_workflow_findings(workflow: str, name: str) -> list[str]:
+    """Pin canon authz and its fleet-only dependants without those restrictions."""
+    findings = []
+    jobs = _jobs(workflow)
+    authz = jobs.get('authz', '')
+    steps = _steps(authz)
+    step = steps[0].rstrip('\n') + '\n' if len(steps) == 1 else ''
+    if (not jobs or _unparsed(workflow) or next(iter(jobs)) != 'authz'
+            or not authz.startswith('\n' + AUTHZ_JOB_HEADER)
+            # Extra job keys such as continue-on-error can bypass refusal
+            # without changing either the header or the single step's hash.
+            or _code(authz) != _code(AUTHZ_JOB_HEADER) + ['    steps:'] + _code(step)
+            or _job_values(authz, 'name') != ['authz']
+            or _job_values(authz, 'permissions') != ['{}']
+            or any(_job_values(authz, key) for key in ('needs', 'if', 'env', 'uses', 'strategy'))
+            or hashlib.sha256(step.encode()).hexdigest() != AUTHZ_STEP_SHA256):
+        findings.append(f'{name} must start with the verbatim canon authz job')
+    events = _events(workflow)
+    if events is None or 'pull_request_target' in events:
+        findings.append(f'{name} must use readable events without pull_request_target')
+    for job, body in jobs.items():
+        if job != 'authz' and 'authz' not in _needs(body):
+            findings.append(f'{name} job {job} must need authz')
+        # Literal arrays may differ in whitespace; quoted JSON scalars and
+        # expressions cannot stand in for the fleet's two scheduler labels.
+        runners = _job_values(body, 'runs-on', unquote=False)
+        if [_runner_value(value) for value in runners] != [_runner_value(PR_RUNNER)]:
+            findings.append(f'{name} job {job} must run on {PR_RUNNER}')
+    return findings
+
+
 def native_workflow_findings(native: str, curl_action: str | None = None) -> list[str]:
     findings = authz_workflow_findings(native, 'native-live.yml', 'native-live-gate')
     jobs = _jobs(native)
@@ -768,6 +810,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
                                 'promote-baseline.yml': promote, **(others or {})})
     findings += authz_workflow_findings(ci, 'ci.yml', 'build-gate')
     findings += native_workflow_findings(native, curl_action)
+    findings += gated_workflow_findings(parity, 'corpus-parity.yml')
+    findings += gated_workflow_findings(docs, 'docs.yml')
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
     for trigger in ('push:\n    branches: [main]', 'pull_request:', 'workflow_dispatch:'):

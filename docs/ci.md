@@ -1070,9 +1070,13 @@ closed `pull_request_target` and manual dispatch triggers; only its
 `runs-on` line changes in the workflow.
 
 Other jobs in workflows triggered by `pull_request` or `pull_request_target`
-do not move to the release class. Docs `build` stays on `ubuntu-latest` because
-`docs.yml` accepts `pull_request`, even though its Cloudflare deployment step
-skips that event. That workflow is left intact.
+do not move to the release class. Docs `build` and both `corpus-parity.yml`
+jobs run on `pf-gcp-pr` behind the canonical `authz` job: `docs.yml` and
+`corpus-parity.yml` both accept `pull_request`, so a fork pull request must be
+refused before any checkout, exactly as `ci.yml` and `native-live.yml` refuse
+it. Outsider pull requests run no CI at all; there is no hosted fallback left
+on either workflow. The docs Cloudflare deployment step still skips
+`pull_request` events.
 
 Both aggregates use `if: always()` and first refuse unless authz succeeded,
 before any checkout or repository code. The native aggregate then requires
@@ -1111,8 +1115,9 @@ steps. Under owner #827 (2026-10-20), no job or step may declare
 `timeout-minutes`, authz included. GitHub's own 6 h platform maximum is the
 only bound; no step, stage or row deadline is added.
 
-`corpus-parity.yml` now pins both jobs to the plain `pf-gcp-pr` literal, while
-documentation deployment retains its existing hosted route and separate pin.
+`corpus-parity.yml` pins both jobs to the plain `pf-gcp-pr` literal behind
+canon authz, and documentation deployment moved from its former hosted route
+to the same gated `pf-gcp-pr` job (PR #472 security fix, 2026-10-21).
 Baseline promotion and release keep #461's separate release pins, now on
 `pf-gcp-main`; their trigger and promotion checks remain binding.
 The literal corpus runner pin refuses the former conditional expression and
@@ -1139,9 +1144,9 @@ Owner ruling of 2026-10-20, CI-HOSTED = B: all CI runs on our own machines,
 credentialed jobs included, subject to the pinned hosted exceptions below.
 Non-release jobs run on `pf-gcp-pr`; the named release and promotion jobs
 run on the separate `pf-gcp-main` class (protected refs, one job per VM),
-never on the shared non-release fleet. Hosted macOS jobs, docs `build` on
-`ubuntu-latest` and release Linux ARM on `ubuntu-22.04-arm` retain their exact
-GitHub runner pins. The earlier CR-171 hosted exception is VOID.
+never on the shared non-release fleet. Hosted macOS jobs and release Linux ARM
+on `ubuntu-22.04-arm` retain their exact GitHub runner pins. The earlier
+CR-171 hosted exception is VOID.
 
 Owner ruling of 2026-10-20, REL-HOSTED = B: the release cut and Linux x64
 artifact build run on `pf-gcp-main`; the existing ARM/macOS matrix legs retain
@@ -1151,13 +1156,17 @@ As of 2026-10-21, #461 has merged as main `03b2406dd`: the old hosted pins
 for the engine's release and promote jobs are gone. `RELEASE_JOB_RUNNERS`
 and `runner_findings` in `scripts/ci_preflight.py` pin those jobs to
 `pf-gcp-main`, with the release `prebuilt` job selecting its pinned matrix.
-`HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py` lists only docs `build` on
-`ubuntu-latest`. The existing guard for unlisted credential-bearing jobs
-still requires standard hosted routing (`runner_findings` in `scripts/ci_preflight.py`),
-and the release matrix retains its hosted ARM/macOS legs
-(`RELEASE_STRATEGY` in `scripts/ci_preflight.py`). The remaining hosted Linux
-routes are the pinned docs `ubuntu-latest` and release ARM
-`ubuntu-22.04-arm` exceptions.
+`HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py` is now empty: docs `build`
+moved to `["self-hosted","pf-gcp-pr"]` behind canon authz (2026-10-21, the
+PR #472 security fix), and `gated_workflow_findings` pins it and both
+`corpus-parity.yml` jobs — first-job authz, the byte-canonical header and step
+hash, `needs: [authz]` on every other job, readable events without
+`pull_request_target`, and a literal fleet array on every `runs-on`. The
+existing guard for unlisted credential-bearing jobs still requires standard
+hosted routing (`runner_findings` in `scripts/ci_preflight.py`), and the
+release matrix retains its hosted ARM/macOS legs (`RELEASE_STRATEGY` in
+`scripts/ci_preflight.py`). The only remaining hosted Linux route is release
+ARM `ubuntu-22.04-arm`.
 
 The `release.yml` pin requires readable `workflow_dispatch`-only triggers,
 refusing both PR events. The named promotion exception requires its existing
