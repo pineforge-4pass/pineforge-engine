@@ -1061,6 +1061,7 @@ fallback. The `prebuilt` matrix keeps its three legs and
 `runs-on: ${{ matrix.runner }}`; `linux-aarch64` retains `ubuntu-22.04-arm`
 as an existing hosted exception, while `macos-universal` retains
 `macos-latest`. The workflow remains `workflow_dispatch` only.
+A release is refused unless the released tree's merged-PR head carries `pineforge/verify` and `pineforge/parity` success, read through the statuses API (fail closed); main commits carry no statuses.
 
 The GCP fleet also routes baseline `promote` in `promote-baseline.yml`
 to `["self-hosted","pf-gcp-main"]`, preserving L6's 15:40 addendum's
