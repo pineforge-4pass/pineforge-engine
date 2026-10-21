@@ -383,3 +383,61 @@ ctest, test binary, repository script, generator, install or lab job ran.
 HEAD is unchanged, the index is empty, and the pre-existing dirty `corpus`
 submodule was not touched. `DONE-fix3` marks this edit-only handoff and its
 explicit cross-lane request, not a build/test PASS.
+
+## Fix round 4
+
+Base / unchanged HEAD: `9fea11a461a0d89bc7c32688cc33c311e0becac2`.
+The supervisor's proof `rj-20261021t053751-f71c98` failed Release and
+Debug builds because neither existing reservation overload accepted the
+queue. This round explicitly authorizes the missing overload in
+`src/engine_execution.cpp`; the round-3 pending integration request above
+is superseded.
+
+Added this definition at `src/engine_execution.cpp:78`, immediately after
+the unchanged `TradeLedger` overload in the same anonymous namespace:
+
+```diff
++void reserve_effects(StreamActionQueue& values, size_t) {
++    values.reserve(0); // prepare the external files; no count-dependent reservation
++}
++
+```
+
+The existing queue implementation at `src/engine_stream.cpp:88` already
+ignores the reservation count and prepares its external storage. The new
+overload delegates directly to that API. The `std::vector<T>` overload
+and `TradeLedger` overload remain byte-identical, preserving their
+signatures, overflow checks, arithmetic and reservation rules.
+
+Every call was read before choosing the additive overload. A recursive
+search including hidden and ignored files found exactly six executable
+calls, all in `src/engine_execution.cpp`: two `StreamActionQueue&`,
+two `TradeLedger&`, and two `std::vector<PyramidEntry>&`. Current line
+numbers follow; the parenthesized lines are from the round-3 HEAD.
+
+| Call site | Call | First argument type | Binding |
+|---|---|---|---|
+| `src/engine_execution.cpp:746` (was 742) | `reserve_effects(engine.stream_order_actions_, events)` | `pineforge::StreamActionQueue&` | New defined `reserve_effects(StreamActionQueue&, size_t)` overload. |
+| `src/engine_execution.cpp:748` (was 744) | `reserve_effects(engine.trades_, count)` | `pineforge::TradeLedger&` | Unchanged `reserve_effects(TradeLedger&, size_t)` overload. |
+| `src/engine_execution.cpp:749` (was 745) | `reserve_effects(engine.pyramid_entries_, 1)` | `std::vector<pineforge::PyramidEntry>&` | Unchanged vector template with `T = pineforge::PyramidEntry`. |
+| `src/engine_execution.cpp:1398` (was 1394) | `reserve_effects(stream_order_actions_, events)` | `pineforge::StreamActionQueue&` | New defined `reserve_effects(StreamActionQueue&, size_t)` overload. |
+| `src/engine_execution.cpp:1400` (was 1396) | `reserve_effects(trades_, closed_trades.size())` | `pineforge::TradeLedger&` | Unchanged `reserve_effects(TradeLedger&, size_t)` overload. |
+| `src/engine_execution.cpp:1401` (was 1397) | `reserve_effects(pyramid_entries_, 1)` | `std::vector<pineforge::PyramidEntry>&` | Unchanged vector template with `T = pineforge::PyramidEntry`. |
+
+Each call binds to a definition visible before its use, by source
+inspection; compilation remains unverified. No call, test, static_assert
+or existing overload was changed.
+
+No behaviour, size arithmetic or capacity semantics changed; this is a compile-surface fix only.
+
+Read-only diff review: `git diff --check` passed. Only this report and
+the four-line overload in `src/engine_execution.cpp` were edited.
+The insertion shifts later source citations by four lines; the existing
+citations in `docs/design/native-feature-parity.md` and
+`docs/pages/pine-to-native.md` need that numeric adjustment by their
+owner and were left outside this round's source/report edit scope.
+
+No local build, preflight, test, measurement or corpus sweep ran, as
+instructed. Release/Debug compilation, C++ unit tests and full corpus
+verification remain for the supervisor. No staging or commit was
+performed, and the pre-existing dirty `corpus` submodule was untouched.

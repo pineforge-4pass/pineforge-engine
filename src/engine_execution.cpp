@@ -75,6 +75,10 @@ void reserve_effects(TradeLedger& values, size_t extra) {
     values.reserve(resident + extra);
 }
 
+void reserve_effects(StreamActionQueue& values, size_t) {
+    values.reserve(0); // prepare the external files; no count-dependent reservation
+}
+
 struct CloseScopeInspection {
     execution::Status status = execution::Status::Applied;
     double held = 0.0;
