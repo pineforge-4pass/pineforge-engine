@@ -20,9 +20,9 @@
 #include "pine_reissue_binding.hpp"
 #include "pine_run_failure.hpp"
 #include "pine_checked_arith.hpp"
+#include "pine_command_scratch_production.hpp"
 #include "pine_value_admission.hpp"
 
-#include <cerrno>
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -44,8 +44,6 @@
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
-#include <fcntl.h>
-#include <unistd.h>
 
 // A condition the per-bar path almost never meets: a narrow margin or
 // admission scope. The hint lays its body out of the fall-through path; the
@@ -1030,78 +1028,14 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 
 namespace detail {
 namespace {
-// The source run owner explicitly chooses an unlinked disk file in its
-// working directory. No environment lookup, finite extent or medium fallback.
-class ExitScratchDiskBacking final : public pineforge::detail::ScratchBacking {
-public:
-    explicit ExitScratchDiskBacking(std::size_t page_size)
-        : ScratchBacking(pineforge::detail::ScratchBackingKind::disk, page_size) {
-        char path[] = ".pineforge-exit-XXXXXX";
-        fd_ = ::mkstemp(path);
-        if (fd_ < 0) exit_scratch_failure(ScratchStatus::io_error);
-        if (::unlink(path) != 0 || ::fcntl(fd_, F_SETFD, FD_CLOEXEC) < 0) {
-            ::close(fd_);
-            fd_ = -1;
-            exit_scratch_failure(ScratchStatus::io_error);
-        }
-    }
-    ~ExitScratchDiskBacking() noexcept override { if (fd_ >= 0) ::close(fd_); }
-    std::uint64_t page_count() const noexcept override { return extent_; }
-
-protected:
-    ScratchStatus do_read_page(pineforge::detail::ScratchPageId id,
-                               ScratchBuffer destination) const noexcept override {
-        if (id >= extent_) return ScratchStatus::not_found;
-        const auto offset = id * page_size();
-        std::size_t done = 0;
-        while (done != destination.size) {
-            const auto count = ::pread(fd_, destination.data + done,
-                destination.size - done, static_cast<off_t>(offset + done));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) return ScratchStatus::io_error;
-            done += static_cast<std::size_t>(count);
-        }
-        return ScratchStatus::ok;
-    }
-    ScratchStatus do_write_page(pineforge::detail::ScratchPageId id,
-                                pineforge::detail::ScratchBytes source) noexcept override {
-        const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
-        if (id >= maximum / page_size()) return ScratchStatus::programming_error;
-        if (id >= extent_) {
-            int result;
-            do { result = ::ftruncate(fd_, static_cast<off_t>((id + 1) * page_size())); }
-            while (result < 0 && errno == EINTR);
-            if (result < 0) return ScratchStatus::io_error;
-            extent_ = id + 1;
-        }
-        const auto offset = id * page_size();
-        std::size_t done = 0;
-        while (done != source.size) {
-            const auto count = ::pwrite(fd_, source.data + done, source.size - done,
-                                        static_cast<off_t>(offset + done));
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) return ScratchStatus::io_error;
-            done += static_cast<std::size_t>(count);
-        }
-        return ScratchStatus::ok;
-    }
-    ScratchStatus do_sync(ScratchDurability durability) noexcept override {
-        if (durability == ScratchDurability::buffered) return ScratchStatus::ok;
-        int result;
-        do { result = ::fsync(fd_); } while (result < 0 && errno == EINTR);
-        return result == 0 ? ScratchStatus::ok : ScratchStatus::io_error;
-    }
-
-private:
-    int fd_ = -1;
-    std::uint64_t extent_ = 0;
-};
-
+// Use the production disk factory for directory selection and per-run I/O
+// observation, sharing the command scratch backing policy.
 struct ExitScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
-    ExitScratchDiskBacking backing{512};
+    std::unique_ptr<pineforge::detail::ScratchBacking> backing =
+        make_command_scratch_backing(512);
     ScratchStore store{{2, 512, 1, 1, exit_scratch_key_order(),
-                        pineforge::detail::ScratchOpenMode::create_empty}, &backing};
+                        pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
     ExitScratchContext context;
 
     explicit ExitScratchRun(const native_order::RunIdentity& run) : context{store, run} {

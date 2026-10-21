@@ -12,6 +12,7 @@
 #if __has_include(<pineforge/source/exit_scratch.hpp>)
 #define PF_HAS_EXIT_SCRATCH 1
 #include <pineforge/source/exit_scratch.hpp>
+#include "../src/source/pine_command_scratch_production.hpp"
 #else
 #define PF_HAS_EXIT_SCRATCH 0
 #endif
@@ -20,7 +21,6 @@
 #include "global_allocation_replacement.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
@@ -99,19 +99,18 @@ struct WorkspaceCharge {
 };
 
 struct ScratchFixture {
-    // Backing for the finite test workload, charged separately from the two
-    // 512-byte RESIDENT cache pages. This is the shared contract's fixture,
-    // not an alternative store. Each test gets a new logical empty backing.
-    static inline std::array<std::byte, 64 * 1024 * 1024> bytes{};
+    // Production disk backing, charged separately from the two 512-byte
+    // RESIDENT cache pages. Each test gets a new logical empty backing.
     static inline std::size_t fixed_workspace_bytes = 0;
     static inline std::uint64_t fixed_resident_bytes = 0;
     native_order::RunIdentity run{native_order::SessionKey{"exit-scratch"}, 1};
     WorkspaceCharge workspace;
     source::detail::ExitScratchOrderStats order;
-    pineforge::detail::FixedMemoryScratchBacking backing{{bytes.data(), bytes.size()}, 512};
+    std::unique_ptr<pineforge::detail::ScratchBacking> backing =
+        source::detail::make_command_scratch_backing(512);
     pineforge::detail::ScratchStore store{
         {2, 512, 1, 1, source::detail::exit_scratch_key_order(&order),
-         pineforge::detail::ScratchOpenMode::create_empty}, &backing};
+         pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
     source::detail::ExitScratchContext context{store, run};
     std::size_t max_scope_rows = 0;
     std::uint64_t max_store_rows = 0;
@@ -123,6 +122,7 @@ struct ScratchFixture {
 
     ScratchFixture() {
         workspace.finish();
+        CHECK(backing->kind() == pineforge::detail::ScratchBackingKind::disk);
         CHECK(store.status() == pineforge::detail::ScratchStatus::ok);
         CHECK(workspace.bytes != 0);
         if (fixed_workspace_bytes == 0) fixed_workspace_bytes = workspace.bytes;
@@ -154,14 +154,14 @@ struct ScratchFixture {
     void population(std::size_t rows) const {
         CHECK(max_scope_rows >= rows);
         CHECK(max_store_rows >= rows);
-        CHECK(backing.page_count() > 2);
+        CHECK(backing->page_count() > 2);
         CHECK(store.stats().resident_bytes == fixed_resident_bytes);
         CHECK(max_lookup_rows <= 1);
         std::printf("%s: rows=%zu workspace=%zu total-heap-bound=%zu backing-pages=%llu "
                     "lookups=%zu candidates=%zu max-per-query=%zu comparisons=%llu "
                     "query-page-reads=%llu max-query-page-reads=%llu\n",
             scenario, rows, workspace.bytes, workspace.bytes + kScratchBytes,
-            static_cast<unsigned long long>(backing.page_count()),
+            static_cast<unsigned long long>(backing->page_count()),
             lookup_calls, lookup_rows, max_lookup_rows,
             static_cast<unsigned long long>(order.comparisons),
             static_cast<unsigned long long>(query_page_reads),
@@ -381,8 +381,26 @@ void ended_sources(std::size_t population) {
 }
 
 #if PF_HAS_EXIT_SCRATCH
+struct ProductionScratchIo {
+    std::uint64_t page_writes = 0;
+    bool disk_only = true;
+    pineforge::detail::ScratchIoObserver previous;
+
+    ProductionScratchIo()
+        : previous(source::detail::set_command_scratch_io_observer({
+            this, [](void* opaque, const pineforge::detail::ScratchIoCharge& charge) noexcept {
+                auto& io = *static_cast<ProductionScratchIo*>(opaque);
+                io.disk_only = io.disk_only
+                    && charge.kind == pineforge::detail::ScratchBackingKind::disk;
+                if (charge.operation == pineforge::detail::ScratchIoOperation::write_page)
+                    ++io.page_writes;
+            }})) {}
+    ~ProductionScratchIo() { source::detail::set_command_scratch_io_observer(previous); }
+};
+
 void production_begin_binding(std::size_t population) {
     scenario = "X25-X27 projected run store and lifecycle";
+    ProductionScratchIo io;
     EmptyHost host;
     Adapter adapter(host);
     source::StagedConfiguration staged;
@@ -417,6 +435,8 @@ void production_begin_binding(std::size_t population) {
         placements.try_emplace(incarnation, row);
         live.push_back({spec.identity, incarnation});
     }
+    const auto writes_before = context.store.stats().page_writes;
+    const auto charged_writes_before = io.page_writes;
     {
         Measure measure;
         const auto selected = (adapter.*access(Children{}))("exit", 0);
@@ -434,6 +454,10 @@ void production_begin_binding(std::size_t population) {
     CHECK(context.store.record_count() == 0);
     CHECK(context.store.stats().backing_pages > 2);
     CHECK(context.store.stats().resident_bytes == resident);
+    CHECK(io.page_writes > charged_writes_before);
+    CHECK(io.page_writes - charged_writes_before
+        == context.store.stats().page_writes - writes_before);
+    CHECK(io.disk_only);
     std::printf("%s: rows=%zu resident=%llu backing-pages=%llu\n", scenario, population,
         static_cast<unsigned long long>(resident),
         static_cast<unsigned long long>(context.store.stats().backing_pages));
