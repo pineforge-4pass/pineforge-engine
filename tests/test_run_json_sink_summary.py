@@ -283,6 +283,48 @@ def test_sink_options_reject_invalid_c_strings_before_loading(tmp_path, monkeypa
     assert document["args"] == {"option": "arguments"}
 
 
+@pytest.mark.parametrize("outputs", [False, True])
+@pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
+def test_selected_mode_honours_named_sink(tmp_path, monkeypatch, frozen, outputs, pnls):
+    # Import at call time: test_run_json_selected_sink imports this module's
+    # read_reference and project_summary helpers.
+    import test_run_json_selected_sink as selected_sinks
+
+    path, spill = tmp_path / "selected report 漢.ndjson", tmp_path / "spill"
+    spill.mkdir()
+    run_id = 'selected "summary"\n漢'
+    plan = selected_sinks.selected.full_plan()
+    before = selected_sinks.invoke(
+        tmp_path, monkeypatch, runner=frozen, plan=plan, outputs=outputs,
+        library=selected_sinks.SelectedSinkLibrary(plan, pnls=pnls, outputs=outputs))
+    library = selected_sinks.NamedSinkLibrary(plan, pnls=pnls, outputs=outputs)
+    after = selected_sinks.invoke(
+        tmp_path, monkeypatch, plan=plan, outputs=outputs, library=library,
+        extra=["--report-sink", str(path), "--run-id", run_id, "--spill-dir", str(spill)])
+    assert (before[0], before[2], after[0], after[2]) == (0, "", 0, ""), (before[1], after[1])
+    assert path.is_file()
+    reference = read_reference(path)
+    document, array = json.loads(after[1]), json.loads(before[1])
+    assert document["report_sink"] == reference
+    assert tuple(document["report_sink"]) == REFERENCE_KEYS
+    assert not {"trades", "equity_curve"} & set(document)
+    assert {"report_window", "report_shape"} <= set(document)
+    if outputs:
+        assert tuple(document["outputs"]) == OUTPUT_KEYS
+    assert reference["path"] == str(path)
+    assert reference["run_id"] == run_id
+    assert reference["counts"] == library.counts
+    assert reference["counts"]["T"] == len(array["trades"])
+    assert reference["counts"]["E"] == len(array["equity_curve"])
+    assert reference["sha256"] == library.sha
+    assert library.descriptors == [(str(path), run_id, str(spill))]
+    assert library.queried == 1 and library.closed == [str(path)]
+    assert not library.incarnation_reads and after[4][0].phase == "completed"
+    expected = project_summary(json.loads(selected_sinks.masked_bytes(before[1])), reference)
+    assert selected_sinks.masked_bytes(after[1]) == json.dumps(
+        expected, separators=(",", ":"), allow_nan=False)
+
+
 def native_summary_compare(tmp_path, module, argv):
     frozen_path = tmp_path / "frozen_run_json.py"
     frozen_path.write_bytes(full._frozen_source_bytes())

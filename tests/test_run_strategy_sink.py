@@ -593,21 +593,21 @@ def test_engine_gets_a_named_owner_only_file_and_every_reader_starts_at_zero(
 
 def test_sink_owner_unlinks_once_and_tolerates_a_vanished_file(sink_directory):
     library = PathLibrary()
-    sink = run_json._TemporaryReportSink(library, 7, directory=sink_directory)
+    sink = run_json._ReportSink(library, 7, directory=sink_directory)
     path = Path(library.paths[0])
     assert path == Path(sink.path) and path.is_file() and path.stat().st_size == 0
     assert sink.directory == str(sink_directory)
     sink.close()
     assert sink.closed and not path.exists()
     sink.close()  # idempotent
-    vanished = run_json._TemporaryReportSink(library, 7, directory=sink_directory)
+    vanished = run_json._ReportSink(library, 7, directory=sink_directory)
     os.unlink(vanished.path)
     vanished.close()  # FileNotFoundError is tolerated
     assert vanished.closed
 
 
 def test_sink_owner_keeps_its_file_only_when_asked(sink_directory):
-    sink = run_json._TemporaryReportSink(PathLibrary(), 7, directory=sink_directory)
+    sink = run_json._ReportSink(PathLibrary(), 7, directory=sink_directory)
     sink.keep = True
     sink.close()
     path = Path(sink.path)
@@ -619,13 +619,13 @@ def test_sink_owner_keeps_its_file_only_when_asked(sink_directory):
 
 def test_sink_owner_leaves_no_file_when_the_engine_refuses_it(sink_directory):
     with pytest.raises(run_json.RunFailure, match="refused"):
-        run_json._TemporaryReportSink(PathLibrary(status=-1), 7, directory=sink_directory)
+        run_json._ReportSink(PathLibrary(status=-1), 7, directory=sink_directory)
     assert not list(sink_directory.iterdir())
 
 
 def test_sink_owner_without_a_directory_has_the_existing_failure_code(tmp_path):
     with pytest.raises(run_json.RunFailure) as error:
-        run_json._TemporaryReportSink(PathLibrary(), 7, directory=tmp_path / "missing")
+        run_json._ReportSink(PathLibrary(), 7, directory=tmp_path / "missing")
     assert error.value.code == "report_sink_failed"
 
 
