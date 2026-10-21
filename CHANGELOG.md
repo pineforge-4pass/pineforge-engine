@@ -5,6 +5,25 @@ README's *Releases* section and on the GitHub releases page. From 1.0.0 the
 version number follows semantic versioning over the surfaces the
 [public contract](docs/pages/public-contract.md) lists.
 
+## Unreleased
+
+- **Ownership manifest controls run in four CTest shards (CR-196).** The same
+  loader-discovered cases keep every assertion and the 180-second timeout per
+  row; a cheap guard checks complete, disjoint assignment for shard counts
+  1 through 8. Preflight continues to run the complete unsharded suite.
+- **EN-115 selected-window completeness proof completed.** From 1.6.2 the image
+  declares selected-window contract revision `1.3` again: the section-4
+  producers and manifest are present, `value_ownership` is `complete`, and a
+  revision `1.3` pairs only with a `complete` receipt. The `docker/run_json.py
+  --capabilities-json` probe reports
+  `capabilities.selected_window_contract_revisions` as `["1.3"]` on a
+  supported runtime and `[]` otherwise. The published 1.5.0 image declared
+  `1.3-parity` (earlier images carried no revision member), the published
+  1.6.0 image declared `1.3` without a completeness proof, and engine 1.6.1
+  (released, no hub image) declares `1.3-parity`; it remains the parity
+  build's literal, and a tuple holding both is invalid. No wire or ABI change: the selected-window wire version
+  stays 1, the phase version 1 and the fingerprint/schema version 2.
+
 ## 1.6.1 — 2026-10-18
 
 **[1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)**,

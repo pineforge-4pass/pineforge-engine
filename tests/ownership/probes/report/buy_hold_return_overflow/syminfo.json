@@ -1,0 +1,7 @@
+{
+  "mintick": 1,
+  "mincontract": 0.5,
+  "pointvalue": 1e300,
+  "timezone": "UTC",
+  "session": "24x7"
+}

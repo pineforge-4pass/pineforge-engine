@@ -38,11 +38,18 @@ struct EquityFoldSnapshot {
     EquityReturnSummary bar_returns, month_returns;
     // Report-only ordered witness, independent of the broker-state hash.
     std::uint64_t point_witness = 1469598103934665603ULL;
+    // First failure in the ordered point walk, deferred until finalization:
+    // the array producer checks inputs and the FINAL open profit first.
+    const char* nonfinite_field = nullptr;
 
-    double span_years() const {
-        return static_cast<double>(last.time_ms - first.time_ms)
-            / (365.25 * 86400.0 * 1000.0);
+    double span_ms() const {
+        return last.time_ms >= first.time_ms
+            ? static_cast<double>(static_cast<std::uint64_t>(last.time_ms)
+                                  - static_cast<std::uint64_t>(first.time_ms))
+            : -static_cast<double>(static_cast<std::uint64_t>(first.time_ms)
+                                   - static_cast<std::uint64_t>(last.time_ms));
     }
+    double span_years() const { return span_ms() / (365.25 * 86400.0 * 1000.0); }
     bool needs_second_pass() const {
         return month_returns.count >= 2
             || (point_count >= 3 && span_years() > 0.0 && bar_returns.count >= 2);
@@ -52,6 +59,9 @@ struct EquityFoldSnapshot {
             && observation_count == other.observation_count
             && bars_in_market == other.bars_in_market
             && point_witness == other.point_witness
+            && ((nonfinite_field == nullptr && other.nonfinite_field == nullptr)
+                || (nonfinite_field && other.nonfinite_field
+                    && std::strcmp(nonfinite_field, other.nonfinite_field) == 0))
             && bar_returns.count == other.bar_returns.count
             && month_returns.count == other.month_returns.count
             && std::memcmp(&bar_returns.sum, &other.bar_returns.sum, sizeof(double)) == 0
@@ -63,6 +73,15 @@ struct EquityFoldSnapshot {
 
 namespace fold_detail {
 constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+
+// Do not throw while accumulating a prefix. A terminal replacement can remove
+// its held defect, and a completed report has checks preceding this walk.
+// Keep only the first field in each ordered stage; the producer's existing
+// report_result_invalid helper raises it at that stage during finalization.
+inline double defer_nonfinite(double value, const char* field, const char*& first) {
+    if (!std::isfinite(value) && first == nullptr) first = field;
+    return value;
+}
 
 // The state of the array path's two return generators, in their original
 // order. A bucket closes on a KEY CHANGE, including nonmonotonic timestamps.
@@ -125,18 +144,24 @@ struct FirstPrefix {
         if (observation) ++s.observation_count;
         if (observation && exposed) ++s.bars_in_market;
         s.last = point;
-        const double eq = point.equity;
+        const auto check = [&s](double value, const char* field) {
+            return defer_nonfinite(value, field, s.nonfinite_field);
+        };
+        const double eq = check(point.equity, "equity_curve.equity");
+        check(point.open_profit, "equity_curve.open_profit");
         if (eq > peak) { peak = eq; trough = eq; }
         if (eq < trough) trough = eq;
-        const double dd = peak - eq;
+        const double dd = check(peak - eq, "metrics.equity.max_equity_drawdown");
         if (dd > s.max_drawdown) {
             s.max_drawdown = dd;
-            s.max_drawdown_pct = peak > 0.0 ? dd / peak * 100.0 : nan;
+            s.max_drawdown_pct = peak > 0.0
+                ? check(dd / peak * 100.0, "metrics.equity.max_equity_drawdown_pct") : nan;
         }
-        const double ru = eq - trough;
+        const double ru = check(eq - trough, "metrics.equity.max_equity_runup");
         if (ru > s.max_runup) {
             s.max_runup = ru;
-            s.max_runup_pct = trough > 0.0 ? ru / trough * 100.0 : nan;
+            s.max_runup_pct = trough > 0.0
+                ? check(ru / trough * 100.0, "metrics.equity.max_equity_runup_pct") : nan;
         }
         returns.fold(point, key,
             [&](double r) { s.bar_returns.fold(r); },
@@ -204,6 +229,7 @@ struct EquityRatioResult {
     EquityFoldSnapshot expected, replayed;
     double sharpe_monthly = fold_detail::nan, sortino_monthly = fold_detail::nan;
     double sharpe_bar = fold_detail::nan, sortino_bar = fold_detail::nan;
+    const char* nonfinite_field = nullptr;
     bool complete = false;
     bool matches(const EquityFoldSnapshot& first) const {
         return complete && expected.same_input(first) && replayed.same_input(first);
@@ -215,31 +241,44 @@ struct ReturnVariance {
     std::size_t expected_count = 0, count = 0;
     double mean = 0.0, rf = 0.0, ann = 0.0;
     double var = 0.0, down = 0.0;
+    const char* sharpe_field = nullptr;
+    const char* sortino_field = nullptr;
+    const char* nonfinite_field = nullptr;
     bool enabled = false;
+    double check(double value, const char* field) {
+        return defer_nonfinite(value, field, nonfinite_field);
+    }
     void prepare(const EquityReturnSummary& first, double risk_free, double annualization,
-                 bool allowed) {
+                 bool allowed, const char* sharpe_name, const char* sortino_name) {
+        sharpe_field = sharpe_name;
+        sortino_field = sortino_name;
         expected_count = first.count;
         enabled = allowed && first.count >= 2;
         if (!enabled) return;
-        mean = first.sum / static_cast<double>(first.count);
-        rf = risk_free;
-        ann = annualization;
+        rf = check(risk_free, sharpe_field);
+        ann = check(annualization, sharpe_field);
+        check(first.sum, sharpe_field);
+        mean = check(first.sum / static_cast<double>(first.count), sharpe_field);
     }
     void fold(double value) {
         if (!enabled) return;
-        var += (value - mean) * (value - mean);
-        const double d = std::min(0.0, value - rf);
-        down += d * d;
+        check(value, sharpe_field);
+        const double delta = check(value - mean, sharpe_field);
+        var = check(var + delta * delta, sharpe_field);
+        const double d = std::min(0.0, check(value - rf, sortino_field));
+        down = check(down + d * d, sortino_field);
         ++count;
     }
     bool complete() const { return !enabled || count == expected_count; }
-    void finish(double& sharpe, double& sortino) const {
+    void finish(double& sharpe, double& sortino) {
         sharpe = sortino = nan;
         if (!enabled || !complete()) return;
-        const double sd = std::sqrt(var / static_cast<double>(expected_count - 1));
-        const double dd = std::sqrt(down / static_cast<double>(expected_count));
-        if (sd > 0.0) sharpe = (mean - rf) / sd * ann;
-        if (dd > 0.0) sortino = (mean - rf) / dd * ann;
+        const double sd = check(std::sqrt(var / static_cast<double>(expected_count - 1)),
+                                sharpe_field);
+        const double dd = check(std::sqrt(down / static_cast<double>(expected_count)),
+                                sortino_field);
+        if (sd > 0.0) sharpe = check((mean - rf) / sd * ann, sharpe_field);
+        if (dd > 0.0) sortino = check((mean - rf) / dd * ann, sortino_field);
     }
 };
 struct SecondPrefix {
@@ -259,12 +298,15 @@ struct SecondPrefix {
 class EquityMetricsSecondPass {
 public:
     explicit EquityMetricsSecondPass(const EquityFoldSnapshot& first) : expected_(first) {
-        prefix_.months.prepare(first.month_returns, 0.02 / 12.0, std::sqrt(12.0), true);
+        prefix_.months.prepare(first.month_returns, 0.02 / 12.0, std::sqrt(12.0), true,
+                               "metrics.equity.sharpe_monthly", "metrics.equity.sortino_monthly");
         const double span = first.span_years();
         if (first.point_count >= 3 && span > 0.0) {
-            const double bars_per_year = static_cast<double>(first.point_count - 1) / span;
+            const double bars_per_year = prefix_.bars.check(
+                static_cast<double>(first.point_count - 1) / span, "metrics.equity.sharpe_bar");
             prefix_.bars.prepare(first.bar_returns, 0.02 / bars_per_year,
-                                 std::sqrt(bars_per_year), true);
+                                 std::sqrt(bars_per_year), true,
+                                 "metrics.equity.sharpe_bar", "metrics.equity.sortino_bar");
         }
     }
     void fold(const pf_equity_point_t& point, int month_key,
@@ -289,6 +331,10 @@ public:
         if (result.complete) {
             final.months.finish(result.sharpe_monthly, result.sortino_monthly);
             final.bars.finish(result.sharpe_bar, result.sortino_bar);
+            // Monthly ratios precede per-bar ratios in the array producer,
+            // regardless of when either defect was encountered during replay.
+            result.nonfinite_field = final.months.nonfinite_field
+                ? final.months.nonfinite_field : final.bars.nonfinite_field;
         }
         return result;
     }
@@ -299,47 +345,9 @@ private:
     fold_detail::SecondPrefix prefix_;
 };
 
-inline pf_equity_stats_t finalize_equity_metrics(
+pf_equity_stats_t finalize_equity_metrics(
         const EquityFoldSnapshot& first, const EquityMetricInputs& inputs,
-        const EquityRatioResult* ratios = nullptr) {
-    using fold_detail::nan;
-    pf_equity_stats_t e{};
-    e.sharpe_monthly = nan; e.sortino_monthly = nan; e.sharpe_bar = nan; e.sortino_bar = nan;
-    e.cagr = nan; e.calmar = nan; e.recovery_factor = nan;
-    e.buy_hold_return = nan; e.buy_hold_return_pct = nan;
-    e.time_in_market_pct = nan; e.open_pl = 0.0;
-    if (std::isfinite(inputs.first_open) && inputs.first_open > 0.0
-        && std::isfinite(inputs.last_close)) {
-        e.buy_hold_return_pct = (inputs.last_close / inputs.first_open - 1.0) * 100.0;
-        e.buy_hold_return = inputs.initial_capital * (inputs.last_close / inputs.first_open - 1.0);
-    }
-    if (first.point_count <= 0) return e;
-    e.open_pl = first.last.open_profit;
-    e.time_in_market_pct = first.observation_count > 0
-        ? static_cast<double>(first.bars_in_market)
-            / static_cast<double>(first.observation_count) * 100.0 : nan;
-    e.max_equity_drawdown = first.max_drawdown;
-    e.max_equity_drawdown_pct = first.max_drawdown_pct;
-    e.max_equity_runup = first.max_runup;
-    e.max_equity_runup_pct = first.max_runup_pct;
-    const double span_years = first.span_years();
-    if (span_years > 0.0 && inputs.initial_capital > 0.0 && first.last.equity > 0.0) {
-        e.cagr = (std::pow(first.last.equity / inputs.initial_capital, 1.0 / span_years)
-                  - 1.0) * 100.0;
-    }
-    if (e.max_equity_drawdown > 0.0) {
-        e.recovery_factor = inputs.net_profit / e.max_equity_drawdown;
-        if (!std::isnan(e.cagr) && e.max_equity_drawdown_pct > 0.0)
-            e.calmar = e.cagr / e.max_equity_drawdown_pct;
-    }
-    if (ratios && ratios->matches(first)) {
-        e.sharpe_monthly = ratios->sharpe_monthly;
-        e.sortino_monthly = ratios->sortino_monthly;
-        e.sharpe_bar = ratios->sharpe_bar;
-        e.sortino_bar = ratios->sortino_bar;
-    }
-    return e;
-}
+        const EquityRatioResult* ratios = nullptr);
 
 // The trade blocks come from the existing fixed accumulators. Passing no
 // second pass explicitly produces first-pass fields only; callers publish

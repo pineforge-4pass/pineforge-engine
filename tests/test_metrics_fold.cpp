@@ -9,11 +9,11 @@
 #endif
 
 #include <pineforge/metrics_stream.hpp>
-#include "equity_stats_reference.hpp"
-#include "trade_stats_reference.hpp"
+#include <pineforge/run_failure.hpp>
 
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <vector>
 
@@ -47,6 +47,22 @@ std::vector<pineforge::TradeC> trades() {
     return rows;
 }
 
+template<class Compute>
+void nonfinite(const char* field, Compute compute) {
+    try {
+        compute();
+        CHECK(false);
+    } catch (const std::exception& error) {
+        const auto failure = pineforge::classify_run_failure(error);
+        CHECK(failure.code == pineforge::RunFailureCode::report_result_invalid);
+        CHECK(pineforge::run_failure_code_class(failure.code)
+              == pineforge::RunFailureClass::engine_fault);
+        CHECK(!pineforge::run_failure_code_retryable(failure.code));
+        CHECK(failure.args && *failure.args ==
+              std::string("{\"field\":\"") + field + "\",\"reason\":\"nonfinite\"}");
+    }
+}
+
 void compare(std::vector<pf_equity_point_t> points, const std::string& zone,
              double capital, bool anchor, bool rewrite) {
     const auto rows = trades();
@@ -67,6 +83,13 @@ void compare(std::vector<pf_equity_point_t> points, const std::string& zone,
         fold.fold(original, equity_month_key(original.time_ms, zone),
                   observation, in_market);
         if (rewrite && i == n - 1) {
+            // A provisional held defect must disappear with its replacement,
+            // even after first_pass() has inspected it in a value copy.
+            auto invalid = points.back();
+            invalid.equity = std::numeric_limits<double>::quiet_NaN();
+            invalid.open_profit = std::numeric_limits<double>::infinity();
+            CHECK(fold.replace_last(invalid, equity_month_key(invalid.time_ms, zone)));
+            CHECK(fold.first_pass().point_count == n);
             auto terminal = points.back();
             terminal.equity -= 33.0;
             fold.replace_last(terminal, equity_month_key(terminal.time_ms, zone));
@@ -80,45 +103,80 @@ void compare(std::vector<pf_equity_point_t> points, const std::string& zone,
     CHECK(first.bars_in_market == exposed);
     const EquityMetricInputs inputs{capital, 101.0, 97.25, -31.5};
 
-    // Exercise the actual production array entry points, then independently
-    // pin them to the test-only, frozen vector implementations.
+    // R13: the production array producers in this run are the oracle.
+    // Nonfinite inputs have explicit typed-failure expectations; the frozen
+    // pre-change NaN propagation and compounded sub-day CAGR are superseded.
     const pf_equity_point_t* array_points = points.empty() ? nullptr : points.data();
     pf_metrics_t array{};
-    array.all = compute_trade_stats(rows.data(), static_cast<int>(rows.size()),
-                                   TradeFilter::ALL, capital);
-    array.longs = compute_trade_stats(rows.data(), static_cast<int>(rows.size()),
-                                     TradeFilter::LONG, capital);
-    array.shorts = compute_trade_stats(rows.data(), static_cast<int>(rows.size()),
-                                      TradeFilter::SHORT, capital);
-    array.equity = compute_equity_stats(array_points, n, capital, zone,
-        inputs.first_open, inputs.last_close, exposed, inputs.net_profit,
-        first.observation_count);
-    pf_metrics_t frozen{};
-    frozen.all = trade_stats_reference::compute_trade_stats(
-        rows.data(), static_cast<int>(rows.size()), TradeFilter::ALL, capital);
-    frozen.longs = trade_stats_reference::compute_trade_stats(
-        rows.data(), static_cast<int>(rows.size()), TradeFilter::LONG, capital);
-    frozen.shorts = trade_stats_reference::compute_trade_stats(
-        rows.data(), static_cast<int>(rows.size()), TradeFilter::SHORT, capital);
-    frozen.equity = equity_stats_reference::compute_equity_stats(
-        array_points, n, capital, zone, inputs.first_open, inputs.last_close,
-        exposed, inputs.net_profit);
-    if (n > 0)
-        frozen.equity.time_in_market_pct = first.observation_count > 0
-            ? static_cast<double>(exposed) / static_cast<double>(first.observation_count) * 100.0
-            : std::numeric_limits<double>::quiet_NaN();
-    CHECK(std::memcmp(&array, &frozen, sizeof(array)) == 0);
-
-    // First-pass fields compare as a complete metrics block after masking
-    // ONLY the four ratios in the array oracle. No expected metric is typed
-    // into this test or computed by the new fold.
-    auto first_only = array;
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    first_only.equity.sharpe_monthly = first_only.equity.sortino_monthly = nan;
-    first_only.equity.sharpe_bar = first_only.equity.sortino_bar = nan;
-    const auto got_first = finalize_metrics(
-        first, inputs, array.all, array.longs, array.shorts);
-    CHECK(std::memcmp(&got_first, &first_only, sizeof(array)) == 0);
+    pf_metrics_t streamed{};
+    struct Block {
+        TradeFilter filter;
+        pf_trade_stats_t pf_metrics_t::*member;
+        const char* capital_field;
+    };
+    const Block blocks[] = {
+        {TradeFilter::ALL, &pf_metrics_t::all, "metrics.all.net_profit_pct"},
+        {TradeFilter::LONG, &pf_metrics_t::longs, "metrics.longs.net_profit_pct"},
+        {TradeFilter::SHORT, &pf_metrics_t::shorts, "metrics.shorts.net_profit_pct"},
+    };
+    for (const auto& block : blocks) {
+        const auto array_stats = [&] {
+            return compute_trade_stats(rows.data(), static_cast<int>(rows.size()),
+                                       block.filter, capital);
+        };
+        const auto folded_stats = [&] {
+            TradeStatsAccumulator accumulator(block.filter, capital);
+            for (const auto& row : rows) accumulator.fold(row);
+            return accumulator.finish();
+        };
+        if (!std::isfinite(capital)) {
+            nonfinite(block.capital_field, array_stats);
+            nonfinite(block.capital_field, folded_stats);
+        } else {
+            array.*block.member = array_stats();
+            streamed.*block.member = folded_stats();
+            CHECK(std::memcmp(&(array.*block.member), &(streamed.*block.member),
+                              sizeof(pf_trade_stats_t)) == 0);
+        }
+    }
+    const auto array_equity = [&] {
+        return compute_equity_stats(array_points, n, capital, zone,
+            inputs.first_open, inputs.last_close, exposed, inputs.net_profit,
+            first.observation_count);
+    };
+    const char* equity_failure = nullptr;
+    if (!std::isfinite(capital)) {
+        equity_failure = "metrics.equity.buy_hold_return";
+    } else if (n > 0 && !std::isfinite(points.back().open_profit)) {
+        equity_failure = "equity_curve.open_profit";
+    } else {
+        for (const auto& point : points) {
+            if (!std::isfinite(point.equity)) {
+                equity_failure = "equity_curve.equity";
+                break;
+            }
+            if (!std::isfinite(point.open_profit)) {
+                equity_failure = "equity_curve.open_profit";
+                break;
+            }
+        }
+    }
+    if (equity_failure) {
+        nonfinite(equity_failure, array_equity);
+        nonfinite(equity_failure, [&] {
+            return finalize_metrics(first, inputs, streamed.all, streamed.longs, streamed.shorts);
+        });
+    } else {
+        array.equity = array_equity();
+        // Mask ONLY the four pending ratios in the live array oracle.
+        auto first_only = array;
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        first_only.equity.sharpe_monthly = first_only.equity.sortino_monthly = nan;
+        first_only.equity.sharpe_bar = first_only.equity.sortino_bar = nan;
+        const auto got_first = finalize_metrics(
+            first, inputs, streamed.all, streamed.longs, streamed.shorts);
+        CHECK(std::memcmp(&got_first, &first_only, sizeof(array)) == 0);
+    }
 
     EquityMetricsSecondPass second(first);
     for (std::int64_t i = 0; i < n; ++i) {
@@ -127,20 +185,37 @@ void compare(std::vector<pf_equity_point_t> points, const std::string& zone,
         auto point = points[static_cast<std::size_t>(i)];
         if (rewrite && i == n - 1) point.equity += 9999.0;
         second.fold(point, equity_month_key(point.time_ms, zone), observation, in_market);
-        if (rewrite && i == n - 1)
+        if (rewrite && i == n - 1) {
+            auto invalid = points.back();
+            invalid.equity = std::numeric_limits<double>::quiet_NaN();
+            invalid.open_profit = std::numeric_limits<double>::infinity();
+            CHECK(second.replace_last(invalid, equity_month_key(invalid.time_ms, zone)));
+            CHECK(!second.finish().matches(first));
             second.replace_last(points.back(), equity_month_key(points.back().time_ms, zone));
+        }
         if (i % 31 == 0 && i < n - 1) CHECK(!second.finish().complete);
     }
     const auto ratios = second.finish();
     CHECK(ratios.matches(first));
-    const auto got = finalize_metrics(
-        first, inputs, array.all, array.longs, array.shorts, &ratios);
     static_assert(sizeof(pf_metrics_t) == 768, "raw metric contract");
-    CHECK(std::memcmp(&got, &array, 768) == 0);
     const auto again = second.finish();
-    const auto repeated = finalize_metrics(
-        fold.first_pass(), inputs, array.all, array.longs, array.shorts, &again);
-    CHECK(std::memcmp(&repeated, &array, 768) == 0);
+    if (equity_failure) {
+        nonfinite(equity_failure, [&] {
+            return finalize_metrics(first, inputs, streamed.all, streamed.longs,
+                                    streamed.shorts, &ratios);
+        });
+        nonfinite(equity_failure, [&] {
+            return finalize_metrics(fold.first_pass(), inputs, streamed.all, streamed.longs,
+                                    streamed.shorts, &again);
+        });
+    } else {
+        const auto got = finalize_metrics(
+            first, inputs, streamed.all, streamed.longs, streamed.shorts, &ratios);
+        CHECK(std::memcmp(&got, &array, 768) == 0);
+        const auto repeated = finalize_metrics(
+            fold.first_pass(), inputs, streamed.all, streamed.longs, streamed.shorts, &again);
+        CHECK(std::memcmp(&repeated, &array, 768) == 0);
+    }
 
     if (n > 0) {
         auto different = fold;
@@ -161,6 +236,91 @@ void compare(std::vector<pf_equity_point_t> points, const std::string& zone,
         // Count and endpoint equality alone cannot authorize a second walk.
         CHECK(!reordered.finish().matches(first));
     }
+}
+
+void failure_order() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    const double max = std::numeric_limits<double>::max();
+    constexpr std::int64_t time = 1704067200000LL;
+    constexpr std::int64_t year = 31'557'600'000LL;
+    constexpr std::int64_t day = 86'400'000LL;
+    struct Case {
+        std::vector<pf_equity_point_t> points;
+        EquityMetricInputs inputs;
+        const char* field;
+    };
+    const Case cases[] = {
+        // The completed curve's final open profit precedes an earlier equity
+        // defect. Within the ordered walk, the first point/operation wins.
+        {{{time, 1, 0}, {time + 1, nan, 0}, {time + 2, 1, 0}, {time + 3, 1, inf}},
+         {1, 1, 1, 0}, "equity_curve.open_profit"},
+        {{{time, 1, 0}, {time + 1, 1, nan}, {time + 2, inf, 0}, {time + 3, 1, 0}},
+         {1, 1, 1, 0}, "equity_curve.open_profit"},
+        {{{time, 1, 0}, {time + 1, nan, inf}, {time + 2, 1, 0}},
+         {1, 1, 1, 0}, "equity_curve.equity"},
+        {{{time, max, 0}, {time + 1, -max, 0}, {time + 2, nan, 0}},
+         {1, 1, 1, 0}, "metrics.equity.max_equity_drawdown"},
+        {{{time, nan, 0}, {time + 1, 1, inf}},
+         {nan, 1, 1, 0}, "metrics.equity.buy_hold_return"},
+        {{{time, nan, 0}, {time + 1, 1, inf}},
+         {1, inf, 1, 0}, "metrics.equity.buy_hold_return_pct"},
+        {{{time, nan, 0}, {time + 1, 1, inf}},
+         {1, inf, 1, inf}, "summary.net_pnl"},
+        // Main's overflow proof supplies these variance/downside inputs and
+        // exact failure fields. Monthly completion precedes bar completion.
+        {{{time, 1, 0}, {time + year, 1e200, 0}, {time + 2 * year, 1, 0}},
+         {1, 1, 1, 0}, "metrics.equity.sharpe_monthly"},
+        {{{time, 1, 0}, {time + day, 1e200, 0}, {time + 2 * day, 1, 0}},
+         {1, 1, 1, 0}, "metrics.equity.sharpe_bar"},
+        {{{time, 1, 0}, {time + year, -1e200, 0},
+          {time + 2 * year, 1, 0}, {time + 3 * year, -1e200, 0}},
+         {1, 1, 1, 0}, "metrics.equity.sortino_monthly"},
+        {{{time, 1, 0}, {time + day, -1e200, 0},
+          {time + 2 * day, 1, 0}, {time + 3 * day, -1e200, 0}},
+         {1, 1, 1, 0}, "metrics.equity.sortino_bar"},
+    };
+    for (const auto& test : cases) {
+        EquityMetricsFold fold;
+        for (const auto& point : test.points)
+            fold.fold(point, equity_month_key(point.time_ms, "UTC"));
+        const auto first = fold.first_pass();
+        EquityMetricsSecondPass second(first);
+        for (const auto& point : test.points)
+            second.fold(point, equity_month_key(point.time_ms, "UTC"));
+        const auto ratios = second.finish();
+        CHECK(ratios.matches(first));
+        nonfinite(test.field, [&] {
+            return compute_equity_stats(test.points.data(),
+                static_cast<std::int64_t>(test.points.size()), test.inputs.initial_capital,
+                "UTC", test.inputs.first_open, test.inputs.last_close, 0, test.inputs.net_profit);
+        });
+        nonfinite(test.field, [&] { return finalize_equity_metrics(first, test.inputs, &ratios); });
+        nonfinite(test.field, [&] {
+            const auto again = second.finish();
+            return finalize_equity_metrics(fold.first_pass(), test.inputs, &again);
+        });
+    }
+    // A LONG-only commission sum overflows before a later row violates ALL's
+    // input domain. Main finishes ALL first even when the folds are fed together.
+    std::vector<pineforge::TradeC> rows(4);
+    rows[0].is_long = rows[2].is_long = 1;
+    rows[0].commission = rows[2].commission = 1e308;
+    rows[1].commission = -1e308;
+    rows[3].entry_price = inf;
+    nonfinite("trades.entry_price", [&] {
+        (void)compute_trade_stats(rows.data(), static_cast<int>(rows.size()), TradeFilter::ALL, 1);
+        (void)compute_trade_stats(rows.data(), static_cast<int>(rows.size()), TradeFilter::LONG, 1);
+    });
+    nonfinite("trades.entry_price", [&] {
+        TradeStatsAccumulator all(TradeFilter::ALL, 1), longs(TradeFilter::LONG, 1);
+        for (const auto& row : rows) {
+            all.fold(row);
+            longs.fold(row);
+        }
+        (void)all.finish();
+        (void)longs.finish();
+    });
 }
 
 void cases() {
@@ -213,12 +373,20 @@ void cases() {
             }
             compare(points, zone, 10000.0, trial % 2 == 0, true);
         }
+        // Main's compounded-overflow fallback inputs, compared with its live
+        // array producer rather than a hard-coded expected CAGR.
+        compare({{1704067200000LL, 1, 0}, {1704153600000LL, 1e300, 0}},
+                zone, 1.0, false, true);
+        compare({{-5'000'000'000'000'000'000LL, 1, 0}, {0, 1, 0},
+                 {5'000'000'000'000'000'000LL, 1, 0}},
+                zone, 1.0, false, true);
     }
 }
 } // namespace
 
 int main() {
     cases();
+    failure_order();
     std::printf("metrics fold: first=%zu bytes, second=%zu bytes; %d checks, %d failures\n",
                 sizeof(EquityMetricsFold), sizeof(EquityMetricsSecondPass), checks, failures);
     return failures ? 1 : 0;

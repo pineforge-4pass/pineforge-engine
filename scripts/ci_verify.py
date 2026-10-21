@@ -643,7 +643,20 @@ ADR_RULED_TEXTS_MIN = 59
 # counted the same way; 773/773/782 with lane FIX-E1E2's two rows of
 # RELEASE_MIN_TESTS in each, counted the same way.
 # An excluded run must still discover at least this many rows before -LE.
-EXCLUDED_REGISTERED_MIN = {'debug': 876, 'sanitizers': 867, 'native': 963}
+EXCLUDED_REGISTERED_MIN = {
+    'debug': 876, 'sanitizers': 867, 'native': 963,
+    # D1, run 39221717231 of the PR TSV, REGISTERED counts (Debug/sanitizers
+    # exclude 29 slow rows, so selected + 29): Debug 938 - 876 = 62 and
+    # sanitizers 929 - 867 = 62 below their registry; Release and kernel-only
+    # ran full there: 957 and 371. Release: 957 - 62 = 895. Kernel: the offset
+    # gives 309, 17 below its registry at that vintage (326), so it takes
+    # KERNEL_MIN_TESTS 337 (34 below the 371 of every sampled run). The lab's
+    # ctest -N confirms both; registration floors, not reduced run floors.
+    # Basis of the offset: the existing keys count rows registered BEFORE -LE,
+    # so a selected count (909, 900) is never compared with a key (876, 867).
+    # See docs/ci.md, "PR tier versus MAIN/RELEASE", and COVERAGE-FLOORS.
+    'release': 895, 'kernel': 337,
+}
 # test_native_live_websocket exits 77 wherever the linked libcurl has no
 # WebSocket support (a system libcurl); main's kernel floor counted that skip
 # as a run -- its number sat exactly one below the registered count for this
@@ -790,6 +803,11 @@ PRIVATE_FIXTURE_PROFILE_FLOORS = {
     'release': (RELEASE_MIN_TESTS, 307),
     'kernel': (KERNEL_MIN_TESTS, 31),
 }
+# CR-196 replaces one public ownership-controls row with four shards (+3
+# registered/run rows in every engine profile, in either fixture world).
+# These pinned minimum floors (absent: release 603, kernel 306) and the PR
+# registration minima remain lower bounds; more rows only raise the count.
+# The receipt/private-fixture populations and runner-only floors are unchanged.
 
 
 def private_fixtures_overlay() -> bool:
