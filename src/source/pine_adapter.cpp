@@ -1032,20 +1032,29 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 }
 
 namespace detail {
-namespace {
 // Use the production disk factory for directory selection and per-run I/O
 // observation, sharing the command scratch backing policy.
-struct ExitScratchRun {
+struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
+    static constexpr std::size_t page_size = 512;
     std::unique_ptr<pineforge::detail::ScratchBacking> backing =
-        make_command_scratch_backing(512);
-    CommandScratchStore store{{2, 512, 1, 1, exit_scratch_key_order(),
-                        pineforge::detail::ScratchOpenMode::create_empty}, backing.get()};
-    ExitScratchContext context;
+        make_command_scratch_backing(page_size);
+    CommandScratchStore store;
 
-    explicit ExitScratchRun(const native_order::RunIdentity& run) : context{store, run} {
+    explicit CommandScratchRun(ScratchKeyOrder order)
+        : store{{2, page_size, 1, 1, order,
+                 pineforge::detail::ScratchOpenMode::create_empty}, backing.get()} {
         exit_scratch_check(store.status());
     }
+};
+
+namespace {
+struct ExitScratchRun {
+    CommandScratchRun scratch{exit_scratch_key_order()};
+    ExitScratchContext context;
+
+    explicit ExitScratchRun(const native_order::RunIdentity& run)
+        : context{scratch.store, run} {}
 };
 
 std::shared_ptr<ExitScratchContext> make_exit_scratch(
@@ -3077,7 +3086,24 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                       "Pine adapter produced invalid native run spec field "
                                       + std::to_string(static_cast<unsigned>(validation.field)));
     }
-    exit_scratch_ = detail::make_exit_scratch(spec.identity);
+    // Construct every backing before changing a borrower. Each factory call
+    // snapshots the run owner's current thread observer and shared byte cap.
+    auto exit_scratch = detail::make_exit_scratch(spec.identity);
+    if (host_ != nullptr) {
+        auto dependency = std::make_shared<detail::CommandScratchRun>(
+            NativeExecutionConsumer::dependency_scratch_order());
+        if (auto* pine = pine_view_of(host_)) {
+            auto trade = std::make_shared<detail::CommandScratchRun>(
+                PineStrategyHost::trade_scratch_order());
+            pine->set_trade_scratch(trade->store);
+            // Publish ownership immediately after each successful install:
+            // a later setter refusal must not leave a dangling borrower.
+            trade_scratch_run_ = std::move(trade);
+        }
+        NativeExecutionConsumer::bound(*host_).set_dependency_scratch(dependency->store);
+        dependency_scratch_run_ = std::move(dependency);
+    }
+    exit_scratch_ = std::move(exit_scratch);
     return spec;
 }
 

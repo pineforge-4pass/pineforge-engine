@@ -7423,3 +7423,31 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     pineforge_add_unit_test(test_o1bk_production_backing)
 endif()
 # --- CR-150 core-cr150-o1c end ---
+
+# --- CR-150 core-cr150-o1-revscratch begin ---
+# A corpus-enabled source build must execute the real reversing probe. Missing
+# fixtures are configure/test failures; this row has no skip or fake module.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
+    add_library(reversal_scratch_strategy MODULE)
+    target_sources(reversal_scratch_strategy PRIVATE
+        ${PROJECT_SOURCE_DIR}/corpus/validation/bracket-atr-trailing-stop-state-01/generated.cpp)
+    target_link_libraries(reversal_scratch_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(reversal_scratch_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(reversal_scratch_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(reversal_scratch_strategy PRIVATE -ffp-contract=off)
+    set_target_properties(reversal_scratch_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/reversal_scratch")
+    add_test(NAME test_run_json_reversal_scratch
+        COMMAND ${Python3_EXECUTABLE} -B
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_reversal_scratch.py
+            --so $<TARGET_FILE:reversal_scratch_strategy>
+            --artifacts ${CMAKE_CURRENT_BINARY_DIR}/reversal_scratch)
+    set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
+endif()
+# --- CR-150 core-cr150-o1-revscratch end ---

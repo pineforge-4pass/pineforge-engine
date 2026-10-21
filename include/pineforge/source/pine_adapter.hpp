@@ -42,7 +42,11 @@ using SourceId = std::string;
 
 class PineStrategyHost;
 class PineScheduler;
-namespace detail { class PositionTailSpill; class PositionTailSummary; }
+namespace detail {
+class PositionTailSpill;
+class PositionTailSummary;
+struct CommandScratchRun;
+}
 
 // R5 lane V19-E: v4 folds the adapter's live state -- the placement rows it
 // still holds, compact records of the erased ones, the pending queues -- and
@@ -2615,6 +2619,10 @@ private:
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
     mutable std::shared_ptr<detail::ExitScratchContext> exit_scratch_;
+    // Borrowers inspect their previous store during replacement. Retain these
+    // owners across reset_for_run() until project() installs fresh run stores.
+    mutable std::shared_ptr<detail::CommandScratchRun> trade_scratch_run_;
+    mutable std::shared_ptr<detail::CommandScratchRun> dependency_scratch_run_;
     const PineScheduler* input_scheduler_ = nullptr;
     PineStrategyConfig config_{};
     StagedConfiguration staged_{};
