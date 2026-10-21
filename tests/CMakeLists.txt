@@ -3688,6 +3688,10 @@ endif()
 
 list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 
+# Report arithmetic and C-host failure ownership, with source-free includes.
+list(APPEND TEST_SOURCES test_metrics_overflow)
+list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
@@ -3772,13 +3776,28 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-add_test(NAME test_selected_window_ownership_manifest_controls
-    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py)
+# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
+# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
+# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
+# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
+# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
+# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
+# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
+# the four shard rows is the measurement; each shard also fails closed when it
+# runs a number of tests different from the number it selected.
+set(_pf_ownership_control_shards)
+foreach(_pf_ownership_shard 1 2 3 4)
+    add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
+            --shard ${_pf_ownership_shard}/4)
+    list(APPEND _pf_ownership_control_shards
+        test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4)
+endforeach()
 add_test(NAME test_selected_window_ownership_d4
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
         ManifestCheckerTests.test_d4_independent_reconstruction_matches_manifest)
 set_tests_properties(test_selected_window_ownership_manifest
-    test_selected_window_ownership_manifest_controls test_selected_window_ownership_d4
+    ${_pf_ownership_control_shards} test_selected_window_ownership_d4
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)
 
 # The C bridge test also links the shared window-plan helper, whose bridge
@@ -7227,6 +7246,14 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
 endif()
 # --- CR-150 core-cr150-l6b2 end ---
 
+# --- CR-150 core-cr150-l17b begin ---
+if(TARGET test_selected_metrics_l17b)
+    target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_LIBRARY_DEBUG_CHECKS=$<CONFIG:Debug>)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_selected_metrics_l17b PRIVATE PINEFORGE_L17B_SOURCE=1)
+    endif()
+endif()
+# --- CR-150 core-cr150-l17b end ---
 # --- CR-150 core-cr150-l19f begin ---
 # CR-150 L19F: plain registrations are in cr150.d/core-cr150-l19f.cmake.
 # --- CR-150 core-cr150-l19f end ---
@@ -7237,3 +7264,150 @@ if(TARGET outputs_fixture_strategy)
         ENVIRONMENT "PINEFORGE_BIN_STRATEGY_SO=$<TARGET_FILE:outputs_fixture_strategy>")
 endif()
 # --- CR-150 core-cr150-l2 end ---
+
+# --- CR-150 core-cr150-l9b begin ---
+# CR-150 L9B: native named-sink summary rows, after every line pin. The Python
+# row is registered in cr150.d/core-cr150-l9b.cmake. These rows read the real
+# L6B1 and outputs-fixture modules from their ENVIRONMENT, which a lane file may
+# not set, so they are registered here once both modules are declared. The
+# row exists only where both modules do: it never runs without them.
+# The opt-in corpus row (PINEFORGE_L9B_CORPUS_CASES) needs real lab probes that
+# only the supervisor can supply, so it is left out of this registration.
+if(TARGET report_sink_l6b1_strategy AND TARGET outputs_fixture_strategy
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_test(NAME test_run_json_sink_summary_l9b_native
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_sink_summary.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_sink_summary_l9b_native APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9B_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9B_OUTPUTS_SO=$<TARGET_FILE:outputs_fixture_strategy>")
+endif()
+# --- CR-150 core-cr150-l9b end ---
+
+# --- CR-150 core-cr150-l9s begin ---
+# CR-150 L9S: native selected-sink rows, after both module declarations.
+# The Python control row stays in cr150.d/core-cr150-l9s.cmake.
+# Corpus rows need a supervisor-supplied manifest; selecting them here would
+# otherwise always SKIP inside a green row.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS
+   AND NOT PINEFORGE_ENABLE_COVERAGE
+   AND TARGET report_sink_l6b1_strategy AND TARGET pineforge_window_plan)
+    add_test(NAME test_run_json_selected_sink_native_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink.py
+            -k "native and not corpus")
+    set_property(TEST test_run_json_selected_sink_native_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    add_test(NAME test_run_json_selected_sink_memory_l9s
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_run_json_selected_sink_memory.py)
+    set_property(TEST test_run_json_selected_sink_memory_l9s APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_L9S_STRATEGY_SO=$<TARGET_FILE:report_sink_l6b1_strategy>"
+        "PINEFORGE_L9S_PLANNER_SO=$<TARGET_FILE:pineforge_window_plan>")
+    set_tests_properties(test_run_json_selected_sink_memory_l9s PROPERTIES LABELS "slow;mem")
+endif()
+# --- CR-150 core-cr150-l9s end ---
+
+# --- CR-150 core-cr150-l22a begin ---
+if(UNIX)
+    target_link_libraries(test_report_sink_fd PRIVATE Threads::Threads)
+    target_compile_definitions(test_report_sink_fd PRIVATE
+        PINEFORGE_L22A_PYTHON="${Python3_EXECUTABLE}"
+        PINEFORGE_L22A_READER="${CMAKE_CURRENT_SOURCE_DIR}/report_sink_fd_reader.py")
+endif()
+# --- CR-150 core-cr150-l22a end ---
+
+# --- CR-150 core-cr150-l22q begin ---
+if(UNIX)
+    target_link_libraries(test_report_sink_summary PRIVATE Threads::Threads)
+endif()
+# --- CR-150 core-cr150-l22q end ---
+
+# --- CR-150 core-cr150-l22s begin ---
+if(UNIX)
+    target_link_libraries(test_scratch_arena_threads PRIVATE Threads::Threads)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(test_scratch_arena PRIVATE "-Wl,--wrap=pread" "-Wl,--wrap=fstat" "-Wl,--wrap=mmap")
+endif()
+# --- CR-150 core-cr150-l22s end ---
+
+# --- CR-150 core-cr150-l22p begin ---
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_report_scratch_arena)
+    add_executable(test_report_scratch_arena test_report_scratch_arena.cpp)
+    target_link_libraries(test_report_scratch_arena PRIVATE pineforge)
+    target_compile_options(test_report_scratch_arena PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_report_scratch_arena PRIVATE ${_pf_cov_test_flags})
+    endif()
+    target_link_options(test_report_scratch_arena PRIVATE
+        "-Wl,--wrap=mkstemp" "-Wl,--wrap=pwrite" "-Wl,--wrap=write"
+        "-Wl,--wrap=ftruncate" "-Wl,--wrap=mmap" "-Wl,--wrap=munmap")
+    add_test(NAME test_report_scratch_arena_curve_bytes
+        COMMAND test_report_scratch_arena curve bytes)
+    add_test(NAME test_report_scratch_arena_curve_fsize
+        COMMAND test_report_scratch_arena curve fsize)
+    add_test(NAME test_report_scratch_arena_curve_exhaustion
+        COMMAND test_report_scratch_arena curve exhaustion)
+    add_test(NAME test_report_scratch_arena_curve_address_space
+        COMMAND test_report_scratch_arena curve address_space)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        target_compile_definitions(test_report_scratch_arena PRIVATE PINEFORGE_L22P_SOURCE=1)
+        add_test(NAME test_report_scratch_arena_position_tail_bytes
+            COMMAND test_report_scratch_arena position_tail bytes)
+        add_test(NAME test_report_scratch_arena_position_tail_fsize
+            COMMAND test_report_scratch_arena position_tail fsize)
+        add_test(NAME test_report_scratch_arena_position_tail_exhaustion
+            COMMAND test_report_scratch_arena position_tail exhaustion)
+        add_test(NAME test_report_scratch_arena_position_tail_address_space
+            COMMAND test_report_scratch_arena position_tail address_space)
+    endif()
+    add_test(NAME test_report_scratch_arena_startup COMMAND test_report_scratch_arena startup)
+endif()
+# --- CR-150 core-cr150-l22p end ---
+
+# --- CR-150 core-cr150-q7 begin ---
+if(UNIX)
+    target_link_libraries(test_run_sigterm_abort PRIVATE Threads::Threads)
+endif()
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(run_sigterm_abort_strategy MODULE run_sigterm_abort_strategy.cpp)
+    target_link_libraries(run_sigterm_abort_strategy PRIVATE pineforge)
+    if(APPLE)
+        target_link_options(run_sigterm_abort_strategy PRIVATE
+            "-Wl,-force_load,$<TARGET_FILE:pineforge>")
+    else()
+        target_link_options(run_sigterm_abort_strategy PRIVATE
+            "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    endif()
+    target_compile_options(run_sigterm_abort_strategy PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(run_sigterm_abort_strategy PROPERTIES
+        PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/run_sigterm_abort")
+    add_test(NAME test_run_sigterm_abort_python
+        COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/test_run_sigterm_abort.py
+            --module $<TARGET_FILE:run_sigterm_abort_strategy>)
+endif()
+# --- CR-150 core-cr150-q7 end ---
+
+# --- CR-150 core-cr150-o1w-contract begin ---
+# Real legacy provider, with an explicit old export surface. The Linux lab
+# exercises negotiation even after new runtime report exports are introduced.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND NOT APPLE
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(o1_report_legacy_provider MODULE test_o1_report_contract.cpp)
+    target_compile_definitions(o1_report_legacy_provider PRIVATE PINEFORGE_O1_LEGACY_PROVIDER=1)
+    target_link_libraries(o1_report_legacy_provider PRIVATE pineforge)
+    target_link_options(o1_report_legacy_provider PRIVATE
+        "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive"
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/o1_report_contract/legacy.exports")
+    target_compile_options(o1_report_legacy_provider PRIVATE -ffp-contract=off)
+    add_test(NAME test_o1_report_mode_unsupported
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_o1_report_mode_unsupported.py
+            --module $<TARGET_FILE:o1_report_legacy_provider>
+            --runner ${PROJECT_SOURCE_DIR}/docker/run_json.py
+            --fixture ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/o1_report_contract/summary_only.json)
+endif()
+# --- CR-150 core-cr150-o1w-contract end ---

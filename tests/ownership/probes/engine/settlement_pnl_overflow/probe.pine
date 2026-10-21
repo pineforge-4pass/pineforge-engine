@@ -1,6 +1,8 @@
 //@version=6
-strategy("D6 21 settlement money overflow", initial_capital=100000, margin_long=0, margin_short=0)
+strategy("D6 21 settlement money overflow", initial_capital=100000, margin_long=0, margin_short=0, pyramiding=2, commission_type=strategy.commission.cash_per_contract, commission_value=0)
 if bar_index == 0
-    strategy.entry("entry", strategy.long, qty=4)
+    strategy.entry("a", strategy.long, qty=2)
+if bar_index == 1
+    strategy.entry("b", strategy.long, qty=2)
 if bar_index == 3
     strategy.close_all()

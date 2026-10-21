@@ -1,0 +1,19 @@
+{
+  "contract": "pineforge-report/v1",
+  "mode": "SUMMARY_ONLY",
+  "population": {
+    "input_bars": 8,
+    "script_bars": 8,
+    "trades": 3,
+    "equity_points": 8
+  },
+  "unsupported": {
+    "exit_status": 1,
+    "code": "report_mode_unsupported",
+    "args": {
+      "mode": "SUMMARY_ONLY",
+      "contract": "pineforge-report/v1"
+    },
+    "diagnostic": "unsupported report mode: SUMMARY_ONLY"
+  }
+}

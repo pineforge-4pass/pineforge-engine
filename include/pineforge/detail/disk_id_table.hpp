@@ -14,7 +14,7 @@
 
 namespace pineforge::detail {
 
-// An AVL tree of byte-string keys and fixed-size values in an anonymous file.
+// An AVL tree of byte-string keys and fixed-size values in positional scratch.
 // A node is 56 + sizeof(Value) bytes followed by the key bytes. Parent links
 // allow rotations and sorted walks with O(1) RAM, including adversarial ids.
 // The independent next link preserves first insertion order. Updating a value
@@ -46,7 +46,18 @@ public:
         }
         return *this;
     }
+    void set_store(ScratchStore store) noexcept { file_.set_store(store); }
+    bool arena_backed() const noexcept { return file_.arena_backed(); }
     void set_directory(const std::string& directory) { file_.set_directory(directory); }
+    void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
+        if (size_ != 0)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                         "scratch id backend changed after use");
+        if (slab && resource != ScratchResource::cohort && resource != ScratchResource::exit_rank)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                         "scratch id table requires a tree region");
+        file_.bind_scratch(slab, resource);
+    }
     void clear() noexcept {
         file_.clear();
         root_ = first_ = last_ = size_ = 0;
@@ -82,6 +93,36 @@ public:
         }
         return std::nullopt;
     }
+    // Read-only whole-node ticket, also used before a caller spills resident
+    // facts or accepts a kernel command. Duplicates need no count/byte growth.
+    // Disk mode deliberately retains its existing search and I/O behaviour.
+    void require_insert(const std::string& key) const {
+        if (!file_.scratch_owner() || find(key)) return;
+        require_new_key(key.size());
+    }
+    // enumerate(visit) replays a stable, borrowed workset. Count each absent
+    // key once without a growing side index: O(workset^2) comparisons, O(1)
+    // retained scratch. No caller may mutate the workset during this ticket.
+    template<class Enumerate> void require_inserts(Enumerate&& enumerate) const {
+        if (!file_.scratch_owner()) return;
+        std::uint64_t ordinal = 0, extra_rows = 0, extra_bytes = 0;
+        enumerate([&](const std::string& key) {
+            const auto current = ordinal++;
+            if (find(key)) return;
+            bool repeated = false;
+            std::uint64_t prior = 0;
+            enumerate([&](const std::string& other) {
+                if (prior++ < current && other == key) repeated = true;
+            });
+            if (repeated) return;
+            const auto maximum = std::numeric_limits<std::uint64_t>::max();
+            if (extra_rows == maximum || key.size() > maximum - extra_bytes)
+                throw ScratchCapacityError(file_.scratch_resource());
+            ++extra_rows;
+            extra_bytes += key.size();
+            require_growth(extra_rows, extra_bytes);
+        });
+    }
     Value get(Offset at) const {
         validate(at);
         Value value{};
@@ -104,11 +145,13 @@ public:
             left = order < 0;
             at = left ? row.left : row.right;
         }
+        require_new_key(key.size());
         constexpr std::size_t header = sizeof(Links) + sizeof(Value);
-        ScratchFile::check_extent(end_, header);
-        ScratchFile::check_extent(end_ + header, key.size());
+        const bool arena = file_.opened() ? file_.arena_backed() : ScratchArena::attached() != nullptr;
+        ScratchFile::check_extent(end_, header, arena, ScratchFile::IoRaiser::auxiliary);
+        ScratchFile::check_extent(end_ + header, key.size(), arena, ScratchFile::IoRaiser::auxiliary);
         if (size_ == std::numeric_limits<std::uint64_t>::max())
-            throw ScratchIoError(EFBIG, "scratch id count exhausted");
+            throw AuxiliaryScratchIoError(EFBIG, "scratch id count exhausted");
         file_.open("pineforge-ids");
         at = end_;
         Links row;
@@ -149,6 +192,34 @@ public:
     }
 
 private:
+    void require_new_key(std::size_t key_size) const {
+        require_growth(1, key_size);
+    }
+    void require_growth(std::uint64_t extra_rows, std::uint64_t extra_bytes) const {
+        const auto& slab = file_.scratch_owner();
+        if (!slab) return;
+        const auto resource = file_.scratch_resource();
+        const auto& manifest = slab->manifest();
+        const auto rows = resource == ScratchResource::cohort ? manifest.U : manifest.V;
+        const auto bytes = resource == ScratchResource::cohort ? manifest.B_U : manifest.B_V;
+        constexpr std::uint64_t header = sizeof(Links) + sizeof(Value);
+        // Packed nodes have no inter-row alignment: the append cursor minus
+        // the null byte and fixed headers is exactly aggregate stored key bytes.
+        const auto key_bytes = end_ - 1 - header * size_;
+        if (size_ > rows || extra_rows > rows - size_
+            || key_bytes > bytes || extra_bytes > bytes - key_bytes)
+            throw ScratchCapacityError(resource);
+        const auto capacity = slab->region(resource).capacity;
+        if (end_ > capacity || extra_rows > (capacity - end_) / header)
+            throw ScratchCapacityError(resource);
+        const auto fixed_bytes = header * extra_rows;
+        if (extra_bytes > capacity - end_ - fixed_bytes)
+            throw ScratchCapacityError(resource);
+        slab->require_extend(resource, end_ + fixed_bytes + extra_bytes);
+    }
+    [[noreturn]] void io_error(int error, const char* operation) const {
+        throw AuxiliaryScratchIoError(error, operation);
+    }
     Offset leftmost(Offset at) const {
         while (at != 0) {
             const auto row = links(at);
@@ -159,7 +230,7 @@ private:
     }
     void validate(Offset at) const {
         if (at == 0 || at >= end_ || end_ - at < sizeof(Links) + sizeof(Value))
-            throw ScratchIoError(EIO, "scratch id invalid offset");
+            io_error(EIO, "scratch id invalid offset");
     }
     Links links(Offset at) const {
         validate(at);
@@ -167,13 +238,13 @@ private:
         file_.read(at, &row, sizeof row);
         if (row.height == 0 || row.height > 128
             || row.key_size > end_ - at - sizeof(Links) - sizeof(Value))
-            throw ScratchIoError(EIO, "scratch id invalid node");
+            io_error(EIO, "scratch id invalid node");
         return row;
     }
     void put_links(Offset at, const Links& row) { file_.write(at, &row, sizeof row); }
     std::string read_key(Offset at, const Links& row) const {
         if (row.key_size > std::string{}.max_size())
-            throw ScratchIoError(EFBIG, "scratch id key too long");
+            io_error(EFBIG, "scratch id key too long");
         std::string key(static_cast<std::size_t>(row.key_size), '\0');
         file_.read(at + sizeof(Links) + sizeof(Value), key.data(), key.size());
         return key;
@@ -226,7 +297,7 @@ private:
         }
     }
 
-    ScratchFile file_;
+    ScratchFile file_{ScratchFile::IoRaiser::auxiliary};
     Offset root_ = 0, first_ = 0, last_ = 0, end_ = 1;
     std::uint64_t size_ = 0;
 };

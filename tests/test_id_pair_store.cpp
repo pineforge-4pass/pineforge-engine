@@ -233,9 +233,10 @@ void expect_io_failure(Operation&& operation, int expected_errno) {
     try { operation(); }
     catch (const std::system_error& error) {
         caught = error.code().value() == expected_errno
-            && classify_run_failure(error).code == RunFailureCode::report_sink_failed;
+            && classify_run_failure(error).code == RunFailureCode::scratch_io_failed
+            && !classify_run_failure(error).args;
     }
-    require(caught, "IO failure carries errno and report_sink_failed");
+    require(caught, "IO failure carries errno and scratch_io_failed");
 }
 
 struct FileSizeLimit {

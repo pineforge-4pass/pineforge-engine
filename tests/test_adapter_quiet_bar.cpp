@@ -59,6 +59,10 @@
 // allocator. `allocations` below reads its count; `count_allocations` says
 // whether a bar records it.
 #include "global_allocation_replacement.hpp"
+#ifndef PINEFORGE_QUIET_BAR_HARVEST
+#include "equity_stats_reference.hpp"
+#include "report_failure_checks.hpp"
+#endif
 
 #include <algorithm>
 #include <cinttypes>
@@ -230,6 +234,17 @@ public:
     }
 
     const TradeLedger& rows() const { return trades_; }
+#ifndef PINEFORGE_QUIET_BAR_HARVEST
+    pf_equity_stats_t reference_equity(const ReportC& report) const {
+        auto reference = equity_stats_reference::compute_equity_stats(
+            report.equity_curve, report.equity_curve_len, initial_capital_, chart_timezone_,
+            first_bar_open_, current_bar_.close, bars_in_market_, report.net_profit);
+        report_failure_checks::apply_proportional_annualization(
+            reference, report.equity_curve, report.equity_curve_len, initial_capital_);
+        return reference;
+    }
+#endif
+    const std::vector<std::uint64_t>& recorded_hashes() const { return broker_state_hashes_; }
     std::vector<std::uint64_t> boundary;
     std::vector<std::size_t> quiet_allocations;
 
@@ -787,9 +802,43 @@ Observed observe(const Scenario& s, bool magnifier, bool recording, bool portabl
     out.error = host.last_error();
     out.boundary = host.boundary;
     ReportC report{};
+#ifdef PINEFORGE_QUIET_BAR_HARVEST
+    // The frozen harvest headers predate the typed report-failure API.
     host.fill_report(&report);
     for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
         out.rows.push_back(report.broker_state_hash[i]);
+#else
+    const auto expected_failure = [&]() {
+        return report_failure_checks::annualization_overflow(host.reference_equity(report));
+    };
+    bool rejected = false;
+    try {
+        host.fill_report(&report);
+        CHECK(expected_failure() == nullptr);
+    } catch (const std::exception& error) {
+        // After proportional annualization, the input-derived frozen walk
+        // must independently prove the exact remaining overflow field.
+        const char* field = expected_failure();
+        if (!field || !report_failure_checks::is_nonfinite(error, field)) {
+            BacktestEngine::free_report(&report);
+            throw;
+        }
+        CHECK(report_failure_checks::is_nonfinite(error, field));
+        rejected = true;
+    }
+    if (rejected) {
+        // Metric assembly precedes the report's hash-array copy. Read the
+        // recorded execution rows directly after checking the report failure;
+        // all original digest words, counts and continuation checks remain.
+        out.rows = host.recorded_hashes();
+    } else {
+        CHECK(equity_stats_reference::first_difference(
+            report.metrics.equity, host.reference_equity(report)) == nullptr);
+        for (std::int64_t i = 0; i < report.broker_state_hash_len; ++i)
+            out.rows.push_back(report.broker_state_hash[i]);
+        CHECK(out.rows == host.recorded_hashes());
+    }
+#endif
     BacktestEngine::free_report(&report);
     out.final_hash = host.broker_state_hash();
     if (!portable) out.continuation = host.continuation();

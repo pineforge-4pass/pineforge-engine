@@ -3,7 +3,7 @@
   "engine_fault": "A PineForge bug; terminal.",
   "input": "The run request's own data or options; terminal.",
   "no_data": "PineForge lacks data the script reads; terminal.",
-  "resource": "Machine memory; retryable, capped.",
+  "resource": "Machine memory or scratch storage; retryability is specified per code.",
   "strategy": "The script or its own declaration; terminal.",
   "strategy_limit": "A TradingView or PineForge resource cap the script reached; terminal.",
   "symbol_feeds": "Other symbols' bars installed through the symbol-feed setters; terminal.",
@@ -937,9 +937,65 @@
    "since": "1.5.0"
   },
   "report_sink_failed": {
-   "args": {},
-   "class": "resource",
-   "description": "The engine could not create or write the report sink. The run has no completed sink or valid trailer.",
+   "args": {
+    "arena_bytes": {
+     "kind": "integer",
+     "optional": true
+    },
+    "cap_bytes": {
+     "kind": "integer",
+     "optional": true
+    },
+    "claimed_bytes": {
+     "kind": "integer",
+     "optional": true
+    },
+    "high_water_bytes": {
+     "kind": "integer",
+     "optional": true
+    },
+    "needed_bytes_lower_bound": {
+     "kind": "integer",
+     "optional": true
+    },
+    "reason": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "arena_exhausted",
+      "arena_io",
+      "arena_backing",
+      "scratch_io",
+      "sink_io",
+      "sink_peer_closed",
+      "sink_exhausted"
+     ]
+    },
+    "sink_bytes": {
+     "kind": "integer",
+     "optional": true
+    },
+    "store": {
+     "kind": "vocab",
+     "optional": true,
+     "values": [
+      "curve",
+      "position_tail",
+      "cohort",
+      "exit_rank",
+      "sequence_index",
+      "sequence_index_idx",
+      "erased_minima",
+      "erased_minima_idx",
+      "partial_cycles",
+      "partial_cycles_idx",
+      "successor_roots",
+      "unknown"
+     ]
+    }
+   },
+   "class": "engine_fault",
+   "description": "The engine could not complete the report sink, scratch storage or spill arena. Every reason, including exhaustion of the engine-certified arena bound or planned sink cap and a closed sink peer during finalization, is an engine fault. reason distinguishes arena exhaustion (arena_exhausted), arena I/O (arena_io), invalid arena backing (arena_backing), file-mode scratch I/O (scratch_io), sink open/write I/O (sink_io), a closed sink peer (sink_peer_closed) and a finalizer stream exceeding its planned cap (sink_exhausted). With arena_exhausted, high_water_bytes and arena_bytes are byte counts, claimed_bytes counts chunk bytes claimed when the failing claim was attempted, store identifies the requesting scratch user, and needed_bytes_lower_bound is the least additional arena bytes needed to satisfy the failed request. With sink_exhausted, the finalizer exits 8; sink_bytes is the bytes read (cap_bytes + 1) and cap_bytes is the planned cap U. APP maps that receipt to this failure and refunds the run; COMPUTE re-places it with 2x U. Other reasons carry no sizes or store identity. All arguments are optional for existing raisers; the run has no completed sink or valid trailer.",
    "english": [
     "report sink open failed",
     "report sink write failed",
@@ -1051,9 +1107,18 @@
    "since": "1.5.0"
   },
   "run_aborted": {
-   "args": {},
+   "args": {
+    "bars_count": {
+     "kind": "integer",
+     "optional": true
+    },
+    "strategy_started": {
+     "kind": "boolean",
+     "optional": true
+    }
+   },
    "class": "engine_fault",
-   "description": "The run was aborted on request.",
+   "description": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used).",
    "english": [
     "native run aborted"
    ],
@@ -1170,7 +1235,10 @@
       "magnifier_volume_weighted",
       "bench",
       "ohlcv_bin",
-      "verify_bin"
+      "verify_bin",
+      "report_sink",
+      "run_id",
+      "spill_dir"
      ]
     }
    },
@@ -1186,6 +1254,48 @@
    ],
    "retryable": false,
    "since": "1.4.0"
+  },
+  "scratch_capacity_exceeded": {
+   "args": {
+    "resource": {
+     "kind": "vocab",
+     "values": [
+      "layout",
+      "sequence_data",
+      "sequence_index",
+      "erased_data",
+      "erased_index",
+      "consumed_data",
+      "consumed_index",
+      "cohort",
+      "exit_rank",
+      "successor_roots"
+     ]
+    }
+   },
+   "class": "resource",
+   "description": "The admitted scratch-table layout or a fixed region's capacity was exceeded. The run must be admitted with sufficient finite maxima before retrying.",
+   "english": [
+    "scratch capacity exceeded"
+   ],
+   "retryable": false,
+   "since": "1.7.0"
+  },
+  "scratch_io_failed": {
+   "args": {},
+   "class": "resource",
+   "description": "The engine could not create, resize, read or write the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io.",
+   "english": [
+    "scratch create",
+    "scratch read",
+    "scratch write",
+    "id table create",
+    "id table resize",
+    "id table read",
+    "id table write"
+   ],
+   "retryable": false,
+   "since": "1.7.0"
   },
   "security_feed_refused": {
    "args": {
@@ -1997,6 +2107,7 @@
   }
  },
  "kinds": {
+  "boolean": "A JSON boolean.",
   "identifier": "A name the compiled strategy spells as a literal (a built-in, an argument).",
   "integer": "A JSON integer.",
   "keyword": "A fixed keyword.",

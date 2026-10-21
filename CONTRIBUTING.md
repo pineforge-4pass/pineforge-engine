@@ -159,7 +159,7 @@ What each gate refuses:
 
 `ci_verify.py` counts the CTest rows that actually **ran** and fails below a
 floor. The floors' numbers live in one place, the
-`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:789 table: per profile, `full`
+`PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:802 table: per profile, `full`
 is its overlay-present registered population and `pinned` is how many rows of
 `tests/private_fixture_rows.txt` that registry registers, so with the private
 fixtures absent the floor is `full` minus `pinned`; every other profile
@@ -309,10 +309,11 @@ A pull request body has two parts and no third:
 The merge gate is two commit statuses on the PR head, `pineforge/verify` and
 `pineforge/parity`, which the maintainers post after running the full
 `ci_verify.py` profiles and their parity verification on it. The GitHub Actions
-jobs (build on Ubuntu + macOS in Release and Debug, sanitizers, ctest, the source
-guards, the install/`find_package` smoke test and the parity subset) are
-advisory. A change that touches documentation only runs the preflight guards
-and the documentation build and skips the rest; `docs/ci.md` names the rule.
+jobs (PR builds on Ubuntu in Release and Debug and macOS in Release; non-PR
+builds also include macOS Debug; sanitizers, ctest, the source guards, the
+install/`find_package` smoke test and the parity subset) are advisory. A change
+that touches documentation only runs the preflight guards and the documentation
+build and skips the rest; `docs/ci.md` names the rule.
 
 ### How a parity campaign gates a merge
 

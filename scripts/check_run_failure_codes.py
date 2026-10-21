@@ -17,7 +17,7 @@ This guard fails closed when:
      ^[a-z][a-z0-9_]{2,47}$, a vocab value that is not lower snake_case
      identifiers optionally joined by dots (VALUE, at most 64 characters), a
      vocab arg without values, or an arg kind/value list a code cannot carry
-     (only a vocab arg carries values; string, nullable_string and scalar
+     (only a vocab arg carries values; string, nullable_string, scalar and boolean
      take none);
   2. a generated file differs from what the catalog generates (run
      `--write-registry` and commit both);
@@ -92,7 +92,7 @@ SCHEMA = "pineforge-run-failure-catalog/v1"
 CLASSES = ("strategy", "strategy_limit", "no_data", "symbol_metadata", "symbol_feeds",
            "input", "unsupported", "resource", "engine_fault")
 KINDS = ("identifier", "keyword", "vocab", "integer", "number", "pine_source", "symbol",
-         "timeframe", "string", "nullable_string", "scalar")
+         "timeframe", "string", "nullable_string", "scalar", "boolean")
 NAME = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
 VALUE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 CODE_FIELDS = {"class", "retryable", "args", "english", "since", "description",
@@ -748,6 +748,7 @@ def self_test() -> int:
     # the generic text kinds and dotted vocab values
     kinds_ok = json.loads(json.dumps(good))
     kinds_ok["codes"]["alpha_code"]["args"].update({
+        "started": {"kind": "boolean"},
         "label": {"kind": "string"},
         "session": {"kind": "nullable_string", "optional": True},
         "value": {"kind": "scalar"},
@@ -755,7 +756,7 @@ def self_test() -> int:
     })
     found = validate_catalog(kinds_ok, canonical(kinds_ok))
     if found:
-        failures.append("the string, nullable_string and scalar kinds or a dotted vocab value "
+        failures.append("the string, nullable_string, scalar and boolean kinds or a dotted vocab value "
                         "were refused: " + repr(found))
     for bad_value in ("Counts.window", "counts..window", "counts.", ".counts", "1counts", "a-b"):
         bad = json.loads(json.dumps(kinds_ok))
@@ -772,7 +773,7 @@ def self_test() -> int:
         failures.append("an unknown arg kind passed")
     registry = render_registry(kinds_ok)
     for needle in ("RunFailureArgKind::string, false", "RunFailureArgKind::nullable_string, true",
-                   "RunFailureArgKind::scalar, false"):
+                   "RunFailureArgKind::scalar, false", "RunFailureArgKind::boolean, false"):
         if needle not in registry:
             failures.append("the registry lacks " + needle)
     # throw scan

@@ -6,7 +6,7 @@
  * Pine `strategy.opentrades.*` accessors — getters that report stats
  * about the *currently open* pyramid entries (in contrast to
  * `closed_trade_*` accessors which are inline in engine.hpp because
- * they're cheap pure-getter wrappers around the trades_ vector).
+ * they read row values from trades_).
  *
  * Each accessor checks position_side_ != FLAT and bounds-checks idx
  * before reading from pyramid_entries_; out-of-range queries return
@@ -155,15 +155,18 @@ double BacktestEngine::open_trade_max_runup_percent(int idx) const {
 //      real strategy.exit leg closed; no kernel path sets it.
 //   4. Otherwise: a strategy.close/close_all market close or a
 //      reversal-driven close -- SCRIPT.
-int BacktestEngine::closed_trade_close_cause(int i) const {
-    if (i < 0 || i >= report_trade_count()) return -1;
-    if (static_cast<std::size_t>(i) < trades_.base()) return -1;
-    const Trade& t = get_report_trade(i);
+int BacktestEngine::classify_report_close_cause(const Trade& t) {
     if (t.open_at_end) return static_cast<int>(execution::CloseCause::RangeEnd);
     if (t.close_cause != execution::CloseCause::Unspecified)
         return static_cast<int>(t.close_cause);
     if (t.exit_from_bracket) return static_cast<int>(execution::CloseCause::Bracket);
     return static_cast<int>(execution::CloseCause::Script);
+}
+
+int BacktestEngine::closed_trade_close_cause(int i) const {
+    if (i < 0 || i >= report_trade_count()) return -1;
+    if (static_cast<std::size_t>(i) < trades_.base()) return -1;
+    return classify_report_close_cause(get_report_trade(i));
 }
 
 } // namespace pineforge

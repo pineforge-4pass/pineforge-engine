@@ -1,0 +1,27 @@
+# Standalone lab build of the public HPO slot plus its summary bridge.
+cmake_minimum_required(VERSION 3.20)
+project(pineforge_hpo_grid LANGUAGES CXX)
+
+get_filename_component(PINEFORGE_HPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(PINEFORGE_BUILD_TESTS OFF CACHE BOOL "Tests run by the separate verification build")
+set(PINEFORGE_BUILD_CORPUS_STRATEGIES OFF CACHE BOOL "Build only the HPO slot")
+set(PINEFORGE_BUILD_BENCH_STRATEGIES OFF CACHE BOOL "Use this bridge-enabled module")
+set(PINEFORGE_BUILD_SPEED_BENCH OFF CACHE BOOL "No timing dependency for the HPO host")
+set(PINEFORGE_HPO_STRATEGY_SOURCE
+    "${PINEFORGE_HPO_ROOT}/benchmarks/assets/strategies/021-composite-scalping-integration-01/generated.cpp"
+    CACHE FILEPATH "Generated source for the HPO module")
+if(NOT EXISTS "${PINEFORGE_HPO_STRATEGY_SOURCE}")
+    message(FATAL_ERROR "HPO strategy source missing: ${PINEFORGE_HPO_STRATEGY_SOURCE}")
+endif()
+add_subdirectory("${PINEFORGE_HPO_ROOT}" engine)
+add_library(pineforge_hpo_grid MODULE "${PINEFORGE_HPO_STRATEGY_SOURCE}")
+set_target_properties(pineforge_hpo_grid PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/lib")
+target_compile_features(pineforge_hpo_grid PRIVATE cxx_std_17)
+target_compile_options(pineforge_hpo_grid PRIVATE -ffp-contract=off)
+if(APPLE)
+    target_link_libraries(pineforge_hpo_grid PRIVATE "-Wl,-force_load,$<TARGET_FILE:pineforge>" pineforge)
+else()
+    target_link_libraries(pineforge_hpo_grid PRIVATE "-Wl,--whole-archive" pineforge "-Wl,--no-whole-archive")
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/hpo_bridge.cmake")
+pineforge_attach_hpo_bridge(pineforge_hpo_grid)

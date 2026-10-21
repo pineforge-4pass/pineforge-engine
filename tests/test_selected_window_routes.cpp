@@ -1,7 +1,7 @@
 // Selected-window route controls: OFF against selected on the batch and stream routes,
 // the failure paths, the single read and the report-only terminal quote, against the
 // frozen observer ABI (pineforge/execution_observer.h) and the frozen selected-window ABI
-// (pineforge/selected_window.h). The lookback null triple and the 1.3-parity capabilities
+// (pineforge/selected_window.h). The lookback null triple and the 1.3 capabilities
 // literal of the wire contract are not read by this native-level TU.
 //
 // Real-system rows driven only from outside, through the public entries a caller

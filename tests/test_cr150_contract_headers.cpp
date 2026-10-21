@@ -30,6 +30,18 @@ static_assert(offsetof(pf_report_sink_v1, path) == 8);
 static_assert(offsetof(pf_report_sink_v1, run_id) == 8 + sizeof(const char*));
 static_assert(offsetof(pf_report_sink_v1, scratch_dir) == 8 + 2 * sizeof(const char*));
 
+static_assert(std::is_standard_layout_v<pf_report_sink_fd_v1>);
+static_assert(sizeof(int) == 4);
+static_assert(offsetof(pf_report_sink_fd_v1, struct_size) == 0);
+static_assert(offsetof(pf_report_sink_fd_v1, version) == 4);
+static_assert(offsetof(pf_report_sink_fd_v1, fd) == 8);
+static_assert(offsetof(pf_report_sink_fd_v1, run_id)
+    == (12 + alignof(const char*) - 1) / alignof(const char*) * alignof(const char*));
+static_assert(sizeof(pf_report_sink_fd_v1)
+    == offsetof(pf_report_sink_fd_v1, run_id) + sizeof(const char*));
+static_assert(std::is_same_v<decltype(&strategy_set_report_sink_fd_v1),
+    int (*)(pf_strategy_t, const pf_report_sink_fd_v1*)>);
+
 static_assert(std::is_standard_layout_v<pf_report_sink_receipt_v1>);
 static_assert(sizeof(pf_report_sink_receipt_v1) == 144);
 static_assert(offsetof(pf_report_sink_receipt_v1, struct_size) == 0);
@@ -47,6 +59,21 @@ static_assert(offsetof(pf_report_sink_receipt_v1, reserved) == 129);
 static_assert(sizeof(decltype(pf_report_sink_receipt_v1::reserved)) == 7);
 static_assert(offsetof(pf_report_sink_receipt_v1, complete) == 136);
 static_assert(offsetof(pf_report_sink_receipt_v1, trades_retained) == 140);
+static_assert(std::is_standard_layout_v<pf_report_sink_summary_v1>);
+static_assert(sizeof(pf_report_sink_summary_v1) == 64);
+static_assert(alignof(pf_report_sink_summary_v1) == 8);
+static_assert(offsetof(pf_report_sink_summary_v1, struct_size) == 0);
+static_assert(offsetof(pf_report_sink_summary_v1, version) == 4);
+static_assert(offsetof(pf_report_sink_summary_v1, count_t) == 8);
+static_assert(offsetof(pf_report_sink_summary_v1, wins) == 16);
+static_assert(offsetof(pf_report_sink_summary_v1, losses) == 24);
+static_assert(offsetof(pf_report_sink_summary_v1, best_trade) == 32);
+static_assert(offsetof(pf_report_sink_summary_v1, worst_trade) == 40);
+static_assert(offsetof(pf_report_sink_summary_v1, max_drawdown) == 48);
+static_assert(offsetof(pf_report_sink_summary_v1, nonfinite_t_field) == 56);
+static_assert(offsetof(pf_report_sink_summary_v1, complete) == 60);
+static_assert(std::is_same_v<decltype(&strategy_report_sink_summary_v1),
+    int (*)(pf_strategy_t, pf_report_sink_summary_v1*)>);
 static_assert(PF_ABI_VERSION == 4);
 
 // DESIGN 3.7:825,833-837,858-879: formatting and writer declarations are
@@ -59,6 +86,7 @@ static_assert(std::is_same_v<decltype(&sink::LineWriter::write_e),
                              void (sink::LineWriter::*)(const pf_equity_point_t&)>);
 static_assert(std::is_same_v<decltype(&sink::LineWriter::write_trailer),
                              sink::Trailer (sink::LineWriter::*)()>);
+static_assert(std::is_constructible_v<sink::LineWriter, const pf_report_sink_fd_v1&>);
 static_assert(sizeof(decltype(sink::Trailer::sha256_hex)) == 65);
 
 // DESIGN 3.4:613-616: global counts and indices use the declared size_type;
@@ -71,19 +99,19 @@ static_assert(std::is_same_v<decltype(std::declval<const Ledger&>().size()),
 static_assert(std::is_same_v<decltype(std::declval<const Ledger&>().base()),
                              Ledger::size_type>);
 static_assert(std::is_same_v<decltype(std::declval<Ledger&>()[Ledger::size_type{}]),
-                             pineforge::Trade&>);
+                             pineforge::Trade>);
 static_assert(std::is_same_v<decltype(std::declval<const Ledger&>()[Ledger::size_type{}]),
-                             const pineforge::Trade&>);
+                             pineforge::Trade>);
 
-// CORE-TOP rev 6 amendment (10-18 16:04), T1: new frozen signatures only.
+// Reset/count operations keep their signatures; external rows return values.
 static_assert(std::is_same_v<decltype(&Ledger::clear), void (Ledger::*)()>);
 static_assert(std::is_same_v<decltype(&Ledger::reserve),
                              void (Ledger::*)(Ledger::size_type)>);
 static_assert(std::is_same_v<decltype(&Ledger::empty), bool (Ledger::*)() const>);
 static_assert(std::is_same_v<decltype(std::declval<Ledger&>().at(Ledger::size_type{})),
-                             pineforge::Trade&>);
+                             pineforge::Trade>);
 static_assert(std::is_same_v<decltype(std::declval<const Ledger&>().at(Ledger::size_type{})),
-                             const pineforge::Trade&>);
+                             pineforge::Trade>);
 
 // DESIGN 3.3:529,535-551 and 3.8:906-907: the accumulator accepts TradeC,
 // finish is a const read, and both sources expose exact 24-byte points.

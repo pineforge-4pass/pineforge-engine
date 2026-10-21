@@ -133,7 +133,7 @@ finding to report, not a step to take.
 
 10. **A test row never silently disappears.** Each profile counts the rows that
     *ran* against a floor: the `PRIVATE_FIXTURE_PROFILE_FLOORS`
-    ci_verify.py:789 table. When rows land, re-measure the profile's own
+    ci_verify.py:802 table. When rows land, re-measure the profile's own
     overlay-present run and edit that table in the same commit.
 
 ## The recipe for a lane
@@ -261,7 +261,7 @@ decision, and removing one is a regression:
 
 **kernel** — the Pine-agnostic half of the engine: matching, fills, sizing,
 margin, settlement, indicators, calendars. Buildable alone as
-`PineForge::kernel` CMakeLists.txt:162 with `PINEFORGE_BUILD_SOURCE_LAYER`
+`PineForge::kernel` CMakeLists.txt:165 with `PINEFORGE_BUILD_SOURCE_LAYER`
 CMakeLists.txt:43 off.
 
 **adapter** — `src/source/` and `src/compat/pine/`: the TradingView-parity
@@ -281,7 +281,7 @@ measurement that produced it, so a later change to it is visible as a change to
 the record, not as an edit to a literal.
 
 **floor** — the minimum number of CTest rows a profile must actually run
-(the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:789 table: with the private
+(the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:802 table: with the private
 overlay present, the profile's full registered population; without it, that
 population minus the pinned private-fixture rows it registers as SKIP
 placeholders). It counts rows that ran, so a skipped row does not pad it.

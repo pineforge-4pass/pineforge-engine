@@ -104,7 +104,7 @@ void placement_minima_match_old_nested_reference() {
         row.command_sequence = 10000 - i;
         table.try_emplace(i, row);
         reference.insert(i, row);
-        if (i % 2 != 0) query(row.source_id, row.from_entry); // fold before erase
+        if (i % 2 != 0) query(row.source_id, row.from_entry); // scan before erase
         require(table.erase(i), "erase a real placement row");
         reference.erase(i);
         table.compact();
@@ -118,6 +118,7 @@ void placement_minima_match_old_nested_reference() {
     table.try_emplace(513, row);
     reference.insert(513, row);
     query(row.source_id, row.from_entry);
+    const auto erased_bytes = table.auxiliary_disk_bytes();
     row.source_id = "replacement-id";
     row.from_entry = "new-from-entry";
     row.command_sequence = std::numeric_limits<std::uint64_t>::max();
@@ -125,7 +126,9 @@ void placement_minima_match_old_nested_reference() {
     table.replace(513, std::move(row));
     query("replace-id", "");
     query("replacement-id", "new-from-entry"); // present UINT64_MAX
-    query("exit-1", "unique-entry-1"); // erased minima survive a rebuild
+    query("exit-1", "unique-entry-1"); // erased minima survive replacement
+    require(table.auxiliary_disk_bytes() == erased_bytes,
+            "retained scans and replacement create no q data or index");
     require(table.erase(513), "erase replacement row");
     reference.erase(513);
     row = {};
@@ -176,7 +179,7 @@ public:
         if (bar % 6 == 1 || bar % 6 == 3)
             strategy_exit(exit_id, id, 100.5, 99.5, kNa, kNa, kNa, 50.0);
         if (bar % 6 == 4 && live_position_size() > 0.0) strategy_close(id);
-        // Exercise lazy retained-row indexing as well as erased minima.
+        // Exercise retained-row scans as well as erased minima.
         // Observations never steer the strategy or add a broker hash field.
         sequences_.push_back(adapter_.command_sequence_for_exit(exit_id, id));
         fallbacks_.push_back(adapter_.command_sequence_for_exit(exit_id, "unbound"));
@@ -263,8 +266,8 @@ void directory_failure_is_a_typed_run_failure() {
     const auto bars = tape(4);
     disk.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
     require(!disk.last_error().empty(), "configured scratch failure ends the run");
-    require(run_failure_value_of(disk).code == RunFailureCode::report_sink_failed,
-            "scratch IO failure is report_sink_failed at the public run boundary");
+    require(run_failure_value_of(disk).code == RunFailureCode::scratch_io_failed,
+            "scratch IO failure is scratch_io_failed at the public run boundary");
 }
 
 void fixture_backend_requires_reset_after_use() {
@@ -277,7 +280,7 @@ void fixture_backend_requires_reset_after_use() {
     row.command_sequence = 7;
     table.try_emplace(1, row);
     require(table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence,
-            "populate the disk auxiliary index before switching backends");
+            "scan retained evidence before switching backends");
     require(table.erase(1), "erase the fixture placement while keeping its history");
     bool refused = false;
     try {
@@ -334,19 +337,25 @@ void placement_directory_failure_is_part_c_error() {
     row.from_entry = "part-c-entry";
     row.command_sequence = 1;
     table.try_emplace(1, row);
+    const auto before_digest = table.erased_digest();
+    require(table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence
+            && table.auxiliary_disk_bytes() == 0,
+            "retained q queries succeed without touching even a missing directory");
     bool failed = false;
     try {
-        (void)table.command_sequence_for(row.source_id, row.from_entry);
+        (void)table.erase(1); // Only the retained e store performs disk I/O.
     } catch (const detail::IdPairStoreError& error) {
         failed = error.code().value() == ENOENT
-            && classify_run_failure(error).code == RunFailureCode::report_sink_failed;
+            && classify_run_failure(error).code == RunFailureCode::scratch_io_failed;
     }
     require(failed, "part C's placement minima preserve the typed missing-directory error");
-    require(table.size() == 1 && table.auxiliary_disk_bytes() == 0,
-            "failed auxiliary fold retains its placement and publishes no disk bytes");
+    require(table.size() == 1 && table.contains(1) && table.erased_rows() == 0
+            && table.erased_digest() == before_digest && table.auxiliary_disk_bytes() == 0,
+            "failed erasure retains its row, digest, counters and unpublished e files");
     table.set_auxiliary_tables_directory(scratch.path);
-    require(table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence,
-            "part C's lazy fold retries after the directory is repaired");
+    require(table.erase(1) && table.erased_rows() == 1 && table.auxiliary_disk_bytes() > 0
+            && table.command_sequence_for(row.source_id, row.from_entry) == row.command_sequence,
+            "e erasure retries after directory repair and keeps the same query answer");
 }
 } // namespace
 

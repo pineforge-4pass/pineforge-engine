@@ -12,6 +12,11 @@ from pathlib import Path
 import struct
 import sys
 
+# Share the host's descriptor and policy arithmetic, including typed refusals.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "docker"))
+from run_json import (RunFailure, _bind_scratch_tables, _check_bench_run,
+                      apply_scratch_tables, default_scratch_manifest, failure_line)
+
 class pf_bar_t(ctypes.Structure):
     _fields_ = [
         ("open", ctypes.c_double),
@@ -378,6 +383,10 @@ class HpoRuntime:
         try:
             for key, value in inputs:
                 self.lib.strategy_set_input(handle, key, str(value).encode())
+            # P0 policy for THIS trial, after its overrides/feed selection.
+            # A fresh handle/run receives fresh occupancy, never its predecessor's.
+            manifest = default_scratch_manifest(len(bars))
+            apply_scratch_tables(self.lib, handle, manifest)
             if self.lib.strategy_set_report_output_mode_v1(handle, 1) != 0:
                 raise RuntimeError("HPO summary mode installation failed")
             if self.lib.strategy_set_hpo_scratch_manifest_v1(
@@ -387,6 +396,7 @@ class HpoRuntime:
             # The dedicated entry has no report argument or report producer.
             # Summary mode suppresses curve/trade/hash capture during execution.
             status = self.lib.strategy_run_hpo_v1(handle, bars, len(bars))
+            _check_bench_run(self.lib, handle)  # a failed trial cannot enter the ranking
             self._check_run(handle)
             if status != 0:
                 raise RuntimeError("HPO trial did not complete")
@@ -835,6 +845,18 @@ def main(library_path=None, csv_path=None, bin_path=None, trial_log=None,
     lib = ctypes.CDLL(str(dylib_path))
     runtime = HpoRuntime(lib)
 
+    # Bounded-memory contract bindings: the per-trial scratch-table setter and
+    # the typed failure accessors, bound only when the library exports them.
+    _bind_scratch_tables(lib)
+    for name in ("strategy_get_last_error", "strategy_get_last_error_code",
+                 "strategy_get_last_error_args"):
+        if hasattr(lib, name):
+            getattr(lib, name).argtypes = [ctypes.c_void_p]
+            getattr(lib, name).restype = ctypes.c_char_p
+    if hasattr(lib, "strategy_last_run_status"):
+        lib.strategy_last_run_status.argtypes = [ctypes.c_void_p]
+        lib.strategy_last_run_status.restype = ctypes.c_int
+
     # Load exactly one shared bar array, from the CSV or the binary input.
     if bin_path is not None:
         print(f"Loading binary OHLCV bars from {bin_path.name}...")
@@ -953,4 +975,8 @@ def cli(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(cli())
+    try:
+        sys.exit(cli())
+    except RunFailure as failure:
+        sys.stderr.write(failure_line(str(failure), failure.code, failure.code_args))
+        sys.exit(failure.exit_status)

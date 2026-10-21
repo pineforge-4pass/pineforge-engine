@@ -1180,6 +1180,10 @@ struct ArgSpec {
 
 // A value the arg's kind accepts, and the JSON it canonicalizes to.
 RunFailureArg sample_arg(const ArgSpec& spec, std::string& json_value) {
+    if (spec.kind == "boolean") {
+        json_value = "true";
+        return RunFailureArg(spec.name.c_str(), true);
+    }
     if (spec.kind == "integer") {
         json_value = "7";
         return RunFailureArg(spec.name.c_str(), std::int64_t{7});
@@ -1283,6 +1287,13 @@ void check_code_args(RunFailureCode code, const std::string& name, const Json* a
             expect(spec.name + " as an integer", with({arg, std::int64_t{1}}), invariant, "{}");
             expect(spec.name + " as a boolean", with({arg, true}), invariant, "{}");
             expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
+        } else if (spec.kind == "boolean") {
+            expect(spec.name + " as text", with({arg, "true"}), invariant, "{}");
+            expect(spec.name + " as an integer", with({arg, 1}), invariant, "{}");
+            expect(spec.name + " as a number", with({arg, 1.0}), invariant, "{}");
+            expect(spec.name + " as a null", with({arg, nullptr}), invariant, "{}");
+            const auto got = pineforge::make_run_failure(code, with({arg, false}));
+            CHECK_EQ(at + spec.name + " false accepted", code_name(got.code), name);
         } else if (spec.kind == "integer") {
             expect(spec.name + " as text", with({arg, "7"}), invariant, "{}");
             expect(spec.name + " as a number", with({arg, 7.5}), invariant, "{}");
@@ -1363,6 +1374,7 @@ void window_vocabulary_rows() {
     CHECK_EQ("kind string", number_of(Kind::string), "8");
     CHECK_EQ("kind nullable_string", number_of(Kind::nullable_string), "9");
     CHECK_EQ("kind scalar", number_of(Kind::scalar), "10");
+    CHECK_EQ("kind boolean", number_of(Kind::boolean), "11");
     CHECK_EQ("type text", number_of(Type::text), "0");
     CHECK_EQ("type integer", number_of(Type::integer), "1");
     CHECK_EQ("type number", number_of(Type::number), "2");

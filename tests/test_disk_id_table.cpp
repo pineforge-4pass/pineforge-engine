@@ -157,9 +157,10 @@ template<class F> void io_failure(F action) {
     try { action(); }
     catch (const std::system_error& error) {
         failed = pineforge::classify_run_failure(error).code
-            == pineforge::RunFailureCode::report_sink_failed;
+            == pineforge::RunFailureCode::scratch_io_failed
+            && !pineforge::classify_run_failure(error).args;
     }
-    require(failed, "I/O error must carry report_sink_failed");
+    require(failed, "I/O error must carry scratch_io_failed");
 }
 
 void file_ownership_and_failures() {

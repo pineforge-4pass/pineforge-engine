@@ -5,12 +5,18 @@ Run with Python 3.10+ (including -I). Mutations touch temporary copies only.
 The positive tree check deliberately requires the integrated producers, rather
 than accepting a recorded count or treating existing integration findings as a
 successful check. The supervisor runs this suite on the completed tree.
+
+Use --shard I/N (1-based) to run sorted loader-discovered ManifestCheckerTests
+ids at positions [I-1::N], plus the cheap partition guard in every shard.
+Without --shard, the usual unittest discovery and CLI selectors apply.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import copy
 import ctypes
+import importlib.util
 import json
 import math
 import re
@@ -25,20 +31,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "scripts/check_selected_window_ownership.py"
 MANIFEST = ROOT / "tests/ownership/manifest.v1.json"
+SPEC = importlib.util.spec_from_file_location("selected_window_ownership", CHECKER)
+ownership = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = ownership
+SPEC.loader.exec_module(ownership)
 
 
 def emitted_schema(root: Path) -> dict:
     """D4 route two: evaluate the actual Python builders, not checker helpers.
 
-    Only ctypes classes and pure report functions are compiled from the AST.
-    No imports, CLI, CDLL, native library or main block is executed. One trade
-    and one mark make both array element schemas observable even on an empty
-    normal report. A second evaluation with defined absences derives nullable
-    columns from _num / _stats_dict instead of borrowing the manifest's flags.
+    Only ctypes classes, the record iterable and pure report functions are
+    compiled from the AST. No imports, CLI, CDLL, native library or main block
+    is executed. One trade and one mark make both array element schemas
+    observable even on an empty normal report. A second evaluation with
+    defined absences derives nullable columns from _num / _stats_dict instead
+    of borrowing the manifest's flags.
     """
     tree = ast.parse((root / "docker/run_json.py").read_text(encoding="utf-8"))
-    classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC"}
-    functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict"}
+    classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC",
+               "_JSONRecordArray"}
+    functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict",
+                 "_annualization_diagnostics", "_annualization_block"}
+    assigned = {"EQUITY_REPORT_KEYS", "MIN_ANNUALIZATION_SPAN_MS"}
     selected = [ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
     found = set()
     for node in tree.body:
@@ -48,11 +62,12 @@ def emitted_schema(root: Path) -> dict:
         elif isinstance(node, ast.FunctionDef) and node.name in functions:
             selected.append(node)
             found.add(node.name)
-        elif isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "EQUITY_REPORT_KEYS" for t in node.targets):
-            selected.append(node)
-            found.add("EQUITY_REPORT_KEYS")
-    if found != classes | functions | {"EQUITY_REPORT_KEYS"}:
+        elif isinstance(node, ast.Assign):
+            names = {t.id for t in node.targets if isinstance(t, ast.Name)} & assigned
+            if names:
+                selected.append(node)
+                found |= names
+    if found != classes | functions | assigned:
         raise AssertionError(f"independent D4 builder extraction is incomplete: {sorted(found)}")
     namespace = {"ctypes": ctypes, "math": math, "Path": Path,
                  "datetime": datetime, "timezone": timezone}
@@ -99,6 +114,14 @@ def emitted_schema(root: Path) -> dict:
     def build():
         out = namespace["build_report_dict"](
             report, Path("feed.csv"), 1, 1, 1, 0.0, {}, {}, {}, [1])
+        # Snapshot the bounded iterables before changing the PODs for the
+        # opposite-side and nullable evaluations. Retaining their factories
+        # would make all three observations read the last mutated report.
+        for key in ("trades", "equity_curve"):
+            if isinstance(out[key], namespace["_JSONRecordArray"]):
+                if len(out[key]) != 1:
+                    raise AssertionError(f"independent D4 needs one observable element at {key}")
+                out[key] = list(out[key])
         # D4's version leaf comes from the real selected-window wire version;
         # this is a reconstruction, not a claim that a digest is implemented.
         window = ast.parse((root / "docker/selected_window_report.py").read_text(encoding="utf-8"))
@@ -127,7 +150,7 @@ def emitted_schema(root: Path) -> dict:
             containers[path] = "object"
             for key, item in value.items():
                 walk(item, undefined[key], key if path == "$" else f"{path}.{key}")
-        elif isinstance(value, list):
+        elif isinstance(value, (list, namespace["_JSONRecordArray"])):
             containers[path] = "array"
             if len(value) != 1:
                 raise AssertionError(f"independent D4 needs one observable element at {path}")
@@ -176,6 +199,7 @@ class ManifestCheckerTests(unittest.TestCase):
         for directory in ("src", "include", "docker"):
             shutil.copytree(ROOT / directory, self.root / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(ROOT / "tests/ownership/probes", self.root / "tests/ownership/probes")
 
     def reject(self, check, detail, *, copied_tree=False):
         result = self.run_checker(copied_tree=copied_tree)
@@ -191,6 +215,36 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
+
+    def test_report_probe_pin_removed_is_rejected(self):
+        self.doc["probes"] = []
+        self.reject("probe-pins", "unregistered report/buy_hold_return_overflow")
+
+    def test_report_probe_file_hash_changed_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "tests/ownership/probes/report/buy_hold_return_overflow/bars.csv"
+        path.write_bytes(path.read_bytes().replace(b"250000000", b"250000001", 1))
+        self.reject("probe-pins", "report/buy_hold_return_overflow: bars.csv sha256 differs",
+                    copied_tree=True)
+
+    def test_report_probe_file_pin_missing_is_rejected(self):
+        del self.doc["probes"][0]["sha256"]["run.json"]
+        self.reject("probe-pins", "report/buy_hold_return_overflow: pinned file set differs")
+
+    def test_report_probe_duplicate_is_rejected(self):
+        self.doc["probes"].append(copy.deepcopy(self.doc["probes"][0]))
+        self.reject("duplicate-probe", "report/buy_hold_return_overflow")
+
+    def test_report_metric_field_binding_changed_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        original = 'metric_field = f"metrics.{block}.{name}"'
+        self.assertEqual(text.count(original), 1)
+        path.write_text(text.replace(original, 'metric_field = f"metrics.{name}.{block}"'),
+                        encoding="utf-8")
+        self.reject("input", "unrecognized metric result guard; update the independent reconstruction",
+                    copied_tree=True)
 
     def test_kept_branch_anchor_removed_is_rejected(self):
         self.copy_tree()
@@ -319,18 +373,23 @@ class ManifestCheckerTests(unittest.TestCase):
         self.reject("sink-mapping", "source.admit_strategy_entry: fields/reasons differ from code")
 
     def test_catalog_code_missing_from_manifest_is_rejected(self):
-        self.doc["catalog"]["codes"] = [row for row in self.doc["catalog"]["codes"]
-                                         if row["code"] != "outputs_limit"]
-        self.reject("catalog-set", "missing outputs_limit")
+        rows = self.doc["catalog"]["codes"]
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                self.doc["catalog"]["codes"] = [row for row in rows if row["code"] != code]
+                self.reject("catalog-set", f"missing {code}")
 
     def test_catalog_registry_missing_code_is_rejected(self):
         self.copy_tree()
         path = self.root / "src/run_failure_registry.inc"
         text = path.read_text(encoding="utf-8")
-        text, changed = re.subn(r'^\s*\{"outputs_limit",[^\n]*\n', "", text, flags=re.M)
-        self.assertEqual(changed, 1)
-        path.write_text(text, encoding="utf-8")
-        self.reject("registry-set", "stale outputs_limit", copied_tree=True)
+        for code in ("outputs_limit", "scratch_capacity_exceeded", "scratch_io_failed"):
+            with self.subTest(code=code):
+                changed_text, changed = re.subn(
+                    r'^\s*\{"' + re.escape(code) + r'",[^\n]*\n', "", text, flags=re.M)
+                self.assertEqual(changed, 1)
+                path.write_text(changed_text, encoding="utf-8")
+                self.reject("registry-set", f"stale {code}", copied_tree=True)
 
     def test_unknown_producer_field_is_rejected_by_vocabulary(self):
         # Killer for vocabulary-check-disabled, even if another check also fails.
@@ -416,6 +475,92 @@ class ManifestCheckerTests(unittest.TestCase):
     def test_d4_independent_reconstruction_matches_manifest(self):
         self.assertEqual(manifest_schema(self.doc), emitted_schema(ROOT))
 
+    def test_d4_record_array_factories_are_accepted(self):
+        # The real builder contains both factories, alongside the separate
+        # sink builder. Discover the schema from its actual source and PODs.
+        findings = ownership.Findings()
+        actual = ownership.reconstruct_schema(ROOT, findings)
+        self.assertEqual(findings.lines, set())
+        self.assertEqual(actual, manifest_schema(self.doc))
+        self.assertEqual(actual, emitted_schema(ROOT))
+
+    def test_d4_second_record_array_assignment_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        assignments = (
+            ("trades", "    trades = _JSONRecordArray(lambda: (trade_at(i) for i in range(n)), n, trade_at)\n"),
+            ("equity_curve", "    equity_curve = _JSONRecordArray(\n"
+                             "        lambda: (point_at(i) for i in range(points)), points, point_at)\n"),
+        )
+        for block, assignment in assignments:
+            with self.subTest(block=block):
+                self.assertEqual(text.count(assignment), 1)
+                path.write_text(text.replace(assignment, assignment + assignment, 1), encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: ambiguous array element producer {block}\n")
+                self.assertEqual(result.stderr, "")
+
+    def test_d4_record_array_callable_with_unknown_source_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        # Summary scalar reconstruction resolves p before the array proof;
+        # the unknown point source therefore fails there first. The trade
+        # row t reaches the factory's exact POD-binding check.
+        for block, row, diagnostic in (
+                ("trades", "t", "unrecognized array POD binding trades"),
+                ("equity_curve", "p",
+                 "unrecognized scalar producer expression: report.unknown[i]")):
+            binding = f"        {row} = report.{block}[i]\n"
+            with self.subTest(block=block):
+                self.assertEqual(text.count(binding), 1)
+                path.write_text(text.replace(binding, f"        {row} = report.unknown[i]\n", 1),
+                                encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: {diagnostic}\n")
+                self.assertEqual(result.stderr, "")
+
+    def scalar_fixture(self, source):
+        assignment, = ast.parse(source).body
+        self.assertIsInstance(assignment, ast.Assign)
+        target, = assignment.targets
+        self.assertIsInstance(target, ast.Name)
+        self.assertEqual(target.id, "p")
+        return ownership.scalar_type(ast.Name(id="p", ctx=ast.Load()), {"p": assignment.value})
+
+    def test_d4_report_array_scalar_index_is_accepted(self):
+        for source in ("p = report.equity_curve[i]", "p = report.equity_curve[0]",
+                       "p = report.trades[i]", "p = report.trades[0]"):
+            with self.subTest(source=source):
+                self.assertEqual(self.scalar_fixture(source), {"kind": "number", "null_allowed": False})
+
+    def test_d4_unrecognized_report_array_index_is_rejected(self):
+        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
+                         {"kind": "number", "null_allowed": False})
+        for expression in ("report.unknown[i]", "other.equity_curve[i]",
+                           "report.other.equity_curve[i]", "report.equity_curve.values[i]"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ownership.InputError) as raised:
+                    self.scalar_fixture("p = " + expression)
+                self.assertEqual(str(raised.exception),
+                                 "unrecognized scalar producer expression: " + expression)
+
+    def test_d4_report_array_slice_is_rejected(self):
+        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
+                         {"kind": "number", "null_allowed": False})
+        for expression in ("report.equity_curve[i:j]", "report.equity_curve[:]",
+                           "report.equity_curve[True]", "report.equity_curve[1.0]",
+                           "report.equity_curve[i + 1]", "report.equity_curve[index()]",
+                           "report.equity_curve[i, j]"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ownership.InputError) as raised:
+                    self.scalar_fixture("p = " + expression)
+                self.assertEqual(str(raised.exception),
+                                 "unrecognized scalar producer expression: " + expression)
+
     def test_d4_manifest_leaf_removed_is_rejected(self):
         # Killer for D4-comparison-disabled; checks this specific diagnostic.
         rows = self.doc["canonical_schema"]["leaves"]
@@ -466,5 +611,69 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertIn("ownership[input]: duplicate JSON key format", result.stdout.splitlines())
 
 
+def shard_case_ids(index: int, count: int) -> list[str]:
+    ids = sorted(test.id() for test in
+                 unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
+    return ids[index - 1::count]
+
+
+class ManifestCheckerShardingTests(unittest.TestCase):
+    def test_shards_partition_every_case_exactly_once(self):
+        # Discover the expectation independently of shard_case_ids, and use
+        # index residues rather than reproducing its slicing implementation.
+        ids = sorted(test.id() for test in
+                     unittest.TestLoader().loadTestsFromTestCase(ManifestCheckerTests))
+        self.assertGreaterEqual(len(ids), 30)
+        for count in range(1, 9):
+            with self.subTest(shards=count):
+                seen = set()
+                total = 0
+                for index in range(1, count + 1):
+                    shard = shard_case_ids(index, count)
+                    expected = [test_id for position, test_id in enumerate(ids)
+                                if position % count == index - 1]
+                    self.assertEqual(shard, expected)
+                    self.assertEqual(len(shard), len(set(shard)))
+                    self.assertTrue(seen.isdisjoint(shard))
+                    seen.update(shard)
+                    total += len(shard)
+                self.assertEqual(seen, set(ids))
+                self.assertEqual(total, len(ids))
+
+
+def parse_shard(value: str) -> tuple[int, int]:
+    message = "--shard must be I/N with integers satisfying 1 <= I <= N"
+    if re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", value) is None:
+        raise argparse.ArgumentTypeError(message)
+    index, count = map(int, value.split("/"))
+    if index > count:
+        raise argparse.ArgumentTypeError(message)
+    return index, count
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if any(arg == "--shard" or arg.startswith("--shard=") for arg in sys.argv[1:]):
+        parser = argparse.ArgumentParser(allow_abbrev=False)
+        parser.add_argument("--shard", type=parse_shard, metavar="I/N",
+                            required=True, action="append")
+        args = parser.parse_args()
+        if len(args.shard) != 1:
+            parser.error("specify --shard exactly once")
+        index, count = args.shard[0]
+        guards = [test.id() for test in unittest.TestLoader().loadTestsFromTestCase(
+            ManifestCheckerShardingTests)]
+        selected = shard_case_ids(index, count) + guards
+        if len(selected) == len(guards):
+            parser.error("shard %d/%d selects no case" % (index, count))
+        # The ids go in argv: with module=None unittest ignores defaultTest and
+        # would fall back to discovery (zero tests, exit 0 before Python 3.12).
+        program = unittest.main(module=None, argv=[sys.argv[0], *selected], exit=False)
+        # A shard that ran a different number of tests than it selected fails,
+        # whatever unittest's own exit status says.
+        if program.result.testsRun != len(selected) or not program.result.wasSuccessful():
+            print("shard %d/%d: ran %d tests, selected %d" % (
+                index, count, program.result.testsRun, len(selected)), file=sys.stderr)
+            sys.exit(1)
+        print("shard %d/%d: ran %d tests as selected" % (index, count, len(selected)))
+    else:
+        unittest.main()

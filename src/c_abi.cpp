@@ -35,7 +35,11 @@
  *     pf_execution_observer_version, strategy_set_execution_observer_v1,
  *     strategy_execution_observation_v1, pf_selected_window_version, pf_report_sink_version,
  *     strategy_set_selected_window_v1, strategy_selected_window_counts_v1,
- *     strategy_set_report_sink_v1, strategy_report_sink_receipt_v1 — the
+ *     strategy_set_report_sink_v1, strategy_set_report_sink_fd_v1, strategy_report_sink_receipt_v1,
+ *     strategy_set_scratch_tables_v1, strategy_report_sink_summary_v1,
+ *     pf_report_scratch_arena_stats,
+ *     pf_run_abort_install_sigterm_v1, pf_run_abort_requested_v1,
+ *     pf_run_abort_restore_sigterm_v1 — the
  *     authoritative list is EXPECTED_RUNTIME in scripts/check_c_abi_runtime.py (CI). Other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -52,6 +56,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
@@ -62,6 +67,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <signal.h>
+#include "run_abort.hpp"
 namespace pineforge {
 void clear_native_c_host_refusal_error(BacktestEngine* engine) noexcept;
 bool native_c_host_in_postrun_hook_frame(BacktestEngine* engine) noexcept;
@@ -79,6 +86,14 @@ int native_selected_window_counts_v1(const BacktestEngine*, pf_selected_window_c
 }
 
 namespace {
+
+volatile sig_atomic_t run_sigterm_stop = 0;
+struct sigaction previous_sigterm {};
+bool sigterm_installed = false;
+
+void run_sigterm_handler(int) noexcept {
+    run_sigterm_stop = 1;
+}
 
 template <typename Fn>
 void pf_cabi_void(Fn&& fn) noexcept {
@@ -333,7 +348,38 @@ static_assert(static_cast<int>(pineforge::MagnifierDistribution::BACK_LOADED)  =
  * STRATEGY by the codegen (in emit_top.py::_emit_extern_c).
  * ─────────────────────────────────────────────────────────────────── */
 
+namespace pineforge {
+bool run_sigterm_requested() noexcept {
+    return sigterm_installed && run_sigterm_stop != 0;
+}
+} // namespace pineforge
+
 extern "C" {
+
+PF_API int pf_run_abort_install_sigterm_v1(void) {
+    // The caller blocks SIGTERM across installation. Repeated installation
+    // must not clear a cancellation that already arrived.
+    if (sigterm_installed) return 0;
+    struct sigaction action {};
+    action.sa_handler = run_sigterm_handler;
+    action.sa_flags = SA_RESTART;
+    if (::sigemptyset(&action.sa_mask) != 0) return -1;
+    run_sigterm_stop = 0;
+    if (::sigaction(SIGTERM, &action, &previous_sigterm) != 0) return -1;
+    sigterm_installed = true;
+    return 0;
+}
+
+PF_API int pf_run_abort_requested_v1(void) {
+    return pineforge::run_sigterm_requested() ? 1 : 0;
+}
+
+PF_API int pf_run_abort_restore_sigterm_v1(void) {
+    if (!sigterm_installed) return 0;
+    if (::sigaction(SIGTERM, &previous_sigterm, nullptr) != 0) return -1;
+    sigterm_installed = false;
+    return 0;
+}
 
 /* trade_index is a REPORT row index: pf_report_t::trades is trades_ followed
  * by range_end_trades_ (fill_trades_section, engine_report.cpp), so the
@@ -354,8 +400,12 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
     if (!s) return 0;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return 0;
-    return engine->get_report_trade(trade_index).entry_incarnation;
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return 0;
+        return engine->get_report_trade(trade_index).entry_incarnation;
+    } catch (...) {
+        return 0;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): closed-trade id / exit-comment
@@ -369,28 +419,41 @@ PF_API uint64_t strategy_closed_trade_entry_incarnation(
  * report-row overload is not possible.
  *
  * Returned pointers are valid until the next run() (or stream call) on this
- * handle, like strategy_get_last_error -- the runtime's own std::string
- * storage backing them is untouched until then. NULL on a NULL handle or an
+ * handle, like strategy_get_last_error. This legacy pointer API explicitly
+ * materializes each requested row; value/page readers use bounded storage.
+ * NULL on a NULL handle or an
  * out-of-range/streamed row, checked by the close-cause query before indexing. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-    return engine->get_report_trade(trade_index).entry_id.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).entry_id.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 PF_API const char* strategy_closed_trade_exit_id(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-    return engine->get_report_trade(trade_index).exit_id.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).exit_id.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade_index) {
     if (!s) return nullptr;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
-    return engine->get_report_trade(trade_index).exit_comment.c_str();
+    try {
+        if (engine->closed_trade_close_cause(trade_index) < 0) return nullptr;
+        return engine->materialize_report_trade(trade_index).exit_comment.c_str();
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): why a REPORT-row closed trade
@@ -408,7 +471,11 @@ PF_API const char* strategy_closed_trade_exit_comment(pf_strategy_t s, int trade
  * _effective_levels). */
 PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index) {
     if (!s) return -1;
-    return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
+    try {
+        return static_cast<const pineforge::BacktestEngine*>(s)->closed_trade_close_cause(trade_index);
+    } catch (...) {
+        return -1;
+    }
 }
 
 /* ABI v4 live-runtime surface (task 9): the script-facing position size
@@ -1324,6 +1391,19 @@ extern "C" {
 
 PF_API uint32_t pf_report_sink_version(void) { return 1; }
 
+PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes, uint64_t* arena_bytes) {
+    if (!high_water_bytes || !arena_bytes || high_water_bytes == arena_bytes) return -1;
+    try {
+        const auto* arena = pineforge::detail::ScratchArena::attached();
+        const auto stats = arena ? arena->stats() : pineforge::detail::ScratchArenaStats{};
+        *high_water_bytes = stats.high_water;
+        *arena_bytes = stats.bytes_supplied;
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
 PF_API int strategy_set_report_sink_v1(pf_strategy_t s, const pf_report_sink_v1* sink) {
     return pf_cabi_int(s, [&] {
         if (!s) return -1;
@@ -1334,6 +1414,33 @@ PF_API int strategy_set_report_sink_v1(pf_strategy_t s, const pf_report_sink_v1*
 PF_API int strategy_report_sink_receipt_v1(pf_strategy_t s, pf_report_sink_receipt_v1* out) {
     if (!s) return -1;
     return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_receipt_v1(out);
+}
+
+PF_API int strategy_report_sink_summary_v1(pf_strategy_t s, pf_report_sink_summary_v1* out) {
+    if (!s) return -1;
+    return static_cast<const pineforge::BacktestEngine*>(s)->report_sink_summary_v1(out);
+}
+
+} // extern "C"
+
+extern "C" {
+
+PF_API int strategy_set_report_sink_fd_v1(pf_strategy_t s, const pf_report_sink_fd_v1* sink) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_report_sink_fd_v1(sink);
+    });
+}
+
+} // extern "C"
+
+extern "C" {
+
+PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s, const pf_scratch_tables_v1* config) {
+    return pf_cabi_int(s, [&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_scratch_tables_v1(config);
+    });
 }
 
 } // extern "C"

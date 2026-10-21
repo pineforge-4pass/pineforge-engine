@@ -116,7 +116,15 @@ public:
     DiskResidentIdTable(DiskResidentIdTable&&) noexcept = default;
     DiskResidentIdTable& operator=(DiskResidentIdTable&&) noexcept = default;
 
+    void set_store(ScratchStore store) noexcept { index_.set_store(store); }
     void set_directory(const std::string& directory) { index_.set_directory(directory); }
+    void bind_scratch(const std::shared_ptr<ScratchSlab>& slab, ScratchResource resource) {
+        index_.bind_scratch(slab, resource);
+    }
+    void require_insert(const std::string& key) const { index_.require_insert(key); }
+    template<class Enumerate> void require_inserts(Enumerate&& enumerate) const {
+        index_.require_inserts(std::forward<Enumerate>(enumerate));
+    }
     void clear() noexcept { resident_.clear(); index_.clear(); }
     std::uint64_t size() const noexcept { return index_.size(); }
     std::size_t resident_size() const noexcept { return resident_.size(); }
@@ -174,6 +182,9 @@ public:
         return end();
     }
     std::pair<iterator, bool> emplace(const std::string& key, Value value) {
+        // A refused new logical row must not first overwrite/evict an eligible
+        // resident row. This search reads index bytes only, without restoring.
+        index_.require_insert(key);
         spill();
         const auto placed = index_.insert(key, value.retired_record());
         if (!placed.second) return {{this, placed.first, load(placed.first)}, false};
@@ -191,6 +202,16 @@ public:
     }
 
 private:
+    // Codecs that validate stored bytes may accept their physical origin.
+    // Keep the original one-argument codec contract for other value types.
+    template<class T = Value>
+    auto restore_record(const typename T::Record& record, int) const
+        -> decltype(T::restore_record(record, bool{})) {
+        return T::restore_record(record, index_.arena_backed());
+    }
+    Value restore_record(const typename Value::Record& record, long) const {
+        return Value::restore_record(record);
+    }
     template<bool Const, class Owner>
     static Iterator<Const> resident_begin(Owner* owner) noexcept {
         const auto at = owner->resident_.rbegin();
@@ -200,7 +221,7 @@ private:
     std::shared_ptr<Row> load(Offset at) const {
         const auto found = resident_.find(at);
         if (found != resident_.end()) return found->second;
-        auto row = std::make_shared<Row>(index_.key(at), Value::restore_record(index_.get(at)));
+        auto row = std::make_shared<Row>(index_.key(at), restore_record(index_.get(at), 0));
         resident_.emplace(at, row);
         return row;
     }

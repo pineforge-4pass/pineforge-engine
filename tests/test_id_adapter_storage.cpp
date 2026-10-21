@@ -320,7 +320,7 @@ void real_host_io_failure() {
     host.run(bars.data(), static_cast<int>(bars.size()), "1", "1", false, 4,
              pineforge::MagnifierDistribution::ENDPOINTS);
     require(!host.last_error().empty(), "disk failure did not fail the run");
-    require(std::string(pineforge::run_failure_code_of(host)) == "report_sink_failed",
+    require(std::string(pineforge::run_failure_code_of(host)) == "scratch_io_failed",
             "scratch failure lost its typed code at the run catcher");
 }
 } // namespace
