@@ -40,14 +40,16 @@ SPEC.loader.exec_module(ownership)
 def emitted_schema(root: Path) -> dict:
     """D4 route two: evaluate the actual Python builders, not checker helpers.
 
-    Only ctypes classes and pure report functions are compiled from the AST.
-    No imports, CLI, CDLL, native library or main block is executed. One trade
-    and one mark make both array element schemas observable even on an empty
-    normal report. A second evaluation with defined absences derives nullable
-    columns from _num / _stats_dict instead of borrowing the manifest's flags.
+    Only ctypes classes, the record iterable and pure report functions are
+    compiled from the AST. No imports, CLI, CDLL, native library or main block
+    is executed. One trade and one mark make both array element schemas
+    observable even on an empty normal report. A second evaluation with
+    defined absences derives nullable columns from _num / _stats_dict instead
+    of borrowing the manifest's flags.
     """
     tree = ast.parse((root / "docker/run_json.py").read_text(encoding="utf-8"))
-    classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC"}
+    classes = {"TradeC", "TradeStatsC", "EquityStatsC", "MetricsC", "EquityPointC",
+               "_JSONRecordArray"}
     functions = {"_num", "_stats_dict", "fmt_utc", "build_report_dict",
                  "_annualization_diagnostics", "_annualization_block"}
     assigned = {"EQUITY_REPORT_KEYS", "MIN_ANNUALIZATION_SPAN_MS"}
@@ -112,6 +114,14 @@ def emitted_schema(root: Path) -> dict:
     def build():
         out = namespace["build_report_dict"](
             report, Path("feed.csv"), 1, 1, 1, 0.0, {}, {}, {}, [1])
+        # Snapshot the bounded iterables before changing the PODs for the
+        # opposite-side and nullable evaluations. Retaining their factories
+        # would make all three observations read the last mutated report.
+        for key in ("trades", "equity_curve"):
+            if isinstance(out[key], namespace["_JSONRecordArray"]):
+                if len(out[key]) != 1:
+                    raise AssertionError(f"independent D4 needs one observable element at {key}")
+                out[key] = list(out[key])
         # D4's version leaf comes from the real selected-window wire version;
         # this is a reconstruction, not a claim that a digest is implemented.
         window = ast.parse((root / "docker/selected_window_report.py").read_text(encoding="utf-8"))
@@ -140,7 +150,7 @@ def emitted_schema(root: Path) -> dict:
             containers[path] = "object"
             for key, item in value.items():
                 walk(item, undefined[key], key if path == "$" else f"{path}.{key}")
-        elif isinstance(value, list):
+        elif isinstance(value, (list, namespace["_JSONRecordArray"])):
             containers[path] = "array"
             if len(value) != 1:
                 raise AssertionError(f"independent D4 needs one observable element at {path}")
@@ -464,6 +474,48 @@ class ManifestCheckerTests(unittest.TestCase):
 
     def test_d4_independent_reconstruction_matches_manifest(self):
         self.assertEqual(manifest_schema(self.doc), emitted_schema(ROOT))
+
+    def test_d4_record_array_factories_are_accepted(self):
+        # The real builder contains both factories, alongside the separate
+        # sink builder. Discover the schema from its actual source and PODs.
+        findings = ownership.Findings()
+        actual = ownership.reconstruct_schema(ROOT, findings)
+        self.assertEqual(findings.lines, set())
+        self.assertEqual(actual, manifest_schema(self.doc))
+        self.assertEqual(actual, emitted_schema(ROOT))
+
+    def test_d4_second_record_array_assignment_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        assignments = (
+            ("trades", "    trades = _JSONRecordArray(lambda: (trade_at(i) for i in range(n)), n, trade_at)\n"),
+            ("equity_curve", "    equity_curve = _JSONRecordArray(\n"
+                             "        lambda: (point_at(i) for i in range(points)), points, point_at)\n"),
+        )
+        for block, assignment in assignments:
+            with self.subTest(block=block):
+                self.assertEqual(text.count(assignment), 1)
+                path.write_text(text.replace(assignment, assignment + assignment, 1), encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: ambiguous array element producer {block}\n")
+                self.assertEqual(result.stderr, "")
+
+    def test_d4_record_array_callable_with_unknown_source_is_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        for block, row in (("trades", "t"), ("equity_curve", "p")):
+            binding = f"        {row} = report.{block}[i]\n"
+            with self.subTest(block=block):
+                self.assertEqual(text.count(binding), 1)
+                path.write_text(text.replace(binding, f"        {row} = report.unknown[i]\n", 1),
+                                encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: unrecognized array POD binding {block}\n")
+                self.assertEqual(result.stderr, "")
 
     def scalar_fixture(self, source):
         assignment, = ast.parse(source).body
