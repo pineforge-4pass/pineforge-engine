@@ -66,7 +66,18 @@ def build(runner, report, incarnations=None):
 def test_array_transport_is_the_frozen_bytes(tmp_path, frozen, count):
     report, trades, curve = population(count)
     incarnations = tuple(range(1, count + 1))
-    expected = json.dumps(build(frozen, report, incarnations),
+    reference = build(frozen, report, incarnations)
+    # CR-202 / revision 3.1 (34f9b3a39f) added the two named forms after
+    # this oracle froze. Every population here has a positive sub-day span
+    # and finite cagr/calmar; preserve every other byte of the frozen report.
+    assert 0 < curve[-1].time_ms - curve[0].time_ms < 86_400_000
+    assert report.metrics.equity.cagr == report.metrics.equity.calmar == 0.0
+    assert "annualization" not in reference["diagnostics"]
+    reference["diagnostics"]["annualization"] = {
+        "cagr": "simple_proportional_subday",
+        "calmar": "simple_proportional_subday",
+    }
+    expected = json.dumps(reference,
                           separators=(",", ":"), allow_nan=False) + "\n"
     with ExitStack() as resources:
         document = build(run_json, report, incarnations)

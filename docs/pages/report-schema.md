@@ -102,8 +102,8 @@ The full contract is
 clients use `ReportMode`, `ReportEnvelopeV1`,
 `BacktestEngine::set_report_mode_v1` and
 `BacktestEngine::fill_report_envelope_v1`. The methods are declarations only
-until the runtime implementation lands. C/ctypes clients require an explicitly
-negotiated provider bridge; there is no new runtime C export in this slice.
+until the runtime implementation lands. C/ctypes clients access the envelope
+through an explicitly negotiated provider bridge.
 
 | Mode | Metrics and summary scalars | Resident sequences | External sequences |
 | --- | --- | --- | --- |

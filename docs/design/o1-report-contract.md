@@ -523,8 +523,10 @@ See the [JSON field types and presence table](../pages/report-schema.md#report_s
 
 This slice adds data types and C++ method declarations only: **zero** new
 `PF_API` declarations/definitions and no runtime storage/behavior.
-`scripts/check_c_abi_runtime.py` remains at 104 public declarations and 84
-runtime implementations; `scripts/test_ci_verify.py` pins the same 104/84.
+`include/pineforge/pineforge.h` has 100 public declarations.
+`scripts/check_c_abi_runtime.py` pins 111 declarations across its four
+`RUNTIME_HEADERS` and 91 runtime implementations; `scripts/test_ci_verify.py`
+pins the same 111/91.
 The separate native-C inventory remains 43 declarations / 43 implementations.
 There is no ABI-4 struct/count bump, README symbol-table change or update to
 legacy ctypes report strides.
@@ -588,7 +590,7 @@ not an alternate public contract or a compatibility alias header.
 | `OutputOptionsV1`, `set_report_output_v1(options)` | `BacktestEngine::set_report_mode_v1(ReportMode)`. The mode word is the sole policy selector; the accepted mode appears in envelope metadata. |
 | `OutputOptionsV1.version`, `SummaryV1.version` | `PF_REPORT_ENVELOPE_VERSION` (`1`) and initialized `metadata.struct_size` / `metadata.version`; not an additional options/summary version. |
 | `HistoryDeliveryV1::{Omit,External}`, optional-history fields of `OutputOptionsV1` | The selected mode's capture policy plus existing recording switches and sink-v1 configuration. SUMMARY_ONLY always omits report histories; no separate per-history mode vocabulary is adopted. |
-| `StorageKindV1`, `StorageActionV1`, `StorageEventV1`, `StorageObserverV1`, `storage_context`, `storage_observer` | Not adopted as report-policy API. Allocation instrumentation belongs to the implementation lanes' tests/growth verification; no substitute public names or new durable state are introduced here. |
+| `StorageKindV1`, `StorageActionV1`, `StorageEventV1`, `StorageObserverV1`, `storage_context`, `storage_observer` | Not adopted as report-policy API. Allocation instrumentation belongs to the implementation lanes' allocation and growth tests; no substitute public names or new durable state are introduced here. |
 | `SummaryV1`, `report_summary_v1()`, `visit_report_summary_v1(...)`, `SummaryVisitorV1` | `ReportEnvelopeV1` / `pf_report_envelope_v1`, read with `fill_report_envelope_v1(...)`. Reuse its frozen payload/metadata; no second summary type or summary visitor. |
 | `SummaryV1.mode`, `total_trades`, `equity_point_count`, optional sequence counts | `metadata.mode`, `metadata.trades.logical_count` (and `report.total_trades`), `metadata.equity_curve.logical_count`, and the corresponding five optional sequence `logical_count` fields. |
 | `SummaryV1.completed_trades` | `completed_trade_source_v1()->size()`, excluding the report-only suffix; no second count is added to the 128-byte metadata. |

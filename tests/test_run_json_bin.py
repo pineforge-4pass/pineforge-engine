@@ -406,23 +406,29 @@ def test_maps_outlive_every_native_cleanup_and_close_on_error(tmp_path, monkeypa
     feed, _ = binary_file(tmp_path, feed=True, name="feed.bin")
     index = index_file(tmp_path, feeds={"1": feed.name})
     maps, real_mmap = [], mmap.mmap
-    def track(*args, **kwargs):
-        result = real_mmap(*args, **kwargs)
-        maps.append(result)
+    def track(fileno, length, *args, **kwargs):
+        result = real_mmap(fileno, length, *args, **kwargs)
+        maps.append((fileno, result))
         return result
     monkeypatch.setattr(run_json.mmap, "mmap", track)
     for fail in (False, True):
         maps.clear()
         library = Library(fail_run=fail)
         def freed(*args):
-            assert len(maps) == 3 and all(not mm.closed for mm in maps)
+            inputs = [mm for fileno, mm in maps if fileno >= 0]
+            artifacts = [mm for fileno, mm in maps if fileno < 0]
+            assert len(inputs) == 3 and all(not mm.closed for mm in inputs)
+            # The bounded serializer adds one anonymous 64 KiB I/O window
+            # only after execution succeeds. It also survives native cleanup.
+            assert len(artifacts) == int(not fail)
+            assert all(not mm.closed and len(mm) == 64 * 1024 for mm in artifacts)
         library.report_free = library.export("report_free", freed)
         library.strategy_free = library.export("strategy_free", freed)
         status, _, _, _ = invoke(monkeypatch, "--ohlcv-bin", path, "--symbol-feeds", index,
                                   library=library)
         assert status == int(fail)
         assert library.calls[-2:] == ["report_free", "strategy_free"]
-        assert all(mm.closed for mm in maps)
+        assert all(mm.closed for _, mm in maps)
 
 
 def test_big_endian_map_is_refused(tmp_path, monkeypatch):
