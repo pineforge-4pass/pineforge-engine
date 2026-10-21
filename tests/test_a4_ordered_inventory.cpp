@@ -270,6 +270,77 @@ void auxiliary_populations() {
     }
 }
 
+// The P27 balance rebuild uses upserts inside one explicit transaction.
+// Each upsert must join it without beginning or committing another one.
+void keyed_batch_transactions() {
+    PineExecutionAdapter adapter;
+    auto& balances = A4InventoryFixture::balances(adapter);
+    std::map<std::string, double> expected;
+    const auto check = [&](const std::map<std::string, double>& rows) {
+        require(balances.size() == rows.size(), "P27 batch keeps exactly the reference keys");
+        auto reference = rows.begin();
+        for (const auto& row : balances) {
+            require(reference != rows.end() && row.first == reference->first
+                        && bits(row.second, reference->second),
+                    "P27 batch values and key order match the reference");
+            ++reference;
+        }
+        require(reference == rows.end(), "P27 batch iteration reaches every reference row");
+    };
+    const auto upsert = [&](auto& rows, const std::string& id, double units) {
+        rows[id] += units;
+        balances.upsert(id, {id, rows.at(id)});
+    };
+    upsert(expected, "A", 0.125);
+    upsert(expected, "B", 1.25);
+    check(expected);
+
+    {
+        auto batch = balances.batch();
+        upsert(expected, "A", 0.375);
+        upsert(expected, "C", 2.5);
+        upsert(expected, "A", 0.0625);
+        check(expected);
+        batch.commit();
+    }
+    check(expected);
+
+    // Abandoning the batch must undo updates AND the newly inserted key.
+    {
+        auto pending = expected;
+        auto batch = balances.batch();
+        upsert(pending, "B", 8.0);
+        upsert(pending, "D", 16.0);
+        upsert(pending, "B", 0.5);
+        check(pending);
+    }
+    check(expected);
+    require(!balances.contains("D"), "P27 abandoned batch leaves no inserted key");
+
+    // Explicitly nesting begin is still rejected as misuse, with no effect on
+    // the outer transaction. It must never masquerade as a backing I/O error.
+    {
+        auto pending = expected;
+        auto batch = balances.batch();
+        upsert(pending, "A", 4.0);
+        bool rejected = false;
+        try {
+            balances.begin_batch();
+        } catch (const coded<std::logic_error>& error) {
+            require(error.run_failure_code() == RunFailureCode::engine_invariant,
+                    "P27 nested begin is an invariant failure, not scratch I/O");
+            rejected = true;
+        }
+        require(rejected, "P27 explicit nested begin is refused");
+        check(pending);
+    }
+    check(expected);
+
+    // Both rollback paths leave the table ready for standalone updates.
+    upsert(expected, "D", 0.875);
+    check(expected);
+}
+
 } // namespace
 
 int main() {
@@ -277,6 +348,7 @@ int main() {
         close_ledger();
         pyramiding();
         auxiliary_populations();
+        keyed_batch_transactions();
         std::puts("A4 ordered inventory: populations, booking and resident bounds passed");
         return 0;
     } catch (const std::exception& error) {

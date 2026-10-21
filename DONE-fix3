@@ -1,0 +1,10 @@
+lane: core-cr150-o1p3 (A4 P26-P31)
+authoring_head: f751c0fd461e7f85aef79827337ec1378c1af288
+worktree: lanes/core-cr150-o1p3/wt2
+cause: balance rebuild nested KeyedTable upserts began a second transaction; programming_error was manufactured into EIO
+fix: batched upserts use the outer transaction; explicit nested begin remains rejected as engine_invariant
+report: REPORT.md, Fix round 3 (prior report preserved; parent directory is outside writable scope)
+verification: static diff check only; preflight, full release/debug and supervisor corpus proof pending
+local execution: no compiler, CMake, CTest, test binary or repository script
+commit: not staged or committed; supervisor owns the diff
+suggested_message: Fix nested balance-rebuild transactions misreported as scratch I/O

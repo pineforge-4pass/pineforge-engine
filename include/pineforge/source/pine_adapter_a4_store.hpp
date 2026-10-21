@@ -377,11 +377,15 @@ public:
         return store_->read(handle, ScratchField::key, 0, buffer) == ScratchStatus::ok;
     }
 
-    // One explicit transaction per booking/update; a failed mutation leaves the
-    // pre-begin state and is reported as the environment failure it is.
+    // One explicit transaction per booking/update. A nested begin is caller
+    // misuse; it must not be reported as a failure of the backing medium.
     void begin_batch() {
         require_open();
-        if (store_->begin() != ScratchStatus::ok)
+        const auto status = store_->begin();
+        if (status == ScratchStatus::programming_error)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "a4 ordered store begin");
+        if (status != ScratchStatus::ok)
             pineforge::detail::raise_scratch_io_error(EIO, "a4 ordered store begin");
     }
     void commit_batch() {
@@ -875,6 +879,13 @@ public:
         return row.second;
     }
     void upsert(const Key& key, const Row& row) {
+        // An explicit batch owns its begin/commit/rollback boundary. Rebuilds
+        // must keep every upsert pending in that transaction; only standalone
+        // updates start and commit a transaction here.
+        if (const auto* store = owner_.store(); store && store->transaction_active()) {
+            store_key(key, row);
+            return;
+        }
         StoreOwner::Batch batch(owner_);
         store_key(key, row);
         batch.commit();
