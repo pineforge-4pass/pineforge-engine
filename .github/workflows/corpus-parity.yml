@@ -21,16 +21,16 @@ name: Corpus parity
 # cores do not shorten, so the whole population cannot be held to the ~25 min
 # a required pull-request check is budgeted for. Full parity therefore runs
 # nightly (01:30 UTC), on `workflow_dispatch`, and on the full-event pipeline.
-# The pull-request early signal is the subset that `ci.yml` calls.
+# The pull-request early signal lives in corpus-parity-subset.yml.
 #
-# PR EARLY SIGNAL. The `corpus-parity-subset` job below
+# FULL-EVENT SUBSET. The `corpus-parity-subset` job below
 # re-runs the 54 probes scripts/corpus_parity_subset.txt names -- in parallel,
 # they write into disjoint directories -- and judges them against the same
 # pinned sha256 rows the nightly uses. Measured on the same laptop at JOBS=8,
 # under sibling load, when the list held its first 30 probes: derive 2 s, build the runtime + the 30 strategy .so 68 s
 # from clean, run 45 s wall for 80 s of probe CPU, judge <1 s; 94 s end to end
 # over an up-to-date build directory, under 3 min cold.
-# .github/workflows/ci.yml calls it as a reusable workflow and includes it in
+# .github/workflows/ci-post.yml calls it as a reusable workflow and includes it in
 # the advisory `build` aggregate. The maintainers' separate full parity
 # verdict posts the required pineforge/parity commit status on the PR head.
 # Nothing about the nightly job changes.
@@ -44,20 +44,20 @@ on:
   workflow_call:
     inputs:
       mode:
-        description: 'full (all 312 probes) or subset (PR early signal)'
+        description: 'full (all 312 probes) or subset (full-event early signal)'
         type: string
         default: full
 
 permissions:
   contents: read
 
-# The caller owns pull-request cancellation. Keep a distinct prefix:
+# Keep a distinct prefix:
 # github.workflow in a reusable workflow names the CALLER, so an unprefixed
 # group would collide with CI's and could cancel it (native-live.yml has the
 # same note). Nightly and manual runs stay unique per run.
 concurrency:
-  group: corpus-parity-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: corpus-parity-${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -68,14 +68,14 @@ env:
   # pin is almost entirely cache hits.
   CCACHE_MAXSIZE: 2G
 
-# Both parity jobs follow canon authz on pf-gcp-pr, with no hosted fallback.
+# Both parity jobs follow canon authz on pf-gcp-post, with no hosted fallback.
 # The build uses every core of the runner.
 # scripts/ci_preflight.py pins runners and limits.
 jobs:
   authz:
     name: authz
-    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
-    runs-on: ["self-hosted", "pf-gcp-pr"]
+    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-post"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -140,7 +140,7 @@ jobs:
   corpus-parity:
     needs: [authz]
     if: inputs.mode != 'subset' && github.event_name != 'pull_request'
-    runs-on: ["self-hosted","pf-gcp-pr"]
+    runs-on: ["self-hosted","pf-gcp-post"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 16.3-26.2 min on the standard runner; 360 minutes is the platform maximum,
@@ -219,7 +219,7 @@ jobs:
   corpus-parity-subset:
     needs: [authz]
     if: inputs.mode == 'subset'
-    runs-on: ["self-hosted","pf-gcp-pr"]
+    runs-on: ["self-hosted","pf-gcp-post"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 1.8-4.7 min on the standard runner; 360 minutes is the platform

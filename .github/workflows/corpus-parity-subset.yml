@@ -1,0 +1,214 @@
+name: Corpus parity PR subset
+
+# PR-only reusable early signal: the 54 probes in scripts/corpus_parity_subset.txt,
+# judged against the same byte oracle as the full post-merge sweep.
+# ci.yml owns scheduling, cancellation and the advisory build aggregate.
+# Full parity and full-event subset runs live in corpus-parity.yml.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# The caller owns pull-request cancellation. Keep a distinct prefix:
+# github.workflow in a reusable workflow names the CALLER, so an unprefixed
+# group would collide with CI's and could cancel it (native-live.yml has the
+# same note). Nightly and manual runs stay unique per run.
+concurrency:
+  group: corpus-parity-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: "1"
+  # 312 corpus translation units of generated C++ plus the runtime; they only
+  # change when the corpus gitlink moves, so a nightly re-run at an unchanged
+  # pin is almost entirely cache hits.
+  CCACHE_MAXSIZE: 2G
+
+# The PR subset follows canon authz on pf-gcp-pr, with no hosted fallback.
+# The build uses every core of the runner.
+# scripts/ci_preflight.py pins runners and limits.
+jobs:
+  authz:
+    name: authz
+    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  # The advisory PR subset: the 54 probes scripts/corpus_parity_subset.txt
+  # names, judged against the same pinned sha256 rows. Reached through CI.
+  corpus-parity-subset:
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-pr"]
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+    # 1.8-4.7 min on the standard runner; 360 minutes is the platform
+    # maximum, the only hang catcher (owner rule, 2026-10-12).
+    steps:
+      # Credentials stay persisted, exactly as the nightly job above: the
+      # submodule clone and `git lfs pull` below go out over https and the
+      # nightly is the configuration that is known to work for them.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache git-lfs
+
+      - name: Resolve the recorded corpus gitlink
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          gitlink="$(git rev-parse HEAD:corpus)"
+          echo "recorded corpus gitlink: $gitlink"
+          echo "gitlink=$gitlink" >> "$GITHUB_OUTPUT"
+
+      # Check the submodule out WITHOUT smudging Git LFS, so the ~176 MB
+      # full-history 1m feed is fetched at most once per gitlink instead of
+      # once per pull-request push. The cache below carries it, and the step
+      # after that proves the restored bytes are the ones the corpus commit
+      # points at.
+      - name: Check out the validation corpus at the recorded gitlink
+        shell: bash
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1"
+        run: |
+          set -euo pipefail
+          git submodule update --init corpus
+          test "$(git -C corpus rev-parse HEAD)" = "${{ steps.pin.outputs.gitlink }}"
+          git -C corpus status --porcelain -- validation
+
+      - name: Restore the corpus chart feed
+        id: feed
+        uses: actions/cache@v4
+        with:
+          path: corpus/data
+          key: corpus-feed-${{ steps.pin.outputs.gitlink }}
+
+      - name: Pull the Git-LFS chart feed
+        if: steps.feed.outputs.cache-hit != 'true'
+        run: git -C corpus lfs pull
+
+      # A restored cache is not evidence. Every LFS pointer the corpus commits
+      # under data/ records its content's sha256; check the bytes on disk
+      # against it, so a corrupt or stale cache is "the feed is wrong" here and
+      # not "54 probes drifted" three steps later.
+      - name: Verify the chart feed against its Git-LFS pointers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C corpus ls-files -- data | while read -r file; do
+            pointer="$(git -C corpus cat-file -p "HEAD:$file")"
+            case "$pointer" in
+              version*git-lfs*)
+                oid="$(printf '%s\n' "$pointer" | sed -n 's/^oid sha256://p')"
+                echo "$oid  corpus/$file" | sha256sum -c -
+                ;;
+            esac
+          done
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-subset-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-corpus-parity-subset-
+
+      - name: Check TradingView parity over the pull-request subset
+        shell: bash
+        env:
+          BUILD_DIR: build-corpus-parity-subset
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: JOBS="$(getconf _NPROCESSORS_ONLN)" ./scripts/check_corpus_parity.sh --subset
+
+      - name: Collect the drifted trades
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p corpus-parity-diagnostics
+          python3 scripts/corpus_trades_identity.py \
+            --subset scripts/corpus_parity_subset.txt --files 30 --lines 40 \
+            > corpus-parity-diagnostics/trades-identity.txt 2>&1 || true
+          git -C corpus --no-pager diff --no-color -- 'validation/*/engine_trades.csv' \
+            > corpus-parity-diagnostics/engine_trades.diff || true
+          git -C corpus status --porcelain -- validation \
+            > corpus-parity-diagnostics/corpus-status.txt || true
+          cp -r build-corpus-parity-subset/subset-run-logs corpus-parity-diagnostics/ 2>/dev/null || true
+          wc -l corpus-parity-diagnostics/* || true
+
+      - name: Retain parity diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-parity-subset-diagnostics
+          path: corpus-parity-diagnostics/
+          if-no-files-found: warn
