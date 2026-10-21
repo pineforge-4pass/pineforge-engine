@@ -367,8 +367,10 @@ jobs:
           NEXT: ${{ needs.release.outputs.version }}
         run: printf '%s\n' "${NEXT}" > VERSION
 
+      # linux-x86_64 runs on the pf-gcp-main fleet: no sudo, no docker, Eigen 3.4.0 is baked
+      # into its image. Only the hosted Linux slice (linux-aarch64) installs Eigen here.
       - name: Install Eigen3 (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.triple != 'linux-x86_64'
         run: |
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev
