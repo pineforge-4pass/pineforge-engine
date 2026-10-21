@@ -5,6 +5,7 @@
  * <pineforge/pineforge.h>; docs/pages/report-schema.md summarizes them.
  */
 #include <pineforge/metrics_stream.hpp>
+#include <pineforge/metrics_fold.hpp>
 #include <pineforge/native_calendar.hpp>
 
 #include <algorithm>
@@ -180,6 +181,14 @@ int keep_utc_month(UtcMonthMemo& memo, int64_t ts_ms) {
 }
 
 }  // namespace detail
+
+int equity_month_key(std::int64_t time_ms, const std::string& chart_timezone) {
+    if (chart_timezone.empty() || chart_timezone == "UTC" || chart_timezone == "Etc/UTC")
+        return detail::month_key_utc(time_ms);
+    // This scope contains only the civil-month lookup, never engine dispatch.
+    tz_util::ScopedTimezone guard(chart_timezone);
+    return month_key_local(time_ms);
+}
 
 pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
                                      TradeFilter filter, double initial_capital) {
@@ -416,9 +425,7 @@ pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
     return e;
 }
 
-// The public point-source contract is intentionally explicit-instantiated for
-// the source owned by this lane.  L6b-4/L7c add the scratch source's matching
-// instantiation once SpillCurve exists; the metric body remains one template.
+// ArrayCurve and the L7c SpillCurve instantiations share this metric body.
 template pf_equity_stats_t compute_equity_stats<ArrayCurve>(
     const ArrayCurve&, int64_t, double, const std::string&, double, double,
     int64_t, double);

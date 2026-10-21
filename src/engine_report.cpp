@@ -256,15 +256,82 @@ void compute_report_metrics(pf_metrics_t& result,
 }  // namespace internal
 
 
+int BacktestEngine::set_equity_report_mode(ReportMode mode) {
+    if (mode != ReportMode::FULL && mode != ReportMode::SUMMARY_ONLY
+        && mode != ReportMode::STREAMED) return -1;
+    if (report_sink_setter_status() != 0) return -3;
+    if (mode == ReportMode::SUMMARY_ONLY && report_sink_state_.enabled) return -4;
+    pending_equity_report_mode_ = mode;
+    return 0;
+}
+
 // Compute metrics after fill_trades_section. Sink-off owns its full arrays;
 // a sink folds closed rows from the ledger plus its presented open-lot view
-// and reads equity history from scratch.
+// and reads equity history from scratch. Summary uses only fixed folds.
 // Metric history derives from recorded points, NOT script_bars_processed:
 // an exception mid-run can truncate the curve (metrics then describe the
 // truncated prefix; consumers must check strategy_get_last_error).
 // No ScopedTimezone may be held here: compute_equity_stats takes the
 // non-recursive global tz lock when chart_timezone_ is non-UTC.
 void BacktestEngine::fill_metrics_section(ReportC* out) const {
+    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY) {
+        // Only the independently held report point is presented. A whole-array
+        // presenter requires an adapter at the versioned mode admission gate.
+        auto presented_fold = summary_equity_fold_;
+        pf_equity_point_t presented{};
+        const auto* held = last_equity_point();
+        if (held) presented = *held;
+        out->equity_curve = held ? &presented : nullptr;
+        out->equity_curve_len = held ? 1 : 0;
+        try {
+            present_report(out);
+            if (out->equity_curve != (held ? &presented : nullptr)
+                || out->equity_curve_len != (held ? 1 : 0))
+                throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
+                    {{"shape", "summary_equity_tail"}},
+                    "summary equity presentation must preserve its held-point view");
+            if (held)
+                presented_fold.replace_last(presented,
+                    metrics::equity_month_key(presented.time_ms, chart_timezone_));
+            summary_equity_snapshot_ = presented_fold.first_pass();
+            summary_equity_snapshot_valid_ = true;
+            const auto* ratios = summary_equity_ratios_
+                && summary_equity_ratios_->matches(summary_equity_snapshot_)
+                ? &*summary_equity_ratios_ : nullptr;
+            summary_equity_ratios_ready_ =
+                !summary_equity_snapshot_.needs_second_pass() || ratios;
+            // While the legacy trade producer is present, use its presented
+            // rows exactly once. R13's omitted-row producer supplies these
+            // three fixed blocks before equity assembly instead.
+            if (out->trades || out->total_trades == 0) {
+                out->metrics.all = metrics::compute_trade_stats(
+                    out->trades, out->trades_len, metrics::TradeFilter::ALL, initial_capital_);
+                out->metrics.longs = metrics::compute_trade_stats(
+                    out->trades, out->trades_len, metrics::TradeFilter::LONG, initial_capital_);
+                out->metrics.shorts = metrics::compute_trade_stats(
+                    out->trades, out->trades_len, metrics::TradeFilter::SHORT, initial_capital_);
+            }
+            if (out->metrics.all.num_trades != out->total_trades)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                    "summary trade metrics differ from the logical trade count");
+            const metrics::EquityMetricInputs inputs{
+                initial_capital_, first_bar_open_, current_bar_.close, out->net_profit};
+            out->metrics = metrics::finalize_metrics(
+                summary_equity_snapshot_, inputs, out->metrics.all,
+                out->metrics.longs, out->metrics.shorts, ratios);
+        } catch (...) {
+            // Never let free_report delete the borrowed stack point.
+            out->equity_curve = nullptr;
+            out->equity_curve_len = 0;
+            summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
+            throw;
+        }
+        // Omitted output is explicit in the envelope's capture flags and
+        // logical count; this ABI-4 length describes only a resident array.
+        out->equity_curve = nullptr;
+        out->equity_curve_len = 0;
+        return;
+    }
     if (report_sink_state_.equity_scratch && !report_sink_state_.selected_equity_stream) {
         fill_report_sink_metrics_section(out);
         return;
@@ -762,6 +829,25 @@ void BacktestEngine::begin_report_sink() {
 #endif
     sink.receipt = {};
     sink.output_base = 0;
+    // Run preparation, before callbacks/bar zero, also when no sink is set.
+    active_equity_report_mode_ = pending_equity_report_mode_;
+    summary_equity_fold_ = {};
+    summary_equity_snapshot_ = {};
+    summary_equity_snapshot_valid_ = summary_equity_ratios_ready_ = false;
+    summary_equity_ratios_.reset();
+    summary_broker_equity_prefix_[0] = summary_broker_equity_prefix_[1] = initial_capital_;
+    summary_broker_equity_prefix_[2] = summary_broker_equity_prefix_[3] = 0.0;
+    if (active_equity_report_mode_ == ReportMode::SUMMARY_ONLY) {
+        if (sink.enabled)
+            throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
+                {{"shape", "summary_with_sequence_sink"}},
+                "summary equity mode conflicts with a sequence sink");
+        // Drop a prior FULL run's capacity and prepare the only held point.
+        std::vector<pf_equity_point_t> held;
+        held.reserve(1);
+        equity_curve_.swap(held);
+        return; // No curve writer, region, file, or sink publication.
+    }
     if (!sink.enabled) return;
     // The new run owns these histories. Drop capacity left by a previous
     // sink-off run before callbacks, even if outputs are disabled this time.
