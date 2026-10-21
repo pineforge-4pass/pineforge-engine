@@ -72,6 +72,8 @@ constexpr std::size_t kWorkPages = 6;
 constexpr std::uint64_t kLive = 1;
 constexpr std::uint64_t kGhost = 2;
 constexpr unsigned kMaxDepth = 48;
+// Handle-table height: 60 slots per node of the smallest page reach 2^62 handles in 11 levels.
+constexpr std::size_t kMaxHeight = 12;
 constexpr std::size_t kSuperFields = 18;
 constexpr std::uint64_t kNoSlot = UINT64_MAX;
 
@@ -332,7 +334,7 @@ public:
     }
 
     Status rd(std::uint64_t id, std::size_t off, std::size_t len, Byte* destination) noexcept {
-        std::int32_t s;
+        std::int32_t s = -1;
         const Status st = fetch(id, true, s);
         if (st != Status::ok) return st;
         std::memcpy(destination, page_at(s) + off, len);
@@ -345,11 +347,14 @@ public:
     Status touch(std::uint64_t id) noexcept {
         if (!active_) return Status::programming_error;
         if (id >= hw0_) return Status::ok;
-        std::int32_t s;
+        std::int32_t s = -1;
         Status st = fetch(id, true, s);
         if (st != Status::ok) return st;
         if (ld64(page_at(s) + 8) == txn_) return Status::ok;
         std::memcpy(jbuf_, page_at(s), usable_);
+        // A pool page leaves the pool before it is overwritten: if that write is
+        // refused or torn the page's link may be damaged, so it must not stay in
+        // the chain. A refused journal write therefore forfeits that one page.
         std::uint64_t image;
         if (cur_.pool_head != 0) {
             image = cur_.pool_head;
@@ -375,7 +380,7 @@ public:
     Status wr(std::uint64_t id, std::size_t off, std::size_t len, const Byte* source) noexcept {
         Status st = touch(id);
         if (st != Status::ok) return st;
-        std::int32_t s;
+        std::int32_t s = -1;
         st = fetch(id, true, s);
         if (st != Status::ok) return st;
         std::memcpy(page_at(s) + off, source, len);
@@ -398,7 +403,7 @@ public:
         std::memset(buffer + usable_, 0, kTrailer);
         Status st = touch(id);
         if (st != Status::ok) return st;
-        std::int32_t s;
+        std::int32_t s = -1;
         st = fetch(id, false, s);
         if (st != Status::ok) return st;
         std::memcpy(page_at(s), buffer, page_);
@@ -445,7 +450,7 @@ public:
             return Status::ok;
         }
         if (cur_.cell_bump == 0 || cur_.cell_next >= cells_per_page_) {
-            std::uint64_t page;
+            std::uint64_t page = 0;
             Status st = alloc_page(page);
             if (st != Status::ok) return st;
             std::memset(w3_, 0, page_);
@@ -473,7 +478,7 @@ public:
         if (length == 0) return Status::ok;
         Status st;
         if (length <= cell_max_) {
-            std::uint64_t cell;
+            std::uint64_t cell = 0;
             st = cell_alloc(cell);
             if (st != Status::ok) return st;
             loc = cell << 1;
@@ -497,7 +502,7 @@ public:
             }
             return Status::ok;
         }
-        std::uint64_t page;
+        std::uint64_t page = 0;
         st = alloc_page(page);
         if (st != Status::ok) return st;
         loc = (page << 1) | 1;
@@ -604,15 +609,22 @@ public:
         return span;
     }
 
-    Status hfind_leaf(std::uint64_t leaf_no, bool create, std::uint64_t& leaf, std::uint64_t& parent,
-                      std::size_t& parent_slot) noexcept {
+    // The interior nodes from the root down to the parent of a leaf, and the
+    // child slot taken in each. Offset 4 of an interior node counts its
+    // nonzero child slots, as offset 4 of a leaf counts its present entries.
+    struct HPath {
+        std::uint64_t node[kMaxHeight];
+        std::size_t slot[kMaxHeight];
+        std::size_t depth;
+    };
+
+    Status hfind_leaf(std::uint64_t leaf_no, bool create, std::uint64_t& leaf, HPath& path) noexcept {
         leaf = 0;
-        parent = 0;
-        parent_slot = 0;
+        path.depth = 0;
         Status st;
         if (cur_.hroot == 0) {
             if (!create) return Status::ok;
-            std::uint64_t page;
+            std::uint64_t page = 0;
             st = alloc_page(page);
             if (st != Status::ok) return st;
             std::memset(w3_, 0, page_);
@@ -624,11 +636,12 @@ public:
         }
         while (leaf_no >= span_of(cur_.hheight)) {
             if (!create) return Status::ok;
-            std::uint64_t page;
+            std::uint64_t page = 0;
             st = alloc_page(page);
             if (st != Status::ok) return st;
             std::memset(w3_, 0, page_);
             st32(w3_, kTypeHandleNode);
+            st32(w3_ + 4, 1);
             st64(w3_ + 16, cur_.hroot);
             st = wr_page(page, w3_);
             if (st != Status::ok) return st;
@@ -638,6 +651,7 @@ public:
         std::uint64_t node = cur_.hroot;
         std::uint64_t rest = leaf_no;
         for (std::uint64_t level = cur_.hheight; level > 1; --level) {
+            if (path.depth >= kMaxHeight) return Status::corrupt;
             const std::uint64_t span = span_of(level - 1);
             const std::size_t ci = static_cast<std::size_t>(rest / span);
             rest -= static_cast<std::uint64_t>(ci) * span;
@@ -655,9 +669,15 @@ public:
                 if (st != Status::ok) return st;
                 st = wr64(node, 16 + 8 * ci, child);
                 if (st != Status::ok) return st;
+                Byte count_raw[4];
+                st = rd(node, 4, 4, count_raw);
+                if (st != Status::ok) return st;
+                st = wr32(node, 4, ld32(count_raw) + 1);
+                if (st != Status::ok) return st;
             }
-            parent = node;
-            parent_slot = ci;
+            path.node[path.depth] = node;
+            path.slot[path.depth] = ci;
+            ++path.depth;
             node = child;
         }
         leaf = node;
@@ -668,9 +688,9 @@ public:
         present = false;
         if (handle == 0 || handle >= cur_.next_handle) return Status::ok;
         const std::uint64_t index = handle - 1;
-        std::uint64_t leaf, parent;
-        std::size_t parent_slot;
-        const Status st = hfind_leaf(index / hleaf_cap_, false, leaf, parent, parent_slot);
+        std::uint64_t leaf = 0;
+        HPath path;
+        const Status st = hfind_leaf(index / hleaf_cap_, false, leaf, path);
         if (st != Status::ok || leaf == 0) return st;
         Byte raw[32];
         const Status rs = rd(leaf, kHeader + static_cast<std::size_t>(index % hleaf_cap_) * 32, 32, raw);
@@ -685,9 +705,9 @@ public:
 
     Status hset(std::uint64_t handle, const Entry& entry) noexcept {
         const std::uint64_t index = handle - 1;
-        std::uint64_t leaf, parent;
-        std::size_t parent_slot;
-        Status st = hfind_leaf(index / hleaf_cap_, true, leaf, parent, parent_slot);
+        std::uint64_t leaf = 0;
+        HPath path;
+        Status st = hfind_leaf(index / hleaf_cap_, true, leaf, path);
         if (st != Status::ok) return st;
         const std::size_t off = kHeader + static_cast<std::size_t>(index % hleaf_cap_) * 32;
         Byte raw[32];
@@ -710,10 +730,23 @@ public:
         else --count;
         st = wr32(leaf, 4, count);
         if (st != Status::ok) return st;
-        if (count == 0 && parent != 0) {
-            st = free_page(leaf);
+        if (count != 0 || path.depth == 0) return Status::ok;
+        // The leaf is empty and is not the root: release it, and each interior
+        // node that this leaves without children, up to but not including the
+        // root. Handle numbers are never reissued, so nothing would reuse them.
+        st = free_page(leaf);
+        if (st != Status::ok) return st;
+        for (std::size_t k = path.depth; k-- > 0;) {
+            st = wr64(path.node[k], 16 + 8 * path.slot[k], 0);
             if (st != Status::ok) return st;
-            return wr64(parent, 16 + 8 * parent_slot, 0);
+            st = rd(path.node[k], 4, 4, count_raw);
+            if (st != Status::ok) return st;
+            const std::uint32_t children = ld32(count_raw) - 1;
+            st = wr32(path.node[k], 4, children);
+            if (st != Status::ok) return st;
+            if (children != 0 || k == 0) break;
+            st = free_page(path.node[k]);
+            if (st != Status::ok) return st;
         }
         return Status::ok;
     }
@@ -722,7 +755,7 @@ public:
 
     Status compare_with(const ScratchByteSource& probe, std::uint64_t handle, int& order) noexcept {
         Entry entry;
-        bool present;
+        bool present = false;
         Status st = hget(handle, entry, present);
         if (st != Status::ok) return st;
         if (!present) return Status::corrupt;
@@ -755,7 +788,7 @@ public:
         std::uint64_t page = cur_.iroot;
         for (std::uint64_t level = cur_.iheight; level > 1; --level) {
             if (path.depth >= kMaxDepth) return Status::corrupt;
-            std::uint32_t count;
+            std::uint32_t count = 0;
             Status st = index_count(page, count);
             if (st != Status::ok) return st;
             std::uint32_t lo = 0, hi = count;
@@ -779,7 +812,7 @@ public:
             page = ld64(child_raw);
             if (page == 0) return Status::corrupt;
         }
-        std::uint32_t count;
+        std::uint32_t count = 0;
         Status st = index_count(page, count);
         if (st != Status::ok) return st;
         std::uint32_t lo = 0, hi = count;
@@ -832,7 +865,7 @@ public:
     }
 
     Status new_root(std::uint64_t separator, std::uint64_t right) noexcept {
-        std::uint64_t page;
+        std::uint64_t page = 0;
         Status st = alloc_page(page);
         if (st != Status::ok) return st;
         std::memset(w3_, 0, page_);
@@ -894,7 +927,7 @@ public:
                 st64(w2_ + 32 + 16 * static_cast<std::size_t>(j), pair_child(j));
             }
             const std::uint64_t promoted = pair_sep(mid);
-            std::uint64_t new_page;
+            std::uint64_t new_page = 0;
             st = alloc_page(new_page);
             if (st != Status::ok) return st;
             st = wr_page(new_page, w1_);
@@ -911,7 +944,7 @@ public:
     Status tree_insert(const Path& path, std::uint64_t leaf, std::uint32_t pos, std::uint64_t handle) noexcept {
         Status st;
         if (leaf == 0) {
-            std::uint64_t page;
+            std::uint64_t page = 0;
             st = alloc_page(page);
             if (st != Status::ok) return st;
             std::memset(w0_, 0, page_);
@@ -941,7 +974,7 @@ public:
             return i < pos ? ld64(w0_ + 32 + 8 * static_cast<std::size_t>(i))
                            : (i == pos ? handle : ld64(w0_ + 32 + 8 * static_cast<std::size_t>(i - 1)));
         };
-        std::uint64_t right_page;
+        std::uint64_t right_page = 0;
         st = alloc_page(right_page);
         if (st != Status::ok) return st;
         const std::uint64_t old_next = ld64(w0_ + 24);
@@ -974,7 +1007,7 @@ public:
     // it; release it when that name goes away.
     Status release_separator(std::uint64_t handle) noexcept {
         Entry entry;
-        bool present;
+        bool present = false;
         Status st = hget(handle, entry, present);
         if (st != Status::ok) return st;
         if (!present || (entry.val_word & 3) != kGhost) return Status::ok;
@@ -1021,7 +1054,7 @@ public:
             break;
         }
         while (cur_.iheight > 1) {
-            std::uint32_t count;
+            std::uint32_t count = 0;
             st = index_count(cur_.iroot, count);
             if (st != Status::ok) return st;
             if (count != 0) break;
@@ -1164,10 +1197,15 @@ public:
         next.pool_head = new_pool;
         encode_super(next, sbuf_);
         // A refused write may still have landed this whole page (it is far
-        // smaller than a page), so the slot is marked until rollback blanks it.
+        // smaller than a page), and a refused final sync leaves it published,
+        // so the slot stays marked until rollback blanks it.
         tainted_slot_ = next.seq & 1;
         st = bwrite(tainted_slot_, sbuf_);
         if (st != Status::ok) return st;
+        if (durability != ScratchDurability::buffered) {
+            st = bsync(durability);
+            if (st != Status::ok) return st;
+        }
         tainted_slot_ = kNoSlot;
         cur_ = next;
         active_ = false;
@@ -1187,27 +1225,32 @@ public:
         return st;
     }
 
+    // Every journal page is spent the moment its target is restored, so a
+    // rollback that failed and is tried again resumes at the first page not yet
+    // restored. A journal page that came from the pool goes back to it; one that
+    // extended the backing is dropped with the high-water mark.
     Status rollback_impl() noexcept {
         invalidate_all();
-        std::uint64_t kept = cur_.pool_head;
-        std::uint64_t image = used_head_;
-        for (std::uint64_t k = 0; k < used_count_; ++k) {
+        while (used_count_ != 0) {
+            const std::uint64_t image = used_head_;
             Status st = bread(image, jbuf_);
             if (st != Status::ok) return structural(st);
             const std::uint64_t target = ld64(jbuf_ + usable_);
             const std::uint64_t next = ld64(jbuf_ + usable_ + 8);
+            if (target < 2 || target >= hw0_) return Status::corrupt;
             std::memcpy(w3_, jbuf_, usable_);
             std::memset(w3_ + usable_, 0, kTrailer);
             st = bwrite(target, w3_);
             if (st != Status::ok) return st;
+            used_head_ = next;
+            --used_count_;
             if (image < hw0_) {
                 st64(jbuf_ + usable_, 0);
-                st64(jbuf_ + usable_ + 8, kept);
+                st64(jbuf_ + usable_ + 8, cur_.pool_head);
                 st = bwrite(image, jbuf_);
                 if (st != Status::ok) return st;
-                kept = image;
+                cur_.pool_head = image;
             }
-            image = next;
         }
         if (tainted_slot_ != kNoSlot) {
             std::memset(w3_, 0, page_);
@@ -1215,19 +1258,22 @@ public:
             if (st != Status::ok) return st;
             tainted_slot_ = kNoSlot;
         }
+        const std::uint64_t pool = cur_.pool_head;
         cur_ = snap_;
-        cur_.pool_head = kept;
+        cur_.pool_head = pool;
         active_ = false;
         poisoned_ = false;
         used_head_ = 0;
         used_tail_ = 0;
-        used_count_ = 0;
         return Status::ok;
     }
 
+    // A rollback that fails leaves the transaction active and rollback-only.
     Status rollback() noexcept {
         if (open_status_ != Status::ok || !active_ || busy_ != 0) return Status::programming_error;
-        return rollback_impl();
+        const Status st = rollback_impl();
+        if (st != Status::ok) poisoned_ = true;
+        return st;
     }
 
     // ---- mutations ----------------------------------------------------------------
@@ -1237,20 +1283,20 @@ public:
         const std::uint64_t val_len = value.size();
         if (val_len >= (std::uint64_t{1} << 61) || key_len >= (std::uint64_t{1} << 61)) return Status::programming_error;
         Path path;
-        bool equal;
-        std::uint32_t pos;
-        std::uint64_t leaf;
+        bool equal = false;
+        std::uint32_t pos = 0;
+        std::uint64_t leaf = 0;
         Status st = descend(key, path, equal, pos, leaf);
         if (st != Status::ok) return st;
         Entry entry;
         entry.key_len = key_len;
         entry.val_word = (val_len << 2) | kLive;
         if (equal) {
-            std::uint64_t handle;
+            std::uint64_t handle = 0;
             st = leaf_entry(leaf, pos, handle);
             if (st != Status::ok) return st;
             Entry old;
-            bool present;
+            bool present = false;
             st = hget(handle, old, present);
             if (st != Status::ok) return st;
             if (!present) return Status::corrupt;
@@ -1297,13 +1343,13 @@ public:
     Status erase_impl(std::uint64_t handle, const Entry& entry) noexcept {
         BlobSource key(this, entry.key_loc, entry.key_len);
         Path path;
-        bool equal;
-        std::uint32_t pos;
-        std::uint64_t leaf;
+        bool equal = false;
+        std::uint32_t pos = 0;
+        std::uint64_t leaf = 0;
         Status st = descend(key, path, equal, pos, leaf);
         if (st != Status::ok) return st;
         if (!equal || leaf == 0) return Status::corrupt;
-        std::uint64_t found;
+        std::uint64_t found = 0;
         st = leaf_entry(leaf, pos, found);
         if (st != Status::ok) return st;
         if (found != handle) return Status::corrupt;
@@ -1341,7 +1387,7 @@ public:
     Status erase(ScratchHandle handle) noexcept {
         if (open_status_ != Status::ok || !active_ || poisoned_ || busy_ != 0) return Status::programming_error;
         Entry entry;
-        bool present;
+        bool present = false;
         Status st = hget(handle, entry, present);
         if (st != Status::ok) {
             poisoned_ = true;
@@ -1362,7 +1408,7 @@ public:
     bool page_ok(const ScratchBuffer& page) const noexcept { return page.data != nullptr && page.size == page_; }
 
     Status live_entry(std::uint64_t handle, Entry& entry) noexcept {
-        bool present;
+        bool present = false;
         const Status st = hget(handle, entry, present);
         if (st != Status::ok) return st;
         if (!present || (entry.val_word & 3) != kLive) return Status::not_found;
@@ -1435,15 +1481,15 @@ public:
 
     Status for_each(ScratchBuffer page, ScratchRecordVisitor visitor, void* context) noexcept {
         if (!readable() || !page_ok(page) || visitor == nullptr) return Status::programming_error;
-        std::uint64_t leaf;
+        std::uint64_t leaf = 0;
         Status st = leftmost_leaf(leaf);
         if (st != Status::ok) return st;
         while (leaf != 0) {
-            std::uint32_t count;
+            std::uint32_t count = 0;
             st = index_count(leaf, count);
             if (st != Status::ok) return st;
             for (std::uint32_t i = 0; i < count; ++i) {
-                std::uint64_t handle;
+                std::uint64_t handle = 0;
                 st = leaf_entry(leaf, i, handle);
                 if (st != Status::ok) return st;
                 Entry entry;
@@ -1471,14 +1517,14 @@ public:
 
     Status first(ScratchHandle& result) noexcept {
         if (!readable()) return Status::programming_error;
-        std::uint64_t leaf;
+        std::uint64_t leaf = 0;
         Status st = leftmost_leaf(leaf);
         if (st != Status::ok) return st;
         if (leaf == 0) {
             result = scratch_no_handle;
             return Status::end;
         }
-        std::uint64_t handle;
+        std::uint64_t handle = 0;
         st = leaf_entry(leaf, 0, handle);
         if (st != Status::ok) return st;
         result = handle;
@@ -1492,9 +1538,9 @@ public:
         if (st != Status::ok) return st;
         BlobSource key(this, entry.key_loc, entry.key_len);
         Path path;
-        bool equal;
-        std::uint32_t pos;
-        std::uint64_t leaf;
+        bool equal = false;
+        std::uint32_t pos = 0;
+        std::uint64_t leaf = 0;
         st = descend(key, path, equal, pos, leaf);
         if (st != Status::ok) return st;
         std::uint64_t found = 0;
@@ -1503,11 +1549,11 @@ public:
             if (st != Status::ok) return st;
         }
         if (found != current) return Status::corrupt;
-        std::uint32_t count;
+        std::uint32_t count = 0;
         st = index_count(leaf, count);
         if (st != Status::ok) return st;
         if (pos + 1 < count) {
-            std::uint64_t handle;
+            std::uint64_t handle = 0;
             st = leaf_entry(leaf, pos + 1, handle);
             if (st != Status::ok) return st;
             result = handle;
@@ -1521,7 +1567,7 @@ public:
             result = scratch_no_handle;
             return Status::end;
         }
-        std::uint64_t handle;
+        std::uint64_t handle = 0;
         st = leaf_entry(next_leaf, 0, handle);
         if (st != Status::ok) return st;
         result = handle;
@@ -1531,19 +1577,19 @@ public:
     Status lower_bound(const ScratchByteSource& probe, ScratchHandle& result) noexcept {
         if (!readable()) return Status::programming_error;
         Path path;
-        bool equal;
-        std::uint32_t pos;
-        std::uint64_t leaf;
+        bool equal = false;
+        std::uint32_t pos = 0;
+        std::uint64_t leaf = 0;
         Status st = descend(probe, path, equal, pos, leaf);
         if (st != Status::ok) return st;
         if (leaf == 0) {
             result = scratch_no_handle;
             return Status::end;
         }
-        std::uint32_t count;
+        std::uint32_t count = 0;
         st = index_count(leaf, count);
         if (st != Status::ok) return st;
-        std::uint64_t handle;
+        std::uint64_t handle = 0;
         if (pos < count) {
             st = leaf_entry(leaf, pos, handle);
             if (st != Status::ok) return st;
@@ -1586,15 +1632,15 @@ public:
             fold.le64(cur_.next_handle);
         }
         fold.le64(cur_.record_count);
-        std::uint64_t leaf;
+        std::uint64_t leaf = 0;
         Status st = leftmost_leaf(leaf);
         if (st != Status::ok) return st;
         while (leaf != 0) {
-            std::uint32_t count;
+            std::uint32_t count = 0;
             st = index_count(leaf, count);
             if (st != Status::ok) return st;
             for (std::uint32_t i = 0; i < count; ++i) {
-                std::uint64_t handle;
+                std::uint64_t handle = 0;
                 st = leaf_entry(leaf, i, handle);
                 if (st != Status::ok) return st;
                 Entry entry;

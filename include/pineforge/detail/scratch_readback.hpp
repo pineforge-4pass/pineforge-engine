@@ -10,7 +10,8 @@ inline constexpr ScratchHandle scratch_no_handle = 0;
 // Borrowed, immutable, potentially larger than a resident page; size() is
 // constant while the source is alive. read copies EXACTLY destination.size
 // bytes at offset, possibly across physical pages. A zero-length read at
-// size() is valid. Out-of-range/null nonempty buffers return
+// size() is valid; an offset beyond size() is out of range even for an empty
+// destination. Out-of-range/null nonempty buffers return
 // programming_error. On error the destination may be partially filled.
 // Callers use fixed buffers; no contiguous owning copy is required anywhere.
 class ScratchByteSource {
@@ -89,9 +90,11 @@ public:
     // page is caller-owned, nonnull, exactly page_size() bytes (else
     // programming_error with no callback). Emit all key chunks followed by all
     // value chunks, each at most page_size() bytes, with contiguous offsets
-    // starting at zero within each field. Emit exactly one final empty chunk
-    // for an empty field. false => cancelled, with no further callback; an
-    // absent handle => not_found with no callback.
+    // starting at zero within each field. Chunks of a nonempty field are
+    // nonempty and the chunk that reaches the field's size is the one marked
+    // final. Emit exactly one final empty chunk for an empty field. false =>
+    // cancelled, with no further callback; an absent handle => not_found with
+    // no callback.
     virtual ScratchStatus visit(ScratchHandle, ScratchBuffer page,
                                 ScratchChunkVisitor, void* context) const noexcept = 0;
 
