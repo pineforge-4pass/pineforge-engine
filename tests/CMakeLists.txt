@@ -7112,7 +7112,6 @@ set(PINEFORGE_PR_FAST_TESTS
     test_ta
     test_matrix
     test_native_run_spec
-    test_integration
     test_native_bare_host_contracts
     test_native_kernel_edge
 )
