@@ -1,5 +1,49 @@
 # Local verification and CI
 
+CR-233 supersedes the D1/D3 pull-request split recorded later on this page.
+Those earlier PR populations and timing estimates are historical; the current
+`ci.yml` trigger map is:
+
+| Job or matrix cell | Pull request | Push to `main`, nightly schedule, manual dispatch |
+| --- | --- | --- |
+| `authz`, `changes`, `build-gate` (check `build`) | Run with the existing authz and classification gates | Run with the same gates |
+| `preflight` | Fast documentation, source and policy stages | The same fast stages |
+| `preflight-slow` | Deferred | All remaining preflight stages |
+| `build (ubuntu-24.04, Release)` | Release smoke, CTest label `fast` | Complete Release profile |
+| `build (ubuntu-24.04, Debug)` and both macOS `build` cells | Deferred | Complete Debug/Release profiles |
+| `sanitizers`, `kernel-only`, all three `native-live` profiles | Deferred | Complete profiles, without label exclusions |
+| `corpus-parity-subset` | Existing advisory subset | Existing advisory subset |
+| `corpus-parity` caller | Deferred | Full parity |
+
+The nightly CI schedule is 01:30 UTC. The existing docs-only classification
+still skips proof jobs on a documentation-only PR or main push. Both
+preflight tiers together retain the original full stage inventory; the slow
+tier still runs on a docs-only main push. Scheduled and manual runs execute
+every profile. `build-gate` refuses failed authz first, requires fast preflight
+and classification success, and accepts only classified docs-only skips or
+the listed PR deferrals. Failed or cancelled deferred jobs still fail it.
+
+`preflight --tier fast` excludes `verifier-tests`, `kernel-residuals-tests`,
+`unittest-shards-tests` and `run-json-harness-tests`; `preflight-slow` runs
+exactly those stages with `--tier slow`. Toolchain setup and the hash-pinned
+pytest install stay in the slow job. A plain local invocation below retains
+all stages and its existing event-aware verifier-class selection.
+
+The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
+`ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
+`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its twelve real
+executables; configure refuses missing, disabled, skippable, private-fixture
+or `slow` rows. The target rebuilds those executables with their library.
+PRs restore the newest compatible default-branch compiler cache, and only
+successful runs on `main` save that cache namespace.
+
+The Linux fleet remains `["self-hosted","pf-gcp-pr"]`; the build matrix
+decodes its platform's literal runner array and retains the macOS exception.
+There is no event-based runner choice or hosted fallback. The documentation
+workflow is unchanged. The standalone `corpus-parity.yml` is also unchanged:
+its existing path-filtered PR trigger can still run full parity independently
+of the deferred caller in `ci.yml`.
+
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
 ShellCheck and pytest, then run:
 

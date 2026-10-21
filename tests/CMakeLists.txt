@@ -7098,3 +7098,41 @@ set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+
+# CR-233: a public, receipt-independent Release smoke. Build these executables
+# before CTest; a library-only build leaves statically linked tests stale.
+# Full profiles still build all targets and run every registered row.
+set(PINEFORGE_PR_FAST_TESTS
+    test_ringbuffer
+    test_timeframe
+    test_path_at
+    test_na_runtime
+    test_math_sum
+    test_str_utils
+    test_ta
+    test_matrix
+    test_native_run_spec
+    test_integration
+    test_native_bare_host_contracts
+    test_native_kernel_edge
+)
+foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
+        message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
+    endif()
+    if(TEST ${_pf_fast_test})
+        get_test_property(${_pf_fast_test} DISABLED _pf_fast_disabled)
+        get_test_property(${_pf_fast_test} SKIP_RETURN_CODE _pf_fast_skip_code)
+        get_test_property(${_pf_fast_test} SKIP_REGULAR_EXPRESSION _pf_fast_skip_regex)
+        get_test_property(${_pf_fast_test} LABELS _pf_fast_labels)
+        if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"
+                OR NOT _pf_fast_skip_regex STREQUAL "NOTFOUND"
+                OR "slow" IN_LIST _pf_fast_labels OR "private_fixtures" IN_LIST _pf_fast_labels)
+            message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
+        endif()
+        set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
+endif()

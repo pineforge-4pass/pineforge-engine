@@ -18,7 +18,7 @@ import ci_verify
 from ci_verifier_classes import select_test_ids, verifier_class_tier
 from run_unittest_shards import discover_test_ids
 from ci_preflight import (AUTHZ_ALWAYS, AUTHZ_REFUSE_STEP, CORES,
-                          DOCS_ONLY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS,
+                          DOCS_ONLY_SKIP, HEAVY_SKIP, HOSTED_MATRIX_RUNNER, JOB_RUNNERS,
                           PR_RUNNER, MATRIX_LINUX_RUNNER, MATRIX_RUNNER,
                           NATIVE_EXCLUSION, NATIVE_CACHE_SAVE, CURL_CACHE_SAVE,
                           PROOF_JOBS, RELEASE_RUNNER, _jobs, check_commands,
@@ -29,15 +29,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PR_SLOW_FLAG = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
 KERNEL_VERIFY = ('run: python3 scripts/ci_verify.py kernel --build-dir build-kernel '
                  '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache '
-                 '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" '
-                 + PR_SLOW_FLAG)
+                 '--curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"')
 # ci_workflow_findings' arguments, in order.
 CI_SOURCES = ('.github/workflows/ci.yml', '.github/workflows/native-live.yml',
               '.github/workflows/promote-baseline.yml', 'tests/CMakeLists.txt',
               '.github/workflows/corpus-parity.yml', '.github/workflows/docs.yml')
 # Independent of the guard's tables: deleting a pin must not delete its test.
 GCP_JOBS = {
-    'ci.yml': ('pr', ('authz', 'changes', 'preflight', 'build', 'sanitizers',
+    'ci.yml': ('pr', ('authz', 'changes', 'preflight', 'preflight-slow', 'build', 'sanitizers',
                       'kernel-only', 'build-gate')),
     'native-live.yml': ('pr', ('authz', 'native-live', 'native-live-gate')),
     'corpus-parity.yml': ('pr', ('authz', 'corpus-parity', 'corpus-parity-subset')),
@@ -45,10 +44,14 @@ GCP_JOBS = {
     'release.yml': ('main', ('release', 'prebuilt', 'notify-hub')),
     'promote-baseline.yml': ('main', ('promote',)),
 }
-BUILD_RUNNER_FINDING = ('ci.yml build must use exactly the pf-gcp-pr Linux and hosted macos-26 build types, '
-                        'excluding only macOS Debug on pull_request')
+BUILD_RUNNER_FINDING = ('ci.yml build must select only Ubuntu Release on pull_request '
+                        'and all four pf-gcp-pr Linux/hosted macos-26 legs on full events')
 RELEASE_MATRIX_FINDING = ('release.yml prebuilt must use exactly the isolated Linux x64 '
                           'and hosted ARM/macOS matrix')
+CI_JOB_IDS = ('authz', 'changes', 'preflight', 'preflight-slow', 'build',
+              'sanitizers', 'kernel-only', 'native-live', 'corpus-parity-subset',
+              'corpus-parity', 'build-gate')
+HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 
 
 def job_script(ci, job, step_name=None):
@@ -99,7 +102,7 @@ class PreflightFailures(unittest.TestCase):
                 if path.endswith(('.yml', '.yaml'))} | self.other_sources()
 
     def gcp_sites(self):
-        """All 19 fleet sites, including the two matrix values."""
+        """All 20 fleet sites, including the two matrix values."""
         for name, (fleet, jobs) in GCP_JOBS.items():
             runner = PR_RUNNER if fleet == 'pr' else RELEASE_RUNNER
             for job in jobs:
@@ -350,9 +353,14 @@ class PreflightFailures(unittest.TestCase):
         # An unnamed repository run is allowed with either canon positive guard.
         for condition in (ci_preflight.AUTHZ_SUCCESS, AUTHZ_ALWAYS):
             with self.subTest(positive_condition=condition):
+                after = verify + '\n' + unnamed_run + f'        if: {condition}\n'
+                changed = in_job(original[0], 'preflight', verify, after)
+                self.assertNotEqual(changed, original[0])
+                self.assertEqual(ci_preflight.authz_workflow_findings(changed, 'ci.yml', 'build-gate'), [])
                 findings = self.mutated_file_findings(0, 'preflight', verify,
-                    verify + '\n' + unnamed_run + f'        if: {condition}\n')
-                self.assertEqual(findings, [])
+                                                       after)
+                self.assertEqual(findings, [
+                    'preflight must keep only checkout, linters, fast checks and diagnostics'])
 
     def test_ci_contract_pins_parallel_pr_light_and_full_events(self):
         original = self.ci_sources()
@@ -365,7 +373,7 @@ class PreflightFailures(unittest.TestCase):
             (0, '  kernel-only:\n', '  missing-kernel:\n'),
             (0, '  corpus-parity-subset:\n', '  missing-subset:\n'),
             (0, '  build-gate:\n', '  missing-gate:\n'),
-            (0, 'passed "$SANITIZER_RESULT"', 'true'),
+            (0, 'deferred "$SANITIZER_RESULT"', 'true'),
             (0, '[[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT"',
                 'passed "$PREFLIGHT_RESULT" && passed "$BUILD_RESULT"'),
             (0, 'needs: [authz, changes, preflight, build,', 'needs: [authz, preflight, build,'),
@@ -386,10 +394,11 @@ class PreflightFailures(unittest.TestCase):
             (0, '        id: classify\n', '        id: classify\n        continue-on-error: true\n'),
             (0, '  changes:\n', '  classify:\n'),
             (0, '  sanitizers:\n', '  sanitizers:\n    needs: preflight\n'),
-            (0, "github.event_name == 'pull_request' && '--exclude-label slow'",
-                "github.event_name == 'pull_request' && matrix.build_type == 'Debug' && '--exclude-label slow'"),
-            (0, "github.event_name == 'pull_request' && '--exclude-label slow'", "'--exclude-label slow'"),
-            (0, "exclude_slow: ${{ github.event_name == 'pull_request' }}", 'exclude_slow: true'),
+            (0, '--ccache\n          fi',
+                "--ccache ${{ github.event_name == 'pull_request' && matrix.build_type == 'Debug' "
+                "&& '--exclude-label slow' || '' }}\n          fi"),
+            (0, '--ccache\n          fi', '--ccache --exclude-label slow\n          fi'),
+            (0, 'exclude_slow: false', 'exclude_slow: true'),
             (1, '        default: false', '        default: true'),
             (1, NATIVE_EXCLUSION, ''),
             # Baseline promotion runs main's copy of the workflow and no PR
@@ -433,53 +442,56 @@ class PreflightFailures(unittest.TestCase):
                 changed = original.copy()
                 self.assertIn(before, changed[index])
                 changed[index] = changed[index].replace(before, after, 1)
+                self.assertNotEqual(changed[index], original[index])
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
 
-    def test_build_matrix_excludes_only_macos_debug_on_pull_requests(self):
+    def test_build_matrix_keeps_one_pr_smoke_and_every_full_event_leg(self):
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        condition = "github.event_name == 'pull_request'"
-        excluded = '[{"os":"macos-26","build_type":"Debug"}]'
-        exclusion = (f"        exclude: ${{{{ fromJSON({condition} && "
-                     f"'{excluded}' || '[]') }}}}\n")
+        debug = '          - event: pull_request\n            build_type: Debug\n'
+        macos = ('          - event: pull_request\n            platform:\n'
+                 '              os: macos-26\n              runner: \'["macos-26"]\'\n')
+        exclusion = '        exclude:\n' + debug + macos
         self.assertIn(exclusion, _jobs(original[0])['build'])
         mutations = [
-            # (a) The old four-leg PR matrix, or an empty exclusion, restores
-            # macOS Debug on PRs.
-            ('macOS Debug restored on PR', exclusion, ''),
-            ('empty PR exclusion', exclusion, exclusion.replace(excluded, '[]')),
+            # No heavy matrix leg may return to the PR wall.
+            ('all heavy legs restored on PR', exclusion, ''),
+            ('empty PR exclusion', exclusion, '        exclude: []\n'),
+            ('Ubuntu Debug restored on PR', debug, ''),
+            ('macOS Release restored on PR', macos, ''),
             # (b) An unconditional exclusion loses coverage on every full event.
-            ('unconditional exclusion', exclusion,
-             f"        exclude: ${{{{ fromJSON('{excluded}') }}}}\n"),
-            ('inverted event condition', exclusion,
-             exclusion.replace(condition, "github.event_name != 'pull_request'")),
+            ('unconditional Debug exclusion', debug, '          - build_type: Debug\n'),
+            ('fixed event axis', '        event: ["${{ github.event_name }}"]\n',
+             '        event: [push]\n'),
             # Dropping an axis also loses full-event coverage.
-            ('macOS axis removed', '        os: [ubuntu-24.04, macos-26]\n',
-             '        os: [ubuntu-24.04]\n'),
+            ('macOS platform removed', '          - os: macos-26\n            runner: \'["macos-26"]\'\n', ''),
+            ('Ubuntu platform removed',
+             '          - os: ubuntu-24.04\n            runner: \'["self-hosted","pf-gcp-pr"]\'\n', ''),
             ('Debug axis removed', '        build_type: [Release, Debug]\n',
              '        build_type: [Release]\n'),
         ]
         for event in ('push', 'workflow_dispatch', 'schedule', 'release'):
             mutations.append((
-                f'macOS Debug removed on {event}', exclusion,
-                exclusion.replace(condition, f"({condition} || github.event_name == '{event}')")))
-        # (c) Every other PR cell stays. (d) macOS Release in particular must
-        # still provide the PR's own Release registration-floor proof.
+                f'heavy legs removed on {event}', exclusion,
+                exclusion.replace('event: pull_request', f'event: {event}')))
+        # The smoke must stay, and every full-event cell must keep its home.
         for os_name, build_type in (('ubuntu-24.04', 'Release'),
                                     ('ubuntu-24.04', 'Debug'),
-                                    ('macos-26', 'Release')):
-            removed = json.dumps([{'os': os_name, 'build_type': build_type}], separators=(',', ':'))
-            mutations.extend((
-                (f'{os_name} {build_type} excluded instead', exclusion,
-                 exclusion.replace(excluded, removed)),
-                (f'{os_name} {build_type} excluded too', exclusion,
-                 exclusion.replace(excluded, excluded[:-1] + ',' + removed[1:])),
-            ))
-        include = '          - os: macos-26\n            runner: \'["macos-26"]\'\n'
-        mutations.append((
-            'macOS Debug reintroduced by include', include,
-            include + '          - os: macos-26\n            build_type: Debug\n'
-            '            runner: \'["macos-26"]\'\n'))
+                                    ('macos-26', 'Release'),
+                                    ('macos-26', 'Debug')):
+            runner = PR_RUNNER if os_name == 'ubuntu-24.04' else '["macos-26"]'
+            for event in ('pull_request', 'push', 'schedule', 'workflow_dispatch'):
+                removed = (f'          - event: {event}\n            platform:\n'
+                           f'              os: {os_name}\n              runner: \'{runner}\'\n'
+                           f'            build_type: {build_type}\n')
+                mutations.append((f'{os_name} {build_type} removed on {event}',
+                                  exclusion, '        exclude:\n' + removed))
+        for build_type in ('Release', 'Debug'):
+            mutations.append((
+                f'macOS {build_type} reintroduced by include', exclusion,
+                exclusion + '        include:\n          - platform:\n'
+                '              os: macos-26\n              runner: \'["macos-26"]\'\n'
+                f'            build_type: {build_type}\n            event: pull_request\n'))
         for reason, before, after in mutations:
             with self.subTest(reason=reason):
                 changed = original.copy()
@@ -487,13 +499,261 @@ class PreflightFailures(unittest.TestCase):
                 self.assertNotEqual(changed[0], original[0])
                 self.assertIn(BUILD_RUNNER_FINDING, ci_workflow_findings(*changed, others=others))
 
-    def test_slow_exclusion_is_exactly_pr_matrix_kernel_and_sanitizers(self):
+    def test_ci_split_requires_every_home_trigger_without_path_filters(self):
+        ci = self.ci_sources()[0]
+        self.assertEqual(ci_preflight._events(ci),
+                         {'push', 'pull_request', 'schedule', 'workflow_dispatch'})
+        mutations = [
+            ('  push:\n    branches: [main]\n', ''),
+            ('  pull_request:\n', ''),
+            ("  schedule:\n    - cron: '30 1 * * *'\n", ''),
+            ('  workflow_dispatch:\n    inputs:\n      cold_native_cache:\n'
+             '        description: Run full native profiles without compiler or libcurl caches\n'
+             '        type: boolean\n        default: false\n', ''),
+            ('    branches: [main]\n', '    branches: [other]\n'),
+            ('    branches: [main]\n', '    branches: [main]\n    paths: [src/**]\n'),
+            ('    branches: [main]\n', '    branches: [main]\n    paths-ignore: [scripts/**]\n'),
+            ("    - cron: '30 1 * * *'\n", "    - cron: '30 1 * * 0'\n"),
+            ('  pull_request:\n', '  pull_request:\n    paths: [src/**]\n'),
+            ('  pull_request:\n', '  pull_request:\n  release:\n'),
+        ]
+        for before, after in mutations:
+            with self.subTest(replacement=after, removed=before):
+                findings = self.mutated_file_findings(0, None, before, after)
+                self.assertIn('ci.yml must keep unfiltered PRs, main pushes, nightly schedule and manual dispatch',
+                              findings)
+
+    def test_ci_split_refuses_deleting_or_renaming_every_job(self):
+        ci = self.ci_sources()[0]
+        self.assertEqual(set(_jobs(ci)), set(CI_JOB_IDS))
+        for job in CI_JOB_IDS:
+            block = '  ' + job + ':' + _jobs(ci)[job]
+            for before, after in ((block, ''), (f'  {job}:\n', f'  {job}-renamed:\n')):
+                with self.subTest(job=job, replacement=after):
+                    findings = self.mutated_file_findings(0, None, before, after)
+                    self.assertIn(f'ci.yml is missing job {job}', findings)
+        for job in set(CI_JOB_IDS) - {'authz', 'build', 'build-gate'}:
+            with self.subTest(check_name=job):
+                findings = self.mutated_file_findings(0, None, f'  {job}:\n',
+                                                       f'  {job}:\n    name: renamed\n')
+                self.assertIn(f'{job} must keep its default check name', findings)
+        for job, name, finding in (
+                ('authz', 'authz', 'ci.yml must start with the verbatim canon authz job'),
+                ('build', 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})',
+                 'ci.yml build legs must keep their names: ' + ci_preflight.BUILD_NAME),
+                ('build-gate', 'build',
+                 'build-gate must aggregate authz, every proof job, preflight and changes')):
+            with self.subTest(check_name=job):
+                findings = self.mutated_file_findings(0, job, f'    name: {name}\n',
+                                                       '    name: renamed\n')
+                self.assertIn(finding, findings)
+
+    def test_ci_split_refuses_heavy_pr_reentry_and_lost_full_events(self):
+        ci = self.ci_sources()[0]
+        for job in HEAVY_CI_JOBS:
+            condition, = ci_preflight._job_values(_jobs(ci)[job], 'if')
+            before = f'    if: {condition}\n'
+            self.assertIn("github.event_name != 'pull_request'", condition)
+            finding = ('preflight-slow must run all deferred stages on full events only'
+                       if job == 'preflight-slow' else
+                       f'{job} must start alongside preflight, after authz and changes, '
+                       'and skip only a docs-only change or its pinned PR deferral')
+            mutations = [
+                '', f'    if: {AUTHZ_ALWAYS}\n', '    if: false\n',
+                before.replace("github.event_name != 'pull_request'", 'true'),
+                before.replace("github.event_name != 'pull_request'",
+                               "github.event_name == 'pull_request'"),
+            ]
+            for event in ('push', 'schedule', 'workflow_dispatch'):
+                mutations += [
+                    before.replace("github.event_name != 'pull_request'",
+                                   f"github.event_name == '{event}'"),
+                    before.replace("github.event_name != 'pull_request'",
+                                   f"github.event_name != 'pull_request' && github.event_name != '{event}'"),
+                ]
+            for after in mutations:
+                with self.subTest(job=job, condition=after):
+                    self.assertIn(finding, self.mutated_file_findings(0, job, before, after))
+        # A second reusable call must not smuggle a heavy profile onto PRs.
+        extra = ('  heavy-again:\n    needs: [authz]\n'
+                 '    uses: ./.github/workflows/native-live.yml\n\n')
+        findings = self.mutated_file_findings(0, None, '  build-gate:\n', extra + '  build-gate:\n')
+        self.assertIn('ci.yml must keep only the pinned fast and full-event jobs', findings)
+
+    def test_preflight_tiers_partition_every_existing_stage(self):
+        # Expectations are independent of SLOW_PREFLIGHT_STAGES: losing a
+        # classification must not also remove its control.
+        slow_names = {'verifier-tests', 'kernel-residuals-tests',
+                      'unittest-shards-tests', 'run-json-harness-tests'}
+        for event in ('pull_request', 'push', 'schedule', 'workflow_dispatch'):
+            for answer in ('false', 'true', ''):
+                with self.subTest(event=event, answer=answer):
+                    env = {'GITHUB_EVENT_NAME': event, 'PINEFORGE_VERIFIER_SLOW': answer}
+                    all_stages = check_commands(ROOT, env={})
+                    fast = check_commands(ROOT, env=env, tier='fast')
+                    slow = check_commands(ROOT, env=env, tier='slow')
+                    self.assertEqual({entry[0] for entry in slow}, slow_names)
+                    self.assertTrue(fast)
+                    self.assertFalse({entry[0] for entry in fast} & slow_names)
+                    self.assertEqual(sorted(fast + slow), sorted(all_stages))
+                    self.assertEqual(len({entry[0] for entry in fast + slow}), len(all_stages))
+                    self.assertTrue({'doc-lint', 'doc-anchors', 'doc-reverts',
+                                     'ci-workflow-contract', 'preflight-tests'} <=
+                                    {entry[0] for entry in fast})
+                    self.assertTrue({name for name, _ in ci_verify.source_guard_commands(ROOT)} <=
+                                    {entry[0] for entry in fast})
+                    self.assertNotIn('--class-tier', dict(slow)['verifier-tests'])
+        with self.assertRaises(ValueError):
+            check_commands(ROOT, tier='missing')
+
+    def test_preflight_split_refuses_slow_stages_on_pr_and_missing_deferred_stages(self):
+        for tier in ('all', 'slow', ''):
+            findings = self.mutated_file_findings(0, 'preflight', '--tier fast',
+                                                  f'--tier {tier}' if tier else '')
+            self.assertIn('preflight must invoke only its fast stage plan', findings)
+        for tier in ('all', 'fast', ''):
+            findings = self.mutated_file_findings(0, 'preflight-slow', '--tier slow',
+                                                  f'--tier {tier}' if tier else '')
+            self.assertIn('preflight-slow must run all deferred stages on full events only', findings)
+        for after in (
+                '          sudo apt-get update\n          cmake --build build\n',
+                '          sudo apt-get update\n          python3 -m pip install pytest\n',
+                '          sudo apt-get update\n          rustup toolchain install stable\n'):
+            findings = self.mutated_file_findings(0, 'preflight',
+                                                  '          sudo apt-get update\n', after)
+            self.assertIn('preflight must keep only checkout, linters, fast checks and diagnostics', findings)
+        for step in (
+                '      - run: cmake --build build\n',
+                '      - uses: actions/setup-python@v5\n',
+                '      - run: python3 scripts/ci_verify.py release\n'):
+            findings = self.mutated_file_findings(0, 'preflight', '    steps:\n',
+                                                  '    steps:\n' + step)
+            self.assertIn('preflight must keep only checkout, linters, fast checks and diagnostics', findings)
+
+    def test_ci_smoke_refuses_missing_builds_or_wrong_ctest_selection(self):
+        mutations = [
+            ('if [ "$GITHUB_EVENT_NAME" = pull_request ]; then',
+             'if [ "$GITHUB_EVENT_NAME" != pull_request ]; then'),
+            ('if [ "$GITHUB_EVENT_NAME" = pull_request ]; then',
+             'if [ "$GITHUB_EVENT_NAME" = push ]; then'),
+            ('-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_BUILD_TYPE=Debug'),
+            ('--target pineforge_pr_smoke', '--target pineforge'),
+            (f'            cmake --build build --target pineforge_pr_smoke --parallel {CORES}\n', ''),
+            ("-L '^fast$'", "-L '^slow$'"),
+            ("-L '^fast$'", ''),
+            ('--no-tests=error', ''),
+            ('--parallel ' + CORES, '--parallel 4'),
+            ('--ccache\n          fi', '--ccache --include-label fast\n          fi'),
+        ]
+        for before, after in mutations:
+            with self.subTest(replacement=after):
+                findings = self.mutated_file_findings(0, 'build', before, after)
+                self.assertIn('build must run the fast Release smoke only on PRs and full profiles otherwise',
+                              findings)
+        findings = self.mutated_file_findings(
+            0, 'build', f'        if: {ci_preflight.AUTHZ_FULL_SUCCESS}\n',
+            f'        if: {ci_preflight.AUTHZ_SUCCESS}\n')
+        self.assertIn('build must install pytest only for the full profiles', findings)
+
+    def test_verification_steps_cannot_skip_their_home_events(self):
+        ci = self.ci_sources()[0]
+        for job, step_name, finding in (
+                ('preflight', 'Verify workflow wiring and source guards',
+                 'preflight must invoke only its fast stage plan'),
+                ('preflight-slow', 'Verify deferred preflight stages',
+                 'preflight-slow must run all deferred stages on full events only'),
+                ('build', 'Verify (${{ matrix.build_type }})',
+                 'build must run the fast Release smoke only on PRs and full profiles otherwise')):
+            step = ci_preflight._step_named(ci_preflight._steps(_jobs(ci)[job]),
+                                            '      - name: ' + step_name)
+            self.assertTrue(step)
+            for condition in (ci_preflight.AUTHZ_FULL_SUCCESS, '${{ false }}', ''):
+                after = step.replace(f'        if: {ci_preflight.AUTHZ_SUCCESS}\n',
+                                     f'        if: {condition}\n' if condition else '', 1)
+                self.assertNotEqual(after, step)
+                with self.subTest(job=job, condition=condition):
+                    findings = self.mutated_file_findings(0, job, step, after)
+                    self.assertIn(finding, findings)
+
+    def test_ci_smoke_cache_refuses_losing_main_fallback_or_pr_writes(self):
+        mutations = [
+            ('uses: actions/cache/restore@v4', 'uses: actions/cache@v4'),
+            ('key: ccache-main-', 'key: ccache-pr-'),
+            ('            ccache-main-', '            ccache-'),
+            ('          restore-keys: |\n', '          restore-keys: |\n            ccache-pr-\n'),
+            (ci_preflight.BUILD_CACHE_SAVE, '${{ success() }}'),
+            ('uses: actions/cache/save@v4', 'uses: actions/cache/restore@v4'),
+            ('key: ${{ steps.ccache-restore.outputs.cache-primary-key }}', 'key: ccache-pr'),
+        ]
+        for before, after in mutations:
+            with self.subTest(replacement=after):
+                findings = self.mutated_file_findings(0, 'build', before, after)
+                self.assertIn('build must restore the main compiler cache by platform and build type', findings)
+        ci = self.ci_sources()[0]
+        save = ci_preflight._step_named(ci_preflight._steps(_jobs(ci)['build']),
+                                        '      - name: Save main ccache')
+        self.assertTrue(save)
+        findings = self.mutated_file_findings(0, 'build', save, '')
+        self.assertIn('build must restore the main compiler cache by platform and build type', findings)
+
+    def test_fast_label_rows_and_build_dependencies_are_pinned(self):
+        cmake = self.ci_sources()[3]
+        rows = ci_preflight.fast_rows(cmake)
+        self.assertEqual(rows, [
+            'test_ringbuffer', 'test_timeframe', 'test_path_at', 'test_na_runtime',
+            'test_math_sum', 'test_str_utils', 'test_ta', 'test_matrix',
+            'test_native_run_spec', 'test_integration', 'test_native_bare_host_contracts',
+            'test_native_kernel_edge'])
+        mutations = [
+            ('    test_ringbuffer\n', ''),
+            ('    test_ringbuffer\n', '    test_ringbuffer\n    test_ringbuffer\n'),
+            ('    test_ringbuffer\n', '    test_missing\n'),
+            ('APPEND PROPERTY LABELS fast', 'APPEND PROPERTY LABELS slow'),
+            ('add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})',
+             'add_custom_target(pineforge_pr_smoke DEPENDS pineforge)'),
+            ('OR NOT TARGET ${_pf_fast_test}', 'OR FALSE'),
+            ('if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"',
+             'if(FALSE'),
+        ]
+        fast_block = cmake[cmake.index('set(PINEFORGE_PR_FAST_TESTS\n'):]
+        for before, after in mutations:
+            with self.subTest(replacement=after):
+                changed_block = fast_block.replace(before, after, 1)
+                self.assertNotEqual(changed_block, fast_block)
+                findings = self.mutated_file_findings(3, None, fast_block, changed_block)
+                self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
+                              findings)
+
+    def test_reusable_heavy_profiles_keep_full_populations_and_dispatch(self):
+        for before, after in (
+                ('  workflow_dispatch:\n', ''),
+                ('  workflow_call:\n', '  pull_request:\n  workflow_call:\n')):
+            findings = self.mutated_file_findings(1, None, before, after)
+            self.assertIn('native-live.yml must retain only workflow_call and workflow_dispatch', findings)
+        for profile, build_dir in (('native', 'build-live'),
+                                   ('live-sanitizers', 'build-live-sanitizers'),
+                                   ('live-tsan', 'build-live-tsan')):
+            block = f'          - profile: {profile}\n            build_dir: {build_dir}\n'
+            findings = self.mutated_file_findings(1, 'native-live', block, '')
+            self.assertIn('native-live must run all three independent profiles with fail-fast false, '
+                          'the platform job maximum and no per-run budget', findings)
+        for after in ('true', "${{ github.event_name == 'pull_request' }}"):
+            findings = self.mutated_file_findings(0, 'native-live', 'exclude_slow: false',
+                                                  f'exclude_slow: {after}')
+            self.assertIn('native-live must receive the full population input', findings)
+        for job, mode, wrong in (('corpus-parity', 'full', 'subset'),
+                                 ('corpus-parity-subset', 'subset', 'full')):
+            findings = self.mutated_file_findings(0, job, f'mode: {mode}', f'mode: {wrong}')
+            self.assertIn(f'{job} must call corpus-parity.yml with mode {mode}', findings)
+
+    def test_full_profiles_refuse_every_label_or_class_exclusion(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
         flag = PR_SLOW_FLAG
         for job in ('build', 'kernel-only', 'sanitizers'):
+            command = ' --ccache'
             mutations = [
-                '', flag + ' ' + flag,
+                flag, flag + ' ' + flag,
                 flag.replace('slow', 'slwo'),
                 flag.replace('slow', 'other'),
                 flag.replace("&& '--exclude-label", "&& matrix.build_type == 'Debug' && '--exclude-label"),
@@ -507,11 +767,13 @@ class PreflightFailures(unittest.TestCase):
                           for event in ('push', 'workflow_dispatch', 'schedule', 'release')]
             for after in mutations:
                 with self.subTest(job=job, after=after):
-                    changed = original.copy()
-                    changed[0] = in_job(changed[0], job, flag, after)
-                    self.assertIn(f'{job} must exclude exactly slow on PRs only, once',
-                                  ci_workflow_findings(*changed))
-        # A fourth excluding job, or a parity subset with any exclusion, fails.
+                    findings = self.mutated_file_findings(0, job, command, command + ' ' + after)
+                    self.assertIn(f'{job} must keep its full population', findings)
+            for after in ('--include-label fast', '--class-tier fast'):
+                with self.subTest(job=job, after=after):
+                    findings = self.mutated_file_findings(0, job, command, command + ' ' + after)
+                    self.assertIn(f'{job} must keep its full population', findings)
+        # A fast preflight or parity subset with any exclusion also fails.
         # `preflight` is a steps job; `corpus-parity-subset` is a reusable-workflow
         # call (`uses:` + `with:`, no `steps:`), so the flag goes into its `with:`.
         for job, before, after in (
@@ -522,24 +784,23 @@ class PreflightFailures(unittest.TestCase):
             with self.subTest(job=job):
                 changed = original.copy()
                 changed[0] = in_job(changed[0], job, before, after)
+                self.assertNotEqual(changed[0], original[0])
                 findings = ci_workflow_findings(*changed)
                 self.assertIn(f'{job} must keep its full population', findings)
-                self.assertIn('CI must carry exactly three PR-only slow exclusion flags', findings)
+                self.assertEqual(sum('--exclude-label' in body for body in _jobs(changed[0]).values()), 1)
 
     def assert_full_event_populations(self, ci, release):
         jobs = _jobs(ci)
-        # These exact PR-only expressions evaluate to empty on every other
-        # event. Any additional flag, including a push-only expression, fails.
+        # Full verification no longer carries a label exclusion on any event.
         self.assertEqual({job for job, body in jobs.items() if '--exclude-label' in body},
-                         {'build', 'kernel-only', 'sanitizers'})
+                         set())
         for body in jobs.values():
-            self.assertNotIn('--exclude-label', body.replace(PR_SLOW_FLAG, ''))
+            self.assertNotIn('--exclude-label', body)
         self.assertNotIn('--exclude-label', release)
         self.assertNotIn('--class-tier', release)
         # Read the real workflow and CMake registration, rather than deriving
         # expectations from the same selector that constructs the commands.
-        self.assertIn("exclude_slow: ${{ github.event_name == 'pull_request' }}",
-                      jobs['native-live'])
+        self.assertIn('exclude_slow: false', jobs['native-live'])
         cmake = (ROOT / 'tests/CMakeLists.txt').read_text()
         row = re.search(r'add_test\(NAME test_ci_verify\s+(.*?)\)', cmake, re.DOTALL)
         self.assertIsNotNone(row)
@@ -560,7 +821,7 @@ class PreflightFailures(unittest.TestCase):
                     self.assertEqual(verifier_class_tier(env), 'all')
                     self.assertEqual(set(select_test_ids(sorted(discovered),
                                                          verifier_class_tier(env))), discovered)
-                    plan = {name: argv for name, argv in check_commands(ROOT, env=env)}
+                    plan = {name: argv for name, argv in check_commands(ROOT, env=env, tier='slow')}
                     self.assertEqual(plan['verifier-tests'], [
                         sys.executable, str(ROOT / 'scripts/run_unittest_shards.py'),
                         str(ROOT / 'scripts/test_ci_verify.py'), '--log-dir',
@@ -575,7 +836,8 @@ class PreflightFailures(unittest.TestCase):
             for flag in ("${{ github.event_name == 'push' && '--exclude-label slow' || '' }}",
                          '--exclude-label slow'):
                 with self.subTest(job=job, flag=flag):
-                    changed = in_job(ci, job, PR_SLOW_FLAG, PR_SLOW_FLAG + ' ' + flag)
+                    changed = in_job(ci, job, ' --ccache', ' --ccache ' + flag)
+                    self.assertNotEqual(changed, ci)
                     with self.assertRaises(AssertionError):
                         self.assert_full_event_populations(changed, release)
                     self.assertNotEqual(ci_workflow_findings(
@@ -619,6 +881,7 @@ class PreflightFailures(unittest.TestCase):
             with self.subTest(job=job, after=after):
                 changed = original.copy()
                 changed[0] = in_job(changed[0], job, before, after)
+                self.assertNotEqual(changed[0], original[0])
                 self.assertNotEqual(ci_workflow_findings(*changed, others=others), [])
 
     def test_ci_contract_pins_spot_runners_time_limits_and_parallelism(self):
@@ -626,7 +889,7 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(PR_RUNNER, '["self-hosted","pf-gcp-pr"]')
         self.assertEqual(json.loads(PR_RUNNER), ['self-hosted', 'pf-gcp-pr'])
         self.assertEqual(MATRIX_LINUX_RUNNER, '\'["self-hosted","pf-gcp-pr"]\'')
-        self.assertEqual(MATRIX_RUNNER, '${{ fromJSON(matrix.runner) }}')
+        self.assertEqual(MATRIX_RUNNER, '${{ fromJSON(matrix.platform.runner) }}')
         self.assertEqual(HOSTED_MATRIX_RUNNER, '${{ matrix.runner }}')
         self.assertEqual(RELEASE_RUNNER, '["self-hosted","pf-gcp-main"]')
         self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS, {})
@@ -680,7 +943,7 @@ class PreflightFailures(unittest.TestCase):
              'ci.yml job native-live calls a workflow the runner contract cannot see; '
              'call one under ./.github/workflows/'),
             # The routing includes and PR-only macOS Debug exclusion are exact.
-            (0, 'build', 'os: [ubuntu-24.04, macos-26]', 'os: [ubuntu-24.04, macos-26-large]',
+            (0, 'build', '          - os: macos-26\n', '          - os: macos-26-large\n',
              BUILD_RUNNER_FINDING),
             (0, 'build', '        build_type: [Release, Debug]\n',
              '        build_type: [Release, Debug]\n        include:\n'
@@ -811,8 +1074,8 @@ class PreflightFailures(unittest.TestCase):
              'run: |\n          export JOBS=4\n          ./scripts/check_corpus_parity.sh',
              'corpus-parity.yml job corpus-parity must size its parallelism to the runner'),
             # The build legs keep their names: build (<image>, <type>).
-            (0, 'build', '    name: build (${{ matrix.os }}, ${{ matrix.build_type }})\n', '',
-             'ci.yml build legs must keep their names: build (${{ matrix.os }}, ${{ matrix.build_type }})'),
+            (0, 'build', '    name: build (${{ matrix.platform.os }}, ${{ matrix.build_type }})\n', '',
+             'ci.yml build legs must keep their names: build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'),
         )
         for index, job, before, after, finding in mutations:
             with self.subTest(file=CI_SOURCES[index], job=job, after=after):
@@ -849,7 +1112,7 @@ class PreflightFailures(unittest.TestCase):
 
     def test_gcp_sites_reject_cross_class_routes(self):
         sites = list(self.gcp_sites())
-        self.assertEqual(len(sites), 19)
+        self.assertEqual(len(sites), 20)
         self.assertEqual(ci_preflight.runner_findings(self.workflow_sources()), [])
         for name, job, fleet, before, finding in sites:
             runner = RELEASE_RUNNER if fleet == 'pr' else PR_RUNNER
@@ -956,7 +1219,8 @@ class PreflightFailures(unittest.TestCase):
         # Docs has no legacy PF_CI_LABELS declaration; the ten original
         # metadata-bearing jobs keep this independent population check.
         sites = [site for site in self.gcp_sites()
-                 if site[2] == 'pr' and site[1] != 'authz' and site[0] != 'docs.yml']
+                 if site[2] == 'pr' and site[1] not in ('authz', 'preflight-slow')
+                 and site[0] != 'docs.yml']
         self.assertEqual(len(sites), 10)
         for name, job, _, before, finding in sites:
             env = ci_preflight._job_block(_jobs(workflows[name])[job], 'env')
@@ -986,9 +1250,10 @@ class PreflightFailures(unittest.TestCase):
         answer; preflight also waits for the class decision and always runs."""
         original, others = self.ci_sources(), self.other_sources()
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
-        skip = f'    if: {DOCS_ONLY_SKIP}\n'
+        docs_skip = f'    if: {DOCS_ONLY_SKIP}\n'
         mutations = []
         for job in PROOF_JOBS:
+            skip = f'    if: {HEAVY_SKIP if job in HEAVY_CI_JOBS else DOCS_ONLY_SKIP}\n'
             refused = f'{job} must start alongside preflight, after authz and changes'
             mutations += [
                 (job, '    needs: [authz, changes]\n', '', refused),
@@ -1009,7 +1274,7 @@ class PreflightFailures(unittest.TestCase):
              'preflight must follow authz and changes'),
             ('preflight', '    needs: [authz, changes]\n', '    needs: build\n',
              'preflight must follow authz and changes'),
-            ('preflight', f'    if: {AUTHZ_ALWAYS}\n', skip,
+            ('preflight', f'    if: {AUTHZ_ALWAYS}\n', docs_skip,
              'preflight must follow authz and changes'),
             ('preflight', f'    if: {AUTHZ_ALWAYS}\n', '',
              'preflight must follow authz and changes'),
@@ -1023,19 +1288,20 @@ class PreflightFailures(unittest.TestCase):
              'ci.yml job sanitizers must not continue on error'),
             ('build-gate', '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n',
              'ci.yml job build-gate must not continue on error'),
-            ('preflight', '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n',
-             '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight\n'
+            ('preflight', '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast\n',
+             '        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast\n'
              '        continue-on-error: true\n', 'ci.yml job preflight must not continue on error')]
         for job, before, after, finding in mutations:
             with self.subTest(job=job, after=after):
                 changed = original.copy()
                 changed[0] = in_job(changed[0], job, before, after)
+                self.assertNotEqual(changed[0], original[0])
                 findings = ci_workflow_findings(*changed, others=others)
                 self.assertTrue(any(finding in line for line in findings), findings)
         # The same wiring spelled another way is no finding.
         for job, before, after in (
                 ('kernel-only', '    needs: [authz, changes]\n', '    needs: [changes, authz]\n'),
-                ('sanitizers', skip, f'    if: "{DOCS_ONLY_SKIP}"\n'),
+                ('sanitizers', f'    if: {HEAVY_SKIP}\n', f'    if: "{HEAVY_SKIP}"\n'),
                 ('changes', '    steps:\n', '    # classify first\n    steps:\n')):
             with self.subTest(job=job, harmless=after):
                 changed = original.copy()
@@ -1057,8 +1323,8 @@ class PreflightFailures(unittest.TestCase):
             ('          BUILD_RESULT: ${{ needs.build.result }}\n',
              "          BUILD_RESULT: ${{ needs.build.result || 'success' }}\n"),
             ('          docs_only=false\n', '          docs_only=true\n'),
-            ('            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"\n',
-             '            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"\n'
+            ('            && slow_preflight && deferred "$FULL_PARITY_RESULT"\n',
+             '            && slow_preflight && deferred "$FULL_PARITY_RESULT"\n'
              '          true\n'),
         )
         for before, after in mutations:
@@ -1077,6 +1343,7 @@ class PreflightFailures(unittest.TestCase):
                'AUTHZ_RESULT': 'success',
                'CHANGES_RESULT': 'success', 'DOCS_ONLY': 'false',
                'PREFLIGHT_RESULT': 'success',
+               'SLOW_PREFLIGHT_RESULT': 'success',
                **{variable: 'success' for variable in PROOF_JOBS.values()}}
         for event in ('pull_request', 'push', 'workflow_dispatch', 'schedule', 'release'):
             for outcome in ('success', 'failure', 'cancelled', 'skipped', ''):
@@ -1098,7 +1365,8 @@ class PreflightFailures(unittest.TestCase):
         script = Path(directory.name) / 'gate.sh'
         script.write_text(job_script(self.ci_sources()[0], 'build-gate',
                                      'Require every verification lane to have passed'))
-        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success'}
+        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'AUTHZ_RESULT': 'success',
+               'GITHUB_EVENT_NAME': 'push', 'SLOW_PREFLIGHT_RESULT': 'success'}
         lanes = list(PROOF_JOBS.values())
         vectors = set()
         for common in ('success', 'skipped'):
@@ -1148,6 +1416,71 @@ class PreflightFailures(unittest.TestCase):
                 self.assertEqual(result.returncode, code, result.stdout + result.stderr)
                 self.assertIn('preflight: success', result.stdout)
                 self.assertIn('matrix: skipped', result.stdout)
+
+    def test_build_aggregate_excuses_only_pr_deferrals_and_classified_docs_skips(self):
+        script = job_script(self.ci_sources()[0], 'build-gate',
+                            'Require every verification lane to have passed')
+        required = {'AUTHZ_RESULT', 'CHANGES_RESULT', 'PREFLIGHT_RESULT'}
+        proof = {'BUILD_RESULT', 'SANITIZER_RESULT', 'NATIVE_RESULT',
+                 'KERNEL_RESULT', 'PARITY_RESULT', 'FULL_PARITY_RESULT'}
+        deferred = {'SLOW_PREFLIGHT_RESULT', 'SANITIZER_RESULT', 'NATIVE_RESULT',
+                    'KERNEL_RESULT', 'FULL_PARITY_RESULT'}
+        for event in ('pull_request', 'push', 'schedule', 'workflow_dispatch'):
+            for docs_only in ('false', 'true'):
+                base = {name: 'success' for name in required | proof | deferred}
+                if docs_only == 'true':
+                    base.update({name: 'skipped' for name in proof})
+                if event == 'pull_request':
+                    base.update({name: 'skipped' for name in deferred})
+                for name in sorted(base):
+                    for outcome in ('success', 'skipped', 'failure', 'cancelled', ''):
+                        results = {**base, name: outcome}
+                        expected = all(results[key] == 'success' for key in required)
+                        expected = expected and all(
+                            results[key] == 'success'
+                            or (results[key] == 'skipped'
+                                and ((event == 'pull_request' and key in deferred)
+                                     or (docs_only == 'true' and key in proof)))
+                            for key in (proof | deferred) - required)
+                        with self.subTest(event=event, docs_only=docs_only, lane=name, result=outcome):
+                            result = subprocess.run(
+                                ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+                                env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                                     'GITHUB_EVENT_NAME': event, 'DOCS_ONLY': docs_only, **results},
+                                capture_output=True, text=True)
+                            self.assertEqual(result.returncode == 0, expected,
+                                             result.stdout + result.stderr)
+                            self.assertIn('preflight (slow): ', result.stdout)
+                            self.assertIn('corpus parity (full): ', result.stdout)
+
+    def test_build_gate_refuses_widened_deferrals_and_lost_heavy_dependencies(self):
+        mutations = [
+            ('"$GITHUB_EVENT_NAME" == "pull_request"', '"$GITHUB_EVENT_NAME" != "pull_request"'),
+            ('"$GITHUB_EVENT_NAME" == "pull_request"', '"$GITHUB_EVENT_NAME" == "push"'),
+            ('"$GITHUB_EVENT_NAME" == "pull_request" && "$1" == "skipped"',
+             '"$1" == "skipped"'),
+            ('&& slow_preflight && deferred "$FULL_PARITY_RESULT"',
+             '&& true && deferred "$FULL_PARITY_RESULT"'),
+            ('deferred "$FULL_PARITY_RESULT"', 'true'),
+            ('PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}',
+             "PARITY_RESULT: ${{ needs.corpus-parity-subset.result || 'success' }}"),
+            ('SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}',
+             "SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result || 'success' }}"),
+        ]
+        for before, after in mutations:
+            with self.subTest(replacement=after):
+                findings = self.mutated_file_findings(0, 'build-gate', before, after)
+                self.assertIn(
+                    'build-gate must keep the exact result policy: success or a classified docs-only skip',
+                    findings)
+        ci = self.ci_sources()[0]
+        needs, = ci_preflight._job_values(_jobs(ci)['build-gate'], 'needs')
+        for job in ('preflight-slow', 'corpus-parity', 'native-live', 'sanitizers', 'kernel-only'):
+            replacement = ', '.join(item for item in ci_preflight._needs(_jobs(ci)['build-gate'])
+                                    if item != job)
+            findings = self.mutated_file_findings(0, 'build-gate', '    needs: ' + needs,
+                                                  '    needs: [' + replacement + ']')
+            self.assertIn('build-gate must aggregate authz, every proof job, preflight and changes', findings)
 
     def test_the_classification_is_the_base_copy_of_the_rule(self):
         """Run the changes job's own shell in throwaway repositories: the
@@ -1214,21 +1547,22 @@ class PreflightFailures(unittest.TestCase):
                 (0, 'build', '      matrix:\n', '      matrix:\n\n        # standard images only\n'),
                 (0, 'build', '      matrix:\n',
                  '      matrix:\n        # Was larger_runner: macos-26-xlarge\n'),
-                (0, 'build', "&& '--exclude-label slow' || '' }}\n",
-                 "&& '--exclude-label slow' || '' }}  # was --jobs 4\n"),
+                (0, 'build', '          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then\n',
+                 '          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then\n'
+                 '            # Was --jobs 4 on the standard runner.\n'),
                 (0, 'kernel-only', verify,
                  'run: |\n          python3 scripts/ci_verify.py kernel --build-dir build-kernel \\\n'
-                 f'            --jobs {CORES} --ccache {PR_SLOW_FLAG}'),
+                 f'            --jobs {CORES} --ccache'),
                 (4, 'corpus-parity-subset', f'run: JOBS={CORES} ./scripts/check_corpus_parity.sh --subset',
                  f'run: |\n          JOBS={CORES} ./scripts/check_corpus_parity.sh --subset'),
                 (5, 'build', '    runs-on: ["self-hosted", "pf-gcp-pr"]\n',
                  '    "runs-on": ["self-hosted", "pf-gcp-pr"]\n'),
                 (0, 'preflight', '      PF_CI_LABELS:', '      "PF_CI_LABELS":'),
-                (0, 'build', '        os: [ubuntu-24.04, macos-26]\n',
-                 '        os: [ubuntu-24.04, macos-26]  # the images\n'),
+                (0, 'build', '        platform:\n',
+                 '        platform:  # the images\n'),
                 (0, 'build', '    strategy:\n', '    strategy:  # the legs\n'),
-                (0, 'build', '-${{ matrix.build_type }}-${{ github.sha }}',
-                 "-${{ matrix.build_type }}-${{ hashFiles('scripts/ci_verify.py') }}-${{ github.sha }}"),
+                (0, 'sanitizers', '-sanitizers-${{ github.sha }}',
+                 "-sanitizers-${{ hashFiles('scripts/ci_verify.py') }}-${{ github.sha }}"),
                 (0, 'kernel-only', '      - name: Verify (kernel)\n',
                  '      - name: Verify (kernel) with scripts/ci_verify.py\n'),
                 (0, 'sanitizers', f'run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs {CORES}',
@@ -1239,7 +1573,7 @@ class PreflightFailures(unittest.TestCase):
                  '      - name: Verify (kernel), no longer --jobs 4\n'),
                 (0, 'kernel-only', KERNEL_VERIFY,
                  'uses: nick-fields/retry@v3\n        with:\n          command: python3 scripts/ci_verify.py '
-                 f'kernel --build-dir build-kernel --jobs {CORES} --ccache {PR_SLOW_FLAG}'),
+                 f'kernel --build-dir build-kernel --jobs {CORES} --ccache'),
                 (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n',
                  f'    runs-on: {RELEASE_RUNNER}  # isolated release\n'),
                 (0, None, '\n  preflight:\n', '\n  preflight:  # the fast gate\n'))
@@ -1609,7 +1943,7 @@ class PreflightFailures(unittest.TestCase):
                  f'ci.yml job sanitizers must run on {PR_RUNNER}'),
                 (('sanitizers', PR_RUNNER, 'pf-linux-x64-16'),
                  f'ci.yml job sanitizers must run on {PR_RUNNER}'),
-                (('build', 'os: [ubuntu-24.04, macos-26]', 'os: [ubuntu-24.04, macos-26-xlarge]'),
+                (('build', '          - os: macos-26\n', '          - os: macos-26-xlarge\n'),
                  'ci.yml must not use larger-runner labels; use the GCP fleet or hosted exceptions'),
                 (('build', '        build_type: [Release, Debug]\n',
                   '        build_type: [Release, Debug]\n        larger_runner: ubuntu-24.04\n'),

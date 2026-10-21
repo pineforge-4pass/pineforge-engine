@@ -39,30 +39,49 @@ ACTIONLINT_VERSION = '1.7.12'
 # The names live only in tests/CMakeLists.txt. A digest pins that measured
 # population without maintaining a second row list in this Python guard.
 PR_SLOW_ROWS_SHA256 = 'e8bddea797abc46ca0deb671d5d35db3491b67a82e1413d08278530d12f7b67b'
+PR_FAST_ROWS_SHA256 = 'c6ec80674daf15ea1cc5d390acdf5f1098620a7fad65a86dfbe5e12fbe29b568'
 # GCP fleet routing (owner #1056): all non-release jobs use -pr on every ref;
 # release, Linux x64 release artifacts and baseline promotion use isolated -main.
 # CI build matrix values are JSON strings decoded to arrays, including macOS.
 PR_RUNNER = '["self-hosted","pf-gcp-pr"]'
 RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
-MATRIX_RUNNER = '${{ fromJSON(matrix.runner) }}'
+CI_EVENTS = '''on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+    inputs:
+      cold_native_cache:
+        description: Run full native profiles without compiler or libcurl caches
+        type: boolean
+        default: false
+'''
+MATRIX_RUNNER = '${{ fromJSON(matrix.platform.runner) }}'
 MATRIX_LINUX_RUNNER = f"'{PR_RUNNER}'"
 HOSTED_MATRIX_RUNNER = '${{ matrix.runner }}'
 # The build job's whole strategy, exactly (comments and blank lines aside):
-# D3 excludes only macOS Debug on PRs; every other event keeps all four legs.
+# CR-233 keeps only Ubuntu Release on PRs; full events keep all four legs.
 # Linux x64 legs use pf-gcp-pr on every ref; macOS stays on macos-26.
 BUILD_STRATEGY = ('    strategy:\n'
                   '      fail-fast: false\n'
                   '      matrix:\n'
-                  '        os: [ubuntu-24.04, macos-26]\n'
-                  '        build_type: [Release, Debug]\n'
-                  '        exclude: ${{ fromJSON(github.event_name == \'pull_request\' && '
-                  '\'[{"os":"macos-26","build_type":"Debug"}]\' || \'[]\') }}\n'
-                  '        include:\n'
+                  '        event: ["${{ github.event_name }}"]\n'
+                  '        platform:\n'
                   '          - os: ubuntu-24.04\n'
                   f'            runner: {MATRIX_LINUX_RUNNER}\n'
                   '          - os: macos-26\n'
-                  '            runner: \'["macos-26"]\'\n')
-BUILD_NAME = 'build (${{ matrix.os }}, ${{ matrix.build_type }})'
+                  '            runner: \'["macos-26"]\'\n'
+                  '        build_type: [Release, Debug]\n'
+                  '        exclude:\n'
+                  '          - event: pull_request\n'
+                  '            build_type: Debug\n'
+                  '          - event: pull_request\n'
+                  '            platform:\n'
+                  '              os: macos-26\n'
+                  '              runner: \'["macos-26"]\'\n')
+BUILD_NAME = 'build (${{ matrix.platform.os }}, ${{ matrix.build_type }})'
 RELEASE_STRATEGY = ('    strategy:\n'
                     '      fail-fast: false\n'
                     '      matrix:\n'
@@ -104,6 +123,7 @@ JOB_RUNNERS = {
     'ci.yml': {'authz': (PR_RUNNER, None),
                'changes': (PR_RUNNER, None),
                'preflight': (PR_RUNNER, None),
+               'preflight-slow': (PR_RUNNER, None),
                'build': (MATRIX_RUNNER, VERIFY),
                'sanitizers': (PR_RUNNER, VERIFY),
                'kernel-only': (PR_RUNNER, VERIFY),
@@ -139,11 +159,74 @@ _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
 # unanswered classification runs it.
 PROOF_JOBS = {'build': 'BUILD_RESULT', 'sanitizers': 'SANITIZER_RESULT',
               'kernel-only': 'KERNEL_RESULT', 'native-live': 'NATIVE_RESULT',
-              'corpus-parity-subset': 'PARITY_RESULT'}
+              'corpus-parity-subset': 'PARITY_RESULT', 'corpus-parity': 'FULL_PARITY_RESULT'}
+HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
+AUTHZ_FULL_SUCCESS = "${{ needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
 DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
+HEAVY_SKIP = DOCS_ONLY_SKIP.replace(" && (needs.changes",
+                                   " && github.event_name != 'pull_request' && (needs.changes")
+SLOW_PREFLIGHT_IF = "${{ always() && needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
+BUILD_VERIFY_RUN = ' '.join(r'''|
+if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPINEFORGE_VERSION_SOURCE=FILE \
+-DPython3_EXECUTABLE="$(command -v python3)" -DPINEFORGE_BUILD_TESTS=ON \
+-DPINEFORGE_BUILD_SOURCE_LAYER=ON -DPINEFORGE_BUILD_TUTORIAL=OFF \
+-DPINEFORGE_BUILD_LIVE_RUNNER=OFF -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+-DPINEFORGE_BUILD_EXAMPLES=OFF -DPINEFORGE_REQUIRE_ABI_RECEIPTS=OFF \
+-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+cmake --build build --target pineforge_pr_smoke --parallel "$(getconf _NPROCESSORS_ONLN)"
+ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
+--parallel "$(getconf _NPROCESSORS_ONLN)" --timeout 0 --output-junit build/ctest-junit.xml
+else
+python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+fi'''.splitlines())
+BUILD_CACHE_KEY = 'ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-'
+BUILD_CACHE_SAVE = ("${{ success() && github.ref == 'refs/heads/main' "
+                    "&& steps.ccache-restore.outputs.cache-hit != 'true' }}")
+PREFLIGHT_LINTER_RUN = ' '.join(r'''|
+set -euo pipefail
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y shellcheck
+tools_dir="$RUNNER_TEMP/pineforge-actionlint"
+mkdir -p "$tools_dir"
+archive="$tools_dir/actionlint.tar.gz"
+curl --fail --location --proto '=https' --tlsv1.2 \
+"https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+--output "$archive"
+echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+tar -xzf "$archive" -C "$tools_dir" actionlint
+echo "$tools_dir" >> "$GITHUB_PATH"'''.splitlines())
+# These stages execute compiler/build controls or need the separately installed
+# pytest dependency. The rest are source/documentation/policy checks. A local
+# unfiltered invocation retains every stage; CI runs both disjoint tiers.
+SLOW_PREFLIGHT_STAGES = frozenset((
+    'verifier-tests', 'kernel-residuals-tests', 'unittest-shards-tests', 'run-json-harness-tests',
+))
+FAST_TEST_REGISTRATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
+        message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
+    endif()
+    if(TEST ${_pf_fast_test})
+        get_test_property(${_pf_fast_test} DISABLED _pf_fast_disabled)
+        get_test_property(${_pf_fast_test} SKIP_RETURN_CODE _pf_fast_skip_code)
+        get_test_property(${_pf_fast_test} SKIP_REGULAR_EXPRESSION _pf_fast_skip_regex)
+        get_test_property(${_pf_fast_test} LABELS _pf_fast_labels)
+        if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"
+                OR NOT _pf_fast_skip_regex STREQUAL "NOTFOUND"
+                OR "slow" IN_LIST _pf_fast_labels OR "private_fixtures" IN_LIST _pf_fast_labels)
+            message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
+        endif()
+        set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
+endif()
+'''
 # The complete canon step, including its env, comments and shell, byte for byte.
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
@@ -193,7 +276,7 @@ PREFLIGHT_VERIFIER_SLOW = ("${{ needs.changes.result == 'success' && "
                           "needs.changes.outputs.verifier_slow || 'true' }}")
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 GATE_NEEDS = ('needs: [authz, changes, preflight, build, sanitizers, native-live, kernel-only, '
-              'corpus-parity-subset]')
+              'corpus-parity-subset, preflight-slow, corpus-parity]')
 # The matrix dependency already aggregates the selected cells. Its result must
 # never be excused for the PR-only exclusion: no job was created for that cell.
 # Pin the whole step so a widened passed(), a later override or a missing-result
@@ -210,23 +293,30 @@ GATE_STEP = r'''      - name: Require every verification lane to have passed
           NATIVE_RESULT: ${{ needs.native-live.result }}
           KERNEL_RESULT: ${{ needs.kernel-only.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
+          SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}
+          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}
         run: |
           printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
             "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
-            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT"
+            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
+            "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
           # The matrix result covers only the selected cells: the PR exclusion
           # creates no skipped cell to excuse. Every existing cell must pass.
           # A proof lane passes by succeeding, or by having been skipped after
           # the changes job succeeded and answered docs-only. A lane skipped
-          # for any other reason fails, and preflight must always succeed.
+          # for any other reason fails, except the pinned PR deferrals below.
+          # Fast preflight always passes; slow preflight must pass on full events.
           docs_only=false
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
           passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
+          deferred() { passed "$1" || [[ "$GITHUB_EVENT_NAME" == "pull_request" && "$1" == "skipped" ]]; }
+          slow_preflight() { [[ "$SLOW_PREFLIGHT_RESULT" == "success" || ( "$GITHUB_EVENT_NAME" == "pull_request" && "$SLOW_PREFLIGHT_RESULT" == "skipped" ) ]]; }
           [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
             && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
-            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"
+            && deferred "$SANITIZER_RESULT" && deferred "$NATIVE_RESULT" \
+            && deferred "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
+            && slow_preflight && deferred "$FULL_PARITY_RESULT"
 '''
 # No stage of this preflight carries a timeout: the verifier self-tests
 # (test_ci_verify.py) drive the real literal-aware parity, receipt and
@@ -529,8 +619,8 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 findings.append(f'{name} job {job} must size its parallelism to the runner')
     build = _jobs(workflows.get('ci.yml', '')).get('build', '')
     if _job_block(build, 'strategy') != _code(BUILD_STRATEGY):
-        findings.append('ci.yml build must use exactly the pf-gcp-pr Linux and hosted macos-26 build types, '
-                        'excluding only macOS Debug on pull_request')
+        findings.append('ci.yml build must select only Ubuntu Release on pull_request '
+                        'and all four pf-gcp-pr Linux/hosted macos-26 legs on full events')
     if _job_values(build, 'name') != [BUILD_NAME]:
         findings.append(f'ci.yml build legs must keep their names: {BUILD_NAME}')
     if 'release.yml' in workflows:
@@ -586,6 +676,23 @@ def _step_named(steps: list[str], marker: str) -> str:
 def _step_values(step: str, key: str) -> list[str]:
     # Keep a leading uses:/run: key on unnamed steps at the other keys' depth.
     return _job_values(re.sub(r'^( *)- ', r'\1  ', step, count=1), key)
+
+
+def _step_block(step: str, key: str) -> list[str]:
+    return _job_block(re.sub(r'^( *)- ', r'\1  ', step, count=1), key)
+
+
+def fast_rows(cmake: str) -> list[str]:
+    """Read the single CMake population; no duplicate Python list of rows."""
+    blocks = re.findall(r'^set\(PINEFORGE_PR_FAST_TESTS\n(.*?)^\)', cmake,
+                        re.MULTILINE | re.DOTALL)
+    if len(blocks) != 1:
+        raise ValueError('expected one PINEFORGE_PR_FAST_TESTS list')
+    rows = [line.strip() for line in blocks[0].splitlines() if line.strip()]
+    if (not rows or len(rows) != len(set(rows))
+            or any(not re.fullmatch(r'test_[A-Za-z0-9_]+', row) for row in rows)):
+        raise ValueError('fast rows must be unique executable test names')
+    return rows
 
 
 def _needs(body: str) -> list[str]:
@@ -651,8 +758,12 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
             # Repository steps need their own positive authz condition as well.
             repository_step = (checkout or any(value.startswith('./') for value in uses)
                                or any('scripts/' in value for value in _step_values(step, 'run')))
+            positive_guards = ([AUTHZ_SUCCESS], [AUTHZ_ALWAYS])
+            if (name == 'ci.yml' and job == 'build'
+                    and '      - name: Install the CTest pytest runner' in _code(step)):
+                positive_guards += ([AUTHZ_FULL_SUCCESS],)
             if (status_function and repository_step
-                    and _step_values(step, 'if') not in ([AUTHZ_SUCCESS], [AUTHZ_ALWAYS])):
+                    and _step_values(step, 'if') not in positive_guards):
                 findings.append(f'{name} job {job} must guard repository steps on authz success')
     gate = jobs.get(aggregate, '')
     gate_steps = _steps(gate)
@@ -698,6 +809,8 @@ def gated_workflow_findings(workflow: str, name: str) -> list[str]:
 
 def native_workflow_findings(native: str, curl_action: str | None = None) -> list[str]:
     findings = authz_workflow_findings(native, 'native-live.yml', 'native-live-gate')
+    if _events(native) != {'workflow_call', 'workflow_dispatch'}:
+        findings.append('native-live.yml must retain only workflow_call and workflow_dispatch')
     jobs = _jobs(native)
     job, gate = jobs.get('native-live', ''), jobs.get('native-live-gate', '')
     if (_job_block(job, 'strategy') != _code(NATIVE_STRATEGY)
@@ -814,13 +927,24 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     findings += gated_workflow_findings(docs, 'docs.yml')
     events = ci.split('\non:\n', 1)
     events = events[1].split('\npermissions:', 1)[0] if len(events) == 2 else ''
-    for trigger in ('push:\n    branches: [main]', 'pull_request:', 'workflow_dispatch:'):
+    if _events(ci) != {'push', 'pull_request', 'schedule', 'workflow_dispatch'}:
+        findings.append('ci.yml must retain exactly push, pull_request, schedule and workflow_dispatch')
+    if _job_block(ci, 'on') != _code(CI_EVENTS):
+        findings.append('ci.yml must keep unfiltered PRs, main pushes, nightly schedule and manual dispatch')
+    for trigger in ('push:\n    branches: [main]', 'pull_request:', 'workflow_dispatch:',
+                    "schedule:\n    - cron: '30 1 * * *'"):
         if '  ' + trigger not in events:
             findings.append(f'ci.yml must retain {trigger.split(":", 1)[0]}')
     jobs = _jobs(ci)
-    for job in ('authz', 'changes', 'preflight', *PROOF_JOBS, 'build-gate'):
+    expected_jobs = {'authz', 'changes', 'preflight', 'preflight-slow', *PROOF_JOBS, 'build-gate'}
+    for job in sorted(expected_jobs):
         if job not in jobs:
             findings.append(f'ci.yml is missing job {job}')
+    if set(jobs) - expected_jobs:
+        findings.append('ci.yml must keep only the pinned fast and full-event jobs')
+    for job in expected_jobs - {'authz', 'build', 'build-gate'}:
+        if _job_values(jobs.get(job, ''), 'name'):
+            findings.append(f'{job} must keep its default check name')
     # All repository work follows authz. Classification and preflight remain
     # separate: failed classification still runs proof, and fails the aggregate.
     if (_needs(jobs.get('changes', '')) != ['authz']
@@ -834,15 +958,36 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):
         findings.append('preflight must consume verifier_slow and default to all classes')
     verifier_step = _step_named(_steps(preflight), '      - name: Verify workflow wiring and source guards')
-    if _step_values(verifier_step, 'run') != [
-            'python3 scripts/ci_preflight.py --output-dir build-ci-preflight']:
-        findings.append('preflight must invoke its unfiltered event-aware stage plan')
+    if (_step_values(verifier_step, 'run') != [
+            'python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast']
+            or _step_values(verifier_step, 'if') != [AUTHZ_SUCCESS]):
+        findings.append('preflight must invoke only its fast stage plan')
+    # No dependency/toolchain installer or extra build-driving run may hide
+    # beside the pinned command. The only other run steps are refusal/linters.
+    preflight_steps = _steps(preflight)
+    linters = _step_named(preflight_steps, '      - name: Install workflow linters')
+    if (len(preflight_steps) != 5
+            or [_step_values(step, 'uses') for step in preflight_steps] != [
+                [], ['actions/checkout@v4'], [], [], ['actions/upload-artifact@v4']]
+            or _step_values(linters, 'run') != [PREFLIGHT_LINTER_RUN]
+            or any(_step_values(step, 'run') for step in preflight_steps
+                   if _step_values(step, 'uses'))):
+        findings.append('preflight must keep only checkout, linters, fast checks and diagnostics')
+    slow = jobs.get('preflight-slow', '')
+    slow_step = _step_named(_steps(slow), '      - name: Verify deferred preflight stages')
+    if (set(_needs(slow)) != {'authz', 'changes'} or len(_needs(slow)) != 2
+            or _job_values(slow, 'if') != [SLOW_PREFLIGHT_IF]
+            or _step_values(slow_step, 'if') != [AUTHZ_SUCCESS]
+            or _step_values(slow_step, 'run') != [
+                'python3 scripts/ci_preflight.py --output-dir build-ci-preflight-slow --tier slow']):
+        findings.append('preflight-slow must run all deferred stages on full events only')
     for job in PROOF_JOBS:
         if (set(_needs(jobs.get(job, ''))) != {'authz', 'changes'}
                 or len(_needs(jobs.get(job, ''))) != 2
-                or _job_values(jobs.get(job, ''), 'if') != [DOCS_ONLY_SKIP]):
+                or _job_values(jobs.get(job, ''), 'if') != [
+                    HEAVY_SKIP if job in HEAVY_JOBS else DOCS_ONLY_SKIP]):
             findings.append(f'{job} must start alongside preflight, after authz and changes, '
-                            'and skip only a docs-only change')
+                            'and skip only a docs-only change or its pinned PR deferral')
     changes = jobs.get('changes', '')
     if ('      docs_only: ${{ steps.classify.outputs.docs_only }}\n' not in changes
             or CLASSIFY_STEP not in changes + '\n'):
@@ -858,9 +1003,10 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
                 findings.append(f'{name} job {job} must not continue on error')
     gate = jobs.get('build-gate', '')
-    if GATE_NEEDS not in gate or '    if: always()' not in gate or '    name: build' not in gate:
+    if GATE_NEEDS not in gate or '    if: always()' not in gate or _job_values(gate, 'name') != ['build']:
         findings.append('build-gate must aggregate authz, every proof job, preflight and changes')
     for job, variable in (('authz', 'AUTHZ_RESULT'), ('changes', 'CHANGES_RESULT'), ('preflight', 'PREFLIGHT_RESULT'),
+                          ('preflight-slow', 'SLOW_PREFLIGHT_RESULT'),
                           *PROOF_JOBS.items()):
         if f'{variable}: ${{{{ needs.{job}.result }}}}' not in gate:
             findings.append(f'build-gate must read the result of {job}')
@@ -872,30 +1018,47 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     if '[[ "$PREFLIGHT_RESULT" == "success" ]]' not in gate or 'passed "$PREFLIGHT_RESULT"' in gate:
         findings.append('build-gate must require preflight success')
     for job, variable in PROOF_JOBS.items():
-        if f'passed "${variable}"' not in gate:
+        policy = 'deferred' if job in HEAVY_JOBS else 'passed'
+        if f'{policy} "${variable}"' not in gate:
             findings.append(f'build-gate must require {job} success or a docs-only skip')
     gate_steps = _steps(gate)
     if not gate_steps or _code(gate_steps[-1]) != _code(GATE_STEP):
         findings.append('build-gate must keep the exact result policy: success or a classified docs-only skip')
-    pr_flag = "${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}"
-    # D1 reverses the full-on-PR Release/kernel rule. Each allowed job has
-    # exactly one PR-only flag; every other event keeps the full population.
-    for job in ('build', 'kernel-only', 'sanitizers'):
-        original = jobs.get(job, '')
-        body = '\n'.join(_code(original))
-        verify_steps = [step for step in _steps(original)
-                        if _VERIFY_CALL.search(_counted_text(step))]
-        if (body.count(pr_flag) != 1 or body.count('--exclude-label') != 1
-                or len(verify_steps) != 1 or pr_flag not in _counted_text(verify_steps[0])):
-            findings.append(f'{job} must exclude exactly slow on PRs only, once')
+    build = jobs.get('build', '')
+    build_step = _step_named(_steps(build), '      - name: Verify (${{ matrix.build_type }})')
+    if (_step_values(build_step, 'run') != [BUILD_VERIFY_RUN]
+            or _step_values(build_step, 'if') != [AUTHZ_SUCCESS]
+            or _counted_text(build).count('scripts/ci_verify.py') != 1
+            or _counted_text(build).count('ctest --test-dir') != 1):
+        findings.append('build must run the fast Release smoke only on PRs and full profiles otherwise')
+    cache = _step_named(_steps(build), '      - name: Restore ccache')
+    save = _step_named(_steps(build), '      - name: Save main ccache')
+    if (_step_values(cache, 'uses') != ['actions/cache/restore@v4']
+            or _step_values(cache, 'id') != ['ccache-restore']
+            or _step_block(cache, 'with') != [
+                '        with:', '          path: ${{ env.CCACHE_DIR }}',
+                f'          key: {BUILD_CACHE_KEY}${{{{ github.sha }}}}',
+                '          restore-keys: |', f'            {BUILD_CACHE_KEY}']
+            or _step_values(save, 'uses') != ['actions/cache/save@v4']
+            or _step_values(save, 'if') != [BUILD_CACHE_SAVE]
+            or _step_block(save, 'with') != [
+                '        with:', '          path: ${{ env.CCACHE_DIR }}',
+                '          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}']):
+        findings.append('build must restore the main compiler cache by platform and build type')
+    pytest_step = _step_named(_steps(build), '      - name: Install the CTest pytest runner')
+    if _step_values(pytest_step, 'if') != [AUTHZ_FULL_SUCCESS]:
+        findings.append('build must install pytest only for the full profiles')
     for job, body in jobs.items():
-        if job not in ('build', 'kernel-only', 'sanitizers') and '--exclude-label' in body:
+        if '--exclude-label' in body or '--include-label' in body or '--class-tier' in body:
             findings.append(f'{job} must keep its full population')
-    if ci.count('--exclude-label') != 3:
-        findings.append('CI must carry exactly three PR-only slow exclusion flags')
-    if ('exclude_slow: ${{ github.event_name == \'pull_request\' }}' not in jobs.get('native-live', '')
+    if ('      exclude_slow: false' not in _code(jobs.get('native-live', ''))
             or _job_values(jobs.get('native-live', ''), 'uses') != ['./.github/workflows/native-live.yml']):
-        findings.append('native-live must receive the PR-only exclusion input')
+        findings.append('native-live must receive the full population input')
+    for job, mode in (('corpus-parity-subset', 'subset'), ('corpus-parity', 'full')):
+        body = jobs.get(job, '')
+        if (_job_values(body, 'uses') != ['./.github/workflows/corpus-parity.yml']
+                or _job_block(body, 'with') != [f'    with:', f'      mode: {mode}']):
+            findings.append(f'{job} must call corpus-parity.yml with mode {mode}')
     if ('cold_cache: ${{ inputs.cold_native_cache || false }}' not in jobs.get('native-live', '')
             or '      cold_native_cache:\n' not in events
             or '        type: boolean\n        default: false' not in events):
@@ -956,6 +1119,14 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or 'set_property(TEST ${_pf_slow_test} APPEND PROPERTY LABELS slow)' not in cmake
             or 'if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_slow_test})' not in cmake):
         findings.append('measured slow rows must keep one pinned CMake label list')
+    try:
+        rows = fast_rows(cmake)
+    except ValueError:
+        rows = []
+    if (hashlib.sha256(('\n'.join(rows) + '\n').encode()).hexdigest() != PR_FAST_ROWS_SHA256
+            or cmake.count('APPEND PROPERTY LABELS fast') != 1
+            or _code(cmake)[-len(_code(FAST_TEST_REGISTRATION)):] != _code(FAST_TEST_REGISTRATION)):
+        findings.append('PR fast rows must keep one pinned CMake label list and executable build target')
     return list(dict.fromkeys(findings))
 
 
@@ -1053,14 +1224,16 @@ def run_json_harness_command(source: Path) -> list[str]:
 
 
 def check_commands(source: Path, output: Path | None = None,
-                   *, env: dict[str, str] | None = None) -> list[tuple]:
+                   *, env: dict[str, str] | None = None, tier: str = 'all') -> list[tuple]:
+    if tier not in ('all', 'fast', 'slow'):
+        raise ValueError(f'unknown preflight tier: {tier}')
     output_dir = (source / 'build-ci-preflight') if output is None else output
     workflows = sorted(str(path) for path in (source / '.github/workflows').glob('*')
                        if path.suffix in ('.yml', '.yaml'))
     class_args = (['--class-tier', 'fast']
-                  if verifier_class_tier(os.environ if env is None else env) == 'fast'
+                  if tier == 'all' and verifier_class_tier(os.environ if env is None else env) == 'fast'
                   else [])
-    return [
+    commands = [
         ('shellcheck-version', ['shellcheck', '--version']),
         ('actionlint-runner-labels',
          [sys.executable, str(source / 'scripts/ci_preflight.py'),
@@ -1183,6 +1356,8 @@ def check_commands(source: Path, output: Path | None = None,
         ('doc-pine-coverage-tests',
          [sys.executable, str(source / 'scripts/test_check_pine_to_native_coverage.py')]),
     ]
+    return [entry for entry in commands
+            if tier == 'all' or (entry[0] in SLOW_PREFLIGHT_STAGES) == (tier == 'slow')]
 
 
 def _utc_now() -> str:
@@ -1256,6 +1431,7 @@ def run_checks(commands: list[tuple], output: Path, *, source: Path = ROOT) -> i
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build-ci-preflight')
+    parser.add_argument('--tier', choices=('all', 'fast', 'slow'), default='all')
     parser.add_argument('--check-docs-workflow', action='store_true')
     parser.add_argument('--self-test-docs-workflow', action='store_true')
     parser.add_argument('--check-ci-workflow', action='store_true')
@@ -1285,8 +1461,8 @@ def main() -> int:
         for finding in findings:
             print(finding)
         if not findings:
-            print('CI workflow contract: PR exclusions, full events, docs-only skip, statuses, '
-                  'slow rows, runners and time limits OK')
+            print('CI workflow contract: PR smoke, full events, docs-only skip, statuses, '
+                  'fast/slow rows, runners and time limits OK')
         return 1 if findings else 0
     if args.check_docs_workflow or args.self_test_docs_workflow:
         workflow = (ROOT / '.github/workflows/docs.yml').read_text()
@@ -1304,8 +1480,8 @@ def main() -> int:
                      'v=subprocess.check_output(["actionlint","-version"],text=True).splitlines()[0]; '
                      f'print("actionlint "+v); sys.exit(0 if v == {ACTIONLINT_VERSION!r} else 1)']
     output_dir = args.output_dir.resolve()
-    return run_checks([('actionlint-version', version_check),
-                       *check_commands(ROOT, output_dir)],
+    return run_checks([*([('actionlint-version', version_check)] if args.tier != 'slow' else []),
+                       *check_commands(ROOT, output_dir, tier=args.tier)],
                       output_dir)
 
 
