@@ -457,7 +457,8 @@ class WiringTests(TempCase):
 
     def test_ci_that_runs_the_gate_on_a_pull_request_is_refused(self):
         found = self.findings(**{'.github/workflows/ci.yml': [
-            ("github.event_name != 'pull_request' && (needs.changes.result", '(needs.changes.result')]})
+            ("github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name"
+             " == github.repository", "github.event_name == 'push'")]})
         self.assertTrue(any('excludes pull_request' in finding for finding in found), found)
 
     def test_a_release_job_that_stops_needing_the_gate_is_refused(self):
@@ -491,11 +492,14 @@ class WiringTests(TempCase):
         self.assertTrue(any('must stand alone' in finding for finding in found), found)
 
     def test_a_failure_swallowed_by_true_is_refused(self):
+        # The census run block gained a positive-count summary check after this
+        # anchor was written; anchor on the run line itself so the mutation stays
+        # a one-character-class change (`|| true`) inside the gate command.
         found = self.findings(**{'.github/workflows/flat-peak.yml': [(
-            '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache\n\n      - name: Retain gate diagnostics\n        if: always()\n'
-            '        uses: actions/upload-artifact@v4\n        with:\n          name: flat-peak-census',
-            '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache || true\n\n      - name: Retain gate diagnostics\n'
-            '        if: always()\n        uses: actions/upload-artifact@v4\n        with:\n          name: flat-peak-census')]})
+            'python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census '
+            '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache',
+            'python3 scripts/ci_flat_peak_gate.py census --build-dir build-flat-peak-census '
+            '--jobs "$(getconf _NPROCESSORS_ONLN)" --ccache || true')]})
         self.assertTrue(any('must not tolerate a failure' in finding for finding in found), found)
 
     def test_a_dropped_arm_is_refused(self):
