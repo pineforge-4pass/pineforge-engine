@@ -32,9 +32,115 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 `grid_search_repro.py` runs a multi-parameter grid search in memory, through Python ctypes FFI, on the compiled C++ shared library for `021-composite-scalping-integration-01`: an EMA-cross scalper with take-profit and stop-loss exits in ticks. The sweep covers 27 combinations: Fast EMA 3/5/7 × Slow EMA 11/13/15 × take profit 10/15/20 ticks, with the stop loss held at its default of 7 ticks.
 
+The CR-150 HPO host requires a module built with `hpo_bridge.cpp` and the integrated
+report-output/v1 and scratch-window implementations. It fills one shared OHLCV
+array directly from a second CSV pass, selects `OutputModeV1::Summary` on every
+fresh trial, installs a fixed resident-window manifest, and reads frozen metrics
+and logical trade/point counts. Trials create no full report object. Legacy
+modules missing the contract fail before any trial; the host cannot fall back to
+retaining a curve.
+
+On the lab, build the bridge-enabled slot and pass its path explicitly:
+
+```bash
+cmake -S benchmarks/throughput -B build-hpo -DCMAKE_BUILD_TYPE=Release
+cmake --build build-hpo --target pineforge_hpo_grid -j4
+python3 benchmarks/throughput/grid_search_repro.py --library build-hpo/lib/libpineforge_hpo_grid.so
+```
+
+Use the corresponding module suffix/path emitted by CMake on macOS. Existing
+module builds can include `benchmarks/throughput/hpo_bridge.cmake` and call
+`pineforge_attach_hpo_bridge(the_strategy_target)` after creating their target.
+The bridge must link into that same module and runtime. Its new C symbols are
+benchmark exports; the engine's public C layouts and ABI version remain unchanged.
+The resident-window budget is a cache geometry, with exact history handled by
+the shared table implementation; it is never a limit on accepted bars or trades.
+
 - **Best configuration:** Fast EMA = 3, Slow EMA = 15, take profit = 20 ticks
 - **Net profit:** **−103.16 USDT**. The probe is a mechanism test, not a profitable strategy: every combination loses. The sweep demonstrates the FFI loop, not an edge.
 - **Trade count:** 5,153 trades over 53,929 bars of 15m ETHUSDT (recorded 2026-09-29 at engine `35db01c8`, as at `e9ad37dd` on 2026-09-22)
+
+### CR-220: streamed TrialRecords, top-k retention and `--ohlcv-bin`
+
+| Option | Meaning |
+|---|---|
+| `--trial-log PATH` | Append one fixed-size `TrialRecord` per finished trial and flush it before the next trial starts. The file is created exclusively: an existing path is refused, never truncated. |
+| `--trial-log-max-bytes N` | Per-run byte cap for `--trial-log`, the 64-byte header included (default 1 GiB). Must be a positive integer. A record that would cross the cap is refused with a typed `TrialLogCapError` before it is written, and the sweep aborts with a non-zero exit. |
+| `--top-k K` | Retain at most K records in memory for the final ranking (default 10). Must be a positive integer (argparse refuses 0, negatives and non-integers with exit 2). Ties are broken by the lower trial index, so `--top-k 1` reproduces the old first-wins best, including its printed `Best Profit` line. A failed trial, a NaN and an `-inf` net profit never enter the ranking (the old scan compared strictly against its `-inf` initial best), so `--top-k 1` is exactly the old scan. |
+| `--ohlcv-bin PATH` | Read the shared bar array from a `pf_bar_t/v1` file instead of `--ohlcv-csv`. The two options are mutually exclusive. The CSV loader refuses a zero-data-row file (header only, empty, or only blank/short rows) with exit 1 and a message; every non-empty CSV loads exactly as before. |
+
+**Record layout** — little-endian, fixed offsets, no on-disk padding. A 64-byte
+header (`b"PFTRIAL\x01"`, version 1, record size 128, 8 parameter slots) is
+followed by 128-byte records in trial order:
+
+| Offset | Type | Field |
+|---:|---|---|
+| 0 | uint32 | trial index (0-based, strictly increasing) |
+| 4 | uint32 | status: 0 = ok, 1 = failed |
+| 8 | float64 | net profit (IEEE bits preserved; NaN on failure) |
+| 16 | int64 | total trades (−1 on failure) |
+| 24 | uint32 | parameter count |
+| 28 | uint32 | reserved, zero |
+| 32 | 32 bytes | SHA-256 of the trial's 768-byte raw metrics block (zeros on failure) |
+| 64 | 8 × float64 | parameter values; unused slots are 0.0 |
+
+A failed trial is written with its status and then the sweep re-raises, so it
+can never enter the ranking. The record carries the metrics *digest*, not the
+768 bytes, so the file grows by exactly 128 bytes per trial.
+
+**Disk cap.** `--trial-log-max-bytes N` (default `2**30` = 1 GiB) counts the
+64-byte header. Each record is exactly 128 bytes, so the cap converts to trials
+by arithmetic: `(1 GiB - 64) / 128 = 8,388,607` whole records fit after the
+header, and the next record is refused. Before writing a record the host
+compares `written_bytes + 128` with the cap; if it would cross, it flushes
+what is on disk and raises a typed `TrialLogCapError` (a subclass of
+`TrialLogError`, the host's trial-log I/O error family) carrying
+`.written_bytes`, `.cap_bytes` and `.trial_index`. The crossing record is never
+written — not partially, not silently dropped, and the file is never truncated
+or rotated — so `iter_trial_log` still reads every record that was written and
+the file size is exactly `64 + written_records * 128`. A cap smaller than the
+header is refused before the file is created, and a non-positive or
+non-integer value is refused by argparse.
+
+**Removal policy.** The log is a **caller-owned artifact**: the caller named
+the path and the sweep created it exclusively (`"xb"`; an existing path is
+refused, never truncated). The host never deletes it — not on success, not on
+a failed sweep, and not on a capped one — and without `--trial-log` no file
+exists at all. This is deliberately different from the engine's CR-150 scratch
+files (`include/pineforge/detail/scratch_file.hpp:29-70`), which are
+run-owned, anonymous and unlinked at creation, so they vanish with the run:
+the engine created those for itself. The trial log exists because the caller
+asked for it as the sweep's result, so it belongs to whoever named it and
+outlives the sweep.
+
+**Memory.** Retained host state is **O(k)**: the k-entry ranking heap plus fixed
+scalars. The log lives on disk; the shared bar array is O(B) and allocated once;
+no list or dict of per-trial results is kept. Nothing in the sweep retains N
+records.
+
+**`--ohlcv-bin` decoding.** Headerless 48-byte records `struct "<5dq"` — open,
+high, low, close, volume as little-endian binary64, then the bar-open timestamp
+as a little-endian int64 Unix millisecond — per `docs/design/BARS-BIN-INPUT.md`
+section 1. The file is mapped read-only and copied into one contiguous
+`pf_bar_t` array with `from_buffer_copy`; no per-row Python object is built.
+The host refuses, with a typed `BarsBinError` (a `ValueError` with a `reason`
+code): a non-regular or missing file (`not_a_file`), a size that is not a
+multiple of 48 (`size_not_multiple_of_48`), an empty file (`empty`), more than
+2³¹−1 bars (`too_many_bars`), and a host whose `pf_bar_t` is not the 48-byte
+little-endian wire record (`host_layout`).
+
+```bash
+python3 benchmarks/throughput/grid_search_repro.py \
+    --library build-hpo/lib/libpineforge_hpo_grid.so \
+    --ohlcv-bin bars.bin --trial-log run.trials --top-k 10
+```
+
+**Not done here.** The sidecar (`PATH.json`, `"format": "pf_bar_t/v1"`) is not
+read or verified, and no digest is recomputed: the HPO decoder validates file
+size, non-emptiness and host layout only. There is no big-endian byte swapping
+(such hosts are refused), no parallel or resumable sweep, and no consumer of
+`--trial-log` inside this repository — external HPO/APP drivers are outside
+this repo and remain the report's UNPLACED boundary.
 
 ---
 
@@ -42,7 +148,7 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 1. **`reproduce.sh`**: The end-to-end automation bash script.
 2. **`plot_quartile.py`**: Python script using NumPy and Matplotlib to parse benchmark JSON, calculate exact throughput quartiles, and generate the boxplot chart (`throughput_quartiles.png`).
-3. **`grid_search_repro.py`**: Multi-parameter grid search optimizer script using ctypes FFI to sweep parameters on the compiled `021-composite-scalping-integration-01` library.
+3. **`grid_search_repro.py`**: Multi-parameter grid search optimizer script using ctypes FFI to sweep parameters on the compiled `021-composite-scalping-integration-01` library. It streams one fixed-size trial record per trial (`--trial-log`), keeps only the top-k records in memory (`--top-k`, default 10), and reads bars from either `--ohlcv-csv` or a `pf_bar_t/v1` `--ohlcv-bin` file.
 
 ---
 
