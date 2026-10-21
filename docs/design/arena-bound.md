@@ -155,7 +155,7 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 
 | Declaration / native fact | Sizing consequence and evidence |
 | --- | --- |
-| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset, as the `max_open_lots` comment and surrounding projection at `src/source/pine_adapter.cpp:2742` state. Do not assume this caps strategy.order or use it as an unconditional H. |
+| pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2661`). Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:2842`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:67`. The native point budget is a callback bound, not a total fill bound. |
 | max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7765`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
@@ -338,7 +338,7 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Position tail | (30+L)*T | L18 sibling footer evidence described below; absent from this base |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `include/pineforge/source/pine_adapter.hpp:2598` |
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6377`; `include/pineforge/detail/disk_id_table.hpp:109` |
-| Sequence minima data | (40+L)*D + (40+2*L)*Q | `include/pineforge/detail/id_pair_store.hpp:140`; `sequence_index_` `include/pineforge/source/pine_adapter.hpp:934` |
+| Sequence minima data | (40+L)*D + (40+2*L)*Q | `include/pineforge/detail/id_pair_store.hpp:140` |
 | Sequence minima index | indexPeak(D+Q) | `include/pineforge/detail/id_pair_store.hpp:403` |
 | Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` `include/pineforge/source/pine_adapter.hpp:933`; `remember_erased` `src/source/pine_adapter.cpp:854` |
 | Erased minima index | indexPeak(D+Q) | `include/pineforge/detail/id_pair_store.hpp:403` |

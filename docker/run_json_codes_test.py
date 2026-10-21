@@ -238,10 +238,19 @@ def line_of(out):
 def harness(tmp_path, monkeypatch):
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
+    native_cdll = ctypes.CDLL
 
     def run(lib, *extra, ohlcv=None, cdll=None):
         argv = ["run_json.py", "--so", "fake.so", "--ohlcv", str(ohlcv or tape), *extra]
-        monkeypatch.setattr(ctypes, "CDLL", cdll or (lambda path: lib))
+        strategy_cdll = cdll or (lambda path: lib)
+
+        def load(path, *args, **kwargs):
+            # Report artifacts use the process libc with use_errno=True.
+            # Only the strategy library is a fixture.
+            return (native_cdll(path, *args, **kwargs) if path is None
+                    else strategy_cdll(path, *args, **kwargs))
+
+        monkeypatch.setattr(ctypes, "CDLL", load)
         monkeypatch.setattr(sys, "argv", argv)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -516,7 +525,9 @@ def test_a_report_write_error_adds_no_failure_line(tmp_path, monkeypatch, error)
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
     lib = fake_lib()
-    monkeypatch.setattr(ctypes, "CDLL", lambda path: lib)
+    native_cdll = ctypes.CDLL
+    monkeypatch.setattr(ctypes, "CDLL", lambda path, *args, **kwargs: (
+        native_cdll(path, *args, **kwargs) if path is None else lib))
     out, err = FailingStdout(error), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         status = run_json.main(["--so", "fake.so", "--ohlcv", str(tape)])
@@ -530,7 +541,9 @@ def test_a_report_write_error_adds_no_failure_line(tmp_path, monkeypatch, error)
 def test_a_closed_pipe_leaves_nothing_for_the_flush_at_exit(tmp_path, monkeypatch):
     tape = tmp_path / "tape.csv"
     tape.write_text(TAPE)
-    monkeypatch.setattr(ctypes, "CDLL", lambda path: fake_lib())
+    native_cdll = ctypes.CDLL
+    monkeypatch.setattr(ctypes, "CDLL", lambda path, *args, **kwargs: (
+        native_cdll(path, *args, **kwargs) if path is None else fake_lib()))
     read_end, write_end = os.pipe()
     os.close(read_end)  # the reader is gone: every write is EPIPE
     stdout, err = open(write_end, "w", encoding="ascii"), io.StringIO()

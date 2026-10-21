@@ -1,4 +1,4 @@
-"""CR-150 L9B: named-sink summaries checked against the frozen full producer.
+"""CR-150 L9B: named-sink summaries checked against the current array producer.
 
 Only native calls are replaced in the Python rows. The real reader, report
 assembly and JSON writer run unchanged. Native rows consume lab-built modules;
@@ -123,7 +123,7 @@ def read_reference(path):
 
 
 def project_summary(document, reference):
-    """Independent section-4.3 projection of the frozen producer's document."""
+    """Independent section-4.3 projection of the full producer's document."""
     expected = {}
     for key, value in document.items():
         if key == "trades":
@@ -140,15 +140,15 @@ def project_summary(document, reference):
 @pytest.mark.parametrize("outputs", [False, True])
 @pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
 def test_named_summary_matches_frozen_projection(
-        tmp_path, monkeypatch, frozen, outputs, pnls, arena_stats):
+        tmp_path, monkeypatch, outputs, pnls, arena_stats):
     """Fail-before: the base parser refuses --report-sink and emits no summary."""
     path = tmp_path / "report 漢.ndjson"
     spill = tmp_path / "spill"
     spill.mkdir()
     extra = ["--outputs"] if outputs else []
-    before = full.invoke(tmp_path, monkeypatch, frozen,
-                         library=full.SinkLibrary(
-                             outputs=outputs, pnls=pnls, arena_stats=arena_stats), extra=extra)
+    before = full.invoke(tmp_path, monkeypatch,
+                         library=full.without_report_sink(full.SinkLibrary(
+                             outputs=outputs, pnls=pnls, arena_stats=arena_stats)), extra=extra)
     library = SummaryLibrary(
         outputs=outputs, pnls=pnls, all_tags=outputs, arena_stats=arena_stats)
     after = full.invoke(tmp_path, monkeypatch, library=library,
@@ -156,6 +156,7 @@ def test_named_summary_matches_frozen_projection(
                                "--spill-dir", str(spill)],
                         forbid_output_arrays=outputs)
     assert before[0] == after[0] == 0 and before[2] == after[2] == "", after[1]
+    assert not before[3].installed
     reference = read_reference(path)
     expected = project_summary(json.loads(before[1]), reference)
     assert after[1] == json.dumps(expected, separators=(",", ":"), allow_nan=False) + "\n"
@@ -254,13 +255,15 @@ def test_bench_only_body_run_writes_named_path(tmp_path, monkeypatch):
 
 
 def test_full_mode_with_run_id_and_spill_keeps_frozen_bytes(
-        tmp_path, monkeypatch, frozen, arena_stats):
+        tmp_path, monkeypatch, arena_stats):
     before = full.invoke(
-        tmp_path, monkeypatch, frozen, library=full.SinkLibrary(arena_stats=arena_stats))
+        tmp_path, monkeypatch,
+        library=full.without_report_sink(full.SinkLibrary(arena_stats=arena_stats)))
     library = SummaryLibrary(arena_stats=arena_stats)
     after = full.invoke(tmp_path, monkeypatch, library=library,
                         extra=["--run-id", "caller id", "--spill-dir", str(tmp_path)])
     assert before[0] == after[0] == 0 and before[2] == after[2] == ""
+    assert not before[3].installed
     assert after[1] == before[1]
     assert library.descriptors[0][1:] == ("caller id", str(tmp_path))
     assert not Path(library.installed[0]).exists()
@@ -290,7 +293,7 @@ def test_sink_options_reject_invalid_c_strings_before_loading(tmp_path, monkeypa
 
 @pytest.mark.parametrize("outputs", [False, True])
 @pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
-def test_selected_mode_honours_named_sink(tmp_path, monkeypatch, frozen, outputs, pnls, arena_stats):
+def test_selected_mode_honours_named_sink(tmp_path, monkeypatch, outputs, pnls, arena_stats):
     # Import at call time: test_run_json_selected_sink imports this module's
     # read_reference and project_summary helpers.
     import test_run_json_selected_sink as selected_sinks
@@ -300,15 +303,16 @@ def test_selected_mode_honours_named_sink(tmp_path, monkeypatch, frozen, outputs
     run_id = 'selected "summary"\n漢'
     plan = selected_sinks.selected.full_plan()
     before = selected_sinks.invoke(
-        tmp_path, monkeypatch, runner=frozen, plan=plan, outputs=outputs,
-        library=selected_sinks.SelectedSinkLibrary(
-            plan, pnls=pnls, outputs=outputs, arena_stats=arena_stats))
+        tmp_path, monkeypatch, plan=plan, outputs=outputs,
+        library=full.without_report_sink(selected_sinks.SelectedSinkLibrary(
+            plan, pnls=pnls, outputs=outputs, arena_stats=arena_stats)))
     library = selected_sinks.NamedSinkLibrary(
         plan, pnls=pnls, outputs=outputs, arena_stats=arena_stats)
     after = selected_sinks.invoke(
         tmp_path, monkeypatch, plan=plan, outputs=outputs, library=library,
         extra=["--report-sink", str(path), "--run-id", run_id, "--spill-dir", str(spill)])
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, ""), (before[1], after[1])
+    assert not before[3].installed
     assert path.is_file()
     reference = read_reference(path)
     document, array = json.loads(after[1]), json.loads(before[1])
@@ -333,21 +337,18 @@ def test_selected_mode_honours_named_sink(tmp_path, monkeypatch, frozen, outputs
 
 
 def native_summary_compare(tmp_path, module, argv):
-    # full.NATIVE_DRIVER extends the frozen diagnostics from its explicit
-    # file-scratch fixture when W2's stats export is available; project every
-    # key below and retain the exact serialized-document comparison.
-    frozen_path = tmp_path / "frozen_run_json.py"
-    frozen_path.write_bytes(full._frozen_source_bytes())
+    # Project the current array report, including main's annualization and
+    # scratch diagnostics, and retain the exact document comparison.
     path = tmp_path / "native-report.ndjson"
     results = []
-    for mode, producer, extra in (
-        ("frozen", frozen_path, []),
-        ("stream", ROOT / "docker/run_json.py",
+    for mode, extra in (
+        ("array", []),
+        ("stream",
          ["--report-sink", str(path), "--run-id", "native proof", "--spill-dir", str(tmp_path)]),
     ):
         result = subprocess.run(
             [sys.executable, "-B", "-c", full.NATIVE_DRIVER, str(ROOT / "docker"),
-             str(producer), mode, "--so", str(module), *map(str, argv), *extra],
+             str(ROOT / "docker/run_json.py"), mode, "--so", str(module), *map(str, argv), *extra],
             cwd=ROOT, capture_output=True, text=True)
         assert result.returncode == 0 and result.stderr == "", (mode, result.stdout, result.stderr)
         results.append(json.loads(full.mask_bytes(result.stdout)))

@@ -110,17 +110,24 @@ def test_python_trade_curve_and_serialization_peak_is_flat(tmp_path):
 
 
 @pytest.mark.parametrize("outputs", [False, True])
-def test_ordinary_and_selected_route_bytes(tmp_path, monkeypatch, frozen, outputs):
+def test_ordinary_and_selected_route_bytes(tmp_path, monkeypatch, outputs):
     # Both ordinary (also the jailed entrypoint's producer) and selected
     # main() execute their actual assembly, cleanup and publication paths.
     extra = ["--outputs"] if outputs else []
-    before = ordinary.invoke(tmp_path, monkeypatch, frozen,
-                             library=ordinary.SinkLibrary(outputs=outputs), extra=extra)
+    before = ordinary.invoke(tmp_path, monkeypatch,
+                             library=ordinary.without_report_sink(
+                                 ordinary.SinkLibrary(outputs=outputs)), extra=extra)
     after = ordinary.invoke(tmp_path, monkeypatch,
                             library=ordinary.SinkLibrary(outputs=outputs), extra=extra)
+    assert not before[3].installed and after[3].installed
+    assert before[0] == after[0] == 0 and before[2] == after[2] == ""
     assert before[:3] == after[:3]
-    before = selected.invoke(tmp_path, monkeypatch, runner=frozen, outputs=outputs)
+    before = selected.invoke(tmp_path, monkeypatch, outputs=outputs,
+                             library=ordinary.without_report_sink(
+                                 selected.SelectedSinkLibrary(
+                                     selected.selected.full_plan(), outputs=outputs)))
     after = selected.invoke(tmp_path, monkeypatch, outputs=outputs)
+    assert not before[3].installed and after[3].installed
     assert before[0] == after[0] == 0 and before[2] == after[2] == ""
     assert selected.masked_bytes(before[1]) == selected.masked_bytes(after[1])
 
@@ -566,7 +573,8 @@ def test_automatic_sink_midwrite_failure_publishes_only_failure(tmp_path, monkey
         tmp_path, monkeypatch, library=library, extra=["--spill-dir", str(tmp_path)])
     assert artifacts and artifacts[0].size > artifacts[0].window
     assert status == 1 and stderr == ""
-    assert text == run_json.failure_line("report sink write failed", "report_sink_failed")
+    assert text == run_json.failure_line(
+        "report sink write failed", "report_sink_failed", {"reason": "scratch_io"})
     assert artifacts[0].closed and artifacts[0].buffer is None
     assert library.freed == library.installed
     assert not any(path.exists() for path in map(Path, library.installed))

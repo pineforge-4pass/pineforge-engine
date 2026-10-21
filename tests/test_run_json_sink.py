@@ -2,8 +2,8 @@
 
 The red commit is intentionally executable against the merged L2/L6b-1 base:
 the first test fails because main never installs the existing sink ABI. Native
-rows compare the frozen producer with the changed producer on the SAME real
-module, and forbid passing report arrays to the legacy builder. No builds or
+rows compare array and sink producers on the SAME real module, and forbid
+passing report arrays to the legacy builder on the sink route. No builds or
 tests were run on the executor Mac; CTest supplies the lab-built modules.
 """
 from __future__ import annotations
@@ -219,6 +219,18 @@ class SinkLibrary(bars.Library):
             self.path = None
 
 
+def without_report_sink(library):
+    """Exercise the current array producer through an older module's ABI.
+
+    R13 gives main's finite checks and annualization precedence over the
+    pre-merge oracle. Keep exact document comparisons between real routes.
+    """
+    for name in ("pf_report_sink_version", "strategy_set_report_sink_v1",
+                 "strategy_report_sink_receipt_v1"):
+        delattr(library, name)
+    return library
+
+
 def outputs_reader():
     manifest = {"series": [{"slot": 1, "output": "p", "encoding": "rgba-u32"},
                            {"slot": 0, "output": "p"}],
@@ -281,10 +293,11 @@ def invoke(tmp_path, monkeypatch, runner=run_json, *, library=None, extra=(), fo
 @pytest.mark.parametrize("outputs", [False, True])
 @pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
 def test_full_json_installs_sink_and_matches_frozen(
-        tmp_path, monkeypatch, frozen, outputs, pnls, arena_stats):
+        tmp_path, monkeypatch, outputs, pnls, arena_stats):
     extra = ["--outputs"] if outputs else []
-    before = invoke(tmp_path, monkeypatch, frozen,
-                    library=SinkLibrary(outputs=outputs, pnls=pnls, arena_stats=arena_stats),
+    before = invoke(tmp_path, monkeypatch,
+                    library=without_report_sink(SinkLibrary(
+                        outputs=outputs, pnls=pnls, arena_stats=arena_stats)),
                     extra=extra)
     after = invoke(tmp_path, monkeypatch,
                    library=SinkLibrary(outputs=outputs, pnls=pnls, arena_stats=arena_stats),
@@ -292,6 +305,7 @@ def test_full_json_installs_sink_and_matches_frozen(
     assert after[3].installed, "L9A missing: main never installs the available report-sink ABI"
     assert after[3].queried == 1
     assert (before[0], before[2], after[0], after[2]) == (0, "", 0, "")
+    assert not before[3].installed
     assert after[1] == before[1]  # fixed clock: not even wall-clock masks are needed
     for name in ARENA_DIAGNOSTICS:
         assert (name in json.loads(after[1])["diagnostics"]) == (arena_stats is not None)
@@ -505,21 +519,21 @@ NATIVE_FILE_SCRATCH_FIXTURE = r'''
 # These file-scratch comparisons install no arena, even if the parent has one.
 os.environ.pop("PF_SCRATCH_ARENA_FD", None)
 os.environ.pop("PF_SCRATCH_ARENA_BYTES", None)
-if sys.argv[3] == "frozen":
-    frozen_load = runner.load_strategy
-    frozen_builder = runner.build_report_dict
+if sys.argv[3] == "array":
+    # R13: compare current array and sink assembly on the same native module.
+    # Expose the older module ABI to the real loader's caller; every other
+    # native export, including scratch statistics, still comes from that module.
+    array_load = runner.load_strategy
+    class ArrayReportLibrary:
+        def __init__(self, library):
+            self.library = library
+        def __getattr__(self, name):
+            if name in ("pf_report_sink_version", "strategy_set_report_sink_v1",
+                        "strategy_report_sink_receipt_v1"):
+                raise AttributeError(name)
+            return getattr(self.library, name)
     def file_scratch_load(path):
-        lib = frozen_load(path)
-        if hasattr(lib, "pf_report_scratch_arena_stats"):
-            def expected_report(*args, **kwargs):
-                document = frozen_builder(*args, **kwargs)
-                # W2, batch-C head a2f3dfdb84: no attached arena means zero
-                # counters (src/c_abi.cpp:1332-1335), not measured byte values.
-                document["diagnostics"]["scratch_arena_high_water_bytes"] = 0
-                document["diagnostics"]["scratch_arena_bytes"] = 0
-                return document
-            runner.build_report_dict = expected_report
-        return lib
+        return ArrayReportLibrary(array_load(path))
     runner.load_strategy = file_scratch_load
 '''
 
@@ -543,15 +557,14 @@ raise SystemExit(runner.main(sys.argv[4:]))
 
 
 def native_compare(tmp_path, module, argv, *, binary=False, phase_fd=False):
-    frozen_path = tmp_path / "frozen_run_json.py"
-    frozen_path.write_bytes(_frozen_source_bytes())
     results = []
-    for mode, producer in (("frozen", frozen_path), ("stream", ROOT / "docker/run_json.py")):
+    for mode in ("array", "stream"):
         parent, child = socket.socketpair()
         try:
             phase_options = ["--run-phase-fd", str(child.fileno())] if phase_fd else []
             result = subprocess.run([sys.executable, "-B", "-c", NATIVE_DRIVER, str(ROOT / "docker"),
-                                     str(producer), mode, "--so", str(module), *map(str, argv), *phase_options],
+                                     str(ROOT / "docker/run_json.py"), mode, "--so", str(module),
+                                     *map(str, argv), *phase_options],
                                     cwd=ROOT, capture_output=True, text=True,
                                     pass_fds=(child.fileno(),) if phase_fd else ())
             child.close()

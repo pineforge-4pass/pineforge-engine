@@ -4211,7 +4211,7 @@ def _validate_report_result(out: dict, *, validate_summary: bool = True) -> None
             ("equity", "equity_curve.equity"),
             ("open_profit", "equity_curve.open_profit"),
         ):
-            if not math.isfinite(point[key]):
+            if point[key] is None or not math.isfinite(point[key]):
                 raise RunFailure(f"the report result {field} is not finite",
                                  "report_result_invalid",
                                  {"field": field, "reason": "nonfinite"})
@@ -6416,11 +6416,16 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
 
     def point_at(index):
         # Diagnostics need only the endpoints. Revisit the verified sink in
-        # bounded memory rather than retaining its equity history.
+        # bounded memory rather than retaining its equity history. Consume
+        # the pass through its trailer so records() checks its digest and
+        # closes the reader even when the requested point is the first one.
+        point = None
         for i, row in enumerate(sink.records("E")):
             if i == index:
-                return row.as_dict()
-        raise _engine_invariant("the report sink equity count differs from its receipt")
+                point = row.as_dict()
+        if point is None:
+            raise _engine_invariant("the report sink equity count differs from its receipt")
+        return point
 
     trades = _JSONRecordArray(
         lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])

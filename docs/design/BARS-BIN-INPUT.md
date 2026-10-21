@@ -402,7 +402,7 @@ selected-window `.bin` reader lands.
 | Loads `LIB` through the normal strategy-library/ABI checks. Constructs no strategy and reads no bar tape in this path. | `load_strategy` docker/run_json.py:2817; `_capabilities_main` docker/run_json.py:4706 |
 | Emits `bars_bin_version` only when the host is little-endian, `sizeof(BarC) == 48`, and the library has `strategy_set_symbol_facts`, `strategy_set_symbol_feed` and `strategy_set_symbol_feed_borrowed_v1`. Otherwise the field is absent, not `0` or `false`. | `byteorder` docker/run_json.py:4715; `hasattr` docker/run_json.py:4716; `_SYMBOL_FEED_SETTERS` docker/run_json.py:3309; `bars_bin_version` docker/run_json.py:4717 |
 | The binary capability is independent of the selected-window support result; it does not remove the CSV-chart requirement for selected windows. | `capabilities_record` docker/run_json.py:4712; `bars_bin_version` docker/run_json.py:4717; `_request_invalid` docker/run_json.py:5314 |
-| Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:4719; `selected_window_bars_bin_version` tests/test_run_json_bin.py:454 |
+| Always emits `capabilities.selected_window_bars_bin_version = 0`, including when the borrowed runtime export is absent. | `selected_window_bars_bin_version` docker/run_json.py:4719; `selected_window_bars_bin_version` tests/test_run_json_bin.py:460 |
 
 Version/info surfaces are separate: the C API exposes `pf_version_get`
 include/pineforge/pineforge.h:1712 and `pf_version_string`
