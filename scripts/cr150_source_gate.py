@@ -140,6 +140,19 @@ class Scopes:
                 elif re.fullmatch(r'(?:class|struct|union)\s+\w+(?:\s+final)?'
                                   r'(?:\s*:[^;{}()]*)?', header):
                     kind = 'class'
+                elif (re.fullmatch(r'(?:[A-Za-z_]\w*(?:::\w+)*[\s*&]+)+'
+                                   r'[A-Za-z_]\w*(?:::\w+)*\s*\([^;{}()]*\)'
+                                   r'\s*(?:const\s*)?(?:noexcept\s*)?', header)
+                      and not re.search(r'\b(?:class|struct|union|enum|namespace|extern|'
+                                        r'if|else|for|while|switch|catch|return|throw|new|delete|'
+                                        r'sizeof|alignas|decltype|using|typedef)\b', header)):
+                    kind = 'function'
+                elif not header or header in ('else', 'do', 'try'):
+                    kind = 'block'
+                elif ((control := re.match(
+                        r'(?:if(?:\s+constexpr)?|else\s+if|while|switch|catch)\s*\(', header))
+                      and _match_paren(header, control.end() - 1) == len(header) - 1):
+                    kind = 'block'
                 stack.append((f'{spelling} #{counts[parent, spelling]}', kind))
             elif ch == '}' and stack:
                 stack.pop()
@@ -155,6 +168,19 @@ class Scopes:
     def nonlocal_at(self, pos: int) -> bool:
         return all(kind in ('namespace', 'class')
                    for kind in self.kinds[bisect_right(self.starts, pos) - 1])
+
+    def local_at(self, pos: int) -> bool:
+        """Prove a function body, crossing only recognized statement blocks.
+
+        Unknown headers (including decorated classes and linkage blocks) are
+        barriers. Their spelling still participates in the unchanged site path.
+        """
+        for kind in reversed(self.kinds[bisect_right(self.starts, pos) - 1]):
+            if kind == 'function':
+                return True
+            if kind != 'block':
+                return False
+        return False
 
     def class_at(self, pos: int) -> bool:
         kinds = self.kinds[bisect_right(self.starts, pos) - 1]
@@ -661,8 +687,9 @@ def load_site_inventory(root: Path, manifest: Manifest) -> dict[tuple, dict]:
             raise GateError('site inventory record must be a map')
         _need(record, ('file', 'symbol', 'scope', 'cls', 'spelling', 'ordinal'),
               'site inventory record')
-        for field in ('file', 'symbol', 'spelling'):
-            _text(record[field], 'site inventory record', field)
+        for field in ('file', 'symbol'):
+            _text(record[field], 'site inventory record', field, placeholder_ok=True)
+        _text(record['spelling'], 'site inventory record', 'spelling')
         _str_list(record['scope'], 'site inventory record', 'scope', nonempty=False)
         if record['cls'] not in OP_CLASSES or not isinstance(record['ordinal'], int) \
                 or isinstance(record['ordinal'], bool) or record['ordinal'] < 1:
@@ -1009,6 +1036,14 @@ def _guarded_push(site: Site, code: str) \
             (base + size_start, base + size_end))
 
 
+def _directives(text: str):
+    """Read directives from code only; C++17's %: digraph also means #."""
+    for code, _, literal in cxxlex.lex_lines(text):
+        marker = re.match(r'\s*(?:#|%:)', code)
+        if marker:
+            yield '#' + code[marker.end():], literal
+
+
 def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
                    texts: dict[str, str], manifest: Manifest) -> list[tuple[str, int, str]]:
     """Fail closed outside the small enforced form; annotation alone never passes."""
@@ -1025,12 +1060,10 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
     fixed = manifest.fixed[bound]
     if fixed['definition'] not in texts:
         return [finding(first, 'fixed-input definition is outside the scanned source files')]
-    lexed = {rel: Scanner._lex(text)[0] for rel, text in texts.items()}
+    lexed = {rel: Scanner._lex(text) for rel, text in texts.items()}
     fixed_header = str(fixed['definition']).removeprefix('include/')
     for rel in {entry['file'], fixed['definition']}:
-        for directive, _, literal in cxxlex.lex_lines(texts[rel]):
-            if not directive.lstrip().startswith('#'):
-                continue
+        for directive, literal in _directives(texts[rel]):
             if re.fullmatch(r'\s*#\s*pragma\s+once\s*', directive):
                 continue
             if re.fullmatch(r'\s*#\s*include\s*<(?:vector|cstddef|cstdint)>\s*', directive):
@@ -1040,16 +1073,25 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
                 continue
             return [finding(first, 'macro/conditional preprocessing or unsupported includes '
                             'are outside guarded bounded admission')]
+    macro_names = {'push_back', 'emplace_back', 'size', entry['symbol'], bound}
+    for rel, text in texts.items():
+        for directive, _ in _directives(text):
+            definition = re.match(r'#\s*define\s+([A-Za-z_]\w*)', directive)
+            if definition and definition.group(1) in macro_names:
+                return [finding(first, f'scanned file {rel} defines macro '
+                                f'{definition.group(1)!r} used by guarded bounded admission')]
     declarations = [s for s in group if s.cls == 'decl']
     if len(declarations) != 1:
         return [finding(first, 'guarded admission requires exactly one local scalar-vector declaration')]
     declaration = declarations[0]
-    code = lexed[declaration.file]
+    code = lexed[declaration.file][0]
     scalar = (r'(?:bool|char|float|double|(?:std::)?u?int(?:8|16|32|64)_t|'
               r'(?:unsigned\s+|signed\s+)?(?:int|short|long(?:\s+long)?))')
     empty = re.match(rf'std::vector\s*<\s*{scalar}\s*>\s+(?P<symbol>{re.escape(entry["symbol"])})'
                      r'\s*(?:;|\{\s*\}\s*;)', code[declaration.pos:])
-    if empty is None or Scopes(code).nonlocal_at(declaration.pos):
+    prefix_start = max(code.rfind(ch, 0, declaration.pos) for ch in ';{}') + 1
+    if (empty is None or not Scopes(code).local_at(declaration.pos)
+            or re.search(r'\bextern\b', code[prefix_start:declaration.pos])):
         return [finding(declaration, 'guarded admission requires an initially empty local '
                         'std::vector of scalar values; member/global/initialized containers stay OPEN')]
     issues = []
@@ -1070,31 +1112,33 @@ def bounded_issues(entry: dict, group: list[Site], sites: list[Site],
         if site.scope[:len(declaration.scope)] != declaration.scope:
             issues.append(finding(site, 'growth is outside the matched declaration scope'))
             continue
-        guard = _guarded_push(site, lexed[site.file])
+        guard = _guarded_push(site, lexed[site.file][0])
         if isinstance(guard, str):
             issues.append(finding(site, guard))
         else:
             symbol_spans.update(guard[2:])
             if guard[0] != bound:
                 issues.append(finding(site, f'guard bound {guard[0]!r} does not match declared bound {bound!r}'))
-    for match in re.finditer(rf'\b{re.escape(entry["symbol"])}\b', code):
-        if match.span() not in symbol_spans:
-            issues.append(finding(declaration, 'container has an unsupported use or shadow '
-                                  'outside its declaration/direct size-guarded pushes; aliases '
-                                  'and other mutation paths are not admitted'))
-            break
+    for rel, (body, starts) in lexed.items():
+        for match in re.finditer(rf'\b{re.escape(entry["symbol"])}\b', body):
+            if rel != declaration.file or match.span() not in symbol_spans:
+                issues.append((rel, Scanner._line(starts, match.start()),
+                               f'bounded entry {eid}: container has an unsupported use or shadow '
+                               'outside its declaration/direct size-guarded pushes; aliases '
+                               'and other mutation paths are not admitted'))
+                break
     # Do not resolve shadowing with a new C++ parser. Refuse a fixed name used
     # anywhere except its immutable declaration and recognized push guards.
     allowed = {(fixed['definition'], *fixed['_name_span'])}
     for site in sites:
         if site.cls == 'grow':
-            guard = _guarded_push(site, lexed[site.file])
+            guard = _guarded_push(site, lexed[site.file][0])
             if not isinstance(guard, str) and guard[0] == bound:
                 allowed.add((site.file, *guard[1]))
-    for rel, body in lexed.items():
+    for rel, (body, starts) in lexed.items():
         for match in re.finditer(rf'\b{re.escape(bound)}\b', body):
             if (rel, *match.span()) not in allowed:
-                issues.append((rel, Scanner._line(Scanner._lex(texts[rel])[1], match.start()),
+                issues.append((rel, Scanner._line(starts, match.start()),
                                f'bounded entry {eid}: fixed bound {bound!r} has an unsupported '
                                'use or shadow declaration outside its definition/size guards'))
     return issues

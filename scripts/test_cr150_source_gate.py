@@ -203,6 +203,38 @@ class PositiveControls(Tree):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(counts(proc)['PASS(bounded)'], 1)
 
+    def test_local_declaration_inside_recognized_blocks_is_admitted(self):
+        loop = LOOP_CPP.replace('    static std::vector',
+                                '    if (x > 0) {\n    {\n    static std::vector')
+        loop = loop.replace('\n}', '\n    }\n    }\n}')
+        self.build(self.clean_entries(), loop=loop)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 1)
+
+    def test_local_declaration_in_a_member_function_is_admitted(self):
+        loop = LOOP_CPP.replace('void on_bar', 'struct Callbacks {\nvoid on_bar') + '};\n'
+        self.build(self.clean_entries(), loop=loop)
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 1)
+
+    def test_empty_brace_initializer_is_admitted(self):
+        self.build(self.clean_entries(), loop=LOOP_CPP.replace('slots_;', 'slots_{};'))
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(counts(proc)['PASS(bounded)'], 1)
+
+    def test_placeholder_words_are_valid_inventory_symbols(self):
+        for symbol in ('rows', 'none', 'unknown', 'todo'):
+            with self.subTest(symbol):
+                self.build([entry('E1', symbol=symbol, ops=['decl'], state='unreviewed')],
+                           loop=f'void f() {{ std::vector<int> {symbol}; }}\n')
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertEqual(counts(proc)['findings'], 0)
+                self.assertEqual(counts(proc)['OPEN'], 1)
+
     def test_pending_flat_memory_is_reported_open_never_pass(self):
         self.build([entry('E1', state='pending-flat-memory')])
         proc = self.gate()
@@ -574,6 +606,50 @@ class GuardedBounds(Tree):
         self.rejected(UNCAPPED_RING_CPP.replace('reserve(kRingSlots)', 'reserve(65)'),
                       'initially empty local')
 
+    def test_decorated_class_members_are_not_local(self):
+        members = '''\
+    std::vector<double> slots_;
+    void on_bar(double x) {
+        if (slots_.size() < kRingSlots) slots_.push_back(1.0);
+    }
+'''
+        for header, close in (
+                ('template <typename T> struct X', '};'),
+                ('class PF_API X', '};'),
+                ('struct alignas(64) X', '};'),
+                ('struct Outer { public: struct X', '}; };')):
+            with self.subTest(header):
+                loop = '#include <vector>\n#include "pineforge/fixed.hpp"\n' \
+                       + header + ' {\n' + members + close + '\n'
+                self.rejected(loop, 'initially empty local')
+
+    def test_local_class_members_do_not_inherit_the_outer_function_scope(self):
+        loop = LOOP_CPP.replace('void on_bar(double x) {\n    static std::vector<double> slots_;',
+                                'void f() { struct X {\n    std::vector<double> slots_;\n'
+                                '    void on_bar(double x) {') + '}; }\n'
+        self.rejected(loop, 'initially empty local')
+
+    def test_unknown_scopes_do_not_inherit_the_outer_function_scope(self):
+        for header in ('auto invoke = []', 'if (x > 0) auto invoke = []()'):
+            with self.subTest(header):
+                loop = LOOP_CPP.replace('    static std::vector',
+                                        f'    {header} {{\n    static std::vector')
+                loop = loop.replace('\n}', '\n    };\n}')
+                self.rejected(loop, 'initially empty local')
+
+    def test_extern_linkage_block_is_not_a_local_scope(self):
+        loop = LOOP_CPP.replace('void on_bar(double x) {\n    static std::vector<double> slots_;',
+                                'extern "C" {\nstd::vector<double> slots_;\n'
+                                'void on_bar(double x) {') + '}\n'
+        self.rejected(loop, 'initially empty local')
+
+    def test_block_scope_extern_is_not_an_empty_local_definition(self):
+        self.rejected(LOOP_CPP.replace('static std::vector', 'extern std::vector'),
+                      'initially empty local')
+
+    def test_nonempty_local_initializer_is_not_bounded(self):
+        self.rejected(LOOP_CPP.replace('slots_;', 'slots_(100);'), 'initially empty local')
+
     def test_uncapped_repeated_push_is_not_bounded(self):
         self.rejected(LOOP_CPP.replace('if (slots_.size() < kRingSlots) ', ''),
                       'no direct own-size guard')
@@ -620,6 +696,20 @@ class GuardedBounds(Tree):
                     entries += [entry('E2', symbol='alias', ops=['grow'], state='unreviewed')]
                 self.rejected(loop, 'unsupported|no direct own-size guard', entries=entries)
 
+    def test_container_uses_in_other_scanned_files_are_not_admitted(self):
+        self.build(self.clean_entries())
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        self.assertEqual(counts(control)['PASS(bounded)'], 1)
+        write_tree(self.root, {'src/other.cpp': 'void f() { consume(slots_); }\n'})
+        proc = self.gate()
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r'FINDING src/other.cpp:1: bounded entry E1: '
+                         r'container has an unsupported use or shadow')
+        self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+        self.assertNotIn('NEW ', proc.stdout)
+        self.assertNotIn('no manifest entry', proc.stdout)
+
     def test_shadowing_the_fixed_input_is_not_admitted(self):
         loop = LOOP_CPP.replace('static std::vector<double> slots_;',
                                 'int kRingSlots = 100;\n    static std::vector<double> slots_;')
@@ -632,11 +722,55 @@ class GuardedBounds(Tree):
                               'numeric literal push argument')
 
     def test_macro_expansion_is_not_treated_as_a_guard_proof(self):
-        self.rejected('#define push_back(x) insert(end(), 65, x)\n' + LOOP_CPP,
-                      'macro/conditional preprocessing')
+        for directive in ('#define push_back(x) insert(end(), 65, x)',
+                          '%:define push_back(x) resize(1u << 30)'):
+            with self.subTest(directive):
+                self.rejected(directive + '\n' + LOOP_CPP, 'macro/conditional preprocessing')
+
+    def test_macros_in_other_scanned_files_cannot_rewrite_a_header_entry(self):
+        header_file = 'include/pineforge/loop.hpp'
+        header = '#pragma once\n' + LOOP_CPP
+        consumer = '#define unrelated(x) x\n#include "pineforge/loop.hpp"\n'
+        self.build([entry('E1', file=header_file, state='bounded')], loop=consumer)
+        write_tree(self.root, {
+            header_file: header,
+            SITE_INVENTORY_REL: inventory_text({
+                header_file: header, 'src/loop.cpp': consumer,
+                'include/pineforge/fixed.hpp': FIXED_HPP})})
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        self.assertEqual(counts(control)['PASS(bounded)'], 1)
+        for marker in ('#', '%:'):
+            for definition in ('push_back(x) resize(1u << 30)',
+                               'emplace_back(x) resize(1u << 30)', 'size() 0',
+                               'slots_ replaced_slots', 'kRingSlots 100'):
+                with self.subTest(marker=marker, definition=definition):
+                    (self.root / 'src/loop.cpp').write_text(
+                        f'{marker}define {definition}\n' + consumer)
+                    proc = self.gate()
+                    self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                    self.assertRegex(proc.stdout, r'FINDING .*bounded entry E1: '
+                                     r'scanned file src/loop.cpp defines macro')
+                    self.assertEqual(counts(proc)['PASS(bounded)'], 0)
+                    self.assertNotIn('NEW ', proc.stdout)
 
 
 class FailClosed(Tree):
+    def test_inventory_spelling_cannot_be_empty_or_a_placeholder(self):
+        self.build(self.clean_entries())
+        control = self.gate()
+        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+        path = self.root / SITE_INVENTORY_REL
+        original = path.read_text()
+        for spelling in ('', 'TODO', '?', 'none', 'unknown'):
+            with self.subTest(spelling):
+                inventory = json.loads(original)
+                inventory['sites'][0]['spelling'] = spelling
+                path.write_text(json.dumps(inventory))
+                proc = self.gate()
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                self.assertIn('field spelling is empty or a placeholder', proc.stdout)
+
     def test_missing_site_inventory_exits_2_instead_of_rebaselining(self):
         self.build(self.clean_entries())
         proc = self.gate()
