@@ -11,6 +11,9 @@
 #include <pineforge/compat/pine/order_priority.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
 #include <pineforge/source/market_admission.hpp>
+#include <pineforge/detail/disk_resident_id_table.hpp>
+#include <pineforge/detail/id_pair_store.hpp>
+#include <pineforge/detail/adapter_exposure_storage.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -22,6 +25,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -35,6 +39,7 @@ using SourceId = std::string;
 
 class PineStrategyHost;
 class PineScheduler;
+namespace detail { class PositionTailSpill; }
 
 // R5 lane V19-E: v4 folds the adapter's live state -- the placement rows it
 // still holds, compact records of the erased ones, the pending queues -- and
@@ -637,6 +642,10 @@ public:
     PlacementTable(PlacementTable&&) noexcept = default;
     PlacementTable& operator=(PlacementTable&&) noexcept = default;
 
+    void set_auxiliary_tables_directory(const std::string& directory);
+    void bind_auxiliary_scratch_tables(const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
+    void fixture_use_memory_auxiliary_tables();
+    std::uint64_t auxiliary_disk_bytes() const noexcept;
     std::size_t size() const noexcept { return size_; }
     std::size_t max_size() const noexcept { return window_.max_size(); }
     // Largest incarnation ever inserted, erased rows included. Incarnations
@@ -660,8 +669,6 @@ public:
         high_water_ = 0;
         erased_rows_ = 0;
         erased_digest_ = kFoldBasis;
-        sequence_index_.clear();
-        std::vector<std::uint64_t>().swap(unfolded_);
         erased_minima_.clear();
         erased_foreign_ids_.clear();
 #if PINEFORGE_PLACEMENT_AUDIT
@@ -767,44 +774,41 @@ public:
             overwrite(*node, std::forward<Args>(args)...);
         }
         PlacementSnapshot* row = node.get();
-        // Named for the per-id index before it is placed, so a failed
-        // placement leaves both as they were.
-        unfolded_.push_back(incarnation);
-        try {
-            place(incarnation, std::move(node));
-        } catch (...) {
-            unfolded_.pop_back();
-            if (unfolded_.empty()) std::vector<std::uint64_t>().swap(unfolded_);
-            throw;
-        }
+        place(incarnation, std::move(node));
         ++size_;
         high_water_ = std::max(high_water_, incarnation);
         return {iterator(this, incarnation, row), true};
     }
 
-    // Replaces an existing row wholesale. Its identity fields may change, so
-    // the per-id index over the retained rows is rebuilt on the next lookup.
+    // Queries scan retained identities directly. Replacement has no scratch
+    // workset to refold/reserve, and never changes the erased minima.
     void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
         at(incarnation) = std::move(snapshot);
-        sequence_index_.clear();
-        std::vector<std::uint64_t>().swap(unfolded_);
-        for (const auto& row : *this) unfolded_.push_back(row.first);
+    }
+
+    // Borrow the complete retirement workset before touching any row, cohort
+    // side, bracket fact or digest. Duplicate single/pair keys are counted once.
+    template<class Enumerate>
+    void preflight_erased_rows(const Enumerate& enumerate) const {
+        erased_minima_.preflight_keys([&](const auto& emit) {
+            enumerate([&](const PlacementSnapshot& row) {
+                emit(Minima::KeyView{row.source_id, std::nullopt});
+                emit(Minima::KeyView{row.source_id, std::string_view(row.from_entry)});
+            });
+        });
     }
 
     // Erases a row. The compact records keep what later logic reads of it:
     // its command sequence under its (source_id, from_entry) and, for a
     // non-margin row, its source id. Returns false when no row is there.
     bool erase(std::uint64_t incarnation) {
+        const PlacementSnapshot* row = locate(incarnation);
+        if (!row) return false;
+        preflight_erased_rows([&](const auto& emit) { emit(*row); });
+        // Fold the admitted pair before taking the node as well: a disk I/O
+        // failure must not lose its retained-row query evidence.
+        fold_sequence(erased_minima_, *row);
         std::unique_ptr<PlacementSnapshot> node = take(incarnation);
-        if (!node) return false;
-        // A row that leaves before the next command-sequence lookup no longer
-        // belongs in the pending index fold. Release the allocation when the
-        // pending set becomes empty; retained rows stay the only live ids.
-        const auto pending_end = std::remove(unfolded_.begin(), unfolded_.end(), incarnation);
-        if (pending_end != unfolded_.end()) {
-            unfolded_.erase(pending_end, unfolded_.end());
-            if (unfolded_.empty()) std::vector<std::uint64_t>().swap(unfolded_);
-        }
         remember_erased(*node);
         --size_;
         ++erased_rows_;
@@ -825,10 +829,8 @@ public:
     // Smallest command_sequence among the rows ever inserted whose source_id
     // is `source_id`: over the rows bound to `from_entry` when any is, else
     // over all of them; UINT64_MAX when no row carried the id. The retained
-    // rows are folded into a per-id index the first lookup after they arrive
-    // (a row's source_id / from_entry / command_sequence is never written in
-    // place; only replace() rewrites a row, and it rebuilds the index), and
-    // an erased row was folded into the erased minima when it left.
+    // rows are scanned without a q cache; replace() rewrites their identity
+    // wholesale. Every erased row was folded into e when it left.
     std::uint64_t command_sequence_for(const std::string& source_id,
                                        const std::string& from_entry) const;
 
@@ -852,11 +854,11 @@ private:
     static constexpr std::size_t kSpareNodes = 64;
     static constexpr std::uint64_t kFoldBasis = 1469598103934665603ULL;
 
-    struct SequenceMinima {
-        std::uint64_t any = std::numeric_limits<std::uint64_t>::max();
-        std::unordered_map<std::string, std::uint64_t> by_from_entry;
-    };
-    using Minima = std::unordered_map<std::string, SequenceMinima>;
+    // Single keys hold the minimum over any from_entry; pair keys hold the
+    // exact (source_id, from_entry) minimum. Their separate key domains keep
+    // an empty from_entry distinct from the any-entry summary. Neither the
+    // directory nor old keys allocate per-id RAM in the bounded backend.
+    using Minima = pineforge::detail::IdPairStore<std::uint64_t>;
 
     // A reused node takes its new row in one assignment.
     static void overwrite(PlacementSnapshot& node, PlacementSnapshot&& row) {
@@ -870,11 +872,15 @@ private:
     }
 
     static void fold_sequence(Minima& index, const PlacementSnapshot& row) {
-        auto& minima = index[row.source_id];
-        minima.any = std::min(minima.any, row.command_sequence);
-        const auto inserted = minima.by_from_entry.emplace(row.from_entry, row.command_sequence);
-        if (!inserted.second)
-            inserted.first->second = std::min(inserted.first->second, row.command_sequence);
+        // Keep both original minima, including an explicitly present
+        // UINT64_MAX: command_sequence_for uses the same fallback for it.
+        // Recurring pairs update their old disk records in place.
+        index.preflight_keys([&](const auto& emit) {
+            emit(Minima::KeyView{row.source_id, std::nullopt});
+            emit(Minima::KeyView{row.source_id, std::string_view(row.from_entry)});
+        });
+        index.min_assign(row.source_id, row.command_sequence);
+        index.min_assign(row.source_id, row.from_entry, row.command_sequence);
     }
 
     PlacementSnapshot* locate(std::uint64_t incarnation) const noexcept {
@@ -921,11 +927,7 @@ private:
     std::uint64_t high_water_ = 0;
     std::uint64_t erased_rows_ = 0;
     std::uint64_t erased_digest_ = kFoldBasis;
-    // command_sequence_for(): the per-id index over the retained rows,
-    // extended lazily over the rows inserted since the previous lookup
-    // (unfolded_), and the minima of the erased rows.
-    mutable Minima sequence_index_;
-    mutable std::vector<std::uint64_t> unfolded_;
+    // Only erased history needs storage. Retained rows are the q query view.
     Minima erased_minima_;
     // Up to three distinct source ids of erased non-margin rows: as many as
     // erased_non_margin_id_outside() can ever need.
@@ -962,6 +964,7 @@ public:
     // R5 lane V19-E: a running digest of the members' incarnations, each
     // folded once, when it was appended (the v4 extension fold's view).
     std::uint64_t digest() const noexcept { return digest_; }
+    static OriginRoster from_retired(std::size_t count, std::uint64_t digest);
     const native_order::RequestHandle& operator[](std::size_t global) const;
     const native_order::RequestHandle& back() const { return (*this)[size() - 1]; }
     bool empty() const noexcept { return size() == 0; }
@@ -1477,6 +1480,17 @@ struct PineReplayRiskConfig {
 
 class PineExecutionAdapter;
 
+} // namespace pineforge::source
+
+namespace pineforge::detail {
+void bind_tree_scratch_tables(source::PineExecutionAdapter&,
+                              const std::shared_ptr<ScratchSlab>&);
+void bind_id_pair_scratch_tables(source::PineExecutionAdapter&,
+                                 const std::shared_ptr<ScratchSlab>&);
+} // namespace pineforge::detail
+
+namespace pineforge::source {
+
 // Allocation-free view facade for Appendix C's later C projection. L2 does
 // not wire the C ABI; this only exposes named truthful sources to native
 // fixture tests and keeps observer reads side-effect-free.
@@ -1531,6 +1545,14 @@ public:
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
+    void set_id_tables_directory(const std::string& directory); // All L19l tables, after reset.
+    void set_auxiliary_tables_directory(const std::string& directory); // Same binding.
+    void fixture_use_memory_auxiliary_tables();
+    std::uint64_t fixture_auxiliary_disk_bytes() const noexcept;
+    std::uint64_t fixture_erased_digest() const noexcept { return placement_.erased_digest(); }
+    std::uint64_t fixture_erased_rows() const noexcept { return placement_.erased_rows(); }
+    const ::pineforge::detail::IdPairStore<std::int64_t, true>&
+    fixture_consumed_partial_exit_cycles() const noexcept { return consumed_partial_exit_cycles_; }
 
     // `instrument_feeds`, when given, is moved into the spec's instrument
     // feeds (and back into it if the projection throws).
@@ -1598,6 +1620,9 @@ public:
     // admission gates run on top.  Pure in the run's declaration, the staged
     // instrument and that point; nothing is remembered.
     bool core_sizes_default_opening(bool is_long) const;
+    // Read-only source scratch ticket, called after exit admission and before
+    // financial commit. Host held-units publication must follow validation.
+    void preflight_id_pair_precommit(const NativePrecommitView&) const;
     NativePrecommitVerdict validate_precommit(const NativePrecommitView&) const;
     // R5: the three policy answers the kernel's margin model asks of its
     // host. `margin_check_allowed` is TradingView's scheduling -- the kernel
@@ -1778,7 +1803,7 @@ public:
         const NativeDecisionContext&) const noexcept;
 
     std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
-                                            const SourceId& from_entry = {}) const noexcept;
+                                            const SourceId& from_entry = {}) const;
     bool is_open_phase_exit(std::size_t trade_index) const noexcept;
     // Reorders trade_exit_phase_[start..) to follow a same-bar exit-group sort:
     // slot start + i takes the phase of the trade previously at indices[i].
@@ -1811,10 +1836,32 @@ private:
     friend class PendingIntentView;
     friend class PineStrategyHost;
     friend class PineScheduler;
+    friend void ::pineforge::detail::bind_id_pair_scratch_tables(
+        PineExecutionAdapter&, const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
+    friend void ::pineforge::detail::bind_tree_scratch_tables(
+        PineExecutionAdapter&, const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
+    bool partial_exit_sibling_live(const PlacementSnapshot&,
+                                  native_order::RequestHandle) const;
+
+    // L8c calls this once for [trades_.base(), global_end), in forward
+    // order, before retiring that prefix. scratch_directory is L6b-4's
+    // already-resolved directory. This is the only dependency binding.
+    void preserve_position_tail_before_seal(
+        std::size_t global_end, const std::string& scratch_directory);
+
+    // Physical storage of immutable, already-hashed closed rows, not a
+    // second logical state. The closed-row digest and position-open mark
+    // reconstruct its reachable sequence. File offsets/cache are excluded
+    // so the sealed/resident partition cannot change continuation hashes.
+    std::shared_ptr<detail::PositionTailSpill> position_tail_spill_;
     struct CohortFacts {
         native_order::CohortHandle handle{};
         OriginRoster origins;
         std::vector<native_order::RequestHandle> opened;
+        struct Record {
+            std::uint64_t handle; std::int64_t cycle;
+            std::uint64_t origin_count, origin_digest, erased_sides;
+        };
         // Live source exposure by opening provenance.  This is source-layer
         // bookkeeping only: the generic core still resolves cohort authority
         // at every candidate.  It lets a command snapshot an existing id's
@@ -1822,12 +1869,15 @@ private:
         // reduce that cohort.
         std::unordered_map<std::uint64_t, double> live_units_by_origin;
         std::int64_t cycle = 0;
+        Record retired_record() const noexcept;
+        static CohortFacts restore_record(const Record&);
+        bool spillable() const noexcept;
         // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
         // in `origins` whose placement rows were erased, so a question about
         // every origin the cohort ever accepted still covers them.
         std::uint8_t erased_opening_sides = 0;
     };
-
+    using CohortTable = ::pineforge::detail::DiskResidentIdTable<CohortFacts>;
     struct PendingBracketLeg {
         native_order::Request request;
         PlacementSnapshot snapshot;
@@ -2013,6 +2063,7 @@ private:
 
     NativeStrategyHost& require_host() const;
     bool modeled_input() const;
+    void require_cohort_ticket(const SourceId* prospective = nullptr) const;
     native_order::CohortHandle cohort_for(const SourceId& id);
     std::optional<native_order::RequestHandle> submit_or_replace(
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
@@ -2034,7 +2085,7 @@ private:
     double cohort_exposure_for(const SourceId&) const noexcept;
     // The units an exit's from_entry holds; none when it names no entry.
     std::optional<double> from_entry_units(const SourceId&) const noexcept;
-    bool from_entry_filled_this_cycle(const SourceId&) const noexcept;
+    bool from_entry_filled_this_cycle(const SourceId&) const;
     double percent_commission_live_equity(double) const noexcept;
     // The same equity at an explicit account-currency rate: the rate an
     // execution converts at, which its terms facts carry
@@ -2396,7 +2447,7 @@ private:
     bool follows_same_bar_declined_reversal(
         const PlacementSnapshot&, const NativePrecommitView&) const;
     bool bracket_belongs_to_reversal(
-        const PlacementSnapshot&, const PlacementSnapshot&) const noexcept;
+        const PlacementSnapshot&, const PlacementSnapshot&) const;
     void suspend_brackets_for_reversal(
         const PlacementSnapshot&, const exit_legs::Frame&, double open_price);
     void suspend_declined_reversal_brackets(
@@ -2519,8 +2570,8 @@ private:
     std::uint64_t source_command_sequence_ = 0;
     std::int32_t entry_attempt_bar_ = -1;
     std::uint32_t entry_attempts_on_bar_ = 0;
-    std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
-    std::vector<SourceId> cohort_order_;
+    CohortTable cohorts_by_id_;
+    CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
@@ -2559,7 +2610,7 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
-    std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
+    pineforge::detail::IdPairStore<std::int64_t, true> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     // An exit bound to its entry id whose working order a strategy.cancel of
@@ -2741,10 +2792,12 @@ private:
     // and the most keys it ever held counting one transient key per live
     // strategy.close / close_all order -- and, for the alternative the tapes
     // leave open, per live strategy.order market order too.
-    std::vector<SourceId> exit_rank_keys_;
+    ::pineforge::detail::DiskIdTable<std::uint32_t> exit_rank_keys_;
     std::uint64_t exit_rank_keys_digest_ = 1469598103934665603ULL;
     std::uint32_t exit_rank_peak_ = 0;
     std::uint32_t exit_rank_alt_peak_ = 0;
+    void require_tree_precommit(const NativePrecommitView&) const;
+    void require_exit_rank_key(const SourceId&) const;
     void note_exit_rank_key(const SourceId&);
     void note_exit_rank_transients();
     // R5 lane V19-E: the exit phases of the trades before exit_phase_final_

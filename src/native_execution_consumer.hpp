@@ -4,6 +4,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 #include <pineforge/native_bar_views.hpp>
+#include <pineforge/metrics_stream.hpp>
 #include "native_calendar_memo.hpp"
 #include "native_selected_epoch.hpp"
 #include "runtime_ambient.hpp"
@@ -18,7 +19,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
+#include "report_scratch.hpp"
 namespace pineforge {
 inline namespace engine_script_run_v19 {
 
@@ -366,7 +367,45 @@ public:
     bool closed_rows_digest_holds(const TradeLedger& rows) const noexcept;
     // NativeStrategyHost::native_closed_rows_amended: the rows from `first` on
     // changed after they were final; the next read folds them again.
-    void closed_rows_amended(std::size_t first) noexcept { rewind_closed_rows(first); }
+    void closed_rows_amended(std::size_t first) { rewind_closed_rows(first); }
+    // L8c: these are storage-boundary seeds of folds already represented by
+    // the logical closed-row sequence, not additional decision/hash inputs.
+    // The source host supplies the phase/money seeds because it owns those
+    // folds; the consumer owns the digest, report folds and sink writer.
+    struct ClosedTradePrefix {
+        std::size_t base = 0;
+        std::uint64_t rows_digest = 1469598103934665603ULL;
+        std::uint64_t exit_phase_digest = 1469598103934665603ULL;
+        double source_gains = 0.0;
+        double source_losses = 0.0;
+        double pnl = 0.0;
+    };
+    bool streams_closed_rows(const BacktestEngine& engine) const noexcept;
+    const std::string& report_scratch_directory(const BacktestEngine& engine) const noexcept;
+    bool begin_closed_row_seal(std::int64_t script_bar_open) noexcept {
+        if (closed_trade_seal_bar_ && *closed_trade_seal_bar_ == script_bar_open) return false;
+        closed_trade_seal_bar_ = script_bar_open;
+        return true;
+    }
+    std::size_t closed_rows_final() const noexcept { return closed_rows_final_; }
+    const ClosedTradePrefix& closed_trade_prefix() const noexcept { return closed_trade_prefix_; }
+    std::size_t closed_rows_sealable(const TradeLedger& rows, std::size_t phase_final,
+        std::uint64_t money_folded, std::int64_t script_bar_open,
+        std::optional<std::uint64_t> mutable_entry) const;
+    // The caller has proved all five seal conditions and exit-phase finality.
+    // L18 spills every reachable row BEFORE this call retires its storage.
+    void seal_closed_rows(BacktestEngine& engine, std::size_t global_end,
+                          std::uint64_t exit_phase_digest,
+                          double source_gains, double source_losses);
+    // Complete report folds from the sealed prefix, resident rows and the
+    // presented open-lot view. The engine owns the no-copy report path.
+    void finish_streamed_trade_metrics(const BacktestEngine& engine, ReportC* out,
+                                      const TradeC* open_rows, int count) const;
+    void fold_sealed_exit_phase(std::uint8_t phase);
+    std::uint64_t replay_sealed_exit_phases(std::uint64_t seed) const noexcept;
+    void restart_exit_phases() noexcept { exit_phases_restarted_ = closed_trade_prefix_.base != 0; }
+    void finish_exit_phase_restart() noexcept { exit_phases_restarted_ = false; }
+    bool exit_phases_restarted() const noexcept { return exit_phases_restarted_; }
     uint64_t terminal_receipt_high_water() const noexcept {
         return terminal_receipt_high_water_;
     }
@@ -1647,7 +1686,10 @@ private:
     void note_committed_events(const native_order::EventRange& events) noexcept;
     void note_cohort_receipts() noexcept;
     void verify_closed_rows(const BacktestEngine& engine) const noexcept;
-    void rewind_closed_rows(std::size_t first) const noexcept;
+    void rewind_closed_rows(std::size_t first) const;
+    void write_streamed_trade(const BacktestEngine& engine, std::size_t global,
+                               const TradeC& row) const;
+    void fill_streamed_report(const BacktestEngine& engine, ReportC* out) const;
     uint64_t spec_digest(const NativeRunSpec& spec, uint64_t run_base) const noexcept;
     void forget_spec_digests() const noexcept;
 
@@ -1933,8 +1975,28 @@ private:
     mutable std::size_t closed_rows_digested_ = 0;
     std::size_t closed_rows_final_ = 0;
     // The digest after each digested row, so an amendment (closed_rows_amended)
-    // rewinds to the row before it in O(1): one word per closed row.
+    // rewinds to the row before it in O(1): one word per resident final row.
+    // Index zero stores the digest after global row closed_trade_prefix_.base.
     mutable std::vector<std::uint64_t> closed_row_prefix_;
+    ClosedTradePrefix closed_trade_prefix_;
+    std::optional<std::int64_t> closed_trade_seal_bar_;
+    struct ClosedTradeReport {
+        explicit ClosedTradeReport(double capital)
+            : all(metrics::TradeFilter::ALL, capital),
+              longs(metrics::TradeFilter::LONG, capital),
+              shorts(metrics::TradeFilter::SHORT, capital) {}
+        metrics::TradeStatsAccumulator all, longs, shorts;
+        // Selected carry-in validation must still inspect sealed entry times.
+        std::int64_t first_entry_time = std::numeric_limits<std::int64_t>::max();
+    };
+    std::unique_ptr<ClosedTradeReport> closed_trade_report_;
+    // A phase is 0..4. Its u64 fold XORs only the low three bits; on each
+    // residue modulo 8 the whole prefix is affine in the remaining bits.
+    // Nine basis seeds replay that prefix for ANY incoming hash, preserving
+    // the pre-refold hash's historical (0, initial_digest, all phases) shape
+    // without keeping a phase per sealed row or changing a hash constant.
+    std::array<std::uint64_t, 9> sealed_exit_phase_basis_{{0, 1, 2, 3, 4, 5, 6, 7, 8}};
+    bool exit_phases_restarted_ = false;
     // A host-owned margin verdict is part of the continuation only when the
     // generic spec actually exposes an initial-margin gate.  Source specs do
     // not set that gate, preserving their established fingerprint while the
@@ -2093,25 +2155,32 @@ public:
     static bool refuse_report_in_dispatch(const BacktestEngine& engine,
                                           ReportC* out) noexcept;
 
-    // The selected-window report, asked by BacktestEngine::fill_report right
-    // after its rows_are_current gate. False when the caller must fill the report
-    // exactly as before: an OFF engine, a selected run still admitted-open, and a
-    // handle whose latest generation was admitted with neither a window nor an
-    // observer. True when the generation behind the engine is closed -- a
+    // The report router, asked by BacktestEngine::fill_report right after its
+    // rows_are_current gate. A streamable sink uses its prefix/resident-tail
+    // path even before a capture seals. Other reads return false for an OFF
+    // engine, an admitted-open selected run, or a generation without a window
+    // or observer. Remaining reads return true for a closed generation -- a
     // selected window that has sealed, or a generation admitted with an observer
     // (a window or not) that has sealed -- with `*out` written whole: the empty
     // report (every array NULL, every count zero, never freed) unless the
     // engine's own bound consumer holds a captured presentation whose results are
     // open, which a failed, aborted or observer-faulted generation never does, so
-    // no present_report runs after any boundary. Then the capture is deep-copied
-    // into a local report, only the output-only suffix runs over it (metrics,
-    // security diagnostics, trace, recorded hashes: engine code that is handed
-    // no host pointer and dispatches nothing virtual), and the finished report
-    // is published by one struct assignment, so a throw frees the local and
-    // leaves `*out` alone. Repeated reads reuse the capture. It reads the slot's
-    // pointer in place and never creates a consumer: a copied value, which lost
-    // its consumer, reads empty.
+    // no present_report runs after any boundary. A local report receives the
+    // capture's values; its output-only suffix runs (metrics, diagnostics,
+    // trace and recorded hashes) without dispatching any host callback. A sink
+    // uses scratch equity. The finished report is published by one assignment,
+    // so a throw frees the local and leaves `*out` alone. Repeated reads reuse
+    // the capture. The slot is read in place and no consumer is created; a
+    // copied value, which lost its consumer, reads empty. All array storage
+    // returned without a sink remains independently owned by the caller.
     static bool fill_selected_report(const BacktestEngine& engine, ReportC* out);
+    // Borrow the captured open-lot view for T emission. Closed rows stay in
+    // the ledger; the returned storage is never attached to a caller's report.
+    static bool report_sink_open_trades(const BacktestEngine& engine,
+                                        const TradeC*& rows, int& count) noexcept;
+    // Explicit ordinary-curve reconstruction for internal array consumers.
+    // Sink removal refuses while scratch is live and never invokes this bridge.
+    static void restore_report_sink_equity_curve(BacktestEngine& engine);
 
     // The private bridges behind the four C accessors of
     // pineforge/execution_observer.h and pineforge/selected_window.h. The free
@@ -2181,7 +2250,7 @@ private:
     bool selected_open_ = false;
     // The presentation capture of a selected run. A selected success tail calls
     // capture_presentation once, before the seal: it builds a local report with
-    // the trades, the nine diagnostic scalars and the equity copy -- the input
+    // the trades, the nine diagnostic scalars and the independent equity view --
     // BacktestEngine::present_report takes, in the order fill_report gives it --
     // calls that virtual exactly once, frees the local if anything throws, and
     // moves it into presentation_ only on success (replacing, and so freeing, any
@@ -2192,11 +2261,13 @@ private:
     // helper (terminal_success) is its one caller, under the epoch's dispatch
     // barrier.
     //
-    // For a selected generation the equity copy is the window's own curve, built
+    // For a selected generation the equity view is the window's own curve, built
     // here before the one presentation hook: the engine's recorded observations
     // labelled in [T, E), in the order they were recorded, behind the anchor
-    // (report::build_selected_equity_curve), handed to the local report by one
-    // owned-array transfer. Their count M must equal the native window script
+    // (report::build_selected_equity_curve on sink OFF). With a sink, immutable
+    // interior points stream to scratch and only the last min(W, M + 1) points
+    // reach the hook, with that window length; the logical M + 1 stays private.
+    // Their count M must equal the native window script
     // count, and a position, fill or account change before T is a failure, never
     // filtered out; each is a coded engine_invariant thrown before the hook.
     void capture_presentation(BacktestEngine& engine);
@@ -2204,13 +2275,20 @@ private:
     // flags. The destructor calls it, and the selected lifecycle will at
     // admission, so a new generation never inherits an old capture.
     void drop_presentation() noexcept;
-    // The capture. Its arrays are the ones BacktestEngine::free_report deletes
-    // (new TradeC[] / new pf_equity_point_t[]), and it is freed only through it.
+    // Sink captures keep scalars and, for an ordinary observer capture, one
+    // owned equity point. Closed rows live in the sealed prefix folds plus
+    // the resident ledger; the editable open-lot view is owned separately.
+    // Sink OFF keeps its original independently owned arrays.
     ReportC presentation_{};
-    // The equity length the metrics read: the engine's equity vector size taken
+    std::unique_ptr<TradeC[]> presentation_open_trades_;
+    int presentation_open_trades_len_ = 0;
+    bool presentation_sink_trades_ = false;
+    // The equity length the metrics read: the engine's recorded point count taken
     // before present_report ran (fill_metrics_section's `n`), which a
     // presentation may leave behind in presentation_.equity_curve_len, the length
-    // a report reader sees. Published with the capture, only once the capture
+    // a report reader sees. On the sink path this is also the logical M + 1,
+    // hidden from the hook; the published count subtracts only the window points
+    // the hook cut. Published with the capture, only once the capture
     // succeeded, and zeroed with it; the assembly never reads the engine's vector
     // for it. A selected capture's is M + 1: the window anchor and its M
     // observations. Its observation count, presentation_metric_observations_,
@@ -2438,11 +2516,15 @@ private:
     // Output bookkeeping, like presentation_ready_: not hashed and never read
     // by a broker decision, a continuation fold or the source adapter. Reset
     // with the presentation; appended so every pre-existing member keeps its
-    // offset. The L6b-1 array remains the metrics source until L17B supplies the
-    // scratch curve; no second per-read equity allocation is needed with a sink.
+    // offset. The selected metrics source is the presented scratch region;
+    // no captured equity array or per-read equity allocation is needed.
     bool presentation_sink_equity_written_ = false;
     bool capture_selected_sink(BacktestEngine& engine);
     bool selected_sink_equity_written(const BacktestEngine& engine) const noexcept;
+    // Report-only ownership, like presentation_: never a broker decision or
+    // continuation input. Admission/drop releases the previous run's file.
+    std::unique_ptr<report_sink::ScratchCurveWriter> presentation_metric_curve_;
+    metrics::SpillCurve make_selected_metric_curve() const;
 public:
     void set_batch_input_release(void* owner, void (*release)(void*) noexcept) noexcept {
         batch_input_owner_ = owner;
@@ -2478,6 +2560,10 @@ public:
     // binding already detached is engine_invariant at admit_public_begin.
     NativeBarViews bar_views() const noexcept;
 };
+
+// Selected-sink presentation borrows only this many final points. The logical
+// metric length and the published count belong to the capture, never ReportC.
+inline constexpr std::int64_t kSelectedPresentationWindowPoints = 2;
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
     return static_cast<NativeExecutionConsumer&>(consumer);
@@ -2515,3 +2601,26 @@ private:
 
 }  // inline namespace engine_script_run_v19
 }  // namespace pineforge
+
+// CR-150 L17B: runtime-private selected metric entry points. The two sources
+// share the report fold; the source owns/borrows its storage for the whole call.
+// equity_len is the pre-presentation M + 1, observation_count is M, even when
+// the host publishes a shorter curve. No presentation or timezone lock is held
+// by the caller. These overloads allocate no curve and retain no source state.
+namespace pineforge::internal {
+
+void compute_selected_report_metrics(
+    pf_metrics_t& result, const TradeC* trades, int trades_len,
+    const metrics::ArrayCurve& curve, std::int64_t equity_len,
+    double net_profit, double initial_capital, const std::string& chart_timezone,
+    double first_window_open, double last_window_close,
+    std::int64_t bars_in_market, std::int64_t observation_count);
+
+void compute_selected_report_metrics(
+    pf_metrics_t& result, const TradeC* trades, int trades_len,
+    const metrics::SpillCurve& curve, std::int64_t equity_len,
+    double net_profit, double initial_capital, const std::string& chart_timezone,
+    double first_window_open, double last_window_close,
+    std::int64_t bars_in_market, std::int64_t observation_count);
+
+}  // namespace pineforge::internal

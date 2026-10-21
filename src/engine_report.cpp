@@ -4,12 +4,13 @@
 
 #include "engine_internal.hpp"
 #include "native_execution_consumer.hpp"
-
-#include <pineforge/metrics.hpp>
-
+#include "selected_report_view.hpp"
+#include <pineforge/metrics_stream.hpp>
+#include "report_scratch.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -63,10 +64,18 @@ void BacktestEngine::fill_report(ReportC* out) const {
         return;
     }
     // Sealed selected/observed generations use their capture (or the empty
-    // report). All other reads retain the ordinary presentation path.
+    // report). A live selected sink cannot supply the ordinary full prefix.
     if (NativeExecutionConsumer::fill_selected_report(*this, out)) {
         finish_report_sink(out);
         return;
+    }
+    if (report_sink_state_.selected_equity_stream) {
+        // Refuse before allocating rows or staging a presented execution point.
+        // A host may catch this read refusal and continue the same generation.
+        *out = ReportC{};
+        throw coded<std::logic_error>(RunFailureCode::report_shape_unsupported,
+            {{"shape", "live_selected_sink"}},
+            "native selected report: a live sink report is unavailable before capture");
     }
     fill_trades_section(out);
 
@@ -98,12 +107,34 @@ void BacktestEngine::fill_report(ReportC* out) const {
 // Copy ``trades_`` — followed by ``range_end_trades_``, the report-only rows
 // of a position still open after the final bar
 // (NativeExecutionConsumer::append_open_position_report_rows) — into a
-// freshly heap-allocated TradeC[] on ``out`` and accumulate ``net_profit``
-// for the report. Owns the allocation; freed by ``free_report``.
+// freshly heap-allocated TradeC[] on ``out`` and accumulate ``net_profit``.
+// A sink allocates only the range-end view. free_report owns either array.
 void BacktestEngine::fill_trades_section(ReportC* out) const {
+    const std::size_t closed = trades_.size();
+    const std::size_t open = range_end_trades_.size();
+    if (closed > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        || open > static_cast<std::size_t>(std::numeric_limits<int>::max()) - closed)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade count exceeds the report row limit");
+    if (!report_sink_state_.enabled && trades_.base() != 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "array report requires the sealed trade rows in the report sink");
     const int n_closed = (int)trades_.size();
     const int n = n_closed + (int)range_end_trades_.size();
     out->total_trades = n;
+    if (report_sink_state_.enabled) {
+        // The hook can re-mark open lots, but closed history is immutable.
+        // Never materialize that history merely to discard it at finalization.
+        const int open_count = (int)range_end_trades_.size();
+        out->net_profit = report_closed_net_profit();
+        out->trades_len = open_count;
+        out->trades = open_count > 0 ? new TradeC[open_count] : nullptr;
+        for (int i = 0; i < open_count; ++i) {
+            out->trades[i] = report_trade_row(range_end_trades_[i]);
+            out->net_profit += out->trades[i].pnl;
+        }
+        return;
+    }
     out->trades_len = n;
 
     if (n > 0) {
@@ -135,6 +166,50 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         out->trades = nullptr;
         out->net_profit = 0.0;
     }
+}
+
+double BacktestEngine::report_closed_net_profit() const {
+    double sum = 0.0;
+    if (trades_.base() != 0) {
+        const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+            execution_consumer_slot_.ptr.get());
+        if (!consumer || consumer->closed_trade_prefix().base != trades_.base())
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "report trade fold is missing its sealed prefix");
+        sum = consumer->closed_trade_prefix().pnl;
+    }
+    // Continue the original left fold; the decision counters use other seeds.
+    for (const auto& trade : trades_) sum += trade.pnl;
+    return sum;
+}
+
+void BacktestEngine::compute_report_sink_trade_metrics(
+        ReportC* out, const TradeC* open_rows, int count) const {
+    // Keep each filter's original left-fold order: closed rows, then the
+    // presented range-end rows. Interleaving independent filters changes none
+    // of their additions. No TradeC history or separately summed tail exists.
+    if (trades_.base() != 0) {
+        const auto* consumer = static_cast<const NativeExecutionConsumer*>(
+            execution_consumer_slot_.ptr.get());
+        if (!consumer)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "report trade metrics are missing their sealed prefix");
+        consumer->finish_streamed_trade_metrics(*this, out, open_rows, count);
+        return;
+    }
+    metrics::TradeStatsAccumulator all(metrics::TradeFilter::ALL, initial_capital_);
+    metrics::TradeStatsAccumulator longs(metrics::TradeFilter::LONG, initial_capital_);
+    metrics::TradeStatsAccumulator shorts(metrics::TradeFilter::SHORT, initial_capital_);
+    const auto fold = [&](const TradeC& row) {
+        all.fold(row);
+        longs.fold(row);
+        shorts.fold(row);
+    };
+    for (const auto& trade : trades_) fold(report_trade_row(trade));
+    for (int i = 0; i < count; ++i) fold(open_rows[i]);
+    out->metrics.all = all.finish();
+    out->metrics.longs = longs.finish();
+    out->metrics.shorts = shorts.finish();
 }
 
 
@@ -181,15 +256,19 @@ void compute_report_metrics(pf_metrics_t& result,
 }  // namespace internal
 
 
-// Copy the equity curve out and compute all metric blocks. Must run AFTER
-// fill_trades_section (reads out->trades). Owns the curve allocation;
-// freed by free_report (which expects new pf_equity_point_t[n]).
-// equity_curve_len derives from the vector size, NOT script_bars_processed:
+// Compute metrics after fill_trades_section. Sink-off owns its full arrays;
+// a sink folds closed rows from the ledger plus its presented open-lot view
+// and reads equity history from scratch.
+// Metric history derives from recorded points, NOT script_bars_processed:
 // an exception mid-run can truncate the curve (metrics then describe the
 // truncated prefix; consumers must check strategy_get_last_error).
 // No ScopedTimezone may be held here: compute_equity_stats takes the
 // non-recursive global tz lock when chart_timezone_ is non-UTC.
 void BacktestEngine::fill_metrics_section(ReportC* out) const {
+    if (report_sink_state_.equity_scratch && !report_sink_state_.selected_equity_stream) {
+        fill_report_sink_metrics_section(out);
+        return;
+    }
     const int64_t n = (int64_t)equity_curve_.size();
     out->equity_curve_len = n;
     if (n > 0) {
@@ -203,6 +282,8 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
                            out->equity_curve, n, out->net_profit,
                            initial_capital_, chart_timezone_,
                            first_bar_open_, current_bar_.close, bars_in_market_);
+    if (report_sink_state_.enabled)
+        compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
 }
 
 
@@ -589,6 +670,20 @@ double BacktestEngine::output_constant_value(int index) const {
 
 namespace pineforge {
 
+BacktestEngine::ReportSinkState::ReportSinkState() = default;
+BacktestEngine::ReportSinkState::~ReportSinkState() = default;
+BacktestEngine::ReportSinkState::ReportSinkState(const ReportSinkState& other)
+    : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
+      path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir) {}
+BacktestEngine::ReportSinkState&
+BacktestEngine::ReportSinkState::operator=(const ReportSinkState& other) {
+    if (this != &other) *this = ReportSinkState(other);
+    return *this;
+}
+BacktestEngine::ReportSinkState::ReportSinkState(ReportSinkState&&) noexcept = default;
+BacktestEngine::ReportSinkState&
+BacktestEngine::ReportSinkState::operator=(ReportSinkState&&) noexcept = default;
+
 int BacktestEngine::report_sink_setter_status() const {
     const auto& sink = report_sink_state_;
     const auto* consumer = execution_consumer_slot_.ptr
@@ -605,6 +700,12 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
         || descriptor->version != 1 || !descriptor->path || !*descriptor->path)) return -1;
     const int status = report_sink_setter_status();
     if (status != 0) return status;
+    // A scratch-backed generation cannot become an array report on removal.
+    // Keep its sink and metric source intact, including an observer capture.
+    // A nonzero ledger base likewise requires the streamed report: its sealed
+    // rows are gone from RAM. A new begin clears size/base to zero, lifting
+    // this guard; the scratch-owner guard still applies to ordinary runs.
+    if (!descriptor && (report_sink_state_.equity_scratch || trades_.base() > 0)) return -3;
     // Construct the full replacement first. Allocation failure cannot erase
     // an installed sink, its receipt or its copied strings.
     ReportSinkState next;
@@ -619,6 +720,13 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
             next.scratch_dir = slash == std::string::npos ? "."
                 : slash == 0 ? "/" : next.path.substr(0, slash);
         }
+    }
+    if (report_sink_state_.equity_scratch) {
+        // Replacing next-run configuration must not discard the current
+        // generation's record-time curve and selected validation latches.
+        next.equity_scratch = std::move(report_sink_state_.equity_scratch);
+        next.equity_tail_stored = report_sink_state_.equity_tail_stored;
+        next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
     }
     report_sink_state_ = std::move(next);
     return 0;
@@ -638,12 +746,27 @@ void BacktestEngine::set_trade_history_streamable(bool streamable) {
     if (report_sink_setter_status() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "trade history policy cannot change during a run");
+    // Refuse before changing policy: ordinary reports need the sealed rows
+    // that are gone from RAM. A new begin clears size/base to zero and allows
+    // the policy to change again, without reading those rows back.
+    if (!streamable && trades_.base() > 0)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "trade history policy cannot retain sealed trade rows");
     report_sink_state_.trade_history_streamable = streamable;
 }
 
 void BacktestEngine::begin_report_sink() {
     auto& sink = report_sink_state_;
     sink.writer.reset();
+    sink.equity_scratch.reset();
+    sink.equity_tail_stored = false;
+    sink.selected_equity_stream.reset();
+#ifndef NDEBUG
+    sink.selected_released_extremes[0] = initial_capital_;
+    sink.selected_released_extremes[1] = initial_capital_;
+    sink.selected_released_extremes[2] = 0.0;
+    sink.selected_released_extremes[3] = 0.0;
+#endif
     sink.receipt = {};
     sink.output_base = 0;
     if (!sink.enabled) return;
@@ -662,6 +785,24 @@ void BacktestEngine::begin_report_sink() {
         sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
         sink.writer->write_header({outputs_enabled_, trace_enabled_, broker_state_hash_recording_,
                                    outputs_slots_, outputs_constants_});
+        pf_selected_window_config_v1 window{};
+        const bool selected = NativeExecutionConsumer::selected_window_admitted(*this, &window);
+        const auto* consumer = execution_consumer_slot_.ptr
+            ? &as_native_consumer(*execution_consumer_slot_.ptr) : nullptr;
+        const auto* spec = consumer ? consumer->view().spec : nullptr;
+        if (!selected || (spec && spec->report_policy != NativeReportPolicy::HostRecorded)) {
+            // The kernel recorder owns only its editable tail in RAM, including
+            // when this handle previously retained a full sink-off curve.
+            std::vector<pf_equity_point_t>().swap(equity_curve_);
+            if (selected) equity_curve_.reserve(kReportSinkHeldEquityPoints);
+            sink.equity_scratch =
+                std::make_unique<report_sink::ScratchCurveWriter>(sink.scratch_dir);
+            if (selected) {
+                sink.selected_equity_stream = std::make_unique<report::SelectedReportStream>(
+                    window.start_ms, window.end_ms, initial_capital_);
+                sink.equity_scratch->append({window.start_ms, initial_capital_, 0.0});
+            }
+        }
     } catch (const report_sink::WriterError& error) {
         sink.writer.reset();
         const auto code = error.reason() == report_sink::WriterFailure::io
@@ -682,33 +823,26 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
         if (sink.writer && !sink.receipt.complete && last_run_status_ == 0
             && last_error_.empty() && consumer
             && consumer->state_kind() == NativeLifecycleKind::Completed) {
-            for (int64_t i = sink.receipt.count_e; i < out->equity_curve_len; ++i) {
-                sink.writer->write_e(out->equity_curve[i]);
-                ++sink.receipt.count_e;
+            if (sink.equity_scratch) {
+                // Metrics/capture have already staged the presented copy.
+                // region() flushes scratch before a trailer can claim success.
+                const auto region = sink.equity_scratch->region();
+                for (int64_t i = sink.receipt.count_e; i < region.point_count; ++i) {
+                    pf_equity_point_t point{};
+                    report_sink::read_scratch_points(region, i, &point, 1);
+                    sink.writer->write_e(point);
+                    ++sink.receipt.count_e;
+                }
+            } else {
+                for (int64_t i = sink.receipt.count_e; i < out->equity_curve_len; ++i) {
+                    sink.writer->write_e(out->equity_curve[i]);
+                    ++sink.receipt.count_e;
+                }
             }
-            for (int i = 0; i < out->trades_len; ++i) {
-                const TradeC& row = out->trades[i];
-                pf_trade_t wire{};
-                wire.entry_time = row.entry_time;
-                wire.exit_time = row.exit_time;
-                wire.entry_price = row.entry_price;
-                wire.exit_price = row.exit_price;
-                wire.pnl = row.pnl;
-                wire.pnl_pct = row.pnl_pct;
-                wire.is_long = row.is_long;
-                wire.max_runup = row.max_runup;
-                wire.max_drawdown = row.max_drawdown;
-                wire.qty = row.qty;
-                wire.commission = row.commission;
-                wire.entry_bar_index = row.entry_bar_index;
-                wire.exit_bar_index = row.exit_bar_index;
-                wire.open_at_end = row.open_at_end;
-                const Trade& identity = get_report_trade(i);
-                sink.writer->write_t(i + INT64_C(1), wire, identity.entry_incarnation,
-                    closed_trade_close_cause(i), identity.entry_id, identity.exit_id,
-                    identity.exit_comment);
-                ++sink.receipt.count_t;
-            }
+            const TradeC* open_rows = out->trades;
+            int open_count = out->trades_len;
+            NativeExecutionConsumer::report_sink_open_trades(*this, open_rows, open_count);
+            write_report_sink_trades(open_rows, open_count);
             if (outputs_enabled_) {
                 write_report_sink_output_row();
                 sink.writer->write_k(output_constants_.data(), outputs_constants_);
@@ -762,6 +896,105 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
     out->broker_state_hash = nullptr; out->broker_state_hash_len = 0;
     out->trace = nullptr; out->trace_len = 0;
     out->trace_names = nullptr; out->trace_names_len = 0;
+}
+
+void BacktestEngine::write_report_sink_trades(const TradeC* open_rows, int count) const {
+    auto& sink = report_sink_state_;
+    const auto closed_count = static_cast<int64_t>(trades_.size());
+    const int64_t total = closed_count + count;
+    if (sink.receipt.count_t < static_cast<int64_t>(trades_.base())
+        || sink.receipt.count_t > total)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "report trade sink cursor is outside the resident window");
+    for (int64_t i = sink.receipt.count_t; i < total; ++i) {
+        const TradeC row = i < closed_count
+            ? report_trade_row(trades_[static_cast<std::size_t>(i)])
+            : open_rows[static_cast<std::size_t>(i - closed_count)];
+        pf_trade_t wire{};
+        wire.entry_time = row.entry_time;
+        wire.exit_time = row.exit_time;
+        wire.entry_price = row.entry_price;
+        wire.exit_price = row.exit_price;
+        wire.pnl = row.pnl;
+        wire.pnl_pct = row.pnl_pct;
+        wire.is_long = row.is_long;
+        wire.max_runup = row.max_runup;
+        wire.max_drawdown = row.max_drawdown;
+        wire.qty = row.qty;
+        wire.commission = row.commission;
+        wire.entry_bar_index = row.entry_bar_index;
+        wire.exit_bar_index = row.exit_bar_index;
+        wire.open_at_end = row.open_at_end;
+        const Trade& identity = get_report_trade(static_cast<int>(i));
+        sink.writer->write_t(i + INT64_C(1), wire, identity.entry_incarnation,
+            closed_trade_close_cause(static_cast<int>(i)), identity.entry_id,
+            identity.exit_id, identity.exit_comment);
+        ++sink.receipt.count_t;
+    }
+}
+
+void BacktestEngine::stage_report_sink_equity_point(const pf_equity_point_t& point) const {
+    auto& sink = report_sink_state_;
+    if (sink.equity_tail_stored) {
+        sink.equity_scratch->replace_last(point);
+    } else {
+        sink.equity_scratch->append(point);
+        sink.equity_tail_stored = true;
+    }
+}
+
+void BacktestEngine::stage_report_sink_equity_tail(const ReportC* out) const {
+    auto& sink = report_sink_state_;
+    if (!sink.equity_scratch || !last_equity_point()) return;
+    try {
+        if (!out->equity_curve || out->equity_curve_len != 1)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "ordinary sink presentation lost its held equity point");
+        stage_report_sink_equity_point(out->equity_curve[0]);
+        sink.equity_scratch->flush();
+    } catch (const std::exception& error) {
+        sink.writer.reset();
+        auto& engine = const_cast<BacktestEngine&>(*this);
+        engine.last_run_status_ = 1;
+        note_run_failure(engine, error.what(), classify_run_failure(error));
+        throw;
+    }
+}
+
+void BacktestEngine::compute_report_sink_metrics(ReportC* out,
+                                                std::int64_t equity_count) const {
+    try {
+        const auto region = report_sink_state_.equity_scratch->region();
+        if (region.point_count != equity_count)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "ordinary sink metric curve differs from its captured point count");
+        compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
+        const report_sink::ScratchCurveWindow curve(region);
+        out->metrics.equity = metrics::compute_equity_stats(
+            curve, equity_count, initial_capital_, chart_timezone_, first_bar_open_,
+            current_bar_.close, bars_in_market_, out->net_profit);
+    } catch (const std::exception& error) {
+        report_sink_state_.writer.reset();
+        auto& engine = const_cast<BacktestEngine&>(*this);
+        engine.last_run_status_ = 1;
+        note_run_failure(engine, error.what(), classify_run_failure(error));
+        throw;
+    }
+}
+
+void BacktestEngine::fill_report_sink_metrics_section(ReportC* out) const {
+    try {
+        const auto* held = last_equity_point();
+        out->equity_curve_len = held ? 1 : 0;
+        out->equity_curve = held ? new pf_equity_point_t[1]{*held} : nullptr;
+        present_report_equity_tail(out);
+        stage_report_sink_equity_tail(out);
+        compute_report_sink_metrics(out, report_sink_state_.equity_scratch->size());
+    } catch (...) {
+        free_report(out);
+        *out = {};
+        throw;
+    }
 }
 
 // Callback-time writes use the same failure codes as begin/fill. The writer
@@ -875,3 +1108,64 @@ void BacktestEngine::retire_report_sink_hashes() {
 }
 
 } // namespace pineforge
+
+// CR-150 L17B: selected report reads share these folds for the array and
+// scratch sources. Formulae, return generation and floating-point order live
+// in metrics::compute_equity_stats; this boundary supplies the selected facts.
+namespace pineforge::internal {
+namespace {
+
+template<class PointSource>
+void selected_report_metrics(
+        pf_metrics_t& result, const TradeC* trades, int trades_len,
+        const PointSource& curve, std::int64_t equity_len,
+        double net_profit, double initial_capital, const std::string& chart_timezone,
+        double first_window_open, double last_window_close,
+        std::int64_t bars_in_market, std::int64_t observation_count) {
+    // The anchor always exists, including M=0. Presentation may shorten the
+    // published curve, but cannot change either of these captured counts.
+    if (equity_len <= 0 || curve.size() < equity_len
+        || observation_count != equity_len - 1)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "native selected report: invalid metric curve counts");
+    pf_metrics_t computed{};
+    computed.all = metrics::compute_trade_stats(
+        trades, trades_len, metrics::TradeFilter::ALL, initial_capital);
+    computed.longs = metrics::compute_trade_stats(
+        trades, trades_len, metrics::TradeFilter::LONG, initial_capital);
+    computed.shorts = metrics::compute_trade_stats(
+        trades, trades_len, metrics::TradeFilter::SHORT, initial_capital);
+    computed.equity = metrics::compute_equity_stats<PointSource>(
+        curve, equity_len, initial_capital, chart_timezone,
+        first_window_open, last_window_close, bars_in_market, net_profit,
+        observation_count);
+    result = computed;
+}
+
+}  // namespace
+
+void compute_selected_report_metrics(
+        pf_metrics_t& result, const TradeC* trades, int trades_len,
+        const metrics::ArrayCurve& curve, std::int64_t equity_len,
+        double net_profit, double initial_capital, const std::string& chart_timezone,
+        double first_window_open, double last_window_close,
+        std::int64_t bars_in_market, std::int64_t observation_count) {
+    selected_report_metrics(result, trades, trades_len, curve, equity_len,
+                            net_profit, initial_capital, chart_timezone,
+                            first_window_open, last_window_close,
+                            bars_in_market, observation_count);
+}
+
+void compute_selected_report_metrics(
+        pf_metrics_t& result, const TradeC* trades, int trades_len,
+        const metrics::SpillCurve& curve, std::int64_t equity_len,
+        double net_profit, double initial_capital, const std::string& chart_timezone,
+        double first_window_open, double last_window_close,
+        std::int64_t bars_in_market, std::int64_t observation_count) {
+    selected_report_metrics(result, trades, trades_len, curve, equity_len,
+                            net_profit, initial_capital, chart_timezone,
+                            first_window_open, last_window_close,
+                            bars_in_market, observation_count);
+}
+
+}  // namespace pineforge::internal
