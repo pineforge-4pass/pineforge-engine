@@ -1,6 +1,8 @@
 #include <pineforge/source/market_admission.hpp>
 #include <pineforge/run_failure.hpp>
+#include "market_admission_fold.hpp"
 #include <algorithm>
+#include <charconv>
 #include <exception>
 #include <stdexcept>
 #include <type_traits>
@@ -181,36 +183,79 @@ void Journal::retain_full_observation_history() {
                                       "full admission observation requires a fresh journal");
     retain_full_observation_history_ = true;
 }
-void Journal::retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence) {
-    if (!outstanding_sequences_.empty() || active_allocations_ != 0)
+namespace {
+void check_retirement(const Journal& journal, std::size_t count,
+                      uint64_t digest, uint64_t last_sequence) {
+    const auto& events = journal.events();
+    const auto& prefix = journal.retired_prefix();
+    if (journal.has_unfinished_events())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "cannot retire admission journal with unfinished events");
-    if (events_.size() > std::numeric_limits<std::size_t>::max() - retired_prefix_.count
-        || count != retired_prefix_.count + events_.size()
-        || last_sequence != (events_.empty() ? retired_prefix_.last_sequence
-                                             : sequence(events_.back()))
-        || (events_.empty() && digest != retired_prefix_.digest))
+    if (events.size() > std::numeric_limits<std::size_t>::max() - prefix.count
+        || count != prefix.count + events.size()
+        || last_sequence != (events.empty() ? prefix.last_sequence : sequence(events.back()))
+        || (events.empty() && digest != prefix.digest))
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission retirement requires the exact folded window");
+}
+void remember_rejection(const Event& event, int& bar) {
+    if (const auto* command = std::get_if<CommandEvent>(&event)) {
+        switch (command->outcome) {
+        case Outcome::RejectedIntradayCap: case Outcome::RejectedFrozenMarketCap:
+        case Outcome::RejectedAffordability: case Outcome::RejectedPricedCap:
+        case Outcome::OpeningRejectedReductionAdmitted:
+            bar = command->observation->bar;
+            break;
+        default: break;
+        }
+    }
+}
+}
+void Journal::retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence) {
+    check_retirement(*this, count, digest, last_sequence);
     if (retain_full_observation_history_) return;
     auto prefix = retired_prefix_;
     for (const auto& event : events_)
-        if (const auto* command = std::get_if<CommandEvent>(&event)) {
-            switch (command->outcome) {
-            case Outcome::RejectedIntradayCap: case Outcome::RejectedFrozenMarketCap:
-            case Outcome::RejectedAffordability: case Outcome::RejectedPricedCap:
-            case Outcome::OpeningRejectedReductionAdmitted:
-                prefix.last_rejected_command_bar = command->observation->bar;
-                break;
-            default: break;
-            }
-        }
+        remember_rejection(event, prefix.last_rejected_command_bar);
     prefix.count = count;
     prefix.digest = digest;
     prefix.last_sequence = last_sequence;
     retired_prefix_ = prefix;
     // Clear destroys all variant payloads, including before/book/review vectors
     // and shared observations. Capacity is bounded by the largest live bar.
+    events_.clear();
+}
+void Journal::fold_and_retire(std::size_t& count, uint64_t& digest, uint64_t& last_sequence) {
+    // With no events and no unfinished producer, the retired prefix is the
+    // entire fold. Synchronize even a stale query cursor; do not return it.
+    if (events_.empty() && !has_unfinished_events()) {
+        count = retired_prefix_.count;
+        digest = retired_prefix_.digest;
+        last_sequence = retired_prefix_.last_sequence;
+        return;
+    }
+    const auto events = prepare_fold(*this, count, digest, last_sequence);
+    int rejected_bar = retired_prefix_.last_rejected_command_bar;
+    if (!retain_full_observation_history_) {
+        // A within-bar hash query may already have folded part of the window.
+        // Read its rejection outcomes without hashing those events again.
+        for (std::size_t i = events.base; i < count; ++i)
+            remember_rejection(events[i], rejected_bar);
+    }
+    const auto total = events.end();
+    for (; count < total; ++count) {
+        BrokerStateHashSink sink;
+        sink.h = digest;
+        admission::reflect(events[count], "event", sink);
+        digest = sink.h;
+        last_sequence = sequence(events[count]);
+        if (!retain_full_observation_history_)
+            remember_rejection(events[count], rejected_bar);
+    }
+    check_retirement(*this, count, digest, last_sequence);
+    if (retain_full_observation_history_) return;
+    retired_prefix_ = {count, digest, last_sequence, rejected_bar};
+    // Payload lifetime and window capacity are the same as retire_prefix().
     events_.clear();
 }
 CommandCapture::CommandCapture(Allocation allocation,CommandObservation input,std::vector<BookObservation> before,
@@ -256,21 +301,92 @@ ReviewReceipt ReviewCapture::receipt_for(const Draft& draft) const {
 }
 
 namespace {
-struct Reflect {
+struct FieldWriter {
+    using Path = std::string;
     const FieldVisitor& visit;
-    template<class T>void field(const std::string& path,const char* name,const T& value) const {
+    template<class T, std::size_t N>
+    void field(const Path& path, const char (&name)[N], const T& value) const {
         if constexpr(std::is_same_v<T,bool>)visit({path+"."+name,uint64_t(value?1:0)});
         else if constexpr(std::is_enum_v<T>||std::is_same_v<T,int>)visit({path+"."+name,int64_t(value)});
         else visit({path+"."+name,value});
     }
-    void birth(const OrderBirth& o,const std::string& p)const {
+    template<class Fn>void index(const Path& path, std::size_t i, Fn fn) const {
+        fn(path + "[" + std::to_string(i) + "]");
+    }
+};
+
+// Each node borrows a suffix for the duration of a recursive traversal.
+// Hashing visits the original path bytes once, without constructing a string
+// or scanning it for its length. There is no bounded path buffer.
+struct HashPath {
+    const HashPath* parent;
+    std::string_view suffix;
+    std::size_t size;
+
+    explicit HashPath(std::string_view root)
+        : parent(nullptr), suffix(root), size(root.size()) {}
+    HashPath(const HashPath& prefix, std::string_view tail)
+        : parent(&prefix), suffix(tail), size(prefix.size + tail.size()) {}
+
+    template<std::size_t N>HashPath operator+(const char (&tail)[N]) const {
+        return HashPath(*this, std::string_view(tail, N - 1));
+    }
+    void bytes(BrokerStateHashSink& sink) const {
+        if (parent) parent->bytes(sink);
+        sink.bytes(suffix.data(), suffix.size());
+    }
+};
+
+struct HashWriter {
+    using Path = HashPath;
+    BrokerStateHashSink& sink;
+
+    template<class T, std::size_t N>
+    void field(const Path& path, const char (&name)[N], const T& value) const {
+        sink.u(path.size + N); // '.' plus N - 1 name bytes
+        path.bytes(sink);
+        sink.bytes(".", 1);
+        sink.bytes(name, N - 1);
+        // These are FieldValue's tags and the diagnostic writer's conversions.
+        if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, uint64_t>) {
+            sink.u(0); sink.u(uint64_t(value));
+        } else if constexpr (std::is_enum_v<T> || std::is_same_v<T, int>
+                             || std::is_same_v<T, int64_t>) {
+            sink.u(1); sink.i(int64_t(value));
+        } else if constexpr (std::is_same_v<T, double>) {
+            sink.u(2); sink.d(value);
+        } else {
+            static_assert(std::is_same_v<T, std::string>, "unhandled admission field");
+            sink.u(3); sink.s(value);
+        }
+    }
+    template<class Fn>void index(const Path& path, std::size_t i, Fn fn) const {
+        // digits10 + 1 covers every size_t, with room for '[' and ']'.
+        char text[std::numeric_limits<std::size_t>::digits10 + 3];
+        text[0] = '[';
+        const auto end = std::to_chars(text + 1, text + sizeof(text) - 1, i).ptr;
+        *end = ']';
+        fn(HashPath(path, std::string_view(text, end + 1 - text)));
+    }
+};
+
+// One schema and field order for both the owning diagnostic projection and
+// the allocation-free hash projection.
+template<class Writer>struct Reflect {
+    using Path = typename Writer::Path;
+    Writer writer;
+    template<class T, std::size_t N>
+    void field(const Path& path, const char (&name)[N], const T& value) const {
+        writer.field(path, name, value);
+    }
+    void birth(const OrderBirth& o,const Path& p)const {
         field(p,"cause",o.cause());field(p,"bar",o.bar());field(p,"timestamp",o.timestamp());
         field(p,"cursor_domain",o.cursor().domain());field(p,"cursor_position",o.cursor().position());
         field(p,"cursor_index",o.cursor().index());field(p,"cursor_count",o.cursor().count());
         field(p,"cursor_price",o.cursor_price());field(p,"first_fill",o.first_fill());
         field(p,"last_fill",o.last_fill());field(p,"evaluation_ordinal",o.evaluation_ordinal());
     }
-    void config(const Configuration& o,const std::string& p)const {
+    void config(const Configuration& o,const Path& p)const {
 #define F(name) field(p,#name,o.name)
         F(process_on_close);F(calc_on_fills);F(magnifier);F(fill_recalculation);F(scheduler);
         F(slippage);F(pyramiding);F(default_quantity_type);F(default_quantity_value);
@@ -278,12 +394,12 @@ struct Reflect {
         F(drawdown_limit);F(intraday_loss_limit);F(position_limit);F(fill_cap_active);F(risk_halted);
 #undef F
     }
-    void sizing(const SizingObservation& o,const std::string& p)const {
+    void sizing(const SizingObservation& o,const Path& p)const {
 #define F(name) field(p,#name,o.name)
         F(quantity);F(equity);F(price);F(mark);F(fx);
 #undef F
     }
-    void command(const CommandObservation& o,const std::string& p)const {
+    void command(const CommandObservation& o,const Path& p)const {
 #define F(name) field(p,#name,o.name)
         F(command);F(kind);birth(o.birth,p+".birth");F(id);F(requested_quantity);F(quantity_type);F(buy);
         field(p+".prices","limit",o.prices.limit);field(p+".prices","stop",o.prices.stop);
@@ -294,21 +410,21 @@ struct Reflect {
         F(explicit_equity);F(explicit_price);
 #undef F
     }
-    void review(const ReviewReceipt& o,const std::string& p)const {
+    void review(const ReviewReceipt& o,const Path& p)const {
         field(p,"sequence",o.sequence);field(p,"checkpoint",o.checkpoint);field(p,"bar",o.bar);
         field(p,"target_command",o.target_command);
     }
-    void revision(const SizingRevision& o,const std::string& p)const {
+    void revision(const SizingRevision& o,const Path& p)const {
         field(p,"sequence",o.sequence);field(p,"cause_fill",o.cause_fill);field(p,"bar",o.bar);
         field(p,"target_command",o.target_command);
     }
-    void draft(const Draft& o,const std::string& p)const {
+    void draft(const Draft& o,const Path& p)const {
         field(p,"observation_present",bool(o.observation()));
         if(o.observation())command(*o.observation(),p+".observation");
         field(p,"review_present",o.review().has_value());if(o.review())review(*o.review(),p+".review");
         field(p,"sizing_revision_present",o.sizing_revision().has_value());if(o.sizing_revision())revision(*o.sizing_revision(),p+".sizing_revision");
     }
-    void book(const BookObservation& o,const std::string& p)const {
+    void book(const BookObservation& o,const Path& p)const {
         field(p,"incarnation",o.incarnation);field(p,"priority",o.priority);field(p,"bar",o.bar);
         field(p,"type",o.type);field(p,"placement_side",o.placement_side);field(p,"buy",o.buy);field(p,"id",o.id);
         field(p,"oca_name",o.oca_name);field(p,"oca_type",o.oca_type);birth(o.birth,p+".birth");
@@ -316,14 +432,16 @@ struct Reflect {
         field(p+".prices","trail_points",o.prices.trail_points);field(p+".prices","trail_price",o.prices.trail_price);
         field(p+".prices","trail_offset",o.prices.trail_offset);draft(o.draft,p+".draft");
     }
-    void resolution(const InstructionResolution& o,const std::string& p)const {
+    void resolution(const InstructionResolution& o,const Path& p)const {
         field(p,"incarnation",o.incarnation);field(p,"kind",o.kind);field(p,"peer_incarnation",o.peer_incarnation);
         field(p,"own_priority",o.own_priority);field(p,"peer_priority",o.peer_priority);field(p,"transaction_quantity",o.transaction_quantity);
     }
-    template<class T,class Fn>void array(const std::vector<T>& values,const std::string& p,Fn fn)const {
-        field(p,"size",uint64_t(values.size()));for(size_t i=0;i<values.size();++i)fn(values[i],p+"["+std::to_string(i)+"]");
+    template<class T,class Fn>void array(const std::vector<T>& values,const Path& p,Fn fn)const {
+        field(p,"size",uint64_t(values.size()));
+        for(size_t i=0;i<values.size();++i)
+            writer.index(p,i,[&](const auto& q){fn(values[i],q);});
     }
-    void event(const Event& value,const std::string& p)const {
+    void event(const Event& value,const Path& p)const {
         field(p,"kind",uint64_t(value.index()));
         std::visit([&](const auto& o){using T=std::decay_t<decltype(o)>;
             if constexpr(std::is_same_v<T,CommandEvent>){
@@ -343,10 +461,13 @@ struct Reflect {
     }
 };
 }
-void reflect(const Draft& value,const std::string& path,const FieldVisitor& visit){Reflect{visit}.draft(value,path);}
-void reflect(const Event& value,const std::string& path,const FieldVisitor& visit){Reflect{visit}.event(value,path);}
+void reflect(const Draft& value,const std::string& path,const FieldVisitor& visit){Reflect<FieldWriter>{{visit}}.draft(value,path);}
+void reflect(const Event& value,const std::string& path,const FieldVisitor& visit){Reflect<FieldWriter>{{visit}}.event(value,path);}
+void reflect(const Event& value, std::string_view path, BrokerStateHashSink& sink) {
+    Reflect<HashWriter>{{sink}}.event(value, HashPath(path));
+}
 void Journal::reflect(const std::string& path,const FieldVisitor& visit)const {
-    Reflect r{visit};r.field(path,"next_sequence",next_sequence_);
+    Reflect<FieldWriter> r{{visit}};r.field(path,"next_sequence",next_sequence_);
     r.field(path,"active_allocations",active_allocations_);
     r.array(outstanding_sequences_,path+".outstanding_sequences",[&](auto sequence,const auto& p){r.field(p,"sequence",sequence);});
     r.array(events_,path+".events",[&](const auto& event,const auto& p){r.event(event,p);});

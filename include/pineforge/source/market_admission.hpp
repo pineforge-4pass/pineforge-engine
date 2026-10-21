@@ -226,6 +226,9 @@ public:
     // Called only at a completed script-bar boundary, after every retained
     // event has entered the v4 fold and no producer can insert before it.
     void retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence);
+    // Completed-boundary fold: derive the rejection index during the event
+    // fold, then release the window under the same retirement checks.
+    void fold_and_retire(std::size_t& count, uint64_t& digest, uint64_t& last_sequence);
 private:
     friend class Allocation;
     void release_allocation(uint64_t sequence) noexcept;

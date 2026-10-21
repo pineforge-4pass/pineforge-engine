@@ -24206,8 +24206,7 @@ void PineExecutionAdapter::on_bar_close(
 }
 
 void PineExecutionAdapter::finish_admission_bar() {
-    fold_admission_events();
-    admission_journal.retire_prefix(admission_events_folded_,
+    admission_journal.fold_and_retire(admission_events_folded_,
         admission_events_digest_, admission_events_last_);
 }
 
