@@ -37,7 +37,7 @@ Three layers, two of them meant to be optional:
    `timeframe`, `timezone`, `str_utils`, `c_abi`, `native_c_host`, `reservation_expansion`
    (`CMakeLists.txt:126`) and `pending_order_mirror` (`CMakeLists.txt:132`) units — plus the
    headers directly under `include/pineforge/`. That list is what `add_library`
-   (`CMakeLists.txt:161`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
+   (`CMakeLists.txt:162`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
    `PINEFORGE_SOURCE_LAYER_SOURCES` are disjoint: no file is in both, and none is outside both.
    **Two stems exist twice; the kernel copy is the generic half** —
    `ReservationExpansion` (`src/reservation_expansion.cpp:10`) and
@@ -78,7 +78,7 @@ summary of it.
   (`native_host.hpp:893`); also `on_native_input` (`native_host.hpp:875`), `on_native_tick`
   (`native_host.hpp:878`), `on_native_timeframe_bar` (`native_host.hpp:885`),
   `on_native_bar_open` — at the modeled opening, before its matching pass
-  (`native_host.hpp:889`, `on_native_bar_open` `native_execution_consumer.cpp:8091-8093`) —
+  (`native_host.hpp:889`, `on_native_bar_open` `native_execution_consumer.cpp:8127-8129`) —
   `on_native_recalculate` for every calculation of the run (`native_host.hpp:913`),
   `on_native_sub_bar` (`native_host.hpp:928`) and post-fill
   `on_native_applied` (`native_host.hpp:938`). `on_bar` is `final` (`native_host.hpp:857`).
@@ -112,7 +112,7 @@ summary of it.
   bare host needs no override at all, while `HostSized` hands the units to the host — and an
   unresolved `HostSized` whose `resolve_execution_terms` (`native_host.hpp:947`) returns no
   units is a `TermsUnresolved` rejection
-  (`TermsUnresolved` `native_execution_consumer.cpp:5905`).
+  (`TermsUnresolved` `native_execution_consumer.cpp:5941`).
 - **Observing executions.** Implement `on_native_applied` (`native_host.hpp:938`) — notifications
   drain FIFO after the outer callback returns — and/or poll `native_events(after_ordinal)`
   (`native_host.hpp:1335`). Do *not* implement
@@ -123,7 +123,7 @@ summary of it.
   | What | Surface |
   |---|---|
   | Run state | `native_state()` → `NativeStateView` — kind, phase, `NativeCompletion` BatchComplete / StreamEnded, failure, high water (`NativeCompletion` `native_host.hpp:50`, `NativeStateView` `:282`, `NativeRunPhase` `:41`) |
-  | Failure model | `NativeFailureCode` (`native_host.hpp:63-77`); `Failed` is latched, nothing resumes. A throwing callback latches `CallbackException` (`CallbackException` `native_execution_consumer.cpp:5878`) |
+  | Failure model | `NativeFailureCode` (`native_host.hpp:63-77`); `Failed` is latched, nothing resumes. A throwing callback latches `CallbackException` (`CallbackException` `native_execution_consumer.cpp:5914`) |
   | Cohorts | `cohort_open` (`native_host.hpp:1282`) / `cohort_add` (`:1285`) / `cohort_remove` (`:1288`) — the handle a `BindCohort` owner names |
   | Mid-callback execution | `current_execution_point` (`native_host.hpp:1087`), `inspect_current_execution` (`native_host.hpp:1099`) / `execute_current` (`native_host.hpp:1104`) |
   | Margin seams | four, not one: the run spec's own `margin` model (`NativeMarginModel` `native_run_spec.hpp:240`) with its three hooks — `resolve_margin_requirement` (`native_host.hpp:976`), `margin_check_allowed` (`native_host.hpp:988`), `resolve_margin_call_units` (`native_host.hpp:995`) — and `validate_execution_precommit` (`native_host.hpp:960`), whose `AdmitWithHostMargin` verdict hands the opening check to the host |
@@ -149,10 +149,10 @@ summary of it.
   the field comments say so, and `scripts/check_adapter_spec_shadowing.py` holds the adapter to
   the fields it actually needs.
 - **Feeding data.** Bars enter through the engine's own entry points: `run(bars, n)`
-  (`engine.hpp:1711`), the timeframe `run` (`engine.hpp:1713`), the rich begin
-  (`run` `engine.hpp:1801`), or `stream_begin` (`engine.hpp:1772`) / `stream_push_bar`
-  (`engine.hpp:1778`) / `stream_push_tick(s)` / `stream_advance_time` / `stream_end`
-  (`engine.hpp:1782`). `market_driver.hpp` is driver *types* (`NativeCoordinate` `market_driver.hpp:72`), not a feed API; read
+  (`engine.hpp:1714`), the timeframe `run` (`engine.hpp:1716`), the rich begin
+  (`run` `engine.hpp:1804`), or `stream_begin` (`engine.hpp:1775`) / `stream_push_bar`
+  (`engine.hpp:1781`) / `stream_push_tick(s)` / `stream_advance_time` / `stream_end`
+  (`engine.hpp:1785`). `market_driver.hpp` is driver *types* (`NativeCoordinate` `market_driver.hpp:72`), not a feed API; read
   `examples/native/native_market_strategy.cpp` for a host that drives both a batch and a stream.
 - **Data / HTF.** The magnifier (`magnifier.hpp`) reconstructs intrabar fills.
   `request.security`-style series **are** reachable from a bare host, as declared series of the
@@ -165,18 +165,18 @@ summary of it.
   `NativeSeriesSource::AuxiliaryFeed` for a series finer than the input. The kernel owns the
   aggregation, the `lookahead`/`gaps` delivery rules and the lazy-seal chronology; TradingView's
   `request.security` *semantics* are not in it. `prepare_native_security_feeds` stays protected
-  (`engine.hpp:1640`) and `configure_security_evaluators` stays an empty virtual
-  (`engine.hpp:1323`) — a host does not register an evaluator by hand — while
-  `set_native_security_feed` (`engine.hpp:1732`) is the pre-run door for a series'
+  (`engine.hpp:1643`) and `configure_security_evaluators` stays an empty virtual
+  (`engine.hpp:1326`) — a host does not register an evaluator by hand — while
+  `set_native_security_feed` (`engine.hpp:1735`) is the pre-run door for a series'
   authoritative bars and still throws in-run
   (`guard_native_mutation` `engine_aux_security.cpp:83`).
   Indicators are `ta_*.cpp`, session/calendar `session_time.cpp` / `native_calendar.cpp`, FX
   `configure_native_fx_curve` (`native_host.hpp:1202`).
-- **Reporting.** `fill_report` (`engine.hpp:1860`, `src/engine_report.cpp:56`) gives a bare host
+- **Reporting.** `fill_report` (`engine.hpp:1863`, `src/engine_report.cpp:56`) gives a bare host
   trade stats, and the equity curve is a run-spec choice rather than a host chore.
   `NativeReportPolicy::HostRecorded` (the default) leaves the series to the host, whose
   `record_equity_point` / `update_equity_extremes` remain protected
-  (`update_equity_extremes` `engine.hpp:1363`, `record_equity_point` `engine.hpp:1384`);
+  (`update_equity_extremes` `engine.hpp:1366`, `record_equity_point` `engine.hpp:1384`);
   `KernelRecorded` has the consumer mark one point per script calculation, and
   `KernelRecordedAtHostMarks` records the same series at the host's own marks.
   `report_open_position_at_end` books the still-open position as a mark-to-market row under

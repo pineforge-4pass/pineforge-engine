@@ -73,6 +73,9 @@ public:
         set_syminfo_session("24x7");
         set_syminfo_mintick(0.25);
     }
+    std::string input_string(const std::string& key, const std::string& default_value) const {
+        return get_input_string(key, default_value);
+    }
     void on_source_bar(const Bar&) override {
         ++calculations;
         require(scratch_trial_binding().slab_bound, "source callback follows slab binding");
@@ -138,7 +141,7 @@ void rich_begin_inputs_are_checked_before_the_source_provider_copies_them() {
             && host.scratch_trial_binding().reason == ScratchTrialReason::effective_inputs_changed
             && host.native_state().kind == NativeLifecycleKind::Unconfigured && host.calculations == 0,
             "rich begin cannot admit an override outside V's default proof");
-    require(host.get_input_string("Entry", "ab") == "ab",
+    require(host.input_string("Entry", "ab") == "ab",
             "rejected rich inputs were never installed by the source provider");
 }
 } // namespace
