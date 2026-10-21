@@ -118,7 +118,7 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REF: ${{ github.ref }}
         run: |
-          python3 scripts/release_gate.py gate \
+          python3 scripts/ci_release_gate.py gate \
             --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
 
       # current / next / tag / prerelease / previous (the release-notes base),

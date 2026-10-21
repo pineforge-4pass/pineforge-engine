@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from ci_preflight import _jobs, _steps
-import release_gate
+import ci_release_gate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,16 +87,16 @@ class GateTests(unittest.TestCase):
     def setUp(self):
         self.api = FakeAPI()
         self.git = mock.Mock(side_effect=AssertionError("unexpected git ancestry read"))
-        first = mock.patch.object(release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", None)
+        first = mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", None)
         first.start()
         self.addCleanup(first.stop)
-        reader = mock.patch.object(release_gate, "read_main_proof",
+        reader = mock.patch.object(ci_release_gate, "read_main_proof",
                                    side_effect=AssertionError("unexpected main-proof read"))
         self.proof = reader.start()
         self.addCleanup(reader.stop)
 
     def enable_watcher(self, receipt=None, *, first_sha=WATCHER_FIRST_SHA):
-        first = mock.patch.object(release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", first_sha)
+        first = mock.patch.object(ci_release_gate, "MAIN_PROOF_WATCHER_FIRST_SHA", first_sha)
         first.start()
         self.addCleanup(first.stop)
         self.git.side_effect = None
@@ -111,7 +111,7 @@ class GateTests(unittest.TestCase):
     def run_gate(self, *, repo=REPO, sha=SHA, ref="refs/heads/main"):
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            code = release_gate.main(
+            code = ci_release_gate.main(
                 ["gate", "--repo", repo, "--sha", sha, "--ref", ref],
                 api=self.api, git=self.git)
         return code, stdout.getvalue(), stderr.getvalue()
@@ -531,25 +531,25 @@ class GateTests(unittest.TestCase):
 
 class APICommandTests(unittest.TestCase):
     def test_gh_adapter_paginates_the_statuses_list(self):
-        with mock.patch.object(release_gate.subprocess, "run") as run:
+        with mock.patch.object(ci_release_gate.subprocess, "run") as run:
             run.return_value.stdout = "[]\n"
-            self.assertEqual(release_gate.gh_api(STATUSES_API, paginate=True), "[]\n")
+            self.assertEqual(ci_release_gate.gh_api(STATUSES_API, paginate=True), "[]\n")
         run.assert_called_once_with(["gh", "api", STATUSES_API, "--include", "--paginate"],
                                     check=True, capture_output=True, text=True)
 
     def test_gh_adapter_reads_live_main_sha_with_jq(self):
-        with mock.patch.object(release_gate.subprocess, "run") as run:
+        with mock.patch.object(ci_release_gate.subprocess, "run") as run:
             run.return_value.stdout = SHA + "\n"
-            self.assertEqual(release_gate.gh_api(MAIN_API, jq=".sha"), SHA + "\n")
+            self.assertEqual(ci_release_gate.gh_api(MAIN_API, jq=".sha"), SHA + "\n")
         run.assert_called_once_with(["gh", "api", MAIN_API, "--include", "--jq", ".sha"],
                                     check=True, capture_output=True, text=True)
 
     def test_gh_adapter_does_not_retry_a_failed_read(self):
         failure = subprocess.CalledProcessError(
             1, ["gh", "api", STATUSES_API], stderr="gh: Service Unavailable (HTTP 503)")
-        with mock.patch.object(release_gate.subprocess, "run", side_effect=failure) as run:
+        with mock.patch.object(ci_release_gate.subprocess, "run", side_effect=failure) as run:
             with self.assertRaises(subprocess.CalledProcessError):
-                release_gate.gh_api(STATUSES_API, paginate=True)
+                ci_release_gate.gh_api(STATUSES_API, paginate=True)
         run.assert_called_once_with(["gh", "api", STATUSES_API, "--include", "--paginate"],
                                     check=True, capture_output=True, text=True)
 
@@ -558,25 +558,25 @@ class MainProofSeamTests(unittest.TestCase):
     def test_reader_is_not_live_and_defines_no_storage_format(self):
         with self.assertRaisesRegex(NotImplementedError,
                                     "^phase 2 receipt reader lands with C2 main-watch #176$"):
-            release_gate.read_main_proof(REPO, SHA)
+            ci_release_gate.read_main_proof(REPO, SHA)
 
     def test_git_adapter_uses_merge_base_ancestor_exit_semantics(self):
         for code, expected in ((0, True), (1, False)):
             with self.subTest(code=code):
-                with mock.patch.object(release_gate.subprocess, "run") as run:
+                with mock.patch.object(ci_release_gate.subprocess, "run") as run:
                     run.return_value.returncode = code
-                    self.assertIs(release_gate.git_is_ancestor(WATCHER_FIRST_SHA, SHA), expected)
+                    self.assertIs(ci_release_gate.git_is_ancestor(WATCHER_FIRST_SHA, SHA), expected)
                 run.assert_called_once_with(
                     ["git", "merge-base", "--is-ancestor", WATCHER_FIRST_SHA, SHA],
                     check=False, capture_output=True, text=True)
 
     def test_git_adapter_does_not_treat_an_error_as_a_pre_watcher_commit(self):
-        with mock.patch.object(release_gate.subprocess, "run") as run:
+        with mock.patch.object(ci_release_gate.subprocess, "run") as run:
             run.return_value.returncode = 128
             run.return_value.stderr = "fatal: invalid commit"
-            with self.assertRaisesRegex(release_gate.ReleaseGateError,
+            with self.assertRaisesRegex(ci_release_gate.ReleaseGateError,
                                         "git merge-base --is-ancestor failed: fatal: invalid commit"):
-                release_gate.git_is_ancestor(WATCHER_FIRST_SHA, SHA)
+                ci_release_gate.git_is_ancestor(WATCHER_FIRST_SHA, SHA)
         run.assert_called_once()
 
 
@@ -599,7 +599,7 @@ class WorkflowPinTests(unittest.TestCase):
         self.assertRegex(gate, r"(?m)^        id: gate$", "release gate id must be gate")
         self.assertNotRegex(gate, r"(?m)^        if\s*:",
                             "release gate must run for dry runs too")
-        self.assertIn("python3 scripts/release_gate.py gate \\\n", gate)
+        self.assertIn("python3 scripts/ci_release_gate.py gate \\\n", gate)
         self.assertIn("          GH_TOKEN: ${{ steps.app.outputs.token }}\n", gate,
                       "release gate must use the release job's own App token")
         for name in ("GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF"):
@@ -623,7 +623,7 @@ class WorkflowPinTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, message):
                 self.assert_gate_pin(path.read_text())
 
-    def test_release_gate_is_unconditional_and_precedes_every_release_write(self):
+    def test_ci_release_gate_is_unconditional_and_precedes_every_release_write(self):
         self.assert_gate_pin(self.workflow())
 
     def test_pin_fails_when_gate_is_deleted(self):

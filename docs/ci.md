@@ -1263,7 +1263,7 @@ statuses API. Zero matches refuse; multiple matches refuse and name every
 matching PR, with no preference for the newest.
 
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
-`scripts/release_gate.py` is `None`. When C2 main-watch (#176) supplies the
+`scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
 receipt reader, the cut-over is the watcher's **first recorded main sha**,
 fixed in that constant by a reviewed PR. The release job cannot configure it
 through an environment variable or workflow input. At that sha and every

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refuse a release without full verification and parity evidence.
 
-Usage: release_gate.py gate --repo OWNER/REPO --sha SHA --ref refs/heads/main
+Usage: ci_release_gate.py gate --repo OWNER/REPO --sha SHA --ref refs/heads/main
 
 Every GitHub API call is a read (GET), using the release job's own GH_TOKEN.
 Each endpoint/page is read at most once; failures refuse without retry or sleep.
