@@ -41,9 +41,8 @@ env:
 jobs:
   authz:
     name: authz
-    # Pool label (needs no toolchain or Docker). Switch to pf-ci-crj once laneboss's
-    # bulletin says the Cloud Run class is live.
-    runs-on: ["self-hosted", "pf-ci", "pf-ci-x64"]
+    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -109,7 +108,7 @@ jobs:
   # builds the site as before. Classification uses the light pool class.
   changes:
     needs: [authz]
-    runs-on: ["self-hosted","pf-ci","pf-ci-x64"]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     outputs:
@@ -156,7 +155,7 @@ jobs:
   preflight:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' }}
-    runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
@@ -244,7 +243,7 @@ jobs:
         exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-26","build_type":"Debug"}]' || '[]') }}
         include:
           - os: ubuntu-24.04
-            runner: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+            runner: '["self-hosted","pf-gcp-pr"]'
           - os: macos-26
             runner: '["macos-26"]'
 
@@ -339,7 +338,7 @@ jobs:
   sanitizers:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     # 360 minutes (the platform maximum). No CTest stage bound remains: main's
     # full set ran out of the old 30- and 60-minute stage bounds twice, and
     # the owner rule of 2026-10-12 removed the bounds rather than raising
@@ -413,7 +412,7 @@ jobs:
   kernel-only:
     needs: [authz, changes]
     if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: ["self-hosted","pf-ci","pf-ci-x64-16"]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # PRs exclude the measured slow rows; push and dispatch run the whole
@@ -508,7 +507,7 @@ jobs:
     needs: [authz, changes, preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
     if: always()
     # The aggregate runs only shell on the light pool class.
-    runs-on: ["self-hosted","pf-ci","pf-ci-x64"]
+    runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     steps:
