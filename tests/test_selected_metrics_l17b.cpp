@@ -1987,6 +1987,22 @@ void random_captures_match_frozen_array(Directory& directory) {
             host.fill_report(&actual.value);
             host.fill_report(&again.value);
             CHECK(sizeof(actual.value.metrics) == 768);
+            if (!same_metrics(actual.value.metrics, reference)) {
+                const auto* got = reinterpret_cast<const unsigned char*>(&actual.value.metrics);
+                const auto* want = reinterpret_cast<const unsigned char*>(&reference);
+                std::size_t byte = 0;
+                while (byte < sizeof reference && got[byte] == want[byte]) ++byte;
+                const auto* field = equity_stats_reference::first_difference(
+                    actual.value.metrics.equity, reference.equity);
+                std::fprintf(stderr,
+                    "C9 random capture: trial=%d m=%d step=%lld zone=%s sink=%d cut=%d "
+                    "metric_count=%lld first_metrics_byte=%zu equity_field=%s "
+                    "cagr=%a reference_cagr=%a calmar=%a reference_calmar=%a\n",
+                    trial, m, static_cast<long long>(step), zone, sink_on, cut,
+                    static_cast<long long>(metric_count), byte, field ? field : "(equal)",
+                    actual.value.metrics.equity.cagr, reference.equity.cagr,
+                    actual.value.metrics.equity.calmar, reference.equity.calmar);
+            }
             CHECK(same_metrics(actual.value.metrics, reference));
             CHECK(same_metrics(actual.value.metrics, again.value.metrics));
             CHECK(host.presentations == 1);
