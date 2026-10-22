@@ -499,9 +499,21 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                 check(self.lib.arena_bound_test_attach(fd, supplied) == 0,
                       f"arena attach: {self.lib.arena_bound_test_error()!r}")
                 attached = True
+                print(f"arena_bound: begin probe={probe.name} params={params!r} "
+                      f"half={half} supplied={supplied} certified={certified}",
+                      file=sys.stderr, flush=True)
                 try:
                     report = super().run(bars_csv, params=params, **kwargs)
                 except RuntimeError as error:
+                    print(f"arena_bound: failed probe={probe.name} params={params!r} "
+                          f"half={half} code={getattr(error, 'run_failure_code', None)!r} "
+                          f"args={getattr(error, 'run_failure_args', None)!r} "
+                          f"fixture_counts={self.fixture_counts!r} "
+                          f"high_water={int(self.lib.arena_bound_test_high_water())} "
+                          f"bytes_used={int(self.lib.arena_bound_test_bytes_used())} "
+                          f"legacy_writes={int(self.lib.arena_bound_test_legacy_writes())} "
+                          f"error={error!r}",
+                          file=sys.stderr, flush=True)
                     if not half:
                         raise
                     check(getattr(error, "run_failure_code", None) == "report_sink_failed",
