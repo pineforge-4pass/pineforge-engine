@@ -7253,3 +7253,36 @@ if(UNIX)
         pineforge_add_unit_test(test_o1s2_payload_readers)
     endif()
 endif()
+
+# LAB-O1SEAMS s4: one executable, one independently selected row per clause.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_o1s4_queue_red)
+    add_executable(test_o1s4_queue_red test_o1s4_queue_red.cpp)
+    target_link_libraries(test_o1s4_queue_red PRIVATE pineforge)
+    target_compile_features(test_o1s4_queue_red PRIVATE cxx_std_17)
+    target_compile_options(test_o1s4_queue_red PRIVATE -ffp-contract=off -UNDEBUG)
+    add_test(NAME s4_one_queue_owner_kept_handle_order_red
+        COMMAND test_o1s4_queue_red s4_one_queue_owner_kept_handle_order_red)
+    add_test(NAME s4_queue_and_membership_islands_fixed_red
+        COMMAND test_o1s4_queue_red s4_queue_and_membership_islands_fixed_red)
+    add_test(NAME s4_terminal_mark_descriptor_stays_fixed_red
+        COMMAND test_o1s4_queue_red s4_terminal_mark_descriptor_stays_fixed_red)
+    add_test(NAME s34_record_index_publication_rollback_red
+        COMMAND test_o1s4_queue_red s34_record_index_publication_rollback_red)
+    add_test(NAME s4_predicate_retained_placement_red
+        COMMAND test_o1s4_queue_red s4_predicate_retained_placement_red)
+    add_test(NAME s4_predicate_named_by_each_current_owner_red
+        COMMAND test_o1s4_queue_red s4_predicate_named_by_each_current_owner_red)
+    add_test(NAME s4_predicate_live_units_key_presence_red
+        COMMAND test_o1s4_queue_red s4_predicate_live_units_key_presence_red)
+    add_test(NAME s4_predicate_opened_full_handle_red
+        COMMAND test_o1s4_queue_red s4_predicate_opened_full_handle_red)
+    add_test(NAME s4_predicate_native_canonical_cohort_red
+        COMMAND test_o1s4_queue_red s4_predicate_native_canonical_cohort_red)
+    add_test(NAME s4_five_pin_frontier_and_indexes_red
+        COMMAND test_o1s4_queue_red s4_five_pin_frontier_and_indexes_red)
+    add_test(NAME s4_membership_hashes_ignore_storage_red
+        COMMAND test_o1s4_queue_red s4_membership_hashes_ignore_storage_red)
+    add_test(NAME s34_failures_are_not_empty_membership_red
+        COMMAND test_o1s4_queue_red s34_failures_are_not_empty_membership_red)
+endif()

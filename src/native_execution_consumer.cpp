@@ -916,13 +916,16 @@ void hash_authority(F& f, const native_order::Authority& authority) noexcept {
 // receipts are append-only history of the roster commands and fold through a
 // running digest instead, one receipt at its commit (hash_cohort_receipt).
 template <class F>
-void hash_cohorts(F& f, const native_order::WorkingRequestCore& requests) noexcept {
+void hash_cohorts(F& f, const native_order::WorkingRequestCore& requests) {
     const auto& cohorts = requests.cohorts();
     f.u(cohorts.size());
-    for (const auto& roster : cohorts) {
-        hash_cohort_handle(f, roster.handle);
-        f.u(roster.origins.size());
-        for (const auto& origin : roster.origins) hash_handle(f, origin);
+    for (std::size_t i = 0; i < cohorts.size(); ++i) {
+        const native_order::CohortHandle handle{static_cast<std::uint64_t>(i) + 1};
+        hash_cohort_handle(f, handle);
+        f.u(requests.visit_cohort_origins(handle, nullptr, nullptr));
+        requests.visit_cohort_origins(handle, &f, [](void* context, const native_order::RequestHandle& origin) {
+            hash_handle(*static_cast<F*>(context), origin);
+        });
     }
 }
 
@@ -9045,6 +9048,21 @@ void NativeExecutionConsumer::record_report_point(
 // path folds (engine_execution.cpp), so a mark row and a close row fold the
 // identical excursion facts; the member is a run-scoped NaN today, which makes
 // the branch inert rather than absent.
+const Trade& BacktestEngine::TerminalRows::row(std::size_t index) const {
+    if (!engine_ || index >= count_) throw std::out_of_range("terminal report row");
+    const auto& lot = engine_->pyramid_entries_[index];
+    execution::PhysicalExecutionContext context;
+    context.effective_time_ms = time_; context.interval_index = interval_; context.account_fx = fx_;
+    if (!std::isnan(engine_->fold_exit_trail_peak_))
+        context.preceding_exit_trail_peak = engine_->fold_exit_trail_peak_;
+    row_ = engine_->build_close_trade_with_costs(lot, lot.qty, price_,
+        engine_->position_side_ == PositionSide::LONG,
+        engine_->allocated_entry_commission(lot, lot.qty),
+        engine_->calc_commission_at(price_, lot.qty, fx_), context);
+    row_.open_at_end = true;
+    return row_;
+}
+
 double NativeExecutionConsumer::append_open_position_report_rows(
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
         int interval_index, double account_fx) const {
@@ -9065,8 +9083,9 @@ double NativeExecutionConsumer::append_open_position_report_rows(
             throw std::logic_error("non-finite open-position report row");
         row.open_at_end = true;
         marked += row.pnl;
-        engine.range_end_trades_.push_back(std::move(row));
     }
+    engine.range_end_trades_.mark(engine, mark_price, mark_time_ms, interval_index,
+                                  account_fx, engine.pyramid_entries_.size());
     return marked;
 }
 

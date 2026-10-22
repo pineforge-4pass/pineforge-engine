@@ -456,6 +456,7 @@ public:
     double append_open_position_report_rows(
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
         int interval_index, double account_fx) const;
+    void fixture_note_committed(const native_order::EventRange& events, bool cohort_receipts) { if (cohort_receipts) note_cohort_receipts(); else note_committed_events(events); }
 
     // How an input span aggregates into this run's script bars, asked before
     // any of it is delivered: for each input bar, whether it completes a

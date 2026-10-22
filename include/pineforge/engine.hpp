@@ -550,7 +550,26 @@ protected:
     // spec asks for them (NativeRunSpec::report_open_position_at_end). They
     // are merged behind trades_ by fill_trades_section and never enter
     // trades_, the realized sums, or the live position (a stream continues it).
-    std::vector<Trade> range_end_trades_;
+    class TerminalRows {
+    public:
+        void clear() noexcept { count_ = 0; row_ = {}; engine_ = nullptr; }
+        bool empty() const noexcept { return count_ == 0; }
+        std::size_t size() const noexcept { return count_; }
+        const Trade& row(std::size_t) const;
+        const Trade& operator[](std::size_t i) const { return row(i); }
+        void mark(const BacktestEngine& engine, double price, int64_t time,
+                  int interval, double fx, std::size_t count) noexcept {
+            engine_ = &engine; price_ = price; time_ = time;
+            interval_ = interval; fx_ = fx; count_ = count;
+        }
+    private:
+        const BacktestEngine* engine_ = nullptr;
+        double price_ = 0.0, fx_ = 1.0;
+        int64_t time_ = 0;
+        int interval_ = 0;
+        std::size_t count_ = 0;
+        mutable Trade row_{};
+    } range_end_trades_;
 
     // Best favorable price is updated by the physical open/add helpers for
     // every host. Source policy may consume the same value through
@@ -1694,6 +1713,17 @@ protected:
 
 public:
     virtual ~BacktestEngine();
+    void fixture_open_lot(PositionSide side, const PyramidEntry* lot) {
+        if (!lot) {
+            pyramid_entries_.clear(); position_side_ = PositionSide::FLAT;
+            position_qty_ = 0.0; position_entry_count_ = 0;
+            return;
+        }
+        pyramid_entries_.push_back(*lot);
+        position_side_ = side;
+        position_qty_ += lot->qty;
+        position_entry_count_ = static_cast<int>(pyramid_entries_.size());
+    }
     int execution_contract() const;
     bool native_bound() const;
     virtual void on_bar(const Bar& bar) = 0;

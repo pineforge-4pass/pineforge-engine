@@ -2,6 +2,7 @@
 #include <pineforge/detail/disk_id_table.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/detail/native_working_codec.hpp>
 #include <pineforge/native_host.hpp>
 #include "native_execution_consumer.hpp"
 #include <cassert>
@@ -238,6 +239,13 @@ void reserve_n(std::vector<T>& values, std::size_t n) {
         cap *= 2;
     }
     values.reserve(std::max(required, cap));
+}
+
+template<class T>
+void reserve_n(detail::WorkingSequence<T>& values, std::size_t n) {
+    if (n > values.max_size() - values.size())
+        throw std::length_error("native working-request capacity exhausted");
+    values.reserve(values.size() + n);
 }
 
 uint64_t event_ordinal(const CommandEvent& event) {
@@ -1892,6 +1900,39 @@ struct WorkingRequestCore::BookSpill {
     }
 };
 
+// The borrowed store is the sole authority once bound. live_ is then only a
+// one-row command frame, never a second executable population.
+struct WorkingRequestCore::WorkingBook {
+    detail::ScratchStore* store = nullptr;
+    std::uint64_t generation = 0;
+    std::size_t count = 0;
+    std::shared_ptr<detail::working_store::Binding> binding =
+        std::make_shared<detail::working_store::Binding>();
+    mutable std::array<std::shared_ptr<LiveRequest>, 2> side{};
+    mutable std::size_t next_side = 0;
+    detail::working_store::Key key(std::uint64_t domain, std::uint64_t item) const {
+        return {domain, generation, item};
+    }
+    std::shared_ptr<LiveRequest> keep(detail::ScratchHandle handle) const {
+        auto row = std::make_shared<LiveRequest>(
+            detail::working_store::read<LiveRequest>(*store, handle, binding));
+        side[next_side] = row; next_side = (next_side + 1) % side.size();
+        return row;
+    }
+    detail::ScratchHandle by_handle(std::uint64_t incarnation) const {
+        namespace ws = detail::working_store;
+        const auto priority = ws::get_word(*store, key(11, incarnation));
+        if (!priority) return 0;
+        if (*priority == 0) ws::check(detail::ScratchStatus::corrupt);
+        const auto row = ws::find(*store, key(10, *priority));
+        if (!row) ws::check(detail::ScratchStatus::corrupt);
+        return row;
+    }
+    detail::ScratchHandle seek(std::uint64_t first, std::uint64_t& priority) const {
+        return detail::working_store::seek(*store, 10, generation, first, priority);
+    }
+};
+
 // What the stores know about the core (E02--E05). The core keeps no copy of
 // it: the spilled count is the book spill's, the journal's length the
 // journal's, the keys' base and count the key log's.
@@ -1900,6 +1941,7 @@ std::size_t WorkingRequestCore::spilled_count() const noexcept {
 }
 
 std::size_t WorkingRequestCore::live_size() const noexcept {
+    if (working_book_) return working_book_->count;
     return live_.size() + spilled_count();
 }
 
@@ -2006,6 +2048,10 @@ const LiveRequest* WorkingRequestCore::spilled_row(uint64_t incarnation) const {
 
 WorkingRequestCore::BookCursor WorkingRequestCore::book_begin() const {
     BookCursor cursor;
+    if (working_book_) {
+        cursor.at = working_book_->seek(0, cursor.spilled_priority);
+        return cursor;
+    }
     if (spilled_count() != 0) {
         cursor.at = book_spill_->first_alive();
         if (cursor.at != 0) cursor.spilled_priority = book_spill_->priority_at(cursor.at);
@@ -2014,15 +2060,22 @@ WorkingRequestCore::BookCursor WorkingRequestCore::book_begin() const {
 }
 
 bool WorkingRequestCore::book_done(const BookCursor& cursor) const noexcept {
+    if (working_book_) return cursor.at == 0;
     return cursor.r == live_.size() && cursor.at == 0;
 }
 
 bool WorkingRequestCore::book_next_spilled(const BookCursor& cursor) const noexcept {
+    if (working_book_) return cursor.at != 0;
     return cursor.at != 0
         && (cursor.r == live_.size() || cursor.spilled_priority < live_[cursor.r].priority());
 }
 
 void WorkingRequestCore::book_step(BookCursor& cursor) const {
+    if (working_book_) {
+        if (cursor.spilled_priority == std::numeric_limits<std::uint64_t>::max()) cursor.at = 0;
+        else cursor.at = working_book_->seek(cursor.spilled_priority + 1, cursor.spilled_priority);
+        return;
+    }
     if (book_next_spilled(cursor)) {
         cursor.at = book_spill_->next_alive(cursor.at);
         cursor.spilled_priority = cursor.at != 0 ? book_spill_->priority_at(cursor.at) : 0;
@@ -2033,6 +2086,15 @@ void WorkingRequestCore::book_step(BookCursor& cursor) const {
 
 template <class Visit>
 void WorkingRequestCore::visit_book(Visit&& visit) const {
+    if (working_book_) {
+        auto cursor = book_begin();
+        while (!book_done(cursor)) {
+            const auto row = working_book_->keep(cursor.at);
+            if (!visit(*row)) return;
+            book_step(cursor);
+        }
+        return;
+    }
     if (spilled_count() == 0) {
         for (const LiveRequest& row : live_) {
             if (!visit(row)) return;
@@ -2053,6 +2115,11 @@ void WorkingRequestCore::visit_book(Visit&& visit) const {
 
 const LiveRequest& WorkingRequestCore::live_at(std::size_t rank) const {
     if (rank >= live_size()) throw std::out_of_range("native live book rank is not live");
+    if (working_book_) {
+        auto cursor = book_begin();
+        for (std::size_t i = 0; i < rank; ++i) book_step(cursor);
+        return *working_book_->keep(cursor.at);
+    }
     if (spilled_count() == 0) return live_[rank];
     BookCursor cursor = book_begin();
     for (std::size_t skipped = 0; skipped != rank; ++skipped) book_step(cursor);
@@ -2063,6 +2130,10 @@ const LiveRequest& WorkingRequestCore::live_at(std::size_t rank) const {
 }
 
 const LiveRequest& WorkingRequestCore::live_back() const {
+    if (working_book_) {
+        if (!live_size()) throw std::out_of_range("native live book is empty");
+        return live_at(live_size() - 1);
+    }
     if (spilled_count() == 0) {
         if (live_.empty()) throw std::out_of_range("native live book is empty");
         return live_.back();
@@ -2084,6 +2155,7 @@ WorkingRequestCore::LiveView WorkingRequestCore::live() const noexcept {
 void WorkingRequestCore::LiveView::const_iterator::settle() {
     held_.reset();
     if (core_->book_done(cursor_)) return;
+    if (core_->working_book_) { held_ = core_->working_book_->keep(cursor_.at); return; }
     if (core_->book_next_spilled(cursor_)) {
         // Through the ring, so a reference the view handed out stays valid
         // for the next few spilled rows it reads, as the header promises.
@@ -2371,6 +2443,10 @@ void WorkingRequestCore::require_epoch_room() const {
 }
 
 void WorkingRequestCore::clear_unbound() noexcept {
+    scratch_store_ = nullptr;
+    working_book_.reset();
+    issued_.detach();
+    cohort_receipts_.detach();
     identity_.session_key.clear();
     identity_.run_number = 0;
     live_.clear();
@@ -2431,6 +2507,7 @@ void WorkingRequestCore::seal_plan(MutationPlan& plan) {
 // no longer reserves anything for it (nothing reads the capacity).
 void WorkingRequestCore::reserve(std::size_t expected_events) {
     (void) expected_events;
+    if (working_book_) return;
     if (live_.capacity() < 8) live_.reserve(8);
 }
 
@@ -2525,6 +2602,15 @@ WorkingRequestCore::TargetKind WorkingRequestCore::classify_resident(
 WorkingRequestCore::TargetKind WorkingRequestCore::classify(
         const RequestHandle& handle, std::size_t* live_index) {
     if (!names_run(handle, identity_)) return TargetKind::InvalidHandle;
+    if (working_book_) {
+        const auto found = working_book_->by_handle(handle.incarnation);
+        if (!found) return TargetKind::NotWorking;
+        LiveRequest row = detail::working_store::read<LiveRequest>(*scratch_store_, found, working_book_->binding);
+        if (!row.definition || row.handle() != handle) detail::working_store::check(detail::ScratchStatus::corrupt);
+        live_.clear(); live_.push_back(std::move(row));
+        if (live_index) *live_index = 0;
+        return TargetKind::Live;
+    }
     const TargetKind resident = classify_resident(handle, live_index);
     if (resident == TargetKind::Live || spilled_count() == 0) return resident;
     std::size_t index = 0;
@@ -2551,6 +2637,13 @@ const LiveRequest* WorkingRequestCore::find_repriced(uint64_t incarnation) const
 // makes passes through here.
 const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) const {
     if (!names_run(handle, identity_)) return nullptr;
+    if (working_book_) {
+        const auto found = working_book_->by_handle(handle.incarnation);
+        if (!found) return nullptr;
+        const auto row = working_book_->keep(found);
+        if (!row->definition || row->handle() != handle) detail::working_store::check(detail::ScratchStatus::corrupt);
+        return row.get();
+    }
     const LiveRequest* resident = nullptr;
     if (!repriced_.empty()) {
         resident = find_repriced(handle.incarnation);
@@ -2692,6 +2785,7 @@ void WorkingRequestCore::note_chain_segment(uint64_t event_ordinal, uint64_t off
 // The chain index. Incarnations are issued in increasing order (usable_
 // incarnation), so both tables only ever grow at their back.
 void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
+    if (working_book_) return; // Published atomically with the row/index before the journal append.
     const RequestDefinition* definition = nullptr;
     if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
         definition = accepted->definition.get();
@@ -2711,8 +2805,14 @@ void WorkingRequestCore::index_committed(const CommandEvent& event) noexcept {
     if (definition->root) append_successor_root(incarnation, definition->root->incarnation);
 }
 
-bool WorkingRequestCore::issued(const RequestHandle& handle) const noexcept {
+bool WorkingRequestCore::issued(const RequestHandle& handle) const {
     if (handle.incarnation == 0 || handle.run != identity_) return false;
+    if (working_book_) {
+        const auto root = detail::working_store::get_word(*scratch_store_, working_book_->key(12, handle.incarnation));
+        if (root && (*root == 0 || *root > handle.incarnation))
+            detail::working_store::check(detail::ScratchStatus::corrupt);
+        return root.has_value();
+    }
     const auto it = std::upper_bound(
             issued_.begin(), issued_.end(), handle.incarnation,
             [](uint64_t incarnation, const std::pair<uint64_t, uint64_t>& range) {
@@ -2747,9 +2847,18 @@ WorkingRequestCore::CohortView WorkingRequestCore::cohorts() const noexcept {
 }
 
 WorkingRequestCore::CohortView::const_iterator::reference
-WorkingRequestCore::CohortView::const_iterator::operator*() const noexcept {
+WorkingRequestCore::CohortView::const_iterator::operator*() const {
     assert(core_ && index_ < core_->next_cohort_handle_ - 1);
     const auto handle = static_cast<std::uint64_t>(index_) + 1;
+    if (core_->working_book_) {
+        empty_.handle = CohortHandle{handle};
+        empty_.origins.clear();
+        core_->visit_cohort_origins(empty_.handle, &empty_.origins,
+            [](void* context, const RequestHandle& origin) {
+                static_cast<std::vector<RequestHandle>*>(context)->push_back(origin);
+            });
+        return empty_;
+    }
     const auto found = core_->cohorts_.find(handle);
     if (found != core_->cohorts_.end()) return found->second;
     empty_.handle = CohortHandle{handle};
@@ -2773,6 +2882,7 @@ CohortHandle WorkingRequestCore::cohort_open() {
 }
 
 void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
+    if (working_book_) { change_working_cohort(cohort, origin, true); return; }
     require_identity(identity_);
     require_epoch_room();
     CohortReceipt receipt;
@@ -2803,6 +2913,7 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
 }
 
 void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin) {
+    if (working_book_) { change_working_cohort(cohort, origin, false); return; }
     require_identity(identity_);
     require_epoch_room();
     CohortReceipt receipt;
@@ -2832,13 +2943,80 @@ bool WorkingRequestCore::cohort_contains(
     if (!cohort_exists(cohort)) return false;
     const auto root = canonical_cohort_origin(opening);
     if (!root) return false;
+    if (working_book_) {
+        const auto owner = detail::working_store::get_word(*scratch_store_, working_book_->key(13, cohort.value));
+        if (!owner) return false;
+        if (*owner == 0) detail::working_store::check(detail::ScratchStatus::corrupt);
+        detail::WorkingSequence<RequestHandle> origins;
+        origins.bind_existing(*scratch_store_, 14, *owner);
+        return std::binary_search(origins.cbegin(), origins.cend(), *root, handle_less);
+    }
     const auto found = cohorts_.find(cohort.value);
     if (found == cohorts_.end()) return false;
     const auto& origins = found->second.origins;
     return std::binary_search(origins.begin(), origins.end(), *root, handle_less);
 }
 
-std::size_t WorkingRequestCore::retire_cohort_receipts(std::size_t through) noexcept {
+std::size_t WorkingRequestCore::visit_cohort_origins(
+        CohortHandle cohort, void* context, HandleVisitor visitor) const {
+    if (!cohort_exists(cohort)) return 0;
+    if (working_book_) {
+        const auto owner = detail::working_store::get_word(*scratch_store_, working_book_->key(13, cohort.value));
+        if (!owner) return 0;
+        if (*owner == 0) detail::working_store::check(detail::ScratchStatus::corrupt);
+        detail::WorkingSequence<RequestHandle> origins;
+        origins.bind_existing(*scratch_store_, 14, *owner);
+        if (visitor) for (const auto& origin : static_cast<const decltype(origins)&>(origins))
+            visitor(context, origin);
+        return origins.size();
+    }
+    const auto found = cohorts_.find(cohort.value);
+    if (found == cohorts_.end()) return 0;
+    if (visitor) for (const auto& origin : found->second.origins) visitor(context, origin);
+    return found->second.origins.size();
+}
+
+void WorkingRequestCore::change_working_cohort(CohortHandle cohort, const RequestHandle& origin,
+                                               bool add) {
+    namespace ws = detail::working_store;
+    require_identity(identity_); require_epoch_room();
+    CohortReceipt receipt;
+    receipt.operation = add ? CohortReceiptOperation::Add : CohortReceiptOperation::Remove;
+    receipt.cohort = cohort; receipt.origin = origin;
+    std::optional<RequestHandle> canonical;
+    if (!cohort_exists(cohort)) receipt.status = CohortReceiptStatus::InvalidHandle;
+    else if (!issued(origin)) receipt.status = CohortReceiptStatus::UnknownOrigin;
+    else if (add && !find_live(origin)) receipt.status = CohortReceiptStatus::TerminalOrigin;
+    else {
+        canonical = canonical_cohort_origin(origin);
+        receipt.status = canonical ? CohortReceiptStatus::Applied : CohortReceiptStatus::UnknownOrigin;
+    }
+    const auto receipts_before = cohort_receipts_.size();
+    try {
+        ws::transaction(*scratch_store_, [&] {
+            if (canonical) {
+                auto owner = ws::get_word(*scratch_store_, working_book_->key(13, cohort.value));
+                if (!owner && add) {
+                    owner = ws::allocate(*scratch_store_);
+                    ws::put_word(*scratch_store_, working_book_->key(13, cohort.value), *owner);
+                }
+                if (owner) {
+                    detail::WorkingSequence<RequestHandle> origins;
+                    origins.bind(*scratch_store_, 14, *owner);
+                    const auto at = std::lower_bound(origins.cbegin(), origins.cend(), *canonical, handle_less);
+                    const auto rank = at - origins.cbegin();
+                    const bool present = at != origins.cend() && *at == *canonical;
+                    if (add && !present) origins.insert(origins.begin() + rank, *canonical);
+                    if (!add && present) origins.erase(origins.begin() + rank);
+                }
+            }
+            cohort_receipts_.push_back(receipt);
+        });
+    } catch (...) { cohort_receipts_.restore_size(receipts_before); throw; }
+    bump_epoch();
+}
+
+std::size_t WorkingRequestCore::retire_cohort_receipts(std::size_t through) {
     if (through <= cohort_receipts_base_) return 0;
     const std::size_t count = std::min(through - cohort_receipts_base_, cohort_receipts_.size());
     cohort_receipts_.erase(cohort_receipts_.begin(),
@@ -3134,8 +3312,9 @@ bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
     return true;
 }
 
-InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
+InstallResult WorkingRequestCore::commit(MutationPlan& plan) {
     if (const auto error = validate_plan(plan)) return *error;
+    if (working_book_) publish_working(plan);
     const std::size_t first = history_end();
     const std::size_t count = plan.events.size();
     for (std::size_t i = 0; i < plan.events.size(); ++i) {
@@ -3145,7 +3324,11 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
         if (plan.consume_incarnation) index_committed(journal_->resident_at(journal_->end - 1));
         last_ordinal_ = ordinal;
     }
-    if (plan.live_change == kLivePush) {
+    if (working_book_) {
+        if (plan.live_change != kLivePush && plan.live_change != 0 && !live_.empty())
+            note_chain_loss(live_[plan.live_index]);
+        live_.clear();
+    } else if (plan.live_change == kLivePush) {
         live_.push_back(std::move(plan.live_row));
     } else if (plan.live_change == kLiveErase) {
         erase_live(plan.live_index);
@@ -3193,12 +3376,110 @@ WorkingRequestCore::WorkingRequestCore(RunIdentity identity) {
     journal_ = std::make_shared<JournalStore>();
 }
 
+void WorkingRequestCore::bind_scratch_store(detail::ScratchStore& store) {
+    detail::working_store::check(store.status());
+    namespace ws = detail::working_store;
+    if (!working_book_) {
+        auto book = std::make_shared<WorkingBook>();
+        book->store = &store;
+        book->binding->store = &store;
+        ws::transaction(store, [&] {
+            book->generation = ws::allocate(store);
+            visit_book([&](const LiveRequest& row) {
+                ws::write(store, book->key(10, row.priority()), row, true);
+                ws::put_word(store, book->key(11, row.handle().incarnation), row.priority());
+                ++book->count; return true;
+            });
+            for (const auto& range : issued_) {
+                for (auto i = range.first;; ++i) {
+                    ws::put_word(store, book->key(12, i), successor_root(i).value_or(i));
+                    if (i == range.second) break;
+                }
+            }
+            for (const auto& row : cohorts_) {
+                const auto owner = ws::allocate(store);
+                ws::put_word(store, book->key(13, row.first), owner);
+                detail::WorkingSequence<RequestHandle> members;
+                members.bind(store, 14, owner);
+                for (const auto& origin : row.second.origins) members.push_back(origin);
+            }
+            ws::put_word(store, book->key(15, 0), book->count);
+        });
+        working_book_ = std::move(book);
+        std::vector<LiveRequest>{}.swap(live_); live_.reserve(1);
+        std::vector<std::pair<uint64_t, uint64_t>>{}.swap(repriced_);
+        book_spill_.reset(); successor_roots_.reset();
+        cohorts_.clear();
+    } else {
+        working_book_->store = &store;
+        working_book_->binding->store = &store;
+        for (auto& row : working_book_->side) row.reset();
+        const auto count = ws::get_word(store, working_book_->key(15, 0));
+        if (!count || *count > std::numeric_limits<std::size_t>::max())
+            ws::check(detail::ScratchStatus::corrupt);
+        working_book_->count = static_cast<std::size_t>(*count);
+        live_.clear();
+        bump_epoch();
+    }
+    scratch_store_ = &store;
+    issued_.bind(store, 17, working_book_->generation);
+    cohort_receipts_.bind(store, 16, working_book_->generation);
+}
+
+void WorkingRequestCore::publish_working(const MutationPlan& plan) {
+    namespace ws = detail::working_store;
+    auto& book = *working_book_;
+    auto count = book.count;
+    const auto ranges_before = issued_.size();
+    try {
+    ws::transaction(*scratch_store_, [&] {
+        if (plan.live_change == kLiveErase || plan.live_change == kLiveUpdate
+            || plan.live_change == kLiveErasePush) {
+            const auto& old = live_[plan.live_index];
+            ws::erase(*scratch_store_, book.key(10, old.priority()));
+            ws::erase(*scratch_store_, book.key(11, old.handle().incarnation));
+            if (plan.live_change == kLiveErase) --count;
+        }
+        if (plan.live_change == kLivePush || plan.live_change == kLiveUpdate
+            || plan.live_change == kLiveErasePush) {
+            const auto& row = plan.live_row;
+            ws::write(*scratch_store_, book.key(10, row.priority()), row, true);
+            ws::put_word(*scratch_store_, book.key(11, row.handle().incarnation), row.priority());
+            if (plan.live_change == kLivePush) ++count;
+        }
+        if (plan.consume_incarnation) {
+            for (const auto& event : plan.events) {
+                const RequestDefinition* definition = nullptr;
+                if (const auto* accepted = std::get_if<AcceptedEvent>(&event))
+                    definition = accepted->definition.get();
+                if (const auto* replaced = std::get_if<ReplacedEvent>(&event))
+                    if (!replaced->kept_handle()) definition = replaced->successor_definition.get();
+                if (definition) {
+                    const auto incarnation = definition->handle.incarnation;
+                    ws::put_word(*scratch_store_, book.key(12, incarnation),
+                        definition->root ? definition->root->incarnation : incarnation);
+                    if (!issued_.empty() && issued_.back().second + 1 == incarnation)
+                        issued_.back().second = incarnation;
+                    else issued_.push_back({incarnation, incarnation});
+                }
+            }
+        }
+        issued_.flush();
+        ws::put_word(*scratch_store_, book.key(15, 0), count);
+    });
+    } catch (...) { issued_.restore_size(ranges_before); throw; }
+    book.count = count;
+    for (auto& row : book.side) row.reset();
+}
+
 WorkingRequestCore::WorkingRequestCore(WorkingRequestCore&& other) noexcept {
     *this = std::move(other);
 }
 WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) noexcept {
     if (this == &other) return *this;
     identity_ = std::move(other.identity_);
+    scratch_store_ = std::exchange(other.scratch_store_, nullptr);
+    working_book_ = std::move(other.working_book_);
     live_ = std::move(other.live_);
     book_spill_ = std::move(other.book_spill_);
     journal_ = std::move(other.journal_);
@@ -3248,8 +3529,10 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
 
 void WorkingRequestCore::reset(RunIdentity identity) {
     require_identity(identity);
+    auto* store = scratch_store_;
     WorkingRequestCore next(std::move(identity));
     *this = std::move(next);
+    if (store) bind_scratch_store(*store);
 }
 
 std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
@@ -4203,6 +4486,12 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
         const Request& request, const CommandContext& context,
         uint64_t& next_order_incarnation, uint64_t& next_timeline_ordinal,
         RequestOrigin origin) {
+    if (working_book_) {
+        auto prepared = prepare_submit(request, context, next_order_incarnation, next_timeline_ordinal, origin);
+        auto installed = install_submit(std::move(prepared));
+        if (auto* ok = std::get_if<CommandInstalled<SubmitResult>>(&installed)) return std::move(*ok);
+        throw std::logic_error("native bound submit install failed");
+    }
     require_identity(identity_);
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
     Request staged = request;
@@ -4390,6 +4679,12 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
         const RequestHandle& target, const Request& request, const CommandContext& context,
         uint64_t& next_order_incarnation, uint64_t& next_timeline_ordinal,
         ReplaceOptions options) {
+    if (working_book_) {
+        auto prepared = prepare_replace(target, request, context, next_order_incarnation, next_timeline_ordinal, options);
+        auto installed = install_replace(std::move(prepared));
+        if (auto* ok = std::get_if<CommandInstalled<ReplaceResult>>(&installed)) return std::move(*ok);
+        throw std::logic_error("native bound replace install failed");
+    }
     if (options.keep_handle || (options.keep_binding && starts_unbound_close(request))) {
         return apply_replace_kept(target, request, context, next_order_incarnation,
                                   next_timeline_ordinal, options);
@@ -4408,6 +4703,12 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace(
 
 CommandInstalled<CancelResult> WorkingRequestCore::apply_cancel(
         const RequestHandle& target, uint64_t& next_timeline_ordinal, CancelReason reason) {
+    if (working_book_) {
+        auto prepared = prepare_cancel(target, next_timeline_ordinal, reason);
+        auto installed = install_cancel(std::move(prepared));
+        if (auto* ok = std::get_if<CommandInstalled<CancelResult>>(&installed)) return std::move(*ok);
+        throw std::logic_error("native bound cancel install failed");
+    }
     require_identity(identity_);
     RequestHandle staged_target = target;
     std::size_t live_index = 0;
@@ -4435,7 +4736,7 @@ CommandInstalled<CancelResult> WorkingRequestCore::apply_cancel(
             end_direct(live_index, std::move(cancelled)).events};
 }
 
-InstalledCommand<SubmitResult> WorkingRequestCore::install_submit(PreparedSubmit&& prepared) noexcept {
+InstalledCommand<SubmitResult> WorkingRequestCore::install_submit(PreparedSubmit&& prepared) {
     if (!prepared.impl_) return InstallError::StalePreparation;
     auto installed = commit(prepared.impl_->plan);
     if (const auto* error = std::get_if<InstallError>(&installed)) return *error;
@@ -4443,7 +4744,7 @@ InstalledCommand<SubmitResult> WorkingRequestCore::install_submit(PreparedSubmit
                                           std::get<Installed>(installed).events};
 }
 
-InstalledCommand<ReplaceResult> WorkingRequestCore::install_replace(PreparedReplace&& prepared) noexcept {
+InstalledCommand<ReplaceResult> WorkingRequestCore::install_replace(PreparedReplace&& prepared) {
     if (!prepared.impl_) return InstallError::StalePreparation;
     auto installed = commit(prepared.impl_->plan);
     if (const auto* error = std::get_if<InstallError>(&installed)) return *error;
@@ -4451,7 +4752,7 @@ InstalledCommand<ReplaceResult> WorkingRequestCore::install_replace(PreparedRepl
                                            std::get<Installed>(installed).events};
 }
 
-InstalledCommand<CancelResult> WorkingRequestCore::install_cancel(PreparedCancel&& prepared) noexcept {
+InstalledCommand<CancelResult> WorkingRequestCore::install_cancel(PreparedCancel&& prepared) {
     if (!prepared.impl_) return InstallError::StalePreparation;
     auto installed = commit(prepared.impl_->plan);
     if (const auto* error = std::get_if<InstallError>(&installed)) return *error;
@@ -4510,11 +4811,18 @@ CancelResult WorkingRequestCore::cancel(const RequestHandle& target,
     return std::move(ok.result);
 }
 
-InstallResult WorkingRequestCore::install_mutation(PreparedMutation&& prepared) noexcept {
+InstallResult WorkingRequestCore::install_mutation(PreparedMutation&& prepared) {
     if (!prepared.impl_) return InstallError::StalePreparation;
     return commit(prepared.impl_->plan);
 }
 
+Preparation<Installed> WorkingRequestCore::install_working_mutation(Preparation<PreparedMutation>&& prepared) {
+    if (const auto* no_change = std::get_if<NoChange>(&prepared)) return *no_change;
+    if (const auto* error = std::get_if<PreparationError>(&prepared)) return *error;
+    auto installed = install_mutation(std::get<PreparedMutation>(std::move(prepared)));
+    if (auto* ok = std::get_if<Installed>(&installed)) return *ok;
+    throw std::logic_error("native bound mutation install failed");
+}
 namespace {
 
 Allowance initialize_allowance(const Remaining& remaining, const Capacity& capacity, uint64_t point) {
@@ -4880,6 +5188,8 @@ Preparation<Installed> WorkingRequestCore::apply_evaluation(
         const TargetObservation& observation,
         uint64_t& next_timeline_ordinal,
         bool open_activation_grant) {
+    if (working_book_) return install_working_mutation(
+        prepare_evaluation(target, context, observation, next_timeline_ordinal, open_activation_grant));
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -5203,6 +5513,9 @@ Preparation<Installed> WorkingRequestCore::apply_trigger(
         std::optional<Side> cohort_side,
         const ActivationGrid& activation_grid,
         bool open_activation_grant) {
+    if (working_book_) return install_working_mutation(
+        prepare_trigger(target, transition, driver_class, next_timeline_ordinal,
+                        cohort_side, activation_grid, open_activation_grant));
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -5461,6 +5774,7 @@ Preparation<Installed> WorkingRequestCore::apply_no_effect(
         const RequestHandle& target,
         const EvaluationContext& context,
         uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(prepare_no_effect(target, context, next_timeline_ordinal));
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -5484,6 +5798,8 @@ Preparation<Installed> WorkingRequestCore::apply_match_rejected(
         MatchRejectReason reason,
         std::optional<ExecutionTerms> attempted_terms,
         uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(
+        prepare_match_rejected(target, context, reason, std::move(attempted_terms), next_timeline_ordinal));
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -5505,6 +5821,7 @@ Preparation<Installed> WorkingRequestCore::apply_match_rejected(
 
 Preparation<Installed> WorkingRequestCore::apply_margin_call(
         const MarginCallEvent& event, uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(prepare_margin_call(event, next_timeline_ordinal));
     require_identity(identity_);
     if (!event.definition || event.definition->handle.run != identity_) {
         return PreparationError{CoreFailure::InvalidProposal, event.applied,
@@ -5526,6 +5843,7 @@ Preparation<Installed> WorkingRequestCore::apply_margin_call(
 
 Preparation<Installed> WorkingRequestCore::apply_risk_event(
         const NativeRiskEvent& event, uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(prepare_risk_event(event, next_timeline_ordinal));
     require_identity(identity_);
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
     begin_direct();
@@ -5684,6 +6002,7 @@ Preparation<Installed> WorkingRequestCore::apply_terms(
         const EvaluationContext& context,
         const TermsResolvedInput& input,
         uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(prepare_terms(target, context, input, next_timeline_ordinal));
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -6230,7 +6549,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
 }
 
 InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared,
-                                                    const CommittedExecutionFacts& facts) noexcept {
+                                                    const CommittedExecutionFacts& facts) {
     if (!prepared.impl_) return InstallError::StalePreparation;
     auto& impl = *prepared.impl_;
     if (const auto error = validate_plan(impl.terminal)) return *error;
@@ -6688,6 +7007,12 @@ InstallResult WorkingRequestCore::apply_execution(
         const CommittedExecutionFacts& facts,
         uint64_t& next_timeline_ordinal,
         bool open_activation_grant) {
+    if (working_book_) {
+        auto prepared = prepare_execution(target, proposal, next_timeline_ordinal, open_activation_grant);
+        auto* token = std::get_if<PreparedExecution>(&prepared);
+        if (!token) return InstallError::StalePreparation;
+        return install_execution(std::move(*token), facts);
+    }
     auto computed = execution_values(target, proposal, next_timeline_ordinal,
                                      open_activation_grant);
     auto* values = std::get_if<ExecutionValues>(&computed);
@@ -6937,6 +7262,7 @@ Preparation<Installed> WorkingRequestCore::apply_group_effect(
         const EventId& applied,
         const RequestHandle& recipient,
         uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(prepare_group_effect(applied, recipient, next_timeline_ordinal));
     require_identity(identity_);
     // Copied for the same reason as in prepare_group_effect.
     std::optional<CommandEvent> cause;
@@ -7314,6 +7640,8 @@ Preparation<Installed> WorkingRequestCore::apply_owner_applied(
         const std::optional<OpeningObservation>& observation,
         uint64_t& next_timeline_ordinal,
         const ArmContext& arm) {
+    if (working_book_) return install_working_mutation(
+        prepare_owner_applied(applied, child, observation, next_timeline_ordinal, arm));
     require_identity(identity_);
     // Copied for the same reason as in prepare_owner_applied.
     std::optional<CommandEvent> cause;
@@ -7589,6 +7917,8 @@ Preparation<Installed> WorkingRequestCore::apply_bound_expiry(
         const RequestHandle& child,
         const TargetObservation& observation,
         uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(
+        prepare_bound_expiry(physical_cause, child, observation, next_timeline_ordinal));
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(child, &live_index) != TargetKind::Live) {
@@ -7620,6 +7950,8 @@ Preparation<Installed> WorkingRequestCore::apply_parent_terminal(
         const EventId& terminal_or_replaced,
         const RequestHandle& child,
         uint64_t& next_timeline_ordinal) {
+    if (working_book_) return install_working_mutation(
+        prepare_parent_terminal(terminal_or_replaced, child, next_timeline_ordinal));
     require_identity(identity_);
     const CommandEvent* event = event_at(terminal_or_replaced);
     if (!event) {
@@ -7850,6 +8182,7 @@ void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
         ensure_chain_segments();
         chain_segments_->index.make_room();
     }
+    if (working_book_) return;
     // index_committed's two rows: an incarnation opens at most one issued
     // range and names at most one successor root.
     if (plan.consume_incarnation) {
@@ -7950,6 +8283,7 @@ void WorkingRequestCore::append_successor_root(uint64_t incarnation, uint64_t ro
 }
 
 std::optional<uint64_t> WorkingRequestCore::successor_root(uint64_t incarnation) const {
+    if (working_book_) return detail::working_store::get_word(*scratch_store_, working_book_->key(12, incarnation));
     return successor_roots_ ? successor_roots_->find(incarnation) : std::nullopt;
 }
 

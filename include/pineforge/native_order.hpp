@@ -7,6 +7,7 @@
 #include "native_order_identity.hpp"
 #include "detail/scratch_readback.hpp"
 #include "payload_readback.hpp"
+#include "detail/working_members.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1778,6 +1779,7 @@ public:
     WorkingRequestCore& operator=(WorkingRequestCore&& other) noexcept;
     void set_successor_roots_directory(const std::string& directory); // After reset, before the first spill; empty uses TMPDIR or /tmp.
     void bind_scratch_slab(const std::shared_ptr<::pineforge::detail::ScratchSlab>& slab);
+    void bind_scratch_store(detail::ScratchStore& store);
     void reset(RunIdentity identity);
 
     const RunIdentity& identity() const noexcept { return identity_; }
@@ -1832,7 +1834,7 @@ public:
     /// positions are [cohort_receipt_base(), cohort_receipt_count()). A
     /// standalone core retains all rows until its reader retires them; the
     /// Window consumer retires each row after folding it into its digest.
-    const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
+    const detail::WorkingSequence<CohortReceipt>& cohort_receipts() const noexcept {
         return cohort_receipts_;
     }
     std::size_t cohort_receipt_base() const noexcept { return cohort_receipts_base_; }
@@ -1843,7 +1845,7 @@ public:
     /// Drop the prefix strictly below the absolute position through, clamped
     /// to the window. The reader must have folded these rows first. Does not
     /// change rosters, command counters, prepared-command validity or totals.
-    std::size_t retire_cohort_receipts(std::size_t through) noexcept;
+    std::size_t retire_cohort_receipts(std::size_t through);
     /// The core's two durable counters: the ordinal of the last committed
     /// event and the last incarnation a command consumed. A later command must
     /// exceed both.
@@ -1878,7 +1880,7 @@ public:
     /// replace successor -- as disjoint ascending [first, last] ranges: the
     /// half of the chain index that tells a request that ended from one that
     /// never existed. Read-only; a consumer issues one dense range.
-    const std::vector<std::pair<uint64_t, uint64_t>>& issued_incarnations() const noexcept {
+    const detail::WorkingSequence<std::pair<uint64_t, uint64_t>>& issued_incarnations() const noexcept {
         return issued_;
     }
     const LiveRequest* find_live(const RequestHandle& handle) const;
@@ -1890,6 +1892,9 @@ public:
     void cohort_add(CohortHandle cohort, RequestHandle origin);
     void cohort_remove(CohortHandle cohort, RequestHandle origin);
     bool cohort_contains(CohortHandle cohort, const RequestHandle& opening) const;
+    // Count and ordered readback without materializing a CohortRoster.
+    // A null visitor asks only for the count.
+    std::size_t visit_cohort_origins(CohortHandle, void*, HandleVisitor) const;
 
     /// R1 producer convenience: prepare then install one command. Bound opening
     /// enrollment requires CommandContext observations via prepare_submit.
@@ -1929,9 +1934,9 @@ public:
     PreparedCancel prepare_cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal,
                                   CancelReason reason = CancelReason::User);
 
-    InstalledCommand<SubmitResult> install_submit(PreparedSubmit&& prepared) noexcept;
-    InstalledCommand<ReplaceResult> install_replace(PreparedReplace&& prepared) noexcept;
-    InstalledCommand<CancelResult> install_cancel(PreparedCancel&& prepared) noexcept;
+    InstalledCommand<SubmitResult> install_submit(PreparedSubmit&& prepared);
+    InstalledCommand<ReplaceResult> install_replace(PreparedReplace&& prepared);
+    InstalledCommand<CancelResult> install_cancel(PreparedCancel&& prepared);
 
     Preparation<PreparedMutation> prepare_evaluation(const RequestHandle& target,
                                                      const EvaluationContext& context,
@@ -1973,7 +1978,7 @@ public:
                                                   std::optional<Side> cohort_side,
                                                   const ActivationGrid& grid,
                                                   bool open_activation_grant);
-    InstallResult install_mutation(PreparedMutation&& prepared) noexcept;
+    InstallResult install_mutation(PreparedMutation&& prepared);
 
     Preparation<PreparedExecution> prepare_execution(const RequestHandle& target,
                                                      const ExecutionProposal& proposal,
@@ -1985,7 +1990,7 @@ public:
                                                      uint64_t& next_timeline_ordinal,
                                                      bool open_activation_grant);
     InstallResult install_execution(PreparedExecution&& prepared,
-                                    const CommittedExecutionFacts& facts) noexcept;
+                                    const CommittedExecutionFacts& facts);
     Preparation<PreparedMutation> prepare_no_effect(const RequestHandle& target,
                                                     const EvaluationContext& context,
                                                     uint64_t& next_timeline_ordinal);
@@ -2306,7 +2311,7 @@ private:
                         double ladder_tick = 0.0) const noexcept;
     /// Whether this run's core accepted a request under `handle`, live or
     /// not: what a cohort command answers UnknownOrigin by.
-    bool issued(const RequestHandle& handle) const noexcept;
+    bool issued(const RequestHandle& handle) const;
     /// The first handle of `origin`'s replace chain (RequestDefinition::root),
     /// read from the live row or, for a request that is no longer working,
     /// from the chain index; nullopt for a handle this run never issued.
@@ -2413,7 +2418,10 @@ private:
     LiveRequest kept_successor(std::size_t live_index, const RequestHandle& staged_target,
                                Request&& staged, uint64_t ordinal, uint64_t incarnation,
                                const CommandContext& context, ReplaceOptions options) const;
-    InstallResult commit(MutationPlan& plan) noexcept;
+    InstallResult commit(MutationPlan& plan);
+    void publish_working(const MutationPlan& plan);
+    void change_working_cohort(CohortHandle, const RequestHandle&, bool add);
+    Preparation<Installed> install_working_mutation(Preparation<PreparedMutation>&&);
     MutationPlan begin_plan() const;
     void reserve_plan(const MutationPlan& plan);
     void bind_plan(MutationPlan& plan) const;
@@ -2505,6 +2513,9 @@ private:
     void visit_book(Visit&& visit) const;
 
     RunIdentity identity_;
+    detail::ScratchStore* scratch_store_ = nullptr;
+    struct WorkingBook;
+    std::shared_ptr<WorkingBook> working_book_;
     std::shared_ptr<InstanceBinding> instance_;
     std::vector<LiveRequest> live_;
     std::shared_ptr<BookSpill> book_spill_;
@@ -2531,7 +2542,7 @@ private:
     void reserve_successor_root();
     void append_successor_root(uint64_t incarnation, uint64_t root) noexcept;
     std::optional<uint64_t> successor_root(uint64_t incarnation) const;
-    std::vector<std::pair<uint64_t, uint64_t>> issued_;
+    detail::WorkingSequence<std::pair<uint64_t, uint64_t>> issued_;
     std::shared_ptr<SuccessorRootIndex> successor_roots_;
     // The requests a keep_handle re-price moved in the queue, ascending by
     // incarnation: (incarnation, priority). The book is held by priority, so
@@ -2551,7 +2562,7 @@ private:
     // its member capacity as well. next_cohort_handle_ records the complete
     // dense sequence of allocated handles, including every empty roster.
     std::map<std::uint64_t, CohortRoster> cohorts_;
-    std::vector<CohortReceipt> cohort_receipts_;
+    detail::WorkingSequence<CohortReceipt> cohort_receipts_;
     // Storage cursor only: the consumer hashes the lifetime count and every
     // receipt, independently of how many of their rows have been retired.
     std::size_t cohort_receipts_base_ = 0;
@@ -2573,8 +2584,8 @@ public:
         using reference = const CohortRoster&;
 
         const_iterator() noexcept = default;
-        reference operator*() const noexcept;
-        pointer operator->() const noexcept { return &**this; }
+        reference operator*() const;
+        pointer operator->() const { return &**this; }
         const_iterator& operator++() noexcept { ++index_; return *this; }
         const_iterator operator++(int) {
             auto previous = *this;
@@ -2927,3 +2938,5 @@ struct hash<pineforge::native_order::CohortHandle> {
     }
 };
 }  // namespace std
+
+#include "detail/native_working_codec.hpp"

@@ -725,8 +725,8 @@ std::uint64_t exit_queue_rank(const PlacementTable& table,
 // True when the placement row of some live handle satisfies `row`: the
 // quiet-bar gates' scan (pine_quiet_bar.hpp). It reads and allocates nothing
 // beyond the rows it visits.
-template <class Row>
-bool any_live_row(const std::vector<native_order::RequestHandle>& live,
+template <class Handles, class Row>
+bool any_live_row(const Handles& live,
                   const PlacementTable& placement, Row&& row) {
     for (const auto& handle : live) {
         const auto found = placement.find(handle.incarnation);
@@ -1441,8 +1441,22 @@ void PineExecutionAdapter::update_l4c_priority() {
         if (handle == decision->child) return 1;
         return 2;
     };
-    std::stable_sort(live_handles_.begin(), live_handles_.end(),
-                     [&](const auto& left, const auto& right) { return rank(left) < rank(right); });
+    if (scratch_store_) {
+        for (std::size_t i = 1; i < live_handles_.size(); ++i) {
+            const auto value = static_cast<const decltype(live_handles_)&>(live_handles_)[i];
+            auto at = i;
+            while (at != 0) {
+                const auto before = static_cast<const decltype(live_handles_)&>(live_handles_)[at - 1];
+                if (rank(before) <= rank(value)) break;
+                live_handles_[at] = before; --at;
+            }
+            live_handles_[at] = value;
+        }
+        live_handles_.flush();
+    } else {
+        std::stable_sort(live_handles_.begin(), live_handles_.end(),
+                         [&](const auto& left, const auto& right) { return rank(left) < rank(right); });
+    }
 }
 
 void PineExecutionAdapter::update_l4c_lifecycle(
@@ -1607,8 +1621,8 @@ public:
             || family == PineOrderFamily::ExitTrail;
     }
 
-    static bool working(const std::vector<native_order::RequestHandle>& live,
-                        std::uint64_t incarnation) noexcept {
+    template<class Handles>
+    static bool working(const Handles& live, std::uint64_t incarnation) {
         return std::any_of(live.begin(), live.end(),
             [&](const native_order::RequestHandle& handle) {
                 return handle.incarnation == incarnation;
@@ -1624,8 +1638,8 @@ public:
         return found == legs.end() ? nullptr : &found->second;
     }
 
-    void fold(std::uint64_t incarnation, const PlacementSnapshot& row,
-              const std::vector<native_order::RequestHandle>& live) {
+    template<class Handles>
+    void fold(std::uint64_t incarnation, const PlacementSnapshot& row, const Handles& live) {
         if (exit_leg(row.family)) {
             if (row.bracket_origin.incarnation != 0) {
                 legs_by_origin[static_cast<std::size_t>(row.family)
@@ -1641,8 +1655,8 @@ public:
 
     // Brings the row index up to the table. May throw std::bad_alloc; every
     // step leaves the index consistent, so a later sync resumes it.
-    void sync_rows(const PlacementTable& table,
-                   const std::vector<native_order::RequestHandle>& live) {
+    template<class Handles>
+    void sync_rows(const PlacementTable& table, const Handles& live) {
         if (table.erased_rows() != erased_seen || table.size() < rows_folded
             || table.high_water() < folded_high) {
             clear_rows();
@@ -1785,7 +1799,7 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
         }
         return false;
     };
-    if (cohort.origins.size() <= kIndexedFrom || cohort.origins.members().empty()) return walk();
+    if (scratch_store_ || cohort.origins.size() <= kIndexedFrom || cohort.origins.members().empty()) return walk();
     AdapterLookupIndex* index = adapter_lookup_index(bound_consumer(), this, run_counter_);
     if (!index) return walk();
     try {
@@ -1840,7 +1854,7 @@ bool PineExecutionAdapter::origin_leg_consumed(
                 return consumed(handle.incarnation);
             });
     };
-    if (members->second.size() <= kIndexedFrom) return walk();
+    if (scratch_store_ || members->second.size() <= kIndexedFrom) return walk();
     AdapterLookupIndex* index = AdapterLookupIndex::exit_leg(family)
         ? adapter_lookup_index(bound_consumer(), this, run_counter_) : nullptr;
     if (!index) return walk();
@@ -1879,7 +1893,7 @@ bool PineExecutionAdapter::immediate_close_placed_on(std::int32_t bar) const noe
     };
     PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_,
         [&](std::uint64_t, const PlacementSnapshot& row) { return placed(row); });
-    if (placement_.size() <= kIndexedFrom) return walk();
+    if (scratch_store_ || placement_.size() <= kIndexedFrom) return walk();
     AdapterLookupIndex* index = adapter_lookup_index(bound_consumer(), this, run_counter_);
     if (!index) return walk();
     try {
@@ -3506,7 +3520,138 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     refresh_pending_view();
 }
 
-void PineExecutionAdapter::retire(native_order::RequestHandle handle) noexcept {
+void PineExecutionAdapter::bind_scratch_store(detail::ScratchStore& store) {
+    ::pineforge::detail::working_store::check(store.status());
+    scratch_store_ = &store;
+    if (!scratch_binding_)
+        scratch_binding_ = std::make_shared<::pineforge::detail::working_store::Binding>();
+    scratch_binding_->store = &store;
+    live_handles_.bind(store, 51, 1);
+    live_by_source_key_.bind(store, 46, 1);
+    cohorts_by_id_.bind_store(store);
+}
+
+native_order::Request PineExecutionAdapter::store_queued_request(
+        const native_order::Request& request, std::uint64_t& record) {
+    if (!scratch_store_) return request;
+    namespace ws = ::pineforge::detail::working_store;
+    std::uint64_t token = 0;
+    ws::transaction(*scratch_store_, [&] {
+        token = ws::allocate(*scratch_store_);
+        ws::write(*scratch_store_, ws::Key(52, 1, token), request);
+    });
+    const auto handle = ws::find(*scratch_store_, ws::Key(52, 1, token));
+    auto stored = ws::read<native_order::Request>(*scratch_store_, handle, scratch_binding_);
+    record = token;
+    return stored;
+}
+
+std::pair<native_order::CohortHandle, const OriginRoster*>
+PineExecutionAdapter::fixture_cohort_state(const SourceId& id, std::uint8_t edit,
+        const native_order::RequestHandle& handle, double units) {
+    if (edit == 9) { cohorts_by_id_.clear(); return {}; }
+    if (edit == 1) (void)cohort_for(id);
+    const auto at = cohorts_by_id_.find(id);
+    if (at == cohorts_by_id_.end()) return {};
+    auto& facts = at->second;
+    switch (edit) {
+    case 0: case 1: break;
+    case 2: facts.origins.push_back(handle); break;
+    case 3: facts.opened.push_back(handle); break;
+    case 4: {
+        const auto found = std::find(facts.opened.begin(), facts.opened.end(), handle);
+        if (found != facts.opened.end()) facts.opened.erase(found);
+        break;
+    }
+    case 5: facts.opened.clear(); break;
+    case 6: facts.live_units_by_origin[handle.incarnation] = units; break;
+    case 7: facts.live_units_by_origin.erase(handle.incarnation); break;
+    case 8: facts.live_units_by_origin.clear(); break;
+    default: throw std::invalid_argument("source cohort fixture edit");
+    }
+    return {facts.handle, &facts.origins};
+}
+
+void PineExecutionAdapter::fixture_projection_state(std::uint8_t edit,
+        const native_order::RequestHandle& handle, const PlacementSnapshot* snapshot) {
+    switch (edit) {
+    case 0:
+        if (!snapshot) throw std::invalid_argument("source projection fixture snapshot");
+        remember(handle, PlacementSnapshot(*snapshot)); break;
+    case 1: retire(handle); break;
+    case 2:
+        if (!snapshot) throw std::invalid_argument("source projection fixture snapshot");
+        if (placement_.contains(handle.incarnation))
+            placement_.replace(handle.incarnation, PlacementSnapshot(*snapshot));
+        else placement_.try_emplace(handle.incarnation, *snapshot);
+        break;
+    case 3: placement_.erase(handle.incarnation); break;
+    case 4:
+        if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
+            live_handles_.push_back(handle);
+        break;
+    case 5:
+        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
+                            live_handles_.end());
+        break;
+    default: throw std::invalid_argument("source projection fixture edit");
+    }
+}
+
+void PineExecutionAdapter::fixture_source_key(std::optional<std::uint64_t> key,
+        const native_order::RequestHandle* handle) {
+    if (!key) live_by_source_key_.clear();
+    else if (handle) live_by_source_key_[*key] = *handle;
+    else live_by_source_key_.erase(*key);
+}
+
+void PineExecutionAdapter::fixture_queue_state(std::uint8_t queue,
+        const native_order::Request* request, const PlacementSnapshot* snapshot,
+        const native_order::RequestHandle& handle, const native_order::RequestHandle& parent) {
+    const bool clear = !request && !snapshot;
+    const auto append = [&](auto& rows) {
+        if (clear) { rows.clear(); return; }
+        typename std::decay_t<decltype(rows)>::value_type row{};
+        if (request) row.request = store_queued_request(*request, row.request_record);
+        if (snapshot) row.snapshot = *snapshot;
+        rows.push_back(std::move(row));
+    };
+    switch (queue) {
+    case 0: append(pending_bracket_legs_); break;
+    case 1: append(pending_entries_); break;
+    case 2: append(delayed_market_orders_); break;
+    case 3:
+        if (clear) deferred_open_marketable_sells_.clear();
+        else { DeferredOpenMarketableSell row{}; if (snapshot) row.snapshot = *snapshot;
+               deferred_open_marketable_sells_.push_back(std::move(row)); }
+        break;
+    case 4:
+        if (clear) throttled_reopen_rearm_.clear();
+        else if (snapshot) throttled_reopen_rearm_.push_back(*snapshot);
+        break;
+    case 5: append(pending_same_bar_commands_); break;
+    case 6:
+        if (clear) source_shadow_pending_.clear();
+        else { SourceShadowPending row{}; if (snapshot) row.snapshot = *snapshot;
+               source_shadow_pending_.push_back(std::move(row)); }
+        break;
+    case 7: append(pending_coof_requests_); break;
+    case 8:
+        if (clear) pending_margin_revivals_.clear();
+        else { PendingMarginRevival row{}; if (snapshot) row.snapshot = *snapshot;
+               pending_margin_revivals_.push_back(std::move(row)); }
+        break;
+    case 9:
+        if (clear) anchored_relative_legs_.clear();
+        else { AnchoredRelativeLeg row{}; if (request) row.request = store_queued_request(*request, row.request_record);
+               row.handle = handle; row.parent = parent;
+               anchored_relative_legs_.push_back(std::move(row)); }
+        break;
+    default: throw std::invalid_argument("source queue fixture id");
+    }
+}
+
+void PineExecutionAdapter::retire(native_order::RequestHandle handle) {
     live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
                         live_handles_.end());
     first_open_newborns_.erase(std::remove(first_open_newborns_.begin(),
@@ -5064,7 +5209,7 @@ bool PineExecutionAdapter::from_entry_filled_this_cycle(const SourceId& id) cons
         && found->second.cycle == current_position_cycle_;
 }
 
-double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexcept {
+double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const {
     const auto found = cohorts_by_id_.find_resident(id);
     if (found == cohorts_by_id_.end()) return 0.0;
     double total = 0.0;
@@ -5081,17 +5226,15 @@ double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexc
         std::size_t next = 0;
         double units = 0.0;
         for (const auto& unit : facts.live_units_by_origin) {
-            const auto* positions = facts.origins.positions_of(unit.first);
-            if (!positions) continue;
-            for (const auto position : *positions) {
-                if (have_previous && position <= previous) continue;
+            facts.origins.visit_incarnation_positions(unit.first, [&](std::size_t position) {
+                if (have_previous && position <= previous) return true;
                 if (!have_next || position < next) {
                     have_next = true;
                     next = position;
                     units = unit.second;
                 }
-                break;
-            }
+                return false;
+            });
         }
         if (!have_next) break;
         if (std::isfinite(units) && units > 0.0) total += units;
@@ -5931,9 +6074,10 @@ void PineExecutionAdapter::consume_cohort_units(
         auto unit = facts.live_units_by_origin.find(incarnation);
         if (unit == facts.live_units_by_origin.end() || !(unit->second > 0.0)) continue;
         const double deduction = std::min(unit->second, remaining);
-        unit->second -= deduction;
+        const double after = unit->second - deduction;
+        facts.live_units_by_origin.set(incarnation, after);
         remaining -= deduction;
-        if (unit->second == 0.0) facts.live_units_by_origin.erase(unit);
+        if (after == 0.0) facts.live_units_by_origin.erase(incarnation);
         if (!(remaining > 0.0)) break;
     }
     ::pineforge::detail::release_empty_exposure_capacity(facts.live_units_by_origin);
@@ -5986,9 +6130,10 @@ void PineExecutionAdapter::consume_closed_trade_rows(
                 trade.entry_incarnation);
             if (units == cohort.second.live_units_by_origin.end()) continue;
             const double consumed = std::min(units->second, remaining);
-            units->second -= consumed;
+            const double after = units->second - consumed;
+            cohort.second.live_units_by_origin.set(trade.entry_incarnation, after);
             remaining -= consumed;
-            const bool drained = !(units->second > 1e-10);
+            const bool drained = !(after > 1e-10);
             if (drained)
                 cohort.second.live_units_by_origin.erase(units);
             settle_slot(cohort.second, trade, drained);
@@ -6003,15 +6148,16 @@ void PineExecutionAdapter::consume_closed_trade_rows(
             auto units = cohort->second.live_units_by_origin.find(incarnation);
             if (units == cohort->second.live_units_by_origin.end()) return true;
             const double consumed = std::min(units->second, remaining);
-            units->second -= consumed;
+            const double after = units->second - consumed;
+            cohort->second.live_units_by_origin.set(incarnation, after);
             remaining -= consumed;
-            const bool drained = !(units->second > 1e-10);
+            const bool drained = !(after > 1e-10);
             if (drained)
                 cohort->second.live_units_by_origin.erase(units);
             settle_slot(cohort->second, trade, drained);
             return remaining > 0.0;
         };
-        auto* lookup = cohort->second.origins.size() <= kIndexedFrom ? nullptr
+        auto* lookup = scratch_store_ || cohort->second.origins.size() <= kIndexedFrom ? nullptr
             : adapter_lookup_index(bound_consumer(), this, run_counter_);
         if (!lookup) {
             for (const auto& origin : cohort->second.origins)
@@ -28064,10 +28210,35 @@ const native_order::RequestHandle& OriginRoster::operator[](std::size_t global) 
 
 void OriginRoster::append_positions_of(const native_order::RequestHandle& handle,
                                        std::vector<std::size_t>& out) const {
-    const auto found = positions_.find(handle.incarnation);
-    if (found == positions_.end()) return;
-    for (const auto position : found->second)
-        if ((*this)[position] == handle) out.push_back(position);
+    visit_positions_of(handle, [&](std::size_t position) { out.push_back(position); return true; });
+}
+
+void OriginRoster::bind_scratch_store(::pineforge::detail::ScratchStore& store,
+                                      std::uint64_t owner) {
+    namespace ws = ::pineforge::detail::working_store;
+    store_ = &store; owner_ = owner;
+    const bool indexed = ::pineforge::detail::working_store::get_word(
+        store, ::pineforge::detail::working_store::Key(43, owner, 0)).has_value();
+    items_.bind(store, 42, owner);
+    positions_.clear(); positions_.rehash(0);
+    std::vector<std::size_t>{}.swap(position_snapshot_);
+    if (const auto base = ws::get_word(store, ws::Key(43, owner, 0))) {
+        if (*base > std::numeric_limits<std::size_t>::max() - items_.size())
+            ws::check(::pineforge::detail::ScratchStatus::corrupt);
+        base_ = static_cast<std::size_t>(*base);
+        const auto digest = ws::get_word(store, ws::Key(43, owner, 1));
+        if (!digest) ws::check(::pineforge::detail::ScratchStatus::corrupt);
+        digest_ = *digest;
+    } else {
+        ws::transaction(store, [&] {
+            ws::put_word(store, ws::Key(43, owner, 0), base_);
+            ws::put_word(store, ws::Key(43, owner, 1), digest_);
+            if (!indexed) {
+                for (std::size_t i = 0; i < items_.size(); ++i)
+                    ws::put_position(store, owner, static_cast<const Members&>(items_)[i].incarnation, base_ + i);
+            }
+        });
+    }
 }
 
 void OriginRoster::retire_before(std::size_t global) {
@@ -28076,6 +28247,20 @@ void OriginRoster::retire_before(std::size_t global) {
                                       "origin roster retirement outside retained window");
     }
     if (global == base_) return;
+    if (store_) {
+        namespace ws = ::pineforge::detail::working_store;
+        const auto before = items_.size();
+        try { ws::transaction(*store_, [&] {
+            for (auto i = base_; i < global; ++i) {
+                const auto incarnation = static_cast<const Members&>(items_)[i - base_].incarnation;
+                ws::erase_position(*store_, owner_, incarnation, i);
+            }
+            items_.erase(items_.begin(), items_.begin() + static_cast<std::ptrdiff_t>(global - base_));
+            ws::put_word(*store_, ws::Key(43, owner_, 0), global);
+        }); } catch (...) { items_.restore_size(before); throw; }
+        base_ = global;
+        return;
+    }
     // Commit the non-allocating edits first. A compaction allocation failure
     // may abort the run, but cannot leave the index using the previous base.
     for (auto at = positions_.begin(); at != positions_.end();) {
@@ -28122,9 +28307,11 @@ void PineExecutionAdapter::retire_origin_prefixes() {
     IExecutionConsumer* consumer = bound_consumer();
     if (!consumer) return;
     const auto& core = as_native_consumer(*consumer).request_core();
-    std::vector<std::uint64_t> named;
+    const auto is_named = [&](std::uint64_t sought) {
+    if (sought == 0) return false;
+    bool named = false;
     const auto name = [&](std::uint64_t incarnation) {
-        if (incarnation != 0) named.push_back(incarnation);
+        if (incarnation == sought) named = true;
     };
     const auto snapshot_names = [&](const PlacementSnapshot& row) {
         name(row.bracket_origin.incarnation);
@@ -28140,7 +28327,14 @@ void PineExecutionAdapter::retire_origin_prefixes() {
         } else if (const auto* opening = std::get_if<native_order::BindOpening>(&request.owner)) {
             name(opening->opening.incarnation);
         } else if (const auto* openings = std::get_if<native_order::BindOpenings>(&request.owner)) {
-            for (const auto& opening : openings->openings) name(opening.incarnation);
+            const auto count = native_order::opening_count(openings->openings,
+                                                           openings->external_openings.get());
+            for (std::uint64_t i = 0; i < count; ++i) {
+                native_order::RequestHandle opening;
+                ::pineforge::detail::working_store::check(native_order::opening_at(
+                    openings->openings, openings->external_openings.get(), i, opening));
+                name(opening.incarnation);
+            }
         }
     };
     const auto live_names = [&](const native_order::RequestHandle& handle) {
@@ -28176,15 +28370,15 @@ void PineExecutionAdapter::retire_origin_prefixes() {
     for (const auto& leg : anchored_relative_legs_) {
         name(leg.handle.incarnation); name(leg.parent.incarnation); request_names(leg.request);
     }
-    std::sort(named.begin(), named.end());
-    named.erase(std::unique(named.begin(), named.end()), named.end());
+    return named;
+    };
     for (auto& row : cohorts_by_id_) {
         auto& facts = row.second;
         auto& origins = facts.origins;
         std::size_t through = origins.base();
         for (const auto& origin : origins) {
             if (placement_.contains(origin.incarnation)
-                || std::binary_search(named.begin(), named.end(), origin.incarnation)
+                || is_named(origin.incarnation)
                 || facts.live_units_by_origin.find(origin.incarnation)
                     != facts.live_units_by_origin.end()
                 || std::find(facts.opened.begin(), facts.opened.end(), origin) != facts.opened.end()

@@ -225,15 +225,21 @@ public:
 
     Status bread(std::uint64_t id, Byte* destination) noexcept {
         ++reads_;
-        return backing_->read_page(id, ScratchBuffer{reinterpret_cast<std::byte*>(destination), page_});
+        const auto status = backing_->read_page(id, ScratchBuffer{reinterpret_cast<std::byte*>(destination), page_});
+        if (status == Status::io_error) backing_io_error_ = true;
+        return status;
     }
     Status bwrite(std::uint64_t id, const Byte* source) noexcept {
         ++writes_;
-        return backing_->write_page(id, ScratchBytes{reinterpret_cast<const std::byte*>(source), page_});
+        const auto status = backing_->write_page(id, ScratchBytes{reinterpret_cast<const std::byte*>(source), page_});
+        if (status == Status::io_error) backing_io_error_ = true;
+        return status;
     }
     Status bsync(ScratchDurability durability) noexcept {
         ++syncs_;
-        return backing_->sync(durability);
+        const auto status = backing_->sync(durability);
+        if (status == Status::io_error) backing_io_error_ = true;
+        return status;
     }
     static Status structural(Status status) noexcept {
         return status == Status::not_found ? Status::corrupt : status;
@@ -1330,11 +1336,12 @@ public:
 
     Status put(const ScratchByteSource& key, const ScratchByteSource& value, ScratchHandle& result) noexcept {
         if (open_status_ != Status::ok || !active_ || poisoned_ || busy_ != 0) return Status::programming_error;
+        backing_io_error_ = false;
         std::uint64_t handle = 0;
         const Status st = put_impl(key, value, handle);
         if (st != Status::ok) {
             poisoned_ = true;
-            return Status::programming_error;
+            return backing_io_error_ ? Status::io_error : Status::programming_error;
         }
         result = handle;
         return Status::ok;
@@ -1386,18 +1393,19 @@ public:
 
     Status erase(ScratchHandle handle) noexcept {
         if (open_status_ != Status::ok || !active_ || poisoned_ || busy_ != 0) return Status::programming_error;
+        backing_io_error_ = false;
         Entry entry;
         bool present = false;
         Status st = hget(handle, entry, present);
         if (st != Status::ok) {
             poisoned_ = true;
-            return Status::programming_error;
+            return backing_io_error_ ? Status::io_error : Status::programming_error;
         }
         if (!present || (entry.val_word & 3) != kLive) return Status::not_found;
         st = erase_impl(handle, entry);
         if (st != Status::ok) {
             poisoned_ = true;
-            return Status::programming_error;
+            return backing_io_error_ ? Status::io_error : Status::programming_error;
         }
         return Status::ok;
     }
@@ -1709,6 +1717,7 @@ public:
     Super snap_{};
     bool active_ = false;
     bool poisoned_ = false;
+    bool backing_io_error_ = false;
     std::uint64_t txn_ = 0;
     std::uint64_t hw0_ = 0;
     std::uint64_t used_head_ = 0;

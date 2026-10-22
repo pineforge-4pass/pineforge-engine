@@ -48,8 +48,8 @@ void hash_source_run_identity(BrokerStateHashSink& f,
 void hash_native_handle(BrokerStateHashSink& f, const native_order::RequestHandle& handle) {
     hash_source_run_identity(f, handle.run); f.u(handle.incarnation);
 }
-void hash_native_handle_vector(BrokerStateHashSink& f,
-                               const std::vector<native_order::RequestHandle>& handles) {
+template<class Handles>
+void hash_native_handle_vector(BrokerStateHashSink& f, const Handles& handles) {
     f.u(handles.size());
     for (const auto& handle : handles) hash_native_handle(f, handle);
 }
@@ -315,14 +315,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.u(cohort.origins.size()); f.u(cohort.origins.digest());
         hash_native_handle_vector(f, cohort.opened);
         f.u(cohort.erased_opening_sides);
-        std::vector<std::uint64_t> live_origin_keys;
-        live_origin_keys.reserve(cohort.live_units_by_origin.size());
-        for (const auto& row : cohort.live_units_by_origin) live_origin_keys.push_back(row.first);
-        std::sort(live_origin_keys.begin(), live_origin_keys.end());
-        f.u(live_origin_keys.size());
-        for (const auto incarnation : live_origin_keys) {
-            f.u(incarnation); f.d(cohort.live_units_by_origin.at(incarnation));
-        }
+        f.u(cohort.live_units_by_origin.size());
+        for (const auto& row : cohort.live_units_by_origin) { f.u(row.first); f.d(row.second); }
     }
     f.u(cohorts_by_id_.size());
     cohorts_by_id_.for_each_id([&](const auto& key) { f.s(key); });
@@ -332,10 +326,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(placement_.high_water()); f.u(placement_.erased_rows()); f.u(placement_.erased_digest());
     f.u(placement_.size());
     for (const auto& row : placement_) { f.u(row.first); hash_placement(f, row.second); }
-    std::vector<std::uint64_t> live_keys;
-    for (const auto& pair : live_by_source_key_) live_keys.push_back(pair.first);
-    std::sort(live_keys.begin(), live_keys.end()); f.u(live_keys.size());
-    for (const auto key : live_keys) { f.u(key); hash_native_handle(f, live_by_source_key_.at(key)); }
+    f.u(live_by_source_key_.size());
+    for (const auto& row : live_by_source_key_) { f.u(row.first); hash_native_handle(f, row.second); }
     std::vector<std::uint64_t> bracket_keys;
     for (const auto& pair : bracket_families_) bracket_keys.push_back(pair.first);
     std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());

@@ -15,6 +15,8 @@
 #include <pineforge/detail/disk_resident_id_table.hpp>
 #include <pineforge/detail/id_pair_store.hpp>
 #include <pineforge/detail/adapter_exposure_storage.hpp>
+#include <pineforge/detail/working_members.hpp>
+#include <pineforge/detail/working_id_table.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -945,11 +947,25 @@ private:
 // an engine_invariant, including historical positions below base().
 class OriginRoster {
 public:
-    using const_iterator = std::vector<native_order::RequestHandle>::const_iterator;
+    using Members = ::pineforge::detail::WorkingSequence<native_order::RequestHandle>;
+    using const_iterator = Members::const_iterator;
     using const_reverse_iterator =
-        std::vector<native_order::RequestHandle>::const_reverse_iterator;
+        Members::const_reverse_iterator;
 
     void push_back(const native_order::RequestHandle& handle) {
+        if (store_) {
+            const auto digest = (digest_ ^ handle.incarnation) * 1099511628211ULL;
+            const auto before = items_.size();
+            try { ::pineforge::detail::working_store::transaction(*store_, [&] {
+                ::pineforge::detail::working_store::put_position(
+                    *store_, owner_, handle.incarnation, size());
+                items_.push_back(handle);
+                ::pineforge::detail::working_store::put_word(*store_,
+                    ::pineforge::detail::working_store::Key(43, owner_, 1), digest);
+            }); } catch (...) { items_.restore_size(before); throw; }
+            digest_ = digest;
+            return;
+        }
         auto& positions = positions_[handle.incarnation];
         positions.push_back(size());
         try {
@@ -960,7 +976,24 @@ public:
         }
         digest_ = (digest_ ^ handle.incarnation) * 1099511628211ULL;
     }
-    const std::vector<native_order::RequestHandle>& members() const noexcept { return items_; }
+    const Members& members() const noexcept { return items_; }
+    void bind_scratch_store(::pineforge::detail::ScratchStore&, std::uint64_t owner);
+    void clear() {
+        if (store_) {
+            const auto base = base_, count = items_.size();
+            const auto digest = digest_;
+            try { ::pineforge::detail::working_store::transaction(*store_, [&] {
+                retire_before(size());
+                ::pineforge::detail::working_store::put_word(*store_,
+                    ::pineforge::detail::working_store::Key(43, owner_, 0), 0);
+                ::pineforge::detail::working_store::put_word(*store_,
+                    ::pineforge::detail::working_store::Key(43, owner_, 1), 1469598103934665603ULL);
+            }); } catch (...) {
+                base_ = base; digest_ = digest; items_.restore_size(count); throw;
+            }
+        } else { items_.clear(); positions_.clear(); }
+        base_ = 0; digest_ = 1469598103934665603ULL;
+    }
     // R5 lane V19-E: a running digest of the members' incarnations, each
     // folded once, when it was appended (the v4 extension fold's view).
     std::uint64_t digest() const noexcept { return digest_; }
@@ -969,14 +1002,30 @@ public:
     const native_order::RequestHandle& back() const { return (*this)[size() - 1]; }
     bool empty() const noexcept { return size() == 0; }
     std::size_t size() const noexcept { return base_ + items_.size(); }
-    const_iterator begin() const noexcept { return items_.begin(); }
-    const_iterator end() const noexcept { return items_.end(); }
-    const_reverse_iterator rbegin() const noexcept { return items_.rbegin(); }
-    const_reverse_iterator rend() const noexcept { return items_.rend(); }
+    const_iterator begin() const { return items_.begin(); }
+    const_iterator end() const { return items_.end(); }
+    const_reverse_iterator rbegin() const { return items_.rbegin(); }
+    const_reverse_iterator rend() const { return items_.rend(); }
     std::size_t base() const noexcept { return base_; }
     // Ascending global positions of retained entries equal to `handle`.
     void append_positions_of(const native_order::RequestHandle& handle,
                              std::vector<std::size_t>& out) const;
+    template<class Visitor>
+    void visit_positions_of(const native_order::RequestHandle& handle, Visitor&& visit) const {
+        visit_incarnation_positions(handle.incarnation,
+            [&](std::size_t position) { return (*this)[position] != handle || visit(position); });
+    }
+    template<class Visitor>
+    void visit_incarnation_positions(std::uint64_t incarnation, Visitor&& visit) const {
+        if (store_) {
+            ::pineforge::detail::working_store::positions(*store_, owner_, incarnation, visit);
+            return;
+        }
+        const auto found = positions_.find(incarnation);
+        if (found == positions_.end()) return;
+        for (const auto position : found->second)
+            if (!visit(position)) return;
+    }
     // Retire [base(), global); the adapter proves release and reachability.
     void retire_before(std::size_t global);
     // size()/digest() survive retirement; references and iterators may move.
@@ -984,16 +1033,25 @@ public:
 
     // Ascending roster positions of the entries carrying `incarnation`, or
     // null when none does. Allocation-free.
-    const std::vector<std::size_t>* positions_of(std::uint64_t incarnation) const noexcept {
+    const std::vector<std::size_t>* positions_of(std::uint64_t incarnation) const {
+        if (store_) {
+            position_snapshot_.clear();
+            ::pineforge::detail::working_store::positions(*store_, owner_, incarnation,
+                [&](std::size_t i) { position_snapshot_.push_back(i); return true; });
+            return position_snapshot_.empty() ? nullptr : &position_snapshot_;
+        }
         const auto found = positions_.find(incarnation);
         return found == positions_.end() ? nullptr : &found->second;
     }
 
 private:
-    std::vector<native_order::RequestHandle> items_;
+    Members items_;
     std::size_t base_ = 0; // Storage offset; size() already hashes the total.
     std::unordered_map<std::uint64_t, std::vector<std::size_t>> positions_;
     std::uint64_t digest_ = 1469598103934665603ULL;
+    ::pineforge::detail::ScratchStore* store_ = nullptr;
+    std::uint64_t owner_ = 0;
+    mutable std::vector<std::size_t> position_snapshot_; // Explicit owning compatibility read only.
 };
 
 // Ordered member list of one source bracket family. Members are appended per
@@ -1536,6 +1594,16 @@ public:
                          compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None);
 
     void bind(NativeStrategyHost& host) noexcept;
+    void bind_scratch_store(detail::ScratchStore&);
+    std::pair<native_order::CohortHandle, const OriginRoster*> fixture_cohort_state(
+        const SourceId&, std::uint8_t, const native_order::RequestHandle&, double);
+    void fixture_projection_state(std::uint8_t, const native_order::RequestHandle&,
+                                  const PlacementSnapshot*);
+    void fixture_queue_state(std::uint8_t, const native_order::Request*,
+                             const PlacementSnapshot*, const native_order::RequestHandle&,
+                             const native_order::RequestHandle&);
+    void fixture_source_key(std::optional<std::uint64_t>, const native_order::RequestHandle*);
+    void fixture_retire_origin_prefixes() { retire_origin_prefixes(); }
     // Pine source state counts chart/source bars. The kernel coordinate is
     // script-bar space, so projection rows use this explicit source index and
     // never rewrite a kernel lot or trade row.
@@ -1845,7 +1913,7 @@ private:
     struct CohortFacts {
         native_order::CohortHandle handle{};
         OriginRoster origins;
-        std::vector<native_order::RequestHandle> opened;
+        ::pineforge::detail::WorkingSequence<native_order::RequestHandle> opened;
         struct Record {
             std::uint64_t handle; std::int64_t cycle;
             std::uint64_t origin_count, origin_digest, erased_sides;
@@ -1855,28 +1923,50 @@ private:
         // at every candidate.  It lets a command snapshot an existing id's
         // percentage basis before later requests in the same script pass
         // reduce that cohort.
-        std::unordered_map<std::uint64_t, double> live_units_by_origin;
-        std::int64_t cycle = 0;
+        ::pineforge::detail::WorkingMap<double> live_units_by_origin;
+        ::pineforge::detail::WorkingScalar<std::int64_t> cycle = 0;
         Record retired_record() const noexcept;
         static CohortFacts restore_record(const Record&);
         bool spillable() const noexcept;
         // R5 lane V19-E: the sides (bit 0 long, bit 1 short) of the openings
         // in `origins` whose placement rows were erased, so a question about
         // every origin the cohort ever accepted still covers them.
-        std::uint8_t erased_opening_sides = 0;
+        ::pineforge::detail::WorkingScalar<std::uint8_t> erased_opening_sides = 0;
+        void bind_members(::pineforge::detail::ScratchStore& store, bool existing = false) {
+            if (existing) {
+                namespace ws = ::pineforge::detail::working_store;
+                for (std::uint64_t field = 0; field < 4; ++field)
+                    if (!ws::get_word(store, ws::Key(43, handle.value, field)))
+                        ws::check(::pineforge::detail::ScratchStatus::corrupt);
+                for (auto domain : {42U, 44U, 45U})
+                    if (!ws::get_word(store, ws::Key(domain, handle.value, 0)))
+                        ws::check(::pineforge::detail::ScratchStatus::corrupt);
+            }
+            origins.bind_scratch_store(store, handle.value);
+            opened.bind(store, 44, handle.value);
+            live_units_by_origin.bind(store, 45, handle.value);
+            cycle.bind(store, handle.value, 2);
+            erased_opening_sides.bind(store, handle.value, 3);
+        }
+        void clear_members() {
+            origins.clear(); opened.clear(); live_units_by_origin.clear();
+            cycle = 0; erased_opening_sides = 0;
+        }
     };
-    using CohortTable = ::pineforge::detail::DiskResidentIdTable<CohortFacts>;
+    using CohortTable = ::pineforge::detail::WorkingIdTable<CohortFacts>;
     struct PendingBracketLeg {
         native_order::Request request;
         PlacementSnapshot snapshot;
         SourceId replacement_key;
         std::uint64_t family_key = 0;
+        std::uint64_t request_record = 0;
     };
 
     struct PendingEntry {
         native_order::Request request;
         PlacementSnapshot snapshot;
         SourceId replacement_key;
+        std::uint64_t request_record = 0;
     };
 
     struct DelayedMarketOrder {
@@ -1885,6 +1975,7 @@ private:
         SourceId replacement_key;
         std::uint64_t release_open_epoch = 0;
         bool execute_at_open = false;
+        std::uint64_t request_record = 0;
     };
 
     // A36/A28: a sell-side stop that is already marketable at the open, while
@@ -1933,6 +2024,7 @@ private:
         std::optional<native_order::Request> unbatched_request;
         std::optional<PlacementSnapshot> unbatched_snapshot;
         EntrySubmissionContext unbatched_context;
+        std::uint64_t request_record = 0;
     };
 
     // A source command can remain observable through the enclosing source
@@ -1983,6 +2075,7 @@ private:
         native_order::Request request;
         bool armed = false;
         double installed_level = std::numeric_limits<double>::quiet_NaN();
+        std::uint64_t request_record = 0;
     };
 
     // A from_entry "" exit with relative legs that covers the position entry
@@ -2015,6 +2108,7 @@ private:
         bool opening = false;
         std::uint64_t family_key = 0;
         bool next_open = false;
+        std::uint64_t request_record = 0;
     };
 
     struct PendingMarginRevival {
@@ -2057,7 +2151,7 @@ private:
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key = {});
     void remember(const native_order::RequestHandle&, PlacementSnapshot&&);
-    void retire(native_order::RequestHandle) noexcept;
+    void retire(native_order::RequestHandle);
     // R5 lane V19-E: erases the placement rows no reader can reach again
     // (pine_adapter.cpp explains the rule); run at every bar open.
     void erase_retired_rows(const NativeDecisionContext&);
@@ -2070,7 +2164,7 @@ private:
     // final mark.
     void set_exit_phase(std::size_t trade_index, std::uint8_t phase);
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
-    double cohort_exposure_for(const SourceId&) const noexcept;
+    double cohort_exposure_for(const SourceId&) const;
     // The units an exit's from_entry holds; none when it names no entry.
     std::optional<double> from_entry_units(const SourceId&) const noexcept;
     bool from_entry_filled_this_cycle(const SourceId&) const;
@@ -2406,6 +2500,7 @@ private:
     PineSizingSnapshot sizing_snapshot() const;
     std::uint64_t key_for(const SourceId&, const SourceId& = {}) const noexcept;
     void refresh_pending_view() noexcept;
+    native_order::Request store_queued_request(const native_order::Request&, std::uint64_t&);
     OrderBirth capture_order_birth() const;
     bool opening_market_short_scope(PineOrderFamily) const;
     void initialize_l4c_policy(PlacementSnapshot&, native_order::RequestHandle);
@@ -2547,6 +2642,8 @@ private:
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
+    detail::ScratchStore* scratch_store_ = nullptr;
+    std::shared_ptr<::pineforge::detail::working_store::Binding> scratch_binding_;
     const PineScheduler* input_scheduler_ = nullptr;
     PineStrategyConfig config_{};
     StagedConfiguration staged_{};
@@ -2561,7 +2658,7 @@ private:
     CohortTable cohorts_by_id_;
     CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
-    std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
+    ::pineforge::detail::WorkingMap<native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
@@ -2584,7 +2681,7 @@ private:
     std::vector<PerEntryExit> per_entry_exits_;
     std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<PendingMarginRevival> pending_margin_revivals_;
-    std::vector<native_order::RequestHandle> live_handles_;
+    ::pineforge::detail::WorkingSequence<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     // R5 lane V19-E: the dropped-close receipts were a log no decision reads;
     // v4 keeps their count and a running digest, each folded once

@@ -1,10 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <algorithm>
+#include <array>
+#include <cstring>
 #include <iosfwd>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <type_traits>
 #include <unordered_set>
 
@@ -49,6 +53,27 @@ public:
 
     const std::string& string() const noexcept { return *ptr_; }
     operator const std::string&() const noexcept { return *ptr_; }
+
+    // Run-local readback: every stored identity was interned by its producer.
+    // Resolve its complete bytes without an identity-sized temporary.
+    template<class Read>
+    static SessionKey from_paged(std::size_t size, Read&& read) {
+        if (size == 0) return {};
+        std::lock_guard<std::mutex> lock(pool_mutex());
+        std::array<char, 128> bytes{};
+        for (const auto& key : pool()) {
+            if (key.size() != size) continue;
+            bool equal = true;
+            for (std::size_t at = 0; at < size;) {
+                const auto n = std::min(bytes.size(), size - at);
+                read(at, bytes.data(), n);
+                if (std::memcmp(bytes.data(), key.data() + at, n)) { equal = false; break; }
+                at += n;
+            }
+            if (equal) { SessionKey out; out.ptr_ = &key; return out; }
+        }
+        throw std::invalid_argument("stored session identity is not interned in this run");
+    }
 
     char operator[](std::size_t i) const noexcept { return (*ptr_)[i]; }
 
@@ -110,13 +135,19 @@ private:
 
     static const std::string* intern(std::string_view s) {
         if (s.empty()) return &empty_string();
-        static std::mutex mutex;
-        static std::unordered_set<std::string> pool;
-        std::lock_guard<std::mutex> lock(mutex);
-        auto it = pool.find(std::string(s));
-        if (it != pool.end()) return &*it;
-        auto [inserted, _] = pool.emplace(s);
+        std::lock_guard<std::mutex> lock(pool_mutex());
+        // C++17 unordered_set has no heterogeneous find. Compare the borrowed
+        // bytes before constructing a key, including for an already interned
+        // identity much larger than a page.
+        for (const auto& key : pool())
+            if (std::string_view(key) == s) return &key;
+        auto [inserted, _] = pool().emplace(s);
         return &*inserted;
+    }
+    static std::mutex& pool_mutex() { static std::mutex mutex; return mutex; }
+    static std::unordered_set<std::string>& pool() {
+        static std::unordered_set<std::string> keys;
+        return keys;
     }
 
     const std::string* ptr_ = &empty_string();
