@@ -4,6 +4,7 @@
 // fails because Item rows survive in the queue. Only the store audit is gated.
 #include "../src/native_execution_consumer.hpp"
 #include "native_order_full_fold.hpp"
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 
 #define PINEFORGE_TEST_ALLOCATION_BYTES
@@ -235,6 +236,9 @@ enum class Shape { Wide, Deep, Tree, ManySeeds };
 constexpr std::size_t kJournalMaxResident = 16384;
 constexpr std::size_t kJournalChunk = 32;
 constexpr std::size_t kJournalSpillPageBytes = 32768;
+// src/native_order.cpp:1582: std::array<Cached, 4>; :1567 has four read buffers.
+// exercise_reload_control counts the decoded storage slots through history_at.
+constexpr std::size_t kJournalCacheSlots = 4;
 constexpr std::size_t kDrainBytes = 4096;
 
 void print_reserve(std::size_t population, Shape shape, bool direct, std::size_t reserve_peak) {
@@ -499,8 +503,150 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     return reserve_peak;
 }
 
+void exercise_reload_control(bool direct, const no::Request& request, const no::Request& filler,
+                             std::size_t reload_budget_bytes) {
+    constexpr auto page_count = kJournalCacheSlots + 2;
+    constexpr auto definition_count = page_count * kJournalChunk;
+    no::WorkingRequestCore core{no::RunIdentity{"x08-reload-control", 1}};
+    core.reset(no::RunIdentity{"x08-reload-control", 1});
+    core.reserve(kJournalMaxResident + definition_count);
+    std::uint64_t incarnation = 1, ordinal = 1;
+    for (std::size_t index = 0; index < definition_count; ++index)
+        CHECK(core.submit(request, 0, incarnation, ordinal).status == no::SubmitStatus::Accepted);
+    CHECK(core.history_end() == definition_count);
+    CHECK(core.live().size() == definition_count);
+    std::array<std::uintptr_t, definition_count> resident_addresses{};
+    std::array<std::uint64_t, definition_count> values{};
+    for (std::size_t index = 0; index < definition_count; ++index) {
+        const auto& event = core.history_at(index);
+        resident_addresses[index] = reinterpret_cast<std::uintptr_t>(&event);
+        values[index] = full_fold::value(event);
+    }
+    while (core.history_end() < kJournalMaxResident)
+        CHECK(core.submit(filler, 0, incarnation, ordinal).status == no::SubmitStatus::Rejected);
+
+    // The next append spills [0,32); every further 32 appends spills another
+    // chunk (src/native_order.cpp:1679-1717). Do not read any spilled row until
+    // recording: all six distinct pages must be cold. Below, verify that each
+    // entire chunk moved into one contiguous decoded CommandEvent vector.
+    std::array<std::size_t, page_count> page_positions{};
+    for (std::size_t page = 0; page < page_count; ++page) {
+        page_positions[page] = page * kJournalChunk;
+        const auto spill_end = kJournalMaxResident + page_positions[page] + 1;
+        while (core.history_end() < spill_end)
+            CHECK(core.submit(filler, 0, incarnation, ordinal).status == no::SubmitStatus::Rejected);
+        CHECK(core.history_end() == spill_end);
+    }
+    CHECK(core.history_base() == 0);
+    CHECK(core.history_end() == kJournalMaxResident + (page_count - 1) * kJournalChunk + 1);
+    std::array<std::uintptr_t, page_count> decoded_addresses{};
+    std::size_t spilled_pages = 0, distinct_reloads = 0, observed_slots = 0;
+    const auto allocations_before = global_allocation::allocations;
+    peak_bytes = 0;
+    global_allocation::live_bytes = 0;
+    global_allocation::on_recorded = record_bytes;
+    global_allocation::recording = true;
+    for (std::size_t page = 0; page < page_count; ++page) {
+        const auto first = page_positions[page];
+        decoded_addresses[page] = reinterpret_cast<std::uintptr_t>(&core.history_at(first));
+        bool full_spilled_page = true;
+        for (std::size_t offset = 0; offset < kJournalChunk; ++offset) {
+            const auto position = first + offset;
+            const auto& event = core.history_at(position);
+            const auto address = reinterpret_cast<std::uintptr_t>(&event);
+            const bool moved = address != resident_addresses[position];
+            const bool contiguous =
+                address == decoded_addresses[page] + offset * sizeof(no::CommandEvent);
+            const bool accepted = std::holds_alternative<no::AcceptedEvent>(event);
+            const bool unchanged = full_fold::value(event) == values[position];
+            CHECK(moved && contiguous && accepted && unchanged);
+            full_spilled_page = full_spilled_page && moved && contiguous && accepted && unchanged;
+        }
+        if (full_spilled_page) {
+            ++spilled_pages;
+            const auto previous = page_positions.begin() + static_cast<std::ptrdiff_t>(page);
+            if (std::find(page_positions.begin(), previous, first) == previous) ++distinct_reloads;
+        }
+        const auto previous = decoded_addresses.begin() + static_cast<std::ptrdiff_t>(page);
+        if (std::find(decoded_addresses.begin(), previous, decoded_addresses[page]) == previous)
+            ++observed_slots;
+    }
+    global_allocation::recording = false;
+    global_allocation::on_recorded = nullptr;
+    const auto measured_reload_peak = peak_bytes;
+    const auto allocations = global_allocation::allocations - allocations_before;
+    CHECK(spilled_pages == page_count);
+    CHECK(distinct_reloads == spilled_pages && distinct_reloads > kJournalCacheSlots);
+    CHECK(observed_slots == kJournalCacheSlots);
+    CHECK(allocations >= distinct_reloads * kJournalChunk);
+    CHECK(measured_reload_peak >= kJournalCacheSlots * kJournalChunk * sizeof(no::RequestDefinition));
+    CHECK(measured_reload_peak <= reload_budget_bytes);
+    std::printf("X08 reload_control direct=%d spilled_pages=%zu distinct_reloads=%zu "
+                "observed_slots=%zu measured_peak=%zu budget=%zu allocations=%zu\n",
+                direct, spilled_pages, distinct_reloads, observed_slots,
+                measured_reload_peak, reload_budget_bytes, allocations);
+}
+
 void exercise_reload(bool direct) {
     constexpr std::size_t population = 8191;
+    const no::Request root_request{no::Transact{1.0}, "root", ""};
+    const no::Request child_request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
+    const no::Request filler{no::Transact{0.0}, "filler", ""};
+    // Conservative make_shared control block plus rounding allowance: two
+    // pointer widths and a size_t, rounded to max_align_t; no private STL type.
+    // Definitions are allocated by src/native_order.cpp:1285, once per event.
+    constexpr auto alignment = alignof(std::max_align_t);
+    constexpr auto control_block_bytes =
+        (2 * sizeof(void*) + sizeof(std::size_t) + alignment - 1) / alignment * alignment;
+    constexpr auto decoded_events = kJournalCacheSlots * kJournalChunk;
+    constexpr auto definition_bytes =
+        decoded_events * (sizeof(no::RequestDefinition) + control_block_bytes);
+    // archive_string (:1205-1215) resizes fresh strings. Bound both text fields
+    // by these actual case strings' largest capacities, including terminators,
+    // even where short-string storage is already included in sizeof(definition).
+    const auto label_capacity = std::max({root_request.label.capacity(),
+                                         child_request.label.capacity(), filler.label.capacity()});
+    const auto comment_capacity = std::max({root_request.comment.capacity(),
+                                           child_request.comment.capacity(), filler.comment.capacity()});
+    const auto string_bytes =
+        decoded_events * (label_capacity + 1 + comment_capacity + 1) * sizeof(std::string::value_type);
+    // The first page has 31 Accepted and one Cancelled event, each with one
+    // definition. Independent/WaitForApplied owners and BookTransaction/Wait
+    // authority with PendingNone contain no opening handles or adjustment ids.
+    // The control pages contain only Accepted/Independent events, also no ids.
+    // archive_vector (src/native_order.cpp:1235-1246) therefore resizes no ids.
+    constexpr std::size_t opening_ids_per_event = 0, adjustment_ids_per_event = 0;
+    constexpr auto id_vector_bytes = decoded_events *
+        (opening_ids_per_event * sizeof(no::RequestHandle)
+         + adjustment_ids_per_event * sizeof(std::uint64_t));
+    // prepare_spill (:1595-1602) reserves all event vectors and buffers and,
+    // via ExtFile::prepare (:979-982), the first arena chunk/table entry BEFORE
+    // recording. The drain can still grow the data extent: bound one existing
+    // page plus a full fixed resident cap of appends (enforced below), each
+    // chunk spilling at most kSpillPageBytes for these short, full-page rows.
+    // The page directory stays within its prepared first arena chunk.
+    constexpr auto max_spill_bytes =
+        (1 + kJournalMaxResident / kJournalChunk) * kJournalSpillPageBytes;
+    constexpr std::size_t arena_chunk_bytes = detail::ScratchArena::kChunkBytes;
+    constexpr auto max_arena_chunks = (max_spill_bytes + arena_chunk_bytes - 1) / arena_chunk_bytes;
+    // src/scratch_arena.cpp:295-301 doubles the uint32_t table capacity:
+    // at most five growths, 1 -> 2 -> 4 -> 8 -> 16 -> 32 (17 chunks needed).
+    // Sum every allocation, including replaced tables, to bound the live peak.
+    constexpr auto arena_chunk_table_bytes = [] {
+        std::size_t bytes = 0;
+        for (std::size_t next = 2; next / 2 < max_arena_chunks; next *= 2)
+            bytes += next * sizeof(std::uint32_t);
+        return bytes;
+    }();
+    // Fixed production caps and fixed case payloads only: no population or
+    // retained-window length contributes to this byte budget.
+    const auto reload_budget_bytes =
+        definition_bytes + string_bytes + id_vector_bytes + arena_chunk_table_bytes;
+    CHECK(population < kJournalMaxResident);
+    // A fifth full decoded page must exceed this SAME budget even counting
+    // only its definitions, so growing the cache cannot hide in the allowances.
+    CHECK(reload_budget_bytes <
+          (kJournalCacheSlots + 1) * kJournalChunk * sizeof(no::RequestDefinition));
 #ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
     ScratchFixture scratch;
     CHECK(scratch.store.status() == detail::ScratchStatus::ok);
@@ -518,8 +664,7 @@ void exercise_reload(bool direct) {
     std::uint64_t incarnation = 1, ordinal = 1;
     std::array<no::RequestHandle, 2> roots;
     for (auto& root : roots) {
-        const auto accepted = core.submit(no::Request{no::Transact{1.0}, "root", ""},
-                                          0, incarnation, ordinal);
+        const auto accepted = core.submit(root_request, 0, incarnation, ordinal);
         CHECK(accepted.status == no::SubmitStatus::Accepted && accepted.handle);
         if (!accepted.handle) return;
         root = *accepted.handle;
@@ -527,7 +672,7 @@ void exercise_reload(bool direct) {
     Probe::Seeds seeds;
     std::size_t cause_position = 0;
     for (std::size_t index = 0; index < population; ++index) {
-        no::Request request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
+        no::Request request = child_request;
         no::WaitForApplied wait;
         wait.parent = roots[index == 0 ? 0 : 1];
         request.owner = wait;
@@ -554,7 +699,6 @@ void exercise_reload(bool direct) {
     // These rejected commands add history without more waiting children.
     // Fold each new row while it is resident; after the first spill, neither
     // note_setup's event range nor its incremental fold revisits the cause.
-    const no::Request filler{no::Transact{0.0}, "filler", ""};
     while (core.history_end() <= kJournalMaxResident) {
         const auto first = core.history_end();
         CHECK(core.submit(filler, 0, incarnation, ordinal).status == no::SubmitStatus::Rejected);
@@ -576,7 +720,14 @@ void exercise_reload(bool direct) {
                 "allocations=%zu definition_bytes=%zu\n",
                 population, direct, cause_position, peak_bytes, kDrainBytes,
                 global_allocation::allocations - allocations_before, sizeof(no::RequestDefinition));
-    CHECK(peak_bytes <= kDrainBytes);
+    const auto measured_reload_peak = peak_bytes;
+    std::printf("X08 reload_budget population=%zu direct=%d measured_peak=%zu budget=%zu "
+                "slots=%zu definition_bytes=%zu\n",
+                population, direct, measured_reload_peak, reload_budget_bytes,
+                kJournalCacheSlots, sizeof(no::RequestDefinition));
+    // Only reload uses its computed byte budget; kDrainBytes remains 4096
+    // for every other drain (and is retained in the diagnostic above).
+    CHECK(measured_reload_peak <= reload_budget_bytes);
     CHECK(!Probe::failed(consumer));
     CHECK(core.live().empty());
     CHECK(core.history_end() - before == population);
@@ -609,6 +760,7 @@ void exercise_reload(bool direct) {
     scratch.check_empty();
     CHECK(scratch.digest() == scratch_digest);
 #endif
+    exercise_reload_control(direct, root_request, filler, reload_budget_bytes);
 }
 
 no::SubmitResult submit_limit_case(no::WorkingRequestCore& core, const no::Request& request,
@@ -644,7 +796,7 @@ void exercise_limits(bool direct) {
     constexpr auto over_label = kJournalSpillPageBytes - accepted_bytes + 1;
     const no::Request filler{no::Transact{0.0}, "filler", ""};
     {
-        no::WorkingRequestCore core;
+        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-fit", 1}};
         core.reset(no::RunIdentity{"x08-limits-fit", 1});
         core.reserve(kJournalMaxResident + 64);
         std::uint64_t incarnation = 1, ordinal = 1;
@@ -708,7 +860,7 @@ void exercise_limits(bool direct) {
         CHECK(found && full_fold::value(*found) == values[kJournalChunk]);
     }
     {
-        no::WorkingRequestCore core;
+        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-refuse", 1}};
         core.reset(no::RunIdentity{"x08-limits-refuse", 1});
         core.reserve(kJournalMaxResident + 64);
         std::uint64_t incarnation = 1, ordinal = 1;
