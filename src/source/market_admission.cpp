@@ -79,7 +79,7 @@ uint64_t sequence(const Event& event) {
     },event);
 }
 struct Journal::CodecState final : detail::ScratchReadback {
-    detail::ScratchStore& store;
+    detail::CommandScratchStore& store;
     mutable std::vector<std::byte> page;
     std::uint64_t count = 0;
     // One write-behind abandonment slot. It joins the next successful record
@@ -90,7 +90,7 @@ struct Journal::CodecState final : detail::ScratchReadback {
     mutable bool snapshot_valid = false;
     detail::ScratchStatus failure = detail::ScratchStatus::ok;
 
-    explicit CodecState(detail::ScratchStore& source) : store(source), page(source.page_size()) {}
+    explicit CodecState(detail::CommandScratchStore& source) : store(source), page(source.page_size()) {}
     static void check(detail::ScratchStatus status) {
         if (status == detail::ScratchStatus::ok) return;
         if (status == detail::ScratchStatus::io_error)
@@ -160,7 +160,7 @@ struct Journal::CodecState final : detail::ScratchReadback {
 Journal::Journal() noexcept = default;
 Journal::~Journal() = default;
 
-void bind_journal_codec(Journal& journal, detail::ScratchStore& store) {
+void bind_journal_codec(Journal& journal, detail::CommandScratchStore& store) {
     if (journal.next_sequence_ != 1 || journal.event_count() || journal.has_unfinished_events()
         || journal.codec_ || store.status() != detail::ScratchStatus::ok
         || store.record_count() || store.transaction_active())

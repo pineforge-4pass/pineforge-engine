@@ -200,7 +200,7 @@ private:
     std::uint64_t length_;
 };
 
-inline ScratchStatus find(ScratchStore& store, std::uint64_t key,
+inline ScratchStatus find(CommandScratchStore& store, std::uint64_t key,
                           ScratchRecordInfo& out) noexcept {
     const WordSource probe(key);
     ScratchHandle handle = scratch_no_handle;
@@ -215,7 +215,7 @@ inline ScratchStatus find(ScratchStore& store, std::uint64_t key,
     return store.point(handle, out);
 }
 
-inline ScratchStatus finish(ScratchStore& store, ScratchStatus status) noexcept {
+inline ScratchStatus finish(CommandScratchStore& store, ScratchStatus status) noexcept {
     if (status == ScratchStatus::ok)
         status = store.commit(ScratchDurability::buffered);
     if (status != ScratchStatus::ok && store.transaction_active()) {
@@ -224,7 +224,7 @@ inline ScratchStatus finish(ScratchStore& store, ScratchStatus status) noexcept 
     }
     return status;
 }
-inline ScratchStatus put(ScratchStore& store, std::uint64_t key,
+inline ScratchStatus put(CommandScratchStore& store, std::uint64_t key,
                          const ScratchByteSource& value) noexcept {
     auto status = store.begin();
     if (status != ScratchStatus::ok) return status;
@@ -232,7 +232,7 @@ inline ScratchStatus put(ScratchStore& store, std::uint64_t key,
     const WordSource probe(key);
     return finish(store, store.put(probe, value, handle));
 }
-inline ScratchStatus clear(ScratchStore& store) noexcept {
+inline ScratchStatus clear(CommandScratchStore& store) noexcept {
     auto status = store.begin();
     if (status != ScratchStatus::ok) return status;
     ScratchHandle handle = scratch_no_handle;

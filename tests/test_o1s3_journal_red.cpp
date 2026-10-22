@@ -61,7 +61,7 @@ namespace pd = pineforge::detail;
 using pd::ScratchBuffer;
 using pd::ScratchBytes;
 using pd::ScratchStatus;
-using pd::ScratchStore;
+using pd::CommandScratchStore;
 using Bytes = std::vector<std::byte>;
 constexpr std::uint64_t seed = 1469598103934665603ULL;
 
@@ -604,7 +604,7 @@ struct Rig {
                                   std::size_t slots = 2) const {
         return {slots, page, 1, 1, {0x73336a6f75726e01ULL, nullptr, &numeric_order}, mode};
     }
-    void audit(const ScratchStore& store) const {
+    void audit(const CommandScratchStore& store) const {
         const auto s = store.stats();
         require(s.page_reads == charges.reads && s.page_writes == charges.writes
                 && s.syncs == charges.syncs, "store counters equal every observed attempt");
@@ -669,7 +669,7 @@ void equals_bytes(const pd::ScratchByteSource& source, const Bytes& model) {
         at += n;
     }
 }
-pd::ScratchHandle put(ScratchStore& store, std::uint64_t position,
+pd::ScratchHandle put(CommandScratchStore& store, std::uint64_t position,
                       const pd::ScratchByteSource& value) {
     std::array<std::byte, 8> key{};
     for (unsigned i = 0; i != 8; ++i)
@@ -705,10 +705,10 @@ struct HeapCensus {
         fixed = global_allocation::live_bytes;
         heap_peak = std::max(heap_peak, fixed); // Never discard construction's transient peak.
     }
-    void flat(const ScratchStore& a, const ScratchStore& b, std::size_t initial_w,
+    void flat(const CommandScratchStore& a, const CommandScratchStore& b, std::size_t initial_w,
               std::size_t fixed_frames) const {
         require(a.stats().resident_bytes + b.stats().resident_bytes == initial_w,
-                "both ScratchStore resident workspaces stay fixed");
+                "both CommandScratchStore resident workspaces stay fixed");
         require(initial_w <= fixed, "W is included once in the measured construction heap");
         require(global_allocation::live_bytes <= fixed + fixed_frames
                 && heap_peak <= fixed + fixed_frames,
@@ -1042,8 +1042,8 @@ void s3_separate_journal_owners_and_reset_red() {
     // bytes/frontiers survive adapter reset; neither old prefix nor old-run
     // handle becomes current. Fails to compile: bind_journal_codec.
     Rig native_rig, admission_rig;
-    ScratchStore native_store(native_rig.config(), &native_rig.backing);
-    ScratchStore admission_store(admission_rig.config(), &admission_rig.backing);
+    CommandScratchStore native_store(native_rig.config(), &native_rig.backing);
+    CommandScratchStore admission_store(admission_rig.config(), &admission_rig.backing);
     const no::RunIdentity first{"s3-owners", 41}, second{"s3-owners", 42};
     no::WorkingRequestCore core(first);
     pineforge::source::PineExecutionAdapter adapter;
@@ -1185,8 +1185,8 @@ void s3_journal_islands_fixed_under_pins_red() {
     Rig native_rig, admission_rig;
     HeapCensus heap; // Starts before construction of EVERY consumer owner/store.
     {
-        ScratchStore native_store(native_rig.config(), &native_rig.backing);
-        ScratchStore admission_store(admission_rig.config(), &admission_rig.backing);
+        CommandScratchStore native_store(native_rig.config(), &native_rig.backing);
+        CommandScratchStore admission_store(admission_rig.config(), &admission_rig.backing);
         pineforge::NativeExecutionConsumer consumer;
         auto& core = consumer.*access(NativeCore{});
         running_consumer(consumer, run);
@@ -1359,7 +1359,7 @@ void s3_native_codec_all_values_cross_page_red() {
             "fixture populates every native alternative");
     for (const auto page : {std::size_t{512}, std::size_t{2048}}) {
         Rig rig(page);
-        ScratchStore store(rig.config(), &rig.backing);
+        CommandScratchStore store(rig.config(), &rig.backing);
         status_is(store.status(), ScratchStatus::ok, "native codec store");
         std::vector<pd::ScratchHandle> handles;
         std::vector<Bytes> model;
@@ -1450,7 +1450,7 @@ void s3_admission_codec_allocations_and_order_red() {
     // independent model. Fails to compile: bind_journal_codec (also the
     // admission encode_journal_record/decode_journal_record overloads).
     Rig rig;
-    ScratchStore store(rig.config(), &rig.backing);
+    CommandScratchStore store(rig.config(), &rig.backing);
     ad::Journal journal;
     bind_journal_codec(journal, store);
     std::vector<ad::Allocation> allocations;
@@ -1536,7 +1536,7 @@ void s3_native_window_dependency_frontier_red() {
                         pineforge::NativeEventRetention::Commands,
                         pineforge::NativeEventRetention::Window}) {
         Rig rig;
-        ScratchStore store(rig.config(), &rig.backing);
+        CommandScratchStore store(rig.config(), &rig.backing);
         pineforge::NativeExecutionConsumer consumer;
         consumer.set_retention_override(policy);
         auto& core = consumer.*access(NativeCore{});
@@ -1717,7 +1717,7 @@ void s3_native_digest_survives_nonzero_base_red() {
     for (std::size_t page : {std::size_t{512}, std::size_t{2048}})
         for (unsigned schedule = 0; schedule != 3; ++schedule) {
             Rig rig(page);
-            ScratchStore store(rig.config(pd::ScratchOpenMode::create_empty, schedule + 2), &rig.backing);
+            CommandScratchStore store(rig.config(pd::ScratchOpenMode::create_empty, schedule + 2), &rig.backing);
             pineforge::NativeExecutionConsumer consumer;
             auto& core = consumer.*access(NativeCore{});
             running_consumer(consumer, run); bind_journal_codec(core, store);
@@ -1980,8 +1980,8 @@ void s34_readback_never_collects_population_red() {
     Rig native_rig, admission_rig;
     HeapCensus heap;
     {
-        ScratchStore native_store(native_rig.config(), &native_rig.backing);
-        ScratchStore admission_store(admission_rig.config(), &admission_rig.backing);
+        CommandScratchStore native_store(native_rig.config(), &native_rig.backing);
+        CommandScratchStore admission_store(admission_rig.config(), &admission_rig.backing);
         no::WorkingRequestCore core(run);
         ad::Journal admission;
         bind_journal_codec(core, native_store); bind_journal_codec(admission, admission_store);
@@ -2111,8 +2111,8 @@ void s34_backing_physical_charge_and_lifetime_red() {
         std::size_t total_w = 0;
         Rig fresh(page_size, use_disk, &fresh_provision);
         {
-            ScratchStore native_store(native_owner->config(), &native_owner->backing);
-            ScratchStore admission_store(admission_owner->config(), &admission_owner->backing);
+            CommandScratchStore native_store(native_owner->config(), &native_owner->backing);
+            CommandScratchStore admission_store(admission_owner->config(), &admission_owner->backing);
             no::WorkingRequestCore core(run);
             ad::Journal admission;
             bind_journal_codec(core, native_store); bind_journal_codec(admission, admission_store);
@@ -2193,8 +2193,8 @@ void s34_backing_physical_charge_and_lifetime_red() {
         admission_owner->backing.read_calls = admission_owner->backing.write_calls =
             admission_owner->backing.sync_calls = 0;
         {
-            ScratchStore native(native_owner->config(pd::ScratchOpenMode::reopen), &native_owner->backing);
-            ScratchStore admission(admission_owner->config(pd::ScratchOpenMode::reopen), &admission_owner->backing);
+            CommandScratchStore native(native_owner->config(pd::ScratchOpenMode::reopen), &native_owner->backing);
+            CommandScratchStore admission(admission_owner->config(pd::ScratchOpenMode::reopen), &admission_owner->backing);
             status_is(native.status(), ScratchStatus::ok, "buffered native same-backing reopen");
             status_is(admission.status(), ScratchStatus::ok, "buffered source same-backing reopen");
             Bytes page(page_size);
@@ -2220,7 +2220,7 @@ void s34_backing_physical_charge_and_lifetime_red() {
         native_owner.reset(); admission_owner.reset();
         require(native_lifetime.expired() && admission_lifetime.expired(),
                 "no codec, observer or global cache keeps the backing owner alive");
-        ScratchStore no_persistence(fresh.config(pd::ScratchOpenMode::reopen), &fresh.backing);
+        CommandScratchStore no_persistence(fresh.config(pd::ScratchOpenMode::reopen), &fresh.backing);
         status_is(no_persistence.status(), ScratchStatus::not_found,
                   "a fresh run-owned medium cannot reopen another owner's discarded state");
         require(heap_peak <= heap.fixed + frames,

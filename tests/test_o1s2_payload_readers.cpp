@@ -44,11 +44,9 @@ bool field_name(const PayloadField& field, std::string_view name) {
 void request_placement_pending() {
     for (auto n : {17U, 129U, 513U}) {
         FixedMemoryScratchBacking backing({storage.data(), storage.size()}, 512);
-        ScratchStore store({2, 512, 1, 1, sd::exit_payload_key_order(), ScratchOpenMode::create_empty}, &backing);
+        CommandScratchStore store({2, 512, 1, 1, sd::exit_payload_key_order(), ScratchOpenMode::create_empty}, &backing);
         REQUIRE(store.status() == ScratchStatus::ok);
         sd::ExitScratchContext context{store, {"o1s2-payload", 1}};
-        sd::ExitScratchVersions versions(context);
-        context.versions = &versions;
         std::string text(n * 129, '\x82');
         text[128] = '\0';
         PlacementSnapshot placement;
@@ -85,8 +83,8 @@ void request_placement_pending() {
             CHECK(sd::freeze_placement(context, 1, placement, placement_version) == ScratchStatus::ok);
         }
         REQUIRE(request_version && placement_version);
-        const auto request_view = versions.request(request_version);
-        const auto placement_view = versions.placement(placement_version);
+        const no::RequestReadback request_view(store, request_version);
+        const pf::source::PlacementReadback placement_view(store, placement_version);
         PayloadField label;
         REQUIRE(request_view.label(label) == ScratchStatus::ok);
         // The pending key deliberately reads the SAME store. The production
@@ -97,7 +95,7 @@ void request_placement_pending() {
                 == ScratchStatus::ok);
         }
         REQUIRE(pending_version);
-        const auto pending = versions.pending(pending_version);
+        const pf::source::PendingReadback pending(store, pending_version);
         request = {};
         placement = {};
         admission.reset();
@@ -226,12 +224,12 @@ void request_placement_pending() {
             CHECK(unchanged == 777 && !store.transaction_active());
             CHECK(store.ordered_digest({page.data(), page.size()}, after) == ScratchStatus::ok);
             CHECK(before == after);
-            CHECK(versions.release_scope(1) == ScratchStatus::ok);
+            CHECK(sd::release_payload_scope(context, 1) == ScratchStatus::ok);
             PayloadChunkBytes key;
             CHECK(pending.replacement_key(key) == ScratchStatus::ok);
             CHECK(equal_text(key, text));
             CHECK(request_view.label(label) == ScratchStatus::not_found);
-            CHECK(versions.release_scope(2) == ScratchStatus::ok);
+            CHECK(sd::release_payload_scope(context, 2) == ScratchStatus::ok);
             CHECK(store.record_count() == 0);
         }
     }

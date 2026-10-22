@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -474,9 +475,10 @@ public:
         : ScratchBacking(inner.kind(), inner.page_size(), observer), inner_(inner) {}
     std::uint64_t page_count() const noexcept override { return inner_.page_count(); }
 
-    void arm_write(std::uint64_t nth, bool torn_write) {
+    void arm_write(std::uint64_t nth, bool torn_write, int error = EIO) {
         fail_write_at_ = nth;
         torn_ = torn_write;
+        write_error_ = error;
         writes_since_arm_ = 0;
     }
     void disarm_write() { fail_write_at_ = 0; }
@@ -501,6 +503,7 @@ protected:
                 fail_write_at_ = 0;
                 ++write_faults_;
                 if (torn_) tear(id, source);
+                errno = write_error_;
                 return ScratchStatus::io_error;
             }
         }
@@ -525,6 +528,7 @@ private:
 
     FixedMemoryScratchBacking& inner_;
     bool torn_ = true;
+    int write_error_ = EIO;
     bool fail_reads_ = false;
     bool fail_syncs_ = false;
     std::uint64_t fail_write_at_ = 0;
@@ -1530,6 +1534,37 @@ void backing_write_failure_during_put() {
     rollback_ok(*s);
     verify(*s, model, 512, numeric_probes(), 1, true, "after rolling back the failed put");
     s.check_io("after a backing page-write failure during put");
+}
+
+void backing_errno_failures_are_io_errors() {
+    // Use the existing nth-page-write seam. The error is raised only when
+    // put actually reaches the backing, after begin has succeeded.
+    for (const int error : {ENOSPC, EIO}) {
+        Rig rig(512, 128);
+        Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+        require_status(s->status(), ScratchStatus::ok, "open errno fault fixture");
+        Model committed(cmp_numeric_text);
+        begin_ok(*s);
+        put_ok(*s, committed, key_u64(1), "committed");
+        commit_ok(*s);
+
+        begin_ok(*s);
+        const auto faults_before = rig.backing.write_faults();
+        rig.backing.arm_write(1, false, error);
+        ScratchHandle handle = 0xDEAD;
+        errno = 0;
+        const auto status = put_text(*s, key_u64(1), "replacement", handle);
+        const int backing_error = errno;
+        require(rig.backing.write_faults() == faults_before + 1,
+                "put reached exactly one injected backing write fault");
+        require(backing_error == error, "the backing raised the selected ENOSPC or EIO");
+        require_status(status, ScratchStatus::io_error, "backing errno failure remains io_error through put");
+        require(handle == 0xDEAD, "an errno-faulted put leaves its output unchanged");
+        check_rollback_only(*s, 512);
+        rollback_ok(*s);
+        verify(*s, committed, 512, numeric_probes(), 1, true, "errno fault preserves the committed state");
+        s.check_io("after an injected backing errno failure");
+    }
 }
 
 void durability_failure_and_transaction_state_machine() {
@@ -2585,6 +2620,7 @@ int main() {
         comparator_cannot_mutate_the_store();
         rollback_after_partial_writes();
         backing_write_failure_during_put();
+        backing_errno_failures_are_io_errors();
         rollback_survives_torn_writes_at_every_phase();
         failed_commit_publishes_nothing();
         durability_failure_and_transaction_state_machine();

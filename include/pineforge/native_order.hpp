@@ -543,7 +543,7 @@ struct Request {
 class RequestReadback final : public detail::PayloadReadback {
 public:
     RequestReadback() noexcept = default;
-    RequestReadback(const detail::ScratchStore& store, detail::ScratchHandle version) noexcept
+    RequestReadback(const detail::CommandScratchStore& store, detail::ScratchHandle version) noexcept
         : PayloadReadback(store, version, detail::PayloadSchema::request) {}
     explicit RequestReadback(detail::PayloadReadback view) noexcept : PayloadReadback(view) {}
     detail::ScratchStatus label(detail::PayloadField& out) const noexcept {
@@ -1419,7 +1419,7 @@ JournalRecordSource encode_journal_record(const CommandEvent&) noexcept;
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
     detail::ScratchBuffer, CommandEvent&) noexcept;
 class WorkingRequestCore;
-void bind_journal_codec(WorkingRequestCore&, detail::ScratchStore&);
+void bind_journal_codec(WorkingRequestCore&, detail::CommandScratchStore&);
 detail::ScratchStatus append_journal_record(WorkingRequestCore&,
     const detail::ScratchByteSource&) noexcept;
 const detail::ScratchReadback& journal_readback(const WorkingRequestCore&);
@@ -2255,7 +2255,7 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
-    friend void bind_journal_codec(WorkingRequestCore&, detail::ScratchStore&);
+    friend void bind_journal_codec(WorkingRequestCore&, detail::CommandScratchStore&);
     friend detail::ScratchStatus append_journal_record(WorkingRequestCore&,
         const detail::ScratchByteSource&) noexcept;
     friend const detail::ScratchReadback& journal_readback(const WorkingRequestCore&);

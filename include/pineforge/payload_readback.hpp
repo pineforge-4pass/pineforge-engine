@@ -67,7 +67,7 @@ struct PayloadField {
 class PayloadReadback {
 public:
     PayloadReadback() noexcept = default;
-    PayloadReadback(const ScratchStore& store, ScratchHandle version,
+    PayloadReadback(const CommandScratchStore& store, ScratchHandle version,
                     PayloadSchema schema) noexcept
         : store_(&store), version_(version), schema_(schema) {}
     ScratchStatus field_count(std::uint64_t& out) const noexcept;
@@ -79,7 +79,7 @@ public:
     ScratchHandle version() const noexcept { return version_; }
 private:
     ScratchStatus root(std::array<std::uint64_t, 3>&) const noexcept;
-    const ScratchStore* store_ = nullptr;
+    const CommandScratchStore* store_ = nullptr;
     ScratchHandle version_ = 0;
     PayloadSchema schema_ = PayloadSchema::request;
     std::uint64_t first_ = 0;

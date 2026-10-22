@@ -92,7 +92,7 @@ struct Rig {
     // Test medium only. Resident store geometry is identical at both E sizes.
     Bytes storage = Bytes(32 * 1024 * 1024);
     pd::FixedMemoryScratchBacking backing{{storage.data(), storage.size()}, page_size};
-    pd::ScratchStore store{{2, page_size, 1, 1, {0x703134666f6c6401ULL, nullptr, &numeric_order},
+    pd::CommandScratchStore store{{2, page_size, 1, 1, {0x703134666f6c6401ULL, nullptr, &numeric_order},
                            pd::ScratchOpenMode::create_empty}, &backing};
     Rig() { ok(backing.status()); ok(store.status()); }
 };

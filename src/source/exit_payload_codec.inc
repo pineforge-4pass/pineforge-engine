@@ -1,5 +1,7 @@
 // Included once by pine_adapter.cpp. Kept separate so the complete payload
 // schema can be reviewed independently of source trading policy.
+#include <pineforge/source/exit_payload_readback.hpp>
+
 namespace pineforge::source::detail {
 namespace {
 using pineforge::detail::PayloadSchema;
@@ -379,47 +381,8 @@ pineforge::detail::ScratchKeyOrder exit_payload_key_order() noexcept {
         }};
 }
 
-namespace {
-void require_payload_status(ScratchStatus status) {
-    if (status != ScratchStatus::ok)
-        throw ExitPayloadError(status);
-}
-}
-ScratchHandle ExitScratchVersions::placement(std::uint64_t scope, const PlacementSnapshot& value) {
-    ScratchHandle version = 0;
-    require_payload_status(freeze_placement(context_, scope, value, version));
-    return version;
-}
-PlacementReadback ExitScratchVersions::placement(ScratchHandle version) const noexcept {
-    return PlacementReadback(context_.store, version);
-}
-ScratchHandle ExitScratchVersions::request(std::uint64_t scope, const native_order::Request& value) {
-    ScratchHandle version = 0;
-    require_payload_status(freeze_request(context_, scope, value, version));
-    return version;
-}
-native_order::RequestReadback ExitScratchVersions::request(ScratchHandle version) const noexcept {
-    return native_order::RequestReadback(context_.store, version);
-}
-ScratchHandle ExitScratchVersions::pending(std::uint64_t scope, const native_order::Request& request,
-                                           const PlacementSnapshot& placement, const ScratchByteSource& key) {
-    ScratchHandle version = 0;
-    require_payload_status(freeze_pending(context_, scope, request, placement, key, version));
-    return version;
-}
-PendingReadback ExitScratchVersions::pending(ScratchHandle version) const noexcept {
-    return PendingReadback(context_.store, version);
-}
-native_order::Owner ExitScratchVersions::freeze_openings(const native_order::RunIdentity& run,
-        std::int64_t cycle, std::uint64_t count, void* context, OpeningReader read) {
-    if (cycle <= 0) require_payload_status(ScratchStatus::programming_error);
-    native_order::OpeningInputCursor input(count, context, read);
-    native_order::BindOpenings owner{{}, cycle};
-    require_payload_status(native_order::freeze_openings(run, input, owner.external_openings));
-    return owner;
-}
-ScratchStatus ExitScratchVersions::release_scope(std::uint64_t scope) noexcept {
-    auto& store = context_.store;
+ScratchStatus release_payload_scope(ExitScratchContext& context, std::uint64_t scope) noexcept {
+    auto& store = context.store;
     const std::array<std::uint64_t, 4> words{scope, pineforge::detail::payload_root_kind, 0, 0};
     ScratchSpanSource probe({reinterpret_cast<const std::byte*>(words.data()), sizeof(words)});
     for (;;) {

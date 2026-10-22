@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-namespace pineforge::detail { class ScratchStore; }
+namespace pineforge::detail { class CommandScratchStore; }
 
 namespace pineforge::admission {
 inline namespace market_admission_v2 {
@@ -210,7 +210,7 @@ JournalRecordSource encode_journal_record(const Event&) noexcept;
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
     detail::ScratchBuffer, Event&) noexcept;
 class Journal;
-void bind_journal_codec(Journal&, detail::ScratchStore&);
+void bind_journal_codec(Journal&, detail::CommandScratchStore&);
 detail::ScratchStatus append_journal_record(Journal&, const detail::ScratchByteSource&) noexcept;
 const detail::ScratchReadback& journal_readback(const Journal&);
 
@@ -264,7 +264,7 @@ public:
     int last_rejected_command_bar() const;
 private:
     friend class Allocation;
-    friend void bind_journal_codec(Journal&, detail::ScratchStore&);
+    friend void bind_journal_codec(Journal&, detail::CommandScratchStore&);
     friend detail::ScratchStatus append_journal_record(Journal&,
         const detail::ScratchByteSource&) noexcept;
     friend const detail::ScratchReadback& journal_readback(const Journal&);

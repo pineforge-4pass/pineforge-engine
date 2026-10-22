@@ -1462,13 +1462,13 @@ constexpr std::size_t kBookMax = 4096;
 // their chunk. Positions are absolute (the core's history_base()..
 // history_end()), ordinals ascend with positions.
 struct WorkingRequestCore::JournalStore {
-    detail::ScratchStore* codec = nullptr; // borrowed, run-owned backing
+    detail::CommandScratchStore* codec = nullptr; // borrowed, run-owned backing
     mutable std::vector<std::byte> codec_page; // allocated once from store geometry
     mutable std::array<std::optional<CommandEvent>, 4> codec_values;
     mutable std::array<uint64_t, 4> codec_positions{};
     mutable std::size_t codec_next = 0;
 
-    void bind(detail::ScratchStore& store) {
+    void bind(detail::CommandScratchStore& store) {
         if (codec || end != 0 || store.status() != ReadStatus::ok || store.record_count() != 0
             || store.transaction_active())
             throw std::invalid_argument("journal codec requires an empty committed store");
@@ -1763,7 +1763,7 @@ struct WorkingRequestCore::JournalStore {
     }
 };
 
-void bind_journal_codec(WorkingRequestCore& core, detail::ScratchStore& store) {
+void bind_journal_codec(WorkingRequestCore& core, detail::CommandScratchStore& store) {
     if (!core.journal_) throw std::invalid_argument("journal codec requires a bound run");
     core.journal_->bind(store);
     core.prepare_codec_frames();
