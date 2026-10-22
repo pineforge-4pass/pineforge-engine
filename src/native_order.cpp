@@ -4327,9 +4327,8 @@ PreparedCancel WorkingRequestCore::prepare_cancel(const RequestHandle& target,
         return PreparedCancel(std::move(impl));
     }
     impl->result = CancelResult{CancelStatus::Cancelled, ordinal};
-    // An explicit withdrawal has no earlier event as its cause. Dependent
-    // cancellations pass their committed parent/group event separately.
-    plan.events.emplace_back(make_cancelled(ordinal, live_[live_index], reason, std::nullopt));
+    plan.events.emplace_back(make_cancelled(ordinal, live_[live_index], reason,
+                                            EventId{identity_, ordinal}));
     plan.live_change = kLiveErase;
     plan.live_index = live_index;
     seal_plan(plan);
@@ -4569,7 +4568,7 @@ CommandInstalled<CancelResult> WorkingRequestCore::apply_cancel(
         return CommandInstalled<CancelResult>{CancelResult{status, ordinal}, finish_direct(first)};
     }
     CancelledEvent cancelled =
-            make_cancelled(ordinal, live_[live_index], reason, std::nullopt);
+            make_cancelled(ordinal, live_[live_index], reason, EventId{identity_, ordinal});
     return CommandInstalled<CancelResult>{
             CancelResult{CancelStatus::Cancelled, ordinal},
             end_direct(live_index, std::move(cancelled)).events};
