@@ -15,10 +15,11 @@ inline namespace engine_script_run_v19 {
 
 // Exact global row space. base() is the publication/fold boundary, NOT a
 // storage boundary: an unsealed exit-time group can have arbitrary length.
-// Only kResidentRows fixed row descriptors stay in memory. All four string
-// payloads and all older mutable/sealed descriptors use the existing
-// run-owned positional scratch files. Owning Trade values belong to readers,
-// so no arbitrary-width string is hidden in the resident window.
+// A kResidentRows descriptor window and an equally sized fixed byte tail of
+// the string payload stay in memory. All four string payloads and all older
+// mutable/sealed descriptors use the existing run-owned positional scratch
+// files. Owning Trade values belong to readers, so no arbitrary-width string
+// is hidden in the resident window.
 //
 // Reads own their values. No reference or contiguous pointer into an
 // evictable page escapes. Iteration visits [base(),size()) as before, now
@@ -84,6 +85,11 @@ public:
     Trade operator[](size_type global) const;
     Trade at(size_type global) const;
     Trade back() const;
+    // Same checked unsealed-row contract as at(). numeric_at() returns every
+    // numeric field and flag with empty strings, reading only the descriptor;
+    // entry_id_at() reads just that one string when a predicate needs it.
+    Trade numeric_at(size_type global) const;
+    std::string entry_id_at(size_type global) const;
     void replace(size_type global, const Trade&);
     void modify(size_type global, const std::function<void(Trade&)>&);
 
