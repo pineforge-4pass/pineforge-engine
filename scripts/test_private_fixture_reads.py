@@ -262,6 +262,12 @@ class TamperTree:
         (self.root / 'benchmarks').mkdir()
         shutil.copy(REPO / 'benchmarks' / 'check_provenance.py',
                     self.root / 'benchmarks')
+        # The cr150.d rows test_sink_finalize, test_sink_finalize_native,
+        # test_sink_to_json and test_run_json_bounded_transport name their
+        # drivers under docker/; the sweep fails when a named driver is absent.
+        (self.root / 'docker').mkdir()
+        for driver in sorted((REPO / 'docker').glob('*.py')):
+            shutil.copy(driver, self.root / 'docker')
 
     def append(self, rel: str, text: str) -> None:
         with (self.root / rel).open('a') as handle:
