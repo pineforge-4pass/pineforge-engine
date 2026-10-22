@@ -53,6 +53,15 @@ void hash_source_run_identity(BrokerStateHashSink& f,
     // it does not change the source-visible state of a fresh run.
     f.u(0);
 }
+void hash_scratch_digest(BrokerStateHashSink& f,
+                         ::pineforge::detail::ScratchStatus status, std::uint64_t digest) {
+    if (status != ::pineforge::detail::ScratchStatus::ok)
+        throw coded<std::logic_error>(
+            status == ::pineforge::detail::ScratchStatus::io_error
+                ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
+            {}, "scratch state digest failed");
+    f.u(digest);
+}
 void hash_scratch_store(BrokerStateHashSink& f,
                         const ::pineforge::detail::CommandScratchStore* store) {
     f.b(store != nullptr);
@@ -63,12 +72,7 @@ void hash_scratch_store(BrokerStateHashSink& f,
     std::vector<std::byte> page(store->page_size());
     std::uint64_t digest = 0;
     const auto status = store->state_digest({page.data(), page.size()}, digest);
-    if (status != ::pineforge::detail::ScratchStatus::ok)
-        throw coded<std::logic_error>(
-            status == ::pineforge::detail::ScratchStatus::io_error
-                ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
-            {}, "scratch state digest failed");
-    f.u(digest);
+    hash_scratch_digest(f, status, digest);
 }
 void hash_exit_scratch(BrokerStateHashSink& f,
                        const source::detail::ExitScratchContext* scratch) {
@@ -1151,7 +1155,16 @@ void hash_selected_intents(BrokerStateHashSink& f, const source::detail::PineInt
 
 void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
-    hash_scratch_store(f, trade_scratch_);
+    const auto released = NativeExecutionConsumer::bound(*this).released_command_scratch(
+        NativeExecutionConsumer::CommandScratchBinding::Trade);
+    if (!trade_scratch_ && released) {
+        // Preserve the live store's exact presence/digest bytes after its
+        // run-owned backing is released. This is no additional hash field.
+        f.b(true);
+        hash_scratch_digest(f, released->status, released->digest);
+    } else {
+        hash_scratch_store(f, trade_scratch_);
+    }
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);

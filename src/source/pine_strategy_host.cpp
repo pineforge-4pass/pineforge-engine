@@ -59,37 +59,25 @@ std::size_t command_scratch_page_size() {
     return static_cast<std::size_t>(size);
 }
 
-struct SourceCommandScratchRun {
+struct SourceExitScratchRun {
     // Backings precede their stores/context, so borrowers die first.
     // The native consumer retains this run through source-adapter destruction.
     // Geometry is fixed independently of the bar and order populations.
     const std::size_t page_size = command_scratch_page_size();
-    std::unique_ptr<::pineforge::detail::ScratchBacking> trade_backing =
-        source::detail::make_command_scratch_backing(page_size);
-    std::unique_ptr<::pineforge::detail::ScratchBacking> dependency_backing =
-        source::detail::make_command_scratch_backing(page_size);
     std::unique_ptr<::pineforge::detail::ScratchBacking> exit_backing =
         source::detail::make_command_scratch_backing(page_size);
-    ::pineforge::detail::CommandScratchStore trade{
-        command_scratch_config(page_size, PineStrategyHost::trade_scratch_order()),
-        trade_backing.get()};
-    ::pineforge::detail::CommandScratchStore dependency{
-        command_scratch_config(page_size, NativeExecutionConsumer::dependency_scratch_order()),
-        dependency_backing.get()};
     ::pineforge::detail::CommandScratchStore exit{
         command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
         exit_backing.get()};
     source::detail::ExitScratchContext exit_context{exit, {}};
 
-    SourceCommandScratchRun() {
-        for (const auto* store : {&trade, &dependency, &exit}) {
-            if (store->status() != ::pineforge::detail::ScratchStatus::ok) {
-                const auto code = store->status() == ::pineforge::detail::ScratchStatus::io_error
-                    ? RunFailureCode::scratch_io_failed
-                    : RunFailureCode::engine_invariant;
-                throw coded<std::logic_error>(code, {},
-                    "run command scratch store failed to open");
-            }
+    SourceExitScratchRun() {
+        if (exit.status() != ::pineforge::detail::ScratchStatus::ok) {
+            const auto code = exit.status() == ::pineforge::detail::ScratchStatus::io_error
+                ? RunFailureCode::scratch_io_failed
+                : RunFailureCode::engine_invariant;
+            throw coded<std::logic_error>(code, {},
+                "run command scratch store failed to open");
         }
         // This head exposes owning NativeOpenLot rows and snapshot readers,
         // rather than the reference tree's NativeOpenLotView visitor API.
@@ -633,13 +621,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     const auto& scratch = scratch_tables_for_run();
     ::pineforge::detail::bind_tree_scratch_tables(adapter_, scratch);
     ::pineforge::detail::bind_id_pair_scratch_tables(adapter_, scratch);
-    auto command_scratch = std::make_shared<SourceCommandScratchRun>();
+    auto command_scratch = std::make_shared<SourceExitScratchRun>();
     auto& consumer = NativeExecutionConsumer::bound(*this);
     using ScratchBinding = NativeExecutionConsumer::CommandScratchBinding;
-    set_trade_scratch(command_scratch->trade);
-    consumer.retain_command_scratch_owner(ScratchBinding::Trade, command_scratch);
-    consumer.set_dependency_scratch(command_scratch->dependency);
-    consumer.retain_command_scratch_owner(ScratchBinding::Dependency, command_scratch);
     // Reserve placement evidence by incarnation once for the disclosed batch:
     // two legs per bar, including re-issued brackets' historical projections.
     if (args.n > 0 && static_cast<std::size_t>(args.n)
@@ -720,6 +704,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
 }
 
 void source::PineStrategyHost::on_native_run_begin() {
+    NativeExecutionConsumer::bound(*this).provision_run_command_scratch(
+        NativeExecutionConsumer::CommandScratchBinding::Trade,
+        trade_scratch_order(), trade_scratch_);
     // The adapter reads the command journal with its receipt cursor and
     // acknowledges it as it moves (observe_terminal_receipts); acknowledging
     // "nothing read yet" here marks this host as one that polls, so the

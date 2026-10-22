@@ -1,4 +1,4 @@
-#include "pine_command_scratch_production.hpp"
+#include "command_scratch_production.hpp"
 
 #include <pineforge/run_failure.hpp>
 
@@ -16,7 +16,7 @@
 #include <unistd.h>
 #include <utility>
 
-namespace pineforge::source::detail {
+namespace pineforge::detail {
 
 struct CommandScratchByteBudget {
     explicit CommandScratchByteBudget(std::uint64_t bytes) noexcept : limit(bytes) {}
@@ -40,8 +40,6 @@ struct CommandScratchByteBudget {
 };
 
 namespace {
-
-using namespace pineforge::detail;
 
 thread_local ScratchIoObserver command_scratch_observer{};
 thread_local CommandScratchByteCap command_scratch_byte_cap;
@@ -241,4 +239,4 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     return std::make_unique<CommandScratchFile>(page_size, command_scratch_observer, std::move(budget));
 }
 
-} // namespace pineforge::source::detail
+} // namespace pineforge::detail

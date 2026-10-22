@@ -3158,23 +3158,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                       "Pine adapter produced invalid native run spec field "
                                       + std::to_string(static_cast<unsigned>(validation.field)));
     }
-    // Construct every backing before changing a borrower. Each factory call
-    // snapshots the run owner's current thread observer and shared byte cap.
+    // Projection owns only the standalone exit service. Trade and dependency
+    // workspaces are installed once by the admitted run's consumer/host setup.
     auto exit_scratch = detail::make_exit_scratch(spec.identity);
-    if (host_ != nullptr) {
-        auto dependency = std::make_shared<detail::CommandScratchRun>(
-            NativeExecutionConsumer::dependency_scratch_order());
-        if (auto* pine = pine_view_of(host_)) {
-            auto trade = std::make_shared<detail::CommandScratchRun>(
-                PineStrategyHost::trade_scratch_order());
-            pine->set_trade_scratch(trade->store);
-            // Publish ownership immediately after each successful install:
-            // a later setter refusal must not leave a dangling borrower.
-            trade_scratch_run_ = std::move(trade);
-        }
-        NativeExecutionConsumer::bound(*host_).set_dependency_scratch(dependency->store);
-        dependency_scratch_run_ = std::move(dependency);
-    }
     exit_scratch_ = std::move(exit_scratch);
     return spec;
 }

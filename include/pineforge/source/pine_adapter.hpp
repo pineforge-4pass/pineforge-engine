@@ -2660,8 +2660,8 @@ private:
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
     mutable std::shared_ptr<detail::ExitScratchContext> exit_scratch_;
-    // Borrowers inspect their previous store during replacement. Retain these
-    // owners across reset_for_run() until project() installs fresh run stores.
+    // Retired ownership slots, kept empty to preserve generated host layout.
+    // Trade/dependency scratch now belongs to the admitted native run.
     mutable std::shared_ptr<detail::CommandScratchRun> trade_scratch_run_;
     mutable std::shared_ptr<detail::CommandScratchRun> dependency_scratch_run_;
     const PineScheduler* input_scheduler_ = nullptr;

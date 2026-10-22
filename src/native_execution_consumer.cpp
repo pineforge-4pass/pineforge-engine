@@ -13,6 +13,7 @@
 #include <pineforge/timeframe.hpp>
 #include <pineforge/detail/scratch_defaults.hpp>
 #include "report_scratch.hpp"
+#include "command_scratch_production.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -1252,6 +1253,73 @@ uint64_t command_ordinal(const native_order::CommandEvent& event) {
 }
 
 }  // namespace
+
+struct NativeExecutionConsumer::RunCommandScratch {
+    // Match the adapter's former trade/dependency geometry. Backing and cache
+    // placement do not enter state_digest; all command scopes roll back.
+    static constexpr std::size_t page_size = 512;
+    std::unique_ptr<detail::ScratchBacking> backing =
+        detail::make_command_scratch_backing(page_size);
+    std::unique_ptr<detail::CommandScratchStore> store;
+    detail::CommandScratchStore** borrower = nullptr;
+    std::array<std::byte, page_size> digest_page{};
+    CommandScratchSnapshot snapshot;
+
+    explicit RunCommandScratch(detail::ScratchKeyOrder order)
+        : store(std::make_unique<detail::CommandScratchStore>(
+              detail::ScratchStoreConfig{2, page_size, 1, 1, order,
+                                        detail::ScratchOpenMode::create_empty},
+              backing.get())) {
+        if (store->status() != detail::ScratchStatus::ok)
+            throw coded<std::logic_error>(
+                store->status() == detail::ScratchStatus::io_error
+                    ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
+                {}, "run command scratch store failed to open");
+    }
+
+    void release() noexcept {
+        if (!store) return;
+        snapshot.status = store->state_digest(
+            {digest_page.data(), digest_page.size()}, snapshot.digest);
+        if (borrower && *borrower == store.get()) *borrower = nullptr;
+        borrower = nullptr;
+        store.reset();
+        backing.reset();
+    }
+    // Destruction during a live stream only destroys owned resources. The
+    // derived host's borrowed slot may already have died with that host.
+};
+
+void NativeExecutionConsumer::provision_run_command_scratch(
+        CommandScratchBinding binding, detail::ScratchKeyOrder order,
+        detail::CommandScratchStore*& borrower) {
+    const auto index = static_cast<std::size_t>(binding);
+    if (index >= run_command_scratch_.size()
+        || (run_command_scratch_[index] && run_command_scratch_[index]->store))
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "run command scratch already provisioned or invalid binding");
+    if (borrower && borrower->transaction_active())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "run command scratch borrower has an active transaction");
+    auto run = std::make_shared<RunCommandScratch>(order);
+    run->borrower = &borrower;
+    borrower = run->store.get();
+    run_command_scratch_[index] = std::move(run);
+}
+
+void NativeExecutionConsumer::release_run_command_scratch() noexcept {
+    for (const auto& run : run_command_scratch_)
+        if (run) run->release();
+}
+
+std::optional<NativeExecutionConsumer::CommandScratchSnapshot>
+NativeExecutionConsumer::released_command_scratch(CommandScratchBinding binding) const noexcept {
+    const auto index = static_cast<std::size_t>(binding);
+    if (index >= run_command_scratch_.size()) return std::nullopt;
+    const auto& run = run_command_scratch_[index];
+    if (!run || run->store) return std::nullopt;
+    return run->snapshot;
+}
 
 std::unique_ptr<IExecutionConsumer> make_native_execution_consumer() {
     return std::make_unique<NativeExecutionConsumer>();
@@ -2945,6 +3013,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         render(engine, "native run generation counter exhausted");
         return false;
     }
+    release_run_command_scratch();
+    for (auto& run : run_command_scratch_) run.reset();
+    dependency_scratch_stats_ = {};
     engine.reset_run_state();
     engine.reset_trade_percent_prefix();
     closed_trade_prefix_ = {};
@@ -3108,6 +3179,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     // host's and are never mistaken for the kernel's tail. This run's
     // declaration is registered after the callback (below).
     clear_timeframe_subscriptions(engine);
+    provision_run_command_scratch(CommandScratchBinding::Dependency,
+                                  dependency_scratch_order(), dependency_scratch_);
     if (auto* host = native_host(engine)) {
         in_callback_ = true;
         in_run_begin_ = true;
