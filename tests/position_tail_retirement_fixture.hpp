@@ -44,28 +44,94 @@ inline void work(const char* site, std::uint64_t count) {
     else check(false, "unknown production loop counter");
 }
 
-// Independent all-pairs oracle. No use of production matching helpers,
-// high-water cursors, cached answers or an expected implementation count.
+inline bool oracle_exit(ps::PineOrderFamily family) {
+    return family == ps::PineOrderFamily::ExitLimit
+        || family == ps::PineOrderFamily::ExitStop
+        || family == ps::PineOrderFamily::ExitTrail;
+}
+
+inline bool oracle_withdrawn(const exit_legs::Lifecycle& legs) {
+    return legs.retired(exit_legs::Leg::Stop) && legs.retired(exit_legs::Leg::Limit)
+        && legs.retired(exit_legs::Leg::Trail);
+}
+
+inline bool different_stop(const ps::PlacementSnapshot& a, const ps::PlacementSnapshot& b) {
+    return std::memcmp(&a.exit_levels.stop, &b.exit_levels.stop, sizeof(double)) != 0;
+}
+
+// Test-owned full walk of both forms of revival supersession. No production
+// predicate, candidate list, release memo or high-water cursor supplies its answer.
+inline std::uint64_t walk_supersessor(const ps::PlacementTable& rows,
+                                     std::uint64_t incarnation,
+                                     const ps::PlacementSnapshot& q) {
+    std::uint64_t first = 0;
+    for (const auto& row : rows) {
+        const auto& peer = row.second;
+        if (peer.placement_cycle != q.placement_cycle) continue;
+        const bool predecessor = peer.projection_predecessor != 0
+            && (peer.projection_predecessor == incarnation
+                || peer.projection_predecessor == q.legs.target().incarnation);
+        const bool reissue = row.first > incarnation && peer.family == q.family
+            && peer.source_id == q.source_id && peer.from_entry == q.from_entry
+            && peer.placement_script_open_ms > q.placement_script_open_ms
+            && different_stop(peer, q);
+        if ((predecessor || reissue) && (first == 0 || row.first < first)) first = row.first;
+    }
+    return first;
+}
+
+inline bool oracle_filled_limit(const ps::PlacementSnapshot& q) {
+    if (!q.filled_exit || q.family != ps::PineOrderFamily::ExitLimit || q.from_entry.empty()
+        || q.bracket_origin.incarnation != 0 || q.per_entry_origin != 0
+        || q.pending_bound_exit || q.legs.pending_replacement()) return false;
+    const auto no_protection = [](const exit_legs::Prices& prices) {
+        return std::isnan(prices.stop_price) && std::isnan(prices.loss_ticks)
+            && std::isnan(prices.trail_points) && std::isnan(prices.trail_price)
+            && std::isnan(prices.trail_offset);
+    };
+    const auto& levels = q.exit_levels;
+    const auto& suspension = q.legs.suspension();
+    return std::isnan(levels.stop) && std::isnan(levels.loss_ticks)
+        && std::isnan(levels.trail_points) && std::isnan(levels.trail_price)
+        && std::isnan(levels.trail_offset) && no_protection(q.legs.prices())
+        && (!suspension || !suspension->revival_definition
+            || no_protection(suspension->revival_definition->prices()));
+}
+
+// Select candidates from rows independently, including the released-origin
+// exclusion via a full supersession walk. Roots and askable origins are raw
+// observer inputs: queued commands and the host's lots are not in rows.
+// Global exits are outside K3's contract; GlobalLimitRevival separately checks
+// their K1 retention and the actual margin reader, including its cancellation.
 template<class Candidates>
-void k3_oracle(const ps::PlacementTable& rows, const Candidates& candidates,
+void k3_oracle(const ps::PlacementTable& rows, std::int64_t cycle,
+               const std::vector<std::uint64_t>& askable,
+               const std::vector<std::uint64_t>& roots, const Candidates& candidates,
                const std::vector<std::uint64_t>& actual) {
     if (!counting) return;
     ++counting->sweeps;
-    std::vector<std::uint64_t> expected;
-    for (const auto& candidate : candidates) {
-        const auto& q = *candidate.second;
+    const auto contains = [](const auto& values, std::uint64_t value) {
+        return std::find(values.begin(), values.end(), value) != values.end();
+    };
+    std::vector<std::uint64_t> expected, expected_candidates, actual_candidates;
+    for (const auto& candidate : rows) {
+        const auto& q = candidate.second;
+        if (!oracle_exit(q.family) || q.placement_cycle != cycle || q.from_entry.empty()
+            || q.legs.target().incarnation == 0 || oracle_withdrawn(q.legs)
+            || oracle_filled_limit(q)) continue;
+        if (!contains(roots, candidate.first) && !contains(askable, candidate.first)
+            && contains(askable, q.bracket_origin.incarnation) && q.legs.dormant()
+            && walk_supersessor(rows, candidate.first, q) != 0) continue;
+        expected_candidates.push_back(candidate.first);
         std::uint64_t first = 0;
         for (const auto& row : rows) {
             const auto& peer = row.second;
-            const bool exit = peer.family == ps::PineOrderFamily::ExitLimit
-                || peer.family == ps::PineOrderFamily::ExitStop
-                || peer.family == ps::PineOrderFamily::ExitTrail;
-            if (!exit || peer.placement_cycle != q.placement_cycle) continue;
+            if (!oracle_exit(peer.family) || peer.placement_cycle != cycle) continue;
             ++counting->oracle_pairs;
             if (row.first <= candidate.first || peer.family != q.family
                 || peer.source_id != q.source_id || peer.from_entry != q.from_entry
                 || peer.placement_script_open_ms <= q.placement_script_open_ms
-                || std::memcmp(&peer.exit_levels.stop, &q.exit_levels.stop, sizeof(double)) == 0)
+                || !different_stop(peer, q))
                 continue;
             if (first == 0 || row.first < first) first = row.first;
         }
@@ -79,8 +145,27 @@ void k3_oracle(const ps::PlacementTable& rows, const Candidates& candidates,
             }
         }
     }
+    for (const auto& candidate : candidates) actual_candidates.push_back(candidate.first);
+    std::sort(expected_candidates.begin(), expected_candidates.end());
+    std::sort(actual_candidates.begin(), actual_candidates.end());
+    check(expected_candidates == actual_candidates, "K3 candidate set differs from independent walk");
     std::sort(expected.begin(), expected.end());
     check(expected == actual, "incremental K3 differs from full candidate/row walk");
+}
+
+struct RevivalObserver {
+    virtual ~RevivalObserver() = default;
+    virtual void observe_revival(bool before, const ps::PlacementTable& rows,
+        const native_order::ExecutionAppliedEvent& event, const NativeDecisionContext& context,
+        double units, std::int64_t cycle, std::uint64_t selected) = 0;
+};
+inline RevivalObserver* revival_observer = nullptr;
+
+inline void observe_revival(bool before, const ps::PlacementTable& rows,
+    const native_order::ExecutionAppliedEvent& event, const NativeDecisionContext& context,
+    double units, std::int64_t cycle, std::uint64_t selected) {
+    if (revival_observer)
+        revival_observer->observe_revival(before, rows, event, context, units, cycle, selected);
 }
 
 template<class Families, class Archive>
@@ -113,13 +198,16 @@ void hash_oracle(const ps::PlacementTable& rows, const Families& families,
 } // namespace o1w_tail
 
 #define PINEFORGE_TAIL_WORK(site, count) ::o1w_tail::work(site, count)
-#define PINEFORGE_RETIREMENT_OBSERVE(rows, candidates, first) \
-    ::o1w_tail::k3_oracle(rows, candidates, first)
+#define PINEFORGE_RETIREMENT_OBSERVE(rows, cycle, askable, roots, candidates, first) \
+    ::o1w_tail::k3_oracle(rows, cycle, askable, roots, candidates, first)
+#define PINEFORGE_MARGIN_REVIVAL_OBSERVE(before, rows, event, context, units, cycle, selected) \
+    ::o1w_tail::observe_revival(before, rows, event, context, units, cycle, selected)
 #define PINEFORGE_BROKER_HASH_OBSERVE(rows, families, archived, digest) \
     ::o1w_tail::hash_oracle(rows, families, archived, digest)
 #include "../src/source/pine_adapter.cpp"
 #include "../src/source/pine_state_hash.cpp"
 #undef PINEFORGE_BROKER_HASH_OBSERVE
+#undef PINEFORGE_MARGIN_REVIVAL_OBSERVE
 #undef PINEFORGE_RETIREMENT_OBSERVE
 #undef PINEFORGE_TAIL_WORK
 
@@ -139,6 +227,11 @@ struct Retention {
     bool previous = ps::detail::retain_retired_rows();
     explicit Retention(bool value) { ps::detail::set_retain_retired_rows(value); }
     ~Retention() { ps::detail::set_retain_retired_rows(previous); }
+};
+struct RevivalScope {
+    RevivalObserver* previous = revival_observer;
+    explicit RevivalScope(RevivalObserver& value) { revival_observer = &value; }
+    ~RevivalScope() { revival_observer = previous; }
 };
 
 inline void check_work(const Work& value) {

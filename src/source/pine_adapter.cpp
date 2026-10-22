@@ -43,7 +43,10 @@
 #define PINEFORGE_TAIL_WORK(site, count) ((void)0)
 #endif
 #ifndef PINEFORGE_RETIREMENT_OBSERVE
-#define PINEFORGE_RETIREMENT_OBSERVE(rows, candidates, first) ((void)0)
+#define PINEFORGE_RETIREMENT_OBSERVE(rows, cycle, askable, roots, candidates, first) ((void)0)
+#endif
+#ifndef PINEFORGE_MARGIN_REVIVAL_OBSERVE
+#define PINEFORGE_MARGIN_REVIVAL_OBSERVE(before, rows, event, context, units, cycle, selected) ((void)0)
 #endif
 
 #include <cerrno>
@@ -136,11 +139,13 @@ bool withdrawn(const exit_legs::Lifecycle& legs) noexcept {
         && legs.retired(exit_legs::Leg::Trail);
 }
 
-// A filled origin-free limit has no consumed-origin reader. Even if a later
-// reversal suspends it, margin revival cannot execute it: both the placed and
-// inherited lifecycle definitions lack a stop (and every loss/trail input).
-// Do not infer this from !live alone: cancelled stops and dormant replacements
-// can still revive. K2/K3 may nevertheless need this row as a supersessor.
+// A filled named origin-free limit has no consumed-origin reader. Even if a
+// later reversal suspends it, margin revival cannot execute it: both the placed
+// and inherited lifecycle definitions lack a stop (and every loss/trail input).
+// Global rows must stay: the revival's supersession walk reads them, while K3
+// only supplies witnesses for named exits. Do not infer safety from !live alone:
+// cancelled stops and dormant replacements can still revive. K2/K3 may
+// nevertheless need a named filled limit as another row's supersessor.
 bool unbound_limit_without_revival(const PlacementSnapshot& row) noexcept {
     const auto& levels = row.exit_levels;
     const auto no_protection = [](const exit_legs::Prices& prices) {
@@ -149,7 +154,7 @@ bool unbound_limit_without_revival(const PlacementSnapshot& row) noexcept {
             && std::isnan(prices.trail_offset);
     };
     const auto& suspension = row.legs.suspension();
-    return row.family == PineOrderFamily::ExitLimit
+    return row.family == PineOrderFamily::ExitLimit && !row.from_entry.empty()
         && row.bracket_origin.incarnation == 0 && row.per_entry_origin == 0
         && !row.pending_bound_exit && !row.legs.pending_replacement()
         && std::isnan(levels.stop) && std::isnan(levels.loss_ticks)
@@ -2344,6 +2349,8 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         if (!answered) PINEFORGE_AUDIT_PLACEMENT_SCAN(placement_, supersedes);
     }
 #endif
+    PINEFORGE_MARGIN_REVIVAL_OBSERVE(true, placement_, event, context,
+        physical.signed_units, current_position_cycle_, 0);
     for (auto row : placement_) {
         // ab9714be pine_orders.cpp:597-608: leg ownership is position-cycle
         // scoped, so only a bracket bound to the cycle this margin call is
@@ -2438,6 +2445,8 @@ void PineExecutionAdapter::revive_brackets_after_margin(
                 event.handle().run, candidate.legs.target().incarnation};
         }
     }
+    PINEFORGE_MARGIN_REVIVAL_OBSERVE(false, placement_, event, context,
+        physical.signed_units, current_position_cycle_, marketable_handle.incarnation);
     if (!marketable) return;
     if (marketable_handle.incarnation) {
         (void)require_host().cancel(marketable_handle);
@@ -3732,9 +3741,11 @@ bool PineExecutionAdapter::lifecycle_readable(const PlacementSnapshot& row) cons
 // exit every bar at the same level -- no re-issue at another stop supersedes
 // it -- no longer holds a row per bar either.
 //
-// O1W: a terminally filled origin-free limit without any stop/loss/trail or
-// inherited replacement definition is not a revival candidate. K2, K3 and
+// O1W: a terminally filled named origin-free limit without any stop/loss/trail
+// or inherited replacement definition is not a revival candidate. K2, K3 and
 // the ordinary roots still keep it when another reader needs its identity.
+// Global filled limits retain K1: they can supersede global dormant legs that
+// are outside K3's named candidate population.
 void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& context) {
     // The previous bars' trades are final: their exit phases fold once.
     const std::size_t phase_base = detail::run_consumer(require_host()).closed_trade_prefix().base;
@@ -4135,7 +4146,8 @@ void PineExecutionAdapter::erase_retired_rows(const NativeDecisionContext& conte
     std::sort(first_reissues.begin(), first_reissues.end());
     sweep.reissues.swap(next_reissues);
     sweep.reissue_high_water = placement_.high_water();
-    PINEFORGE_RETIREMENT_OBSERVE(placement_, candidates, first_reissues);
+    PINEFORGE_RETIREMENT_OBSERVE(placement_, cycle, askable_origins, roots,
+                                candidates, first_reissues);
 
     auto& doomed = sweep.doomed;
     auto root_cursor = roots.begin();
@@ -4243,7 +4255,7 @@ void PineExecutionAdapter::archive_settled_bracket_families() {
             continue;
         }
         const auto value = at->second.settled_record();
-        const auto inserted = settled_bracket_families_.emplace(at->first, value);
+        [[maybe_unused]] const auto inserted = settled_bracket_families_.emplace(at->first, value);
         assert(inserted.second);
         settled_bracket_digest_ ^= settled_bracket_hash(at->first, value);
         at = bracket_families_.erase(at);

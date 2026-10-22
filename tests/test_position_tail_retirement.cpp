@@ -352,6 +352,271 @@ private:
     }
 };
 
+// Preserve the reader's global-limit counterexample. The 25%-margin long
+// remains leveraged after its half exit, so the later drop causes a real
+// partial margin slice and leaves units for the restored bracket to flatten.
+class GlobalLimitRevival final : public BookHost, public RevivalObserver {
+public:
+    GlobalLimitRevival() {
+        ps::PineStrategyConfig config;
+        config.initial_capital = 10000.0;
+        config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        config.default_qty_value = 100.0;
+        config.pyramiding = 0;
+        config.margin_long = 25.0;
+        config.margin_short = 100.0;
+        configure_pine_strategy(config);
+        set_margin_call_enabled(true);
+    }
+
+    struct Reading {
+        std::uint64_t ordinal = 0, expected_selected = 0, selected = 0;
+        std::uint64_t limit_witness = 0, cancel_after = 0, cancelled = 0;
+        bool after = false;
+        std::vector<std::uint64_t> expected_restored, restored;
+        std::vector<std::pair<std::uint64_t, std::vector<std::uint64_t>>> lifecycles;
+    };
+    std::vector<Reading> readings;
+
+    void on_source_bar(const Bar&) override {
+        const int i = pine_bar_index();
+        if (i == 0) strategy_entry("L", true, missing, missing, 360.0);
+        if (i == 1) {
+            strategy_exit("X", "", 110.0, 90.0);
+            original_limit_ = exit_at(1, ps::PineOrderFamily::ExitLimit);
+            original_stop_ = exit_at(1, ps::PineOrderFamily::ExitStop);
+            check(original_limit_ != 0 && original_stop_ > original_limit_,
+                  "global bracket did not place limit then stop");
+        }
+        if (i == 2) {
+            strategy_entry("S", false);
+            strategy_close("L", "Declined reversal");
+        }
+        if (i == 4) {
+            const auto& rows = adapter_.*member(Rows{});
+            const auto& limit = rows.at(original_limit_);
+            const auto& stop = rows.at(original_stop_);
+            saw_dormant_ = limit.legs.dormant() && stop.legs.dormant()
+                && !oracle_withdrawn(limit.legs) && !oracle_withdrawn(stop.legs);
+            check(saw_dormant_ && live_position_size() > 0.0,
+                  "declined reversal did not suspend both global legs on a long");
+            partial_units_ = live_position_size() * 0.5;
+            strategy_exit("X", "", 105.0, missing, missing, missing, missing, 50.0);
+            filled_limit_ = exit_at(4, ps::PineOrderFamily::ExitLimit);
+            check(filled_limit_ > original_stop_
+                  && rows.at(filled_limit_).projection_predecessor == 0,
+                  "global partial reissue used a live predecessor instead of supersession");
+        }
+        if (i == 5) {
+            for (const auto& row : native_events(cursor_)) {
+                if (!row.command) continue;
+                const auto* applied =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*row.command);
+                if (applied && applied->handle().incarnation == filled_limit_) {
+                    check(applied->terminal && applied->closed_units == partial_units_
+                          && applied->opened_units == 0.0
+                          && applied->cycle_before == applied->cycle_after,
+                          "global limit did not terminally fill half without ending its cycle");
+                    ++partial_fills_;
+                }
+            }
+            bool working = false;
+            for (const auto& row : native_working_requests())
+                working = working || row.definition->handle.incarnation == filled_limit_;
+            check(partial_fills_ == 1 && !working && live_position_size() == partial_units_,
+                  "global partial fill receipt or remaining long was missing");
+        }
+        if (i == 6) {
+            const auto& rows = adapter_.*member(Rows{});
+            const auto filled = rows.find(filled_limit_);
+            // Record this before margin, but defer the assertion so the
+            // unfixed run can expose the actual restored/cancelled-row delta.
+            survived_sweep_ = filled != rows.end() && !filled->second.filled_exit;
+        }
+        observe_book();
+    }
+
+    void observe_book() {
+        for (const auto& row : native_events(cursor_)) {
+            if (!row.command) continue;
+            for (auto& reading : readings) {
+                if (!reading.after || reading.selected == 0 || reading.cancelled != 0
+                    || row.ordinal <= reading.cancel_after) continue;
+                // The first command after the after-walk observer is the
+                // revival's cancel. Both original requests are off the book.
+                const auto* cancelled = std::get_if<native_order::NotWorkingEvent>(&*row.command);
+                check(cancelled != nullptr, "global revival did not cancel its dormant target");
+                reading.cancelled = cancelled->target.incarnation;
+            }
+        }
+        BookHost::observe_book();
+    }
+
+    void observe_revival(bool before, const ps::PlacementTable& rows,
+        const native_order::ExecutionAppliedEvent& event, const NativeDecisionContext& context,
+        double units, std::int64_t cycle, std::uint64_t selected) override {
+        check(units > 0.0 && event.closed_units > 0.0
+              && event.cycle_before == event.cycle_after,
+              "global revival oracle did not observe a partial long margin call");
+        if (before) {
+            check(!in_walk_, "overlapping global revival observations");
+            in_walk_ = true;
+            before_.clear();
+            readings.emplace_back();
+            auto& reading = readings.back();
+            reading.ordinal = event.ordinal;
+            std::uint64_t selected_row = 0;
+            for (const auto& row : rows) {
+                const auto& q = row.second;
+                if (!oracle_exit(q.family) || q.source_id != "X"
+                    || !q.from_entry.empty() || q.placement_cycle != cycle) continue;
+                before_.emplace_back(row.first, q);
+                if (!q.legs.dormant() || q.legs.target().incarnation == 0
+                    || oracle_withdrawn(q.legs)) continue;
+                const auto witness = walk_supersessor(rows, row.first, q);
+                if (row.first == original_limit_) reading.limit_witness = witness;
+                if (witness != 0) continue;
+                reading.expected_restored.push_back(row.first);
+                double stop = q.exit_levels.stop;
+                if (!(std::isfinite(stop) && stop > 0.0)) {
+                    const auto& suspension = q.legs.suspension();
+                    const double original = suspension && suspension->revival_definition
+                        ? suspension->revival_definition->prices().stop_price : missing;
+                    stop = std::isfinite(original) ? original : q.legs.prices().stop_price;
+                }
+                const auto& bounds = q.leg_activation.bounds();
+                const bool ready = !bounds || (bounds->position_cycle == cycle
+                    && context.coordinate.interval_index >= bounds->stop_first_bar);
+                const bool full = std::isfinite(q.requested_qty)
+                    ? q.requested_qty >= units - 1e-9
+                    : (!std::isfinite(q.qty_percent) || q.qty_percent >= 100.0 - 1e-5);
+                if (full && ready && std::isfinite(stop) && stop >= event.resolved_price
+                    && (selected_row == 0 || row.first < selected_row)) {
+                    selected_row = row.first;
+                    reading.expected_selected = q.legs.target().incarnation;
+                }
+            }
+            std::sort(reading.expected_restored.begin(), reading.expected_restored.end());
+            return;
+        }
+        check(in_walk_ && !readings.empty() && readings.back().ordinal == event.ordinal,
+              "global revival after-observer lost its independent before-walk");
+        auto& reading = readings.back();
+        reading.selected = selected;
+        for (const auto& prior : before_) {
+            const auto& q = rows.at(prior.first);
+            const auto& action = q.legs.last_action();
+            const bool restored = action && action->cause.event == event.ordinal
+                && action->cause.phase == exit_legs::Phase::AfterMargin
+                && std::holds_alternative<exit_legs::Restore>(action->operation);
+            if (restored) {
+                reading.restored.push_back(prior.first);
+                check(q.restored_after_margin && !q.legs.dormant()
+                      && q.legs.revision() == prior.second.legs.revision() + 1
+                      && q.legs.target().incarnation == prior.second.legs.target().incarnation
+                      && q.legs.target().owner == prior.second.legs.target().owner
+                      && action->expected_revision == prior.second.legs.revision()
+                      && action->cause.bar == context.coordinate.interval_index,
+                      "global revival did not preserve identity and advance the restored lifecycle");
+                for (const auto leg : {exit_legs::Leg::Stop, exit_legs::Leg::Limit,
+                                       exit_legs::Leg::Trail})
+                    check(!q.legs.retired(leg)
+                          && q.legs.generation(leg) == prior.second.legs.generation(leg) + 1,
+                          "global revival did not restore all three leg generations");
+            } else {
+                check(lifecycle(q) == lifecycle(prior.second),
+                      "global revival changed a row the independent walk did not restore");
+            }
+            reading.lifecycles.emplace_back(prior.first, lifecycle(q));
+        }
+        std::sort(reading.restored.begin(), reading.restored.end());
+        check(reading.expected_restored == reading.restored
+              && reading.expected_selected == reading.selected,
+              "global revival disagrees with independent full-table walk");
+        reading.cancel_after = event.ordinal;
+        for (const auto& row : native_events(cursor_))
+            reading.cancel_after = std::max(reading.cancel_after, row.ordinal);
+        reading.after = true;
+        in_walk_ = false;
+    }
+
+    void check_path() const {
+        check(saw_dormant_ && partial_fills_ == 1 && survived_sweep_,
+              "global filled limit was not retained unmarked through the pre-margin sweep");
+        check(!in_walk_ && !readings.empty(), "global limit scenario skipped its real revival oracle");
+        for (const auto& reading : readings) {
+            check(reading.after && reading.limit_witness == filled_limit_,
+                  "independent margin walk did not read the filled global limit as evidence");
+            check(std::find(reading.expected_restored.begin(), reading.expected_restored.end(),
+                            original_stop_) != reading.expected_restored.end()
+                  && std::find(reading.expected_restored.begin(), reading.expected_restored.end(),
+                               original_limit_) == reading.expected_restored.end(),
+                  "control walk did not restore the global stop and skip its superseded limit");
+            check(reading.expected_selected == original_stop_
+                  && reading.cancelled == reading.expected_selected,
+                  "global revival cancelled a different handle from the independently selected stop");
+        }
+    }
+private:
+    std::uint64_t original_limit_ = 0, original_stop_ = 0, filled_limit_ = 0;
+    double partial_units_ = 0.0;
+    int partial_fills_ = 0;
+    bool saw_dormant_ = false, survived_sweep_ = false, in_walk_ = false;
+    std::vector<std::pair<std::uint64_t, ps::PlacementSnapshot>> before_;
+
+    // Compare every lifecycle word, including replay payload and suspension,
+    // without a hash collision or an expected state made by Lifecycle::apply.
+    struct LifecycleWords {
+        std::vector<std::uint64_t> words;
+        void u(std::uint64_t value) { words.push_back(value); }
+        void i(std::int64_t value) { u(static_cast<std::uint64_t>(value)); }
+        void b(bool value) { u(value ? 1 : 0); }
+        void d(double value) {
+            std::uint64_t bits = 0;
+            std::memcpy(&bits, &value, sizeof bits);
+            u(bits);
+        }
+    };
+    static std::vector<std::uint64_t> lifecycle(const ps::PlacementSnapshot& q) {
+        LifecycleWords sink;
+        q.legs.visit(sink);
+        sink.b(q.restored_after_margin);
+        return sink.words;
+    }
+    std::uint64_t exit_at(int bar, ps::PineOrderFamily family) const {
+        std::uint64_t found = 0;
+        for (const auto& row : adapter_.*member(Rows{})) {
+            const auto& q = row.second;
+            if (q.source_id != "X" || !q.from_entry.empty() || q.family != family
+                || q.projection_created_bar != bar) continue;
+            check(found == 0 && q.legs.target().incarnation == row.first
+                  && q.bracket_origin.incarnation == 0,
+                  "global exit has ambiguous rows or a different lifecycle target");
+            found = row.first;
+        }
+        return found;
+    }
+};
+
+std::vector<Bar> global_limit_margin_feed() {
+    std::vector<Bar> result;
+    const auto add = [&](double open, double high, double low, double close) {
+        result.push_back({open, high, low, close, 1.0,
+                          start_ms + static_cast<std::int64_t>(result.size()) * 86400000});
+    };
+    add(100.0, 100.2, 99.8, 100.0); // 0: submit the leveraged long
+    add(100.0, 100.2, 99.8, 100.0); // 1: arm global X limit 110 / stop 90
+    add(100.0, 100.2, 99.8, 100.0); // 2: submit all-in short / paired long close
+    add(102.0, 102.2, 101.8, 102.0);// 3: short's cost exceeds its frozen placement equity
+    add(102.0, 102.2, 101.8, 102.0);// 4: dormant predecessor; reissue X limit 105 at 50%
+    add(102.0, 106.0, 101.8, 105.0);// 5: terminal partial fill, same position cycle
+    add(105.0, 105.2, 104.8, 105.0);// 6: receipt-safe sweep before margin
+    add(105.0, 105.2, 50.0, 50.0);  // 7: partial margin slice, then real global revival
+    add(50.0, 50.2, 49.8, 50.0);
+    add(50.0, 50.2, 49.8, 50.0);
+    return result;
+}
+
 std::vector<Bar> margin_feed() {
     // The V19-D directed path, with a second upward gap at bar 6 to decline
     // the second all-in reversal after the one-unit stop has filled.
@@ -392,6 +657,45 @@ void paired_books(const std::vector<Bar>& bars, Host& kept, Host& erased,
     check(kept.observations == erased.observations, "book or command outcomes changed");
     check(kept.not_working == erased.not_working, "non-working command population changed");
     check_work(old_work); check_work(new_work);
+}
+
+void global_limit_differential() {
+    const auto bars = global_limit_margin_feed();
+    GlobalLimitRevival kept, erased;
+    Work old_work, new_work;
+    const auto run = [&](GlobalLimitRevival& host, Work& work, bool retain) {
+        Retention reference(retain);
+        CountScope count(work);
+        RevivalScope observe(host);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        host.observe_book();
+    };
+    run(kept, old_work, true);
+    run(erased, new_work, false);
+    equal_outcome(kept, erased);
+    check(kept.observations == erased.observations && kept.not_working == erased.not_working,
+          "global limit retirement changed book or command outcomes");
+    check_work(old_work); check_work(new_work);
+    kept.check_path(); erased.check_path();
+    check(kept.readings.size() == erased.readings.size(), "global margin revival population changed");
+    for (std::size_t i = 0; i < kept.readings.size(); ++i) {
+        const auto& control = kept.readings[i];
+        const auto& actual = erased.readings[i];
+        check(control.ordinal == actual.ordinal
+              && control.expected_restored == actual.restored
+              && control.expected_selected == actual.selected
+              && control.expected_selected == actual.cancelled
+              && control.lifecycles == actual.lifecycles,
+              "global retirement changed restored rows, cancelled handle or full lifecycle state");
+    }
+    bool margin = false, revived = false;
+    for (int i = 0; i < erased.trade_count(); ++i) {
+        const auto& trade = erased.get_trade(i);
+        margin = margin || trade.exit_id == ps::kMarginCallLabel;
+        revived = revived || (trade.exit_id == "X" && trade.exit_bar_index > 5
+                              && !trade.open_at_end);
+    }
+    check(margin && revived, "global limit scenario did not book both margin and revived-exit trades");
 }
 } // namespace o1w_tail
 
@@ -436,6 +740,7 @@ int main() {
         }
         check(partial_closes == 1, "partial-stop scenario did not book exactly one X fill");
         check(margin_closed, "revival witness never reached a margin call");
+        global_limit_differential();
         std::puts("test_position_tail_retirement: trades/reports, K3 oracle, archive/reissue/cancel/reset");
         return 0;
     } catch (const std::exception& error) {
