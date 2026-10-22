@@ -1,4 +1,5 @@
 #include "command_scratch_production.hpp"
+#include "command_scratch_cache.hpp"
 
 #include <pineforge/run_failure.hpp>
 
@@ -236,7 +237,9 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
             command_scratch_environment_budget = budget;
         }
     }
-    return std::make_unique<CommandScratchFile>(page_size, command_scratch_observer, std::move(budget));
+    return std::make_unique<CachedScratchBacking>(
+        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}, std::move(budget)),
+        command_scratch_observer);
 }
 
 } // namespace pineforge::detail

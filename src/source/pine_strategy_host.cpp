@@ -2141,11 +2141,17 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 static bool same_bar_exit_group_possible(const TradeLedger& trades) {
 #if PINEFORGE_PINE_QUIET_BAR_GATES
     if (trades.size() < 2) return false;
-    const Trade& last = trades[trades.size() - 1];
-    const Trade& previous = trades[trades.size() - 2];
-    return previous.exit_from_bracket && last.exit_from_bracket
-        && previous.exit_time == last.exit_time && previous.entry_time == last.entry_time
-        && previous.entry_id == last.entry_id;
+    const auto last_index = trades.size() - 1;
+    const auto previous_index = last_index - 1;
+    const Trade last = trades.numeric_at(last_index);
+    const Trade previous = trades.numeric_at(previous_index);
+    if (!previous.exit_from_bracket || !last.exit_from_bracket
+        || previous.exit_time != last.exit_time || previous.entry_time != last.entry_time)
+        return false;
+    // Entry identity is still exact, but comments and exit IDs are irrelevant
+    // here. Do not decode even the entry IDs unless the numeric test matches.
+    const auto last_entry_id = trades.entry_id_at(last_index);
+    return trades.entry_id_at(previous_index) == last_entry_id;
 #else
     (void)trades;
     return true;

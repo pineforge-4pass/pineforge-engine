@@ -364,12 +364,14 @@ struct TradeLedger::State {
     };
     static_assert(std::is_trivially_copyable_v<Record>);
     static_assert(sizeof(int) == sizeof(std::int32_t));
-    // Strings are never retained by the window. It holds fixed descriptors;
-    // even the newest row's four payloads already live in scratch.
+    // The row window holds fixed descriptors; even the newest row's four
+    // payloads already live in scratch. Cache only a fixed byte tail below.
+    static constexpr size_type kPayloadTailBytes = kResidentRows * sizeof(Record);
     std::array<Record, kResidentRows> rows{};
     size_type first = 0, end = 0, resident_first = 0, count = 0, head = 0;
     detail::ScratchFile index, payload;
     std::uint64_t payload_end = 0;
+    std::array<char, kPayloadTailBytes> payload_tail{};
     std::string directory;
     mutable std::map<size_type, Trade> materialized;
 
@@ -390,10 +392,25 @@ struct TradeLedger::State {
     size_type slot(size_type global) const {
         return (head + global - resident_first) % kResidentRows;
     }
+    struct TailSpan { size_type slot, first; };
+    static TailSpan tail_span(std::uint64_t offset, size_type length) noexcept {
+        const auto slot = static_cast<size_type>(offset % kPayloadTailBytes);
+        return {slot, std::min(length, kPayloadTailBytes - slot)};
+    }
+    void remember_payload(std::uint64_t offset, const std::string& text) noexcept {
+        const auto retained = std::min(text.size(), kPayloadTailBytes);
+        const auto skip = text.size() - retained;
+        const auto span = tail_span(offset + skip, retained);
+        std::copy_n(text.data() + skip, span.first, payload_tail.data() + span.slot);
+        std::copy_n(text.data() + skip + span.first, retained - span.first, payload_tail.data());
+    }
     StringExtent put_string(const std::string& text) {
         detail::ScratchFile::check_extent(payload_end, text.size());
         const StringExtent result{payload_end, static_cast<std::uint64_t>(text.size())};
-        if (!text.empty()) payload.write(payload_end, text.data(), text.size());
+        if (!text.empty()) {
+            payload.write(payload_end, text.data(), text.size());
+            remember_payload(payload_end, text);
+        }
         payload_end += text.size();
         return result;
     }
@@ -402,7 +419,19 @@ struct TradeLedger::State {
             || text.offset > payload_end || text.length > payload_end - text.offset)
             throw detail::ScratchIoError(EIO, "trade ledger string extent");
         std::string result(static_cast<size_type>(text.length), '\0');
-        if (!result.empty()) payload.read(text.offset, result.data(), result.size());
+        if (!result.empty()) {
+            // Validation above proves the entire extent ends at/before
+            // payload_end. Its start must also be in the retained byte tail;
+            // in particular, a string wider than the tail always spills.
+            if (payload_end - text.offset <= kPayloadTailBytes) {
+                const auto span = tail_span(text.offset, result.size());
+                std::copy_n(payload_tail.data() + span.slot, span.first, result.data());
+                std::copy_n(payload_tail.data(), result.size() - span.first,
+                            result.data() + span.first);
+            } else {
+                payload.read(text.offset, result.data(), result.size());
+            }
+        }
         return result;
     }
     Record store(size_type global, const Trade& row) {
@@ -424,26 +453,31 @@ struct TradeLedger::State {
         index.write(record_offset(global), &record, sizeof(record));
         return record;
     }
-    Trade decode(const Record& record) const {
+    static Trade decode_numeric(const Record& record) {
         Trade row{};
         row.entry_time = record.entry_time; row.exit_time = record.exit_time;
         row.entry_price = record.entry_price; row.exit_price = record.exit_price;
         row.qty = record.qty; row.pnl = record.pnl; row.pnl_pct = record.pnl_pct;
         row.entry_bar_index = record.entry_bar_index; row.exit_bar_index = record.exit_bar_index;
-        row.entry_id = get_string(record.entry_id);
-        row.entry_comment = get_string(record.entry_comment);
-        row.exit_comment = get_string(record.exit_comment);
-        row.exit_id = get_string(record.exit_id);
         row.max_runup = record.max_runup; row.max_drawdown = record.max_drawdown;
         row.commission = record.commission; row.entry_incarnation = record.entry_incarnation;
         row.close_cause = record.close_cause; row.is_long = record.is_long;
         row.exit_from_bracket = record.exit_from_bracket; row.open_at_end = record.open_at_end;
         return row;
     }
-    Trade load(size_type global) const {
+    Trade decode(const Record& record) const {
+        Trade row = decode_numeric(record);
+        row.entry_id = get_string(record.entry_id);
+        row.entry_comment = get_string(record.entry_comment);
+        row.exit_comment = get_string(record.exit_comment);
+        row.exit_id = get_string(record.exit_id);
+        return row;
+    }
+    Record descriptor(size_type global) const {
+        if (global >= resident_first) return rows[slot(global)];
         Record record{};
         index.read(record_offset(global), &record, sizeof(record));
-        return decode(record);
+        return record;
     }
     void evict() {
         rows[head] = Record{};
@@ -510,8 +544,7 @@ bool TradeLedger::empty() const { return size() == 0; }
 
 Trade TradeLedger::read(size_type global) const {
     state_->check(global);
-    return global >= state_->resident_first ? state_->decode(state_->rows[state_->slot(global)])
-                                           : state_->load(global);
+    return state_->decode(state_->descriptor(global));
 }
 
 Trade TradeLedger::operator[](size_type global) const { return at(global); }
@@ -525,6 +558,16 @@ Trade TradeLedger::back() const {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "trade ledger: no resident last row");
     return read(size() - 1);
+}
+
+Trade TradeLedger::numeric_at(size_type global) const {
+    state_->check(global, true);
+    return State::decode_numeric(state_->descriptor(global));
+}
+
+std::string TradeLedger::entry_id_at(size_type global) const {
+    state_->check(global, true);
+    return state_->get_string(state_->descriptor(global).entry_id);
 }
 
 void TradeLedger::replace(size_type global, const Trade& row) {
