@@ -26063,6 +26063,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     update_l4c_lifecycle(event, context);
     if (event.terminal) {
         const auto filled = placement_.find(event.handle().incarnation);
+        // Share K1's named-only guard: global fills stay supersession evidence.
         if (filled != placement_.end() && event.closed_units > 0.0
             && unbound_limit_without_revival(filled->second))
             filled->second.filled_exit = true;

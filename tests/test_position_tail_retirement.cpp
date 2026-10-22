@@ -380,7 +380,7 @@ public:
 
     void on_source_bar(const Bar&) override {
         const int i = pine_bar_index();
-        if (i == 0) strategy_entry("L", true, missing, missing, 360.0);
+        if (i == 0) strategy_entry("L", true, missing, missing, 250.0);
         if (i == 1) {
             strategy_exit("X", "", 110.0, 90.0);
             original_limit_ = exit_at(1, ps::PineOrderFamily::ExitLimit);
@@ -398,8 +398,9 @@ public:
             const auto& stop = rows.at(original_stop_);
             saw_dormant_ = limit.legs.dormant() && stop.legs.dormant()
                 && !oracle_withdrawn(limit.legs) && !oracle_withdrawn(stop.legs);
-            check(saw_dormant_ && live_position_size() > 0.0,
-                  "declined reversal did not suspend both global legs on a long");
+            check(saw_dormant_ && saw_decline_ && limit_rejected_ && stop_rejected_
+                  && live_position_size() > 0.0,
+                  "declined reversal did not suspend and retire both touched global requests");
             partial_units_ = live_position_size() * 0.5;
             strategy_exit("X", "", 105.0, missing, missing, missing, missing, 50.0);
             filled_limit_ = exit_at(4, ps::PineOrderFamily::ExitLimit);
@@ -439,6 +440,19 @@ public:
     void observe_book() {
         for (const auto& row : native_events(cursor_)) {
             if (!row.command) continue;
+            if (const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&*row.command)) {
+                if (rejected->cursor.point.interval_index == 3) {
+                    saw_decline_ = saw_decline_ || (rejected->request().label == "S"
+                        && (rejected->reason == native_order::MatchRejectReason::HostPrecommit
+                            || rejected->reason == native_order::MatchRejectReason::InitialMargin));
+                    if (rejected->reason == native_order::MatchRejectReason::HostPrecommit) {
+                        limit_rejected_ = limit_rejected_
+                            || rejected->handle().incarnation == original_limit_;
+                        stop_rejected_ = stop_rejected_
+                            || rejected->handle().incarnation == original_stop_;
+                    }
+                }
+            }
             for (auto& reading : readings) {
                 if (!reading.after || reading.selected == 0 || reading.cancelled != 0
                     || row.ordinal <= reading.cancel_after) continue;
@@ -541,7 +555,8 @@ public:
     }
 
     void check_path() const {
-        check(saw_dormant_ && partial_fills_ == 1 && survived_sweep_,
+        check(saw_dormant_ && saw_decline_ && limit_rejected_ && stop_rejected_
+              && partial_fills_ == 1 && survived_sweep_,
               "global filled limit was not retained unmarked through the pre-margin sweep");
         check(!in_walk_ && !readings.empty(), "global limit scenario skipped its real revival oracle");
         for (const auto& reading : readings) {
@@ -562,6 +577,7 @@ private:
     double partial_units_ = 0.0;
     int partial_fills_ = 0;
     bool saw_dormant_ = false, survived_sweep_ = false, in_walk_ = false;
+    bool saw_decline_ = false, limit_rejected_ = false, stop_rejected_ = false;
     std::vector<std::pair<std::uint64_t, ps::PlacementSnapshot>> before_;
 
     // Compare every lifecycle word, including replay payload and suspension,
@@ -607,13 +623,16 @@ std::vector<Bar> global_limit_margin_feed() {
     add(100.0, 100.2, 99.8, 100.0); // 0: submit the leveraged long
     add(100.0, 100.2, 99.8, 100.0); // 1: arm global X limit 110 / stop 90
     add(100.0, 100.2, 99.8, 100.0); // 2: submit all-in short / paired long close
-    add(102.0, 102.2, 101.8, 102.0);// 3: short's cost exceeds its frozen placement equity
-    add(102.0, 102.2, 101.8, 102.0);// 4: dormant predecessor; reissue X limit 105 at 50%
-    add(102.0, 106.0, 101.8, 105.0);// 5: terminal partial fill, same position cycle
-    add(105.0, 105.2, 104.8, 105.0);// 6: receipt-safe sweep before margin
-    add(105.0, 105.2, 50.0, 50.0);  // 7: partial margin slice, then real global revival
-    add(50.0, 50.2, 49.8, 50.0);
-    add(50.0, 50.2, 49.8, 50.0);
+    // The gap declines the frozen all-in short. Both dormant prices then
+    // touch and receive terminal precommit refusals, giving the later call
+    // fresh requests with no projection link. The 89 low stays above margin.
+    add(102.0, 111.0, 89.0, 102.0); // 3: decline, then retire both touched requests
+    add(102.0, 102.2, 101.8, 102.0); // 4: dormant predecessor; reissue X limit 105 at 50%
+    add(102.0, 106.0, 101.8, 105.0); // 5: terminal partial fill, same position cycle
+    add(105.0, 105.2, 104.8, 105.0); // 6: receipt-safe sweep before margin
+    add(105.0, 105.2, 19.0, 19.0);   // 7: partial margin slice, then real global revival
+    add(19.0, 19.2, 18.8, 19.0);
+    add(19.0, 19.2, 18.8, 19.0);
     return result;
 }
 
@@ -741,7 +760,8 @@ int main() {
         check(partial_closes == 1, "partial-stop scenario did not book exactly one X fill");
         check(margin_closed, "revival witness never reached a margin call");
         global_limit_differential();
-        std::puts("test_position_tail_retirement: trades/reports, K3 oracle, archive/reissue/cancel/reset");
+        std::puts("test_position_tail_retirement: trades/reports, K3 oracle, "
+                  "global limit/margin revival, archive/reissue/cancel/reset");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "test_position_tail_retirement: %s\n", error.what());
