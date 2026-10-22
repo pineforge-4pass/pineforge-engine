@@ -144,6 +144,12 @@ void cohort_restore_translator(bool arena) {
         Host host(Mode::corrupt_cohort);
         host.arena_fd = backing.value;
         run(host, tape(64));
+        std::fprintf(stderr,
+            "C21 cohort restore: backend=%s poisoned=%d callbacks=%d last_run_status=%d "
+            "code=%s args=%s last_error=%s\n",
+            arena ? "arena" : "file", host.poisoned, host.callbacks, host.last_run_status(),
+            pineforge::run_failure_code_of(host), pineforge::run_failure_args_of(host),
+            host.last_error().c_str());
         require(host.poisoned && host.callbacks == 33,
                 "real cohort codec rejection must interrupt its recurrence");
         expect_engine_failure(host, "{}", pineforge::RunFailureCode::scratch_io_failed,
