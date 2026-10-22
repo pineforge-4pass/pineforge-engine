@@ -10,6 +10,26 @@
 
 namespace pineforge::detail::journal_codec {
 
+enum class WorkOperation { payload_source, payload_read, encoder_word, writer_status };
+struct WorkObserver {
+    void* context;
+    void (*observe)(void*, WorkOperation, std::uint64_t) noexcept;
+};
+
+// Borrowed registration on the calling thread. A nonnull observer must have a
+// valid callback and outlive its registration; restore the returned pointer.
+// payload_read reports requested bytes; the other operations report zero.
+inline thread_local const WorkObserver* work_observer = nullptr;
+inline const WorkObserver* set_work_observer(const WorkObserver* observer) noexcept {
+    const auto previous = work_observer;
+    work_observer = observer;
+    return previous;
+}
+inline void observe_work(WorkOperation operation, std::uint64_t bytes = 0) noexcept {
+    if (work_observer)
+        work_observer->observe(work_observer->context, operation, bytes);
+}
+
 // A counting/slicing sink. Each read spells intersecting bytes directly into
 // the caller's destination, without constructing a contiguous record.
 struct Writer {
@@ -18,6 +38,11 @@ struct Writer {
     ScratchBuffer destination{};
     ScratchStatus status = ScratchStatus::ok;
 
+    // Explicit caller status reads, excluding the internal bytes() guard.
+    ScratchStatus checked_status() const noexcept {
+        observe_work(WorkOperation::writer_status);
+        return status;
+    }
     void bytes(const void* data, std::uint64_t length) noexcept {
         if (status != ScratchStatus::ok) return;
         if (length > std::numeric_limits<std::uint64_t>::max() - position) {
@@ -35,6 +60,7 @@ struct Writer {
         position = end;
     }
     void word(std::uint64_t value) noexcept {
+        observe_work(WorkOperation::encoder_word);
         std::array<std::byte, 8> bytes{};
         for (unsigned i = 0; i != 8; ++i)
             bytes[i] = static_cast<std::byte>(value >> (8 * i));
@@ -160,9 +186,12 @@ private:
 class StoreSource final : public ScratchByteSource {
 public:
     StoreSource(const ScratchReadback& store, ScratchHandle handle,
-                std::uint64_t length) noexcept : store_(store), handle_(handle), length_(length) {}
+                std::uint64_t length) noexcept : store_(store), handle_(handle), length_(length) {
+        observe_work(WorkOperation::payload_source);
+    }
     std::uint64_t size() const noexcept override { return length_; }
     ScratchStatus read(std::uint64_t offset, ScratchBuffer out) const noexcept override {
+        observe_work(WorkOperation::payload_read, out.size);
         return store_.read(handle_, ScratchField::value, offset, out);
     }
 private:

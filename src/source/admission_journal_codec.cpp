@@ -61,7 +61,7 @@ struct Save {
     std::array<std::uint64_t, 4>* array_rows = nullptr;
     std::size_t arrays = 0;
     bool stopped = false;
-    bool good() const { return out.status == Status::ok && !stopped; }
+    bool good() const { return out.checked_status() == Status::ok && !stopped; }
     template<class T> void field(const Path& path, const char* name, T& value) {
         if (!good()) return;
         const auto row = rows++;
@@ -77,7 +77,7 @@ struct Save {
         else if constexpr (std::is_same_v<T, double>) {
             std::uint64_t bits = 0; std::memcpy(&bits, &value, sizeof bits); out.word(bits);
         } else out.word(static_cast<std::uint64_t>(value));
-        if (next_offset && out.status == Status::ok) {
+        if (next_offset && out.checked_status() == Status::ok) {
             if (out.position <= out.offset + out.destination.size) {
                 *next_offset = out.position;
                 *next_row = rows;
@@ -349,7 +349,7 @@ JournalRecordSource::JournalRecordSource(const Event& event) noexcept : event_(&
         Save save{out};
         Schema<Save>{save}.event(const_cast<Event&>(event));
         length_ = out.position;
-        status_ = out.status;
+        status_ = out.checked_status();
     } catch (...) { status_ = Status::programming_error; }
 }
 detail::ScratchStatus JournalRecordSource::read(std::uint64_t offset,
@@ -370,7 +370,7 @@ detail::ScratchStatus JournalRecordSource::read(std::uint64_t offset,
         if (!next_offset_) out.word(rows_);
         Save save{out,false,0,&next_offset_,&next_row_,&array_elements_,&array_rows_};
         Schema<Save>{save}.event(const_cast<Event&>(*event_));
-        return out.status;
+        return out.checked_status();
     } catch (...) { return Status::programming_error; }
 }
 JournalRecordSource encode_journal_record(const Event& event) noexcept { return JournalRecordSource(event); }

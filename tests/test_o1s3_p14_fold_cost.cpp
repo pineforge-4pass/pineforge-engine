@@ -1,9 +1,5 @@
 // LAB-O1S3-P14: deterministic work counts, never elapsed time.
-// Compile the production bodies with forwarding decorators so the same test
-// also builds on baec6e0b0a. No copied fold/encoder and no production test hook.
-// The archive's two corresponding objects are not extracted: this TU defines
-// their symbols. Every other dependency, including the compat gate, is linked
-// from pineforge as usual.
+// Observe the linked library's fold/encoder through the detail codec seam.
 #include <pineforge/compat/pine/market_admission.hpp>
 #include <pineforge/detail/journal_codec.hpp>
 #include <pineforge/run_failure.hpp>
@@ -31,61 +27,29 @@ struct Counts {
     }
 };
 Counts work;
-}
 
-namespace pineforge::detail::journal_codec {
-class CountingStoreSource final : public ScratchByteSource {
-public:
-    CountingStoreSource(const ScratchReadback& store, ScratchHandle handle,
-                        std::uint64_t length) noexcept : source_(store, handle, length) {
-        ++fold_cost::work.records;
-    }
-    std::uint64_t size() const noexcept override { return source_.size(); }
-    ScratchStatus read(std::uint64_t offset, ScratchBuffer out) const noexcept override {
-        ++fold_cost::work.calls;
-        fold_cost::work.bytes += out.size;
-        return source_.read(offset, out);
-    }
-private:
-    StoreSource source_;
-};
-struct CountingWriter : Writer {
-    // Save::good reads this forwarding status on every field/array visit,
-    // including fields skipped by a resume cursor. Counting only word writes
-    // would miss a cursor that still walked all the old array elements.
-    struct Status {
-        ScratchStatus& value;
-        operator ScratchStatus() const noexcept {
-            ++fold_cost::work.checks;
-            return value;
+namespace jc = pineforge::detail::journal_codec;
+class ObserveWork {
+    static void observe(void* context, jc::WorkOperation operation,
+                        std::uint64_t bytes) noexcept {
+        auto& counts = *static_cast<Counts*>(context);
+        switch (operation) {
+        case jc::WorkOperation::payload_source: ++counts.records; break;
+        case jc::WorkOperation::payload_read:
+            ++counts.calls; counts.bytes += bytes; break;
+        case jc::WorkOperation::encoder_word: ++counts.words; break;
+        case jc::WorkOperation::writer_status: ++counts.checks; break;
         }
-        Status& operator=(ScratchStatus next) noexcept { value = next; return *this; }
-    };
-    Status status;
-    CountingWriter() : status{Writer::status} {}
-    CountingWriter(std::uint64_t position, std::uint64_t offset, ScratchBuffer out)
-        : Writer{position, offset, out}, status{Writer::status} {}
-    CountingWriter(const CountingWriter&) = delete;
-    CountingWriter& operator=(const CountingWriter&) = delete;
-    void word(std::uint64_t value) noexcept {
-        ++fold_cost::work.words;
-        Writer::word(value);
     }
-    void text(const std::string& value) noexcept {
-        word(value.size());
-        Writer::bytes(value.data(), value.size());
-    }
+    const jc::WorkObserver observer_{&work, &observe};
+    const jc::WorkObserver* previous_;
+public:
+    ObserveWork() noexcept : previous_(jc::set_work_observer(&observer_)) {}
+    ~ObserveWork() { jc::set_work_observer(previous_); }
+    ObserveWork(const ObserveWork&) = delete;
+    ObserveWork& operator=(const ObserveWork&) = delete;
 };
 }
-
-// The headers have already been included, so only the production call sites
-// are decorated. The decorators preserve every byte, status and control flow.
-#define StoreSource CountingStoreSource
-#include "../src/source/market_admission.cpp"
-#undef StoreSource
-#define Writer CountingWriter
-#include "../src/source/admission_journal_codec.cpp"
-#undef Writer
 
 namespace {
 namespace ad = pineforge::admission;
@@ -408,7 +372,10 @@ int main() {
     };
     for (const auto& test : cases) {
         std::printf("CASE %s\n", test.name);
-        try { test.run(); }
+        try {
+            fold_cost::ObserveWork observe;
+            test.run();
+        }
         catch (const std::exception& error) {
             ++failures;
             std::fprintf(stderr, "FAIL %s: %s\n", test.name, error.what());
