@@ -326,23 +326,27 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
 //   Script::TrailReissue/true/false: rows_digest 0xbae98e9f6da67e3dull -> 0x98ba7b2c66e6130bull, final_hash 1320551696866588489ull -> 16341311528503403960ull [H-THIN]
 //   Script::TrailReissue/true/true: rows_digest 0x7e3565d7ef6b9c34ull -> 0xfdd8fbf5bc9ecc0aull, final_hash 12226981095802833438ull -> 15203686385562626719ull [H-THIN]
 // Phase B (2e976fb11f), proof rj-20261022t033804-5368ab, box i-09ed19f2aa5a5fc42, harvest harvest-evidence-20261022T053127Z/out/fix-test_adapter_command_allocations.txt: 10 lines moved; the harvest owns these values, never edit one by hand.
+// Join head (7ca2baba67, s1c line), harvest job rj-20261022t111407-69377e (NTU2, engine 8825bf1cd2 = the join head with
+// PINEFORGE_L5_HARVEST on): 32 values moved (rows_digest 16 of 16, final_hash 16 of 16); the row count 60, trades_digest
+// and trades moved 0 of 16. Cause: the exit and trade scratch folds of 3c6f46d159 and the provider's context.versions of
+// 4b5ef3dd28; design, not a bug. The harvest owns these values, never edit one by hand.
 const Pin kPins[] = {
-    {Script::ExitReissue, false, false, 0x48637aa69b335d2full, 60ull, 18090998540612474254ull, 0x584fc4b9ebbba609ull, 4},
-    {Script::ExitReissue, false, true, 0x15dfb8c8114c4d6aull, 60ull, 5752803826563842468ull, 0x584fc4b9ebbba609ull, 4},
-    {Script::ExitReissue, true, false, 0xd338c6a123fb215dull, 60ull, 16206915275973016439ull, 0x41e6c3b1e0481c20ull, 4},
-    {Script::ExitReissue, true, true, 0xcda25031339799a0ull, 60ull, 4143345501056223547ull, 0x41e6c3b1e0481c20ull, 4},
-    {Script::FarReissue, false, false, 0x46b2ec207c22c83eull, 60ull, 15192390774338051974ull, 0x7aac154ea6a8629aull, 4},
-    {Script::FarReissue, false, true, 0x57bcf2f81127cb7cull, 60ull, 2459246240855329928ull, 0x7aac154ea6a8629aull, 4},
-    {Script::FarReissue, true, false, 0x9e06c47a6b513eecull, 60ull, 15244552330600615048ull, 0xfdb435b76f2571b6ull, 4},
-    {Script::FarReissue, true, true, 0x75d3f670b18f78faull, 60ull, 14117483659754983584ull, 0xfdb435b76f2571b6ull, 4},
-    {Script::EntryReissue, false, false, 0xd3d6f15ce920583cull, 60ull, 11220111473525669975ull, 0xfa79a63a9a8de06aull, 29},
-    {Script::EntryReissue, false, true, 0x945ec1e50439cea9ull, 60ull, 12057658321036544371ull, 0xdc986aa5f5cc536aull, 29},
-    {Script::EntryReissue, true, false, 0xb4bf05553414c0f6ull, 60ull, 10998295444980399292ull, 0xfa79a63a9a8de06aull, 29},
-    {Script::EntryReissue, true, true, 0xfafcf88fbbcb31fdull, 60ull, 4518277612499075029ull, 0xdc986aa5f5cc536aull, 29},
-    {Script::TrailReissue, false, false, 0x135e94d89626c7a9ull, 60ull, 11128545198996405094ull, 0xd64b560956c46b33ull, 3},
-    {Script::TrailReissue, false, true, 0x1ba82c2d0f6d3d68ull, 60ull, 16557720182371283228ull, 0x5241bc8c55a4a4a3ull, 3},
-    {Script::TrailReissue, true, false, 0x341d3eeabe0dde36ull, 60ull, 1190172391570115828ull, 0xcdcafa54f49f508aull, 3},
-    {Script::TrailReissue, true, true, 0x53319e46b43ccf02ull, 60ull, 3093634480998232689ull, 0x45d4c2aceeb466faull, 3},
+    {Script::ExitReissue, false, false, 0xb5de258afc406381ull, 60ull, 13065747784831568330ull, 0x584fc4b9ebbba609ull, 4},
+    {Script::ExitReissue, false, true, 0x9d2e52d5691421d1ull, 60ull, 16213827458903396160ull, 0x584fc4b9ebbba609ull, 4},
+    {Script::ExitReissue, true, false, 0xcf120d45f8aeddcaull, 60ull, 7645780866322835415ull, 0x41e6c3b1e0481c20ull, 4},
+    {Script::ExitReissue, true, true, 0x73e6f1f9dcfa62e6ull, 60ull, 13361429895848445019ull, 0x41e6c3b1e0481c20ull, 4},
+    {Script::FarReissue, false, false, 0x1db822b57efd854cull, 60ull, 14306988471025273477ull, 0x7aac154ea6a8629aull, 4},
+    {Script::FarReissue, false, true, 0x98dbbc8f93033ac5ull, 60ull, 307155196323944871ull, 0x7aac154ea6a8629aull, 4},
+    {Script::FarReissue, true, false, 0x57e5c095afff2355ull, 60ull, 11476316102419732728ull, 0xfdb435b76f2571b6ull, 4},
+    {Script::FarReissue, true, true, 0x52f10317f6226fe8ull, 60ull, 4083600677535130192ull, 0xfdb435b76f2571b6ull, 4},
+    {Script::EntryReissue, false, false, 0x57ffb998d3623f27ull, 60ull, 15512588079377022917ull, 0xfa79a63a9a8de06aull, 29},
+    {Script::EntryReissue, false, true, 0x0583f342dfb4f94dull, 60ull, 17321673975274852757ull, 0xdc986aa5f5cc536aull, 29},
+    {Script::EntryReissue, true, false, 0xc9a3dea49bff6179ull, 60ull, 11703987762478390726ull, 0xfa79a63a9a8de06aull, 29},
+    {Script::EntryReissue, true, true, 0xd3ba17cd8a1a723eull, 60ull, 3037570888378280735ull, 0xdc986aa5f5cc536aull, 29},
+    {Script::TrailReissue, false, false, 0xaf070ccb90e1c4d5ull, 60ull, 6384581491588595509ull, 0xd64b560956c46b33ull, 3},
+    {Script::TrailReissue, false, true, 0xbe69e91cdce06716ull, 60ull, 13293340180440643723ull, 0x5241bc8c55a4a4a3ull, 3},
+    {Script::TrailReissue, true, false, 0xa01e19d815592a5cull, 60ull, 5426026448567275382ull, 0xcdcafa54f49f508aull, 3},
+    {Script::TrailReissue, true, true, 0x9e35870042671d7aull, 60ull, 6130566582003967887ull, 0x45d4c2aceeb466faull, 3},
 };
 
 void the_scripts_produce_the_values_pinned_before_the_lane() {
