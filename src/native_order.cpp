@@ -951,12 +951,12 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 // CR-221 O1-E2. The command journal, the group-effect keys and the long
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
-// read and written by position. Nothing here refuses. A store that outgrows its
-// resident part spills; a failed write or read is a ScratchIoError, never a
-// capacity refusal. No file exists before the first spill, so a run whose
-// journal is retired in time never touches the disk, and every spill is made
-// where the caller may still throw (reserve_plan, seal_direct), never in
-// commit.
+// read and written by position. A store that outgrows its resident part spills;
+// a failed write/read or an oversized serialized journal page is a
+// ScratchIoError. Spill preparation can open the journal files before the first
+// spill; a run whose reservation stays resident never touches them. Every spill
+// is made where the caller may still throw (reserve_plan, seal_direct), never
+// in commit.
 namespace {
 
 class ExtFile {
@@ -967,8 +967,19 @@ public:
     ExtFile(ExtFile&&) noexcept = default;
     ExtFile& operator=(ExtFile&&) noexcept = default;
 
-    void set_directory(const std::string& directory) { file_.set_directory(directory); }
+    void set_directory(const std::string& directory) {
+        // A reservation may have opened an otherwise empty file. It has no
+        // records to preserve when the caller selects its spill directory.
+        if (end_ == 0) file_.clear();
+        file_.set_directory(directory);
+    }
     uint64_t size() const noexcept { return end_; }
+    // Physical backing only: do not publish any logical records. In arena mode
+    // this also claims the first chunk/table entry before a bounded operation.
+    void prepare(uint64_t bytes) {
+        file_.open("pineforge-o1e2");
+        file_.ensure_size(bytes);
+    }
     // Positional write; the logical size moves only after the whole write.
     void write(uint64_t offset, const void* data, std::size_t length) {
         if (length == 0) return;
@@ -1013,8 +1024,8 @@ private:
 // never touches the file. Retiring a prefix moves `base` and drops the tail
 // records below it; once every record is retired the file behind them is
 // closed and the next record starts a fresh one (a new origin), so a log that
-// is pinned, drained and pinned again leaves no dead file. make_room() is the
-// only call that does I/O: push() cannot fail after it.
+// is pinned, drained and pinned again leaves no dead file. Only prepare() and
+// make_room() do I/O: push() cannot fail after make_room().
 template <class Record, std::size_t kTail>
 class TailLog {
     static_assert(std::is_trivially_copyable_v<Record>, "log records are raw bytes");
@@ -1029,6 +1040,9 @@ public:
     uint64_t retained() const noexcept { return size() - base_; }
     // How many records the process holds in memory.
     std::size_t resident() const noexcept { return tail_.size(); }
+    void prepare() {
+        file_.prepare((flushed_ - origin_ + kTail / 2) * sizeof(Record));
+    }
     void make_room() {
         if (tail_.size() < kTail) return;
         const std::size_t half = kTail / 2;
@@ -1080,15 +1094,29 @@ private:
 
 class ByteWriter {
 public:
+    ByteWriter() = default;
+    ByteWriter(unsigned char* buffer, std::size_t capacity) noexcept
+        : fixed_(buffer), capacity_(capacity) {}
     void raw(const void* data, std::size_t length) {
+        if (fixed_) {
+            if (length > capacity_ - used_) {
+                throw detail::ScratchIoError(EFBIG, "native o1 journal page exceeds byte bound");
+            }
+            if (length != 0) std::memcpy(fixed_ + used_, data, length);
+            used_ += length;
+            return;
+        }
         const auto* bytes = static_cast<const unsigned char*>(data);
         buffer_.insert(buffer_.end(), bytes, bytes + length);
     }
-    const unsigned char* data() const noexcept { return buffer_.data(); }
-    std::size_t size() const noexcept { return buffer_.size(); }
+    const unsigned char* data() const noexcept { return fixed_ ? fixed_ : buffer_.data(); }
+    std::size_t size() const noexcept { return fixed_ ? used_ : buffer_.size(); }
 
 private:
     std::vector<unsigned char> buffer_;
+    unsigned char* fixed_ = nullptr;
+    std::size_t capacity_ = 0;
+    std::size_t used_ = 0;
 };
 
 class ByteReader {
@@ -1503,9 +1531,22 @@ struct WorkingRequestCore::JournalStore {
     static constexpr std::size_t kChunk = 32;
     static constexpr std::size_t kMaxResident = 16384;
     static constexpr std::size_t kKeepResident = 128;
+    // Page layout: up to 32 concatenated events, each starting with a
+    // uint32_t alternative and a uint64_t ordinal, followed by its fields.
+    // Budget 1024 bytes/event (12 bytes of tag/ordinal + 1012 payload bytes),
+    // pooled across the page: this is a byte budget, NOT a per-event limit.
+    // Request label/comment, opening/exposure vectors and rejected requests
+    // have no finite schema bound. ByteWriter checks EVERY raw write and
+    // refuses the whole spill with ScratchIoError(EFBIG) before publishing it.
+    static constexpr std::size_t kSpillPageBytes =
+        kChunk * (sizeof(uint32_t) + sizeof(uint64_t) + 1012);
+    static_assert(sizeof(uint32_t) == 4 && sizeof(uint64_t) == 8,
+                  "journal event tag/ordinal byte budget");
     struct Chunk {
         std::array<std::optional<CommandEvent>, kChunk> slot;
     };
+    static_assert(sizeof(Chunk) == kChunk * sizeof(std::optional<CommandEvent>),
+                  "resident journal chunk contains exactly kChunk event slots");
     struct Cached {
         bool valid = false;
         uint64_t page_no = 0;
@@ -1513,6 +1554,15 @@ struct WorkingRequestCore::JournalStore {
         uint64_t count = 0;
         std::vector<CommandEvent> events;
     };
+    // One lazy fixed allocation per journal. A writer never aliases a reload,
+    // and each cache slot keeps its own input bytes. Owning payload decoding
+    // below the event vector (definitions, strings, nested vectors) is separate.
+    struct SpillStorage {
+        std::array<unsigned char, kSpillPageBytes> write;
+        std::array<std::array<unsigned char, kSpillPageBytes>, 4> read;
+    };
+    static_assert(sizeof(SpillStorage) == 5 * kSpillPageBytes,
+                  "one spill buffer and four distinct reload buffers");
 
     std::vector<std::unique_ptr<Chunk>> chunks;
     // The most recent chunk a retirement or a spill emptied, kept for the next
@@ -1526,6 +1576,7 @@ struct WorkingRequestCore::JournalStore {
     ExtFile data;
     mutable std::array<Cached, 4> cache{};
     mutable std::size_t cache_next = 0;
+    std::unique_ptr<SpillStorage> spill;
     // The directory this core's stores spill into ("": TMPDIR, then /tmp), set
     // beside the successor roots'. The journal exists for the whole life of a
     // bound core, so it is where the core keeps it (scratch_directory): the
@@ -1533,10 +1584,23 @@ struct WorkingRequestCore::JournalStore {
     std::string where;
 
     JournalStore() { chunks.reserve(kMaxResident / kChunk + 4); }
+    // Called by a beyond-resident reserve before the operation it provisions,
+    // or lazily by the first unreserved spill. No added page/cache allocation
+    // is charged to a core whose reservations and history stay resident.
+    void prepare_spill() {
+        if (!spill) {
+            auto storage = std::make_unique<SpillStorage>();
+            for (Cached& slot : cache) slot.events.reserve(kChunk);
+            spill = std::move(storage);
+        }
+        data.prepare(data.size() + kSpillPageBytes);
+        pages.prepare();
+    }
     void set_directory(const std::string& directory) {
         pages.set_directory(directory);
         data.set_directory(directory);
         where = directory;
+        if (spill) prepare_spill();
     }
     std::size_t resident_count() const noexcept { return static_cast<std::size_t>(end - first); }
     // Every spilled event has been retired: the page table, the file behind
@@ -1610,7 +1674,8 @@ struct WorkingRequestCore::JournalStore {
     void spill_front_chunk() {
         const uint64_t chunk_end = std::min<uint64_t>(end, chunk0_base + kChunk);
         if (chunk_end <= first) return;
-        ByteWriter out;
+        if (!spill) prepare_spill();
+        ByteWriter out(spill->write.data(), spill->write.size());
         SaveAr ar{out};
         for (uint64_t position = first; position < chunk_end; ++position) {
             ar(resident_at(position));
@@ -1664,15 +1729,21 @@ struct WorkingRequestCore::JournalStore {
         for (const Cached& slot : cache) {
             if (slot.valid && slot.page_no == page_no) return slot.events;
         }
-        std::vector<unsigned char> bytes(static_cast<std::size_t>(page.length));
-        data.read(page.offset, bytes.data(), bytes.size());
-        ByteReader in(bytes.data(), bytes.size());
-        LoadAr ar{in};
-        std::vector<CommandEvent> events(static_cast<std::size_t>(page.count));
-        for (CommandEvent& event : events) ar(event);
+        if (!spill || page.length > kSpillPageBytes || page.count > kChunk) {
+            throw detail::ScratchIoError(EFBIG, "native o1 journal page exceeds byte bound");
+        }
         Cached& slot = cache[cache_next];
+        auto& bytes = spill->read[cache_next];
+        // Invalidate before replacing a page: a failed read/decode must never
+        // leave a partially replaced event vector under its old cache key.
+        slot.valid = false;
+        slot.events.clear();
+        data.read(page.offset, bytes.data(), static_cast<std::size_t>(page.length));
+        ByteReader in(bytes.data(), static_cast<std::size_t>(page.length));
+        LoadAr ar{in};
+        slot.events.resize(static_cast<std::size_t>(page.count));
+        for (CommandEvent& event : slot.events) ar(event);
         cache_next = (cache_next + 1) % cache.size();
-        slot.events = std::move(events);
         slot.page_no = page_no;
         slot.first_position = page.first_position;
         slot.count = page.count;
@@ -2539,8 +2610,13 @@ void WorkingRequestCore::seal_plan(MutationPlan& plan) {
 // The journal is no longer one vector a caller can presize: its resident part
 // has a fixed bound and the rest is external. Still reserve the requested
 // retained-window capacity while it fits, so preallocated command output does
-// not allocate chunks during the bounded operation.
+// not allocate chunks during the bounded operation. A beyond-resident
+// reservation also prepares the fixed page buffers and initial scratch extents;
+// it does not raise the resident event bound.
 void WorkingRequestCore::reserve(std::size_t expected_events) {
+    if (journal_ && !journal_->codec && expected_events > JournalStore::kMaxResident) {
+        journal_->prepare_spill();
+    }
     if (journal_ && expected_events > journal_->end - history_base_) {
         const auto resident = journal_->resident_count();
         if (resident < JournalStore::kMaxResident) {
