@@ -306,6 +306,39 @@ def exit_scratch_context_fields(root: Path, source_hash: str) -> int:
     return len(EXIT_SCRATCH_CONTEXT_FOLDS)
 
 
+def trade_scratch_folds(source_hash: str) -> None:
+    # A mention in the branch condition is not coverage. Pin both alternative
+    # folds and their shared digest path without changing the emitted bytes.
+    host = _function_body(
+        source_hash, r"\bvoid\s+source::PineStrategyHost::hash_host_extension\s*\(",
+        "trade_scratch_ host extension")
+    expected = (
+        "const auto released = NativeExecutionConsumer::bound(*this).released_command_scratch("
+        "NativeExecutionConsumer::CommandScratchBinding::Trade);"
+        "if (!trade_scratch_ && released) {"
+        "f.b(true);"
+        "hash_scratch_digest(f, released->status, released->digest);"
+        "} else {"
+        "hash_scratch_store(f, trade_scratch_);"
+        "}"
+    )
+    require_once(re.sub(r"\s+", "", host), re.sub(r"\s+", "", expected),
+                 "trade_scratch_ live/released folds")
+    for name, statements in (
+        ("hash_scratch_store", (
+            "f.b(store != nullptr);",
+            "if (!store) return;",
+            "const auto status = store->state_digest({page.data(), page.size()}, digest);",
+            "hash_scratch_digest(f, status, digest);",
+        )),
+        ("hash_scratch_digest", ("f.u(digest);",)),
+    ):
+        fold = _function_body(source_hash, r"\bvoid\s+" + re.escape(name) + r"\s*\(",
+                              "trade_scratch_ " + name)
+        for statement in statements:
+            require_once(fold, statement, "trade_scratch_ " + name + " fold `" + statement + "`")
+
+
 def main(root: Path = ROOT) -> int:
     try:
         engine_hash = executable_hash_text((root / "src/engine_state_hash.cpp").read_text())
@@ -385,6 +418,7 @@ def main(root: Path = ROOT) -> int:
 
         scratch_leaf = scratch_store_state_digest_leaf(root)
         exit_context_fields = exit_scratch_context_fields(root, source_hash)
+        trade_scratch_folds(source_hash)
 
         # R5 N5 (RP9): a KernelRecorded run records the per-bar broker-state
         # hash row itself, in exactly one place — the per-calculation

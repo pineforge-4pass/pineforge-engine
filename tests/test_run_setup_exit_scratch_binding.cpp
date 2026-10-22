@@ -196,10 +196,13 @@ void run_owner_reversal_without_adapter_starts_each_run_empty() {
     NativeRunSpec spec;
     spec.identity = {"run-owner-command-scratch", 1};
     spec.input_tf = spec.script_tf = "1";
+    spec.tickerid = "TEST:SCRATCH";
     spec.timezone = "UTC";
     spec.session = "24x7";
     spec.price_tick = 0.25;
     spec.initial_capital = 100000.0;
+    spec.point_value = 1.0;
+    spec.account_fx = 1.0;
     spec.close_execution = NativeCloseExecution::NextEligiblePoint;
     spec.event_retention = NativeEventRetention::Full;
     spec.report_policy = NativeReportPolicy::KernelRecorded;

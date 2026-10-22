@@ -223,10 +223,39 @@ class Coverage(unittest.TestCase):
         result, output = self.check()
         self.assertEqual(result, 0, output)
         fold = "hash_scratch_store(f, trade_scratch_);"
-        for replacement in ("", "hash_scratch_store(f, nullptr);"):
+        for replacement in ("", "hash_scratch_store(f, nullptr);",
+                            "if (false) { " + fold + " }"):
             with self.subTest(replacement=replacement):
                 result, output = self.check(((
                     "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("trade_scratch_", output)
+
+    def test_trade_scratch_released_and_helper_folds_are_required(self):
+        for fold in (
+            "hash_scratch_digest(f, released->status, released->digest);",
+            "f.b(store != nullptr);",
+            "hash_scratch_digest(f, status, digest);",
+            "f.u(digest);",
+        ):
+            for replacement in ("", "if (false) { " + fold + " }"):
+                with self.subTest(fold=fold, replacement=replacement):
+                    result, output = self.check(((
+                        "src/source/pine_state_hash.cpp", fold, replacement),))
+                    self.assertEqual(result, 1, output)
+                    self.assertIn("trade_scratch_", output)
+        for before, after in (
+            ("f.b(true);\n        hash_scratch_digest(f, released->status, released->digest);",
+             "hash_scratch_digest(f, released->status, released->digest);"),
+            ("hash_scratch_digest(f, released->status, released->digest);",
+             "hash_scratch_digest(f, released->status, 0);"),
+            ("f.u(digest);", "f.u(0);"),
+            ("const auto status = store->state_digest({page.data(), page.size()}, digest);",
+             "const auto status = ::pineforge::detail::ScratchStatus::ok;"),
+        ):
+            with self.subTest(before=before, after=after):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", before, after),))
                 self.assertEqual(result, 1, output)
                 self.assertIn("trade_scratch_", output)
 
