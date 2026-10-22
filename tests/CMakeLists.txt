@@ -7265,6 +7265,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         COMMAND test_o1s4_queue_red s4_one_queue_owner_kept_handle_order_red)
     add_test(NAME s4_queue_and_membership_islands_fixed_red
         COMMAND test_o1s4_queue_red s4_queue_and_membership_islands_fixed_red)
+    add_test(NAME s4_islands_small_n_probe_red
+        COMMAND test_o1s4_queue_red s4_islands_small_n_probe_red)
     add_test(NAME s4_terminal_mark_descriptor_stays_fixed_red
         COMMAND test_o1s4_queue_red s4_terminal_mark_descriptor_stays_fixed_red)
     add_test(NAME s34_record_index_publication_rollback_red

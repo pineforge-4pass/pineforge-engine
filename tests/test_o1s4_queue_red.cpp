@@ -68,6 +68,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -953,6 +954,208 @@ void s4_queue_and_membership_islands_fixed_red() {
                 "population overflows resident geometry into backing");
         heap.fixed(store, resident);
     }
+}
+
+// Diagnostic copy of the islands case: small populations only, with disjoint
+// subject/oracle/check timers. The original full-population red gate is above.
+void s4_islands_small_n_probe_red() {
+    using Clock = std::chrono::steady_clock;
+    struct TimedWork {
+        Clock::duration& elapsed;
+        const Clock::time_point start;
+        explicit TimedWork(Clock::duration& out) : elapsed(out), start(Clock::now()) {}
+        ~TimedWork() { elapsed += Clock::now() - start; }
+    };
+
+    std::printf("islands-probe start\n");
+    std::fflush(stdout);
+    for (const unsigned axis : {0u, 1u, 2u}) {
+        Model model;
+        std::vector<no::RequestHandle> handles;
+        { OracleWork oracle; handles.reserve(257); }
+        Rig rig;
+        HeapCensus heap;
+        ScratchStore store(rig.config(), &rig.backing);
+        Subject s(store);
+        const auto resident = store.stats().resident_bytes;
+        const auto construction = global_allocation::live_bytes;
+        require(construction >= resident, "store workspace is already in the heap census");
+        // Four disjoint callback/reader pages. They are stack allocations and
+        // counted once, not also added as heap workspace.
+        std::array<std::array<std::byte, page_bytes>, 4> caller_pages{};
+        heap.seal();
+        for (unsigned cycle = 0; cycle < 2; ++cycle) {
+            for (std::size_t n : {std::size_t{17}, std::size_t{257}}) {
+                std::printf("islands-probe entering axis=%u cycle=%u n=%zu\n", axis, cycle, n);
+                std::fflush(stdout);
+                Clock::duration subject_time{}, oracle_time{}, check_time{};
+                const auto subject_work = [&](auto&& work) -> decltype(auto) {
+                    TimedWork timer(subject_time);
+                    return work();
+                };
+                while (handles.size() < n) {
+                    const auto i = handles.size();
+                    const auto actual = subject_work([&] {
+                        return s.submit(limit_order(1.0, 50.0 + i % 13));
+                    });
+                    no::RequestHandle expected;
+                    { OracleWork oracle; TimedWork timer(oracle_time);
+                      expected = model.submit(1.0, 50.0 + i % 13);
+                      handles.push_back(expected);
+                    }
+                    require(same_handle(actual, expected), "no capacity refusal on growing population");
+                    const std::string id = axis == 2 ? std::to_string(i) : "one";
+                    if (axis != 0) {
+                        subject_work([&] {
+                            const auto cohort = s.cohort(id);
+                            s.append(id, actual); s.append(id, actual);
+                            (void)s.cohort_state(id, CohortEdit::append_opened, actual);
+                            (void)s.cohort_state(id, CohortEdit::put_units, actual, 0.0);
+                            s.core().cohort_add(cohort, actual);
+                            s.core().cohort_add(cohort, actual);
+                            s.cohort_note();
+                        });
+                        { OracleWork oracle; TimedWork timer(oracle_time);
+                          auto& c = model.cohorts[id];
+                          c.append(expected); c.append(expected);
+                          c.opened.push_back(expected); c.units[expected.incarnation] = 0.0;
+                          c.canonical.push_back(expected);
+                        }
+                    }
+                    ps::PlacementSnapshot snapshot;
+                    snapshot.source_id = "q";
+                    snapshot.requested_qty = 1.0;
+                    subject_work([&] { s.remember(actual, std::move(snapshot)); });
+                    { OracleWork oracle; TimedWork timer(oracle_time);
+                      model.placements[expected.incarnation].source_id = "q";
+                      model.placements[expected.incarnation].requested_qty = 1.0;
+                    }
+                    if (axis == 1) {
+                        // P alone grows: the executable queue is drained on
+                        // every iteration, while source opened/lot facts stay.
+                        PyramidEntry lot{};
+                        lot.price = 100; lot.time = static_cast<std::int64_t>(i);
+                        lot.qty = 1; lot.entry_incarnation = actual.incarnation;
+                        subject_work([&] {
+                            s.host.fixture_open_lot(PositionSide::LONG, &lot);
+                            s.cancel(actual); s.retire_handle(actual);
+                        });
+                        { OracleWork oracle; TimedWork timer(oracle_time); model.erase(expected); }
+                    } else if (axis == 2) {
+                        // C alone grows; only one working row exists at once.
+                        subject_work([&] { s.cancel(actual); s.retire_handle(actual); });
+                        { OracleWork oracle; TimedWork timer(oracle_time); model.erase(expected); }
+                    }
+                }
+                if (axis == 0) {
+                    const auto h = handles[n / 2];
+                    const auto moved = subject_work([&] {
+                        return s.replace(h, limit_order(3.0, 61.0), true);
+                    });
+                    { OracleWork oracle; TimedWork timer(oracle_time); model.replace(h, 3.0, 61.0, true); }
+                    require(same_handle(h, moved), "repriced_ uses the kept handle");
+                    ps::PlacementSnapshot repriced;
+                    repriced.source_id = "q"; repriced.requested_qty = 3.0;
+                    subject_work([&] { s.projection(ProjectionEdit::put, h, &repriced); });
+                    { OracleWork oracle; TimedWork timer(oracle_time);
+                      model.placements.at(h.incarnation).requested_qty = 3.0;
+                    }
+                    const auto ordinary_target = handles[n / 3];
+                    const auto ordinary = subject_work([&] {
+                        return s.replace(ordinary_target, limit_order(4.0, 62.0), false);
+                    });
+                    no::RequestHandle want;
+                    { OracleWork oracle; TimedWork timer(oracle_time);
+                      want = model.replace(ordinary_target, 4.0, 62.0, false);
+                      handles[n / 3] = want;
+                    }
+                    require(same_handle(ordinary, want), "ordinary replacement changes only its chain row");
+                    subject_work([&] {
+                        s.retire_handle(ordinary_target);
+                        s.projection(ProjectionEdit::erase, ordinary_target);
+                    });
+                    ps::PlacementSnapshot replacement;
+                    replacement.source_id = "q"; replacement.requested_qty = 4.0;
+                    subject_work([&] { s.remember(ordinary, std::move(replacement)); });
+                    { OracleWork oracle; TimedWork timer(oracle_time);
+                      model.placements.erase(ordinary_target.incarnation);
+                      model.placements[ordinary.incarnation].source_id = "q";
+                      model.placements[ordinary.incarnation].requested_qty = 4.0;
+                    }
+                }
+                {
+                    TimedWork timer(check_time);
+                    check_book(s.core(), model);
+                    for (const auto& c : model.cohorts) check_roster(s, c.first, c.second);
+                }
+                subject_work([&] { s.retire(); });
+                // Production pending facade; do not charge an explicit owning
+                // diagnostic snapshot as if it were a bounded production read.
+                // Time facade calls separately from their model lookup.
+                const auto& pending = subject_work([&]() -> decltype(auto) {
+                    return s.adapter().pending_intent_view();
+                });
+                for (int i = 0; i < subject_work([&] { return pending.size(); }); ++i) {
+                    pf_pending_order_v1_t row{};
+                    require(subject_work([&] { return pending.copy_v1(i, &row); }) >= 0,
+                            "production observer row reads successfully");
+                    {
+                        OracleWork oracle; TimedWork timer(oracle_time);
+                        const auto expected = model.placements.find(row.incarnation);
+                        require(expected != model.placements.end()
+                                    && row.qty == expected->second.requested_qty,
+                                "production observer returns the input placement value");
+                    }
+                }
+                rig.accounting(store);
+                const auto stats = store.stats();
+                std::printf("islands-probe axis=%u cycle=%u n=%zu "
+                            "subject_ms=%.3f oracle_ms=%.3f check_ms=%.3f "
+                            "store_reads=%llu store_writes=%llu store_records=%llu "
+                            "backing_pages=%llu heap_live=%zu\n",
+                            axis, cycle, n,
+                            std::chrono::duration<double, std::milli>(subject_time).count(),
+                            std::chrono::duration<double, std::milli>(oracle_time).count(),
+                            std::chrono::duration<double, std::milli>(check_time).count(),
+                            static_cast<unsigned long long>(stats.page_reads),
+                            static_cast<unsigned long long>(stats.page_writes),
+                            static_cast<unsigned long long>(store.record_count()),
+                            static_cast<unsigned long long>(stats.backing_pages),
+                            global_allocation::live_bytes);
+                std::fflush(stdout);
+            }
+            for (const auto h : handles) {
+                if (s.core().find_live(h)) s.cancel(h);
+                s.retire_handle(h);
+                s.projection(ProjectionEdit::erase, h);
+            }
+            for (const auto& c : model.cohorts) {
+                const auto cohort = s.cohort(c.first);
+                for (const auto h : c.second.opened) s.core().cohort_remove(cohort, h);
+                (void)s.cohort_state(c.first, CohortEdit::clear_opened);
+                (void)s.cohort_state(c.first, CohortEdit::clear_units);
+            }
+            s.cohort_note();
+            s.host.fixture_open_lot(PositionSide::FLAT, nullptr);
+            s.retire();
+            { OracleWork oracle;
+              model.queue.clear();
+              model.placements.clear();
+              for (auto& c : model.cohorts) {
+                  c.second.opened.clear(); c.second.units.clear(); c.second.canonical.clear();
+                  model.retire(c.second);
+              }
+              handles.clear();
+            }
+            check_book(s.core(), model);
+            for (const auto& c : model.cohorts) check_roster(s, c.first, c.second);
+            rig.accounting(store);
+        }
+        // The full-population case alone requires overflow at N=4096.
+        heap.fixed(store, resident);
+    }
+    std::printf("islands-probe done\n");
+    std::fflush(stdout);
 }
 
 // Fixed memory, S4-RE (548). Input: P physical lots, two successive terminal
@@ -2145,6 +2348,7 @@ struct TestCase { const char* name; void (*body)(); };
 const TestCase tests[] = {
     {"s4_one_queue_owner_kept_handle_order_red", &s4_one_queue_owner_kept_handle_order_red},
     {"s4_queue_and_membership_islands_fixed_red", &s4_queue_and_membership_islands_fixed_red},
+    {"s4_islands_small_n_probe_red", &s4_islands_small_n_probe_red},
     {"s4_terminal_mark_descriptor_stays_fixed_red", &s4_terminal_mark_descriptor_stays_fixed_red},
     {"s34_record_index_publication_rollback_red", &s34_record_index_publication_rollback_red},
     {"s4_predicate_retained_placement_red", &s4_predicate_retained_placement_red},
