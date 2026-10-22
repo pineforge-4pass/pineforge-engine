@@ -238,6 +238,7 @@ if __name__ == "__main__" and len(sys.argv) > 1:
 
 import base64
 import ctypes
+import io
 import itertools
 import types
 
@@ -292,7 +293,7 @@ def synthetic(tmp_path, pnls=(13.25, -4.5, 0.0, -0.0, 2.0), *, outputs=False):
                      index + 17, index % 4, f"entry {index} 漢", f"exit {index}", 'quote"\n'])
     for index, point in enumerate(curve):
         point.time_ms = 1700000000000 + (index // 2) * 60000  # repeat times are legal
-        point.equity = 10000.0 + index if index % 3 else float("nan")
+        point.equity = 10000.0 + index
         point.open_profit = float(index % 5) if index % 2 else -0.0
         # E before T proves that report order is obtained through replay.
         rows.insert(index, ["E", point.time_ms, finite(point.equity), point.open_profit])
@@ -333,6 +334,13 @@ def synthetic(tmp_path, pnls=(13.25, -4.5, 0.0, -0.0, 2.0), *, outputs=False):
                 finite(event.value), "0123456789abcdef", event.message])
         rows.insert(0, ["K", *reader.constants()])
     expected["fingerprint"] = None
+    # Match the current finite-result contract and serialize the lazy native
+    # arrays while their ctypes owners are alive. Only this small test oracle
+    # is materialized; the converter still replays the retained sink.
+    run_json._validate_report_result(expected)
+    with io.StringIO() as encoded:
+        run_json._stream_json(expected, encoded)
+        expected = json.loads(encoded.getvalue())
     sink, metadata = tmp_path / "retained.sink", tmp_path / "stdout.json"
     write_stream(sink, fixtures.header(outputs=outputs), rows)
     metadata.write_bytes(report_bytes(projection(expected)))
