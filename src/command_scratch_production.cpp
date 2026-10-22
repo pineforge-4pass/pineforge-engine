@@ -1,5 +1,6 @@
 #include "command_scratch_production.hpp"
 
+#include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
@@ -74,6 +75,67 @@ ScratchStatus io_status(int error) noexcept {
     return error == ENOSPC || error == EDQUOT || error == EFBIG
         ? ScratchStatus::programming_error : ScratchStatus::io_error;
 }
+
+// An attached arena is the host's explicit backing selection. Borrow one
+// region for this store; never create a second file or resize the inherited fd.
+class CommandScratchArena final : public ScratchBacking {
+public:
+    CommandScratchArena(std::size_t size, ScratchIoObserver observer,
+                        CommandScratchByteCap budget, ScratchArenaBackend backend)
+        : ScratchBacking(backend == ScratchArenaBackend::sealed_memfd
+              ? ScratchBackingKind::memfd : ScratchBackingKind::disk, size, observer),
+          budget_(std::move(budget)) {
+        file_.open("pineforge-command");
+    }
+    ~CommandScratchArena() noexcept override {
+        if (budget_) budget_->release(extent_ * static_cast<std::uint64_t>(page_size()));
+    }
+    std::uint64_t page_count() const noexcept override { return extent_; }
+
+protected:
+    ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {
+        if (id >= extent_) return ScratchStatus::not_found;
+        return perform([&] {
+            file_.read(id * page_size(), destination.data, destination.size);
+        });
+    }
+    ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
+        const auto limit = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+        if (id >= limit / page_size()) return ScratchStatus::programming_error;
+        if (id >= extent_) {
+            const auto end = (id + 1) * page_size();
+            const auto growth = end - extent_ * page_size();
+            if (budget_ && !budget_->reserve(growth)) return ScratchStatus::io_error;
+            const auto status = perform([&] { file_.ensure_size(end); });
+            if (status != ScratchStatus::ok) {
+                if (budget_) budget_->release(growth);
+                return status;
+            }
+            extent_ = id + 1;
+        }
+        return perform([&] { file_.write(id * page_size(), source.data, source.size); });
+    }
+    ScratchStatus do_sync(ScratchDurability durability) noexcept override {
+        // Arena mappings provide positional scratch, not a durability hook.
+        return durability == ScratchDurability::buffered
+            ? ScratchStatus::ok : ScratchStatus::programming_error;
+    }
+
+private:
+    template<class Operation> static ScratchStatus perform(Operation operation) noexcept {
+        try {
+            operation();
+            return ScratchStatus::ok;
+        } catch (const std::system_error& error) {
+            return io_status(error.code().value());
+        } catch (...) {
+            return ScratchStatus::programming_error;
+        }
+    }
+    ScratchFile file_{ScratchFile::IoRaiser::auxiliary};
+    std::uint64_t extent_ = 0;
+    CommandScratchByteCap budget_;
+};
 
 class CommandScratchFile final : public ScratchBacking {
 public:
@@ -236,6 +298,9 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
             command_scratch_environment_budget = budget;
         }
     }
+    if (const auto* arena = ScratchArena::attached())
+        return std::make_unique<CommandScratchArena>(
+            page_size, command_scratch_observer, std::move(budget), arena->stats().backend);
     return std::make_unique<CommandScratchFile>(page_size, command_scratch_observer, std::move(budget));
 }
 

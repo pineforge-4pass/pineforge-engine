@@ -25,7 +25,12 @@ using CommandScratchByteCap = std::shared_ptr<CommandScratchByteBudget>;
 CommandScratchByteCap set_command_scratch_byte_cap(std::uint64_t bytes);
 CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registration) noexcept;
 
-// Fresh, exclusive, initially empty disk-file backing. The directory comes from
+// Fresh, exclusive, initially empty backing. With an explicitly attached
+// ScratchArena, borrow a region until destruction; the attachment must outlive
+// it. No file is created or resized and the disk directory is not consulted.
+// Arena mode supports buffered sync only; data/full return programming_error
+// rather than promising durability the arena does not provide.
+// Without an attachment, the disk directory comes from
 // PINEFORGE_COMMAND_SCRATCH_DIR, defaulting to /tmp when unset or empty. There
 // is no fallback when the selected directory fails. The unique file is unlinked
 // before returning and its close-on-exec descriptor is closed on destruction.
@@ -34,7 +39,7 @@ CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registr
 // set, it must be positive decimal uint64_t, even with an explicit registration;
 // invalid values throw std::invalid_argument. Unset means no default cap.
 // Extents consume the run budget until destruction; over-cap extensions return
-// ScratchStatus::io_error before extending the file.
+// ScratchStatus::io_error before extending the backing in either mode.
 // Zero page size and sizes beyond off_t throw std::invalid_argument.
 // OS setup failures throw std::system_error.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
