@@ -7330,7 +7330,7 @@ endif()
 # --- CR-150 core-cr150-l22a end ---
 
 # --- CR-150 core-cr150-l22q begin ---
-if(UNIX)
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     target_link_libraries(test_report_sink_summary PRIVATE Threads::Threads)
 endif()
 # --- CR-150 core-cr150-l22q end ---
