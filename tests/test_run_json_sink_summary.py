@@ -46,6 +46,7 @@ class SummaryLibrary(full.SinkLibrary):
         assert descriptor.struct_size == ctypes.sizeof(run_json.ReportSinkC)
         assert descriptor.version == 1
         self.path = os.fsdecode(descriptor.path)
+        self.path_expected_at_free = Path(self.path).exists()
         self.run_id = descriptor.run_id.decode("utf-8")
         self.descriptors.append((self.path, self.run_id, os.fsdecode(descriptor.scratch_dir)))
         self.installed.append(self.path)
@@ -72,6 +73,7 @@ class SummaryLibrary(full.SinkLibrary):
         counts = {entry["type"]: 0 for entry in head["records"]}
         digest = hashlib.sha256()
         with open(path, "wb") as file:
+            self.path_expected_at_free = True
             line = full.encoded(head)
             file.write(line)
             digest.update(line)
@@ -97,6 +99,15 @@ class SummaryLibrary(full.SinkLibrary):
         if self.fault == "receipt-count":
             pointer._obj.count_e += 1
         return status
+
+    def free(self, state):
+        if self.path is not None and not self.path_expected_at_free:
+            # A named path absent at install stays absent if opening it fails.
+            assert not Path(self.path).exists()
+            self.freed.append(self.path)
+            self.path = None
+            return
+        super().free(state)  # Existing or opened paths must remain until strategy_free.
 
 
 def read_reference(path):
