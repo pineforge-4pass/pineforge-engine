@@ -325,23 +325,24 @@ constexpr Script kScripts[] = {Script::ExitReissue, Script::FarReissue, Script::
 //   Script::TrailReissue/false/true: rows_digest 0x12bab345b4c21bdeull -> 0xa8b81e0ff7a1ed94ull, final_hash 5117488907256490505ull -> 16557720182371283228ull [H-THIN]
 //   Script::TrailReissue/true/false: rows_digest 0xbae98e9f6da67e3dull -> 0x98ba7b2c66e6130bull, final_hash 1320551696866588489ull -> 16341311528503403960ull [H-THIN]
 //   Script::TrailReissue/true/true: rows_digest 0x7e3565d7ef6b9c34ull -> 0xfdd8fbf5bc9ecc0aull, final_hash 12226981095802833438ull -> 15203686385562626719ull [H-THIN]
+// Phase B (2e976fb11f), proof rj-20261022t033804-5368ab, box i-09ed19f2aa5a5fc42, harvest harvest-evidence-20261022T053127Z/out/fix-test_adapter_command_allocations.txt: 10 lines moved; the harvest owns these values, never edit one by hand.
 const Pin kPins[] = {
-    {Script::ExitReissue, false, false, 0x531f1841e4e5968dull, 60ull, 2515667530823692736ull, 0x584fc4b9ebbba609ull, 4},
-    {Script::ExitReissue, false, true, 0x904f0e658a3f9a84ull, 60ull, 10620900185585014094ull, 0x584fc4b9ebbba609ull, 4},
-    {Script::ExitReissue, true, false, 0xb7d5805919147374ull, 60ull, 15062163376854141177ull, 0x41e6c3b1e0481c20ull, 4},
-    {Script::ExitReissue, true, true, 0x5b2a95f0e24225afull, 60ull, 14855689204879364685ull, 0x41e6c3b1e0481c20ull, 4},
+    {Script::ExitReissue, false, false, 0x48637aa69b335d2full, 60ull, 18090998540612474254ull, 0x584fc4b9ebbba609ull, 4},
+    {Script::ExitReissue, false, true, 0x15dfb8c8114c4d6aull, 60ull, 5752803826563842468ull, 0x584fc4b9ebbba609ull, 4},
+    {Script::ExitReissue, true, false, 0xd338c6a123fb215dull, 60ull, 16206915275973016439ull, 0x41e6c3b1e0481c20ull, 4},
+    {Script::ExitReissue, true, true, 0xcda25031339799a0ull, 60ull, 4143345501056223547ull, 0x41e6c3b1e0481c20ull, 4},
     {Script::FarReissue, false, false, 0x46b2ec207c22c83eull, 60ull, 15192390774338051974ull, 0x7aac154ea6a8629aull, 4},
     {Script::FarReissue, false, true, 0x57bcf2f81127cb7cull, 60ull, 2459246240855329928ull, 0x7aac154ea6a8629aull, 4},
-    {Script::FarReissue, true, false, 0x423a3c703f0df268ull, 60ull, 15244552330600615048ull, 0xfdb435b76f2571b6ull, 4},
-    {Script::FarReissue, true, true, 0xa76d150ee8cd57c8ull, 60ull, 14117483659754983584ull, 0xfdb435b76f2571b6ull, 4},
+    {Script::FarReissue, true, false, 0x9e06c47a6b513eecull, 60ull, 15244552330600615048ull, 0xfdb435b76f2571b6ull, 4},
+    {Script::FarReissue, true, true, 0x75d3f670b18f78faull, 60ull, 14117483659754983584ull, 0xfdb435b76f2571b6ull, 4},
     {Script::EntryReissue, false, false, 0xd3d6f15ce920583cull, 60ull, 11220111473525669975ull, 0xfa79a63a9a8de06aull, 29},
     {Script::EntryReissue, false, true, 0x945ec1e50439cea9ull, 60ull, 12057658321036544371ull, 0xdc986aa5f5cc536aull, 29},
     {Script::EntryReissue, true, false, 0xb4bf05553414c0f6ull, 60ull, 10998295444980399292ull, 0xfa79a63a9a8de06aull, 29},
     {Script::EntryReissue, true, true, 0xfafcf88fbbcb31fdull, 60ull, 4518277612499075029ull, 0xdc986aa5f5cc536aull, 29},
-    {Script::TrailReissue, false, false, 0xc8f7abcf99019929ull, 60ull, 11128545198996405094ull, 0xd64b560956c46b33ull, 3},
-    {Script::TrailReissue, false, true, 0xa8b81e0ff7a1ed94ull, 60ull, 16557720182371283228ull, 0x5241bc8c55a4a4a3ull, 3},
-    {Script::TrailReissue, true, false, 0x98ba7b2c66e6130bull, 60ull, 16341311528503403960ull, 0xcdcafa54f49f508aull, 3},
-    {Script::TrailReissue, true, true, 0xfdd8fbf5bc9ecc0aull, 60ull, 15203686385562626719ull, 0x45d4c2aceeb466faull, 3},
+    {Script::TrailReissue, false, false, 0x135e94d89626c7a9ull, 60ull, 11128545198996405094ull, 0xd64b560956c46b33ull, 3},
+    {Script::TrailReissue, false, true, 0x1ba82c2d0f6d3d68ull, 60ull, 16557720182371283228ull, 0x5241bc8c55a4a4a3ull, 3},
+    {Script::TrailReissue, true, false, 0x341d3eeabe0dde36ull, 60ull, 1190172391570115828ull, 0xcdcafa54f49f508aull, 3},
+    {Script::TrailReissue, true, true, 0x53319e46b43ccf02ull, 60ull, 3093634480998232689ull, 0x45d4c2aceeb466faull, 3},
 };
 
 void the_scripts_produce_the_values_pinned_before_the_lane() {
