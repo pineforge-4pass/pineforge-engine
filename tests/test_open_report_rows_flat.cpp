@@ -25,6 +25,7 @@
 #include <pineforge/report_mode.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,18 @@ constexpr std::int64_t kT0 = 1704067200000LL;
 constexpr std::int64_t kMinute = 60000;
 
 std::size_t* g_peak = nullptr;
+
+// Progress for the long populations: one stderr line every 10,000 steps
+// (population, step, elapsed since the program started), so a run that is slow
+// can be told from a run that has stopped advancing. It reads no engine state.
+const std::chrono::steady_clock::time_point g_progress_start = std::chrono::steady_clock::now();
+constexpr long kProgressEvery = 10000;
+void progress(const char* phase, int population, long step) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - g_progress_start).count();
+    std::fprintf(stderr, "R12 progress phase=%s population=%d step=%ld elapsed_ms=%lld\n",
+                 phase, population, step, static_cast<long long>(elapsed));
+}
 
 struct Peak {
     std::size_t bytes = 0;
@@ -107,6 +120,7 @@ public:
     explicit HoldHost(int target) : target_(target) {}
 
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        if (++bars_seen_ % kProgressEvery == 0) progress("bar", target_, bars_seen_);
         if (submitted_ >= target_) return;
         const auto result = submit({no::Transact{1.0}, "lot", ""});
         if (result.status != no::SubmitStatus::Accepted || !result.handle.has_value()) {
@@ -145,6 +159,7 @@ public:
 
 private:
     int target_;
+    long bars_seen_ = 0;
     int submitted_ = 0;
     bool rejected_ = false;
 };
@@ -225,6 +240,7 @@ void one_population(int lots, bool compare_full) {
             // materialized row per lot in the fixture itself.
             const int identity_rows = std::min(lots, 256);
             for (int i = 0; i < lots; ++i) {
+                if (i != 0 && i % kProgressEvery == 0) progress("full_rows", lots, i);
                 const auto index = static_cast<std::size_t>(i);
                 const Trade expected = full.reference_row(index);
                 check_row(report.trades[i], expected);
@@ -256,8 +272,10 @@ void one_population(int lots, bool compare_full) {
     // The exact fold: the same left fold the old producer and the FULL report
     // accumulate, over the reference rows in lot order.
     double expected_net = 0.0;
-    for (int i = 0; i < lots; ++i)
+    for (int i = 0; i < lots; ++i) {
+        if (i != 0 && i % kProgressEvery == 0) progress("summary_rows", lots, i);
         expected_net += summary.reference_row(static_cast<std::size_t>(i)).pnl;
+    }
     CHECK(same_bits(envelope.report.net_profit, expected_net));
     CHECK(std::fabs(envelope.report.net_profit) > 0.0);  // the fold saw its input
 
