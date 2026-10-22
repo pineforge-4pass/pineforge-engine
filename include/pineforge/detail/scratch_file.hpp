@@ -34,6 +34,9 @@ using ScratchIoError = ReportScratchIoError;
 // or RAM fallback. clear() releases the region and its mapped windows.
 class ScratchFile {
 public:
+    // Fixed byte window shared by scratch I/O amortisation contracts.
+    static constexpr std::size_t kCacheBytes = 64 * 1024;
+
     enum class IoRaiser { report_sink, auxiliary };
     explicit ScratchFile(IoRaiser raiser = IoRaiser::report_sink) : io_raiser_(raiser) {}
     ScratchFile(const ScratchFile&) = delete;
@@ -326,7 +329,6 @@ private:
             throw AuxiliaryScratchIoError(error, operation);
         throw ReportScratchIoError(error, operation, {{"reason", "scratch_io"}});
     }
-    static constexpr std::size_t kCacheBytes = 64 * 1024;
     void discard_clean_cache() const {
 #if defined(__linux__)
         if (bounded_cache_) {

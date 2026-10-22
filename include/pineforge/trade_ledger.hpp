@@ -27,6 +27,10 @@ class TradeLedger {
 public:
     using size_type = std::size_t;
     using value_type = Trade;
+    // The fixed descriptor width is part of the ledger I/O contract. The
+    // implementation asserts it against State::Record after that private
+    // storage type is complete.
+    static constexpr size_type kRecordBytes = 168;
     static constexpr size_type kResidentRows = 64;
     using Visitor = std::function<bool(size_type, const Trade&)>;
 
