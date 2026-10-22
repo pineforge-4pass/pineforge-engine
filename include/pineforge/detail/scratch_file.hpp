@@ -51,9 +51,8 @@ public:
             other.region_.size = 0;
             io_raiser_ = other.io_raiser_;
             bounded_cache_ = other.bounded_cache_;
-            dirty_begin_ = other.dirty_begin_;
-            dirty_end_ = other.dirty_end_;
-            other.dirty_begin_ = other.dirty_end_ = 0;
+            clean_bytes_read_ = std::exchange(other.clean_bytes_read_, 0);
+            bytes_written_since_sync_ = std::exchange(other.bytes_written_since_sync_, 0);
         }
         return *this;
     }
@@ -99,7 +98,7 @@ public:
         arena_ = nullptr;
         if (fd_ >= 0) ::close(fd_);
         fd_ = -1;
-        dirty_begin_ = dirty_end_ = 0;
+        clean_bytes_read_ = bytes_written_since_sync_ = 0;
         // resource_ was validated at bind. Clearing reuses the same allocation
         // and binding; a later empty-owner bind explicitly restores disk mode.
         if (slab_) slab_->reset(resource_);
@@ -221,16 +220,16 @@ public:
         const auto* bytes = static_cast<const unsigned char*>(data);
         std::size_t written = 0;
         while (written < length) {
-            const auto position = offset + written;
+            prepare_write();
             const auto chunk = std::min(length - written, bounded_cache_
-                ? kCacheBytes - static_cast<std::size_t>(position % kCacheBytes)
+                ? kCacheBytes - bytes_written_since_sync_
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
-            prepare_write(position, chunk);
             const ssize_t count = ::pwrite(fd_, bytes + written, chunk,
                                            static_cast<off_t>(offset + written));
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch write");
             written += static_cast<std::size_t>(count);
+            if (bounded_cache_) bytes_written_since_sync_ += static_cast<std::size_t>(count);
         }
     }
     void read(std::uint64_t offset, void* data, std::size_t length) const {
@@ -246,14 +245,20 @@ public:
         auto* bytes = static_cast<unsigned char*>(data);
         std::size_t received = 0;
         while (received < length) {
-            const auto chunk = std::min(length - received, bounded_cache_ ? kCacheBytes
+            // Retry a failed discard before admitting another read batch.
+            if (bounded_cache_ && clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+            const auto chunk = std::min(length - received, bounded_cache_
+                ? kCacheBytes - clean_bytes_read_
                 : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
             const ssize_t count = ::pread(fd_, bytes + received, chunk,
                                           static_cast<off_t>(offset + received));
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0) io_error(count < 0 ? errno : EIO, "scratch read");
             received += static_cast<std::size_t>(count);
-            discard_clean_cache();
+            if (bounded_cache_) {
+                clean_bytes_read_ += static_cast<std::size_t>(count);
+                if (clean_bytes_read_ == kCacheBytes) discard_clean_cache();
+            }
         }
     }
 
@@ -276,32 +281,32 @@ private:
             throw AuxiliaryScratchIoError(error, operation);
         throw ReportScratchIoError(error, operation, {{"reason", "scratch_io"}});
     }
+    // Bound traffic between whole-file discards: at most 64 KiB of reads
+    // and 64 KiB of unsynced writes per file, independent of offset span.
+    // With RANDOM disabling read-ahead, the conservative data-page bound is
+    // 2*kCacheBytes OS pages (even one-byte accesses to distinct pages), not
+    // 128 KiB of physical cache. DONTNEED retains any still-dirty pages;
+    // the write counter bounds those until the next sync and discard.
     static constexpr std::size_t kCacheBytes = 64 * 1024;
     void discard_clean_cache() const {
-#if defined(__linux__)
-        if (bounded_cache_) {
-            const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
-            if (error != 0) io_error(error, "scratch discard cache");
-        }
-#endif
-    }
-    void prepare_write(std::uint64_t offset, std::size_t count) {
         if (!bounded_cache_) return;
-        const auto first = dirty_begin_ == dirty_end_ ? offset : std::min(offset, dirty_begin_);
-        const auto end = std::max(offset + count, dirty_end_);
-        if (end - first > kCacheBytes) {
 #if defined(__linux__)
-            int result;
-            do { result = ::fdatasync(fd_); } while (result != 0 && errno == EINTR);
-            if (result != 0) io_error(errno, "scratch flush cache window");
+        const int error = ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+        if (error != 0) io_error(error, "scratch discard cache");
 #endif
-            discard_clean_cache();
-            dirty_begin_ = offset;
-            dirty_end_ = offset + count;
-        } else {
-            dirty_begin_ = first;
-            dirty_end_ = end;
-        }
+        clean_bytes_read_ = 0;
+    }
+    void prepare_write() {
+        if (!bounded_cache_ || bytes_written_since_sync_ < kCacheBytes) return;
+#if defined(__linux__)
+        int result;
+        do { result = ::fdatasync(fd_); } while (result != 0 && errno == EINTR);
+        if (result != 0) io_error(errno, "scratch flush cache window");
+#endif
+        // Only the successful byte count triggers sync; a far-back update
+        // followed by a tail append cannot flush once per offset change.
+        discard_clean_cache();
+        bytes_written_since_sync_ = 0;
     }
     int fd_ = -1;
     std::string directory_;
@@ -313,6 +318,7 @@ private:
     ScratchArena::Region region_;
     IoRaiser io_raiser_ = IoRaiser::report_sink;
     bool bounded_cache_ = false;
-    std::uint64_t dirty_begin_ = 0, dirty_end_ = 0;
+    mutable std::size_t clean_bytes_read_ = 0;
+    std::size_t bytes_written_since_sync_ = 0;
 };
 } // namespace pineforge::detail
