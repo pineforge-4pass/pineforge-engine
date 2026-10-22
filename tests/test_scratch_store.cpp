@@ -1437,16 +1437,13 @@ void torn_write_during_transaction(std::uint64_t nth, bool torn, bool explicit_r
     Rng rng(1000 + nth);
     begin_ok(*s);
     rig.backing.arm_write(nth, torn);
-    bool in_commit = false;
     ScratchStatus failure = random_ops(*s, pending, rng, 600);
     if (failure == ScratchStatus::ok) {
-        in_commit = true;
         failure = s->commit(ScratchDurability::buffered);
     }
     require(rig.backing.write_faults() == 1, "the injected write fault was reached");
     require(failure != ScratchStatus::ok, "a failed backing write is never reported as success");
-    require_status(failure, in_commit ? ScratchStatus::io_error : ScratchStatus::programming_error,
-                   in_commit ? "a commit reports the failing backing call" : "a mutation reports programming_error");
+    require_status(failure, ScratchStatus::io_error, "a mutation and a commit both report the failing backing call");
     check_rollback_only(*s, 512);
     if (explicit_rollback) {
         rollback_ok(*s);
