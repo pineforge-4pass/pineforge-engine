@@ -951,6 +951,24 @@ def test_native_selected_fd_keeps_the_file_document_and_wire(tmp_path, empty):
     assert all(event["closed"] for event in actual[4][1:])
 
 
+def test_named_sink_open_refusal_keeps_typed_failure_through_cleanup(tmp_path):
+    source, library = bars.csv_file(tmp_path), FdLibrary()
+    path = tmp_path / "refused.sink"
+    refusal = PermissionError(errno.EACCES, "Permission denied", str(path))
+    with mock.patch.object(summaries, "open", side_effect=refusal, create=True) as opened:
+        status, text, stderr = invoke(
+            source, library, ["--profile", "unjailed", "--report-sink", str(path)])
+    opened.assert_called_once_with(str(path), "wb")
+    assert status == 1 and stderr == "", (status, text, stderr)
+    assert len(text.splitlines()) == 1
+    document = json.loads(text)
+    assert document["code"] == "report_sink_failed" and document["args"] == {}
+    assert "[Errno 13]" in document["error"] and "summary" not in document
+    assert library.calls[-2:] == ["report_free", "strategy_free"]
+    assert library.installed == library.freed == [str(path)]
+    assert library.path is None and not path.exists()
+
+
 def child_main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--events-fd", type=int, required=True)
