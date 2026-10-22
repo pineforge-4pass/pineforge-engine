@@ -25,6 +25,7 @@ column replay, with no RSS allowance proportional to the sink's size.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -48,7 +49,12 @@ def wire(value):
 
 
 def report_bytes(value):
-    return json.dumps(value, separators=(",", ":"), allow_nan=False).encode("ascii") + b"\n"
+    # Also used by --differential before the pytest/run_json imports below.
+    import run_json
+
+    encoded = io.StringIO()
+    run_json._stream_json(value, encoded)
+    return encoded.getvalue().encode("ascii") + b"\n"
 
 
 def no_file_writes():

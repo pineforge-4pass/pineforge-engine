@@ -163,7 +163,9 @@ def wire_document(marks, equity_metrics, entry_bars=(1,), positive_capital=True,
         report, Path("annualization.csv"), len(marks), marks[0][0], marks[-1][0],
         0.0, {}, {}, {"chart_tz": "America/New_York"}, **options)
     run_json._validate_report_result(document)
-    return json.loads(json.dumps(document, allow_nan=False))
+    encoded = io.StringIO()
+    run_json._stream_json(document, encoded)
+    return json.loads(encoded.getvalue())
 
 
 def exact_overflow_ratio(span_ms, factor):
