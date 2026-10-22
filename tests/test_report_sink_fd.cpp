@@ -4,6 +4,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink.h>
 #include <pineforge/native_host.hpp>
+#include <pineforge/metrics_stream.hpp>
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
@@ -193,6 +194,13 @@ public:
         set_broker_state_hash_recording(true);
     }
     pf_strategy_t handle() { return static_cast<BacktestEngine*>(this); }
+    std::array<std::size_t, 4> report_storage() const {
+        return {equity_curve_.size(), equity_curve_.capacity(),
+                trades_.base(), trades_.resident_base()};
+    }
+    pineforge::metrics::ScratchCurveRegion scratch_region() const {
+        return report_sink_equity_scratch_region();
+    }
     bool abort = false;
     bool fail = false;
     int callbacks = 0;
@@ -231,6 +239,14 @@ pf_report_sink_receipt_v1 receipt(Fixture& host) {
     result.struct_size = sizeof result;
     result.version = 1;
     require(strategy_report_sink_receipt_v1(host.handle(), &result) == 0, "receipt query refused");
+    return result;
+}
+
+pf_report_sink_summary_v1 summary(Fixture& host) {
+    pf_report_sink_summary_v1 result{};
+    result.struct_size = sizeof result;
+    result.version = 1;
+    require(strategy_report_sink_summary_v1(host.handle(), &result) == 0, "summary query refused");
     return result;
 }
 
@@ -334,6 +350,117 @@ Result baseline(const fs::path& directory, const std::vector<Bar>& bars) {
     require(::fcntl(unused->fd(), F_GETFD) >= 0, "path replacement closed borrowed fd");
     require(unused->finish().empty(), "replaced fd sink received bytes");
     return result;
+}
+
+void unchanged_generation(Fixture& host, const Result& before,
+                           const pf_report_sink_summary_v1& before_summary) {
+    const auto after_receipt = receipt(host);
+    const auto after_summary = summary(host);
+    require(std::memcmp(&after_receipt, &before.receipt, sizeof after_receipt) == 0,
+            "NULL removal changed the completed receipt");
+    require(std::memcmp(&after_summary, &before_summary, sizeof after_summary) == 0,
+            "NULL removal changed the completed summary");
+    struct Report {
+        pineforge::ReportC value{};
+        ~Report() { BacktestEngine::free_report(&value); }
+    } report;
+    host.fill_report(&report.value);
+    require(report.value.trades == nullptr && report.value.trades_len == 0
+            && report.value.equity_curve == nullptr && report.value.equity_curve_len == 0
+            && report.value.broker_state_hash == nullptr && report.value.broker_state_hash_len == 0
+            && report.value.trace == nullptr && report.value.trace_len == 0,
+            "NULL removal changed the completed summary report into arrays");
+    require(std::memcmp(&report.value.metrics, &before.metrics, sizeof before.metrics) == 0
+            && report.value.total_trades == before.total_trades,
+            "NULL removal changed the completed report metrics or logical trades");
+    require(host.last_run_status() == 0 && host.last_error().empty()
+            && host.broker_state_hash() == before.hash,
+            "NULL removal changed the run outcome or broker hash");
+}
+
+void unchanged_storage(Fixture& host, const std::array<std::size_t, 4>& before,
+                       const pineforge::metrics::ScratchCurveRegion& scratch) {
+    require(host.report_storage() == before, "NULL removal rehydrated report history");
+    const auto after = host.scratch_region();
+    require(after.scratch == scratch.scratch && after.descriptor == scratch.descriptor
+            && after.byte_offset == scratch.byte_offset && after.point_count == scratch.point_count,
+            "NULL removal dropped or changed the scratch owner");
+}
+
+void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bars,
+                          const std::string& bytes, bool through_path) {
+    auto output = stream(Transport::pipe, directory);
+    const int flags = ::fcntl(output->fd(), F_GETFL);
+    const int descriptor_flags = ::fcntl(output->fd(), F_GETFD);
+    require(flags >= 0 && descriptor_flags >= 0, "cannot read removal fixture fd flags");
+    {
+        Fixture host;
+        install_fd(host, output->fd());
+        const auto before = execute(host, bars);
+        const auto before_summary = summary(host);
+        const auto storage = host.report_storage();
+        const auto scratch = host.scratch_region();
+        require(before_summary.complete == 1 && before_summary.count_t == before.receipt.count_t,
+                "fd removal fixture has no completed T-row summary");
+        require(scratch.point_count > 0 && (scratch.scratch || scratch.descriptor >= 0)
+                && storage[0] < static_cast<std::size_t>(before.receipt.count_e),
+                "fd removal fixture has no live scratch-backed curve");
+        const auto remove = [&] {
+            return through_path ? strategy_set_report_sink_v1(host.handle(), nullptr)
+                                : strategy_set_report_sink_fd_v1(host.handle(), nullptr);
+        };
+        require(remove() == 0, through_path ? "path NULL refused a completed fd generation"
+                                           : "fd NULL refused a completed fd generation");
+        unchanged_storage(host, storage, scratch);
+        unchanged_generation(host, before, before_summary);
+        unchanged_storage(host, storage, scratch);
+        require(remove() == 0, "repeated NULL removal refused a completed fd generation");
+        unchanged_generation(host, before, before_summary);
+        unchanged_storage(host, storage, scratch);
+        require(::fcntl(output->fd(), F_GETFL) == flags
+                && ::fcntl(output->fd(), F_GETFD) == descriptor_flags,
+                "NULL removal closed the borrowed fd or changed its flags");
+
+        // A retained receipt must not keep the sink installed for the next
+        // run: that run owns ordinary arrays and writes nothing to this fd.
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        struct Report {
+            pineforge::ReportC value{};
+            ~Report() { BacktestEngine::free_report(&value); }
+        } next;
+        host.fill_report(&next.value);
+        require(host.last_run_status() == 0 && host.last_error().empty()
+                && host.callbacks == static_cast<int>(bars.size()),
+                "sink-off run after NULL removal failed");
+        require(next.value.trades != nullptr && next.value.trades_len == before.total_trades
+                && next.value.equity_curve != nullptr
+                && next.value.equity_curve_len == before.receipt.count_e,
+                "NULL removal did not detach the sink for the next run");
+        require(receipt(host).complete == 0 && summary(host).complete == 0,
+                "next run retained the previous generation's completion");
+    }
+    require(::fcntl(output->fd(), F_GETFD) == descriptor_flags,
+            "destruction after NULL removal closed the borrowed fd");
+    require(output->finish() == bytes, "NULL removal or the next run appended sink bytes");
+}
+
+void ordinary_scratch_removal_refused(const fs::path& directory, const std::vector<Bar>& bars) {
+    Fixture host;
+    const auto path = directory / "ordinary-removal.ndjson";
+    install_path(host, path);
+    const auto before = execute(host, bars);
+    const auto before_summary = summary(host);
+    const auto storage = host.report_storage();
+    const auto scratch = host.scratch_region();
+    const auto bytes = read_file(path);
+    require(scratch.point_count > 0 && (scratch.scratch || scratch.descriptor >= 0),
+            "ordinary removal control has no live scratch owner");
+    require(strategy_set_report_sink_v1(host.handle(), nullptr) == -3,
+            "ordinary scratch removal lost its -3 refusal");
+    unchanged_storage(host, storage, scratch);
+    unchanged_generation(host, before, before_summary);
+    unchanged_storage(host, storage, scratch);
+    require(read_file(path) == bytes, "ordinary refusal or repeat capture appended sink bytes");
 }
 
 std::string fd_run(const fs::path& directory, const std::vector<Bar>& bars,
@@ -521,6 +648,9 @@ int main() {
         const auto bars = feed();
         const auto expected = baseline(directory, bars);
         const auto bytes = read_file(directory / "path.ndjson");
+        completed_fd_removal(directory, bars, bytes, true);
+        completed_fd_removal(directory, bars, bytes, false);
+        ordinary_scratch_removal_refused(directory, bars);
         for (const auto transport : {Transport::pipe, Transport::fifo, Transport::socket}) {
             const auto captured = fd_run(directory, bars, expected, transport, transport == Transport::fifo);
             require(captured == bytes, "fd stream bytes differ from the real path-sink run");

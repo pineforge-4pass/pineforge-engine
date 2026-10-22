@@ -181,6 +181,8 @@ PF_API uint32_t pf_report_sink_version(void);
  *  preserving the sink, receipt and report without rehydrating rows until a
  *  new run begin clears size/base to 0 (ordinary scratch ownership still
  *  independently refuses removal).
+ *  Completed fd generations allow NULL through either setter to detach the
+ *  next-run sink while preserving their receipt, summary and borrowed fd.
  *  The sink composes with the execution observer and selected window.
  *  Write errors fail the run with the sink I/O code planned for
  *  docker/run_failure_codes.json (DESIGN 3.7:881-888; 6:1330-1332).
