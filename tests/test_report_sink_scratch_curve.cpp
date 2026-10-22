@@ -802,7 +802,10 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     require(arrays.peak_bytes == held_bytes && arrays.capacity_bytes == held_bytes,
             "report-array peak or capacity changed after refused removal");
     require(arrays.live_bytes == (observer ? held_bytes : 0),
-            "report fill retained an extra curve array");
+            "report fill retained an extra curve array: live_bytes=" + std::to_string(arrays.live_bytes)
+            + ", held_bytes=" + std::to_string(held_bytes)
+            + ", held_size=" + std::to_string(held_size)
+            + ", observer=" + std::to_string(observer));
     if (observer) {
         require(observer_calls > 0 && observer_calls == oracle->observer_calls
                     && observer_calls == callbacks_before
