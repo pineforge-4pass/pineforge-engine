@@ -1,5 +1,6 @@
 import ast
 import inspect
+from itertools import permutations
 import unittest
 import json
 import os
@@ -21,6 +22,7 @@ from native_live_tick_tape import (
 )
 from native_live_tick_oracle import classify_first_divergence, first_fill, modeled_points, script_bars
 from native_live_genuine_retry_e2e import check_invocation_order
+from native_live_receipts import receipts_by_sequence
 
 
 class HarnessContract(unittest.TestCase):
@@ -90,56 +92,62 @@ class HarnessContract(unittest.TestCase):
         for index, key, value, diagnostic in (
                 (0, "attempts_before", 1, "initial invocation"),
                 (1, "attempts_before", 4, "invocation boundary"),
-                (1, "effects_before", 1, "no successful attempt")):
+                (1, "effects_before", 1, "new successful attempts")):
             with self.subTest(index=index, key=key, value=value):
                 attempts, effects, invocations = self.genuine_invocation_fixture()
                 invocations[index][key] = value
                 with self.assertRaisesRegex(AssertionError, diagnostic):
                     check_invocation_order(attempts, effects, invocations)
 
-    def test_genuine_invocations_refuse_redelivery_attempt_and_effect_reordering(self):
-        for reorder_effects in (False, True):
-            with self.subTest(reorder_effects=reorder_effects):
-                attempts, effects, invocations = self.genuine_invocation_fixture()
-                if reorder_effects:
-                    effects[1], effects[2] = effects[2], effects[1]
-                else:
-                    attempts[3], attempts[4] = attempts[4], attempts[3]
-                with self.assertRaisesRegex(AssertionError, "reordered"):
+    def test_genuine_invocations_accept_redelivery_attempt_and_effect_permutations(self):
+        for reorder_attempts in (False, True):
+            for reorder_effects in (False, True):
+                with self.subTest(attempts=reorder_attempts, effects=reorder_effects):
+                    attempts, effects, invocations = self.genuine_invocation_fixture()
+                    if reorder_effects:
+                        effects[1], effects[2] = effects[2], effects[1]
+                    if reorder_attempts:
+                        attempts[3], attempts[4] = attempts[4], attempts[3]
                     check_invocation_order(attempts, effects, invocations)
 
-    def test_genuine_invocations_keep_first_pass_order_strict_across_restart(self):
+    def test_genuine_invocations_match_first_pass_sequences_across_restart(self):
         attempts, effects = self.delivery_fixture((2, 1, 3))
         attempts = [attempts[4], attempts[3], attempts[5]]
         invocations = [
             {"command": ["runner", "run"], "attempts_before": 0, "effects_before": 0},
             {"command": ["runner", "run"], "attempts_before": 1, "effects_before": 1},
         ]
-        with self.assertRaisesRegex(AssertionError, "first-pass effects"):
+        check_invocation_order(attempts, effects, invocations)
+        effects[0], effects[1] = effects[1], effects[0]
+        with self.assertRaisesRegex(AssertionError, "new successful attempts"):
             check_invocation_order(attempts, effects, invocations)
 
     def test_explicit_redelivery_allows_an_earlier_failed_effect_after_later_effects(self):
         attempts, effects = self.delivery_fixture((2, 1, 3))
+        attempts[1]["status"] = 200
         redelivery = self.redelivery_fixture(["1", "3"], effects_before=1)
         self.assertEqual([effect["sequence"] for effect in ordered_delivery_effects(
             attempts, effects, redelivery)], [1, 2, 3])
-        with self.assertRaisesRegex(RuntimeError, "first-pass effects"):
-            ordered_delivery_effects(attempts, effects)
+        self.assertEqual(ordered_delivery_effects(attempts, effects), self.delivery_fixture()[1])
 
-    def test_redelivery_does_not_allow_initial_effects_or_first_attempts_to_reorder(self):
-        attempts, effects = self.delivery_fixture((2, 1, 3))
-        redelivery = self.redelivery_fixture(["1", "2", "3"], effects_before=2)
-        with self.assertRaisesRegex(RuntimeError, "first-pass effects"):
-            ordered_delivery_effects(attempts, effects, redelivery)
-        attempts[0], attempts[1] = attempts[1], attempts[0]
-        with self.assertRaisesRegex(RuntimeError, "first-attempt"):
-            ordered_delivery_effects(attempts, effects, redelivery)
+    def test_redelivery_matches_permuted_initial_effects_and_first_attempts_by_sequence(self):
+        expected = self.delivery_fixture()[1]
+        for effect_order in permutations(range(1, len(expected) + 1)):
+            for attempt_order in permutations(range(len(expected))):
+                with self.subTest(effects=effect_order, attempts=attempt_order):
+                    attempts, effects = self.delivery_fixture(effect_order)
+                    for effect in effects[:2]:
+                        attempts[effect["sequence"] - 1]["status"] = 200
+                    attempts[:3] = [attempts[index] for index in attempt_order]
+                    redelivery = self.redelivery_fixture(["1", "2", "3"], effects_before=2)
+                    self.assertEqual(ordered_delivery_effects(attempts, effects, redelivery), expected)
 
-    def test_redelivery_does_not_allow_unselected_effects_to_reorder(self):
+    def test_redelivery_matches_unselected_effects_by_sequence(self):
         attempts, effects = self.delivery_fixture((2, 1, 3))
-        with self.assertRaisesRegex(RuntimeError, "non-redelivered"):
-            ordered_delivery_effects(attempts, effects,
-                self.redelivery_fixture(["3"]))
+        attempts[0]["status"] = attempts[1]["status"] = 200
+        attempts = attempts[:3] + attempts[5:]
+        self.assertEqual(ordered_delivery_effects(attempts, effects,
+            self.redelivery_fixture(["3"], effects_before=2)), self.delivery_fixture()[1])
 
     def test_redelivery_still_requires_exact_bodies_keys_and_complete_unique_effects(self):
         attempts, effects = self.delivery_fixture()
@@ -152,16 +160,17 @@ class HarnessContract(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ordered_delivery_effects(attempts, altered)
 
-    def test_redelivery_selection_keeps_attempt_and_effect_order(self):
+    def test_redelivery_selection_keeps_exact_attempts_and_effects_by_sequence(self):
         attempts, effects = self.delivery_fixture((2, 3, 1))
+        attempts[1]["status"] = 200
+        attempts = attempts[:3] + [attempts[5], attempts[3]]
         redelivery = self.redelivery_fixture(["1", "3"], effects_before=1)
-        with self.assertRaisesRegex(RuntimeError, "redelivery effects"):
-            ordered_delivery_effects(attempts, effects, redelivery)
-        attempts[3], attempts[5] = attempts[5], attempts[3]
-        with self.assertRaisesRegex(RuntimeError, "redelivery attempts"):
+        self.assertEqual(ordered_delivery_effects(attempts, effects, redelivery), self.delivery_fixture()[1])
+        attempts[-1]["status"] = 503
+        with self.assertRaisesRegex(RuntimeError, "new successful attempts"):
             ordered_delivery_effects(attempts, effects, redelivery)
 
-    def test_redelivery_restart_reselects_acknowledged_actions_in_order(self):
+    def test_redelivery_restart_reselects_exact_acknowledged_sequence_set(self):
         attempts, effects = self.delivery_fixture()
         attempts += [dict(attempt) for attempt in attempts[3:]]
         redelivery = self.redelivery_fixture(["1", "2", "3"])
@@ -171,8 +180,45 @@ class HarnessContract(unittest.TestCase):
             altered = list(attempts)
             altered[start + 1], altered[start + 2] = altered[start + 2], altered[start + 1]
             with self.subTest(invocation_start=start):
-                with self.assertRaisesRegex(RuntimeError, "redelivery attempts"):
-                    ordered_delivery_effects(altered, effects, redelivery)
+                self.assertEqual(ordered_delivery_effects(altered, effects, redelivery), effects)
+        with self.assertRaisesRegex(RuntimeError, "selection is incomplete"):
+            ordered_delivery_effects(attempts[:-1], effects, redelivery)
+
+    def test_receipt_indexes_preserve_raw_bytes_and_reject_duplicate_sequences(self):
+        attempts, effects = self.delivery_fixture()
+        receipts = [(row["idempotency_header"], row["body"].encode()) for row in attempts[:3]]
+        sequence_of = lambda receipt: json.loads(receipt[1])["sequence"]
+        expected = dict(zip(range(1, len(effects) + 1), receipts))
+        for reordered in permutations(receipts):
+            self.assertEqual(receipts_by_sequence(reordered, sequence_of), expected)
+        with self.assertRaisesRegex(RuntimeError, "duplicate receipt sequence"):
+            receipts_by_sequence(receipts + receipts[:1], sequence_of)
+
+    def test_delivery_comparison_rejects_sequence_gaps_aliases_and_changed_effect_payloads(self):
+        attempts, effects = self.delivery_fixture()
+        for sequence in (effects[0]["sequence"], len(effects) + 1):
+            altered = [dict(effect) for effect in effects]
+            altered[-1]["sequence"] = sequence
+            with self.subTest(sequence=sequence):
+                with self.assertRaisesRegex(RuntimeError, "sequence"):
+                    ordered_delivery_effects(attempts, altered)
+        altered = [dict(attempt) for attempt in attempts]
+        payload = {**effects[-1], "sequence": effects[0]["sequence"]}
+        altered[2]["body"] = altered[-1]["body"] = json.dumps(payload)
+        with self.assertRaisesRegex(RuntimeError, "duplicate receipt sequence"):
+            ordered_delivery_effects(altered, effects)
+        missing = [attempt for attempt in attempts
+                   if json.loads(attempt["body"])["sequence"] != effects[-1]["sequence"]]
+        with self.assertRaisesRegex(RuntimeError, "first-attempt deliveries are incomplete"):
+            ordered_delivery_effects(missing, effects)
+        duplicate_ids = [dict(effect) for effect in effects]
+        duplicate_ids[-1]["event_id"] = effects[0]["event_id"]
+        with self.assertRaisesRegex(RuntimeError, "duplicate logical effect"):
+            ordered_delivery_effects(attempts, duplicate_ids)
+        altered_effects = [dict(effect) for effect in effects]
+        altered_effects[-1]["delivery_id"] = "changed"
+        with self.assertRaisesRegex(RuntimeError, "effect body differs"):
+            ordered_delivery_effects(attempts, altered_effects)
 
     def test_redelivery_restart_preserves_exact_bytes_keys_and_unique_effects(self):
         attempts, effects = self.delivery_fixture()
