@@ -1,25 +1,13 @@
 name: docs
 
-# Build the API documentation with Doxygen and deploy to Cloudflare Pages.
-#
-# Required repository secrets:
-#   CLOUDFLARE_API_TOKEN  - token with "Cloudflare Pages: Edit" permission
-#   CLOUDFLARE_ACCOUNT_ID - your CF account id
-#
-# Required repository variables (or hard-code below):
-#   CF_PAGES_PROJECT      - the Cloudflare Pages project name
-#                           (defaults to "pineforge-docs" if unset)
+# Build PR API documentation with Doxygen. Deployment lives in docs-post.yml.
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request: {}
-  workflow_dispatch: {}
+  pull_request:
+    paths-ignore: ['.github/**']
 
 permissions:
   contents: read
-  deployments: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -28,7 +16,7 @@ concurrency:
 jobs:
   authz:
     name: authz
-    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
+    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
     runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -91,9 +79,6 @@ jobs:
   build:
     needs: [authz]
     runs-on: ["self-hosted", "pf-gcp-pr"]
-    env:
-      CF_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'pineforge-docs' }}
-      DEPLOY_BRANCH: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -131,22 +116,3 @@ jobs:
             docs/site/html
             docs/site/doxygen-warnings.log
           retention-days: 7
-
-      - name: Sanitize deploy branch name
-        id: deploy
-        run: |
-          # CF Pages branch names: alphanumerics, dashes, underscores, slashes.
-          SAFE="$(printf '%s' "$DEPLOY_BRANCH" | tr -c 'A-Za-z0-9._/-' '-')"
-          echo "branch=$SAFE" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy to Cloudflare Pages
-        if: github.event_name != 'pull_request'
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: >-
-            pages deploy docs/site/html
-            --project-name=${{ env.CF_PROJECT }}
-            --branch=${{ steps.deploy.outputs.branch }}
-            --commit-dirty=true
