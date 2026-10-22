@@ -1,12 +1,21 @@
 #pragma once
 
 #include <pineforge/detail/scratch_backing.hpp>
+#include <pineforge/detail/scratch_store.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 
 namespace pineforge::detail {
+
+// CR-257 compact-record commit ceiling (inert acceptance geometry, not a
+// bound on arbitrary-width blobs). The layout has at most kMaxHeight handle
+// pages and kMaxDepth ordered-index pages on a path, plus key/value/free-cell
+// pages. Charge an undo image and a data write for each, then the journal-tail
+// link and one published superblock. No runtime policy uses this constant.
+inline constexpr std::size_t kPagesPerCommit =
+    2 * (scratch_impl::kMaxHeight + scratch_impl::kMaxDepth + 3) + 2;
 
 // The run owner installs its observer on the thread creating command scopes.
 // Each backing snapshots that observer; its context must outlive the backing.

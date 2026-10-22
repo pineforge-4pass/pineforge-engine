@@ -363,6 +363,7 @@ struct TradeLedger::State {
         bool is_long = false, exit_from_bracket = false, open_at_end = false;
     };
     static_assert(std::is_trivially_copyable_v<Record>);
+    static_assert(TradeLedger::kRecordBytes == sizeof(Record));
     static_assert(sizeof(int) == sizeof(std::int32_t));
     // Strings are never retained by the window. It holds fixed descriptors;
     // even the newest row's four payloads already live in scratch.

@@ -32,6 +32,9 @@ using pineforge::detail::ScratchSpanSource;
 using pineforge::detail::ScratchStatus;
 using pineforge::detail::CommandScratchStore;
 
+// CR-257 acceptance geometry only; clear() does not use batching yet.
+inline constexpr std::size_t kExitScopeEraseBatch = 64;
+
 // The source run owner provisions the CX-O1C store. The version owner must retain
 // every payload field externally until release_scope, including across nested
 // Applied callbacks; it may not keep an owning row/token table in RAM. Reads
