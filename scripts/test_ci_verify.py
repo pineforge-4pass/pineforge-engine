@@ -892,7 +892,11 @@ class ProfileOptions(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, 'must run every runner row'):
             self.definitions('live-tsan', ['--exclude-label', 'slow'])
         self.assertIn('native_live_routing_e2e', ci_verify.runner_e2e_test_names(ROOT))
-        self.assertNotIn('native_live_equivalence_e2e', ci_verify.runner_e2e_test_names(ROOT))
+        # The prerequisite-gated row is registered, but public native-live
+        # does not provision its corpus. Keep the mandatory inventory honest.
+        self.assertEqual(ci_verify.runner_e2e_test_names(ROOT),
+                         {path.stem for path in (ROOT / 'tests').glob('native_live*_e2e.py')}
+                         - {'native_live_equivalence_e2e'})
 
     def test_kernel_drops_the_source_layer_and_keeps_the_live_runner(self):
         values, argv = self.definitions('kernel')
@@ -4118,6 +4122,151 @@ class CTestDeadlines(unittest.TestCase):
         self.assertEqual((rows.total, rows.ran), (4, 2), output)
         self.assertEqual(rows.skipped, ('labelled_skip',), output)
         self.assertEqual(rows.not_run, ('labelled_not_run',), output)
+
+
+class NativeLiveEquivalenceCTest(unittest.TestCase):
+    """CR-223-ROW: source wiring and compiler-free adapter controls.
+
+    The tiny driver below is a fixture, never the corpus e2e or a compiler.
+    The supervisor separately proves the registered row with the real driver.
+    """
+
+    def test_registered_row_has_build_tree_outputs_and_status_only_skip(self):
+        cmake = (ROOT / 'runner' / 'CMakeLists.txt').read_text()
+        row = re.search(r'add_test\(NAME native_live_equivalence_e2e\s+(.*?)\)',
+                        cmake, re.S)
+        self.assertIsNotNone(row, 'the equivalence driver needs a permanent runner CTest row')
+        command = row.group(1)
+        self.assertIn('${Python3_EXECUTABLE} -B', command)
+        self.assertIn('${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_ctest.py', command)
+        self.assertIn('--script ${PROJECT_SOURCE_DIR}/tests/native_live_equivalence_e2e.py', command)
+        self.assertIn('--build-dir ${PROJECT_BINARY_DIR}', command)
+        for option in ('--libraries-dir', '--out'):
+            self.assertRegex(command, re.escape(option) + r'\s+\$\{CMAKE_CURRENT_BINARY_DIR\}/')
+        properties = re.search(
+            r'set_tests_properties\(native_live_equivalence_e2e\s+PROPERTIES\s+(.*?)\)',
+            cmake, re.S)
+        self.assertIsNotNone(properties)
+        self.assertRegex(properties.group(1), r'\bSKIP_RETURN_CODE\s+77\b')
+        self.assertRegex(properties.group(1), r'\bLABELS\s+private_fixtures\b')
+        self.assertNotRegex(properties.group(1),
+                            r'\b(SKIP_REGULAR_EXPRESSION|PASS_REGULAR_EXPRESSION|WILL_FAIL|DISABLED)\b')
+        self.assertIn('native_live_equivalence_e2e', ci_verify.private_fixture_rows(ROOT))
+        # The same runtime preload/finalization contract must reach both
+        # ctypes witnesses in ASan and TSan builds.
+        self.assertRegex(cmake, r'set_tests_properties\(native_live_genuine_retry_e2e\s+'
+                         r'native_live_equivalence_e2e\s+PROPERTIES ENVIRONMENT')
+
+    def test_exclusion_reason_is_next_to_the_filter_and_in_ci_inventory_docs(self):
+        source = (ROOT / 'scripts' / 'ci_verify.py').read_text()
+        function = source.split('def runner_e2e_test_names(', 1)[1].split('\n\n', 1)[0]
+        self.assertIn('native-live.yml', function)
+        self.assertIn('corpus', function)
+        self.assertIn('docs/ci.md', function)
+        docs = (ROOT / 'docs' / 'ci.md').read_text()
+        self.assertIn('`native_live_equivalence_e2e`', docs)
+        self.assertIn('runner_e2e_test_names()', docs)
+        self.assertNotIn('corpus equivalence driver is not a runner CTest row', docs)
+
+    def test_conditional_row_does_not_lower_or_inflate_existing_live_run_floor(self):
+        # This row can SKIP; the pre-existing public rows must all still run.
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            for transport_present in (False, True):
+                if transport_present:
+                    (source / 'runner').mkdir()
+                    (source / 'runner' / 'transport.cpp').write_text('// fixture\n')
+                for overlay in ('', '1'):
+                    with self.subTest(transport=transport_present, overlay=overlay), \
+                            mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': overlay}):
+                        for profile in ci_verify.LIVE_ONLY_PROFILES:
+                            self.assertEqual(ci_verify.profile_min_tests(ci_verify.PROFILE[profile], source),
+                                             12 if transport_present else 11)
+
+    def fixture(self, temporary, *, missing=None, exit_code=0, exception=False):
+        root = Path(temporary) / 'source'
+        build = Path(temporary) / 'build'
+        script = root / 'tests' / 'native_live_equivalence_e2e.py'
+        script.parent.mkdir(parents=True)
+        script.write_text(
+            "PROBES = {'probe-alpha': {'market'}, 'probe-beta': {'limit'}}\n"
+            "import argparse, json\nfrom pathlib import Path\n"
+            "parser = argparse.ArgumentParser()\n"
+            "for option in ('--root', '--build-dir', '--libraries-dir', '--out'):\n"
+            "    parser.add_argument(option, required=True)\n"
+            "args = parser.parse_args()\n"
+            "Path(args.out).mkdir(parents=True, exist_ok=False)\n"
+            "Path(args.libraries_dir).mkdir(parents=True, exist_ok=False)\n"
+            "print('DRIVER_EXECUTED ' + json.dumps(vars(args)), flush=True)\n"
+            + ("raise RuntimeError('driver fixture failure')\n" if exception
+               else f"raise SystemExit({exit_code})\n"))
+        paths = [
+            build / 'bin' / 'pineforge-live', build / 'compile_commands.json',
+            build / 'lib' / 'libpineforge.a',
+            root / 'corpus' / 'data' / 'ohlcv_ETH-USDT-USDT_1m.csv',
+            root / 'tests' / 'native_live_receipts.py',
+            *(root / 'corpus' / 'validation' / probe / 'generated.cpp'
+              for probe in ('probe-alpha', 'probe-beta')),
+        ]
+        for path in paths:
+            if missing is None or not path.as_posix().endswith(missing):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('// prerequisite fixture only\n')
+        command = [sys.executable, '-B', str(ROOT / 'tests' / 'native_live_equivalence_ctest.py'),
+                   '--script', str(script), '--root', str(root), '--build-dir', str(build),
+                   '--libraries-dir', str(build / 'libraries'), '--out', str(build / 'results')]
+        return command
+
+    def invoke_fixture(self, command):
+        return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env={key: value for key, value in os.environ.items()
+                                   if key not in ('LD_PRELOAD', 'DYLD_INSERT_LIBRARIES')})
+
+    def test_each_missing_prerequisite_skips_once_without_executing_driver(self):
+        for missing in ('bin/pineforge-live', 'compile_commands.json', 'lib/libpineforge.a',
+                        'corpus/data/ohlcv_ETH-USDT-USDT_1m.csv', 'tests/native_live_receipts.py',
+                        'corpus/validation/probe-alpha/generated.cpp',
+                        'corpus/validation/probe-beta/generated.cpp'):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temporary:
+                result = self.invoke_fixture(self.fixture(temporary, missing=missing))
+                self.assertEqual(result.returncode, 77, result.stdout + result.stderr)
+                self.assertEqual(len(result.stdout.splitlines()), 1)
+                self.assertTrue(result.stdout.startswith(
+                    'SKIP native_live_equivalence_e2e prerequisites absent: '), result.stdout)
+                self.assertIn(missing, result.stdout)
+                self.assertNotIn('DRIVER_EXECUTED', result.stdout)
+
+    def test_ready_driver_executes_and_runtime_failures_never_become_skips(self):
+        for exit_code in (0, 1, 2, 77):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as temporary:
+                result = self.invoke_fixture(self.fixture(temporary, exit_code=exit_code))
+                self.assertIn('DRIVER_EXECUTED ', result.stdout, result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 1 if exit_code == 77 else exit_code,
+                                 result.stdout + result.stderr)
+                self.assertNotIn('SKIP ', result.stdout)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self.invoke_fixture(self.fixture(temporary, exception=True))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotEqual(result.returncode, 77)
+            self.assertIn('driver fixture failure', result.stderr)
+
+    def test_reruns_retain_distinct_outputs_and_libraries_under_build_tree(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            command = self.fixture(temporary)
+            receipts = []
+            for _ in range(2):
+                result = self.invoke_fixture(command)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                receipt = json.loads(next(line.removeprefix('DRIVER_EXECUTED ')
+                                         for line in result.stdout.splitlines()
+                                         if line.startswith('DRIVER_EXECUTED ')))
+                for option in ('out', 'libraries_dir'):
+                    self.assertTrue(Path(receipt[option]).is_relative_to(Path(temporary) / 'build'))
+                    self.assertTrue(Path(receipt[option]).is_dir())
+                receipts.append(receipt)
+            for option in ('out', 'libraries_dir'):
+                self.assertNotEqual(receipts[0][option], receipts[1][option])
+                self.assertTrue(Path(receipts[0][option]).is_dir())
 
 
 if __name__ == '__main__':
