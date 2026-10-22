@@ -297,7 +297,7 @@ void exercise_book(std::size_t population) {
     // Every row reads back to the value it had when it was submitted, by
     // handle and by walking the queue.
     std::size_t mismatches = 0;
-    for (std::size_t i = 0; i != handles.size(); i += 3) {
+    for (std::size_t i = 0; i < handles.size(); i += 3) {
         const no::LiveRequest* row = b.core.find_live(handles[i]);
         if (row == nullptr || ff::value(*row) != values[i]) ++mismatches;
     }
