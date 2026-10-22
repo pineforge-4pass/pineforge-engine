@@ -114,6 +114,19 @@ void bound(const char* metric, Count actual, Count allowed, Context context) {
         static_cast<unsigned long long>(context.n), ok ? "PASS" : "FAIL");
     if (!ok) ++failures;
 }
+// Informational twin of bound(): printed, never counted as a failure. Used for the
+// WRITE-side numbers of the engine run, which belong to layer (c) (1.7.1: the
+// ExitScratchScope::clear erase batching); the direct scope test asserts that layer.
+void info(const char* metric, Count actual, Count allowed, Context context) {
+    std::printf("X257 %s total=%llu per_bar=%.9Lf allowed=%llu"
+                " extent_pages=%llu records_changed=%llu N=%llu INFO(layer c)\n",
+        metric, static_cast<unsigned long long>(actual),
+        static_cast<long double>(actual) / context.n,
+        static_cast<unsigned long long>(allowed),
+        static_cast<unsigned long long>(context.extent_pages),
+        static_cast<unsigned long long>(context.records_changed),
+        static_cast<unsigned long long>(context.n));
+}
 } // namespace cr257
 
 extern "C" ssize_t __real_pread(int, void*, std::size_t, off_t);
@@ -677,13 +690,16 @@ void source_bounds(const SourceRun& run) {
     const Count erase_commits = ceil_div(context.records_changed, sd::kExitScopeEraseBatch);
     const Count allowed_commits = erase_commits + run.insert_commits;
     const Count write_calls = allowed_commits * pd::kPagesPerCommit;
-    bound("command.commits", run.commits, allowed_commits, context);
-    bound("command.page_pwrite_calls", pages.pwrite.calls, write_calls, context);
-    bound("command.total_pwrite_calls", io.pwrite.calls, write_calls, context);
-    bound("command.page_pwrite_bytes", pages.pwrite.bytes, write_calls * platform_page, context);
-    bound("command.total_pwrite_bytes", io.pwrite.bytes, write_calls * platform_page, context);
+    info("command.commits", run.commits, allowed_commits, context);
+    info("command.page_pwrite_calls", pages.pwrite.calls, write_calls, context);
+    info("command.total_pwrite_calls", io.pwrite.calls, write_calls, context);
+    info("command.page_pwrite_bytes", pages.pwrite.bytes, write_calls * platform_page, context);
+    info("command.total_pwrite_bytes", io.pwrite.bytes, write_calls * platform_page, context);
+    // DONTNEED fires once per kCacheBytes of clean bytes read, and once per kCacheBytes
+    // of bytes written (the flush that precedes dropping dirty pages): both are allowed.
     bound("command.fadvise_calls", io.fadvise.calls,
-          ceil_div(io.pread.bytes, kCacheBytes) + 1, context);
+          ceil_div(io.pread.bytes, kCacheBytes) + ceil_div(io.pwrite.bytes, kCacheBytes) + 1,
+          context);
     bound("command.fdatasync_calls", io.fdatasync.calls,
           ceil_div(io.pwrite.bytes, kCacheBytes) + 1, context);
     std::printf("X257 command.charges read=%llu write=%llu sync=%llu commits=%llu"
