@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -18,10 +19,38 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
+
+#if defined(PINEFORGE_O1BK_WRAP_PWRITE)
+namespace {
+struct PwriteFault {
+    int fd;
+    int error;
+    std::size_t calls = 0;
+    std::size_t requested = 0;
+    off_t offset = -1;
+};
+PwriteFault* selected_pwrite_fault = nullptr;
+} // namespace
+
+extern "C" ssize_t __real_pwrite(int, const void*, std::size_t, off_t);
+extern "C" ssize_t __wrap_pwrite(int fd, const void* data, std::size_t size, off_t offset) {
+    if (selected_pwrite_fault && selected_pwrite_fault->fd == fd) {
+        auto& fault = *selected_pwrite_fault;
+        ++fault.calls;
+        fault.requested = size;
+        fault.offset = offset;
+        errno = fault.error;
+        return -1;
+    }
+    return __real_pwrite(fd, data, size, offset);
+}
+#endif
 
 namespace {
 using namespace pineforge::detail;
@@ -662,6 +691,131 @@ void selected_directory_failure(std::size_t page, const std::string& directory) 
     require(rejected, "failed selected directory must surface errno instead of falling back");
 }
 
+void backing_errno_mapping() {
+    struct Mapping {
+        int error;
+        ScratchStatus status;
+        const char* name;
+    };
+    const std::array<Mapping, 5> mappings{{
+        {ENOSPC, ScratchStatus::io_error, "ENOSPC is a backing I/O fault"},
+        {EDQUOT, ScratchStatus::io_error, "EDQUOT is a backing I/O fault"},
+        {EFBIG, ScratchStatus::io_error, "EFBIG is a backing I/O fault"},
+        {EIO, ScratchStatus::io_error, "EIO is a backing I/O fault"},
+        {EBADF, ScratchStatus::io_error, "unrelated errno remains a backing I/O fault"},
+    }};
+    for (const auto& mapping : mappings)
+        require_status(pineforge::detail::command_scratch_io_status(mapping.error),
+                       mapping.status, mapping.name);
+}
+
+void write_past_file_size_limit(std::size_t page) {
+    struct sigaction disposition{};
+    disposition.sa_handler = SIG_IGN;
+    require(::sigemptyset(&disposition.sa_mask) == 0
+            && ::sigaction(SIGXFSZ, &disposition, nullptr) == 0,
+            "child ignores SIGXFSZ so the real syscall can report EFBIG");
+    struct rlimit limit{};
+    require(::getrlimit(RLIMIT_FSIZE, &limit) == 0, "read child file-size limit");
+    const auto cap = static_cast<rlim_t>(page);
+    require(static_cast<std::uintmax_t>(cap) == static_cast<std::uintmax_t>(page)
+            && (limit.rlim_max == RLIM_INFINITY || cap <= limit.rlim_max),
+            "one page must fit the inherited hard file-size limit");
+    limit.rlim_cur = cap;
+    require(::setrlimit(RLIMIT_FSIZE, &limit) == 0
+            && ::getrlimit(RLIMIT_FSIZE, &limit) == 0 && limit.rlim_cur == cap,
+            "apply and verify the child's real one-page file-size cap");
+
+    ByteCapRegistration uncapped(std::uint64_t{0});
+    Charges charges;
+    ObserverRegistration observer(charges.observer());
+    const auto before = open_descriptors();
+    auto backing = make_command_scratch_backing(page);
+    const int fd = created_descriptor(before);
+    const auto image = pattern(page, 18);
+    require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok,
+                   "first page fits the OS cap without a synthetic byte cap");
+    require_charge(charges, 0, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
+    require_extent(*backing, fd, 1);
+    const auto next_page_end = std::uintmax_t{2} * image.size();
+    require(image.size() == page && next_page_end > static_cast<std::uintmax_t>(limit.rlim_cur),
+            "page one ends at two pages, strictly beyond the applied one-page cap");
+    errno = 0;
+    const auto status = backing->write_page(1, bytes(image));
+    const int error = errno;
+    require(error == EFBIG, "production extension must hit the real OS EFBIG fault");
+    require_status(status, ScratchStatus::io_error, "production EFBIG must return io_error");
+    require_charge(charges, 1, ScratchIoOperation::write_page, 1, page, ScratchStatus::io_error);
+    require_extent(*backing, fd, 1);
+    std::vector<std::byte> out(page);
+    require_status(backing->read_page(0, buffer(out)), ScratchStatus::ok,
+                   "existing page remains readable after EFBIG");
+    require(out == image, "EFBIG preserves the existing page bytes");
+    require_status(backing->read_page(1, buffer(out)), ScratchStatus::not_found,
+                   "failed OS extension cannot expose an unwritten page");
+}
+
+void file_size_limit_is_io_error(std::size_t page) {
+    const pid_t child = ::fork();
+    require(child >= 0, "fork a child for the file-size limit fault");
+    if (child == 0) {
+        try {
+            write_past_file_size_limit(page);
+            ::_exit(0);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "FAIL file_size_limit child page_size=%zu: %s\n", page, error.what());
+            std::fflush(stderr);
+            ::_exit(1);
+        }
+    }
+    int status = 0;
+    pid_t waited;
+    do { waited = ::waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+    require(waited == child, "wait for the file-size limit child");
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        throw std::runtime_error("file-size limit child failed: wait status " + std::to_string(status));
+}
+
+#if defined(PINEFORGE_O1BK_WRAP_PWRITE)
+void production_pwrite_faults_are_io_errors(std::size_t page) {
+    ByteCapRegistration uncapped(std::uint64_t{0});
+    for (const int error : {ENOSPC, EIO}) {
+        Charges charges;
+        ObserverRegistration observer(charges.observer());
+        const auto before = open_descriptors();
+        auto backing = make_command_scratch_backing(page);
+        const int fd = created_descriptor(before);
+        const auto image = pattern(page, 19), replacement = pattern(page, 20);
+        require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok,
+                       "seed real production backing before interposing pwrite");
+        require_charge(charges, 0, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
+
+        PwriteFault fault{fd, error};
+        selected_pwrite_fault = &fault;
+        errno = 0;
+        const auto status = backing->write_page(0, bytes(replacement));
+        const int observed_error = errno;
+        // write_page is noexcept: disarm before any throwing assertion.
+        selected_pwrite_fault = nullptr;
+        require(fault.calls == 1 && fault.requested == page && fault.offset == 0,
+                "production backing reached exactly one full-page positional write");
+        require(observed_error == error, "interposed production pwrite raised the selected errno");
+        require_status(status, ScratchStatus::io_error, "production ENOSPC/EIO must return io_error");
+        require_charge(charges, 1, ScratchIoOperation::write_page, 0, page, ScratchStatus::io_error);
+        require_extent(*backing, fd, 1);
+        std::vector<std::byte> out(page);
+        require_status(backing->read_page(0, buffer(out)), ScratchStatus::ok,
+                       "read production backing after interposed fault");
+        require(out == image, "failed pwrite preserves the prior page bytes");
+        require_status(backing->write_page(0, bytes(replacement)), ScratchStatus::ok,
+                       "disarmed pwrite returns to the real OS backing");
+        require_status(backing->read_page(0, buffer(out)), ScratchStatus::ok,
+                       "read production backing after disarming");
+        require(out == replacement, "real pwrite stores the replacement after the injected fault");
+    }
+}
+#endif
+
 void short_reads_and_syscall_errors(std::size_t page) {
     Charges charges;
     ObserverRegistration registration(charges.observer());
@@ -742,6 +896,11 @@ int main() {
             run("byte_cap_invalid_environment", [&] { byte_cap_invalid_environment(page); });
             run("byte_cap_failed_extension_accounting", [&] { byte_cap_failed_extension_accounting(page); });
             run("selected_directory_failure", [&] { selected_directory_failure(page, directory.path); });
+            run("backing_errno_mapping", [&] { backing_errno_mapping(); });
+            run("file_size_limit_is_io_error", [&] { file_size_limit_is_io_error(page); });
+#if defined(PINEFORGE_O1BK_WRAP_PWRITE)
+            run("production_pwrite_faults_are_io_errors", [&] { production_pwrite_faults_are_io_errors(page); });
+#endif
             run("short_reads_and_syscall_errors", [&] { short_reads_and_syscall_errors(page); });
         }
         return failures == 0 ? 0 : 1;

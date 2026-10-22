@@ -11,8 +11,8 @@ namespace pineforge::detail {
 // No capacity/refusal status and no RunFailureCode conversion in this API.
 // end: an ordered seek found no record. cancelled: a visitor returned false.
 // not_found: an absent handle, a page past the extent, or nothing to reopen.
-// programming_error: contract misuse or a request the host did not provision
-// for, including a backing that cannot extend. io_error: the medium failed.
+// programming_error: caller contract violations. io_error: backing I/O faults,
+// including medium exhaustion or a backing that cannot extend.
 // corrupt: stored bytes failed validation.
 enum class ScratchStatus : std::uint32_t {
     ok = 0,
@@ -78,7 +78,8 @@ struct ScratchIoObserver {
 // A failed write MAY have partially modified its target: transactions must
 // protect previously committed pages. No operation throws or allocates an
 // O(page_count) userspace directory. Production backing must extend/spill;
-// backing exhaustion is a programming_error, never a capacity run failure.
+// backing I/O faults, including exhaustion, are io_error, never a capacity
+// run failure. programming_error is reserved for caller contract violations.
 class ScratchBacking {
 public:
     virtual ~ScratchBacking() noexcept = default;

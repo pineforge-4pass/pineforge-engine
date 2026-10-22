@@ -7461,6 +7461,10 @@ endif()
 if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     list(APPEND TEST_SOURCES test_o1bk_production_backing)
     pineforge_add_unit_test(test_o1bk_production_backing)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(test_o1bk_production_backing PRIVATE PINEFORGE_O1BK_WRAP_PWRITE=1)
+        target_link_options(test_o1bk_production_backing PRIVATE "-Wl,--wrap=pwrite")
+    endif()
 endif()
 # --- CR-150 core-cr150-o1c end ---
 
