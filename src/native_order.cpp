@@ -2,6 +2,8 @@
 #include <pineforge/detail/disk_id_table.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/detail/journal_codec.hpp>
+#include "native_journal_codec.hpp"
 #include <pineforge/native_host.hpp>
 #include "native_execution_consumer.hpp"
 #include <cassert>
@@ -1461,6 +1463,38 @@ constexpr std::size_t kBookMax = 4096;
 // their chunk. Positions are absolute (the core's history_base()..
 // history_end()), ordinals ascend with positions.
 struct WorkingRequestCore::JournalStore {
+    detail::ScratchStore* codec = nullptr; // borrowed, run-owned backing
+    mutable std::vector<std::byte> codec_page; // allocated once from store geometry
+    mutable std::array<std::optional<CommandEvent>, 4> codec_values;
+    mutable std::array<uint64_t, 4> codec_positions{};
+    mutable std::size_t codec_next = 0;
+
+    void bind(detail::ScratchStore& store) {
+        if (codec || end != 0 || store.status() != ReadStatus::ok || store.record_count() != 0
+            || store.transaction_active())
+            throw std::invalid_argument("journal codec requires an empty committed store");
+        codec_page.resize(store.page_size());
+        codec = &store;
+    }
+    void check(ReadStatus status) const {
+        if (status == ReadStatus::ok) return;
+        if (status == ReadStatus::io_error)
+            throw detail::ScratchIoError(EIO, "native journal codec I/O");
+        throw std::logic_error("native journal codec invalid storage");
+    }
+    const CommandEvent& codec_at(uint64_t position) const {
+        for (std::size_t i = 0; i != codec_values.size(); ++i)
+            if (codec_values[i] && codec_positions[i] == position) return *codec_values[i];
+        detail::ScratchRecordInfo info;
+        check(detail::journal_codec::find(*codec, position, info));
+        const detail::journal_codec::StoreSource source(*codec, info.handle, info.value_bytes);
+        CommandEvent value;
+        check(decode_journal_record(source, {codec_page.data(), codec_page.size()}, value));
+        const auto slot = codec_next++ % codec_values.size();
+        codec_values[slot] = std::move(value);
+        codec_positions[slot] = position;
+        return *codec_values[slot];
+    }
     // A page is one chunk's worth of events. The resident part may hold up to
     // kMaxResident events -- far past what a run that retires its journal ever
     // keeps, so a windowed run never writes a page -- and a journal pinned or
@@ -1519,12 +1553,21 @@ struct WorkingRequestCore::JournalStore {
         cache_next = 0;
     }
     const CommandEvent& resident_at(uint64_t position) const {
+        if (codec) return codec_at(position);
         const uint64_t relative = position - chunk0_base;
         return *chunks[static_cast<std::size_t>(relative / kChunk)]
                     ->slot[static_cast<std::size_t>(relative % kChunk)];
     }
     // Appends one event into storage make_room set aside.
-    void push(CommandEvent&& event) noexcept {
+    void push(CommandEvent&& event) {
+        if (codec) {
+            const auto source = encode_journal_record(event);
+            check(detail::journal_codec::put(*codec, end, source));
+            const auto slot = codec_next++ % codec_values.size();
+            codec_values[slot] = std::move(event);
+            codec_positions[slot] = end++;
+            return;
+        }
         const uint64_t relative = end - chunk0_base;
         chunks[static_cast<std::size_t>(relative / kChunk)]
             ->slot[static_cast<std::size_t>(relative % kChunk)].emplace(std::move(event));
@@ -1532,7 +1575,23 @@ struct WorkingRequestCore::JournalStore {
     }
     // Destroys the resident events below `new_first` and frees every chunk
     // they emptied. No I/O.
-    void drop_front(uint64_t new_first) noexcept {
+    void drop_front(uint64_t new_first) {
+        if (codec) {
+            auto status = codec->begin();
+            if (status != ReadStatus::ok) { check(status); return; }
+            for (auto position = first; position != new_first; ++position) {
+                detail::ScratchRecordInfo info;
+                status = detail::journal_codec::find(*codec, position, info);
+                if (status != ReadStatus::ok) break;
+                status = codec->erase(info.handle);
+                if (status != ReadStatus::ok) break;
+            }
+            check(detail::journal_codec::finish(*codec, status));
+            first = new_first;
+            for (std::size_t i = 0; i != codec_values.size(); ++i)
+                if (codec_values[i] && codec_positions[i] < first) codec_values[i].reset();
+            return;
+        }
         while (first < new_first) {
             const uint64_t relative = first - chunk0_base;
             chunks[static_cast<std::size_t>(relative / kChunk)]
@@ -1571,6 +1630,7 @@ struct WorkingRequestCore::JournalStore {
     // Room for `incoming` more events: spill while the resident part would
     // pass its bound, then make sure the chunks that will hold them exist.
     void make_room(std::size_t incoming) {
+        if (codec) return;
         while (resident_count() + incoming > kMaxResident && resident_count() > kKeepResident) {
             spill_front_chunk();
         }
@@ -1622,6 +1682,7 @@ struct WorkingRequestCore::JournalStore {
     }
     // The retained event at an absolute position.
     const CommandEvent& at(uint64_t position) const {
+        if (codec) return codec_at(position);
         if (position >= first) return resident_at(position);
         // A page already decoded answers without a look at the page table.
         for (const Cached& slot : cache) {
@@ -1637,13 +1698,32 @@ struct WorkingRequestCore::JournalStore {
         }
         return load(page_no, page).at(static_cast<std::size_t>(position - page.first_position));
     }
-    uint64_t ordinal_at(uint64_t position) const { return event_ordinal(at(position)); }
+    uint64_t ordinal_at(uint64_t position) const {
+        if (!codec) return event_ordinal(at(position));
+        detail::ScratchRecordInfo info;
+        check(detail::journal_codec::find(*codec, position, info));
+        const detail::journal_codec::StoreSource source(*codec, info.handle, info.value_bytes);
+        detail::journal_codec::Reader reader{source, {codec_page.data(), codec_page.size()}};
+        (void)reader.word(); // event alternative
+        const auto ordinal = reader.word();
+        check(reader.status);
+        return ordinal;
+    }
     // The first absolute position in [low, end) whose ordinal is above
     // `ordinal` (end when none); `low` is the window's first position and the
     // journal's ordinals ascend with positions. The resident part is bisected
     // directly; for a target before it the page table is bisected by ordinal
     // and exactly one page is read.
     uint64_t upper_bound_position(uint64_t ordinal, uint64_t low) const {
+        if (codec) {
+            uint64_t high = end;
+            while (low < high) {
+                const auto middle = low + (high - low) / 2;
+                if (ordinal_at(middle) <= ordinal) low = middle + 1;
+                else high = middle;
+            }
+            return low;
+        }
         if (first < end && ordinal >= event_ordinal(resident_at(first))) {
             uint64_t lo = first;
             uint64_t hi = end;
@@ -1683,6 +1763,37 @@ struct WorkingRequestCore::JournalStore {
         return above - 1;
     }
 };
+
+void bind_journal_codec(WorkingRequestCore& core, detail::ScratchStore& store) {
+    if (!core.journal_) throw std::invalid_argument("journal codec requires a bound run");
+    core.journal_->bind(store);
+    core.prepare_codec_frames();
+}
+
+ReadStatus append_journal_record(WorkingRequestCore& core,
+                                const detail::ScratchByteSource& source) noexcept {
+    if (!core.journal_ || !core.journal_->codec) return ReadStatus::programming_error;
+    auto& journal = *core.journal_;
+    if (journal.end == std::numeric_limits<uint64_t>::max())
+        return ReadStatus::programming_error;
+    uint64_t ordinal = 0;
+    auto status = scan_journal_record(source,
+        {journal.codec_page.data(), journal.codec_page.size()}, ordinal);
+    if (status != ReadStatus::ok) return status;
+    if (!ordinal || ordinal <= core.last_ordinal_) return ReadStatus::corrupt;
+    status = detail::journal_codec::put(*journal.codec, journal.end, source);
+    if (status == ReadStatus::ok) {
+        ++journal.end;
+        core.last_ordinal_ = ordinal;
+    }
+    return status;
+}
+
+const detail::ScratchReadback& journal_readback(const WorkingRequestCore& core) {
+    if (!core.journal_ || !core.journal_->codec)
+        throw std::logic_error("journal codec is not bound");
+    return *core.journal_->codec;
+}
 
 // The group-effect keys: a resident tail over an external fixed-record log.
 struct WorkingRequestCore::ReceiptStore {
@@ -2457,10 +2568,10 @@ void WorkingRequestCore::begin_direct() const {
 }
 
 // The one place an event enters the journal. Storage was set aside by
-// reserve_plan or seal_direct (JournalStore::make_room), so this cannot throw.
-void WorkingRequestCore::append_event(CommandEvent&& event) noexcept {
-    note_chain_birth(event);
+// reserve_plan or seal_direct. A bound codec publishes through its borrowed store.
+void WorkingRequestCore::append_event(CommandEvent&& event) {
     journal_->push(std::move(event));
+    note_chain_birth(journal_->resident_at(journal_->end - 1));
 }
 
 void WorkingRequestCore::note_chain_birth(const CommandEvent& event) noexcept {
@@ -2485,7 +2596,7 @@ void WorkingRequestCore::erase_live(std::size_t index) noexcept {
 }
 
 template <class Event>
-void WorkingRequestCore::append_direct(Event&& event, bool consume_incarnation) noexcept {
+void WorkingRequestCore::append_direct(Event&& event, bool consume_incarnation) {
     static_assert(!std::is_lvalue_reference_v<Event>, "an event is appended by move");
     const uint64_t ordinal = event.ordinal;
     append_event(CommandEvent(std::forward<Event>(event)));
@@ -2674,6 +2785,16 @@ void WorkingRequestCore::ensure_receipt_store() {
     const std::string& directory = scratch_directory();
     if (!directory.empty()) store->log.set_directory(directory);
     receipt_store_ = std::move(store);
+}
+
+void WorkingRequestCore::prepare_codec_frames() {
+    // Fixed construction frames for ordinary commands and their bounded tails.
+    // Larger working books continue through the existing book spill path.
+    live_.reserve(4);
+    issued_.reserve(1);
+    ensure_receipt_store();
+    ensure_chain_segments();
+    reserve_successor_root();
 }
 
 void WorkingRequestCore::ensure_chain_segments() {
@@ -2900,12 +3021,12 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
     if (external && count > std::numeric_limits<uint64_t>::max() / sizeof(uint64_t)) return false;
     constexpr std::size_t kBlock = 512;
     uint64_t region = 0;
-    std::vector<uint64_t> block;
+    std::array<uint64_t, kBlock> block{};
+    std::size_t block_size = 0;
     std::vector<EventId> local;
     if (external) {
         ensure_chain_segments();
         region = chain_segments_->ids.extend(count * sizeof(uint64_t));
-        block.reserve(kBlock);
     } else {
         local.reserve(static_cast<std::size_t>(count));
     }
@@ -2913,13 +3034,13 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
     // `block` holds the ids discovered since the last flush, tail first: the
     // k-th id found from the tail is the (count - 1 - k)-th of the chain.
     const auto flush = [&]() {
-        if (block.empty()) return;
-        std::reverse(block.begin(), block.end());
-        const uint64_t first_forward = count - written - block.size();
+        if (block_size == 0) return;
+        std::reverse(block.begin(), block.begin() + block_size);
+        const uint64_t first_forward = count - written - block_size;
         chain_segments_->ids.write(region + first_forward * sizeof(uint64_t), block.data(),
-                                   block.size() * sizeof(uint64_t));
-        written += block.size();
-        block.clear();
+                                   block_size * sizeof(uint64_t));
+        written += block_size;
+        block_size = 0;
     };
     EventId cursor = deferred->tail_receipt;
     for (uint64_t i = 0; i < count; ++i) {
@@ -2930,8 +3051,8 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
             return false;
         }
         if (external) {
-            block.push_back(cursor.ordinal);
-            if (block.size() == kBlock) flush();
+            block[block_size++] = cursor.ordinal;
+            if (block_size == kBlock) flush();
         } else {
             local.push_back(cursor);
         }
@@ -2950,17 +3071,18 @@ bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending
     // totals for valid chains such as 0.1, 0.2, 0.3. An absorbed delta joined
     // no chain, so every link here moved the total (pending_sum).
     double sum = 0.0;
-    std::vector<uint64_t> window;
+    std::array<uint64_t, kBlock> window{};
+    std::size_t window_size = 0;
     uint64_t window_first = 0;
     EventId previous;
     for (uint64_t i = 0; i < count; ++i) {
         EventId id;
         if (external) {
-            if (i >= window_first + window.size()) {
+            if (i >= window_first + window_size) {
                 const uint64_t n = std::min<uint64_t>(kBlock, count - i);
-                window.resize(static_cast<std::size_t>(n));
+                window_size = static_cast<std::size_t>(n);
                 chain_segments_->ids.read(region + i * sizeof(uint64_t), window.data(),
-                                          window.size() * sizeof(uint64_t));
+                                          window_size * sizeof(uint64_t));
                 window_first = i;
             }
             id = EventId{identity_, window[static_cast<std::size_t>(i - window_first)]};
@@ -3014,14 +3136,13 @@ bool WorkingRequestCore::visit_prior_adjustments(
     ChainSegmentRec segment;
     if (!chain_segments_ || !chain_segments_->find(resolution.ordinal, &segment)) return true;
     constexpr std::size_t kBlock = 512;
-    std::vector<uint64_t> window;
+    std::array<uint64_t, kBlock> window{};
     for (uint64_t at = 0; at < segment.count;) {
         const uint64_t n = std::min<uint64_t>(kBlock, segment.count - at);
-        window.resize(static_cast<std::size_t>(n));
         chain_segments_->ids.read(segment.offset + at * sizeof(uint64_t), window.data(),
-                                  window.size() * sizeof(uint64_t));
-        for (const uint64_t ordinal : window) {
-            if (!visit(EventId{identity_, ordinal})) return true;
+                                  static_cast<std::size_t>(n) * sizeof(uint64_t));
+        for (std::size_t i = 0; i != n; ++i) {
+            if (!visit(EventId{identity_, window[i]})) return true;
         }
         at += n;
     }
@@ -3248,6 +3369,20 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
 
 void WorkingRequestCore::reset(RunIdentity identity) {
     require_identity(identity);
+    if (journal_ && journal_->codec) {
+        auto instance = std::make_shared<InstanceBinding>();
+        journal_->check(detail::journal_codec::clear(*journal_->codec));
+        auto journal = std::move(journal_);
+        for (auto& value : journal->codec_values) value.reset();
+        journal->first = journal->end = 0;
+        journal->codec_next = 0;
+        clear_unbound();
+        identity_ = std::move(identity);
+        instance_ = std::move(instance);
+        journal_ = std::move(journal);
+        prepare_codec_frames();
+        return;
+    }
     WorkingRequestCore next(std::move(identity));
     *this = std::move(next);
 }

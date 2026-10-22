@@ -1404,6 +1404,26 @@ using CommandEvent = std::variant<AcceptedEvent,
                                   MarginCallEvent,
                                   NativeRiskEvent>;
 
+class JournalRecordSource final : public detail::ScratchByteSource {
+public:
+    explicit JournalRecordSource(const CommandEvent&) noexcept;
+    std::uint64_t size() const noexcept override { return length_; }
+    detail::ScratchStatus read(std::uint64_t, detail::ScratchBuffer) const noexcept override;
+private:
+    const CommandEvent* event_;
+    std::uint64_t length_ = 0;
+    detail::ScratchStatus status_ = detail::ScratchStatus::ok;
+};
+JournalRecordSource encode_journal_record(const CommandEvent&) noexcept;
+// Owning decode is an explicit diagnostic surface.
+detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
+    detail::ScratchBuffer, CommandEvent&) noexcept;
+class WorkingRequestCore;
+void bind_journal_codec(WorkingRequestCore&, detail::ScratchStore&);
+detail::ScratchStatus append_journal_record(WorkingRequestCore&,
+    const detail::ScratchByteSource&) noexcept;
+const detail::ScratchReadback& journal_readback(const WorkingRequestCore&);
+
 /// Almost every prepared command yields one history event. Keep that ordinary
 /// transactional payload inline; the overflow vector preserves the existing
 /// arbitrary-length behavior for group/lifecycle plans that emit more events.
@@ -2235,6 +2255,10 @@ public:
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
+    friend void bind_journal_codec(WorkingRequestCore&, detail::ScratchStore&);
+    friend detail::ScratchStatus append_journal_record(WorkingRequestCore&,
+        const detail::ScratchByteSource&) noexcept;
+    friend const detail::ScratchReadback& journal_readback(const WorkingRequestCore&);
     friend class PreparedSubmit;
     friend class PreparedReplace;
     friend class PreparedCancel;
@@ -2287,10 +2311,11 @@ private:
     /// The external stores are created on first use, in the directory
     /// set_successor_roots_directory named.
     void ensure_receipt_store();
+    void prepare_codec_frames();
     void ensure_chain_segments();
     /// Appends one event to the journal (storage reserved by reserve_plan or
-    /// seal_direct) and advances the absolute length. Cannot throw.
-    void append_event(CommandEvent&& event) noexcept;
+    /// seal_direct) and advances the absolute length. A bound codec reports I/O.
+    void append_event(CommandEvent&& event);
     /// A first deferred link starts a chain whose head retire_history must
     /// keep; a row that held a chain and no longer does makes the cached
     /// floor a lower bound until it is recomputed.
@@ -2438,7 +2463,7 @@ private:
     /// append_direct (room made by seal_direct). Cannot throw.
     void note_chain_segment(uint64_t event_ordinal, uint64_t offset, uint64_t count) noexcept;
     template <class Event>
-    void append_direct(Event&& event, bool consume_incarnation) noexcept;
+    void append_direct(Event&& event, bool consume_incarnation);
     EventRange finish_direct(std::size_t first) noexcept;
     template <class Event>
     Installed end_direct(std::size_t live_index, Event&& event);

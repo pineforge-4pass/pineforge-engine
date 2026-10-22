@@ -6,6 +6,7 @@
 // translation unit consumed it). It is hashed through the source host's
 // extension fold (src/source/pine_state_hash.cpp), never by the kernel.
 #include <pineforge/order_birth.hpp>
+#include <pineforge/detail/scratch_readback.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,8 @@
 #include <string>
 #include <variant>
 #include <vector>
+
+namespace pineforge::detail { class ScratchStore; }
 
 namespace pineforge::admission {
 inline namespace market_admission_v2 {
@@ -185,6 +188,25 @@ using FieldVisitor = std::function<void(const Field&)>;
 void reflect(const Draft& value, const std::string& path, const FieldVisitor& visit);
 void reflect(const Event& value, const std::string& path, const FieldVisitor& visit);
 
+class JournalRecordSource final : public detail::ScratchByteSource {
+public:
+    explicit JournalRecordSource(const Event&) noexcept;
+    std::uint64_t size() const noexcept override { return length_; }
+    detail::ScratchStatus read(std::uint64_t, detail::ScratchBuffer) const noexcept override;
+private:
+    const Event* event_;
+    std::uint64_t length_ = 0;
+    std::uint64_t rows_ = 0;
+    detail::ScratchStatus status_ = detail::ScratchStatus::ok;
+};
+JournalRecordSource encode_journal_record(const Event&) noexcept;
+detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
+    detail::ScratchBuffer, Event&) noexcept;
+class Journal;
+void bind_journal_codec(Journal&, detail::ScratchStore&);
+detail::ScratchStatus append_journal_record(Journal&, const detail::ScratchByteSource&) noexcept;
+const detail::ScratchReadback& journal_readback(const Journal&);
+
 class Allocation;
 class Journal {
 public:
@@ -196,7 +218,8 @@ public:
         uint64_t last_sequence = 0;
         int last_rejected_command_bar = -1;
     };
-    Journal() = default;
+    Journal() noexcept;
+    ~Journal();
     Journal(const Journal& other);
     Journal& operator=(const Journal& other);
     Journal(Journal&& other);
@@ -207,16 +230,16 @@ public:
     Allocation reserve();
     void abandon(uint64_t sequence) noexcept;
     void append(Event event);
-    const std::vector<Event>& events() const { return events_; }
+    const std::vector<Event>& events() const;
     uint64_t sequence_frontier() const { return next_sequence_; }
     void reset();
     // Keep actual causes still referenced by history, instructions or settlement.
     void retain(const std::vector<uint64_t>& sequences);
     void reflect(const std::string& path, const FieldVisitor& visit) const;
     const Prefix& retired_prefix() const { return retired_prefix_; }
-    std::size_t event_count() const { return retired_prefix_.count + events_.size(); }
+    std::size_t event_count() const;
     bool has_unfinished_events() const {
-        return active_allocations_ != 0 || !outstanding_sequences_.empty();
+        return active_allocations_ != 0 || outstanding_count_ != 0;
     }
     // Explicit diagnostic projection, like the native Full event observer.
     // Install before a run; keeps original reflection paths for tools which
@@ -226,14 +249,28 @@ public:
     // Called only at a completed script-bar boundary, after every retained
     // event has entered the v4 fold and no producer can insert before it.
     void retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence);
+    // Current v4 continuation, read fieldwise without an owning event snapshot.
+    // Filtering invalidates fold evidence; only reset starts a new lifetime.
+    Prefix folded_window() const;
+    int last_rejected_command_bar() const;
 private:
     friend class Allocation;
+    friend void bind_journal_codec(Journal&, detail::ScratchStore&);
+    friend detail::ScratchStatus append_journal_record(Journal&,
+        const detail::ScratchByteSource&) noexcept;
+    friend const detail::ScratchReadback& journal_readback(const Journal&);
+    struct CodecState;
+    std::unique_ptr<CodecState> codec_;
     void release_allocation(uint64_t sequence) noexcept;
     uint64_t next_sequence_ = 1;
     uint64_t active_allocations_ = 0;
+    uint64_t outstanding_count_ = 0;
     std::vector<uint64_t> outstanding_sequences_;
-    std::vector<Event> events_;
+    mutable std::vector<Event> events_; // explicit diagnostic projection when bound
     Prefix retired_prefix_;
+    mutable Prefix folded_window_;
+    mutable bool fold_valid_ = false;
+    bool filtered_ = false;
     // Observation-only configuration, persistent across reset like recording;
     // not independent broker state and deliberately absent from the v4 fold.
     bool retain_full_observation_history_ = false;
