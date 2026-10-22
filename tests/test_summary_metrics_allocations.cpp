@@ -102,6 +102,7 @@ void configure(Host& host, std::uint64_t run_number) {
     spec.input_tf = spec.script_tf = "1";
     spec.tickerid = "TEST:O1W_METRICS";
     spec.timezone = "America/New_York";
+    spec.chart_timezone = "America/New_York";
     spec.session = "24x7";
     spec.initial_capital = 10000.0;
     spec.point_value = spec.account_fx = 1.0;
