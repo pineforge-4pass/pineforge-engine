@@ -176,8 +176,14 @@ class Fixture final : public NativeStrategyHost {
 public:
     Fixture() {
         declare_outputs(2, 1, 2);
+        configure_run(1);
+        require(set_outputs_enabled(true), "cannot enable outputs");
+        set_trace_enabled(true);
+        set_broker_state_hash_recording(true);
+    }
+    void configure_run(std::uint64_t run_number) {
         pineforge::NativeRunSpec spec;
-        spec.identity = {"L22A", 1};
+        spec.identity = {"L22A", run_number};
         spec.input_tf = spec.script_tf = "1";
         spec.tickerid = "TEST:L22A";
         spec.timezone = "UTC";
@@ -189,9 +195,6 @@ public:
         spec.report_open_position_at_end = true;
         require(configure_native(spec).status == pineforge::NativeSetupStatus::Applied,
                 "native fixture configure refused");
-        require(set_outputs_enabled(true), "cannot enable outputs");
-        set_trace_enabled(true);
-        set_broker_state_hash_recording(true);
     }
     pf_strategy_t handle() { return static_cast<BacktestEngine*>(this); }
     std::array<std::size_t, 4> report_storage() const {
@@ -423,6 +426,8 @@ void completed_fd_removal(const fs::path& directory, const std::vector<Bar>& bar
 
         // A retained receipt must not keep the sink installed for the next
         // run: that run owns ordinary arrays and writes nothing to this fd.
+        // A Completed native host needs a fresh Ready spec before another begin.
+        host.configure_run(2);
         host.run(bars.data(), static_cast<int>(bars.size()));
         struct Report {
             pineforge::ReportC value{};
