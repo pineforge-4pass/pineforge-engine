@@ -8,6 +8,7 @@
 #include <ctime>
 #include <limits>
 #include <memory>
+#include <iterator>
 #include <set>
 #include <algorithm>
 #include <unordered_map>
@@ -278,6 +279,42 @@ struct Trade {
     // (open_at_end, exit_from_bracket).
     execution::CloseCause close_cause = execution::CloseCause::Unspecified;
 };
+
+namespace detail {
+// Transient report cursor, separate from the engine's stored mark descriptor.
+template<class Rows>
+class TerminalRowIterator {
+public:
+    using iterator_category = std::input_iterator_tag;
+    using value_type = Trade;
+    using difference_type = std::ptrdiff_t;
+    using reference = const Trade&;
+    using pointer = const Trade*;
+    TerminalRowIterator() = default;
+    TerminalRowIterator(const Rows* owner, std::size_t index)
+        : owner_(owner), index_(index), epoch_(owner->book_epoch_) { validate(); }
+    reference operator*() const { validate(); return owner_->row(index_); }
+    pointer operator->() const { return &**this; }
+    TerminalRowIterator& operator++() { validate(); ++index_; return *this; }
+    TerminalRowIterator operator++(int) { auto old = *this; ++*this; return old; }
+    friend bool operator==(const TerminalRowIterator& a, const TerminalRowIterator& b) {
+        a.validate(); b.validate();
+        return a.owner_ == b.owner_ && a.index_ == b.index_;
+    }
+    friend bool operator!=(const TerminalRowIterator& a, const TerminalRowIterator& b) {
+        return !(a == b);
+    }
+private:
+    void validate() const {
+        if (!owner_) return;
+        owner_->validate_epoch();
+        if (epoch_ != owner_->book_epoch_) Rows::changed_book();
+    }
+    const Rows* owner_ = nullptr;
+    std::size_t index_ = 0;
+    std::shared_ptr<const void> epoch_;
+};
+} // namespace detail
 
 struct TradeC {
     int64_t entry_time;
@@ -618,19 +655,60 @@ protected:
         std::size_t size() const noexcept { return count_; }
         const Trade& row(std::size_t) const;
         const Trade& operator[](std::size_t i) const { return row(i); }
+        const Trade& at(std::size_t i) const { return row(i); }
+        // One decoded row, read-only; each reference lasts until the next row read.
+        using const_iterator = detail::TerminalRowIterator<TerminalRows>;
+        using iterator = const_iterator;
+        const_iterator begin() const { validate_epoch(); return {this, 0}; }
+        const_iterator end() const { validate_epoch(); return {this, count_}; }
+        const_iterator cbegin() const { return begin(); }
+        const_iterator cend() const { return end(); }
+
+        // Legacy synthetic injection is available only without a marked book.
+        // Explicit vector observers materialize an owned snapshot, valid until
+        // clear/mark/push_back. Normal marked iteration never builds this vector.
+        void push_back(const Trade& value) {
+            if (engine_)
+                throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                              "cannot append to a marked terminal report");
+            row_.second.push_back(value);
+            count_ = row_.second.size();
+        }
+        operator const std::vector<Trade>&() const {
+            validate_epoch();
+            if (engine_ && row_.second.size() != count_) {
+                std::vector<Trade> snapshot;
+                snapshot.reserve(count_);
+                for (std::size_t i = 0; i < count_; ++i) snapshot.push_back(row(i));
+                validate_epoch();
+                row_.second = std::move(snapshot);
+            }
+            return row_.second;
+        }
         void mark(const BacktestEngine& engine, double price, int64_t time,
                   int interval, double fx, std::size_t count) noexcept {
+            row_ = {};
             engine_ = &engine; price_ = price; time_ = time;
             interval_ = interval; fx_ = fx; count_ = count;
             book_epoch_ = engine.pyramid_entries_.read_epoch();
         }
     private:
+        friend class detail::TerminalRowIterator<TerminalRows>;
+        [[noreturn]] static void changed_book() {
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                          "terminal report book changed after mark");
+        }
+        void validate_epoch() const {
+            if (engine_ && (book_epoch_ != engine_->pyramid_entries_.read_epoch()
+                            || count_ != engine_->pyramid_entries_.size()))
+                changed_book();
+        }
         const BacktestEngine* engine_ = nullptr;
         double price_ = 0.0, fx_ = 1.0;
         int64_t time_ = 0;
         int interval_ = 0;
         std::size_t count_ = 0;
-        mutable Trade row_{};
+        mutable std::pair<Trade, std::vector<Trade>> row_{};
         std::shared_ptr<const void> book_epoch_;
     } range_end_trades_;
 

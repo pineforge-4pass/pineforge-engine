@@ -89,6 +89,15 @@ public:
         }
         release_pending();
     }
+    // A call-local copy for observers: pending writable values are visible,
+    // without publishing them or creating/flushing a writable row pin.
+    std::optional<T> observe(std::uint64_t key) const {
+        const auto handle = working_store::find(*store_, {domain_, owner_, key});
+        if (!handle) return {};
+        for (const auto* state = pins_; state; state = state->next)
+            if (state->key == key && !state->erased) return state->value;
+        return working_store::read<T>(*store_, handle, binding_);
+    }
     Pin find(std::uint64_t key, bool writable) const {
         flush();
         for (auto* state = pins_; state; state = state->next) {

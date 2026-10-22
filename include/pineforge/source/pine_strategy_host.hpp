@@ -792,7 +792,12 @@ protected:
                                    std::int64_t bar_ms) const {
         return pineforge::pine_session_ispostmarket(session, timezone, bar_ms, script_tf_);
     }
-    const ::pineforge::detail::WorkingSequence<FixtureIntentRow>& source_pending_view() const;
+    // Rebuilds the derived view on the selected store; requires the run's writer.
+    const ::pineforge::detail::WorkingSequence<FixtureIntentRow>& source_pending_view();
+    // Const fixtures get a call-owned in-memory projection, with no store writes.
+    ::pineforge::detail::WorkingSequence<FixtureIntentRow> source_pending_view() const;
+    void build_source_pending_view(
+        ::pineforge::detail::WorkingSequence<FixtureIntentRow>& view) const;
     // request.security registration, as generated configure_security_evaluators()
     // spells it. The kernel registers the aggregating evaluator; Pine's
     // publication semantics for the site (barmerge.lookahead, barmerge.gaps,
@@ -1298,7 +1303,7 @@ protected:
     bool security_history_publication_replay_ = false;
 
     // Read-only test projection cache; no future execution can observe it.
-    mutable ::pineforge::detail::WorkingSequence<FixtureIntentRow> source_pending_view_cache_;
+    ::pineforge::detail::WorkingSequence<FixtureIntentRow> source_pending_view_cache_;
 
     // Held units the applied request's precommit saw (the owner's pre-fill
     // position_qty_); cleared after the applied notification.

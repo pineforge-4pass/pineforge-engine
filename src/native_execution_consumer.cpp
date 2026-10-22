@@ -6838,35 +6838,24 @@ void NativeExecutionConsumer::match_path(
         std::optional<Candidate> winner;
         // Candidate selection makes no request-core mutation; only the
         // selected winner can replace or retire a later request afterwards.
-        // Snapshot pointers through that selection pass. The ordinary route
-        // has only the two bracket siblings, so keep it on the stack.
-        std::array<const native_order::LiveRequest*, 8> inline_snapshot{};
+        // Read one owning value per candidate: ranked compatibility references
+        // expire at the next lookup, and iterator pins expire on advancement.
         const auto& live_requests = requests_.live();
-        const native_order::LiveRequest* const* snapshot = inline_snapshot.data();
         std::size_t snapshot_size = live_requests.size();
         std::size_t winner_index = 0;
         if (winner_only) {
             // The refreshed winner's row is the first one: take it off and
             // scan that one request again.
             winner_index = rows.take_first();
-            inline_snapshot[0] = &live_requests[winner_index];
             snapshot_size = 1;
-        } else if (snapshot_size <= inline_snapshot.size()) {
-            for (std::size_t i = 0; i < snapshot_size; ++i)
-                inline_snapshot[i] = &live_requests[i];
-        } else {
-            auto& overflow_snapshot = match_snapshot_;
-            overflow_snapshot.clear();
-            overflow_snapshot.reserve(snapshot_size);
-            for (const auto& live : live_requests) overflow_snapshot.push_back(&live);
-            snapshot = overflow_snapshot.data();
         }
         const bool keep_rows = winner_only
             || (match_row_reuse_ && live_requests.size() >= kKeepRowsFrom);
         if (!winner_only) rows.clear();
+        auto next_live = winner_only ? live_requests.end() : live_requests.begin();
         for (std::size_t snapshot_index = 0; snapshot_index < snapshot_size; ++snapshot_index) {
-            const auto* live = snapshot[snapshot_index];
-            if (!live) continue;
+            const auto held = winner_only ? requests_.read_live_at(winner_index) : *next_live++;
+            const auto* live = &held;
             const auto& handle = live->handle();
             const bool cohort_close =
                 std::holds_alternative<native_order::CohortClose>(live->authority);
@@ -9052,25 +9041,21 @@ void NativeExecutionConsumer::record_report_point(
 // identical excursion facts; the member is a run-scoped NaN today, which makes
 // the branch inert rather than absent.
 const Trade& BacktestEngine::TerminalRows::row(std::size_t index) const {
-    if (!engine_ || index >= count_) throw std::out_of_range("terminal report row");
-    if (book_epoch_ != engine_->pyramid_entries_.read_epoch()
-        || count_ != engine_->pyramid_entries_.size())
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                      "terminal report book changed after mark");
+    validate_epoch();
+    if (index >= count_) throw std::out_of_range("terminal report row");
+    if (!engine_) return row_.second.at(index);
     const auto lot = engine_->pyramid_entries_.value_at(index);
     execution::PhysicalExecutionContext context;
     context.effective_time_ms = time_; context.interval_index = interval_; context.account_fx = fx_;
     if (!std::isnan(engine_->fold_exit_trail_peak_))
         context.preceding_exit_trail_peak = engine_->fold_exit_trail_peak_;
-    row_ = engine_->build_close_trade_with_costs(lot, lot.qty, price_,
+    row_.first = engine_->build_close_trade_with_costs(lot, lot.qty, price_,
         engine_->position_side_ == PositionSide::LONG,
         engine_->allocated_entry_commission(lot, lot.qty),
         engine_->calc_commission_at(price_, lot.qty, fx_), context);
-    row_.open_at_end = true;
-    if (book_epoch_ != engine_->pyramid_entries_.read_epoch())
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                      "terminal report book changed after mark");
-    return row_;
+    row_.first.open_at_end = true;
+    validate_epoch();
+    return row_.first;
 }
 
 double NativeExecutionConsumer::append_open_position_report_rows(

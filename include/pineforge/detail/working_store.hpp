@@ -237,14 +237,43 @@ private:
 
 // Immutable chunk version. Reading an old row while writing a successor is
 // legal: each chunk is fully read into a fixed transfer frame before put.
-struct Binding { ScratchStore* store = nullptr; };
+struct PayloadVersion {
+    std::uint64_t version = 0, size = 0;
+    std::optional<Key> retired_key;
+    std::shared_ptr<PayloadVersion> next;
+};
+struct Binding {
+    ScratchStore* store = nullptr;
+    // Only live byte readers and deferred reclamations, never all stored rows.
+    std::shared_ptr<PayloadVersion> readers;
+};
+
+inline std::shared_ptr<PayloadVersion> pin_version(
+        Binding& binding, std::uint64_t version, std::uint64_t size) {
+    auto* link = &binding.readers;
+    while (*link) {
+        if ((*link)->version == version) {
+            if ((*link)->size != size) check(ScratchStatus::corrupt);
+            return *link;
+        }
+        if (link->use_count() == 1 && !(*link)->retired_key) {
+            *link = std::move((*link)->next);
+        } else link = &(*link)->next;
+    }
+    auto reader = std::make_shared<PayloadVersion>();
+    reader->version = version; reader->size = size;
+    reader->next = std::move(binding.readers);
+    binding.readers = reader;
+    return reader;
+}
 
 class Bytes final : public ScratchByteSource {
 public:
     Bytes() = default;
     Bytes(const ScratchStore& store, std::uint64_t version, std::uint64_t size,
           std::shared_ptr<Binding> binding = {})
-        : store_(&store), version_(version), size_(size), binding_(std::move(binding)) {}
+        : store_(&store), version_(version), size_(size), binding_(std::move(binding)),
+          reader_(binding_ ? pin_version(*binding_, version, size) : nullptr) {}
     std::uint64_t size() const noexcept override { return size_; }
     ScratchStatus read(std::uint64_t at, ScratchBuffer out) const noexcept override {
         const auto* store = binding_ ? binding_->store : store_;
@@ -269,6 +298,7 @@ private:
     const ScratchStore* store_ = nullptr;
     std::uint64_t version_ = 0, size_ = 0;
     std::shared_ptr<Binding> binding_;
+    std::shared_ptr<PayloadVersion> reader_;
 };
 
 class Load {
@@ -422,17 +452,66 @@ inline void erase_version(ScratchStore& store, std::uint64_t version, std::uint6
     for (std::uint64_t at = 0; at < size; at += std::min<std::uint64_t>(Bytes::chunk_size, size - at))
         erase(store, Key(2, version, at / Bytes::chunk_size));
 }
-inline void erase_value(ScratchStore& store, const Key& key) {
+
+// Called only at explicit write boundaries. No I/O, retry or rollback occurs
+// when a Bytes reader or its binding is destroyed.
+inline void collect_versions(ScratchStore& store, const std::shared_ptr<Binding>& binding) {
+    if (!binding) return;
+    auto* link = &binding->readers;
+    while (*link) {
+        if (link->use_count() != 1) { link = &(*link)->next; continue; }
+        if ((*link)->retired_key) {
+            // A failed publication followed by explicit rollback can restore
+            // this version as the current root. It is then not retired.
+            const auto current = find(store, *(*link)->retired_key);
+            std::array<std::byte, 16> meta{};
+            if (current)
+                check(store.read(current, ScratchField::value, 0, {meta.data(), meta.size()}));
+            if (!current || word(meta.data()) != (*link)->version)
+                erase_version(store, (*link)->version, (*link)->size);
+        }
+        *link = std::move((*link)->next);
+    }
+}
+inline void retire_version(ScratchStore& store, const Key& key,
+                           std::uint64_t version, std::uint64_t size,
+                           const std::shared_ptr<Binding>& binding) {
+    if (binding) {
+        for (auto* link = &binding->readers; *link; link = &(*link)->next) {
+            if ((*link)->version != version) continue;
+            if ((*link)->size != size) check(ScratchStatus::corrupt);
+            if (link->use_count() > 1) {
+                (*link)->retired_key = key;
+                return;
+            }
+            break;
+        }
+    }
+    erase_version(store, version, size);
+}
+inline void reclaim_versions(ScratchStore& store, const std::shared_ptr<Binding>& binding) {
+    if (!binding) return;
+    for (auto* link = &binding->readers; *link; link = &(*link)->next) {
+        if ((*link)->retired_key && link->use_count() == 1) {
+            transaction(store, [&] { collect_versions(store, binding); });
+            return;
+        }
+    }
+}
+inline void erase_value(ScratchStore& store, const Key& key,
+                        const std::shared_ptr<Binding>& binding = {}) {
     const auto handle = find(store, key);
     if (!handle) return;
     std::array<std::byte, 16> meta{};
     check(store.read(handle, ScratchField::value, 0, {meta.data(), meta.size()}));
-    erase_version(store, word(meta.data()), word(meta.data() + 8));
     check(store.erase(handle));
+    retire_version(store, key, word(meta.data()), word(meta.data() + 8), binding);
+    collect_versions(store, binding);
 }
 
 template<class T>
-void write(ScratchStore& store, const Key& key, const T& value, bool retain_previous = false) {
+void write(ScratchStore& store, const Key& key, const T& value, bool retain_previous = false,
+           const std::shared_ptr<Binding>& binding = {}) {
     const auto previous = find(store, key);
     std::array<std::byte, 16> old{};
     if (previous) check(store.read(previous, ScratchField::value, 0, {old.data(), old.size()}));
@@ -451,7 +530,8 @@ void write(ScratchStore& store, const Key& key, const T& value, bool retain_prev
     ScratchSpanSource root({meta.data(), meta.size()});
     put(store, key, root);
     if (previous && !retain_previous)
-        erase_version(store, word(old.data()), word(old.data() + 8));
+        retire_version(store, key, word(old.data()), word(old.data() + 8), binding);
+    collect_versions(store, binding);
 }
 
 inline Bytes bytes(const ScratchStore& store, ScratchHandle handle, std::shared_ptr<Binding> binding = {}) {

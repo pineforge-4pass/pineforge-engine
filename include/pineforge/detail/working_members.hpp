@@ -1,5 +1,6 @@
 #pragma once
 #include <pineforge/detail/working_store.hpp>
+#include <exception>
 #include <iterator>
 #include <utility>
 
@@ -156,6 +157,20 @@ public:
     }
     std::size_t capacity() const noexcept { return store_ ? frames_.size() : memory_.capacity(); }
     void reserve(std::size_t n) { if (!store_) memory_.reserve(n); }
+    // Observe current values, including a dirty frame, without publishing or
+    // evicting frames. Lazy payload readers retain their usual version pins.
+    T observe_at(std::size_t index) const {
+        if (index >= size())
+            throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {},
+                                           "working sequence position");
+        if (!store_) return memory_[index];
+        validate();
+        for (const auto& frame : frames_)
+            if (frame.row && frame.index == index) return *frame.row;
+        const auto handle = working_store::find(*store_, key(index + 1));
+        if (!handle) working_store::check(ScratchStatus::corrupt);
+        return working_store::read<T>(*store_, handle, binding_);
+    }
     T value_at(std::size_t index) const {
         if (index >= size()) throw std::out_of_range("working sequence position");
         if (!store_) return memory_[index];
@@ -217,10 +232,11 @@ public:
                 write_row(i - (stop - start), row);
             }
             for (std::size_t i = old - (stop - start); i < old; ++i)
-                working_store::erase(*store_, key(i + 1));
+                working_store::erase_value(*store_, key(i + 1), binding_);
             working_store::put_word(*store_, key(0), old - (stop - start));
         });
         count_ = old - (stop - start); drop_frames();
+        working_store::reclaim_versions(*store_, binding_);
         return {this, start};
     }
     iterator erase(iterator at) { return erase(at, at + 1); }
@@ -242,6 +258,7 @@ public:
             working_store::put_word(*store_, key(0), old + 1);
         });
         count_ = old + 1; drop_frames();
+        working_store::reclaim_versions(*store_, binding_);
         return {this, position};
     }
     void set(std::size_t index, const T& value) {
@@ -250,17 +267,51 @@ public:
         flush();
         working_store::transaction(*store_, [&] { write_row(index, row); });
         drop_frames();
+        working_store::reclaim_versions(*store_, binding_);
     }
     void clear() {
         if (!store_) { memory_.clear(); return; }
         drop_frames();
-        if (!owner_) { count_ = 0; return; }
+        if (!owner_) {
+            count_ = 0;
+            working_store::reclaim_versions(*store_, binding_);
+            return;
+        }
         working_store::transaction(*store_, [&] {
-            for (std::size_t i = 0; i < count_; ++i) working_store::erase(*store_, key(i + 1));
+            for (std::size_t i = 0; i < count_; ++i)
+                working_store::erase_value(*store_, key(i + 1), binding_);
             working_store::put_word(*store_, key(0), 0);
+            working_store::collect_versions(*store_, binding_);
         });
         count_ = 0;
     }
+    // A drained temporary either returns its empty owner to the member or
+    // removes the obsolete count record. The binding still carries live readers.
+    void recycle_into(WorkingSequence& member) {
+        clear();
+        if (member.empty() && (member.bound() || member.capacity() == 0)) member.swap(*this);
+        if (store_ && owner_) {
+            working_store::transaction(*store_, [&] {
+                working_store::erase(*store_, key(0));
+                working_store::collect_versions(*store_, binding_);
+            });
+            owner_ = 0;
+        }
+    }
+    class DrainStorage {
+    public:
+        DrainStorage(WorkingSequence& queued, WorkingSequence& member)
+            : queued_(queued), member_(member) {}
+        DrainStorage(const DrainStorage&) = delete;
+        DrainStorage& operator=(const DrainStorage&) = delete;
+        ~DrainStorage() noexcept(false) {
+            if (std::uncaught_exceptions() == 0) queued_.recycle_into(member_);
+        }
+    private:
+        WorkingSequence& queued_;
+        WorkingSequence& member_;
+    };
+    DrainStorage recycle_on_exit(WorkingSequence& member) { return {*this, member}; }
     void swap(WorkingSequence& other) {
         if (store_ && !other.store_) {
             auto rows = std::move(other.memory_);
@@ -297,6 +348,7 @@ public:
             }
         });
         drop_frames();
+        working_store::reclaim_versions(*store_, binding_);
     }
     void flush() const {
         if (!store_) return;
@@ -314,6 +366,7 @@ public:
                 frame.dirty = false;
                 frame.row = read_row(frame.index);
             }
+            working_store::reclaim_versions(*store_, binding_);
         } catch (...) { drop_frames(); throw; }
     }
     operator std::vector<T>() const {
@@ -332,10 +385,9 @@ private:
         return working_store::read<T>(*store_, handle, binding_);
     }
     void write_row(std::size_t i, const T& row) const {
-        // A copied row may still lend a StoredOpenings reader into the old
-        // version while sorting/shifting its successor. Reclaiming that
-        // version needs a reader-retention proof, not a cache-slot eviction.
-        working_store::write(*store_, key(i + 1), row, true);
+        // Copied lazy readers pin their version; only those versions survive
+        // replacement, and the next write boundary collects released pins.
+        working_store::write(*store_, key(i + 1), row, false, binding_);
     }
     void append_pending(const T& row) {
         if (count_ == max_size()) throw std::overflow_error("working sequence position domain exhausted");

@@ -1314,11 +1314,24 @@ bool source::PineStrategyHost::adapter_has_open_entry_id(
 }
 
 const ::pineforge::detail::WorkingSequence<source::PineStrategyHost::FixtureIntentRow>&
-source::PineStrategyHost::source_pending_view() const {
+source::PineStrategyHost::source_pending_view() {
     if (adapter_.scratch_store_)
         source_pending_view_cache_.bind(*adapter_.scratch_store_, 64, 1);
-    source_pending_view_cache_.clear();
-    source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
+    build_source_pending_view(source_pending_view_cache_);
+    return source_pending_view_cache_;
+}
+
+::pineforge::detail::WorkingSequence<source::PineStrategyHost::FixtureIntentRow>
+source::PineStrategyHost::source_pending_view() const {
+    ::pineforge::detail::WorkingSequence<FixtureIntentRow> view;
+    build_source_pending_view(view);
+    return view;
+}
+
+void source::PineStrategyHost::build_source_pending_view(
+        ::pineforge::detail::WorkingSequence<FixtureIntentRow>& view) const {
+    view.clear();
+    view.reserve(adapter_.pending_same_bar_commands_.size()
         + adapter_.pending_entries_.size() + adapter_.pending_bracket_legs_.size()
         + adapter_.pending_coof_requests_.size()
         + adapter_.delayed_market_orders_.size()
@@ -1425,9 +1438,10 @@ source::PineStrategyHost::source_pending_view() const {
                 snapshot.sizing.price, snapshot.sizing.mark, snapshot.sizing.fx};
             row.market_admission.bind(std::move(observation));
         }
-        source_pending_view_cache_.push_back(std::move(row));
+        view.push_back(std::move(row));
     };
-    for (const auto& command : adapter_.pending_same_bar_commands_) {
+    for (std::size_t i = 0; i < adapter_.pending_same_bar_commands_.size(); ++i) {
+        const auto command = adapter_.pending_same_bar_commands_.observe_at(i);
         // ab9714be strategy.close under process_orders_on_close is held in the
         // same-bar close accumulator until the callback returns; the legacy
         // pending_orders_ observer therefore sees the two entry commands but
@@ -1439,28 +1453,38 @@ source::PineStrategyHost::source_pending_view() const {
         }
         append(command.snapshot, command.request.label);
     }
-    for (const auto& pending : adapter_.pending_entries_)
+    for (std::size_t i = 0; i < adapter_.pending_entries_.size(); ++i) {
+        const auto pending = adapter_.pending_entries_.observe_at(i);
         append(pending.snapshot, pending.request.label);
-    for (const auto& delayed : adapter_.delayed_market_orders_)
+    }
+    for (std::size_t i = 0; i < adapter_.delayed_market_orders_.size(); ++i) {
+        const auto delayed = adapter_.delayed_market_orders_.observe_at(i);
         append(delayed.snapshot, delayed.request.label);
-    for (const auto& leg : adapter_.pending_bracket_legs_)
+    }
+    for (std::size_t i = 0; i < adapter_.pending_bracket_legs_.size(); ++i) {
+        const auto leg = adapter_.pending_bracket_legs_.observe_at(i);
         append(leg.snapshot, leg.request.label);
-    for (const auto& pending : adapter_.pending_coof_requests_)
+    }
+    for (std::size_t i = 0; i < adapter_.pending_coof_requests_.size(); ++i) {
+        const auto pending = adapter_.pending_coof_requests_.observe_at(i);
         append(pending.snapshot, pending.request.label);
-    for (const auto& shadow : adapter_.source_shadow_pending_)
+    }
+    for (std::size_t i = 0; i < adapter_.source_shadow_pending_.size(); ++i) {
+        const auto shadow = adapter_.source_shadow_pending_.observe_at(i);
         append(shadow.snapshot, shadow.label);
-    for (const auto& handle : adapter_.live_handles_) {
-        const auto found = adapter_.placement_.find(handle.incarnation);
-        if (found == adapter_.placement_.end()) continue;
+    }
+    for (std::size_t i = 0; i < adapter_.live_handles_.size(); ++i) {
+        const auto handle = adapter_.live_handles_.observe_at(i);
+        const auto found = adapter_.placement_.observe(handle.incarnation);
+        if (!found) continue;
         if (config_.process_orders_on_close
-            && found->second.family == PineOrderFamily::Close
-            && found->second.projection_created_bar == source_bar_index_
-            && !found->second.birth.at_terminal_fill()) {
+            && found->family == PineOrderFamily::Close
+            && found->projection_created_bar == source_bar_index_
+            && !found->birth.at_terminal_fill()) {
             continue;
         }
-        append(found->second, found->second.source_id);
+        append(*found, found->source_id);
     }
-    return source_pending_view_cache_;
 }
 
 void source::PineStrategyHost::source_stream_entry_comment(
