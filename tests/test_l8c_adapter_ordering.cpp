@@ -43,7 +43,8 @@ template struct PrivateAccess<PlacementTag,
     &source::PineExecutionAdapter::placement_>;
 
 struct LiveHandlesTag {
-    using type = std::vector<no::RequestHandle> source::PineExecutionAdapter::*;
+    using type = ::pineforge::detail::WorkingSequence<no::RequestHandle>
+        source::PineExecutionAdapter::*;
     friend type access(LiveHandlesTag);
 };
 template struct PrivateAccess<LiveHandlesTag,
