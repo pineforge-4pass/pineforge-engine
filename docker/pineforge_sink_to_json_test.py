@@ -353,10 +353,12 @@ def synthetic(tmp_path, pnls=(13.25, -4.5, 0.0, -0.0, 2.0), *, outputs=False):
     return sink, metadata, expected
 
 
-def invoke(sink, metadata, *, extra=(), launcher=False):
+def invoke(sink, metadata, *, max_bytes=None, extra=(), launcher=False):
+    if max_bytes is None:
+        max_bytes = sink.stat().st_size
     return subprocess.run([sys.executable, "-I", "-B", "-S", str(LAUNCHER if launcher else TOOL),
         "--in", str(sink), "--stdout-json", str(metadata), "--out", "-", "--max-bytes",
-        str(sink.stat().st_size), *map(str, extra)], stdin=subprocess.DEVNULL,
+        str(max_bytes), *map(str, extra)], stdin=subprocess.DEVNULL,
         capture_output=True, preexec_fn=no_file_writes, cwd=sink.parent)
 
 
@@ -794,13 +796,18 @@ def test_missing_stdout_capture_is_a_logged_metadata_drop(tmp_path):
 
 def test_sink_cap_run_id_and_empty_sink_are_refusals(tmp_path):
     sink, metadata, _ = synthetic(tmp_path)
-    result = invoke(sink, metadata, extra=("--max-bytes", sink.stat().st_size - 1))
+    result = invoke(sink, metadata, max_bytes=sink.stat().st_size - 1)
     assert result.returncode == 8 and result.stdout == b""
     result = invoke(sink, metadata, extra=("--run-id", "different"))
     assert result.returncode == 3 and result.stdout == b""
     sink.write_bytes(b"")
-    result = invoke(sink, metadata, extra=("--max-bytes", "1"))
-    assert result.returncode == 6 and result.stdout == b""
+    result = invoke(sink, metadata, max_bytes=1)
+    assert result.returncode == 6 and result.stdout == b"", result.stderr.decode()
+    lines = diagnostics(result)
+    assert len(lines) == 1
+    assert lines[0]["event"] == "sink_refused" and lines[0]["sink_verified"] is False
+    assert lines[0]["detail"] == "line 1: missing header or trailer"
+    assert lines[0]["billing"] == "normal" and lines[0]["metadata_drops"] == 0
 
 
 def test_readwrite_sink_and_live_pipe_are_usage_refusals(tmp_path):
