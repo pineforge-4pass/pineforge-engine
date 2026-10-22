@@ -4,17 +4,21 @@
 // fails because Item rows survive in the queue. Only the store audit is gated.
 #include "../src/native_execution_consumer.hpp"
 #include "native_order_full_fold.hpp"
+#include <pineforge/detail/scratch_file.hpp>
 
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <optional>
+#include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -29,8 +33,8 @@ struct NativeExecutionConsumerProbe {
         return c.requests_;
     }
     static bool failed(const NativeExecutionConsumer& c) noexcept { return c.failed(); }
-    static void note_setup(NativeExecutionConsumer& c) {
-        c.note_install(native_order::EventRange{0, c.requests_.history_end()});
+    static void note_setup(NativeExecutionConsumer& c, std::size_t first = 0) {
+        c.note_install(native_order::EventRange{first, c.requests_.history_end() - first});
     }
     static void drain(NativeExecutionConsumer& c, BacktestEngine& engine, const Seeds& seeds) {
         c.drain_dependency_queue(engine, seeds, NativeFailureOperation::Mutation);
@@ -230,6 +234,7 @@ enum class Shape { Wide, Deep, Tree, ManySeeds };
 // Mirrors JournalStore's private constants; the event value itself is public.
 constexpr std::size_t kJournalMaxResident = 16384;
 constexpr std::size_t kJournalChunk = 32;
+constexpr std::size_t kJournalSpillPageBytes = 32768;
 constexpr std::size_t kDrainBytes = 4096;
 
 void print_reserve(std::size_t population, Shape shape, bool direct, std::size_t reserve_peak) {
@@ -494,6 +499,267 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     return reserve_peak;
 }
 
+void exercise_reload(bool direct) {
+    constexpr std::size_t population = 8191;
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    ScratchFixture scratch;
+    CHECK(scratch.store.status() == detail::ScratchStatus::ok);
+    const auto scratch_digest = scratch.digest();
+#endif
+    Host actual;
+    auto& consumer = actual.consumer();
+    consumer.set_direct_mutation(direct);
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    consumer.set_dependency_scratch(scratch.store);
+#endif
+    auto& core = Probe::core(consumer);
+    core.reset(no::RunIdentity{"x08-reload", 1});
+    core.reserve(kJournalMaxResident + population + 64);
+    std::uint64_t incarnation = 1, ordinal = 1;
+    std::array<no::RequestHandle, 2> roots;
+    for (auto& root : roots) {
+        const auto accepted = core.submit(no::Request{no::Transact{1.0}, "root", ""},
+                                          0, incarnation, ordinal);
+        CHECK(accepted.status == no::SubmitStatus::Accepted && accepted.handle);
+        if (!accepted.handle) return;
+        root = *accepted.handle;
+    }
+    Probe::Seeds seeds;
+    std::size_t cause_position = 0;
+    for (std::size_t index = 0; index < population; ++index) {
+        no::Request request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
+        no::WaitForApplied wait;
+        wait.parent = roots[index == 0 ? 0 : 1];
+        request.owner = wait;
+        const auto accepted = core.submit(request, 0, incarnation, ordinal);
+        CHECK(accepted.status == no::SubmitStatus::Accepted);
+        if (index == 0) {
+            // Both roots and the first waiting child precede this cause:
+            // position 3 is in the first spilled page, unlike populate().
+            cause_position = core.history_end();
+            const auto cancelled = core.cancel(roots[0], ordinal);
+            CHECK(cancelled.status == no::CancelStatus::Cancelled);
+            seeds.push_back({no::EventId{core.identity(), cancelled.event_ordinal}, roots[0]});
+        }
+    }
+    const auto cancelled = core.cancel(roots[1], ordinal);
+    CHECK(cancelled.status == no::CancelStatus::Cancelled);
+    seeds.push_back({no::EventId{core.identity(), cancelled.event_ordinal}, roots[1]});
+    CHECK(core.live().size() == population);
+    CHECK(cause_position == 3 && cause_position < kJournalChunk);
+    const auto cause_address = reinterpret_cast<std::uintptr_t>(&core.history_at(cause_position));
+    const auto cause_value = full_fold::value(core.history_at(cause_position));
+    Probe::note_setup(consumer);
+
+    // These rejected commands add history without more waiting children.
+    // Fold each new row while it is resident; after the first spill, neither
+    // note_setup's event range nor its incremental fold revisits the cause.
+    const no::Request filler{no::Transact{0.0}, "filler", ""};
+    while (core.history_end() <= kJournalMaxResident) {
+        const auto first = core.history_end();
+        CHECK(core.submit(filler, 0, incarnation, ordinal).status == no::SubmitStatus::Rejected);
+        Probe::note_setup(consumer, first);
+    }
+    const auto before = core.history_end();
+    CHECK(before == kJournalMaxResident + 1);
+    CHECK(core.history_base() == 0);
+    const auto allocations_before = global_allocation::allocations;
+    peak_bytes = 0;
+    global_allocation::live_bytes = 0;
+    global_allocation::on_recorded = record_bytes;
+    global_allocation::recording = true;
+    // apply/prepare_parent_terminal must event_at() the cold spilled cause.
+    Probe::drain(consumer, actual, seeds);
+    global_allocation::recording = false;
+    global_allocation::on_recorded = nullptr;
+    std::printf("X08 reload population=%zu direct=%d cause_position=%zu peak=%zu bound=%zu "
+                "allocations=%zu definition_bytes=%zu\n",
+                population, direct, cause_position, peak_bytes, kDrainBytes,
+                global_allocation::allocations - allocations_before, sizeof(no::RequestDefinition));
+    CHECK(peak_bytes <= kDrainBytes);
+    CHECK(!Probe::failed(consumer));
+    CHECK(core.live().empty());
+    CHECK(core.history_end() - before == population);
+    CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(cause_position)) != cause_address);
+    CHECK(full_fold::value(core.history_at(cause_position)) == cause_value);
+    std::size_t early = 0, late = 0;
+    for (std::size_t index = before; index < core.history_end(); ++index) {
+        const auto* row = std::get_if<no::CancelledEvent>(&core.history_at(index));
+        CHECK(row && row->reason == no::CancelReason::OwnerGone && row->cause);
+        if (!row || !row->cause) continue;
+        if (row->cause->ordinal == seeds[0].first.ordinal) ++early;
+        else if (row->cause->ordinal == seeds[1].first.ordinal) ++late;
+        else CHECK(false);
+    }
+    CHECK(early == 1 && late == population - 1);
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    scratch.check_empty();
+    CHECK(scratch.digest() == scratch_digest);
+    CHECK(Probe::stats(consumer).book_rows == population);
+    CHECK(Probe::stats(consumer).waiting_rows == population);
+    CHECK(Probe::stats(consumer).seed_rows == seeds.size());
+#endif
+    const auto finished_hash = consumer.continuation_hash();
+    const auto finished_history = core.history_end();
+    Probe::drain(consumer, actual, seeds);
+    CHECK(!Probe::failed(consumer));
+    CHECK(consumer.continuation_hash() == finished_hash);
+    CHECK(core.history_end() == finished_history);
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    scratch.check_empty();
+    CHECK(scratch.digest() == scratch_digest);
+#endif
+}
+
+no::SubmitResult submit_limit_case(no::WorkingRequestCore& core, const no::Request& request,
+                                  std::uint64_t& incarnation, std::uint64_t& ordinal, bool direct) {
+    if (!direct) return core.submit(request, 0, incarnation, ordinal);
+    auto installed = core.apply_submit(request, no::CommandContext{}, incarnation, ordinal);
+    ++ordinal;
+    if (installed.result.status == no::SubmitStatus::Accepted) ++incarnation;
+    return std::move(installed.result);
+}
+
+void exercise_limits(bool direct) {
+    // Match SaveAr, not sizeof(Request): each variant has a uint32_t tag,
+    // strings have uint64_t lengths, empty alternatives still write sizeof(T),
+    // and each absent optional / present definition writes a one-byte flag.
+    // These accepted requests have no predecessor, root or kept binding.
+    static_assert(std::is_trivially_copyable_v<no::RequestHandle>
+                  && std::is_trivially_copyable_v<no::Birth>);
+    constexpr auto tag = sizeof(std::uint32_t);
+    constexpr auto flag = sizeof(unsigned char);
+    constexpr auto request_bytes =
+        tag + sizeof(no::Transact) + 2 * sizeof(std::uint64_t)
+        + tag + sizeof(no::Market) + tag + sizeof(no::ImmediateRemaining)
+        + tag + sizeof(no::Independent) + tag + sizeof(no::NoGroup)
+        + tag + sizeof(no::Absolute);
+    constexpr auto accepted_bytes =
+        tag + sizeof(std::uint64_t) + flag + sizeof(no::RequestHandle) + request_bytes
+        + sizeof(no::Birth) + flag + sizeof(no::RequestOrigin) + flag
+        + sizeof(std::uint64_t) + flag + sizeof(no::CommandSurface);
+    static_assert(accepted_bytes < kJournalSpillPageBytes);
+    constexpr auto under_label = kJournalSpillPageBytes - accepted_bytes - 1;
+    constexpr auto exact_label = kJournalSpillPageBytes - accepted_bytes;
+    constexpr auto over_label = kJournalSpillPageBytes - accepted_bytes + 1;
+    const no::Request filler{no::Transact{0.0}, "filler", ""};
+    {
+        no::WorkingRequestCore core;
+        core.reset(no::RunIdentity{"x08-limits-fit", 1});
+        core.reserve(kJournalMaxResident + 64);
+        std::uint64_t incarnation = 1, ordinal = 1;
+        const no::Request under{no::Transact{1.0}, std::string(under_label, 'u'), ""};
+        const no::Request exact{no::Transact{1.0}, std::string(exact_label, 'e'), ""};
+        CHECK(submit_limit_case(core, under, incarnation, ordinal, direct).status
+              == no::SubmitStatus::Accepted);
+        CHECK(submit_limit_case(core, exact, incarnation, ordinal, direct).status
+              == no::SubmitStatus::Accepted);
+        while (core.history_end() < kJournalMaxResident)
+            CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
+                  == no::SubmitStatus::Rejected);
+        std::array<std::uint64_t, kJournalChunk + 1> values{}, ordinals{};
+        std::array<std::uintptr_t, kJournalChunk + 1> addresses{};
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const auto& event = core.history_at(index);
+            values[index] = full_fold::value(event);
+            ordinals[index] = std::visit([](const auto& row) { return row.ordinal; }, event);
+            addresses[index] = reinterpret_cast<std::uintptr_t>(&event);
+        }
+        // Successive appends must spill pages [0,1), [1,2), then [2,32).
+        // The first two pages cannot include even the following event's tag.
+        for (std::size_t step = 0; step < 3; ++step) {
+            CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
+                  == no::SubmitStatus::Rejected);
+            CHECK(core.history_end() == kJournalMaxResident + step + 1);
+            CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(step)) != addresses[step]);
+            if (step < 2)
+                CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(step + 1))
+                      == addresses[step + 1]);
+        }
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            CHECK(full_fold::value(core.history_at(index)) == values[index]);
+            const auto* found = core.event_at(no::EventId{core.identity(), ordinals[index]});
+            CHECK(found && full_fold::value(*found) == values[index]);
+        }
+        const auto& under_read = std::get<no::AcceptedEvent>(core.history_at(0));
+        const auto& exact_read = std::get<no::AcceptedEvent>(core.history_at(1));
+        CHECK(under_read.request().label == under.label);
+        CHECK(exact_read.request().label == exact.label);
+
+        // Retire at a short-page boundary, inside the remaining chunk, then
+        // through every spilled row. A new spill reuses page number zero.
+        CHECK(core.retire_history(ordinals[0]) == 1);
+        CHECK(core.history_base() == 1);
+        CHECK(!core.event_at(no::EventId{core.identity(), ordinals[0]}));
+        CHECK(full_fold::value(core.history_at(1)) == values[1]);
+        CHECK(core.retire_history(ordinals[15]) == 15);
+        CHECK(core.history_base() == 16);
+        CHECK(full_fold::value(core.history_at(16)) == values[16]);
+        CHECK(core.retire_history(ordinals[kJournalChunk - 1]) == kJournalChunk - 16);
+        CHECK(core.history_base() == kJournalChunk);
+        CHECK(full_fold::value(core.history_at(kJournalChunk)) == values[kJournalChunk]);
+        for (std::size_t index = 0; index < kJournalChunk - 2; ++index)
+            CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
+                  == no::SubmitStatus::Rejected);
+        CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(kJournalChunk))
+              != addresses[kJournalChunk]);
+        CHECK(full_fold::value(core.history_at(kJournalChunk)) == values[kJournalChunk]);
+        const auto* found = core.event_at(no::EventId{core.identity(), ordinals[kJournalChunk]});
+        CHECK(found && full_fold::value(*found) == values[kJournalChunk]);
+    }
+    {
+        no::WorkingRequestCore core;
+        core.reset(no::RunIdentity{"x08-limits-refuse", 1});
+        core.reserve(kJournalMaxResident + 64);
+        std::uint64_t incarnation = 1, ordinal = 1;
+        const no::Request over{no::Transact{1.0}, std::string(over_label, 'o'), ""};
+        const auto accepted = submit_limit_case(core, over, incarnation, ordinal, direct);
+        CHECK(accepted.status == no::SubmitStatus::Accepted);
+        while (core.history_end() < kJournalMaxResident)
+            CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
+                  == no::SubmitStatus::Rejected);
+        const auto before = full_fold::core_value(core);
+        const auto before_end = core.history_end();
+        const auto before_incarnation = incarnation, before_ordinal = ordinal;
+        std::array<std::uintptr_t, kJournalChunk> addresses{};
+        for (std::size_t index = 0; index < addresses.size(); ++index)
+            addresses[index] = reinterpret_cast<std::uintptr_t>(&core.history_at(index));
+        // The event is already resident; the next append reaches the spill
+        // refusal in reserve_plan/seal_direct. Retry also must publish nothing.
+        for (unsigned attempt = 0; attempt < 2; ++attempt) {
+            bool refused = false;
+            try {
+                (void)submit_limit_case(core, filler, incarnation, ordinal, direct);
+            } catch (const detail::ScratchIoError& error) {
+                refused = true;
+                CHECK(error.code() == std::error_code(EFBIG, std::generic_category()));
+                CHECK(std::string(error.what()).find(
+                          "native o1 journal event exceeds the spill page byte bound")
+                      != std::string::npos);
+            }
+            CHECK(refused);
+            CHECK(core.history_end() == before_end && core.history_base() == 0);
+            CHECK(incarnation == before_incarnation && ordinal == before_ordinal);
+            CHECK(full_fold::core_value(core) == before);
+            for (std::size_t index = 0; index < addresses.size(); ++index)
+                CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(index)) == addresses[index]);
+        }
+        // Removing only the oversized event leaves a partial resident chunk.
+        // The following appends must still spill/read its surviving prefix.
+        const auto survivor = full_fold::value(core.history_at(1));
+        CHECK(core.retire_history(accepted.event_ordinal) == 1);
+        for (unsigned index = 0; index < 2; ++index)
+            CHECK(submit_limit_case(core, filler, incarnation, ordinal, direct).status
+                  == no::SubmitStatus::Rejected);
+        CHECK(core.history_base() == 1 && core.history_end() == before_end + 2);
+        CHECK(reinterpret_cast<std::uintptr_t>(&core.history_at(1)) != addresses[1]);
+        CHECK(full_fold::value(core.history_at(1)) == survivor);
+    }
+    std::printf("X08 limits direct=%d page_bytes=%zu accepted_fixed_bytes=%zu "
+                "under_label=%zu exact_label=%zu over_label=%zu\n",
+                direct, kJournalSpillPageBytes, accepted_bytes, under_label, exact_label, over_label);
+}
+
 void invalid_cause(bool direct) {
 #ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
     ScratchFixture scratch;
@@ -542,6 +808,8 @@ int main() {
         const auto reserve_peak_beyond_cap = exercise_beyond_cap(8191, direct);
         CHECK(reserve_peak_at_cap > 0);
         CHECK(reserve_peak_at_cap == reserve_peak_beyond_cap);
+        exercise_reload(direct);
+        exercise_limits(direct);
         invalid_cause(direct);
     }
     std::printf("%s X08 parent-terminal scratch (%d failures)\n",
