@@ -104,7 +104,6 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/source/pine_scheduler.cpp
     src/source/pine_strategy_host.cpp
     src/source/pine_strategy_commands.cpp
-    src/source/pine_command_scratch_production.cpp
     src/source/exit_scratch_versions_production.cpp
     src/source/pine_value_admission.cpp
     src/source/pine_aux_security.cpp
@@ -137,6 +136,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/engine_consumer.cpp
     src/market_driver.cpp
     src/native_execution_consumer.cpp
+    src/command_scratch_production.cpp
     src/native_calc_plan.cpp
     src/magnifier.cpp
     src/math.cpp

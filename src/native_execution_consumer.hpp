@@ -92,11 +92,25 @@ public:
     enum class CommandScratchBinding : std::size_t {
         Trade, Dependency, Exit, Count
     };
-    // Each successful borrowed binding retains the same run owner. Separate
-    // slots keep both runs alive if a later binding during begin throws.
-    // These own storage/workspace, not a second copy of broker state.
+    // Source services retain their borrowed bindings' owner through teardown.
+    // Trade/Dependency use the typed run workspaces below; Exit retains its
+    // existing source service. These own storage, not a second broker state.
     void retain_command_scratch_owner(CommandScratchBinding,
                                       std::shared_ptr<void> owner) noexcept;
+
+    // Run setup installs one production workspace in the named borrowed slot.
+    // Only Trade and Dependency are run workspaces; Exit retains its existing
+    // source-owned service above. No store is created by a command or accessor.
+    void provision_run_command_scratch(CommandScratchBinding, detail::ScratchKeyOrder,
+                                       detail::CommandScratchStore*& borrower);
+    struct CommandScratchSnapshot {
+        detail::ScratchStatus status = detail::ScratchStatus::ok;
+        std::uint64_t digest = 0;
+    };
+    // After release, this is the exact state_digest previously read from the
+    // live store. It preserves existing post-run hash bytes without a backing.
+    std::optional<CommandScratchSnapshot> released_command_scratch(
+        CommandScratchBinding) const noexcept;
 
     // The digests the spec fold takes of the run spec's three bar arrays
     // (intrabar path, declared series, auxiliary feed). See spec_bar_digests_.
@@ -1725,11 +1739,15 @@ private:
     uint64_t spec_digest(const NativeRunSpec& spec, uint64_t run_base) const noexcept;
     void forget_spec_digests() const noexcept;
 
-    // Retained through native run-state and host-state destruction. The source
-    // adapter dies before its base engine's consumer; keeping the owner here
-    // also preserves the generated source-host object layout.
+    // Source services survive source-adapter destruction in the base consumer,
+    // preserving the generated source-host layout. The typed workspaces release
+    // their stores/backings at run end and keep only the final digest/status
+    // for the existing post-run source hash until the next admitted reset.
     std::array<std::shared_ptr<void>,
                static_cast<std::size_t>(CommandScratchBinding::Count)> command_scratch_owners_;
+    struct RunCommandScratch;
+    std::array<std::shared_ptr<RunCommandScratch>, 2> run_command_scratch_;
+    void release_run_command_scratch() noexcept;
     NativeLifecycle state_{NativeUnconfigured{}};
     // native_host()'s answer for the engine the last public begin named.
     // Derived, never folded.
@@ -2457,6 +2475,7 @@ private:
                     c_.batch_input_release_(c_.batch_input_owner_);
                 c_.detach_bar_views();
             }
+            if (!c_.running()) c_.release_run_command_scratch();
         }
         EntryExitGuard(const EntryExitGuard&) = delete;
         EntryExitGuard& operator=(const EntryExitGuard&) = delete;
