@@ -1035,6 +1035,7 @@ struct NativeDriver {
 };
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 1
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-O, PINEFORGE_O1S3_CLAUSE=1 — native/admission owners reset independently and handles remain run-qualified.
 void s3_separate_journal_owners_and_reset_red() {
     // Ownership / S3-O. Input: colliding native/admission numbers, adapter
     // reset alone, then a fresh run reusing incarnation 1. Assertion: native
@@ -1153,6 +1154,7 @@ struct SourceWalk {
 void note(pineforge::NativeExecutionConsumer& consumer, std::size_t first);
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 4
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-M, PINEFORGE_O1S3_CLAUSE=4 — fixed heap/workspace bounds hold as pinned journals, captures and record lengths grow.
 void s3_journal_islands_fixed_under_pins_red() {
     // Fixed memory / S3-M. Input: fixed two-slot stores, separately increasing
     // J and text length, delayed acknowledgement, a live deferred chain, and
@@ -1341,6 +1343,7 @@ void s3_journal_islands_fixed_under_pins_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 2
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-NR, PINEFORGE_O1S3_CLAUSE=2 — native values round-trip fieldwise in absolute order after eviction and malformed framing is corrupt.
 void s3_native_codec_all_values_cross_page_red() {
     // Records and ordering / S3-NR. Input: all 19 alternatives, every nested
     // request/authority/state alternative, independent kept-handle definitions,
@@ -1438,6 +1441,7 @@ void s3_native_codec_all_values_cross_page_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 3
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-AR, PINEFORGE_O1S3_CLAUSE=3 — allocated admission values retain every field in sequence order; abandoned, reused and unallocated ids are refused.
 void s3_admission_codec_allocations_and_order_red() {
     // Records and ordering / S3-AR. Input: allocated sequences completed in
     // reverse, one abandoned allocation, all kinds and large nested Draft/book
@@ -1519,6 +1523,7 @@ void note(pineforge::NativeExecutionConsumer& consumer, std::size_t first) {
 }
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 5
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-NW, PINEFORGE_O1S3_CLAUSE=5 — Window retirement respects acknowledgements, queued causes and pending chains without renumbering retained positions or totals.
 void s3_native_window_dependency_frontier_red() {
     // Transactions and retain windows / S3-NW. Input: ack zero, above/below
     // high water, a queued applied cause, and an unresolved then resolved
@@ -1627,6 +1632,7 @@ void s3_native_window_dependency_frontier_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 6
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-AW, PINEFORGE_O1S3_CLAUSE=6 — unfinished captures and mismatched fold evidence refuse retirement; referenced Draft values and rejection summaries survive.
 void s3_admission_window_requires_closed_prefix_red() {
     // Transactions and retain windows / S3-AW. Input: a terminal-bar command,
     // unfinished review and process-on-close sizing captures, rejection prefix
@@ -1699,6 +1705,7 @@ void s3_admission_window_requires_closed_prefix_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 7
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-ND, PINEFORGE_O1S3_CLAUSE=7 — native continuation folds and lifetime counts match the independent model through nonzero-base retirement.
 void s3_native_digest_survives_nonzero_base_red() {
     // Digests / S3-ND. Input: identical commands under two page/cache
     // geometries and three retire schedules, a replace root, cohort receipts,
@@ -1798,6 +1805,7 @@ void s3_native_digest_survives_nonzero_base_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 8
+// Spec: docs/scratch-store.md stage 2.3 (ecbc4d175e), LAB-O1SEAMS clause S3-AD, PINEFORGE_O1S3_CLAUSE=8 — the v4 fold, lifetime count and cursor survive retirement/filtering without any zero refold outside a true run reset.
 void s3_admission_digest_refuses_zero_refold_red() {
     // Digests / S3-AD. Input: all admission kinds, normalized zeros/NaNs,
     // rejection prefix, legal prefix retirement, perturbed cursor, then a
@@ -1943,6 +1951,7 @@ struct CountWalk {
 };
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 9
+// Spec: docs/scratch-store.md stages 2.1 (f2c2fbb370) / 2.3 (ecbc4d175e) §Readback (S34-R), PINEFORGE_O1S3_CLAUSE=9 — nested streaming preserves exact values, status distinctions and fixed memory.
 void s34_readback_never_collects_population_red() {
     // Readback / S34-R. Input: both journals, >cache records, eviction, nested
     // disjoint-page callbacks, retired positions, cancellation and backing read
@@ -2055,6 +2064,7 @@ void s34_readback_never_collects_population_red() {
 #endif
 
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 10
+// Spec: docs/scratch-store.md stages 2.1 (f2c2fbb370) / 2.3 (ecbc4d175e) §Backing and charged I/O (S34-B), PINEFORGE_O1S3_CLAUSE=10 — disk/test_memory charge every attempt, preserve committed reopen state and release borrowed owners; extent is a proxy.
 void s34_backing_physical_charge_and_lifetime_red() {
     // Backing / S34-B. Input: identical large journal populations on explicitly
     // chosen test_memory AND the existing CommandScratchFile disk provider,
