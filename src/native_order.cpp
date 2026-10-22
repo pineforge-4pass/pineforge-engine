@@ -837,15 +837,21 @@ bool on_optional_grid(double value, std::optional<double> grid) {
 // Prepared tokens are short-lived transactional envelopes. Reusing their
 // storage keeps repeated submit/replace/evaluation traffic from returning to
 // the allocator at every broker point; the contained plans still construct,
-// validate and commit exactly as before. This thread-local scratch is neither
-// request state nor part of the continuation hash.
+// validate and commit exactly as before. Keep at most one idle envelope of
+// each type, rather than retaining the peak number of simultaneous tokens.
+// The block holds no constructed request state or continuation hash bytes.
 template<class Tag>
 struct PreparedImplStorage {
+    static void prepare(std::size_t size) {
+        auto& recycled = free_block();
+        if (!recycled) recycled = ::operator new(size);
+    }
+
     static void* allocate(std::size_t size) {
-        auto& recycled = free_blocks();
-        if (!recycled.empty()) {
-            void* block = recycled.back();
-            recycled.pop_back();
+        auto& recycled = free_block();
+        if (recycled) {
+            void* block = recycled;
+            recycled = nullptr;
             return block;
         }
         return ::operator new(size);
@@ -853,29 +859,22 @@ struct PreparedImplStorage {
 
     static void deallocate(void* block) noexcept {
         if (!block) return;
-        try {
-            free_blocks().push_back(block);
-        } catch (...) {
-            ::operator delete(block);
-        }
+        auto& recycled = free_block();
+        if (recycled) ::operator delete(block);
+        else recycled = block;
     }
 
 private:
-    // The recycled blocks are released when the thread-local scratch is
-    // destroyed; otherwise LeakSanitizer reports every block still parked in
-    // the freelist at process exit as a direct leak (CI sanitizers lane).
     struct Recycled {
-        std::vector<void*> blocks;
+        void* block = nullptr;
         Recycled() = default;
         Recycled(const Recycled&) = delete;
         Recycled& operator=(const Recycled&) = delete;
-        ~Recycled() {
-            for (void* block : blocks) ::operator delete(block);
-        }
+        ~Recycled() { ::operator delete(block); }
     };
-    static std::vector<void*>& free_blocks() {
+    static void*& free_block() noexcept {
         static thread_local Recycled recycled;
-        return recycled.blocks;
+        return recycled.block;
     }
 };
 
@@ -2790,6 +2789,11 @@ void WorkingRequestCore::ensure_receipt_store() {
 void WorkingRequestCore::prepare_codec_frames() {
     // Fixed construction frames for ordinary commands and their bounded tails.
     // Larger working books continue through the existing book spill path.
+    PreparedImplStorage<PreparedSubmitStorageTag>::prepare(sizeof(PreparedSubmit::Impl));
+    PreparedImplStorage<PreparedReplaceStorageTag>::prepare(sizeof(PreparedReplace::Impl));
+    PreparedImplStorage<PreparedCancelStorageTag>::prepare(sizeof(PreparedCancel::Impl));
+    PreparedImplStorage<PreparedMutationStorageTag>::prepare(sizeof(PreparedMutation::Impl));
+    PreparedImplStorage<PreparedExecutionStorageTag>::prepare(sizeof(PreparedExecution::Impl));
     live_.reserve(4);
     issued_.reserve(1);
     ensure_receipt_store();
@@ -4323,8 +4327,9 @@ PreparedCancel WorkingRequestCore::prepare_cancel(const RequestHandle& target,
         return PreparedCancel(std::move(impl));
     }
     impl->result = CancelResult{CancelStatus::Cancelled, ordinal};
-    plan.events.emplace_back(make_cancelled(ordinal, live_[live_index], reason,
-                                            EventId{identity_, ordinal}));
+    // An explicit withdrawal has no earlier event as its cause. Dependent
+    // cancellations pass their committed parent/group event separately.
+    plan.events.emplace_back(make_cancelled(ordinal, live_[live_index], reason, std::nullopt));
     plan.live_change = kLiveErase;
     plan.live_index = live_index;
     seal_plan(plan);
@@ -4564,7 +4569,7 @@ CommandInstalled<CancelResult> WorkingRequestCore::apply_cancel(
         return CommandInstalled<CancelResult>{CancelResult{status, ordinal}, finish_direct(first)};
     }
     CancelledEvent cancelled =
-            make_cancelled(ordinal, live_[live_index], reason, EventId{identity_, ordinal});
+            make_cancelled(ordinal, live_[live_index], reason, std::nullopt);
     return CommandInstalled<CancelResult>{
             CancelResult{CancelStatus::Cancelled, ordinal},
             end_direct(live_index, std::move(cancelled)).events};
