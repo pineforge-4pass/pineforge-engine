@@ -1760,7 +1760,11 @@ void s3_native_digest_survives_nonzero_base_red() {
             cohorts.handle(root); ++cohorts.count; check();
             require(core.cancel(root, driver.ordinal).status == no::CancelStatus::Cancelled,
                     "cancel the replaced request");
-            events.event(4, 0); check();
+            // An explicit withdrawal's cancelled event folds its EXISTING compact
+            // record: CancelReason::User (0) with the cause-present bit (1 << 32).
+            // S3-ND (docs/scratch-store.md :411, :678) keeps those bytes; a digest
+            // that does not survive a nonzero base still differs from this model.
+            events.event(4, std::uint64_t{1} << 32); check();
             (void)core.retire_history(core.last_ordinal());
             require(core.history_base() != 0, "fixture establishes a real unavailable prefix");
             const auto parent = driver.submit(limit(4096, 50)); events.event(0, 0); check();
