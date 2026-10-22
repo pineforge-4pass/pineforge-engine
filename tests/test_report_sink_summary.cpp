@@ -6,6 +6,7 @@
 #include <pineforge/execution_observer.h>
 #include <pineforge/selected_window.h>
 #include <pineforge/native_host.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/native_execution_consumer.hpp"
 
@@ -486,6 +487,39 @@ void presented_case(Directory& directory, const std::vector<double>& pnls, int i
     install_fd(fd, pipe.fd());
     Options options;
     options.selected = options.observed = capture;
+    if (invalid) {
+        // Canonical nonfinite rows fail before a summary can be published.
+        const std::array<const char*, 8> fields{{"entry_price", "exit_price", "qty", "pnl",
+            "pnl_pct", "max_runup", "max_drawdown", "commission"}};
+        const std::string expected_args = std::string("{\"field\":\"trades.")
+            + fields.at(static_cast<std::size_t>(invalid - 5)) + "\",\"reason\":\"nonfinite\"}";
+        for (auto* host : {&baseline, &path, &fd}) {
+            configure_capture(*host, options, static_cast<int>(bars.size()));
+            bool refused = false;
+            RunFailureValue failure{};
+            try {
+                host->execute(bars);
+                if (host->last_run_status() != 0 || !host->last_error().empty()) {
+                    refused = true;
+                    failure = run_failure_value_of(*host);
+                } else {
+                    Report report;
+                    host->fill_report(&report.value);
+                }
+            } catch (const std::exception& error) {
+                refused = true;
+                failure = classify_run_failure(error);
+            }
+            require(refused, "nonfinite presentation was accepted");
+            require(failure.code == RunFailureCode::report_result_invalid
+                    && failure.args && *failure.args == expected_args,
+                    "nonfinite presentation lost its first-field typed refusal");
+            unpublished(*host);
+            require(receipt(*host).complete == 0, "nonfinite presentation completed a sink");
+        }
+        pipe.finish();
+        return;
+    }
     for (auto* host : {&baseline, &path, &fd}) {
         configure_capture(*host, options, static_cast<int>(bars.size()));
         run(*host, bars);
@@ -499,8 +533,6 @@ void presented_case(Directory& directory, const std::vector<double>& pnls, int i
         require(std::signbit(array.value.trades[0].pnl) == std::signbit(pnls.front()),
                 "presentation lost the first zero's sign before folding");
     }
-    if (invalid)
-        require(ref.nonfinite_t_field == invalid, "invalid fixture did not reach its first field");
     for (auto* host : {&path, &fd}) {
         Report actual;
         host->fill_report(&actual.value);
