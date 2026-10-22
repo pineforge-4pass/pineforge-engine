@@ -94,7 +94,7 @@ struct Journal::CodecState final : detail::ScratchReadback {
     static void check(detail::ScratchStatus status) {
         if (status == detail::ScratchStatus::ok) return;
         if (status == detail::ScratchStatus::io_error)
-            throw detail::ScratchIoError(EIO, "admission journal codec I/O");
+            detail::raise_scratch_io_error(EIO, "admission journal codec I/O");
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission journal codec invalid storage");
     }
@@ -170,7 +170,9 @@ void bind_journal_codec(Journal& journal, detail::ScratchStore& store) {
 }
 
 const detail::ScratchReadback& journal_readback(const Journal& journal) {
-    if (!journal.codec_) throw std::logic_error("journal codec is not bound");
+    if (!journal.codec_)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "journal codec is not bound");
     return *journal.codec_;
 }
 

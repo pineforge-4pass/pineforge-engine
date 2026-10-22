@@ -1,5 +1,6 @@
 #include "admission_journal_codec.hpp"
 #include <pineforge/detail/journal_codec.hpp>
+#include <pineforge/run_failure.hpp>
 #include <string_view>
 #include <new>
 
@@ -16,7 +17,9 @@ struct Path {
     std::size_t length = 0;
     Path() { append("event"); }
     void append(std::string_view value) {
-        if (value.size() > bytes.size() - length) throw std::length_error("admission field path");
+        if (value.size() > bytes.size() - length)
+            throw coded<std::length_error>(RunFailureCode::engine_invariant, {},
+                                           "admission field path");
         std::memcpy(bytes.data() + length, value.data(), value.size());
         length += value.size();
     }
@@ -135,7 +138,9 @@ template<class A> struct Schema {
                 value = OrderBirth::fill_evaluation(bar,timestamp,cursor,price,first,last,ordinal);
                 break;
             }
-            default: throw std::invalid_argument("invalid admission birth");
+            default:
+                throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                                   "invalid admission birth");
             }
         }
     }

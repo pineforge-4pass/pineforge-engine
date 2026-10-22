@@ -146,7 +146,13 @@
  *                                          a Trail's arm_price presence is
  *                                          pf_native_working_v1::trail_has_arm_price, the anchor and
  *                                          owner relation are pf_native_working_v1::anchor .. arm_scope
+ *   [--] visit_native_working_requests     C++ callback traversal with ScratchStatus; C reads indexed working rows
+ *   [--] native_visit_working_requests     C++ callback traversal; C reads indexed working rows
+ *   [--] native_working_request            C++ handle lookup; C finds the handle among indexed working rows
  *   [C]  native_open_lots                  strategy_native_open_lot_count_v1 / strategy_native_open_lot_get_v1
+ *   [--] visit_native_open_lots            C++ borrowed-row traversal with ScratchStatus; C reads indexed open lots
+ *   [--] native_visit_open_lots            C++ borrowed-row traversal; C reads indexed open lots
+ *   [--] visit_native_open_lot_values      C++ scalar callback traversal; C reads indexed open-lot values
  *   [C]  cancel_all                        strategy_native_cancel_all_v1
  *   [C]  cancel_where                      strategy_native_cancel_where_v1
  *   [C]  cohort_open                       strategy_native_cohort_open_v1
