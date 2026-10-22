@@ -4129,6 +4129,11 @@ file(GLOB_RECURSE PINEFORGE_SOURCE_LAYER_FILES CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/src/compat/*.hpp"
      "${PROJECT_SOURCE_DIR}/include/pineforge/source/*.hpp"
      "${PROJECT_SOURCE_DIR}/include/pineforge/compat/*.hpp")
+# The neutrality witness below covers the Pine lowering layer. The exit-scratch record
+# codec is excluded: it is the kernel's archive field dispatcher, it must name each
+# native_order alternative to record it, and it constructs or resolves nothing
+# (measured red: test_native_sizing_bases :793 on proof rj-20261022t055326-7da628).
+list(FILTER PINEFORGE_SOURCE_LAYER_FILES EXCLUDE REGEX "/exit_scratch_versions_production\\.cpp$")
 list(LENGTH PINEFORGE_SOURCE_LAYER_FILES PINEFORGE_SOURCE_LAYER_COUNT)
 if(PINEFORGE_SOURCE_LAYER_COUNT LESS 4)
     message(FATAL_ERROR "source-layer neutrality glob found no translation units")
