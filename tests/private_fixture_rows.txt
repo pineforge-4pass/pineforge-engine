@@ -2,7 +2,7 @@
 // when the private fixtures are absent (removed by the private-fixture PRs). The count also
 // covers the PR 1b batch, whose rows runner/CMakeLists.txt registers the same way.
 // manifest: l44/pr1-manifest.tsv sha256 9a2727d455c1b470d515665428e2c6e090a22ac07f87255d1ca9c20d5528bd62
-// rows: 375
+// rows: 376
 capabilities_equivalence_clock_flags
 capabilities_equivalence_close
 checked_settings_e2e
@@ -378,3 +378,4 @@ test_tvdef_drops_tapes
 test_whole_lot_tie_tapes
 test_zero_offset_trail_rides_l4c
 test_zero_trail_sibling_stop
+native_live_equivalence_e2e
