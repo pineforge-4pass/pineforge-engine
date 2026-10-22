@@ -23,7 +23,6 @@ docs/design/native-feature-parity.md:138  pine_aux_security.cpp:282-397  calling
 docs/design/native-feature-parity.md:158  engine_orders.cpp:158-172  max_runup  2026-10-22
 docs/design/native-feature-parity.md:161  engine_metrics.cpp:304-458  compute_equity_stats  2026-10-22
 docs/design/native-feature-parity.md:165  native_execution_consumer.cpp:239-261  hash_spec  2026-10-22
-docs/design/native-feature-parity.md:188  CMakeLists.txt:474-479  PATTERN  2026-10-22
 docs/design/native-feature-parity.md:198  check_native_include_independence.py:72-78  pine  2026-10-22
 docs/design/native-feature-parity.md:212  session_time.hpp:35-211  timeframe_time  2026-10-22
 docs/design/native-feature-parity.md:214  pine_adapter.hpp:574-943  PlacementTable  2026-10-22
