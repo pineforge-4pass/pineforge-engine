@@ -1793,7 +1793,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
 
     def test_pr_exclusion_proves_registered_minus_labelled_equals_ran(self):
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 963,
+                         {'debug': 876, 'sanitizers': 867, 'native': 964,
                           'release': 895, 'kernel': 337})
         for profile, registered in ci_verify.EXCLUDED_REGISTERED_MIN.items():
             with self.subTest(profile=profile):
@@ -2828,7 +2828,7 @@ class PrivateFixtureFloors(unittest.TestCase):
             self.assertEqual(validate_config(parse_args(['kernel'])).min_tests,
                              FULL_FLOOR['kernel'])
         self.assertEqual(ci_verify.EXCLUDED_REGISTERED_MIN,
-                         {'debug': 876, 'sanitizers': 867, 'native': 963,
+                         {'debug': 876, 'sanitizers': 867, 'native': 964,
                           'release': 895, 'kernel': 337})
 
     def test_overlay_flag_moves_the_floor_and_is_the_only_input(self):
@@ -3377,10 +3377,10 @@ class LiveProfilesWithFixturesAbsent(unittest.TestCase):
     skip; without the overlay runner/ registers its pinned private-fixture
     placeholders and they SKIP, so the old rule failed the required
     native-live job of every public PR (.github/workflows/ci.yml's build
-    gate). The branch now accepts exactly the pinned skips -- every skipped
-    row must be a pinned private-fixture row -- while an unpinned skip, a
-    not-run row and a disabled row still fail, and with the overlay present
-    the old rule stands: nothing may skip.
+    gate). The branch accepts pinned skips outside the required e2e inventory;
+    every skipped row must be a pinned private-fixture row. A required e2e
+    skip, an unpinned skip, a not-run row and a disabled row still fail. With
+    the overlay present the old rule stands: nothing may skip.
     """
 
     def run_profile(self, profile='live-sanitizers', extra=None, **exits):
@@ -4321,7 +4321,8 @@ class NativeLiveEquivalenceCTest(unittest.TestCase):
                                          for line in result.stdout.splitlines()
                                          if line.startswith('DRIVER_EXECUTED ')))
                 for option in ('out', 'libraries_dir'):
-                    self.assertTrue(Path(receipt[option]).is_relative_to(Path(temporary) / 'build'))
+                    self.assertTrue(Path(receipt[option]).is_relative_to(
+                        (Path(temporary) / 'build').resolve()))
                     self.assertTrue(Path(receipt[option]).is_dir())
                 receipts.append(receipt)
             for option in ('out', 'libraries_dir'):

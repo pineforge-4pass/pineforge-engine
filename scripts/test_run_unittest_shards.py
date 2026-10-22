@@ -112,6 +112,7 @@ class UnittestShardsTests(unittest.TestCase):
             'PrExclusionWithFixturesAbsent', 'LiveProfilesWithFixturesAbsent',
             'FloorDocsPointAtTheTable', 'ExamplesAssertLive', 'StaleBinaries',
             'ReceiptRecipe', 'DiagnosticsCollection', 'CTestDeadlines',
+            'NativeLiveEquivalenceCTest',
         })
         self.assertEqual(verifier_classes.FAST_CLASSES & verifier_classes.SLOW_CLASSES, set())
         self.assertEqual(verifier_classes.SLOW_CLASSES, {
@@ -119,6 +120,7 @@ class UnittestShardsTests(unittest.TestCase):
             'PrivateFixtureFloors', 'PrExclusionWithFixturesAbsent',
             'LiveProfilesWithFixturesAbsent', 'ExamplesAssertLive',
             'StaleBinaries', 'ReceiptRecipe',
+            'NativeLiveEquivalenceCTest',
         })
         self.assertEqual(verifier_classes.FAST_CLASSES | verifier_classes.SLOW_CLASSES, discovered)
         verifier_classes.validate_class_partition(discovered)
