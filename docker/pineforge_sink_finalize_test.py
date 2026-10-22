@@ -6,8 +6,9 @@ The ordinary row reuses tests/test_run_json_sink.py's v1 fixture writer.
 No sink fixture or hash is recorded here. The RSS probe runs this file in
 a fresh stdlib-only process, before pytest/run_json are imported, so
 RUSAGE_CHILDREN describes just the finalizer rather than pytest's children
-or a large inherited pytest heap. It generates and hashes >=64 MiB on the
-fly and requires peak RSS <20 MiB (less than one third of the input).
+or a large inherited pytest heap. Separate fresh probes measure a tiny
+stream and >=64 MiB generated and hashed on the fly. The large stream may
+add at most 1 MiB of peak RSS and must fit the measured tiny baseline +2 MiB.
 """
 from __future__ import annotations
 
@@ -31,7 +32,8 @@ RECEIPT_KEYS = ("complete", *(f"count_{tag.lower()}" for tag in TAGS),
 EXHAUSTED_RECEIPT_KEYS = (
     "complete", *(f"count_{tag.lower()}" for tag in TAGS),
     "reason", "sink_bytes", "cap_bytes", "sha256", "finalizer_version")
-RSS_LIMIT_BYTES = 20 * 1024 * 1024
+RSS_FLATNESS_BYTES = 1024 * 1024
+RSS_BASELINE_HEADROOM_BYTES = 2 * 1024 * 1024
 STREAM_BYTES = 64 * 1024 * 1024
 
 
@@ -49,7 +51,7 @@ def write_all(fd, data):
         remaining = remaining[count:]
 
 
-def rss_probe(directory, header_path, *, stdout_mode=False):
+def rss_probe(directory, header_path, *, stdout_mode=False, tiny=False):
     """One child only; do not import pytest, run_json or the test fixtures."""
     directory = Path(directory)
     out = directory / "large.sink"
@@ -97,12 +99,14 @@ def rss_probe(directory, header_path, *, stdout_mode=False):
 
     try:
         send(encoded(head))
-        message = "s" * (16 * 1024)
+        message = "s" * (512 if tiny else 16 * 1024)
         while total < STREAM_BYTES:
             number = counts["V"] + 1
             send(encoded(["V", number, 0, number - 1, None, None,
                           0, 1, 1, 1.0, "0123456789abcdef", message]))
             counts["V"] += 1
+            if tiny and counts["V"] == 4:
+                break
         send(encoded(["K", 50.0]))
         counts["K"] += 1
         send(encoded({"trailer": "pf-report-sink", "version": 1,
@@ -129,10 +133,11 @@ def rss_probe(directory, header_path, *, stdout_mode=False):
     return process.returncode
 
 
-if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] in (
+if __name__ == "__main__" and len(sys.argv) in (4, 5) and sys.argv[1] in (
         "--rss-probe", "--rss-stdout-probe"):
     raise SystemExit(rss_probe(sys.argv[2], sys.argv[3],
-                              stdout_mode=sys.argv[1] == "--rss-stdout-probe"))
+                              stdout_mode=sys.argv[1] == "--rss-stdout-probe",
+                              tiny=len(sys.argv) == 5 and sys.argv[4] == "tiny"))
 
 
 import ctypes
@@ -1022,36 +1027,66 @@ def test_fsync_then_verify_then_publish_and_short_writes(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stdout_mode", [False, True])
-def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode):
+def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode, record_property):
     header = tmp_path / "header.json"
     header.write_bytes(encoded(fixtures.header(outputs=True)))
-    directory = tmp_path / "rss"
-    directory.mkdir()
-    result = subprocess.run(
-        [sys.executable, "-B", "-S", str(Path(__file__).resolve()),
-         "--rss-stdout-probe" if stdout_mode else "--rss-probe", str(directory), str(header)],
-        stdin=subprocess.DEVNULL, capture_output=True, cwd=tmp_path)
-    assert result.returncode == 0, result.stderr.decode()
-    measured = json.loads(result.stdout)
-    assert measured["returncode"] == 0 and measured["stderr"] == "", measured
-    assert 0 < measured["peak_bytes"] < RSS_LIMIT_BYTES, measured
-    assert measured["expected_bytes"] >= STREAM_BYTES
-    receipt = measured["receipt"]
-    assert tuple(receipt) == RECEIPT_KEYS and receipt["complete"] is True
-    assert receipt["sink_bytes"] == measured["expected_bytes"]
-    assert receipt["sha256"] == measured["expected_sha256"]
-    assert {tag: receipt["count_" + tag.lower()] for tag in TAGS} == {
-        tag: measured["expected_counts"].get(tag, 0) for tag in TAGS}
-    if stdout_mode:
-        assert measured["received_bytes"] == measured["expected_bytes"]
-        assert measured["received_wire_sha256"] == measured["expected_wire_sha256"]
-        assert list(directory.iterdir()) == []
-    else:
-        out = directory / "large.sink"
-        wire = hashlib.sha256()
-        with out.open("rb") as file:
-            while chunk := file.read(64 * 1024):
-                wire.update(chunk)
-        assert out.stat().st_size == measured["expected_bytes"]
-        assert wire.hexdigest() == measured["expected_wire_sha256"]
-    assert list(directory.glob(".pineforge-sink-*.spool")) == []
+    probes = {}
+    for sample in ("tiny", "big"):
+        directory = tmp_path / ("rss-" + sample)
+        directory.mkdir()
+        # Each fresh stdlib-only probe owns exactly one finalizer child,
+        # keeping the two RUSAGE_CHILDREN high-water marks independent.
+        result = subprocess.run(
+            [sys.executable, "-B", "-S", str(Path(__file__).resolve()),
+             "--rss-stdout-probe" if stdout_mode else "--rss-probe",
+             str(directory), str(header), sample],
+            stdin=subprocess.DEVNULL, capture_output=True, cwd=tmp_path)
+        assert result.returncode == 0, (
+            f"rss probe '{sample}' failed (rc={result.returncode}): {result.stderr.decode()}")
+        probes[sample] = (directory, result, json.loads(result.stdout))
+
+    tiny_peak = probes["tiny"][2]["peak_bytes"]
+    big_peak = probes["big"][2]["peak_bytes"]
+    delta = big_peak - tiny_peak
+    mode = "stdout" if stdout_mode else "file"
+    python_version = " ".join(sys.version.split())
+    measurement = (f"rss-measurement mode={mode} tiny={tiny_peak} big={big_peak} "
+                   f"delta={delta} py={python_version}")
+    print(measurement, file=sys.stderr, flush=True)
+    for name, value in (("rss_mode", mode), ("rss_tiny_bytes", tiny_peak),
+                        ("rss_big_bytes", big_peak), ("rss_delta_bytes", delta),
+                        ("rss_python_version", python_version)):
+        record_property(name, value)
+
+    for sample, (directory, result, measured) in probes.items():
+        details = f"{measurement}\nsample={sample} measured={measured}"
+        assert result.returncode == 0, f"{measurement}\n{result.stderr.decode()}"
+        assert measured["returncode"] == 0 and measured["stderr"] == "", details
+        if sample == "big":
+            assert measured["expected_bytes"] >= STREAM_BYTES, details
+        else:
+            assert measured["expected_counts"]["V"] == 4, details
+            assert 0 < measured["expected_bytes"] < 16 * 1024, details
+        receipt = measured["receipt"]
+        assert tuple(receipt) == RECEIPT_KEYS and receipt["complete"] is True, details
+        assert receipt["sink_bytes"] == measured["expected_bytes"], details
+        assert receipt["sha256"] == measured["expected_sha256"], details
+        assert {tag: receipt["count_" + tag.lower()] for tag in TAGS} == {
+            tag: measured["expected_counts"].get(tag, 0) for tag in TAGS}, details
+        if stdout_mode:
+            assert measured["received_bytes"] == measured["expected_bytes"], details
+            assert measured["received_wire_sha256"] == measured["expected_wire_sha256"], details
+            assert list(directory.iterdir()) == [], details
+        else:
+            out = directory / "large.sink"
+            wire = hashlib.sha256()
+            with out.open("rb") as file:
+                while chunk := file.read(64 * 1024):
+                    wire.update(chunk)
+            assert out.stat().st_size == measured["expected_bytes"], details
+            assert wire.hexdigest() == measured["expected_wire_sha256"], details
+        assert list(directory.glob(".pineforge-sink-*.spool")) == [], details
+
+    assert 0 < tiny_peak and 0 < big_peak, measurement
+    assert delta <= RSS_FLATNESS_BYTES, measurement
+    assert big_peak <= tiny_peak + RSS_BASELINE_HEADROOM_BYTES, measurement
