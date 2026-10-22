@@ -116,6 +116,8 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_selected_window_counts_v1",
     "pf_report_sink_version",
     "pf_report_scratch_arena_stats",
+    "strategy_require_report_scratch_arena_v1",
+    "strategy_report_sink_diagnostics_v1",
     "pf_run_abort_install_sigterm_v1",
     "pf_run_abort_requested_v1",
     "pf_run_abort_restore_sigterm_v1",
@@ -137,8 +139,8 @@ RUNTIME_HEADERS = (
     "report_sink.h",
 )
 
-EXPECTED_PUBLIC_DECLARATIONS = 111
-EXPECTED_RUNTIME_IMPLEMENTATIONS = 91
+EXPECTED_PUBLIC_DECLARATIONS = 113
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 93
 
 # Runtime setters whose data a stream cannot take: the source host refuses
 # stream_begin() while any of them holds data (the native daily feed since its
@@ -156,7 +158,7 @@ HISTORICAL_ONLY_RUNTIME = frozenset({
 })
 HISTORICAL_ONLY_PHRASE = "stream_begin() fails closed"
 
-# The C-level native host API. Additive to the 91 above: every symbol here is
+# The C-level native host API. Additive to the runtime above: every symbol here is
 # declared in include/pineforge/native_c_api.h and implemented in
 # src/native_c_host.cpp, and neither file contributes to the two counts above.
 EXPECTED_NATIVE_C_API = frozenset({

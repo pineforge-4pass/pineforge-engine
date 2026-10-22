@@ -185,6 +185,23 @@ process-wide signal handling.
 
 ## Report sink summary receipt
 
+The additive `strategy_report_sink_diagnostics_v1` query supplies annualization
+provenance without reading the sink back. Its descriptor in `report_sink.h`
+is 72 bytes: `struct_size`/`version` at 0/4, `count_e` at 8, first and last
+`pf_equity_point_t` at 16/40, `trade_at_start` at 64 and `complete` at 68.
+The points are the emitted E endpoints; `trade_at_start` folds whether any
+emitted T has `entry_bar_index <= 0`. It publishes only after the trailer.
+Missing, failed, aborted or unstarted generations return zeros/incomplete.
+Initialize size/version=1; a bad handle, pointer, size or version returns -1
+without changing the output. This separate query preserves both existing
+receipt layouts, wire bytes and broker hashes.
+
+Jailed hosts additionally call `strategy_require_report_scratch_arena_v1`
+before execution. The engine validates/attaches the inherited fixed-fd-5
+arena or returns the handle's typed `report_sink_failed`/`arena_backing`.
+It never creates backing. `run_json.py` refuses sink fd 5 and jailed spill
+directories, and takes sink-fd ownership only after the fd API is admitted.
+
 `strategy_report_sink_summary_v1` is an additive query in
 `<pineforge/report_sink.h>` for both sink transports. It avoids a record
 read-back when a jailed child publishes its summary. The existing

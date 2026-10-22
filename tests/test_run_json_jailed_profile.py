@@ -28,6 +28,8 @@ import test_run_json_nonfinite_report as reports
 import test_run_json_sink as sinks
 import test_run_json_sink_fd as fd_sinks
 
+REAL_CDLL = ctypes.CDLL
+
 PROFILE_ENV = "PINEFORGE_RUN_JSON_PROFILE"
 SETTER = "strategy_set_scratch_tables_v1"
 FIELDS = ("K_q", "B_q", "K_e", "B_e", "K_c", "B_c", "U", "B_U", "V", "B_V", "R")
@@ -47,6 +49,12 @@ class ScratchRecorder:
         self.history, self.configured, self.created, self.released = [], {}, [], []
         self.setter_status = setter_status
         self.on_create = None
+        self.arena_status = 0
+        self.arena_admissions = []
+        def admit_arena(state):
+            self.arena_admissions.append((state, tuple(self.history)))
+            return self.arena_status
+        self.strategy_require_report_scratch_arena_v1 = admit_arena
         if symbol:
             def install(state, pointer):
                 copy = Descriptor.from_buffer_copy(ctypes.string_at(pointer, 104))
@@ -197,9 +205,22 @@ def forbid_spools(monkeypatch):
     return hits
 
 
+def test_jailed_serializer_handles_lazy_arrays_without_a_file(monkeypatch):
+    files = forbid_spools(monkeypatch)
+    rows = [{"value": -0.0}, {"value": 'quote"\n漢'}]
+    document = {"rows": run_json._JSONRecordArray(lambda: iter(rows), len(rows))}
+    args = run_json.argparse.Namespace(profile="jailed", spill_dir=None)
+    with contextlib.ExitStack() as resources:
+        buffer = run_json._prepare_report_json(document, resources, args, None)
+        assert buffer.read() == json.dumps(
+            {"rows": rows}, separators=(",", ":"), allow_nan=False) + "\n"
+    assert buffer.closed and files == []
+
+
 def invoke(tmp_path, monkeypatch, library, *extra):
     source = bars.csv_file(tmp_path)
-    monkeypatch.setattr(run_json.ctypes, "CDLL", lambda path: library)
+    monkeypatch.setattr(run_json.ctypes, "CDLL", lambda path, *args, **kwargs: (
+        REAL_CDLL(path, *args, **kwargs) if path is None else library))
     monkeypatch.setattr(run_json.time, "time", lambda: 10.0)
     stdout, stderr = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -207,18 +228,23 @@ def invoke(tmp_path, monkeypatch, library, *extra):
     return status, stdout.getvalue(), stderr.getvalue()
 
 
-def assert_admission(library, count, roots):
+def assert_admission(library, count, roots, *, require_arena=False):
     admissions = [row for row in library.history if row[0] == "scratch"]
     runs = [row for row in library.history if row[0] == "run"]
     assert len(admissions) == len(runs) == len(library.created) == count
     assert library.released == library.created
     assert len(set(library.created)) == count
     assert not library.configured
+    if require_arena:
+        assert [state for state, before in library.arena_admissions] == library.created
     for state in library.created:
         history = [row for row in library.history if row[1] == state]
         names = [row[0] for row in history]
         assert names.count("scratch") == names.count("run") == 1
         assert names.index("create") < names.index("scratch") < names.index("run") < names.index("free")
+        if require_arena:
+            before_arena = next(before for owner, before in library.arena_admissions if owner == state)
+            assert [row[0] for row in before_arena if row[1] == state][-1] == "scratch"
         for setting in ("input", "override"):
             if setting in names:
                 assert names.index(setting) < names.index("scratch")
@@ -236,7 +262,7 @@ def test_jailed_configures_every_fresh_bench_and_body_handle_without_a_sink(tmp_
                     "--overrides", '{"pyramiding":"2"}')
     assert (result[0], result[2]) == (0, ""), result
     assert json.loads(result[1])["summary"]["total_trades"] == 3
-    assert_admission(library, 6, 10)  # five input bars, including each warmup/repeat.
+    assert_admission(library, 6, 10, require_arena=True)  # five input bars, including each warmup/repeat.
     assert files == [] and library.installed == [] and library.queried == 0
     assert not list(tmp_path.glob("*.sink"))
 
@@ -247,7 +273,7 @@ def test_selected_uses_retained_fed_count_before_its_native_run(tmp_path, monkey
     files = forbid_spools(monkeypatch)
     result = harness.run("selected", extra=["--profile", "jailed"])
     assert (result.status, result.stderr) == (0, ""), result.stdout
-    assert_admission(result.library, 1, 18)  # ten supplied rows, nine retained/fed.
+    assert_admission(result.library, 1, 18, require_arena=True)  # ten supplied rows, nine retained/fed.
     assert result.library.run_args[1] == 9
     assert result.library.window_config is None and result.library.observer_descriptor is None
     assert files == []
@@ -338,7 +364,7 @@ def test_jailed_fd_overrides_sinks_off_after_admission(tmp_path, mode):
         expected["diagnostics"].pop("phase_timing")
     fd_sinks.assert_document(json.dumps(actual, separators=(",", ":")) + "\n", expected)
     assert actual["summary"]["total_trades"] == len(fd_sinks.PNLS)
-    assert_admission(library, 1, 18 if mode == "selected" else 10)
+    assert_admission(library, 1, 18 if mode == "selected" else 10, require_arena=True)
     names = [row[0] for row in library.history]
     assert names == ["create", "scratch", "sink", "run", "free"]
     assert library.installed == [stream.writer]
@@ -400,6 +426,37 @@ def test_jailed_fd_requires_admission_before_installing_the_sink(
         ["create", "scratch", "free"] if symbol else ["create", "free"])
 
 
+@pytest.mark.parametrize("mode", ["ordinary", "selected"])
+def test_jailed_fd_arena_refusal_preserves_caller_ownership(tmp_path, mode):
+    factory = SelectedProfileFdLibrary if mode == "selected" else ProfileFdLibrary
+    library = factory()
+    library.arena_status = -1
+    with fd_sinks.Stream() as stream:
+        status, text, stderr = invoke_profile_sink(tmp_path, mode, library, [
+            "--profile", "jailed", "--report-sink-fd", str(stream.writer)])
+        fd_sinks.os.fstat(stream.writer)
+    assert status == 1 and stderr == "", text
+    document = reports.strict_line(text)
+    assert (document["code"], document["args"]) == (
+        "report_sink_failed", {"reason": "arena_backing"})
+    assert [row[0] for row in library.history] == ["create", "scratch", "free"]
+    assert len(library.arena_admissions) == 1 and library.arena_admissions[0][0] == library.created[0]
+    assert library.released == library.created and not library.installed
+    assert stream.data == b"" and "summary" not in document
+
+
+@pytest.mark.parametrize("capabilities", [False, True])
+def test_jailed_spill_dir_refuses_before_loading_a_library(tmp_path, monkeypatch, capabilities):
+    library = ProfileLibrary()
+    files = forbid_spools(monkeypatch)
+    extra = ["--capabilities-json"] if capabilities else []
+    status, text, stderr = invoke(tmp_path, monkeypatch, library,
+                                 "--profile", "jailed", "--spill-dir", str(tmp_path), *extra)
+    assert status == 1 and stderr == "" and files == [], text
+    assert reports.strict_line(text)["code"] == "run_request_invalid"
+    assert library.created == [] and library.calls == []
+
+
 @pytest.mark.parametrize("code,args", [
     ("scratch_capacity_exceeded", {"resource": "successor_roots"}),
     ("scratch_io_failed", {}),
@@ -414,7 +471,7 @@ def test_scratch_failure_keeps_its_type_even_during_warmup(tmp_path, monkeypatch
     assert status == 1 and stderr == ""
     assert (document["code"], document["args"]) == (code, args)
     assert "summary" not in document
-    assert_admission(library, 1, 10)
+    assert_admission(library, 1, 10, require_arena=True)
 
 
 @pytest.mark.parametrize("symbol", [False, True])
@@ -450,7 +507,7 @@ def test_environment_profile_is_read_once_before_any_fresh_handle(tmp_path, monk
                                   "--bench", "--warmup", "1", "--repeats", "2")
     assert (status, stderr) == (0, ""), text
     assert reads == [PROFILE_ENV]
-    assert_admission(library, 4, 10)
+    assert_admission(library, 4, 10, require_arena=True)
     assert files == []
 
 

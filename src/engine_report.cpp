@@ -1029,6 +1029,19 @@ int BacktestEngine::report_sink_summary_v1(pf_report_sink_summary_v1* out) const
     return 0;
 }
 
+int BacktestEngine::report_sink_diagnostics_v1(
+        pf_report_sink_diagnostics_v1* out) const noexcept {
+    if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
+    pf_report_sink_diagnostics_v1 local{};
+    if (report_sink_state_.enabled && report_sink_state_.receipt.complete
+        && report_sink_state_.writer)
+        local = report_sink_state_.writer->diagnostics();
+    local.struct_size = sizeof local;
+    local.version = 1;
+    *out = local;
+    return 0;
+}
+
 void BacktestEngine::set_trade_history_streamable(bool streamable) {
     if (report_sink_setter_status() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},

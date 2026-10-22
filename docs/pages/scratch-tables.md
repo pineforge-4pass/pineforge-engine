@@ -130,11 +130,22 @@ ordinary body run, and selected-window execution. Selected mode uses the
 retained fed-input count, including pre-roll, rather than the supplied file
 length. A trial/run receives fresh occupancy, never the prior trial's usage.
 
-The report sink stays **OFF**. The host neither constructs a temporary sink
-nor uses the sink verification/transposition/staging files; it uses ordinary
-report arrays and the in-memory JSON path. Optional recorded outputs use the
-ordinary retained-output reader. This preserves the existing report format
-but does not make report assembly bounded in bars or trades.
+The report sink stays **OFF** unless `--report-sink-fd N` explicitly supplies
+a stream. Without it, the host uses ordinary report arrays and the in-memory
+JSON path, including lazy arrays; optional recorded outputs use the ordinary
+retained-output reader. This preserves the existing report format but does
+not make array report assembly bounded in bars or trades. With an fd sink,
+stdout carries the summary and diagnostics; the trusted finalizer consumes
+the v1 records. Neither jailed route constructs a sink file or JSON spool.
+
+Every jailed handle also calls `strategy_require_report_scratch_arena_v1`
+after table admission and before sink installation/execution. It attaches and
+validates the inherited arena (`PF_SCRATCH_ARENA_FD=5`, positive
+`PF_SCRATCH_ARENA_BYTES`, optional `PF_SCRATCH_WINDOW_BYTES`), or refuses with
+typed `report_sink_failed` / `arena_backing`. No attached arena means no
+execution and no TMPDIR fallback. `--spill-dir` is refused in this profile;
+`--report-sink-fd 5` is refused in every profile because 5 is the engine's
+fixed arena slot. The wrapper must charge the arena as well as the table slab.
 
 The setter is an optional ctypes binding for old libraries in the unjailed
 profile. In the jailed profile, an absent setter refuses before execution as
@@ -142,6 +153,8 @@ profile. In the jailed profile, an absent setter refuses before execution as
 export name is in the message; the optional `missing` argument is omitted
 because its closed catalog vocabulary does not include this name. A setter
 refusal is an `engine_invariant`. Neither condition permits disk fallback.
+The arena admission export is also required; an older library missing it is
+`strategy_library_incompatible` with `{"reason":"symbol_missing"}`.
 An invalid environment profile is `run_request_invalid` with the existing
 `{"option":"arguments"}` classification.
 
@@ -194,7 +207,8 @@ APP-visible integration items (external production paths are not asserted):
    entitlement. Cover effective HPO parameters and internal replacements;
    incomplete codegen receipts do not prove a smaller budget.
 3. Install the signal disposition above, then enforce the filesystem/file-size
-   restrictions. Keep the report sink OFF and use the ordinary report route.
+   restrictions. Supply the separately charged inherited arena; keep the sink
+   off for array reports or pass an fd stream for trusted v1 finalization.
 4. Synchronize the error catalog, preserve typed engine failures, refund them
    in plain/selected/HPO execution, and test that failed trials cannot rank.
 5. Prove on the actual Linux jail: no writable directory, `RLIMIT_FSIZE=0`,
