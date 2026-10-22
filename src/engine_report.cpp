@@ -1610,6 +1610,8 @@ void BacktestEngine::finalize_summary_output_row() {
         return;
     }
     fold_current_output_row_witness();
+    // Discarding the resident row must preserve the next event's global row.
+    report_sink_state_.output_base += static_cast<std::int64_t>(output_open_ms_.size());
     output_series_.clear();
     output_open_ms_.clear();
     output_close_ms_.clear();
