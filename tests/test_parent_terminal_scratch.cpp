@@ -421,7 +421,10 @@ void exercise(std::size_t population, Shape shape, bool direct) {
 #endif
 }
 
-std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
+// drain_peak != nullptr is the DIAGNOSTIC form (CR150-CX drain decision job): it reports
+// the recorded drain peak instead of checking it against kDrainBytes.
+std::size_t exercise_beyond_cap(std::size_t population, bool direct,
+                                std::size_t* drain_peak = nullptr) {
     // Wide needs only two roots and tests the same journal capacity as Deep
     // and Tree. Avoid the oracle's per-child book scans at these populations.
     constexpr auto shape = Shape::Wide;
@@ -459,9 +462,10 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     Probe::drain(consumer, actual, seeds);
     global_allocation::recording = false;
     global_allocation::on_recorded = nullptr;
-    CHECK(peak_bytes <= kDrainBytes);
-    std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",
-                population, static_cast<int>(shape), direct, peak_bytes, kDrainBytes);
+    if (drain_peak) *drain_peak = peak_bytes;
+    else CHECK(peak_bytes <= kDrainBytes);
+    std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu events_before=%zu\n",
+                population, static_cast<int>(shape), direct, peak_bytes, kDrainBytes, before);
 
     CHECK(!Probe::failed(consumer));
     CHECK(consumer.request_core().live().empty());
@@ -960,6 +964,13 @@ int main() {
         const auto reserve_peak_beyond_cap = exercise_beyond_cap(8191, direct);
         CHECK(reserve_peak_at_cap > 0);
         CHECK(reserve_peak_at_cap == reserve_peak_beyond_cap);
+        // Diagnostic: the drain peak at populations that already start spilled.
+        for (const std::size_t population : {std::size_t{16382}, std::size_t{65536}}) {
+            std::size_t drain_peak = 0;
+            exercise_beyond_cap(population, direct, &drain_peak);
+            std::printf("X08 decide population=%zu direct=%d drain_peak=%zu\n",
+                        population, direct, drain_peak);
+        }
         exercise_reload(direct);
         exercise_limits(direct);
         invalid_cause(direct);
