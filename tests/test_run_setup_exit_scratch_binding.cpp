@@ -26,6 +26,10 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#if defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
 
 namespace pineforge {
 inline namespace engine_script_run_v19 {
@@ -96,6 +100,79 @@ std::vector<int> open_descriptors() {
     }
     std::sort(result.begin(), result.end());
     return result;
+}
+
+std::string descriptor_target(int descriptor) {
+#if defined(__APPLE__)
+    struct stat status{};
+    require(::fstat(descriptor, &status) == 0, "inspect descriptor type");
+    if (!S_ISREG(status.st_mode)) return "<non-regular descriptor>";
+    std::array<char, 4096> target{};
+    if (::fcntl(descriptor, F_GETPATH, target.data()) == 0) return target.data();
+#else
+    const std::string link = "/proc/self/fd/" + std::to_string(descriptor);
+    std::vector<char> target(256);
+    for (;;) {
+        const auto size = ::readlink(link.c_str(), target.data(), target.size());
+        if (size < 0) break;
+        if (static_cast<std::size_t>(size) < target.size())
+            return {target.data(), static_cast<std::size_t>(size)};
+        target.resize(target.size() * 2);
+    }
+#endif
+    const int error = errno;
+    throw std::runtime_error("descriptor target unavailable: fd=" + std::to_string(descriptor)
+                             + " errno=" + std::to_string(error));
+}
+
+using DescriptorSnapshot = std::vector<std::pair<int, std::string>>;
+
+DescriptorSnapshot snapshot_descriptors(const std::vector<int>& descriptors) {
+    DescriptorSnapshot result;
+    for (const int descriptor : descriptors)
+        result.emplace_back(descriptor, descriptor_target(descriptor));
+    return result;
+}
+
+bool descriptor_has_prefix(const std::string& target, const std::string& prefix) {
+    const auto slash = target.find_last_of('/');
+    const auto name = slash == std::string::npos ? 0 : slash + 1;
+    return target.compare(name, prefix.size(), prefix) == 0;
+}
+
+std::size_t command_scratch_descriptor_count(const DescriptorSnapshot& descriptors) {
+    return static_cast<std::size_t>(std::count_if(descriptors.begin(), descriptors.end(),
+        [](const auto& descriptor) {
+            return descriptor_has_prefix(descriptor.second, "pineforge-command-");
+        }));
+}
+
+const char* descriptor_kind(const std::string& target) {
+    if (descriptor_has_prefix(target, "pineforge-command-")) return "command scratch";
+    if (descriptor_has_prefix(target, "pineforge-trade-index-")) return "trade ledger index";
+    if (descriptor_has_prefix(target, "pineforge-trade-payload-")) return "trade ledger payload";
+    if (descriptor_has_prefix(target, "pineforge-roots-")) return "successor root index";
+    if (descriptor_has_prefix(target, "pineforge-scratch-")) return "report scratch";
+    if (descriptor_has_prefix(target, "pineforge-ids-")) return "ID table";
+    if (descriptor_has_prefix(target, "pineforge-id-pairs-")) return "ID pair scratch";
+    if (descriptor_has_prefix(target, "pineforge-sequence-")) return "scratch sequence";
+    return "other / unclassified";
+}
+
+void report_descriptor_changes(const DescriptorSnapshot& before, const DescriptorSnapshot& after,
+                               const char* phase) {
+    if (before == after) return;
+    std::fprintf(stderr, "test_run_setup_exit_scratch_binding: %s descriptor changes:\n", phase);
+    for (const auto& descriptor : after) {
+        if (std::find(before.begin(), before.end(), descriptor) == before.end())
+            std::fprintf(stderr, "  extra fd=%d kind=%s target=%s\n", descriptor.first,
+                         descriptor_kind(descriptor.second), descriptor.second.c_str());
+    }
+    for (const auto& descriptor : before) {
+        if (std::find(after.begin(), after.end(), descriptor) == after.end())
+            std::fprintf(stderr, "  removed fd=%d kind=%s target=%s\n", descriptor.first,
+                         descriptor_kind(descriptor.second), descriptor.second.c_str());
+    }
 }
 
 class ReversingNativeHost final : public NativeStrategyHost {
@@ -214,7 +291,10 @@ void run_owner_reversal_without_adapter_starts_each_run_empty() {
         warm.run(bars.data(), 1);
         require_completed(warm);
     }
-    const auto before = open_descriptors();
+    const auto before = snapshot_descriptors(open_descriptors());
+    const auto before_command_files = command_scratch_descriptor_count(before);
+    if (before_command_files != 0) report_descriptor_changes({}, before, "warmup teardown");
+    require(before_command_files == 0, "warmup teardown releases command scratch backing files");
     ReversingNativeHost host;
     require(host.configure_native(spec).status == NativeSetupStatus::Applied, "configure first run");
     host.run(bars.data(), static_cast<int>(bars.size()));
@@ -224,7 +304,11 @@ void run_owner_reversal_without_adapter_starts_each_run_empty() {
     require(host.reversals != 0 && host.drains != 0, "the first run reversed and drained");
     require(NativeExecutionConsumerProbe::dependency(host.consumer()) == nullptr,
             "run completion clears the dependency borrower");
-    require(open_descriptors() == before, "run completion releases command scratch backing files");
+    const auto after_first = snapshot_descriptors(open_descriptors());
+    report_descriptor_changes(before, after_first, "run completion");
+    // The live host retains its trade ledger; command workspaces must close.
+    require(command_scratch_descriptor_count(after_first) == before_command_files,
+            "run completion releases command scratch backing files");
     const auto first_events = host.native_events(0).size();
     const auto first_hash = host.native_continuation_hash();
     ReportC first{};
@@ -254,7 +338,10 @@ void run_owner_reversal_without_adapter_starts_each_run_empty() {
     BacktestEngine::free_report(&second);
     require(NativeExecutionConsumerProbe::dependency(host.consumer()) == nullptr,
             "restart completion leaves no dangling dependency borrower");
-    require(open_descriptors() == before, "restart releases every command scratch backing file");
+    const auto after_restart = snapshot_descriptors(open_descriptors());
+    report_descriptor_changes(before, after_restart, "restart completion");
+    require(command_scratch_descriptor_count(after_restart) == before_command_files,
+            "restart releases every command scratch backing file");
 }
 
 class ExitHost final : public source::PineStrategyHost {
