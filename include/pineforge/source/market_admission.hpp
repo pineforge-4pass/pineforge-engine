@@ -250,7 +250,9 @@ public:
     // event has entered the v4 fold and no producer can insert before it.
     void retire_prefix(std::size_t count, uint64_t digest, uint64_t last_sequence);
     // Current v4 continuation, read fieldwise without an owning event snapshot.
-    // Filtering invalidates fold evidence; only reset starts a new lifetime.
+    // Filtering requires a validated nonzero prefix and an unchanged rejection
+    // gate before its surviving tail can be refolded. Only reset starts a new
+    // lifetime.
     Prefix folded_window() const;
     int last_rejected_command_bar() const;
 private:
@@ -270,7 +272,7 @@ private:
     Prefix retired_prefix_;
     mutable Prefix folded_window_;
     mutable bool fold_valid_ = false;
-    bool filtered_ = false;
+    mutable bool filtered_ = false;
     // Observation-only configuration, persistent across reset like recording;
     // not independent broker state and deliberately absent from the v4 fold.
     bool retain_full_observation_history_ = false;

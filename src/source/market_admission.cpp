@@ -246,10 +246,14 @@ const std::vector<Event>& Journal::events() const {
 }
 
 Journal::Prefix Journal::folded_window() const {
-    if (filtered_)
+    // A destructive filter supplies no prefix proof of its own. A validated
+    // nonzero retired prefix may seed its surviving tail, but never a zero
+    // restart or a rewrite of the command gate's last rejected bar.
+    if (filtered_ && retired_prefix_.count == 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission filter cannot rewrite folded lifetime history");
-    Prefix result = fold_valid_ ? folded_window_ : retired_prefix_;
+    Prefix result = fold_valid_ && !filtered_ ? folded_window_ : retired_prefix_;
+    auto retained_rejected_bar = retired_prefix_.last_rejected_command_bar;
     const auto append = [&](const detail::ScratchByteSource& source, detail::ScratchBuffer page) {
         JournalRecordSummary summary;
         CodecState::check(scan_journal_record(source,page,summary));
@@ -260,7 +264,13 @@ Journal::Prefix Journal::folded_window() const {
                                               "admission event count exhausted");
         ++result.count;
         result.last_sequence = summary.sequence;
-        if (summary.rejected) result.last_rejected_command_bar = summary.rejected_bar;
+        if (summary.rejected) {
+            result.last_rejected_command_bar = summary.rejected_bar;
+            // Prove the old gate at its folded frontier independently of any
+            // later appends; a new rejection cannot repair a discarded cause.
+            if (summary.sequence <= folded_window_.last_sequence)
+                retained_rejected_bar = summary.rejected_bar;
+        }
     };
     if (codec_) {
         CodecState::check(codec_->failure);
@@ -284,8 +294,12 @@ Journal::Prefix Journal::folded_window() const {
             append(source,{page.data(),page.size()});
         }
     }
+    if (filtered_ && retained_rejected_bar != folded_window_.last_rejected_command_bar)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "admission filter cannot rewrite the rejection gate");
     folded_window_ = result;
     fold_valid_ = true;
+    filtered_ = false;
     return result;
 }
 
@@ -501,7 +515,7 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
             codec_->count -= removed;
             codec_->snapshot_valid = false;
             std::vector<Event>().swap(events_);
-            filtered_ = fold_valid_;
+            filtered_ = filtered_ || fold_valid_;
         }
         return;
     }
