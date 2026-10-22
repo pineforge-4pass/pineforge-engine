@@ -25,6 +25,15 @@ using Handle = pineforge::native_order::RequestHandle;
 using Units = std::unordered_map<std::uint64_t, double>;
 using Opened = std::vector<Handle>;
 
+// Unmodelled containers use production behaviour in both arms: old_clear
+// would invent legacy behaviour and falsify the old/new comparison.
+template<class Container>
+inline constexpr bool modeled = false;
+template<>
+inline constexpr bool modeled<Units> = true;
+template<>
+inline constexpr bool modeled<Opened> = true;
+
 struct Probe {
     bool old_implementation = false;
     std::vector<Units*> units;
@@ -79,20 +88,30 @@ void old_clear(Container& container) { container.clear(); }
 namespace pineforge::detail {
 template<class Container>
 void growth_fixture_release_empty(Container& container) {
+    if constexpr (!growth_fixture::modeled<Container>) {
+        release_empty_exposure_capacity(container);
+        return;
+    } else {
     growth_fixture::observe(container);
     if (growth_fixture::active && growth_fixture::active->old_implementation)
         growth_fixture::old_release_empty(container);
     else
         release_empty_exposure_capacity(container);
+    }
 }
 template<class Container>
 void growth_fixture_clear(Container& container) {
+    if constexpr (!growth_fixture::modeled<Container>) {
+        clear_exposure_storage(container);
+        return;
+    } else {
     // Observe the empty container after the old clear, before any release.
     if (growth_fixture::active && growth_fixture::active->old_implementation) {
         growth_fixture::old_clear(container);
         growth_fixture::observe(container);
     } else {
         clear_exposure_storage(container);
+    }
     }
 }
 } // namespace pineforge::detail

@@ -52,6 +52,9 @@ struct CommandScratchRun;
 // still holds, compact records of the erased ones, the pending queues -- and
 // running digests of its append-only logs, each element folded once, so the
 // extension costs what is live per read, not what the run has done.
+// O1W extends this retirement representation inside v19: terminal exit fills
+// fold conditionally, and wholly settled bracket families use the explicit
+// pineforge-settled-bracket-families/v1 subdomain (native-feature-parity.md).
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v4";
 
 // The adapter's forced-close vocabulary. These strings are TradingView report
@@ -206,6 +209,10 @@ struct PlacementSnapshot {
     bool is_long = true;
     bool immediately = false;
     bool opening = false;
+    // A terminal Applied fill of an origin-free limit with no protection or
+    // replacement definition. Only K1's narrow filled-limit exception needs
+    // this receipt. A new incarnation clears it even on a copied lifecycle.
+    bool filled_exit = false;
     bool deferred_cohort = false;
     bool reservation_deferred_to_pending_entry = false;
     // A strategy.exit issued while its from_entry had neither an open trade
@@ -1277,6 +1284,25 @@ public:
         }
         return digest;
     }
+    // A wholly settled family has no mutable member or consumed-origin fact.
+    // Keep precisely the prefix needed by a later append or bracket cancel;
+    // it need not join the per-bar family walks.
+    struct Settled {
+        native_order::RunIdentity run{};
+        std::uint64_t last = 0;
+        std::size_t count = 0;
+        std::uint64_t digest = kDigestBasis;
+    };
+    bool wholly_settled() const noexcept {
+        return hot_.empty() && parked_.empty() && consumed_.empty();
+    }
+    Settled settled_record() const noexcept {
+        return {run_, settled_last_, settled_count_, settled_digest_};
+    }
+    explicit BracketRoster(const Settled& value)
+        : run_(value.run), settled_last_(value.last),
+          settled_count_(value.count), settled_digest_(value.digest) {}
+    BracketRoster() = default;
 
     // Erases every member equal to one of `doomed`, keeping the order of the
     // rest: the same result as erase(remove_if(find in doomed)). A doomed
@@ -1587,9 +1613,24 @@ public:
     fixture_consumed_partial_exit_cycles() const noexcept { return consumed_partial_exit_cycles_; }
 
     // Diagnostic work counters, excluded from broker continuation state.
+    enum class PositionTailGuard : std::uint8_t {
+        None, Inactive, Invalidated, PublicationRewind, PublicationGap,
+        BeforeBarrier, NonmonotoneTime, MissingOrigin, ReactivatedOrigin,
+        SideMismatch, InvalidQuantity, QuantumShift, MagnitudeShift, MagnitudeOverflow,
+        InvalidCertificate, NonfiniteResult, NonPineHost, ShortSeed,
+        Amendment, Relabel, Flat, Rebind, Count
+    };
     struct PositionTailWork {
         std::uint64_t queries = 0, certified_queries = 0, fallback_queries = 0;
         std::uint64_t update_rows = 0, replay_rows = 0, origin_visits = 0;
+        // Populated only by the observation seam. Counts are cumulative
+        // within a run; observers take differences at each query.
+        std::uint64_t host_rows = 0, spill_rows = 0, replay_host_rows = 0;
+        std::uint64_t begin_updates = 0, begin_rows = 0, closed_updates = 0;
+        std::uint64_t open_updates = 0, reissue_updates = 0, reissue_rows = 0;
+        std::uint64_t sync_updates = 0, invalidations = 0;
+        std::uint64_t guard_reasons[static_cast<std::size_t>(PositionTailGuard::Count)]{};
+        PositionTailGuard guard_reason = PositionTailGuard::None;
     };
     PositionTailWork position_tail_work() const noexcept;
 
@@ -2639,6 +2680,15 @@ private:
     PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
+    // Immutable, wholly settled families. All appends restore through
+    // bracket_family(); exit_cancel_bracket also consults this archive. The keyed
+    // digest is updated on every insertion/removal, never cached over a
+    // mutable roster. Run identity has the same normalization as v4 handles.
+    std::unordered_map<std::uint64_t, BracketRoster::Settled> settled_bracket_families_;
+    std::uint64_t settled_bracket_digest_ = 0;
+    BracketRoster& bracket_family(std::uint64_t key);
+    void archive_settled_bracket_families();
+    void clear_bracket_families() noexcept;
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
     std::vector<DelayedMarketOrder> delayed_market_orders_;
@@ -2926,7 +2976,8 @@ private:
     // R5 lane V19-E: erase_retired_rows()'s working sets, kept so that a bar
     // that erases nothing allocates nothing once they have grown (a quiet bar
     // must not allocate: tests/test_adapter_quiet_bar.cpp). Not state: every
-    // sweep empties them first, and nothing survives a sweep in them.
+    // sweep empties the working sets first; only the derived memos described
+    // below survive a sweep.
     struct RetiredRowScratch {
         std::vector<std::uint64_t> roots;
         std::vector<std::uint64_t> askable_origins;
@@ -2953,6 +3004,21 @@ private:
         // the fields the test reads never change once a row is placed, and a
         // row that could supersede the leg is newer than every row it covers.
         std::vector<std::pair<std::uint64_t, std::uint64_t>> unsuperseded;
+        // K3's exact first-reissue lookup over immutable identity/age/stop
+        // fields. New candidates read all rows; unresolved old candidates
+        // read only rows above reissue_high_water. A pinned first witness
+        // needs no more reads. A run begin clears this derived memo.
+        std::uint64_t reissue_high_water = 0;
+        std::int64_t reissue_cycle = -1;
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> reissues;
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> next_reissues;
+        std::vector<std::size_t> new_candidates;
+        std::vector<std::size_t> known_candidates;
+        std::vector<std::size_t> unresolved_candidates;
+        // Anchored legs may be remembered after newer incarnations. They
+        // are new peers too, even below the high water. Kept until a K3
+        // pass consumes them (quiet-bar returns must not discard them).
+        std::vector<std::uint64_t> adopted_reissues;
         // R5 lane V19-FIX: release_closed_cohort_origins()'s working sets --
         // the chain roots of the working requests, the openings of the open
         // lots and those no roster holds as a root, the origins leaving a
@@ -2978,6 +3044,10 @@ private:
             doomed.clear();
             held.clear();
             released.clear();
+            next_reissues.clear();
+            new_candidates.clear();
+            known_candidates.clear();
+            unresolved_candidates.clear();
         }
     };
     RetiredRowScratch retired_row_scratch_;
