@@ -143,7 +143,7 @@ public:
                 const auto available = static_cast<std::size_t>(
                     std::min<std::uint64_t>(buffer_.size(), remaining()));
                 exit_scratch_check(store_.read(handle_, ScratchField::value, offset_,
-                    {buffer_.data(), available}));
+                    {buffer_.data(), available}), store_);
                 begin_ = 0;
                 end_ = available;
             }
@@ -510,12 +510,12 @@ private:
 template<class... T> void read_payload(const CommandScratchStore& store, ScratchHandle version,
                                       std::uint64_t kind, T&... values) {
     ScratchRecordInfo info{};
-    exit_scratch_check(store.point(version, info));
+    exit_scratch_check(store.point(version, info), store);
     ExitScratchKeyWords words{};
     if (info.key_bytes != sizeof(words))
         exit_scratch_failure(ScratchStatus::programming_error);
     exit_scratch_check(store.read(version, ScratchField::key, 0,
-        {reinterpret_cast<std::byte*>(words.data()), sizeof(words)}));
+        {reinterpret_cast<std::byte*>(words.data()), sizeof(words)}), store);
     if (words[0] == 0 || words[1] != kind || words[3] != 0
         || (kind == sequence_kind ? words[2] != 0 : words[2] == 0))
         exit_scratch_failure(ScratchStatus::programming_error);
@@ -609,7 +609,7 @@ native_order::Owner ExitScratchVersionsProduction::freeze_openings(
     owner.openings.resize(static_cast<std::size_t>(count));
     for (std::uint64_t index = 0; index < count; ++index) {
         auto& handle = owner.openings[static_cast<std::size_t>(index)];
-        exit_scratch_check(read(context, index, handle));
+        exit_scratch_check(read(context, index, handle), store_);
         if (handle.run != run || !handle.incarnation)
             exit_scratch_failure(ScratchStatus::programming_error);
     }

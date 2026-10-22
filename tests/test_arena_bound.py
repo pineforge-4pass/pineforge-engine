@@ -43,6 +43,9 @@ VECTORS = ROOT / "tests/data/arena_bound_vectors.json"
 FIXTURE = ROOT / "tests/fixtures/arena_bound/generated.cpp"
 START_MS = 1_736_121_600_000
 STEP_MS = 60_000
+# The owner brief's uncertified hosting default. COMPUTE owns that production
+# constant; it is not defined in this engine checkout.
+HOST_DEFAULT_ARENA_BYTES_FROM_BRIEF = 1 << 30
 
 
 def check(condition: bool, message: str) -> None:
@@ -419,8 +422,11 @@ class SelectedWindow(ctypes.Structure):
 
 
 def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
-                   measurements: list, selected_window=None, half=False):
+                   measurements: list, selected_window=None, half=False,
+                   command_first=False, observe_commands=False, supplied_bytes=None,
+                   uncertified_default=False):
     base = runner.Strategy
+    watch_commands = command_first or observe_commands
 
     class MeasuredStrategy(base):
         def __init__(self, _unused):
@@ -436,6 +442,17 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                 function = getattr(lib, "arena_bound_test_" + name)
                 function.argtypes = []
                 function.restype = ctypes.c_uint64
+            if watch_commands:
+                lib.arena_bound_test_watch_commands.argtypes = [ctypes.c_uint64]
+                lib.arena_bound_test_watch_commands.restype = ctypes.c_int
+                for name in ("failures", "needed", "failed_extent", "peak_extent", "capacity",
+                             "share_numerator", "share_denominator", "before_used", "before_total",
+                             "before_supplied",
+                             "failed_before_used", "failed_before_high_water", "failed_high_water",
+                             "failed_supplied", "failed_used", "failed_free"):
+                    function = getattr(lib, "arena_bound_test_command_" + name)
+                    function.argtypes = []
+                    function.restype = ctypes.c_uint64
             self.fixture_counts = {}
             self.fixture_trades = 0
             original_create = lib.strategy_create
@@ -483,10 +500,16 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                       "runtime parameters differ from the fingerprinted inputs.json")
             all_terms, verdict = bound_probe(probe, data)
             bound = all_terms["terms"]["arena"]
-            check(verdict == "BOUNDED" and not bound["unbounded"],
-                  f"{probe.name}: {bound.get('reason', verdict)}")
+            if uncertified_default:
+                check(bound["unbounded"] and supplied_bytes is None and not half,
+                      "default-arena witness must really lack a certified arena bound")
+            else:
+                check(verdict == "BOUNDED" and not bound["unbounded"],
+                      f"{probe.name}: {bound.get('reason', verdict)}")
             certified = bound["arenaBytes"]
-            supplied = certified // 2 if half else certified
+            supplied = (HOST_DEFAULT_ARENA_BYTES_FROM_BRIEF if uncertified_default
+                        else supplied_bytes if supplied_bytes is not None
+                        else certified // 2 if half else certified)
             # Whole-chunk undersizing avoids an unallocatable fractional tail.
             supplied -= supplied % CHUNK_BYTES
             arena_directory.mkdir(parents=True, exist_ok=True)
@@ -499,6 +522,29 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                 check(self.lib.arena_bound_test_attach(fd, supplied) == 0,
                       f"arena attach: {self.lib.arena_bound_test_error()!r}")
                 attached = True
+                if watch_commands:
+                    # The 32-bar tape's complete curve is an independent
+                    # report first-write allowance (two doubles per row).
+                    # The failed command observer and store identity below
+                    # additionally reject exhaustion in any auxiliary user.
+                    curve_bytes = data["windowBars"] * 2 * ctypes.sizeof(ctypes.c_double)
+                    report_first_bytes = ((curve_bytes + CHUNK_BYTES - 1) // CHUNK_BYTES
+                                          * CHUNK_BYTES)
+                    check(self.lib.arena_bound_test_watch_commands(report_first_bytes) == 0,
+                          f"command observation setup: {self.lib.arena_bound_test_error()!r}")
+                    before_total = int(self.lib.arena_bound_test_command_before_total())
+                    before_used = int(self.lib.arena_bound_test_command_before_used())
+                    stats_supplied = int(self.lib.arena_bound_test_command_before_supplied())
+                    numerator = int(self.lib.arena_bound_test_command_share_numerator())
+                    denominator = int(self.lib.arena_bound_test_command_share_denominator())
+                    capacity = (stats_supplied * numerator // denominator
+                                // CHUNK_BYTES * CHUNK_BYTES)
+                    check(stats_supplied == supplied,
+                          "attached arena stats differ from the host-supplied arena size")
+                    check(before_total - before_used >= report_first_bytes,
+                          "report first-write allowance is absent before the command witness")
+                    check(self.lib.arena_bound_test_command_capacity() == capacity,
+                          "opened command store share differs from supplied arena stats")
                 print(f"arena_bound: begin probe={probe.name} params={params!r} "
                       f"half={half} supplied={supplied} certified={certified}",
                       file=sys.stderr, flush=True)
@@ -514,6 +560,56 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                           f"legacy_writes={int(self.lib.arena_bound_test_legacy_writes())} "
                           f"error={error!r}",
                           file=sys.stderr, flush=True)
+                    if command_first:
+                        check(getattr(error, "run_failure_code", None) == "report_sink_failed",
+                              f"command arena failure lost its typed code: {error!r}")
+                        check("scratch arena exhausted" in str(error),
+                              "command witness must fail at arena exhaustion")
+                        raw_args = getattr(error, "run_failure_args", None)
+                        check(isinstance(raw_args, str),
+                              f"command arena failure has no canonical JSON arguments: {raw_args!r}")
+                        args = json.loads(raw_args)
+                        check(isinstance(args, dict) and args.get("reason") == "arena_exhausted",
+                              f"command arena failure lost its typed arguments: {args!r}")
+                        check(args.get("store") == "command",
+                              f"a report user exhausted before the command store: {args!r}")
+                        check(self.lib.arena_bound_test_command_failures() > 0,
+                              "no command backing returned io_error")
+                        extent = int(self.lib.arena_bound_test_command_failed_extent())
+                        store_need = ((extent + CHUNK_BYTES - 1) // CHUNK_BYTES * CHUNK_BYTES)
+                        needed = min((1 << 63) - 1,
+                                     (store_need * denominator + numerator - 1) // numerator)
+                        check(self.lib.arena_bound_test_command_needed() == needed,
+                              "bridge demand differs from independent extent/share arithmetic")
+                        snapshot = {
+                            "high_water_bytes": int(
+                                self.lib.arena_bound_test_command_failed_high_water()),
+                            "arena_bytes": int(self.lib.arena_bound_test_command_failed_supplied()),
+                            "claimed_bytes": int(self.lib.arena_bound_test_command_failed_used()),
+                            "needed_bytes_lower_bound": needed,
+                        }
+                        for name, expected in snapshot.items():
+                            check(type(args.get(name)) is int and args[name] == expected,
+                                  f"{name}: typed argument {args.get(name)!r} != "
+                                  f"post-failure arena snapshot {expected}")
+                        check(store_need > capacity
+                              and self.lib.arena_bound_test_command_failed_free() > 0,
+                              "a command store must exhaust its share before the arena fills")
+                        check(snapshot["claimed_bytes"]
+                              == self.lib.arena_bound_test_command_failed_before_used()
+                              and snapshot["high_water_bytes"]
+                              == self.lib.arena_bound_test_command_failed_before_high_water(),
+                              "share refusal changed the arena's claims or high-water")
+                        check(self.lib.arena_bound_test_legacy_writes() == 0,
+                              "command exhaustion touched legacy private scratch")
+                        measurements.append({
+                            "probe": probe.name, "negative": True, "commandFirst": True,
+                            "arenaBytes": certified, "supplied": supplied,
+                            "beforeUsed": before_used, "beforeTotal": before_total,
+                            "snapshot": snapshot, "legacyWrites": 0, "capacity": capacity,
+                            "requestedExtent": extent,
+                        })
+                        return None
                     if not half:
                         raise
                     check(getattr(error, "run_failure_code", None) == "report_sink_failed",
@@ -524,11 +620,14 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                                          "arenaBytes": certified, "supplied": supplied})
                     return None
                 check(not half, "bound/2 unexpectedly completed; negative witness is ineffective")
+                check(not command_first,
+                      "command-share witness unexpectedly completed")
                 actual = int(self.lib.arena_bound_test_high_water())
                 used = int(self.lib.arena_bound_test_bytes_used())
                 check(self.lib.arena_bound_test_legacy_writes() == 0,
                       "a physical scratch user bypassed ScratchFile/arena")
-                check(0 <= used <= actual <= certified,
+                check(0 <= used <= actual <= supplied
+                      and (certified is None or actual <= certified),
                       f"{probe.name}: actual={actual}, used={used}, bound={certified}")
                 stream = all_terms["terms"]["finalizerStream"]
                 if not stream["unbounded"]:
@@ -540,14 +639,21 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                     check(actual >= CHUNK_BYTES,
                           "large curve used no arena; a legacy path was measured")
                 self.fixture_trades = int(report.get("total_trades", 0))
-                row = {"probe": probe.name, "actual": actual, "arenaBytes": certified,
+                ceiling = supplied if certified is None else certified
+                row = {"probe": probe.name, "actual": actual, "arenaBytes": ceiling,
                        "inputs": bound["inputs"],
                        "unboundedTerms": all_terms["unboundedTerms"],
                        "childPrivate": all_terms["terms"]["childPrivate"]}
+                if watch_commands:
+                    row.update(commandPeakExtent=int(
+                        self.lib.arena_bound_test_command_peak_extent()),
+                        commandCapacity=capacity, shareNumerator=numerator,
+                        shareDenominator=denominator, supplied=stats_supplied,
+                        uncertified=uncertified_default)
                 measurements.append(row)
-                print(f"arena_bound: probe={probe.name} actual={actual} bound={certified} "
-                      f"actual/bound={actual}/{certified} "
-                      f"ratio={actual / certified:.9f}", flush=True)
+                print(f"arena_bound: probe={probe.name} actual={actual} bound={ceiling} "
+                      f"actual/bound={actual}/{ceiling} "
+                      f"ratio={actual / ceiling:.9f}", flush=True)
                 return report
             finally:
                 if attached:
@@ -602,6 +708,75 @@ def fixture_facts(which: int, bars: int) -> dict:
     }
 
 
+def command_share_runs(runner, probe: Path, shared: Path, arena_directory: Path,
+                       measurements: list, bars, count: int) -> None:
+    """Same input at 1x (typed failure), 2x, and an independent large arena."""
+    params = {"case": 1}
+    kwargs = {"preloaded_bars": (bars, count), "input_tf": "1", "script_tf": "1"}
+    # No sidecar: this really exercises the uncertified/default path. It is a
+    # separate strategy/run, not a second view of the eventual 2x report.
+    default_probe = probe.parent / "command-share-uncertified"
+    default_probe.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(FIXTURE, default_probe / "generated.cpp")
+    (default_probe / "inputs.json").write_text(json.dumps(params) + "\n")
+    reference_class = measured_class(
+        runner, default_probe, shared, arena_directory, measurements,
+        observe_commands=True, uncertified_default=True)
+    with mock.patch.dict(os.environ, {runner.REPORT_SINK_ENV: "1"}):
+        reference = reference_class(shared).run(default_probe / "unused.csv",
+                                                params=params, **kwargs)
+    try:
+        reference_bytes = Path(reference.sink.path).read_bytes()  # Entire canonical report/trailer.
+        reference_row = measurements[-1]
+        check(reference_row["uncertified"]
+              and reference_row["supplied"] == HOST_DEFAULT_ARENA_BYTES_FROM_BRIEF,
+              "uncertified run did not receive the stated hosting default")
+        numerator, denominator = (reference_row["shareNumerator"],
+                                  reference_row["shareDenominator"])
+        expected_capacity = (reference_row["supplied"] * numerator // denominator
+                             // CHUNK_BYTES * CHUNK_BYTES)
+        check(reference_row["commandCapacity"] == expected_capacity,
+              "default arena's opened command share is not derived from its own size")
+        extent = reference_row["commandPeakExtent"]
+        check(extent > 0 and reference.sink.counts.get("T", 0) > 0,
+              "independent reference executed neither command pages nor full trade rows")
+    finally:
+        reference.close()
+
+    store_need = ((extent + CHUNK_BYTES - 1) // CHUNK_BYTES * CHUNK_BYTES)
+    arena_need = (store_need * denominator + numerator - 1) // numerator
+    half_need = (max(arena_need, reference_row["actual"]) + 1) // 2
+    one_x = (half_need + CHUNK_BYTES - 1) // CHUNK_BYTES * CHUNK_BYTES
+    one_capacity = one_x * numerator // denominator // CHUNK_BYTES * CHUNK_BYTES
+    two_capacity = 2 * one_x * numerator // denominator // CHUNK_BYTES * CHUNK_BYTES
+    check(one_capacity < store_need <= two_capacity,
+          "fixture does not isolate share exhaustion between 1x and 2x")
+    check(2 * one_x < reference_row["supplied"],
+          "independent reference arena must be larger than the 2x arena")
+
+    negative_class = measured_class(
+        runner, probe, shared, arena_directory, measurements,
+        command_first=True, supplied_bytes=one_x)
+    with mock.patch.dict(os.environ, {runner.REPORT_SINK_ENV: "1"}):
+        negative_class(shared).run(probe / "unused.csv", params=params, **kwargs)
+    check(measurements[-1].get("commandFirst") is True,
+          "1x run did not produce the typed command-share witness")
+
+    control_class = measured_class(
+        runner, probe, shared, arena_directory, measurements,
+        observe_commands=True, supplied_bytes=2 * one_x)
+    with mock.patch.dict(os.environ, {runner.REPORT_SINK_ENV: "1"}):
+        control = control_class(shared).run(probe / "unused.csv", params=params, **kwargs)
+    try:
+        check(measurements[-1]["commandCapacity"] == two_capacity
+              and measurements[-1]["commandPeakExtent"] == extent,
+              "2x replay changed the input's command-store extent")
+        check(Path(control.sink.path).read_bytes() == reference_bytes,
+              "2x full report differs byte-for-byte from the independent large-arena report")
+    finally:
+        control.close()
+
+
 def fixture_run(build: Path, work: Path, arena_directory: Path) -> list:
     import run_strategy as runner
 
@@ -640,6 +815,8 @@ def fixture_run(build: Path, work: Path, arena_directory: Path) -> list:
                               "openAtEndRows": facts["fills"]["rowsPerFill"],
                               "outputs": 0, "trace": 0, "hashes": 0,
                               "commentBytes": 64})
+        if which == 1:
+            command_share_runs(runner, probe, shared, arena_directory, rows, bars, count)
         cls = measured_class(runner, probe, shared, arena_directory, rows, window)
         strategy = cls(shared)
         with mock.patch.dict(os.environ, {runner.REPORT_SINK_ENV: "1"}):

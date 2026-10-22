@@ -7496,3 +7496,11 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
     set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
+
+# --- CR-150 core-cr150-arena begin ---
+# Set B stays in this fence so the set A lane file can be committed by name.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_command_scratch_arena_bounded)
+    pineforge_add_unit_test(test_command_scratch_arena_bounded)
+endif()
+# --- CR-150 core-cr150-arena end ---

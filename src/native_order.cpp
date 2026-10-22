@@ -1501,6 +1501,8 @@ struct WorkingRequestCore::JournalStore {
     mutable std::size_t codec_next = 0;
 
     void bind(detail::CommandScratchStore& store) {
+        if (store.status() == ReadStatus::io_error)
+            detail::rethrow_carried_scratch_failure(store.carried_failure());
         if (codec || end != 0 || store.status() != ReadStatus::ok || store.record_count() != 0
             || store.transaction_active())
             throw std::invalid_argument("journal codec requires an empty committed store");
@@ -1509,8 +1511,10 @@ struct WorkingRequestCore::JournalStore {
     }
     void check(ReadStatus status) const {
         if (status == ReadStatus::ok) return;
-        if (status == ReadStatus::io_error)
+        if (status == ReadStatus::io_error) {
+            if (codec) detail::rethrow_carried_scratch_failure(codec->carried_failure());
             throw detail::ScratchIoError(EIO, "native journal codec I/O");
+        }
         throw std::logic_error("native journal codec invalid storage");
     }
     const CommandEvent& codec_at(uint64_t position) const {

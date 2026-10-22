@@ -1100,8 +1100,7 @@ PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
 }
 
 namespace detail {
-// Use the production disk factory for directory selection and per-run I/O
-// observation, sharing the command scratch backing policy.
+// Share the production attached-arena/disk selection and per-run I/O policy.
 struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
     static constexpr std::size_t page_size = 512;
@@ -1112,7 +1111,7 @@ struct CommandScratchRun {
     explicit CommandScratchRun(ScratchKeyOrder order)
         : store{{2, page_size, 1, 1, order,
                  pineforge::detail::ScratchOpenMode::create_empty}, backing.get()} {
-        exit_scratch_check(store.status());
+        exit_scratch_check(store.status(), store);
     }
 };
 
@@ -1153,7 +1152,7 @@ ExitScratchError::ExitScratchError(ScratchStatus status)
 } // namespace detail
 
 void PineExecutionAdapter::bind_exit_scratch(detail::ExitScratchContext& context) {
-    detail::exit_scratch_check(context.store.status());
+    detail::exit_scratch_check(context.store.status(), context.store);
     if (context.store.transaction_active())
         detail::exit_scratch_failure(detail::ScratchStatus::programming_error);
     if (exit_scratch_.get() == &context) return;

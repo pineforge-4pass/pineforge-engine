@@ -446,7 +446,8 @@ class CatalogDiff(unittest.TestCase):
                 "optional": True,
                 "values": ["curve", "position_tail", "cohort", "exit_rank", "sequence_index",
                            "sequence_index_idx", "erased_minima", "erased_minima_idx",
-                           "partial_cycles", "partial_cycles_idx", "successor_roots", "unknown"],
+                           "partial_cycles", "partial_cycles_idx", "successor_roots", "command",
+                           "unknown"],
             },
         })
         self.assertEqual(entry["english"], [

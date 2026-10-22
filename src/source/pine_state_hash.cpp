@@ -54,12 +54,16 @@ void hash_source_run_identity(BrokerStateHashSink& f,
     f.u(0);
 }
 void hash_scratch_digest(BrokerStateHashSink& f,
-                         ::pineforge::detail::ScratchStatus status, std::uint64_t digest) {
-    if (status != ::pineforge::detail::ScratchStatus::ok)
+                         ::pineforge::detail::ScratchStatus status, std::uint64_t digest,
+                         const ::pineforge::detail::ReportScratchIoError* failure = nullptr) {
+    if (status != ::pineforge::detail::ScratchStatus::ok) {
+        if (status == ::pineforge::detail::ScratchStatus::io_error)
+            ::pineforge::detail::rethrow_carried_scratch_failure(failure);
         throw coded<std::logic_error>(
             status == ::pineforge::detail::ScratchStatus::io_error
                 ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
             {}, "scratch state digest failed");
+    }
     f.u(digest);
 }
 void hash_scratch_store(BrokerStateHashSink& f,
@@ -72,7 +76,7 @@ void hash_scratch_store(BrokerStateHashSink& f,
     std::vector<std::byte> page(store->page_size());
     std::uint64_t digest = 0;
     const auto status = store->state_digest({page.data(), page.size()}, digest);
-    hash_scratch_digest(f, status, digest);
+    hash_scratch_digest(f, status, digest, store->carried_failure());
 }
 void hash_exit_scratch(BrokerStateHashSink& f,
                        const source::detail::ExitScratchContext* scratch) {
@@ -1134,7 +1138,8 @@ void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const
         // Preserve the live store's exact presence/digest bytes after its
         // run-owned backing is released. This is no additional hash field.
         f.b(true);
-        hash_scratch_digest(f, released->status, released->digest);
+        hash_scratch_digest(f, released->status, released->digest,
+                            released->failure ? &*released->failure : nullptr);
     } else {
         hash_scratch_store(f, trade_scratch_);
     }

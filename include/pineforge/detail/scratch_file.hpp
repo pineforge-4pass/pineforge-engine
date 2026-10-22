@@ -175,10 +175,29 @@ public:
 #endif
         }
     }
+    // Explicit arena-only path. Reserve the whole chunk directory now, before
+    // the first write; max_bytes may be zero (a sub-chunk arena share).
+    // Ordinary open() and all existing report regions keep their policy.
+    void open_bounded(const char* /*prefix*/, std::uint64_t max_bytes) {
+        if (slab_)
+            throw std::logic_error("bounded scratch requires an arena region");
+        if (opened()) {
+            if (!arena_ || region_.max_bytes != max_bytes)
+                throw std::logic_error("bounded scratch policy changed after open");
+            return;
+        }
+        auto* arena = ScratchArena::attached();
+        if (!arena) throw std::logic_error("bounded scratch requires an attached arena");
+        check_extent(max_bytes, 0, true, io_raiser_);
+        arena_io([&] { arena->open_region(region_, max_bytes); });
+        arena_ = arena;
+    }
     // Monotone, zero-filled growth, for sparse hash indexes and similar
     // ftruncate users. Does not shrink or open the file. Arena mode claims
     // chunks without a sizing syscall; file mode uses fstat + ftruncate.
-    void ensure_size(std::uint64_t bytes) {
+    // A bounded caller can supply the arena size required for this extent.
+    // Only an exhaustion uses it; zero preserves report users' chunk demand.
+    void ensure_size(std::uint64_t bytes, std::uint64_t needed_bytes_lower_bound = 0) {
         if (slab_) {
             slab_->extend(resource_, bytes);
             return;
@@ -186,7 +205,7 @@ public:
         check_extent(bytes, 0, arena_ != nullptr, io_raiser_);
         if (!opened()) throw std::logic_error("scratch growth before open");
         if (arena_) {
-            arena_io([&] { arena_->ensure_size(region_, bytes); });
+            arena_io([&] { arena_->ensure_size(region_, bytes, needed_bytes_lower_bound); });
             return;
         }
         struct stat status{};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/detail/scratch_store.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -106,6 +107,8 @@ public:
     struct CommandScratchSnapshot {
         detail::ScratchStatus status = detail::ScratchStatus::ok;
         std::uint64_t digest = 0;
+        // Failure transport only, not logical durable store state/hash input.
+        std::optional<detail::ReportScratchIoError> failure;
     };
     // After release, this is the exact state_digest previously read from the
     // live store. It preserves existing post-run hash bytes without a backing.

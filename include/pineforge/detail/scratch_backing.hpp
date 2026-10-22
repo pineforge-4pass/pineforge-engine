@@ -5,8 +5,11 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 
 namespace pineforge::detail {
+
+class ReportScratchIoError;
 
 // No capacity/refusal status and no RunFailureCode conversion in this API.
 // end: an ordered seek found no record. cancelled: a visitor returned false.
@@ -78,8 +81,10 @@ struct ScratchIoObserver {
 // A failed write MAY have partially modified its target: transactions must
 // protect previously committed pages. No operation throws or allocates an
 // O(page_count) userspace directory. Production backing must extend/spill;
-// backing I/O faults, including exhaustion, are io_error, never a capacity
-// run failure. programming_error is reserved for caller contract violations.
+// backing I/O faults, including exhaustion, are io_error. An arena backing
+// can additionally carry its original typed exception for an owner to rethrow;
+// the status itself is never a capacity code. programming_error is reserved
+// for caller contract violations.
 class ScratchBacking {
 public:
     virtual ~ScratchBacking() noexcept = default;
@@ -91,6 +96,15 @@ public:
     ScratchBackingKind kind() const noexcept { return kind_; }
     std::size_t page_size() const noexcept { return page_size_; }
     virtual std::uint64_t page_count() const noexcept = 0;
+    // Construction-time arena region bound, including a zero-byte share.
+    // No value for disk/test backings; this policy is not logical store state.
+    virtual std::optional<std::uint64_t> arena_capacity_bytes() const noexcept {
+        return std::nullopt;
+    }
+    // Optional original exception for the last backing operation. Borrowed
+    // until the next operation/destruction; inspect before cleanup I/O.
+    // Disk/test backings retain their existing status-only behavior.
+    virtual const ReportScratchIoError* carried_failure() const noexcept { return nullptr; }
 
     ScratchStatus read_page(ScratchPageId id, ScratchBuffer destination) const noexcept {
         const auto status = valid_page(id, destination.data, destination.size)

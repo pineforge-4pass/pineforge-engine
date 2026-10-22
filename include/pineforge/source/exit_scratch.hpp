@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/detail/scratch_store.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -87,6 +89,14 @@ ExitScratchContext& exit_scratch(const PineExecutionAdapter&);
 inline void exit_scratch_check(ScratchStatus status) {
     if (status != ScratchStatus::ok) exit_scratch_failure(status);
 }
+[[noreturn]] inline void exit_scratch_failure(ScratchStatus status, const ScratchReadback& store) {
+    if (status == ScratchStatus::io_error)
+        pineforge::detail::rethrow_carried_scratch_failure(store.carried_failure());
+    exit_scratch_failure(status);
+}
+inline void exit_scratch_check(ScratchStatus status, const ScratchReadback& store) {
+    if (status != ScratchStatus::ok) exit_scratch_failure(status, store);
+}
 inline ExitScratchVersions& exit_scratch_versions(ExitScratchContext& context) {
     if (!context.versions) exit_scratch_failure(ScratchStatus::programming_error);
     return *context.versions;
@@ -99,7 +109,7 @@ template<class Visit> void exit_scratch_lots(ExitScratchContext& scratch,
         [](void* context, const NativeOpenLot& lot) {
             return (*static_cast<Visit*>(context))(lot);
         });
-    if (status != ScratchStatus::cancelled) exit_scratch_check(status);
+    if (status != ScratchStatus::cancelled) exit_scratch_check(status, scratch.store);
 }
 template<class Visit> void exit_scratch_working(ExitScratchContext& scratch,
         const NativeStrategyHost& host, Visit visit) {
@@ -108,7 +118,7 @@ template<class Visit> void exit_scratch_working(ExitScratchContext& scratch,
         [](void* context, const NativeWorkingRequest& request) {
             return (*static_cast<Visit*>(context))(request);
         });
-    if (status != ScratchStatus::cancelled) exit_scratch_check(status);
+    if (status != ScratchStatus::cancelled) exit_scratch_check(status, scratch.store);
 }
 
 // A handle plus a borrowed readback, never a cache pointer or owning string.
@@ -119,12 +129,15 @@ public:
                     ScratchField field = ScratchField::value, std::uint64_t offset = 0)
         : reader_(&reader), handle_(handle), field_(field), offset_(offset) {
         ScratchRecordInfo info{};
-        exit_scratch_check(reader.point(handle, info));
+        exit_scratch_check(reader.point(handle, info), reader);
         const auto bytes = field == ScratchField::key ? info.key_bytes : info.value_bytes;
         if (offset > bytes) exit_scratch_failure(ScratchStatus::corrupt);
         size_ = bytes - offset;
     }
     std::uint64_t size() const noexcept override { return size_; }
+    const pineforge::detail::ReportScratchIoError* carried_failure() const noexcept override {
+        return reader_->carried_failure();
+    }
     bool empty() const noexcept { return size_ == 0; }
     ScratchStatus read(std::uint64_t offset, ScratchBuffer destination) const noexcept override {
         if (offset > size_ || destination.size > size_ - offset)
@@ -199,7 +212,12 @@ inline bool exit_scratch_equal(const ScratchByteSource& left,
                                const ScratchByteSource& right) {
     if (left.size() != right.size()) return false;
     int order = 0;
-    exit_scratch_check(exit_scratch_compare_text(left, 0, right, 0, order));
+    const auto status = exit_scratch_compare_text(left, 0, right, 0, order);
+    if (status == ScratchStatus::io_error) {
+        pineforge::detail::rethrow_carried_scratch_failure(left.carried_failure());
+        pineforge::detail::rethrow_carried_scratch_failure(right.carried_failure());
+    }
+    exit_scratch_check(status);
     return order == 0;
 }
 inline bool operator==(const ExitScratchText& left, const std::string& right) {
@@ -279,7 +297,7 @@ inline ExitScratchKeyWords exit_scratch_words(ExitScratchContext& context,
                                              ScratchHandle handle) {
     ExitScratchKeyWords words{};
     exit_scratch_check(context.store.read(handle, ScratchField::key, 0,
-        {reinterpret_cast<std::byte*>(words.data()), sizeof(words)}));
+        {reinterpret_cast<std::byte*>(words.data()), sizeof(words)}), context.store);
     return words;
 }
 inline ScratchHandle exit_scratch_seek(ExitScratchContext& context,
@@ -287,16 +305,23 @@ inline ScratchHandle exit_scratch_seek(ExitScratchContext& context,
     ScratchHandle handle = 0;
     const auto status = context.store.lower_bound(key, handle);
     if (status == ScratchStatus::end) return 0;
-    exit_scratch_check(status);
+    exit_scratch_check(status, context.store);
     return handle;
 }
 template<class Edit> void exit_scratch_edit(ExitScratchContext& context, Edit operation) {
-    exit_scratch_check(context.store.begin());
+    exit_scratch_check(context.store.begin(), context.store);
     auto status = operation();
     if (status == ScratchStatus::ok)
         status = context.store.commit(ScratchDurability::buffered);
     if (status != ScratchStatus::ok) {
-        exit_scratch_check(context.store.rollback());
+        // Rollback makes further backing calls. Preserve the first failure
+        // before cleanup can replace the backing's borrowed diagnostic.
+        std::optional<pineforge::detail::ReportScratchIoError> failure;
+        if (status == ScratchStatus::io_error)
+            if (const auto* carried = context.store.carried_failure()) failure = *carried;
+        const auto rollback_status = context.store.rollback();
+        pineforge::detail::rethrow_carried_scratch_failure(failure ? &*failure : nullptr);
+        exit_scratch_check(rollback_status, context.store);
         exit_scratch_failure(status);
     }
 }
@@ -386,7 +411,7 @@ private:
         if (!exit_scratch_equal(key, found)) return absent;
         std::uint64_t value = 0;
         exit_scratch_check(context.store.read(handle, ScratchField::value, 0,
-            {reinterpret_cast<std::byte*>(&value), sizeof(value)}));
+            {reinterpret_cast<std::byte*>(&value), sizeof(value)}), context.store);
         return value;
     }
     template<class Visit> void walk(std::uint64_t major, bool restricted, Visit visit) const {
@@ -398,11 +423,11 @@ private:
             if (words[0] != scope_.scope() || (restricted && words[2] != major)) break;
             std::uint64_t value = 0;
             exit_scratch_check(context.store.read(handle, ScratchField::value, 0,
-                {reinterpret_cast<std::byte*>(&value), sizeof(value)}));
+                {reinterpret_cast<std::byte*>(&value), sizeof(value)}), context.store);
             if (!visit(value)) break;
             const auto status = context.store.next(handle, handle);
             if (status == ScratchStatus::end) break;
-            exit_scratch_check(status);
+            exit_scratch_check(status, context.store);
         }
     }
     ExitScratchScope scope_;
@@ -417,7 +442,7 @@ template<class T> struct ExitScratchValue {
     static T read(const ExitScratchContext& context, ScratchHandle handle) {
         T value{};
         exit_scratch_check(context.store.read(handle, ScratchField::value, 0,
-            {reinterpret_cast<std::byte*>(&value), sizeof(value)}));
+            {reinterpret_cast<std::byte*>(&value), sizeof(value)}), context.store);
         return value;
     }
 };
@@ -441,7 +466,7 @@ template<> struct ExitScratchValue<native_order::RequestHandle> {
                                             ScratchHandle handle) {
         std::uint64_t incarnation = 0;
         exit_scratch_check(context.store.read(handle, ScratchField::value, 0,
-            {reinterpret_cast<std::byte*>(&incarnation), sizeof(incarnation)}));
+            {reinterpret_cast<std::byte*>(&incarnation), sizeof(incarnation)}), context.store);
         return {context.run, incarnation};
     }
 };
@@ -522,7 +547,7 @@ public:
             previous = row;
             const auto status = context().store.next(handle, handle);
             if (status == ScratchStatus::end) break;
-            exit_scratch_check(status);
+            exit_scratch_check(status, context().store);
         }
     }
 

@@ -166,7 +166,39 @@ size, ids are below `scratch_no_page`, a read at or past the extent is
 `not_found`, and a successful write extends the extent to cover the id and
 zero-fills any gap. A failed write may have changed its target, which is why a
 transaction must protect previously committed pages. No operation throws.
-Exhaustion is a `programming_error`, never a capacity code.
+Backing exhaustion is `io_error`, never a capacity status. Typed arena
+exhaustion is the one exhaustion case carried as `report_sink_failed` for the
+owner to rethrow. `programming_error` is reserved for caller contract violations.
+
+The production command backing uses an explicitly attached `ScratchArena`
+when present and otherwise retains its unlinked disk-file implementation.
+Command-store bytes scale with the strategy's LIVE commands/exits/lots:
+pending orders, open lots and dependency fan-out, not window length or trade
+count. Each store may use at most the exact ratio `kCommandScratchArenaShare`
+(f, provisionally 1/8 pending M1 measurement) of the attached arena. At open,
+K = floor_to_chunk(f × `ScratchArena::stats().bytes_supplied`), using the
+arena's 1 MiB chunks. The complete K/chunk directory is reserved once at open;
+writes do not allocate a directory, including when the share rounds to zero.
+Crossing the share is typed `arena_exhausted` before claiming any chunks,
+at every arena size including the default and largest hosting rung.
+The run byte budget is reserved before growth and released on
+failed growth or destruction. Arena mode supports `buffered` sync; `data` and
+`full` return `programming_error`.
+
+An arena backing also exposes its original `ReportScratchIoError` through
+`carried_failure()`. The store retains that diagnostic across successful
+rollback I/O, clearing it on a new transaction. Owners rethrow the original
+exception before applying their existing status-only error mapping. In
+particular, arena exhaustion remains `report_sink_failed` with reason
+`arena_exhausted`, store `command`, and the allocator's locked snapshot of
+`high_water_bytes`, `arena_bytes` and `claimed_bytes`.
+`needed_bytes_lower_bound` is the ARENA size that can satisfy this store:
+ceil(chunkCeil(required store extent after the refused write) / f), using exact
+integer arithmetic and saturating at INT64_MAX, the failure-argument transport
+maximum. It is not the store's own shortfall. The hosting layer re-places a run
+on this typed failure; a need beyond its largest arena continues to raise the
+same failure until the host stops re-placement. A separate command byte-budget
+refusal retains its existing status-only `io_error`.
 
 Every attempted `read_page`, `write_page` and `sync` is reported once to the
 `ScratchIoObserver`, errors and refused arguments included, with the backing's
