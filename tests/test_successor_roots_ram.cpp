@@ -21,6 +21,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -36,52 +37,100 @@ namespace pd = pineforge::detail;
 
 namespace {
 
-// Transcribed from d91c96d47d's native_order.hpp: InstanceBinding at 2202-2205,
-// then every WorkingRequestCore data member in declaration order at 2296-2344,
-// including ReceiptKey's fields. Private nested types are mirrored locally;
-// no private-member access or values from a compiler/implementation run are
-// used. The class has no base or virtual members. Adding the non-virtual
-// bind_scratch_slab member function changes none of these data declarations.
-// Keep this pre-change mirror fixed: sizeof/alignof are compared against the
-// real class in each remote compiler/configuration, never against a self-pin.
-struct WorkingRequestCorePreBindLayout {
+// Pin s4 working structures at native_order.hpp:2548 and :2568, O(1) per run.
+// Transcribed from working_members.hpp:14-18 and :414-420. Frame is mirrored
+// independently so its inline growth cannot enlarge both sides of the pin.
+template<class T>
+struct WorkingSequenceWorkingLayout {
+    struct Frame {
+        std::optional<T> row;
+        std::size_t index = 0;
+        bool dirty = false;
+    };
+
+    pd::ScratchStore* store_ = nullptr;
+    std::uint64_t domain_ = 0, owner_ = 0;
+    std::size_t count_ = 0;
+    std::vector<T> memory_;
+    mutable std::array<Frame, 2> frames_{};
+    mutable std::size_t next_frame_ = 0;
+    std::shared_ptr<pd::working_store::Binding> binding_;
+};
+
+using IssuedWorkingLayout = WorkingSequenceWorkingLayout<std::pair<uint64_t, uint64_t>>;
+using CohortReceiptsWorkingLayout = WorkingSequenceWorkingLayout<no::CohortReceipt>;
+
+static_assert(sizeof(pd::WorkingSequence<std::pair<uint64_t, uint64_t>>)
+                  == sizeof(IssuedWorkingLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: issued size");
+static_assert(alignof(pd::WorkingSequence<std::pair<uint64_t, uint64_t>>)
+                  == alignof(IssuedWorkingLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: issued alignment");
+static_assert(sizeof(pd::WorkingSequence<no::CohortReceipt>)
+                  == sizeof(CohortReceiptsWorkingLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: cohort receipts size");
+static_assert(alignof(pd::WorkingSequence<no::CohortReceipt>)
+                  == alignof(CohortReceiptsWorkingLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: cohort receipts alignment");
+
+// Pin s4 working structures at native_order.hpp:2548 and :2568, O(1) per run.
+// native_order.hpp:2519 holds a pointer to ScratchStore (scratch_store.hpp:64),
+// not the pointee by value; transcribe that pointer slot only.
+struct ScratchStorePointerLayout {
+    pd::ScratchStore* scratch_store_ = nullptr;
+};
+
+static_assert(sizeof(pd::ScratchStore*) == sizeof(ScratchStorePointerLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: scratch pointer size");
+static_assert(alignof(pd::ScratchStore*) == alignof(ScratchStorePointerLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: scratch pointer alignment");
+
+// Pin s4 working structures at native_order.hpp:2548 and :2568, O(1) per run.
+// Transcribed from native_order.hpp:2518-2571, with InstanceBinding at :2364-2367.
+// Pointer-only private nested types stay incomplete. The class has no base or
+// virtual members; no padding or compiler-reported size is transcribed.
+struct WorkingRequestCoreWorkingLayout {
     struct InstanceBinding {
         uint64_t generation = 1;
         bool expired = false;
     };
+    struct WorkingBook;
+    struct BookSpill;
+    struct JournalStore;
+    struct ChainSegments;
+    struct SuccessorRootIndex;
+    struct ReceiptStore;
 
     no::RunIdentity identity_;
+    pd::ScratchStore* scratch_store_ = nullptr;
+    std::shared_ptr<WorkingBook> working_book_;
     std::shared_ptr<InstanceBinding> instance_;
     std::vector<no::LiveRequest> live_;
-    std::vector<no::CommandEvent> history_;
+    std::shared_ptr<BookSpill> book_spill_;
     uint64_t last_ordinal_ = 0;
     uint64_t last_incarnation_ = 0;
     uint64_t epoch_ = 0;
-    std::vector<std::pair<uint64_t, std::size_t>> ordinal_index_;
+    std::shared_ptr<JournalStore> journal_;
     std::size_t history_base_ = 0;
     uint64_t retired_through_ = 0;
-    struct SuccessorRootIndex;
-    std::vector<std::pair<uint64_t, uint64_t>> issued_;
+    static constexpr uint64_t kNoChainFloor = std::numeric_limits<uint64_t>::max();
+    mutable uint64_t chain_floor_ = kNoChainFloor;
+    mutable bool chain_floor_exact_ = true;
+    std::shared_ptr<ChainSegments> chain_segments_;
+    pd::WorkingSequence<std::pair<uint64_t, uint64_t>> issued_;
     std::shared_ptr<SuccessorRootIndex> successor_roots_;
     std::vector<std::pair<uint64_t, uint64_t>> repriced_;
-    struct ReceiptKey {
-        no::EventId cause;
-        no::RequestHandle recipient;
-        no::GroupEffect effect = no::GroupEffect::Reduce;
-        uint64_t outcome_ordinal = 0;
-    };
-    std::vector<ReceiptKey> receipts_;
-    std::size_t receipts_base_ = 0;
+    std::shared_ptr<ReceiptStore> receipt_store_;
     std::uint64_t next_cohort_handle_ = 1;
     std::map<std::uint64_t, no::CohortRoster> cohorts_;
-    std::vector<no::CohortReceipt> cohort_receipts_;
+    pd::WorkingSequence<no::CohortReceipt> cohort_receipts_;
     std::size_t cohort_receipts_base_ = 0;
 };
 
-static_assert(sizeof(no::WorkingRequestCore) == sizeof(WorkingRequestCorePreBindLayout),
-              "slab binding must preserve the pre-change WorkingRequestCore size");
-static_assert(alignof(no::WorkingRequestCore) == alignof(WorkingRequestCorePreBindLayout),
-              "slab binding must preserve the pre-change WorkingRequestCore alignment");
+static_assert(sizeof(no::WorkingRequestCore) == sizeof(WorkingRequestCoreWorkingLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: core size");
+static_assert(alignof(no::WorkingRequestCore) == alignof(WorkingRequestCoreWorkingLayout),
+              "s4 working structures at native_order.hpp:2548 and :2568, O(1) per run: core alignment");
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
