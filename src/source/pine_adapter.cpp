@@ -4920,9 +4920,6 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     // the replace, which moves their value out into predecessor_legs.
     std::optional<PlacementSnapshot> predecessor_snapshot;
     exit_legs::Lifecycle predecessor_legs;
-    // The node retire() would erase for `key`, kept for the successor's
-    // entry instead of allocating one.
-    decltype(live_by_source_key_)::node_type reused_key_node;
     bool predecessor_exit = false;
     bool predecessor_market = false;
     const auto unchanged_dynamic_exit = [&](const PlacementSnapshot& prior) {
@@ -5163,7 +5160,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                 }
                 snapshot.projection_predecessor_exit = predecessor_exit;
                 snapshot.projection_predecessor_market = predecessor_market;
-                reused_key_node = live_by_source_key_.extract(key);
+                live_by_source_key_.erase(key);
                 retire(*existing_handle);
                 accepted = *result.successor;
             }
@@ -5273,13 +5270,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             delayed_market_orders_.end());
     }
     if (key != 0) {
-        if (reused_key_node) {
-            reused_key_node.mapped() = *accepted;
-            auto placed = live_by_source_key_.insert(std::move(reused_key_node));
-            if (!placed.inserted) placed.position->second = *accepted;
-        } else {
-            live_by_source_key_[key] = *accepted;
-        }
+        live_by_source_key_[key] = *accepted;
     }
     if (opening) {
         const auto source_pin = placement_.pin_at(accepted->incarnation);
@@ -5305,8 +5296,11 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
 
 std::vector<native_order::RequestHandle> PineExecutionAdapter::openings_for(const SourceId& id) const {
     const auto found = cohorts_by_id_.find(id);
-    return found == cohorts_by_id_.end() ? std::vector<native_order::RequestHandle>{}
-                                         : found->second.opened;
+    if (found == cohorts_by_id_.end()) return {};
+    std::vector<native_order::RequestHandle> openings;
+    openings.reserve(found->second.opened.size());
+    for (const auto& opening : found->second.opened) openings.push_back(opening);
+    return openings;
 }
 
 bool PineExecutionAdapter::from_entry_filled_this_cycle(const SourceId& id) const {

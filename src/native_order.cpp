@@ -3473,7 +3473,8 @@ void WorkingRequestCore::publish_working(const MutationPlan& plan) {
             if (plan.live_change == kLivePush) ++count;
         }
         if (plan.consume_incarnation) {
-            for (const auto& event : plan.events) {
+            for (std::size_t i = 0; i < plan.events.size(); ++i) {
+                const auto& event = plan.events[i];
                 const RequestDefinition* definition = nullptr;
                 if (const auto* accepted = std::get_if<AcceptedEvent>(&event))
                     definition = accepted->definition.get();
@@ -3494,7 +3495,8 @@ void WorkingRequestCore::publish_working(const MutationPlan& plan) {
     });
     } catch (...) { issued_.restore_size(ranges_before); throw; }
     book.count = count;
-    for (auto& row : book.side) row.reset();
+    book.compatibility_read.reset();
+    book.compatibility_rank_read.reset();
 }
 
 WorkingRequestCore::WorkingRequestCore(WorkingRequestCore&& other) noexcept {

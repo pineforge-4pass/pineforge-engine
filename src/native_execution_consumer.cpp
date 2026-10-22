@@ -7079,7 +7079,8 @@ void NativeExecutionConsumer::match_path(
                         continue;
                     }
                 } else {
-                    read_target_into(engine, live, match_target_, match_target_handles_);
+                    read_target_into(engine, live ? &*live : nullptr,
+                                     match_target_, match_target_handles_);
                     // Handed the timeline: an unbound close carrying a
                     // binding the book still has binds here, taking an
                     // ordinal (ReplaceOptions::keep_binding, R5 lane V19-D).
@@ -7099,7 +7100,8 @@ void NativeExecutionConsumer::match_path(
             CoreStep step;
             try {
                 if (!winner_target) {
-                    read_target_into(engine, live, match_target_, match_target_handles_);
+                    read_target_into(engine, live ? &*live : nullptr,
+                                     match_target_, match_target_handles_);
                 }
                 const native_order::TargetObservation& observed =
                     winner_target ? *winner_target : match_target_;
