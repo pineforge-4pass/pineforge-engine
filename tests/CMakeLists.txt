@@ -7079,3 +7079,8 @@ set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+
+# CR150-CX open-lot scaling probe (comparison with the join head): wall and CPU
+# of the engine run with N open lots. Not part of v1.6.1.
+pineforge_add_unit_test(test_open_lots_scale_1k)
+pineforge_add_unit_test(test_open_lots_scale_100k)
