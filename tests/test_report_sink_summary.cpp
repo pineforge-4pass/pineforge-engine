@@ -6,6 +6,7 @@
 #include <pineforge/execution_observer.h>
 #include <pineforge/selected_window.h>
 #include <pineforge/native_host.hpp>
+#include <pineforge/run_failure.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/native_execution_consumer.hpp"
 
@@ -453,24 +454,58 @@ void presented_case(Directory& directory, const std::vector<double>& pnls, int i
     options.selected = options.observed = capture;
     for (auto* host : {&baseline, &path, &fd}) {
         configure_capture(*host, options, static_cast<int>(bars.size()));
-        run(*host, bars);
-        unpublished(*host);
+        if (!invalid) {
+            run(*host, bars);
+            unpublished(*host);
+        }
     }
-    Report array;
-    baseline.fill_report(&array.value);
-    const auto ref = reference(array.value);
-    if (!invalid && std::all_of(pnls.begin(), pnls.end(), [](double pnl) { return pnl == 0; })) {
-        require(ref.wins == 0 && ref.losses == 0, "zero-only report counted a win/loss");
-        require(std::signbit(array.value.trades[0].pnl) == std::signbit(pnls.front()),
-                "presentation lost the first zero's sign before folding");
-    }
-    if (invalid)
-        require(ref.nonfinite_t_field == invalid, "invalid fixture did not reach its first field");
-    for (auto* host : {&path, &fd}) {
-        Report actual;
-        host->fill_report(&actual.value);
-        equal(summary(*host), ref, "presented array reference");
-        repeated_read(*host, ref, "presented route");
+    if (invalid) {
+        const char* fields[] = {"entry_price", "exit_price", "qty", "pnl",
+                                "pnl_pct", "max_runup", "max_drawdown", "commission"};
+        require(invalid >= 5 && invalid <= 12, "invalid fixture field is out of range");
+        const auto expected_args = std::string("{\"field\":\"trades.")
+            + fields[invalid - 5] + "\",\"reason\":\"nonfinite\"}";
+        for (auto* host : {&baseline, &path, &fd}) {
+            Report rejected;
+            RunFailureValue failure;
+            try {
+                // Selected/observed runs present at terminal capture; an
+                // ordinary run presents when fill_report is requested.
+                host->execute(bars);
+                if (host->last_run_status() != 0 || !host->last_error().empty()) {
+                    failure = run_failure_value_of(*host);
+                } else {
+                    host->fill_report(&rejected.value);
+                }
+            } catch (const std::exception& error) {
+                failure = classify_run_failure(error);
+            }
+            require(failure.code == RunFailureCode::report_result_invalid,
+                    "invalid presentation did not produce its canonical-result refusal");
+            require(run_failure_code_class(failure.code) == RunFailureClass::engine_fault
+                        && !run_failure_code_retryable(failure.code),
+                    "invalid presentation changed its failure class");
+            require(failure.args && *failure.args == expected_args,
+                    "invalid presentation lost its first offending field");
+            unpublished(*host);
+            require(receipt(*host).complete == 0,
+                    "invalid presentation published a successful trailer");
+        }
+    } else {
+        Report array;
+        baseline.fill_report(&array.value);
+        const auto ref = reference(array.value);
+        if (std::all_of(pnls.begin(), pnls.end(), [](double pnl) { return pnl == 0; })) {
+            require(ref.wins == 0 && ref.losses == 0, "zero-only report counted a win/loss");
+            require(std::signbit(array.value.trades[0].pnl) == std::signbit(pnls.front()),
+                    "presentation lost the first zero's sign before folding");
+        }
+        for (auto* host : {&path, &fd}) {
+            Report actual;
+            host->fill_report(&actual.value);
+            equal(summary(*host), ref, "presented array reference");
+            repeated_read(*host, ref, "presented route");
+        }
     }
     pipe.finish();
 }

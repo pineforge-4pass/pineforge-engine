@@ -7,13 +7,17 @@
 // that base for the missing feature. CORE-TOP records the lab diagnostic;
 // no compilation or execution is permitted in this worktree on the Mac.
 #include <pineforge/metrics_stream.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include "trade_stats_reference.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace {
@@ -84,18 +88,42 @@ bool same_trade_stats(const pf_trade_stats_t& got, const pf_trade_stats_t& want,
 void check_trade_rows(const std::vector<pineforge::TradeC>& rows,
                       pineforge::metrics::TradeFilter filter, double capital) {
     const int n = static_cast<int>(rows.size());
+    const auto check_result = [&](auto compute, const pf_trade_stats_t& expected, int count) {
+        if (std::isfinite(capital)) {
+            CHECK(same_trade_stats(compute(), expected, count, filter));
+        } else {
+            // A nonfinite capital is invalid even for an empty or filtered
+            // prefix; finish must retain that refusal across reads and copies.
+            bool refused = false;
+            try {
+                (void)compute();
+            } catch (const std::exception& error) {
+                const auto failure = pineforge::classify_run_failure(error);
+                CHECK(failure.code == pineforge::RunFailureCode::report_result_invalid);
+                CHECK(pineforge::run_failure_code_class(failure.code)
+                      == pineforge::RunFailureClass::engine_fault);
+                CHECK(!pineforge::run_failure_code_retryable(failure.code));
+                const char* prefix = filter == pineforge::metrics::TradeFilter::ALL
+                    ? "metrics.all" : filter == pineforge::metrics::TradeFilter::LONG
+                    ? "metrics.longs" : "metrics.shorts";
+                CHECK(failure.args && *failure.args == std::string("{\"field\":\"")
+                      + prefix + ".net_profit_pct\",\"reason\":\"nonfinite\"}");
+                refused = true;
+            }
+            CHECK(refused);
+        }
+    };
     const pf_trade_stats_t want = trade_stats_reference::compute_trade_stats(
         rows.data(), n, filter, capital);
-    const pf_trade_stats_t got = pineforge::metrics::compute_trade_stats(
-        rows.data(), n, filter, capital);
-    CHECK(same_trade_stats(got, want, n, filter));
+    check_result([&] {
+        return pineforge::metrics::compute_trade_stats(rows.data(), n, filter, capital);
+    }, want, n);
 
     pineforge::metrics::TradeStatsAccumulator accumulator(filter, capital);
     for (const pineforge::TradeC& row : rows) accumulator.fold(row);
-    const pf_trade_stats_t folded = accumulator.finish();
-    CHECK(same_trade_stats(folded, want, n, filter));
+    check_result([&] { return accumulator.finish(); }, want, n);
     const auto& finished = accumulator;
-    CHECK(same_trade_stats(finished.finish(), want, n, filter));
+    check_result([&] { return finished.finish(); }, want, n);
 
     // Model a sealed prefix, then continue each independent copy with the
     // unsealed and range-end rows. Finishing a prefix must not change it.
@@ -110,7 +138,7 @@ void check_trade_rows(const std::vector<pineforge::TradeC>& rows,
         for (int i = 0; i < split; ++i) prefix.fold(rows[i]);
         const pf_trade_stats_t prefix_want = trade_stats_reference::compute_trade_stats(
             rows.data(), split, filter, capital);
-        CHECK(same_trade_stats(prefix.finish(), prefix_want, split, filter));
+        check_result([&] { return prefix.finish(); }, prefix_want, split);
 
         auto copied = prefix;
         // Assignment must replace filter/capital as well as every sum and
@@ -124,19 +152,19 @@ void check_trade_rows(const std::vector<pineforge::TradeC>& rows,
         assigned = prefix;
         const auto& self = assigned;
         assigned = self;
-        CHECK(same_trade_stats(copied.finish(), prefix_want, split, filter));
-        CHECK(same_trade_stats(assigned.finish(), prefix_want, split, filter));
+        check_result([&] { return copied.finish(); }, prefix_want, split);
+        check_result([&] { return assigned.finish(); }, prefix_want, split);
 
         for (int i = split; i < n; ++i) copied.fold(rows[i]);
-        CHECK(same_trade_stats(copied.finish(), want, n, filter));
-        CHECK(same_trade_stats(prefix.finish(), prefix_want, split, filter));
-        CHECK(same_trade_stats(assigned.finish(), prefix_want, split, filter));
+        check_result([&] { return copied.finish(); }, want, n);
+        check_result([&] { return prefix.finish(); }, prefix_want, split);
+        check_result([&] { return assigned.finish(); }, prefix_want, split);
         for (int i = split; i < n; ++i) assigned.fold(rows[i]);
-        CHECK(same_trade_stats(assigned.finish(), want, n, filter));
-        CHECK(same_trade_stats(prefix.finish(), prefix_want, split, filter));
+        check_result([&] { return assigned.finish(); }, want, n);
+        check_result([&] { return prefix.finish(); }, prefix_want, split);
         for (int i = split; i < n; ++i) prefix.fold(rows[i]);
-        CHECK(same_trade_stats(prefix.finish(), want, n, filter));
-        CHECK(same_trade_stats(prefix.finish(), want, n, filter));
+        check_result([&] { return prefix.finish(); }, want, n);
+        check_result([&] { return prefix.finish(); }, want, n);
     }
 }
 
