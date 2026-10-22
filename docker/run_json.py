@@ -165,9 +165,10 @@ An older library missing either admission API is a typed incompatibility.
 The default profile is unjailed.
 See docs/pages/scratch-tables.md for the policy tier and remaining jail work.
 
---report-mode FULL|SUMMARY_ONLY|STREAMED requests the opt-in report envelope.
-This ctypes host has no envelope provider bridge and refuses explicit requests
-as report_mode_unsupported before execution. Omitting it keeps the legacy route.
+--report-mode FULL is identical to omitting the option and uses the legacy route.
+SUMMARY_ONLY and STREAMED request the opt-in report envelope. This ctypes host
+has no envelope provider bridge and refuses those modes as report_mode_unsupported
+before reading feeds, loading a library or creating a handle.
 """
 from __future__ import annotations
 
@@ -5268,8 +5269,9 @@ def _main(argv, binary_inputs) -> int:
                          "jailed requires bounded scratch tables and the inherited arena; only an explicit "
                          "--report-sink-fd enables a sink, and --report-sink paths are refused.")
     ap.add_argument("--report-mode", choices=("FULL", "SUMMARY_ONLY", "STREAMED"), default=None,
-                    help="Request a pineforge-report/v1 envelope; requires a provider "
-                         "bridge for this host. Absent keeps the legacy report route.")
+                    help="FULL uses the legacy report route, identical to omitting this option. "
+                         "SUMMARY_ONLY and STREAMED require a pineforge-report/v1 provider "
+                         "bridge and are refused before execution by this host.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
     argv = _legacy_abbreviations(argv, pre_profile_long, all_long)
@@ -5292,13 +5294,13 @@ def _main(argv, binary_inputs) -> int:
         missing.append("--ohlcv")
     if missing:
         ap.error("the following arguments are required: " + ", ".join(missing))
-    if args.report_mode is not None:
+    if args.report_mode in ("SUMMARY_ONLY", "STREAMED"):
         # report_mode.h declares data, not a C provider bridge. This ctypes
         # host has only the legacy run/report API; neither ABI 4 nor the v1
         # sink is an envelope capability (o1-report-contract.md, transport).
-        # Refuse every explicit envelope request before feeds, handles or
-        # callbacks. A future bridge must land its implementation and
-        # negotiation together, including explicit FULL envelope reads.
+        # Refuse unsupported envelope modes before feeds, libraries, handles
+        # or callbacks. Explicit FULL falls through to the same legacy path
+        # as an omitted option.
         raise RunFailure(f"unsupported report mode: {args.report_mode} "
                          "(no pineforge-report/v1 provider bridge for this host)",
                          "report_mode_unsupported",
