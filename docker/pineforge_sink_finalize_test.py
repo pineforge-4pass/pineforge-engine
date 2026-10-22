@@ -1027,7 +1027,7 @@ def test_fsync_then_verify_then_publish_and_short_writes(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stdout_mode", [False, True])
-def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode, record_property):
+def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode, record_property, capfd):
     header = tmp_path / "header.json"
     header.write_bytes(encoded(fixtures.header(outputs=True)))
     probes = {}
@@ -1052,7 +1052,10 @@ def test_64_mib_stream_has_flat_peak_rss(tmp_path, stdout_mode, record_property)
     python_version = " ".join(sys.version.split())
     measurement = (f"rss-measurement mode={mode} tiny={tiny_peak} big={big_peak} "
                    f"delta={delta} py={python_version}")
-    print(measurement, file=sys.stderr, flush=True)
+    # pytest hides a passing test's captured output; the measured bytes must
+    # reach the log on every run, so write them with capture suspended.
+    with capfd.disabled():
+        print(measurement, file=sys.stderr, flush=True)
     for name, value in (("rss_mode", mode), ("rss_tiny_bytes", tiny_peak),
                         ("rss_big_bytes", big_peak), ("rss_delta_bytes", delta),
                         ("rss_python_version", python_version)):
