@@ -164,7 +164,8 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         || open > static_cast<std::size_t>(std::numeric_limits<int>::max()) - closed)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
             "report trade count exceeds the report row limit");
-    if (!report_sink_state_.enabled && trades_.base() != 0)
+    const bool sink_generation = report_sink_state_.enabled || report_sink_state_.receipt.complete;
+    if (!sink_generation && trades_.base() != 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
             "array report requires the sealed trade rows in the report sink");
     const int n_closed = (int)trades_.size();
@@ -180,7 +181,7 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         // are already at the sink cursor, so only their fold prefix is read.
         out->trades = nullptr;
         double net = 0.0;
-        if (report_sink_state_.enabled) {
+        if (sink_generation) {
             net = report_closed_net_profit();
             out->net_profit = net;
             out->total_trades = n_closed;
@@ -200,7 +201,7 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         }
         return;
     }
-    if (report_sink_state_.enabled) {
+    if (sink_generation) {
         // The hook can re-mark open lots, but closed history is immutable.
         // Never materialize that history merely to discard it at finalization.
         const int open_count = (int)range_end_trades_.size();
@@ -474,7 +475,7 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
                            out->equity_curve, n, out->net_profit,
                            initial_capital_, chart_timezone_,
                            first_bar_open_, current_bar_.close, bars_in_market_);
-    if (report_sink_state_.enabled)
+    if (report_sink_state_.enabled || report_sink_state_.receipt.complete)
         compute_report_sink_trade_metrics(out, out->trades, out->trades_len);
 }
 
@@ -944,6 +945,14 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
         || descriptor->version != 1 || !descriptor->path || !*descriptor->path)) return -1;
     const int status = report_sink_setter_status();
     if (status != 0) return status;
+    if (!descriptor && report_sink_state_.fd >= 0 && report_sink_state_.receipt.complete
+        && last_run_status_ == 0 && last_error_.empty()) {
+        // A completed fd generation remains readable until the next begin.
+        // Detach only its next-run configuration; keep the writer, receipt,
+        // summary and scratch owner without closing or rehydrating anything.
+        report_sink_state_.enabled = false;
+        return 0;
+    }
     // A scratch-backed generation cannot become an array report on removal.
     // Keep its sink and metric source intact, including an observer capture.
     // A nonzero ledger base likewise requires the streamed report: its sealed
@@ -987,6 +996,9 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
         || descriptor->version != 1 || descriptor->fd < 0)) return -1;
     const int status = report_sink_setter_status();
     if (status != 0) return status;
+    if (!descriptor && report_sink_state_.fd >= 0 && report_sink_state_.receipt.complete
+        && last_run_status_ == 0 && last_error_.empty())
+        return set_report_sink_v1(nullptr);
     ReportSinkState next;
     next.trade_history_streamable = report_sink_state_.trade_history_streamable;
     if (descriptor) {
@@ -1010,7 +1022,8 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
 int BacktestEngine::report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_receipt_v1 local{};
-    if (report_sink_state_.enabled) local = report_sink_state_.receipt;
+    if (report_sink_state_.enabled || report_sink_state_.receipt.complete)
+        local = report_sink_state_.receipt;
     local.struct_size = sizeof local;
     local.version = 1;
     *out = local;
@@ -1020,7 +1033,7 @@ int BacktestEngine::report_sink_receipt_v1(pf_report_sink_receipt_v1* out) const
 int BacktestEngine::report_sink_summary_v1(pf_report_sink_summary_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_summary_v1 local{};
-    if (report_sink_state_.enabled) {
+    if (report_sink_state_.enabled || report_sink_state_.receipt.complete) {
         local = report_sink_state_.summary;
         local.complete = report_sink_state_.receipt.complete;
     }
@@ -1034,8 +1047,7 @@ int BacktestEngine::report_sink_diagnostics_v1(
         pf_report_sink_diagnostics_v1* out) const noexcept {
     if (!out || out->struct_size != sizeof(*out) || out->version != 1) return -1;
     pf_report_sink_diagnostics_v1 local{};
-    if (report_sink_state_.enabled && report_sink_state_.receipt.complete
-        && report_sink_state_.writer)
+    if (report_sink_state_.receipt.complete && report_sink_state_.writer)
         local = report_sink_state_.writer->diagnostics();
     local.struct_size = sizeof local;
     local.version = 1;
@@ -1141,7 +1153,7 @@ void BacktestEngine::begin_report_sink() {
 
 void BacktestEngine::finish_report_sink(ReportC* out) const {
     auto& sink = report_sink_state_;
-    if (!sink.enabled) return;
+    if (!sink.enabled && !sink.receipt.complete) return;
     try {
         // Partial reports still answer as summaries, but never finish a sink.
         // The row/capture gates in fill_report already reject another attempt's
