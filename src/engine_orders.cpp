@@ -76,6 +76,15 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
         double fill_price, bool was_long, double entry_commission,
         double exit_commission,
         const execution::PhysicalExecutionContext& context) const {
+    return build_close_trade_with_costs(pe, close_qty, fill_price, was_long,
+        entry_commission, exit_commission, context, nullptr, true);
+}
+
+Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, double close_qty,
+        double fill_price, bool was_long, double entry_commission,
+        double exit_commission,
+        const execution::PhysicalExecutionContext& context,
+        const ClosedLotExcursion* retained_excursion, bool consult_excursion_hook) const {
     // Realized PnL scales by the instrument point value ($ per point per
     // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
     // multiply the price-difference PnL. The price-difference component is in
@@ -134,7 +143,12 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     const double slice = (pe.qty > 0.0) ? (close_qty / pe.qty) : 1.0;
     const double fill_fav = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
                       * close_qty;
-    if (lot_excursion_hook_) {
+    if (retained_excursion != nullptr) {
+        trade.max_runup = retained_excursion->favorable;
+        trade.max_drawdown = retained_excursion->adverse;
+        return trade;
+    }
+    if (consult_excursion_hook && lot_excursion_hook_) {
         // The host owns this lot's excursion (RULING A48): it sampled the
         // lot's path itself and answers the two magnitudes of the closing
         // row, which the row records exactly as answered -- facts in,

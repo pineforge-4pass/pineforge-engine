@@ -9,6 +9,7 @@
 #include "report_scratch.hpp"
 
 #include <pineforge/metrics.hpp>
+#include <pineforge/detail/scratch_sequence.hpp>
 #include "report_value_invalid.hpp"
 #include <algorithm>
 #include <cctype>
@@ -1701,6 +1702,10 @@ void compute_selected_report_metrics(
 // file held before.
 namespace pineforge {
 
+struct OpenReportRowSource::OwnedExcursions {
+    detail::ScratchSequence<ClosedLotExcursion> values;
+};
+
 // A terminal mark replaces the previous generation wholesale, exactly as the
 // row vector's clear + append did. Retained C-accessor rows belong to the
 // replaced generation and are dropped with it.
@@ -1713,27 +1718,46 @@ void OpenReportRowSource::clear() noexcept {
     account_fx_ = 1.0;
     count_ = 0;
     pnl_ = 0.0;
+    excursions_.reset();
     materialized_.clear();
     synthetic_.clear();
 }
 
 void OpenReportRowSource::begin(
         double mark_price, std::int64_t mark_time_ms, int interval_index,
-        double account_fx, bool was_long, std::size_t count) noexcept {
+        double account_fx, bool was_long, std::size_t count) {
     clear();
-    present_ = count != 0;
     was_long_ = was_long;
     mark_price_ = mark_price;
     mark_time_ms_ = mark_time_ms;
     interval_index_ = interval_index;
     account_fx_ = account_fx;
+    std::shared_ptr<OwnedExcursions> excursions;
+    if (count != 0 && owner_ != nullptr && owner_->lot_excursion_hook_) {
+        excursions = std::make_shared<OwnedExcursions>();
+        excursions->values.set_directory(owner_->trades_.scratch_directory());
+    }
+    double marked = 0.0;
+    for (std::size_t index = 0; index < count; ++index) {
+        const Trade built = build_row(index, true);
+        if (!internal::closed_row_all_finite(built))
+            throw std::logic_error("non-finite open-position report row");
+        if (excursions)
+            excursions->values.push_back({built.max_runup, built.max_drawdown});
+        marked += built.pnl;
+    }
+    // Publish only the complete, validated generation. A callback, row guard
+    // or scratch failure leaves no terminal row addressable and no row PnL.
+    excursions_ = std::move(excursions);
+    pnl_ = marked;
     count_ = count;
+    present_ = count != 0;
 }
 
 // The exact row the range-end append used to push: the same non-mutating
 // builder, the same context fields and the same open_at_end mark. Only the
 // storage changed; every field, including the four identity strings, is
-// rebuilt from the lot and the frozen terminal mark.
+// rebuilt from the lot, the frozen terminal mark and any retained host answer.
 Trade OpenReportRowSource::row(std::size_t index) const {
     if (!present_) {
         if (index >= synthetic_.size())
@@ -1744,6 +1768,14 @@ Trade OpenReportRowSource::row(std::size_t index) const {
     if (owner_ == nullptr || index >= count_)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
             "range-end report row index is outside the terminal mark");
+    return build_row(index, false);
+}
+
+Trade OpenReportRowSource::build_row(
+        std::size_t index, bool consult_excursion_hook) const {
+    if (owner_ == nullptr)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+            "range-end report row has no owner");
     const BacktestEngine& engine = *owner_;
     // The mark names the lots it was taken over. A lot retired after the mark
     // (before its report row was read) would otherwise rebuild a different
@@ -1759,10 +1791,13 @@ Trade OpenReportRowSource::row(std::size_t index) const {
     context.account_fx = account_fx_;
     if (!std::isnan(engine.fold_exit_trail_peak_))
         context.preceding_exit_trail_peak = engine.fold_exit_trail_peak_;
+    ClosedLotExcursion retained;
+    if (excursions_) retained = excursions_->values[index];
     Trade built = engine.build_close_trade_with_costs(
         lot, lot.qty, mark_price_, was_long_,
         engine.allocated_entry_commission(lot, lot.qty),
-        engine.calc_commission_at(mark_price_, lot.qty, account_fx_), context);
+        engine.calc_commission_at(mark_price_, lot.qty, account_fx_), context,
+        excursions_ ? &retained : nullptr, consult_excursion_hook);
     built.open_at_end = true;
     return built;
 }

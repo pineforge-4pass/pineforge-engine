@@ -9246,7 +9246,8 @@ void NativeExecutionConsumer::record_report_point(
 // full close uses and pinned to the engine's terminal mark descriptor; the
 // summed NET row P&L comes back for a caller that re-derives a report figure
 // from it. The rows themselves are rebuilt by each reader one at a time, so
-// this producer retains no per-lot row or string.
+// this producer retains no per-lot row or string. Host-owned excursion
+// answers are resolved once into bounded numeric scratch for those readers.
 //
 // Nothing here is a policy: the caller decides when to mark, what to clear
 // first and what (if anything) downstream of the rows it re-marks. The
@@ -9258,24 +9259,15 @@ double NativeExecutionConsumer::append_open_position_report_rows(
         BacktestEngine& engine, double mark_price, int64_t mark_time_ms,
         int interval_index, double account_fx) const {
     const bool was_long = engine.position_side_ == PositionSide::LONG;
-    // O1 R12: pin the terminal mark and produce the rows one at a time. A row
-    // is still built here, in lot order, for the finite-row guard and the
-    // returned net mark -- the same builder, context and left fold as before
-    // -- but nothing per lot is retained. Report construction rebuilds each
-    // row from the same frozen mark when it needs the value or the fold.
+    // O1 R12: begin builds and validates each row in lot order, retaining any
+    // host-owned excursion answer before publishing the terminal generation.
+    // Report construction rebuilds from those facts without replaying a host
+    // callback. The builder, context and net-PnL left fold stay the same.
     // A second mark (without an intervening clear) replaces the generation,
     // exactly as clear+append did at both call sites.
     engine.range_end_trades_.begin(mark_price, mark_time_ms, interval_index,
                                    account_fx, was_long, engine.pyramid_entries_.size());
-    double marked = 0.0;
-    for (std::size_t index = 0; index < engine.pyramid_entries_.size(); ++index) {
-        Trade row = engine.range_end_trades_.row(index);
-        if (!internal::closed_row_all_finite(row))
-            throw std::logic_error("non-finite open-position report row");
-        marked += row.pnl;
-    }
-    engine.range_end_trades_.set_pnl(marked);
-    return marked;
+    return engine.range_end_trades_.pnl();
 }
 
 bool NativeExecutionConsumer::script_bucket_completions(

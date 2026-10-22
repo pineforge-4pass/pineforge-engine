@@ -336,12 +336,12 @@ class BacktestEngine;
 
 // O1 R12: the terminal range-end row source.
 //
-// A run that ends with P physical lots open reports one row per lot. A row is
-// a pure function of (lot, terminal mark, account FX) through the same
-// non-mutating builder a full close uses, so this object keeps only the mark
-// descriptor and the already-folded row PnL; every reader builds one row at a
-// time, in lot order. Resident storage is constant in P: no row array and no
-// per-lot string copy.
+// A run that ends with P physical lots open reports one row per lot. The mark
+// resolves a host's excursion answers once, retains those numeric facts in
+// bounded scratch, and validates every row before publishing the generation.
+// Every reader then rebuilds one row at a time from the lot, terminal mark,
+// account FX and retained answer through the same builder a full close uses.
+// Resident storage is constant in P: no row array and no per-lot string copy.
 //
 // materialize() is the legacy borrowed-pointer boundary. Only the C accessors
 // that hand out a string pointer (materialize_report_trade and its callers)
@@ -358,7 +358,7 @@ public:
     // retained rows belong to the replaced generation.
     void clear() noexcept;
     void begin(double mark_price, std::int64_t mark_time_ms, int interval_index,
-               double account_fx, bool was_long, std::size_t count) noexcept;
+               double account_fx, bool was_long, std::size_t count);
     // The exact left fold append_open_position_report_rows returned.
     void set_pnl(double pnl) noexcept { pnl_ = pnl; }
     bool empty() const noexcept { return size() == 0; }
@@ -400,6 +400,8 @@ public:
     const_iterator begin() const { return const_iterator(this, 0); }
     const_iterator end() const { return const_iterator(this, size()); }
 private:
+    struct OwnedExcursions;
+    Trade build_row(std::size_t index, bool consult_excursion_hook) const;
     const BacktestEngine* owner_ = nullptr;
     bool present_ = false;
     bool was_long_ = false;
@@ -409,6 +411,9 @@ private:
     double account_fx_ = 1.0;
     std::size_t count_ = 0;
     double pnl_ = 0.0;
+    // Published generations share immutable report facts, not continuation
+    // state. Only a host-owned excursion needs this external numeric store.
+    std::shared_ptr<const OwnedExcursions> excursions_;
     // A deque gives every retained row a stable address, so a reference a C
     // accessor handed out survives the next row's materialization, as a
     // reference into the old vector did.
@@ -1828,6 +1833,13 @@ protected:
         double fill_price, bool was_long, double entry_commission,
         double exit_commission,
         const execution::PhysicalExecutionContext& context) const;
+    // A terminal-row read supplies its retained answer (or the kernel model)
+    // and never consults the host again. Settlement uses the overload above.
+    Trade build_close_trade_with_costs(const PyramidEntry& pe, double close_qty,
+        double fill_price, bool was_long, double entry_commission,
+        double exit_commission,
+        const execution::PhysicalExecutionContext& context,
+        const ClosedLotExcursion* retained_excursion, bool consult_excursion_hook) const;
     void reset_position_state_to_flat();
     // Reset ALL per-run state (trades, accumulators, position, pending orders,
     // equity extremes, risk latches, intraday/day counters, source-series
