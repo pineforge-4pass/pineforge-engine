@@ -108,6 +108,10 @@ public:
     /// (3.7:881-888). No destructor-generated success trailer is promised.
     Trailer write_trailer();
 
+    /// Bounded provenance of the successfully emitted E/T records. Zero and
+    /// incomplete until the trailer succeeds; no input or output I/O.
+    pf_report_sink_diagnostics_v1 diagnostics() const noexcept;
+
     /// At a completed-bar boundary, flush the last complete records and
     /// permanently abandon this stream without a trailer or a receipt.
     /// Does not close a borrowed fd; its owner closes it after native cleanup.

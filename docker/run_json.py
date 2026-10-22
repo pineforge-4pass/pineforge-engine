@@ -157,9 +157,17 @@ run is the ordinary run described above, byte for byte.
 startup) installs bounded-memory scratch tables on every fresh handle and
 keeps the report sink OFF unless --report-sink-fd explicitly selects a stream.
 Path sinks (--report-sink) are refused in this profile. Scratch-table admission
-is required for fd sinks too. It requires strategy_set_scratch_tables_v1; an
-older library is a typed incompatibility. The default profile is unjailed.
+is required for fd sinks too. Every jailed handle also requires an attached
+scratch arena (PF_SCRATCH_ARENA_FD=5); absent/invalid backing is a typed refusal
+before execution, never a temporary-file fallback. --spill-dir is refused,
+and --report-sink-fd 5 is reserved for the arena in every profile.
+An older library missing either admission API is a typed incompatibility.
+The default profile is unjailed.
 See docs/pages/scratch-tables.md for the policy tier and remaining jail work.
+
+--report-mode FULL|SUMMARY_ONLY|STREAMED requests the opt-in report envelope.
+This ctypes host has no envelope provider bridge and refuses explicit requests
+as report_mode_unsupported before execution. Omitting it keeps the legacy route.
 """
 from __future__ import annotations
 
@@ -4834,6 +4842,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(fed_count))
+                _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args)
         except BaseException:
             try:
@@ -5001,15 +5010,7 @@ def _selected_run(args, inputs, overrides, input_tf, script_tf, bar_magnifier,
         # 6. Serialization begins; the timing is known now and is outside the provenance.
         _advance(phases, "serialization")
         out["diagnostics"]["phase_timing"] = phases.writer.phase_timing()
-        if sink is not None and getattr(sink, "fd_mode", False):
-            buffer = io.StringIO()
-            json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
-            buffer.write("\n")
-            buffer.seek(0)
-        else:
-            buffer = _prepare_stream_report(
-                out, binary_inputs, sink.directory if sink is not None else args.spill_dir,
-                sink_errors=sink is not None)
+        buffer = _prepare_report_json(out, binary_inputs, args, sink)
         if output_files is not None:
             output_files.close()  # surface column close failures before stdout
     except Exception as error:
@@ -5264,8 +5265,11 @@ def _main(argv, binary_inputs) -> int:
     pre_profile_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     ap.add_argument("--profile", choices=("unjailed", "jailed"), default=environment_profile,
                     help="Host profile (default: PINEFORGE_RUN_JSON_PROFILE or unjailed). "
-                         "jailed requires bounded scratch tables; only an explicit "
+                         "jailed requires bounded scratch tables and the inherited arena; only an explicit "
                          "--report-sink-fd enables a sink, and --report-sink paths are refused.")
+    ap.add_argument("--report-mode", choices=("FULL", "SUMMARY_ONLY", "STREAMED"), default=None,
+                    help="Request a pineforge-report/v1 envelope; requires a provider "
+                         "bridge for this host. Absent keeps the legacy report route.")
     all_long = tuple(s for s in ap._option_string_actions if s.startswith("--"))
     argv = _legacy_abbreviations(argv, legacy_long, all_long)
     argv = _legacy_abbreviations(argv, pre_profile_long, all_long)
@@ -5288,6 +5292,17 @@ def _main(argv, binary_inputs) -> int:
         missing.append("--ohlcv")
     if missing:
         ap.error("the following arguments are required: " + ", ".join(missing))
+    if args.report_mode is not None:
+        # report_mode.h declares data, not a C provider bridge. This ctypes
+        # host has only the legacy run/report API; neither ABI 4 nor the v1
+        # sink is an envelope capability (o1-report-contract.md, transport).
+        # Refuse every explicit envelope request before feeds, handles or
+        # callbacks. A future bridge must land its implementation and
+        # negotiation together, including explicit FULL envelope reads.
+        raise RunFailure(f"unsupported report mode: {args.report_mode} "
+                         "(no pineforge-report/v1 provider bridge for this host)",
+                         "report_mode_unsupported",
+                         {"mode": args.report_mode, "contract": "pineforge-report/v1"})
     _refuse_jailed_path_sink(args)
     if args.capabilities_json:
         if args.report_sink_fd is not None:
@@ -5299,13 +5314,15 @@ def _main(argv, binary_inputs) -> int:
     _validate_sink_options(args)
     abort = getattr(binary_inputs, "_sigterm_abort", None)
     if args.report_sink_fd is not None:
-        args._sink_fd_owner = _InheritedSinkFd(args.report_sink_fd)
+        args._sink_fd_owner = None
         def close_startup_sink():
-            # Jailed admission refusals retain caller ownership until the
-            # sink is installed. A startup SIGTERM still gives fd 4 EOF
-            # before the abort line, even before library/strategy creation.
-            if args.profile != "jailed" or (abort is not None and abort.requested()):
+            # Admission refusals retain caller ownership until the fd API
+            # has been checked. Startup SIGTERM still delivers EOF before
+            # the abort line, including before library/strategy creation.
+            if args._sink_fd_owner is not None:
                 args._sink_fd_owner.close()
+            elif abort is not None and abort.requested():
+                _InheritedSinkFd(args.report_sink_fd).close()
         binary_inputs.callback(close_startup_sink)
     if abort is not None:
         abort.check_before_start()
@@ -5394,6 +5411,7 @@ def _main(argv, binary_inputs) -> int:
                 enable_outputs(lib, st)
             if args.profile == "jailed":
                 apply_scratch_tables(lib, st, default_scratch_manifest(n))
+                _require_jailed_arena(lib, st)
             sink = _new_report_sink(lib, st, args, body=body)
         except BaseException:
             try:
@@ -5566,15 +5584,7 @@ def _main(argv, binary_inputs) -> int:
         # Serialized whole before any byte is written (the same JSON encoder), so
         # a failure while it is built never follows half a report.
         try:
-            if sink is not None and getattr(sink, "fd_mode", False):
-                buffer = io.StringIO()
-                json.dump(out, buffer, separators=(",", ":"), allow_nan=False)
-                buffer.write("\n")
-                buffer.seek(0)
-            else:
-                buffer = _prepare_stream_report(
-                    out, binary_inputs, sink.directory if sink is not None else args.spill_dir,
-                    sink_errors=sink is not None)
+            buffer = _prepare_report_json(out, binary_inputs, args, sink)
         except ValueError as error:
             # Match only the encoder's allow_nan=False refusal, including the
             # versions that append repr(value); other ValueErrors keep their code.
@@ -5651,11 +5661,19 @@ class ReportSinkSummaryC(ctypes.Structure):
                 ("nonfinite_t_field", ctypes.c_int32), ("complete", ctypes.c_uint32)]
 
 
+class ReportSinkDiagnosticsC(ctypes.Structure):
+    """Independent 72-byte endpoint/provenance query; existing receipts stay fixed."""
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("count_e", ctypes.c_int64), ("first", EquityPointC), ("last", EquityPointC),
+                ("trade_at_start", ctypes.c_uint32), ("complete", ctypes.c_uint32)]
+
+
 def _bind_report_sink(lib) -> None:
     signatures = {
         "pf_report_sink_version": (ctypes.c_uint32, []),
         "pf_report_scratch_arena_stats": (ctypes.c_int, [
             ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]),
+        "strategy_require_report_scratch_arena_v1": (ctypes.c_int, [ctypes.c_void_p]),
         "strategy_set_report_sink_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkC)]),
         "strategy_set_report_sink_fd_v1": (ctypes.c_int, [
@@ -5664,6 +5682,8 @@ def _bind_report_sink(lib) -> None:
             ctypes.c_void_p, ctypes.POINTER(ReportSinkReceiptC)]),
         "strategy_report_sink_summary_v1": (ctypes.c_int, [
             ctypes.c_void_p, ctypes.POINTER(ReportSinkSummaryC)]),
+        "strategy_report_sink_diagnostics_v1": (ctypes.c_int, [
+            ctypes.c_void_p, ctypes.POINTER(ReportSinkDiagnosticsC)]),
     }
     for name, (restype, argtypes) in signatures.items():
         if hasattr(lib, name):
@@ -5689,6 +5709,24 @@ def _refuse_jailed_path_sink(args):
             and getattr(args, "report_sink", None) is not None):
         raise _request_invalid("error: --profile jailed refuses --report-sink paths; "
                                "use --report-sink-fd", "arguments")
+    if (getattr(args, "profile", "unjailed") == "jailed"
+            and getattr(args, "spill_dir", None) is not None):
+        raise _request_invalid("error: --profile jailed refuses --spill-dir; "
+                               "supply the inherited scratch arena", "arguments")
+
+
+def _require_jailed_arena(lib, state):
+    admission = getattr(lib, "strategy_require_report_scratch_arena_v1", None)
+    if admission is None:
+        raise StrategyLibraryError("the jailed profile requires "
+                                   "strategy_require_report_scratch_arena_v1",
+                                   {"reason": "symbol_missing"})
+    if admission(state) != 0:
+        failure = run_failure(lib, state)
+        if failure is not None and failure[1]:
+            raise RunFailure(*failure)
+        raise RunFailure("the jailed profile requires an attached scratch arena",
+                         "report_sink_failed", {"reason": "arena_backing"})
 
 
 def _validate_sink_options(args):
@@ -5699,6 +5737,11 @@ def _validate_sink_options(args):
         if fd < 3 or fd > (1 << (ctypes.sizeof(ctypes.c_int) * 8 - 1)) - 1:
             raise _request_invalid("error: --report-sink-fd must be a descriptor number "
                                    "from 3 through INT_MAX", "arguments", exit_status=2)
+        # ScratchArena::kInheritedFd is fixed by the engine, unlike the
+        # wrapper's conventional sink/phase descriptor numbers.
+        if fd == 5:
+            raise _request_invalid("error: --report-sink-fd 5 collides with "
+                                   "PF_SCRATCH_ARENA_FD", "arguments", exit_status=2)
         if args.report_sink is not None:
             raise _request_invalid("error: --report-sink-fd and --report-sink are mutually "
                                    "exclusive", "arguments", exit_status=2)
@@ -5737,15 +5780,17 @@ def _new_report_sink(lib, state, args, *, body=True):
     jailed = getattr(args, "profile", "unjailed") == "jailed"
     if getattr(args, "report_sink_fd", None) is not None:
         names = ("pf_report_sink_version", "strategy_set_report_sink_fd_v1",
-                 "strategy_report_sink_receipt_v1", "strategy_report_sink_summary_v1")
+                 "strategy_report_sink_receipt_v1", "strategy_report_sink_summary_v1",
+                 "strategy_report_sink_diagnostics_v1")
         if not all(hasattr(lib, name) for name in names):
             raise StrategyLibraryError("the strategy library has no fd report sink API",
                                        {"reason": "symbol_missing"})
         if int(lib.pf_report_sink_version()) != 1:
             raise _engine_invariant("the strategy library has an incompatible report sink ABI")
+        args._sink_fd_owner = _InheritedSinkFd(args.report_sink_fd)
         return _FdReportSink(lib, state, fd=args.report_sink_fd,
                              run_id=getattr(args, "run_id", ""),
-                             owner=getattr(args, "_sink_fd_owner", None))
+                             owner=args._sink_fd_owner)
     if jailed:
         return None
     names = ("pf_report_sink_version", "strategy_set_report_sink_v1",
@@ -5793,6 +5838,7 @@ class _FdReportSink:
         self.run_id = run_id
         self.counts = {}
         self.summary = None
+        self.diagnostics = None
         try:
             descriptor = ReportSinkFdC(ctypes.sizeof(ReportSinkFdC), 1, fd,
                                        run_id.encode("utf-8"))
@@ -5831,7 +5877,14 @@ class _FdReportSink:
                 or summary.wins < 0 or summary.losses < 0
                 or summary.wins + summary.losses > counts["T"]):
             raise _engine_invariant("the report sink summary differs from its engine receipt")
-        self.counts, self.summary = counts, summary
+        diagnostics = ReportSinkDiagnosticsC()
+        diagnostics.struct_size, diagnostics.version = ctypes.sizeof(diagnostics), 1
+        if (lib.strategy_report_sink_diagnostics_v1(state, ctypes.byref(diagnostics)) != 0
+                or diagnostics.complete != 1 or diagnostics.count_e != counts["E"]
+                or diagnostics.trade_at_start not in (0, 1)
+                or (diagnostics.count_e and diagnostics.last.time_ms < diagnostics.first.time_ms)):
+            raise _engine_invariant("the report sink diagnostics differ from its engine receipt")
+        self.counts, self.summary, self.diagnostics = counts, summary, diagnostics
 
     def close(self):
         if self.fd is not None:
@@ -6320,6 +6373,21 @@ def _prepare_stream_report(document, resources, directory, *, sink_errors=True):
     return file
 
 
+def _prepare_report_json(document, resources, args, sink):
+    # The jailed array route is intentionally resident, as are its native
+    # arrays. The fd route contains only the bounded summary. Neither may
+    # create a report file, even when no sink is installed.
+    if args.profile == "jailed" or getattr(sink, "fd_mode", False):
+        buffer = resources.enter_context(io.StringIO())
+        _stream_json(document, buffer)
+        buffer.write("\n")
+        buffer.seek(0)
+        return buffer
+    return _prepare_stream_report(
+        document, resources, sink.directory if sink is not None else args.spill_dir,
+        sink_errors=sink is not None)
+
+
 def _sink_trade(record):
     # The first 16 fields of fixed v1 T are exactly the existing JSON trade.
     # Close cause and ids remain in the sink; they are not report additions.
@@ -6408,6 +6476,15 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
     out["summary"] = _sink_summary(report, sink)
     if getattr(sink, "fd_mode", False):
         _validate_report_result(out)  # the engine's summary checked every T
+        diagnostics = sink.diagnostics
+        endpoints = [
+            {"time_ms": int(point.time_ms), "equity": float(point.equity),
+             "open_profit": float(point.open_profit)}
+            for point in (diagnostics.first, diagnostics.last)
+        ] if diagnostics.count_e else ()
+        first_bar_trade = ({"entry_bar_index": 0},) if diagnostics.trade_at_start else ()
+        out["diagnostics"].update(
+            _annualization_block(endpoints, out["metrics"], first_bar_trade, window_anchor))
         # stdout.json has the small report only. The wrapper/finalizer owns
         # the stream's artifact and receipt; no child-local path names it.
         out.pop("trades")

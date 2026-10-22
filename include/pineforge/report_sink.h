@@ -143,6 +143,30 @@ PF_STATIC_ASSERT(alignof(pf_report_sink_summary_v1) == 8);
 PF_STATIC_ASSERT(_Alignof(pf_report_sink_summary_v1) == 8);
 #endif
 
+/** Fixed-size annualization provenance from the emitted v1 records.
+ *  Independent of both existing receipts; no wire or legacy layout changes.
+ *  first/last are the first/last presented E rows, not input-feed endpoints.
+ *  trade_at_start is 1 iff any emitted T row has entry_bar_index <= 0.
+ *  Published only after a successful trailer. No sink, failure, abort or
+ *  an unstarted generation yields all-zero values and complete 0.
+ *  Read through strategy_report_sink_diagnostics_v1 (pineforge.h). */
+typedef struct pf_report_sink_diagnostics_v1 {
+    uint32_t struct_size;
+    uint32_t version;
+    int64_t count_e;
+    pf_equity_point_t first;
+    pf_equity_point_t last;
+    uint32_t trade_at_start;
+    uint32_t complete;
+} pf_report_sink_diagnostics_v1;
+
+PF_STATIC_ASSERT(sizeof(pf_report_sink_diagnostics_v1) == 72);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, count_e) == 8);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, first) == 16);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, last) == 40);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, trade_at_start) == 64);
+PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, complete) == 68);
+
 /** Returns report sink ABI version 1 (DESIGN 6:1300). */
 PF_API uint32_t pf_report_sink_version(void);
 

@@ -58,6 +58,7 @@ class FdLibrary(summaries.SummaryLibrary):
         self.trade_rows, self.summary_queries = [], 0
         self.strategy_set_report_sink_fd_v1 = self.export("set_fd", self.install_fd)
         self.strategy_report_sink_summary_v1 = self.export("summary", self.summary_receipt)
+        self.strategy_report_sink_diagnostics_v1 = self.export("diagnostics", self.diagnostics_receipt)
         self.strategy_get_last_error = self.export("last_error", lambda state: (
             self.error[0].encode() if self.error else b""))
         self.strategy_get_last_error_code = self.export("last_code", lambda state: (
@@ -98,6 +99,7 @@ class FdLibrary(summaries.SummaryLibrary):
     def write_sink(self, path, rows, *, outputs=False, fault=None):
         rows = list(rows)
         self.trade_rows = [row[1:] for row in rows if row[0] == "T"]
+        self.equity_rows = [row[1:] for row in rows if row[0] == "E"]
         if self.fd is None:
             return super().write_sink(path, rows, outputs=outputs, fault=fault)
         header = full.header(outputs)
@@ -181,6 +183,24 @@ class FdLibrary(summaries.SummaryLibrary):
             return -1
         return status
 
+    def diagnostics_receipt(self, state, ref):
+        result = ref._obj
+        assert result.struct_size == ctypes.sizeof(run_json.ReportSinkDiagnosticsC) == 72
+        assert result.version == 1
+        result.count_e = len(self.equity_rows)
+        if self.equity_rows:
+            result.first = run_json.EquityPointC(*self.equity_rows[0])
+            result.last = run_json.EquityPointC(*self.equity_rows[-1])
+        result.trade_at_start = any(row[12] <= 0 for row in self.trade_rows)
+        result.complete = 1
+        if self.fd_fault == "diagnostics-incomplete":
+            result.complete = 0
+        elif self.fd_fault == "diagnostics-count":
+            result.count_e += 1
+        elif self.fd_fault == "diagnostics-status":
+            return -1
+        return 0
+
     def constants(self, state, destination, capacity):
         values = full.outputs_reader().constants()
         for index in range(min(capacity, len(values))):
@@ -205,6 +225,7 @@ class SelectedFdLibrary(selected_sinks.NamedSinkLibrary):
         self.trade_rows, self.summary_queries, self.all_tags = [], 0, False
         self.strategy_set_report_sink_fd_v1 = self.install_fd
         self.strategy_report_sink_summary_v1 = self.summary_receipt
+        self.strategy_report_sink_diagnostics_v1 = self.diagnostics_receipt
         self.strategy_outputs_series_count = lambda state: 2
         self.strategy_outputs_constants_copy = self.constants
         self.strategy_get_last_error = lambda state: self.error[0].encode() if self.error else b""
@@ -230,6 +251,7 @@ class SelectedFdLibrary(selected_sinks.NamedSinkLibrary):
 
     install_fd = FdLibrary.install_fd
     summary_receipt = FdLibrary.summary_receipt
+    diagnostics_receipt = FdLibrary.diagnostics_receipt
     constants = FdLibrary.constants
 
     def write_sink(self, path, rows, **kwargs):
@@ -397,6 +419,56 @@ def test_fd_matches_file_document_and_wire(tmp_path, transport, outputs, pnls):
     assert "trades" not in json.loads(actual[1]) and "equity_curve" not in json.loads(actual[1])
 
 
+def test_fd_annualization_matches_verified_file_endpoints(tmp_path):
+    source = bars.csv_file(tmp_path)
+    reference = invoke(source, FdLibrary(), [
+        "--report-sink", str(tmp_path / "annualization.sink")])
+    assert (reference[0], reference[2]) == (0, ""), reference
+    expected = json.loads(reference[1])["diagnostics"]["annualization"]
+    with Stream() as stream:
+        actual = invoke(source, FdLibrary(), [
+            "--report-sink-fd", str(stream.writer)], no_files=True)
+    assert (actual[0], actual[2]) == (0, ""), actual
+    assert json.loads(actual[1])["diagnostics"]["annualization"] == expected
+
+
+@pytest.mark.parametrize("span,final,trade_at_start,open_profit,has_reason", [
+    (120000, 2., True, 0., True),
+    (0, 2., False, 0., False),
+    (172800000, 2., False, 0., False),
+    (86400000, 1e308, False, 0., True),
+    (86400000, 1e308, True, 0., False),
+    (86400000, 1e308, False, 1., False),
+])
+def test_fd_annualization_uses_presented_endpoints_not_input_span(
+        tmp_path, span, final, trade_at_start, open_profit, has_reason):
+    class PresentedEndpoints(FdLibrary):
+        def write_sink(self, path, rows, **kwargs):
+            rows = [list(row) for row in rows]
+            equity = [row for row in rows if row[0] == "E"]
+            assert len(equity) > 1
+            for index, row in enumerate(equity):
+                row[1] = bars.T0 + span * index // (len(equity) - 1)
+                row[2] = 1. + (final - 1.) * (index / (len(equity) - 1))
+                row[3] = open_profit if index == 0 else 0.
+            for row in rows:
+                if row[0] == "T" and not trade_at_start:
+                    row[13] += 1
+            return super().write_sink(path, rows, **kwargs)
+
+    source = bars.csv_file(tmp_path)
+    reference = invoke(source, PresentedEndpoints(), [
+        "--report-sink", str(tmp_path / "presented.sink")])
+    assert (reference[0], reference[2]) == (0, ""), reference
+    expected = json.loads(reference[1])["diagnostics"].get("annualization")
+    assert bool(expected) == has_reason
+    with Stream() as stream:
+        actual = invoke(source, PresentedEndpoints(), [
+            "--report-sink-fd", str(stream.writer)], no_files=True)
+    assert (actual[0], actual[2]) == (0, ""), actual
+    assert json.loads(actual[1])["diagnostics"].get("annualization") == expected
+
+
 def test_fd_layout_and_bindings(tmp_path, monkeypatch):
     library = FdLibrary()
     monkeypatch.setattr(ctypes, "CDLL", lambda path: library)
@@ -407,6 +479,13 @@ def test_fd_layout_and_bindings(tmp_path, monkeypatch):
     assert library.strategy_report_sink_summary_v1.restype is ctypes.c_int
     assert library.strategy_report_sink_summary_v1.argtypes == [
         ctypes.c_void_p, ctypes.POINTER(run_json.ReportSinkSummaryC)]
+    assert library.strategy_report_sink_diagnostics_v1.argtypes == [
+        ctypes.c_void_p, ctypes.POINTER(run_json.ReportSinkDiagnosticsC)]
+    assert library.strategy_report_sink_diagnostics_v1.restype is ctypes.c_int
+    assert ctypes.sizeof(run_json.ReportSinkDiagnosticsC) == 72
+    for name, offset in (("struct_size", 0), ("version", 4), ("count_e", 8),
+                         ("first", 16), ("last", 40), ("trade_at_start", 64), ("complete", 68)):
+        assert getattr(run_json.ReportSinkDiagnosticsC, name).offset == offset
     fd_type, summary_type = run_json.ReportSinkFdC, run_json.ReportSinkSummaryC
     assert fd_type.struct_size.offset == 0 and fd_type.version.offset == 4
     assert fd_type.fd.offset == 8
@@ -424,6 +503,7 @@ def test_fd_layout_and_bindings(tmp_path, monkeypatch):
     "summary-incomplete", "summary-count", "summary-status", "unknown-field",
     "metric-count", "report-count", "receipt-incomplete", "receipt-count",
     "receipt-status", "negative-count",
+    "diagnostics-incomplete", "diagnostics-count", "diagnostics-status",
 ])
 def test_fd_rejects_incomplete_or_inconsistent_summary(tmp_path, fault):
     source = bars.csv_file(tmp_path)
@@ -492,8 +572,23 @@ def test_fd_and_phase_transport_cannot_share_the_endpoint(tmp_path):
     assert json.loads(text)["code"] == "run_request_invalid"
 
 
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+def test_fd_five_is_reserved_by_admission_guard(profile):
+    # Exercise admission alone: a fail-before run must never hand pytest's
+    # own fd 5 to the old implementation, which would take and close it.
+    args = argparse.Namespace(
+        profile=profile, report_sink_fd=5, report_sink=None, spill_dir=None,
+        bench=False, validate_window_only=False, run_phase_fd=None,
+        report_sink_format=1, run_id="")
+    with pytest.raises(run_json.RunFailure) as failure:
+        run_json._validate_sink_options(args)
+    assert failure.value.exit_status == 2
+    assert failure.value.code == "run_request_invalid"
+
+
 @pytest.mark.parametrize("missing", [
     "strategy_set_report_sink_fd_v1", "strategy_report_sink_summary_v1",
+    "strategy_report_sink_diagnostics_v1",
 ])
 def test_fd_missing_api_never_falls_back_to_a_path(tmp_path, missing):
     source, library = bars.csv_file(tmp_path), FdLibrary()
@@ -620,11 +715,18 @@ def snapshot(*directories):
 
 
 def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
-              work=None, temporary=None, fault=None, break_after=None, pnls=PNLS):
+              work=None, temporary=None, fault=None, break_after=None, pnls=PNLS,
+              without_arena=False, arena_path=None):
     event_read, event_write = os.pipe()
-    with Stream(transport, break_after=break_after) as stream:
+    with contextlib.ExitStack() as inherited, Stream(transport, break_after=break_after) as stream:
         command = [sys.executable, "-B", str(Path(__file__).resolve()),
                    "--events-fd", str(event_write), "--owned-fd", str(stream.writer)]
+        pass_fds = (stream.writer, event_write)
+        if arena_path is not None:
+            arena = inherited.enter_context(open(arena_path, "r+b", buffering=0))
+            command += ["--arena-fd", str(arena.fileno()),
+                        "--arena-bytes", str(os.fstat(arena.fileno()).st_size)]
+            pass_fds += (arena.fileno(),)
         if stub:
             command += ["--stub", "--pnls", json.dumps(pnls)]
         if fault:
@@ -632,7 +734,7 @@ def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
         if jail:
             command += ["--jail"]
         command += ["--", "--ohlcv", str(source), *map(str, extra)]
-        if jail and temporary is not None:
+        if jail and temporary is not None and "--profile" not in extra:
             # Match the wrapper's explicit, read-only scratch directory for
             # the path-sink refusal too; tempfile's directory probing is not
             # the native writer/open failure that this control exercises.
@@ -640,10 +742,14 @@ def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
         if "--report-sink" not in extra:
             command += ["--report-sink-fd", str(stream.writer)]
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        if without_arena:
+            for name in ("PF_SCRATCH_ARENA_FD", "PF_SCRATCH_ARENA_BYTES",
+                         "PF_SCRATCH_WINDOW_BYTES"):
+                environment.pop(name, None)
         if temporary is not None:
             environment.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
         try:
-            process = subprocess.Popen(command, pass_fds=(stream.writer, event_write),
+            process = subprocess.Popen(command, pass_fds=pass_fds,
                                        cwd=work or ROOT, env=environment,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         finally:
@@ -747,6 +853,45 @@ def test_native_fd_fsize_zero_has_no_python_file_operations(tmp_path):
         temporary.chmod(0o755)
 
 
+def test_native_jailed_fd_without_arena_refuses_before_scratch_or_sink(tmp_path):
+    source = bars.csv_file(tmp_path, count=17)
+    actual = child_run(source, ["--so", native_module(False), "--profile", "jailed"],
+                       stub=False, jail=True, without_arena=True)
+    assert actual[0] == 1 and actual[2] == "", actual
+    failure = json.loads(actual[1])
+    assert (failure["code"], failure["args"]) == (
+        "report_sink_failed", {"reason": "arena_backing"})
+    assert actual[3] == b"" and "summary" not in failure
+
+
+def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
+    source = bars.csv_file(tmp_path, count=17)
+    arena = tmp_path / "inherited-arena"
+    with arena.open("wb") as prepared:
+        prepared.truncate(16 * 1024 * 1024)
+    work, temporary = tmp_path / "work", tmp_path / "tmp"
+    work.mkdir(mode=0o555)
+    temporary.mkdir(mode=0o555)
+    try:
+        before = snapshot(work, temporary)
+        actual = child_run(
+            source, ["--so", native_module(False), "--profile", "jailed",
+                     "--input-tf", "1", "--script-tf", "1"],
+            stub=False, jail=True, work=work, temporary=temporary, arena_path=arena)
+        assert actual[0] == 0 and actual[2] == "", actual
+        document = json.loads(actual[1])
+        assert "trades" not in document and "equity_curve" not in document
+        assert document["summary"]["bars_processed"] == 17
+        with pf_sink.SinkReader(stream=io.BytesIO(actual[3])) as reader:
+            records = list(reader)
+            assert reader.complete
+            assert sum(row.tag == "T" for row in records) == document["summary"]["total_trades"]
+        assert snapshot(work, temporary) == before
+    finally:
+        work.chmod(0o755)
+        temporary.chmod(0o755)
+
+
 @pytest.mark.parametrize("transport", ["pipe", "socket"])
 def test_native_fd_epipe_is_typed_and_ordered(tmp_path, transport):
     source = bars.csv_file(tmp_path, count=4096)
@@ -787,9 +932,16 @@ def child_main(argv):
     parser.add_argument("--jail", action="store_true")
     parser.add_argument("--pnls", default=json.dumps(PNLS))
     parser.add_argument("--fault")
+    parser.add_argument("--arena-fd", type=int)
+    parser.add_argument("--arena-bytes", type=int)
     own, runner_argv = parser.parse_args(argv[:argv.index("--")]), argv[argv.index("--") + 1:]
     real_close = os.close
     original_stdout = sys.stdout
+    if own.arena_fd is not None:
+        os.dup2(own.arena_fd, 5)
+        os.environ.update(PF_SCRATCH_ARENA_FD="5",
+                          PF_SCRATCH_ARENA_BYTES=str(own.arena_bytes),
+                          PF_SCRATCH_WINDOW_BYTES=str(1024 * 1024))
 
     def event(document):
         line = full.encoded(document)

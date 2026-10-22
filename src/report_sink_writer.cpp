@@ -301,6 +301,9 @@ struct LineWriter::State {
     Phase phase = Phase::configured;
     RecordSet records{};
     Trailer trailer{};
+    // Output-only provenance beside the existing trailer/hash. No trading
+    // decision or broker-state hash reads this bounded record fold.
+    pf_report_sink_diagnostics_v1 diagnostics{};
     Sha256 hash;
     Line scratch;
     std::array<char, io_window + io_alignment - 1> storage{};
@@ -508,6 +511,8 @@ void LineWriter::write_e(const pf_equity_point_t& point) {
         line.append(','); real(line, point.equity);
         line.append(','); real(line, point.open_profit);
         line.append(']'); state.line();
+        if (state.trailer.count_e == 0) state.diagnostics.first = point;
+        state.diagnostics.last = point;
         ++state.trailer.count_e;
         state.has_equity_time = true;
         state.equity_time = point.time_ms;
@@ -539,7 +544,20 @@ void LineWriter::write_t(std::int64_t n, const pf_trade_t& trade,
             line.append(','); wire_string(line, value);
         }
         line.append(']'); state.line(); ++state.trailer.count_t;
+        if (trade.entry_bar_index <= 0) state.diagnostics.trade_at_start = 1;
     } catch (...) { state.fail(); throw; }
+}
+
+pf_report_sink_diagnostics_v1 LineWriter::diagnostics() const noexcept {
+    pf_report_sink_diagnostics_v1 result{};
+    if (state_->phase == State::Phase::complete) {
+        result = state_->diagnostics;
+        result.count_e = state_->trailer.count_e;
+        result.complete = 1;
+    }
+    result.struct_size = sizeof result;
+    result.version = 1;
+    return result;
 }
 
 void LineWriter::abandon() {

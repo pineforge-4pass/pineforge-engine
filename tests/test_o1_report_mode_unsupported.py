@@ -84,6 +84,18 @@ def main() -> None:
         require(set(failure) == {"engine", "error", "code", "args"},
                 "an unsupported request must not masquerade as a full or empty report")
         require(not marker.exists(), "an unsupported SUMMARY_ONLY request must not execute callbacks")
+        # An explicit FULL also requests the envelope, not the legacy array
+        # report. Sink support cannot stand in for STREAMED envelope support.
+        for mode in ("FULL", "STREAMED"):
+            refused = subprocess.run(command + ["--report-mode", mode],
+                                     capture_output=True, text=True, env=environment)
+            failure = document(refused.stdout)
+            require(refused.returncode == unsupported["exit_status"]
+                    and failure.get("code") == unsupported["code"],
+                    f"legacy provider accepted an unsupported {mode} envelope: {refused.stdout}")
+            require(failure.get("args") == {"mode": mode, "contract": request["contract"]},
+                    f"envelope refusal did not preserve the {mode} request")
+            require(not marker.exists(), f"unsupported {mode} envelope executed callbacks")
     print("PASS O1 unsupported mode: populated legacy control; SUMMARY_ONLY refused before execution")
 
 
