@@ -644,7 +644,7 @@ void exercise_limits(bool direct) {
     constexpr auto over_label = kJournalSpillPageBytes - accepted_bytes + 1;
     const no::Request filler{no::Transact{0.0}, "filler", ""};
     {
-        no::WorkingRequestCore core;
+        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-fit", 1}};
         core.reset(no::RunIdentity{"x08-limits-fit", 1});
         core.reserve(kJournalMaxResident + 64);
         std::uint64_t incarnation = 1, ordinal = 1;
@@ -708,7 +708,7 @@ void exercise_limits(bool direct) {
         CHECK(found && full_fold::value(*found) == values[kJournalChunk]);
     }
     {
-        no::WorkingRequestCore core;
+        no::WorkingRequestCore core{no::RunIdentity{"x08-limits-refuse", 1}};
         core.reset(no::RunIdentity{"x08-limits-refuse", 1});
         core.reserve(kJournalMaxResident + 64);
         std::uint64_t incarnation = 1, ordinal = 1;
