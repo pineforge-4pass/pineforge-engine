@@ -7154,6 +7154,12 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     endforeach()
     unset(_o1s3_case)
     unset(_o1s3_row)
+
+    add_executable(test_o1s3_p14_fold_cost test_o1s3_p14_fold_cost.cpp)
+    target_link_libraries(test_o1s3_p14_fold_cost PRIVATE pineforge)
+    target_compile_features(test_o1s3_p14_fold_cost PRIVATE cxx_std_17)
+    target_compile_options(test_o1s3_p14_fold_cost PRIVATE -ffp-contract=off -UNDEBUG)
+    add_test(NAME test_o1s3_p14_fold_cost COMMAND test_o1s3_p14_fold_cost)
 endif()
 
 add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)

@@ -55,10 +55,21 @@ struct Save {
     jc::Writer& out;
     bool counting = false;
     std::uint64_t rows = 0;
-    bool good() const { return out.status == Status::ok; }
+    std::uint64_t* next_offset = nullptr;
+    std::uint64_t* next_row = nullptr;
+    std::array<std::uint64_t, 4>* array_elements = nullptr;
+    std::array<std::uint64_t, 4>* array_rows = nullptr;
+    std::size_t arrays = 0;
+    bool stopped = false;
+    bool good() const { return out.status == Status::ok && !stopped; }
     template<class T> void field(const Path& path, const char* name, T& value) {
-        ++rows;
-        if (counting || !good()) return;
+        if (!good()) return;
+        const auto row = rows++;
+        if (counting || (next_row && row < *next_row)) return;
+        if (next_offset && out.position >= out.offset + out.destination.size) {
+            stopped = true;
+            return;
+        }
         const auto key = path.child(name);
         out.word(key.length); out.bytes(key.bytes.data(), key.length);
         out.word(tag<T>());
@@ -66,6 +77,24 @@ struct Save {
         else if constexpr (std::is_same_v<T, double>) {
             std::uint64_t bits = 0; std::memcpy(&bits, &value, sizeof bits); out.word(bits);
         } else out.word(static_cast<std::uint64_t>(value));
+        if (next_offset && out.status == Status::ok) {
+            if (out.position <= out.offset + out.destination.size) {
+                *next_offset = out.position;
+                *next_row = rows;
+            } else stopped = true; // Retry only this field at the next page.
+        }
+    }
+    std::uint64_t begin_array(std::size_t slot) {
+        if (!array_elements || !good()) return 0;
+        // Restore the field ordinal at the first unfinished element without
+        // traversing any completed element, including its optional fields.
+        rows = std::max(rows, (*array_rows)[slot]);
+        return (*array_elements)[slot];
+    }
+    void end_element(std::size_t slot, std::uint64_t next) {
+        if (!array_elements || !good()) return;
+        (*array_elements)[slot] = next;
+        (*array_rows)[slot] = rows;
     }
 };
 
@@ -226,9 +255,16 @@ template<class A> struct Schema {
                 || count > rows.max_size()) { a.in.status = Status::corrupt; return; }
             if constexpr (A::owning) rows.resize(static_cast<std::size_t>(count));
         }
-        for (std::uint64_t i = 0; i != count && a.good(); ++i) {
+        std::uint64_t first = 0;
+        std::size_t slot = 0;
+        if constexpr (!A::loading) {
+            slot = a.arrays++;
+            first = a.begin_array(slot);
+        }
+        for (std::uint64_t i = first; i != count && a.good(); ++i) {
             if constexpr (A::loading && !A::owning) { T row{}; emit(p.element(i),row); }
             else emit(p.element(i),rows[static_cast<std::size_t>(i)]);
+            if constexpr (!A::loading) a.end_element(slot,i+1);
         }
     }
     void event(Event& value) {
@@ -280,14 +316,6 @@ template<class A> struct Schema {
     }
 };
 
-bool rejection(Outcome outcome) {
-    switch (outcome) {
-    case Outcome::RejectedIntradayCap: case Outcome::RejectedFrozenMarketCap:
-    case Outcome::RejectedAffordability: case Outcome::RejectedPricedCap:
-    case Outcome::OpeningRejectedReductionAdmitted: return true;
-    default: return false;
-    }
-}
 template<bool Owning> Status decode(const detail::ScratchByteSource& source,
     detail::ScratchBuffer page, Event& event, JournalRecordSummary& summary) noexcept {
     if (!page.data || !page.size) return Status::programming_error;
@@ -301,7 +329,7 @@ template<bool Owning> Status decode(const detail::ScratchByteSource& source,
         const auto status = in.finish();
         if (status == Status::ok) {
             summary = load.summary;
-            summary.rejected = rejection(load.outcome);
+            summary.rejected = rejected_command(load.outcome);
             summary.rejected_bar = load.bar;
         }
         return status;
@@ -329,10 +357,18 @@ detail::ScratchStatus JournalRecordSource::read(std::uint64_t offset,
     if (status_ != Status::ok) return status_;
     if (offset > length_ || buffer.size > length_ - offset || (buffer.size && !buffer.data))
         return Status::programming_error;
+    if (!buffer.size) return Status::ok;
     try {
-        jc::Writer out{0,offset,buffer};
-        out.word(rows_);
-        Save save{out};
+        // Forward pages resume within the current array element. A seek before
+        // the saved field boundary (including the second pass) starts anew.
+        if (offset < next_offset_) {
+            next_offset_ = next_row_ = 0;
+            array_elements_.fill(0);
+            array_rows_.fill(0);
+        }
+        jc::Writer out{next_offset_,offset,buffer};
+        if (!next_offset_) out.word(rows_);
+        Save save{out,false,0,&next_offset_,&next_row_,&array_elements_,&array_rows_};
         Schema<Save>{save}.event(const_cast<Event&>(*event_));
         return out.status;
     } catch (...) { return Status::programming_error; }

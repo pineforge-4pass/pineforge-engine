@@ -8,6 +8,14 @@ struct JournalRecordSummary {
     int rejected_bar = -1;
     bool rejected = false;
 };
+inline bool rejected_command(Outcome outcome) noexcept {
+    switch (outcome) {
+    case Outcome::RejectedIntradayCap: case Outcome::RejectedFrozenMarketCap:
+    case Outcome::RejectedAffordability: case Outcome::RejectedPricedCap:
+    case Outcome::OpeningRejectedReductionAdmitted: return true;
+    default: return false;
+    }
+}
 detail::ScratchStatus scan_journal_record(const detail::ScratchByteSource&,
     detail::ScratchBuffer, JournalRecordSummary&) noexcept;
 detail::ScratchStatus fold_journal_record(const detail::ScratchByteSource&,

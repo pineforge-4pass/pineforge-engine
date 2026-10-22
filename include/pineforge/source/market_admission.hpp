@@ -7,6 +7,7 @@
 // extension fold (src/source/pine_state_hash.cpp), never by the kernel.
 #include <pineforge/order_birth.hpp>
 #include <pineforge/detail/scratch_readback.hpp>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -198,6 +199,12 @@ private:
     std::uint64_t length_ = 0;
     std::uint64_t rows_ = 0;
     detail::ScratchStatus status_ = detail::ScratchStatus::ok;
+    // Resume at a field boundary. Only Event has arrays (at most four);
+    // BookObservation/Draft/CommandObservation contain no nested arrays.
+    mutable std::uint64_t next_offset_ = 0;
+    mutable std::uint64_t next_row_ = 0;
+    mutable std::array<std::uint64_t, 4> array_elements_{};
+    mutable std::array<std::uint64_t, 4> array_rows_{};
 };
 JournalRecordSource encode_journal_record(const Event&) noexcept;
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
@@ -273,6 +280,13 @@ private:
     mutable Prefix folded_window_;
     mutable bool fold_valid_ = false;
     mutable bool filtered_ = false;
+    // Derived on successful append; sequence order, not the greatest bar.
+    struct RejectionGate {
+        uint64_t sequence = 0;
+        int bar = -1;
+        bool valid = true;
+    };
+    mutable RejectionGate rejection_gate_;
     // Observation-only configuration, persistent across reset like recording;
     // not independent broker state and deliberately absent from the v4 fold.
     bool retain_full_observation_history_ = false;

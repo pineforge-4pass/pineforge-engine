@@ -215,6 +215,9 @@ detail::ScratchStatus append_journal_record(Journal& journal,
         codec.snapshot_valid = false;
         std::vector<Event>().swap(journal.events_);
         if (summary.sequence <= journal.folded_window_.last_sequence) journal.fold_valid_ = false;
+        if (summary.rejected && journal.rejection_gate_.valid
+            && summary.sequence > journal.rejection_gate_.sequence)
+            journal.rejection_gate_ = {summary.sequence,summary.rejected_bar,true};
     } else codec.failed_sequence = summary.sequence;
     return status;
 }
@@ -252,7 +255,12 @@ Journal::Prefix Journal::folded_window() const {
     if (filtered_ && retired_prefix_.count == 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission filter cannot rewrite folded lifetime history");
+    if (codec_) CodecState::check(codec_->failure);
+    if (fold_valid_ && !filtered_ && folded_window_.count == event_count())
+        return folded_window_;
     Prefix result = fold_valid_ && !filtered_ ? folded_window_ : retired_prefix_;
+    auto gate = rejection_gate_.valid ? rejection_gate_
+        : RejectionGate{retired_prefix_.last_sequence,retired_prefix_.last_rejected_command_bar,true};
     auto retained_rejected_bar = retired_prefix_.last_rejected_command_bar;
     const auto append = [&](const detail::ScratchByteSource& source, detail::ScratchBuffer page) {
         JournalRecordSummary summary;
@@ -266,6 +274,8 @@ Journal::Prefix Journal::folded_window() const {
         result.last_sequence = summary.sequence;
         if (summary.rejected) {
             result.last_rejected_command_bar = summary.rejected_bar;
+            if (summary.sequence > gate.sequence)
+                gate = {summary.sequence,summary.rejected_bar,true};
             // Prove the old gate at its folded frontier independently of any
             // later appends; a new rejection cannot repair a discarded cause.
             if (summary.sequence <= folded_window_.last_sequence)
@@ -273,13 +283,21 @@ Journal::Prefix Journal::folded_window() const {
         }
     };
     if (codec_) {
-        CodecState::check(codec_->failure);
         detail::ScratchHandle handle = detail::scratch_no_handle;
-        auto status = codec_->store.first(handle);
+        // Inclusive seek permits one frontier key check, never a payload scan
+        // of the prefix. Keys are the sequences validated at publication.
+        const detail::journal_codec::WordSource frontier(result.last_sequence);
+        auto status = codec_->store.lower_bound(frontier,handle);
         while (status == detail::ScratchStatus::ok) {
             detail::ScratchRecordInfo info;
             CodecState::check(codec_->store.point(handle,info));
-            if (info.value_bytes) {
+            std::array<std::byte,8> key{};
+            CodecState::check(codec_->store.read(handle,detail::ScratchField::key,0,
+                                                 {key.data(),key.size()}));
+            std::uint64_t id = 0;
+            for (unsigned i=0;i!=8;++i)
+                id |= std::uint64_t(std::to_integer<unsigned>(key[i])) << (8*i);
+            if (id > result.last_sequence && info.value_bytes) {
                 detail::journal_codec::StoreSource source(codec_->store,handle,info.value_bytes);
                 append(source,codec_->buffer());
             }
@@ -288,9 +306,10 @@ Journal::Prefix Journal::folded_window() const {
         if (status != detail::ScratchStatus::end) CodecState::check(status);
     } else {
         std::array<std::byte,512> page{};
-        for (const auto& event : events_) {
-            if (sequence(event) <= result.last_sequence) continue;
-            const auto source = encode_journal_record(event);
+        const auto first = std::upper_bound(events_.begin(),events_.end(),result.last_sequence,
+            [](uint64_t id,const auto& event){return id < sequence(event);});
+        for (auto at = first; at != events_.end(); ++at) {
+            const auto source = encode_journal_record(*at);
             append(source,{page.data(),page.size()});
         }
     }
@@ -300,12 +319,15 @@ Journal::Prefix Journal::folded_window() const {
     folded_window_ = result;
     fold_valid_ = true;
     filtered_ = false;
+    rejection_gate_ = gate;
     return result;
 }
 
 int Journal::last_rejected_command_bar() const {
     if (filtered_ && fold_valid_) return folded_window_.last_rejected_command_bar;
-    return folded_window().last_rejected_command_bar;
+    if (codec_) CodecState::check(codec_->failure);
+    if (!rejection_gate_.valid) return folded_window().last_rejected_command_bar;
+    return rejection_gate_.bar;
 }
 
 Journal::Journal(const Journal& other) {
@@ -329,6 +351,7 @@ Journal::Journal(const Journal& other) {
     folded_window_ = other.folded_window_;
     fold_valid_ = other.fold_valid_;
     filtered_ = other.filtered_;
+    rejection_gate_ = other.rejection_gate_;
     retain_full_observation_history_ = other.retain_full_observation_history_;
 }
 Journal& Journal::operator=(const Journal& other) {
@@ -346,6 +369,7 @@ Journal& Journal::operator=(const Journal& other) {
     std::swap(folded_window_, copy.folded_window_);
     std::swap(fold_valid_, copy.fold_valid_);
     std::swap(filtered_, copy.filtered_);
+    std::swap(rejection_gate_, copy.rejection_gate_);
     std::swap(retain_full_observation_history_, copy.retain_full_observation_history_);
     return *this;
 }
@@ -362,6 +386,7 @@ Journal::Journal(Journal&& other) {
     folded_window_ = other.folded_window_;
     fold_valid_ = other.fold_valid_;
     filtered_ = other.filtered_;
+    rejection_gate_ = other.rejection_gate_;
     retain_full_observation_history_ = other.retain_full_observation_history_;
     other.outstanding_sequences_.clear();
     other.events_.clear();
@@ -370,6 +395,7 @@ Journal::Journal(Journal&& other) {
     other.folded_window_ = {};
     other.fold_valid_ = false;
     other.filtered_ = false;
+    other.rejection_gate_ = {};
     other.retain_full_observation_history_ = false;
 }
 Journal& Journal::operator=(Journal&& other) {
@@ -387,6 +413,7 @@ Journal& Journal::operator=(Journal&& other) {
     std::swap(folded_window_, moved.folded_window_);
     std::swap(fold_valid_, moved.fold_valid_);
     std::swap(filtered_, moved.filtered_);
+    std::swap(rejection_gate_, moved.rejection_gate_);
     std::swap(retain_full_observation_history_, moved.retain_full_observation_history_);
     return *this;
 }
@@ -466,6 +493,9 @@ void Journal::append(Event event) {
     if (pending == outstanding_sequences_.end())
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission event has no outstanding allocation");
+    const auto* command = std::get_if<CommandEvent>(&event);
+    const bool rejected = command && rejected_command(command->outcome);
+    const int rejected_bar = rejected ? command->observation->bar : -1;
     auto at=std::lower_bound(events_.begin(),events_.end(),id,[](const auto& e,uint64_t n){return sequence(e)<n;});
     events_.insert(at,std::move(event));
     // Consume only after insertion succeeds. Allocation failure leaves a caller
@@ -473,6 +503,8 @@ void Journal::append(Event event) {
     outstanding_sequences_.erase(pending);
     --outstanding_count_;
     if (id <= folded_window_.last_sequence) fold_valid_ = false;
+    if (rejected && rejection_gate_.valid && id > rejection_gate_.sequence)
+        rejection_gate_ = {id,rejected_bar,true};
 }
 void Journal::retain(const std::vector<uint64_t>& retained) {
     if (codec_) {
@@ -516,6 +548,7 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
             codec_->snapshot_valid = false;
             std::vector<Event>().swap(events_);
             filtered_ = filtered_ || fold_valid_;
+            rejection_gate_.valid = false;
         }
         return;
     }
@@ -523,7 +556,10 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
     events_.erase(std::remove_if(events_.begin(),events_.end(),[&](const auto& e){
         return std::find(retained.begin(),retained.end(),sequence(e))==retained.end();
     }),events_.end());
-    if (events_.size() != before && fold_valid_) filtered_ = true;
+    if (events_.size() != before) {
+        if (fold_valid_) filtered_ = true;
+        rejection_gate_.valid = false;
+    }
 }
 void Journal::reset() {
     if (has_unfinished_events())
@@ -538,6 +574,7 @@ void Journal::reset() {
     std::vector<Event>().swap(events_);
     std::vector<uint64_t>().swap(outstanding_sequences_);
     next_sequence_=1;retired_prefix_={};folded_window_={};fold_valid_=false;filtered_=false;
+    rejection_gate_ = {};
 }
 void Journal::retain_full_observation_history() {
     if (next_sequence_ != 1 || has_unfinished_events() || !events_.empty()
