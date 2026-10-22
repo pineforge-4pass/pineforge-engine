@@ -952,7 +952,7 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
 // read and written by position. A store that outgrows its resident part spills;
-// a failed write/read or an oversized serialized journal page is a
+// a failed write/read or an oversized serialized journal event is a
 // ScratchIoError. Spill preparation can open the journal files before the first
 // spill; a run whose reservation stays resident never touches them. Every spill
 // is made where the caller may still throw (reserve_plan, seal_direct), never
@@ -1094,13 +1094,15 @@ private:
 
 class ByteWriter {
 public:
+    struct CapacityExceeded {};
+
     ByteWriter() = default;
     ByteWriter(unsigned char* buffer, std::size_t capacity) noexcept
         : fixed_(buffer), capacity_(capacity) {}
     void raw(const void* data, std::size_t length) {
         if (fixed_) {
             if (length > capacity_ - used_) {
-                throw detail::ScratchIoError(EFBIG, "native o1 journal page exceeds byte bound");
+                throw CapacityExceeded{};
             }
             if (length != 0) std::memcpy(fixed_ + used_, data, length);
             used_ += length;
@@ -1111,6 +1113,8 @@ public:
     }
     const unsigned char* data() const noexcept { return fixed_ ? fixed_ : buffer_.data(); }
     std::size_t size() const noexcept { return fixed_ ? used_ : buffer_.size(); }
+    // Only the fixed journal writer rewinds, to the last complete event.
+    void rewind(std::size_t size) noexcept { used_ = size; }
 
 private:
     std::vector<unsigned char> buffer_;
@@ -1522,7 +1526,8 @@ struct WorkingRequestCore::JournalStore {
         codec_positions[slot] = position;
         return *codec_values[slot];
     }
-    // A page is one chunk's worth of events. The resident part may hold up to
+    // A page holds a contiguous prefix of one chunk, bounded by bytes as well
+    // as kChunk events. The resident part may hold up to
     // kMaxResident events -- far past what a run that retires its journal ever
     // keeps, so a windowed run never writes a page -- and a journal pinned or
     // retained past it spills its oldest chunks to pages. A spill never takes
@@ -1531,17 +1536,17 @@ struct WorkingRequestCore::JournalStore {
     static constexpr std::size_t kChunk = 32;
     static constexpr std::size_t kMaxResident = 16384;
     static constexpr std::size_t kKeepResident = 128;
-    // Page layout: up to 32 concatenated events, each starting with a
-    // uint32_t alternative and a uint64_t ordinal, followed by its fields.
-    // Budget 1024 bytes/event (12 bytes of tag/ordinal + 1012 payload bytes),
-    // pooled across the page: this is a byte budget, NOT a per-event limit.
-    // Request label/comment, opening/exposure vectors and rejected requests
-    // have no finite schema bound. ByteWriter checks EVERY raw write and
-    // refuses the whole spill with ScratchIoError(EFBIG) before publishing it.
-    static constexpr std::size_t kSpillPageBytes =
-        kChunk * (sizeof(uint32_t) + sizeof(uint64_t) + 1012);
+    // Page layout: concatenated events, each starting with a uint32_t
+    // alternative and a uint64_t ordinal, followed by its fields. This 32,768 B
+    // buffer is sized by the largest single serialized CommandEvent we admit:
+    // an event above it is refused with ScratchIoError(EFBIG). Request
+    // label/comment, BindOpenings/OpeningsClose opening vectors,
+    // SelectedExposure incarnations and TermsResolvedEvent/QuantityBoundEvent
+    // adjustment-id vectors have no finite schema bound. A full page closes
+    // before the next event; no per-event size estimate is used.
+    static constexpr std::size_t kSpillPageBytes = 32768;
     static_assert(sizeof(uint32_t) == 4 && sizeof(uint64_t) == 8,
-                  "journal event tag/ordinal byte budget");
+                  "journal event tag/ordinal byte widths");
     struct Chunk {
         std::array<std::optional<CommandEvent>, kChunk> slot;
     };
@@ -1668,28 +1673,41 @@ struct WorkingRequestCore::JournalStore {
         }
         if (chunks.empty()) chunk0_base = first;
     }
-    // Writes the oldest resident events, up to the end of their chunk, as one
-    // page and drops them. Everything that can throw comes before the first
-    // change to the store.
+    // Writes the oldest resident events that fit, up to their chunk's end,
+    // as one page and drops exactly that prefix. Everything that can throw
+    // comes before publishing the page or changing the resident prefix.
     void spill_front_chunk() {
         const uint64_t chunk_end = std::min<uint64_t>(end, chunk0_base + kChunk);
         if (chunk_end <= first) return;
         if (!spill) prepare_spill();
         ByteWriter out(spill->write.data(), spill->write.size());
         SaveAr ar{out};
-        for (uint64_t position = first; position < chunk_end; ++position) {
-            ar(resident_at(position));
+        uint64_t page_end = first;
+        for (; page_end < chunk_end; ++page_end) {
+            const std::size_t event_start = out.size();
+            try {
+                ar(resident_at(page_end));
+            } catch (const ByteWriter::CapacityExceeded&) {
+                out.rewind(event_start);
+                if (page_end == first) {
+                    throw detail::ScratchIoError(
+                            EFBIG, "native o1 journal event exceeds the spill page byte bound");
+                }
+                break;
+            }
         }
         JournalPage page;
         page.first_position = first;
-        page.count = chunk_end - first;
+        page.count = page_end - first;
         page.first_ordinal = event_ordinal(resident_at(first));
-        page.last_ordinal = event_ordinal(resident_at(chunk_end - 1));
+        page.last_ordinal = event_ordinal(resident_at(page_end - 1));
         pages.make_room();
         page.offset = data.append(out.data(), out.size());
         page.length = out.size();
         pages.push(page);
-        drop_front(chunk_end);
+        // drop_front keeps a partly occupied chunk and its original slot base;
+        // the next spill starts at page_end, even when it is not aligned.
+        drop_front(page_end);
     }
     // Room for `incoming` more events: spill while the resident part would
     // pass its bound, then make sure the chunks that will hold them exist.
