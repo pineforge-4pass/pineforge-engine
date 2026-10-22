@@ -21,6 +21,7 @@
 #include "pine_run_failure.hpp"
 #include "pine_checked_arith.hpp"
 #include "pine_command_scratch_production.hpp"
+#include "exit_scratch_versions_production.hpp"
 #include "pine_value_admission.hpp"
 #include "pine_position_tail.hpp"
 #include "pine_position_tail_binding.hpp"
@@ -1114,9 +1115,12 @@ namespace {
 struct ExitScratchRun {
     CommandScratchRun scratch{exit_scratch_key_order()};
     ExitScratchContext context;
+    ExitScratchVersionsProduction versions{scratch.store};
 
     explicit ExitScratchRun(const native_order::RunIdentity& run)
-        : context{scratch.store, run} {}
+        : context{scratch.store, run} {
+        context.versions = &versions;
+    }
 };
 
 std::shared_ptr<ExitScratchContext> make_exit_scratch(

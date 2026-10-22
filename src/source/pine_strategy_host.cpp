@@ -18,6 +18,7 @@
 #include "pine_value_admit_decl.hpp"
 #include "pine_value_admit_risk.hpp"
 #include "pine_command_scratch_production.hpp"
+#include "exit_scratch_versions_production.hpp"
 
 #include <algorithm>
 #include <array>
@@ -80,6 +81,7 @@ struct SourceCommandScratchRun {
         command_scratch_config(page_size, source::detail::exit_scratch_key_order()),
         exit_backing.get()};
     source::detail::ExitScratchContext exit_context{exit, {}};
+    source::detail::ExitScratchVersionsProduction exit_versions{exit};
 
     SourceCommandScratchRun() {
         for (const auto* store : {&trade, &dependency, &exit}) {
@@ -93,6 +95,7 @@ struct SourceCommandScratchRun {
         }
         // This head exposes owning NativeOpenLot rows and snapshot readers,
         // rather than the reference tree's NativeOpenLotView visitor API.
+        exit_context.versions = &exit_versions;
         exit_context.lots = [](const NativeStrategyHost& host, double mark, void* context,
                                bool (*visit)(void*, const NativeOpenLot&)) {
             for (const auto& lot : host.native_open_lots(mark))

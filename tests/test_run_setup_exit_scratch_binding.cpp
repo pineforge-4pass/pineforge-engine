@@ -11,6 +11,7 @@
 #include <array>
 #include <cerrno>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <dirent.h>
 #include <limits>
@@ -18,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -222,10 +224,171 @@ void stream_setup_binds_readers_before_input() {
     require(host.stream_end(), "stream teardown succeeds with its binding alive");
     require(host.last_error().empty(), "stream teardown records no scratch failure");
 }
+
+// Uses only the pre-fix interface. On 85d1af77 the first versions lookup
+// reaches "exit scratch operation failed: context versions null".
+// Fail-before and pass-after execution belong to the supervisor's box.
+void run_setup_binds_versions_and_round_trips_scoped_payloads() {
+    ExitHost host;
+    const Bar warmup{100.0, 101.0, 99.0, 100.0, 1.0, 1704067200000LL};
+    const bool begun = host.stream_begin(&warmup, 1, "1", "1");
+    require_healthy(host);
+    require(begun, "version test starts a real command-scratch run");
+    auto& context = host.scratch();
+    auto& versions = source::detail::exit_scratch_versions(context);
+    require(context.versions != nullptr, "run setup installs its version provider");
+    const auto before = context.store.record_count();
+    const auto resident = context.store.stats().resident_bytes;
+    const std::string label = "frozen-" + std::to_string(context.run.run_number)
+        + std::string(context.store.page_size() * 3, 'p');
+    const std::string comment{"retained\0comment", 16};
+    const std::string replacement_key = label + "\x1f" + comment;
+    native_order::Owner frozen;
+    {
+        source::detail::ExitScratchScope owner(context);
+        std::uint64_t placement_version = 0, request_version = 0, pending_version = 0;
+        {
+            source::PlacementSnapshot placed;
+            placed.family = source::PineOrderFamily::ExitStop;
+            placed.source_id = label;
+            placed.from_entry = comment;
+            placed.comment = comment;
+            placed.exit_levels.stop = warmup.low;
+            placed.requested_qty = warmup.volume;
+            placed.paired_reversal_parent = {context.run, owner.scope()};
+            placed.sizing.price = warmup.close;
+            placed.birth = OrderBirth::chart_evaluation(2, warmup.timestamp);
+            placed.legs.attach(owner.scope(), 1);
+            exit_legs::Prices prices;
+            prices.stop_price = warmup.low;
+            placed.legs.set_prices(prices);
+            const exit_legs::Action cancel{placed.legs.target(), placed.legs.revision(),
+                {1, 2, exit_legs::Domain::Ordinary, exit_legs::Phase::Observation},
+                exit_legs::Cancel{{exit_legs::Leg::Stop}}};
+            require(placed.legs.apply(placed.legs.target(), cancel) == exit_legs::Result::Applied,
+                    "fixture has real lifecycle retirement and replay state");
+            auto observation = std::make_shared<admission::CommandObservation>();
+            observation->command = owner.scope();
+            observation->id = label;
+            observation->birth = placed.birth;
+            placed.market_admission.bind(observation);
+            placement_version = versions.placement(owner.scope(), placed);
+
+            native_order::Request request;
+            request.intent = native_order::Sized{native_order::Side::Short,
+                native_order::EquityFraction{0.25}, native_order::SizeTime::AtAcceptance,
+                native_order::SizePrice::SignalOnTick,
+                native_order::ExecutionGridPolicy::ExplicitUnits, true};
+            request.label = label;
+            request.comment = comment;
+            request.trigger = native_order::Trail{0.5, warmup.high,
+                native_order::TrailTicks{2.0}, warmup.close};
+            request.capacity = native_order::PointBudget{warmup.volume};
+            request.owner = native_order::BindOpenings{
+                {{context.run, owner.scope()}, {context.run, owner.scope() + 1}}, 1};
+            request.group = native_order::Member{owner.scope(), 1, native_order::GroupEffect::Reduce};
+            request.anchor = native_order::FromOwnerFill{
+                -0.5, true, native_order::NativeAnchorRounding::Directional};
+            request_version = versions.request(owner.scope(), request);
+            pending_version = versions.pending(owner.scope(), request, placed, replacement_key);
+            // Retained values must not alias either the caller or its shared pointees.
+            observation->id = "changed";
+            placed.source_id.clear();
+            placed.legs.set_stop_price(warmup.high);
+            request.label.clear();
+        }
+        std::uint64_t nested_version = 0;
+        {
+            source::detail::ExitScratchRows<native_order::RequestHandle> nested(context);
+            require(nested.scope() != owner.scope(), "round trip crosses a scratch scope change");
+            nested.push_back({context.run, owner.scope()});
+            nested.push_back({context.run, nested.scope()});
+            frozen = versions.freeze_openings(context.run, 1, nested.size(), &nested,
+                [](void* opaque, std::uint64_t index, native_order::RequestHandle& result) {
+                    const auto& rows = *static_cast<const source::detail::ExitScratchRows<
+                        native_order::RequestHandle>*>(opaque);
+                    if (index >= rows.size()) return Status::not_found;
+                    result = rows[index];
+                    return Status::ok;
+                });
+            source::PlacementSnapshot temporary;
+            temporary.source_id = "nested";
+            nested_version = versions.placement(nested.scope(), temporary);
+        }
+        detail::ScratchRecordInfo info{};
+        require(context.store.point(nested_version, info) == Status::not_found,
+                "nested scope releases its versions");
+        require(context.store.point(placement_version, info) == Status::ok,
+                "outer version payload remains in the run store after nested release");
+        require(info.value_bytes > label.size(), "stored payload includes the full wide source id");
+        std::string bytes(static_cast<std::size_t>(info.value_bytes), '\0');
+        require(context.store.read(placement_version, detail::ScratchField::value, 0,
+                    {reinterpret_cast<std::byte*>(bytes.data()), bytes.size()}) == Status::ok,
+                "payload bytes are readable directly from the run store");
+        require(bytes.find(label) != std::string::npos && bytes.find(comment) != std::string::npos,
+                "the store owns the frozen text, including embedded NULs");
+
+        auto placed = versions.placement(placement_version);
+        require(placed.source_id == label && placed.from_entry == comment
+                && placed.comment == comment && placed.exit_levels.stop == warmup.low
+                && placed.requested_qty == warmup.volume && placed.sizing.price == warmup.close
+                && placed.paired_reversal_parent
+                    == native_order::RequestHandle{context.run, owner.scope()},
+                "placement provider reproduces text, prices, sizing and handle identity");
+        require(placed.birth.cause() == OrderBirthCause::ChartEvaluation
+                && placed.birth.timestamp() == warmup.timestamp && placed.legs.revision() == 2
+                && placed.legs.retired(exit_legs::Leg::Stop) && placed.legs.last_action()
+                && placed.legs.prices().stop_price == warmup.low
+                && placed.market_admission.observation()
+                && placed.market_admission.observation()->id == label,
+                "placement provider reproduces private lifecycle and admission values");
+        require(placed.legs.apply(placed.legs.target(), *placed.legs.last_action())
+                    == exit_legs::Result::Replay,
+                "restored lifecycle recognizes the exact original action replay");
+        const auto request = versions.request(request_version);
+        const auto& sized = std::get<native_order::Sized>(request.intent);
+        const auto& trail = std::get<native_order::Trail>(request.trigger);
+        const auto& openings = std::get<native_order::BindOpenings>(request.owner);
+        require(request.label == label && request.comment == comment
+                && sized.side == native_order::Side::Short
+                && std::get<native_order::EquityFraction>(sized.basis).fraction == 0.25
+                && sized.time == native_order::SizeTime::AtAcceptance
+                && sized.price == native_order::SizePrice::SignalOnTick
+                && sized.grid_policy == native_order::ExecutionGridPolicy::ExplicitUnits
+                && sized.reserve_percent_fee && trail.arm_price == warmup.high
+                && trail.ticks && trail.ticks->ticks == 2.0 && trail.best_seed == warmup.close
+                && openings.cycle == 1 && openings.openings.size() == 2
+                && openings.openings.front().run == context.run
+                && std::get<native_order::PointBudget>(request.capacity).units == warmup.volume
+                && std::get<native_order::Member>(request.group).group == owner.scope()
+                && std::get<native_order::FromOwnerFill>(request.anchor).ticks,
+                "request provider preserves nested variants, optional values and fixed owners");
+        native_order::Request pending_request;
+        source::PlacementSnapshot pending_placement;
+        std::string pending_key;
+        std::as_const(versions).pending(
+            pending_version, pending_request, pending_placement, pending_key);
+        require(pending_key == replacement_key && pending_request.label == label
+                && pending_placement.source_id == label
+                && pending_placement.legs.retired(exit_legs::Leg::Stop),
+                "pending provider round trips the request, placement and replacement key together");
+        require(context.store.stats().resident_bytes == resident,
+                "wide retained versions do not grow the store's resident workspace");
+    }
+    require(context.store.record_count() == before && !context.store.transaction_active(),
+            "scope teardown releases payloads and stored version counters");
+    const auto& openings = std::get<native_order::BindOpenings>(frozen);
+    require(openings.cycle == 1 && openings.openings.size() == 2
+            && openings.openings.front().run == context.run
+            && openings.openings.front().incarnation != openings.openings.back().incarnation,
+            "frozen native membership survives destruction of its scratch scope");
+    require(host.stream_end(), "version test ends its command-scratch run");
+}
 } // namespace
 
 int main() {
     try {
+        run_setup_binds_versions_and_round_trips_scoped_payloads();
         stream_setup_binds_readers_before_input();
         run_setup_binds_exit_scratch_before_global_exit();
     } catch (const std::exception& error) {
