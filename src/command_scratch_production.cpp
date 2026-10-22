@@ -1,4 +1,5 @@
 #include "command_scratch_production.hpp"
+#include "command_scratch_cache.hpp"
 
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/run_failure.hpp>
@@ -376,10 +377,16 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
             command_scratch_environment_budget = budget;
         }
     }
+    // The cache decorator owns the logical I/O observer (it charges hits too):
+    // the inner backing, file or arena, is constructed with NO observer.
     if (const auto* arena = ScratchArena::attached())
-        return std::make_unique<CommandScratchArena>(
-            page_size, command_scratch_observer, std::move(budget), arena->stats());
-    return std::make_unique<CommandScratchFile>(page_size, command_scratch_observer, std::move(budget));
+        return std::make_unique<CachedScratchBacking>(
+            std::make_unique<CommandScratchArena>(
+                page_size, ScratchIoObserver{}, std::move(budget), arena->stats()),
+            command_scratch_observer);
+    return std::make_unique<CachedScratchBacking>(
+        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}, std::move(budget)),
+        command_scratch_observer);
 }
 
 } // namespace pineforge::detail
