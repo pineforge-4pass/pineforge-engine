@@ -585,6 +585,10 @@ void lifecycle(Directory& directory) {
                 && std::memcmp(&bad, &before, sizeof bad) == 0, "bad prefix rewrote output");
     }
     install_path(host, directory.file());
+    require(strategy_set_report_sink_v1(handle(host), nullptr) == 0,
+            "unstarted path sink removal refused");
+    unpublished(host);
+    install_path(host, directory.file());
     const auto bars = tape(146);
     pf_report_sink_summary_v1 first{};
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -595,8 +599,18 @@ void lifecycle(Directory& directory) {
         if (attempt == 0) first = summary(host);
         else equal(summary(host), first, "reused handle");
     }
-    require(strategy_set_report_sink_v1(handle(host), nullptr) == 0, "sink removal refused");
-    unpublished(host);
+    // An ordinary run still owns its scratch curve; S's detach rule is fd-only.
+    const auto before = receipt(host);
+    const auto before_diagnostics = diagnostics(host);
+    require(strategy_set_report_sink_v1(handle(host), nullptr) == -3,
+            "ordinary path sink removal lost its -3 refusal");
+    repeated_read(host, first, "refused ordinary path removal");
+    const auto after = receipt(host);
+    const auto after_diagnostics = diagnostics(host);
+    require(std::memcmp(&before, &after, sizeof before) == 0,
+            "refused removal changed the completed receipt");
+    require(std::memcmp(&before_diagnostics, &after_diagnostics, sizeof before_diagnostics) == 0,
+            "refused removal changed the completed diagnostics");
 
     // Exercise failure after a real begin: no trailer means no published fold.
     PresentedFixture failed({-0.0, +0.0});
