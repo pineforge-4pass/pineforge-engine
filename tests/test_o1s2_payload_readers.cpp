@@ -65,7 +65,7 @@ void request_placement_pending() {
         admission->id = admission->oca_name = text;
         admission->command = 912;
         placement.market_admission.bind(admission);
-        placement.market_admission.reviewed({93, pf::admission::Checkpoint::ExplicitPair, 4, 912});
+        placement.market_admission.reviewed({913, pf::admission::Checkpoint::ExplicitPair, 4, 912});
 
         no::Request request{no::Reduce{no::ScopeFraction{0.5, no::ScopeClaim::NetOfSiblings,
                                                       no::ScopeBasis::AtAcceptance}}, text, text};
