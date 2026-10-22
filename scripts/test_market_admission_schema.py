@@ -38,12 +38,28 @@ class AdmissionSchema(unittest.TestCase):
     def test_missing_adapter_hash_is_rejected(self):
         directory, root = self.clone()
         try:
-            path = root / "src/source/pine_state_hash.cpp"
-            path.write_text(path.read_text().replace(
-                "admission::reflect(events[admission_events_folded_]",
-                "admission::missing(events[admission_events_folded_]", 1))
-            with self.assertRaises(ValueError):
-                checker.check(root)
+            for relative, token in (
+                ("src/source/market_admission.cpp",
+                 "fold_journal_record(source,page,result.digest)"),
+                ("src/source/pine_state_hash.cpp",
+                 "const auto folded = admission_journal.folded_window();"),
+                ("src/source/pine_state_hash.cpp",
+                 "admission_events_folded_ = folded.count;"),
+                ("src/source/pine_state_hash.cpp",
+                 "admission_events_digest_ = folded.digest;"),
+                ("src/source/pine_state_hash.cpp",
+                 "admission_events_last_ = folded.last_sequence;"),
+            ):
+                with self.subTest(token=token):
+                    path = root / relative
+                    original = path.read_text()
+                    self.assertIn(token, original)
+                    try:
+                        path.write_text(original.replace(token, "", 1))
+                        with self.assertRaises(ValueError):
+                            checker.check(root)
+                    finally:
+                        path.write_text(original)
         finally:
             directory.cleanup()
 

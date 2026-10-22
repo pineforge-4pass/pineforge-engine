@@ -1437,16 +1437,13 @@ void torn_write_during_transaction(std::uint64_t nth, bool torn, bool explicit_r
     Rng rng(1000 + nth);
     begin_ok(*s);
     rig.backing.arm_write(nth, torn);
-    bool in_commit = false;
     ScratchStatus failure = random_ops(*s, pending, rng, 600);
     if (failure == ScratchStatus::ok) {
-        in_commit = true;
         failure = s->commit(ScratchDurability::buffered);
     }
     require(rig.backing.write_faults() == 1, "the injected write fault was reached");
     require(failure != ScratchStatus::ok, "a failed backing write is never reported as success");
-    require_status(failure, in_commit ? ScratchStatus::io_error : ScratchStatus::programming_error,
-                   in_commit ? "a commit reports the failing backing call" : "a mutation reports programming_error");
+    require_status(failure, ScratchStatus::io_error, "a mutation and a commit both report the failing backing call");
     check_rollback_only(*s, 512);
     if (explicit_rollback) {
         rollback_ok(*s);
@@ -1511,6 +1508,28 @@ void failed_commit_publishes_nothing() {
         }
         require(succeeded, "the sweep reached a commit that no fault index could break");
     }
+}
+
+void backing_write_failure_during_put() {
+    Rig rig(512, 128);
+    Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+    require_status(s->status(), ScratchStatus::ok, "open");
+    Model model(cmp_numeric_text);
+    begin_ok(*s);
+    put_ok(*s, model, key_u64(1), "one");
+    commit_ok(*s);
+
+    begin_ok(*s);
+    rig.backing.arm_write(1, false);
+    ScratchHandle handle = 0xDEAD;
+    const ScratchStatus status = put_text(*s, key_u64(1), "replacement", handle);
+    require(rig.backing.write_faults() == 1, "the put reached the injected page-write failure before commit");
+    require_status(status, ScratchStatus::io_error, "put reports a failing backing page write");
+    require(handle == 0xDEAD, "a put with a failing backing write leaves its output");
+    check_rollback_only(*s, 512);
+    rollback_ok(*s);
+    verify(*s, model, 512, numeric_probes(), 1, true, "after rolling back the failed put");
+    s.check_io("after a backing page-write failure during put");
 }
 
 void durability_failure_and_transaction_state_machine() {
@@ -2387,6 +2406,61 @@ void misuse_and_error_surface() {
     }
 }
 
+void comparator_failure_during_erase() {
+    Rig rig(512, 128);
+    OrderProbe probe;
+    Session s(rig, config_for(512, 2, 1, 1, order_numeric(&probe), ScratchOpenMode::create_empty));
+    require_status(s->status(), ScratchStatus::ok, "open");
+    Model model(cmp_numeric_text);
+    begin_ok(*s);
+    const ScratchHandle handle = put_ok(*s, model, key_u64(1), "one");
+    commit_ok(*s);
+
+    begin_ok(*s);
+    const std::uint64_t comparisons_before = probe.calls;
+    probe.fail_from_call = comparisons_before + 1;
+    const ScratchStatus status = s->erase(handle);
+    require(probe.calls > comparisons_before, "erase reached the failing comparator");
+    require_status(status, ScratchStatus::programming_error, "a comparator io_error fails erase as a programming error");
+    probe.fail_from_call = 0;
+    check_rollback_only(*s, 512);
+    rollback_ok(*s);
+    verify(*s, model, 512, numeric_probes(), 1, true, "after rolling back the failed erase");
+    s.check_io("after a comparator failure during erase");
+}
+
+void source_failure_during_put() {
+    struct FailingSource final : ScratchByteSource {
+        std::uint64_t size() const noexcept override { return 1; }
+        ScratchStatus read(std::uint64_t, ScratchBuffer) const noexcept override {
+            ++reads;
+            return ScratchStatus::io_error;
+        }
+        mutable std::uint64_t reads = 0;
+    } value_source;
+
+    Rig rig(512, 128);
+    Session s(rig, config_for(512, 2, 1, 1, order_numeric(), ScratchOpenMode::create_empty));
+    require_status(s->status(), ScratchStatus::ok, "open");
+    Model model(cmp_numeric_text);
+    begin_ok(*s);
+    put_ok(*s, model, key_u64(1), "one");
+    commit_ok(*s);
+
+    begin_ok(*s);
+    const Text key = key_u64(1);
+    ScratchSpanSource key_source(bytes_of(key));
+    ScratchHandle handle = 0xDEAD;
+    const ScratchStatus status = s->put(key_source, value_source, handle);
+    require(value_source.reads > 0, "put reached the failing source read");
+    require_status(status, ScratchStatus::programming_error, "a source io_error fails put as a programming error");
+    require(handle == 0xDEAD, "a put with a failing source leaves its output");
+    check_rollback_only(*s, 512);
+    rollback_ok(*s);
+    verify(*s, model, 512, numeric_probes(), 1, true, "after rolling back the failed source put");
+    s.check_io("after a source failure during put");
+}
+
 void geometry_and_open_validation() {
     struct Bad {
         std::size_t page_count;
@@ -2510,6 +2584,7 @@ int main() {
         reentrant_reads_during_iteration();
         comparator_cannot_mutate_the_store();
         rollback_after_partial_writes();
+        backing_write_failure_during_put();
         rollback_survives_torn_writes_at_every_phase();
         failed_commit_publishes_nothing();
         durability_failure_and_transaction_state_machine();
@@ -2522,6 +2597,8 @@ int main() {
         keys_and_values_larger_than_the_cache();
         equal_keys_upsert_and_key_bytes();
         misuse_and_error_surface();
+        comparator_failure_during_erase();
+        source_failure_during_put();
         geometry_and_open_validation();
         differential_random_walk();
         std::puts("test_scratch_store: order, handles, eviction, reentrancy, rollback, reopen, digests, no heap");

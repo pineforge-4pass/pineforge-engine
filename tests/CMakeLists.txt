@@ -7157,6 +7157,40 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
+# O(1) seam 3 journal-codec red clauses: ten executables over one test file, one clause each.
+# They link the source layer (pine_adapter.hpp, pine_command_scratch_production.hpp), so a
+# kernel-only configure must not create them.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_o1s3_row 0)
+    foreach(_o1s3_case IN ITEMS
+        s3_separate_journal_owners_and_reset_red
+        s3_native_codec_all_values_cross_page_red
+        s3_admission_codec_allocations_and_order_red
+        s3_journal_islands_fixed_under_pins_red
+        s3_native_window_dependency_frontier_red
+        s3_admission_window_requires_closed_prefix_red
+        s3_native_digest_survives_nonzero_base_red
+        s3_admission_digest_refuses_zero_refold_red
+        s34_readback_never_collects_population_red
+        s34_backing_physical_charge_and_lifetime_red)
+        math(EXPR _o1s3_row "${_o1s3_row} + 1")
+        add_executable(${_o1s3_case} test_o1s3_journal_red.cpp)
+        target_link_libraries(${_o1s3_case} PRIVATE pineforge)
+        target_compile_features(${_o1s3_case} PRIVATE cxx_std_17)
+        target_compile_definitions(${_o1s3_case} PRIVATE PINEFORGE_O1S3_CLAUSE=${_o1s3_row})
+        target_compile_options(${_o1s3_case} PRIVATE -ffp-contract=off -UNDEBUG)
+        add_test(NAME ${_o1s3_case} COMMAND ${_o1s3_case} ${_o1s3_case})
+    endforeach()
+    unset(_o1s3_case)
+    unset(_o1s3_row)
+
+    add_executable(test_o1s3_p14_fold_cost test_o1s3_p14_fold_cost.cpp)
+    target_link_libraries(test_o1s3_p14_fold_cost PRIVATE pineforge)
+    target_compile_features(test_o1s3_p14_fold_cost PRIVATE cxx_std_17)
+    target_compile_options(test_o1s3_p14_fold_cost PRIVATE -ffp-contract=off -UNDEBUG)
+    add_test(NAME test_o1s3_p14_fold_cost COMMAND test_o1s3_p14_fold_cost)
+endif()
+
 add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
 
 # CR-150: one file per lane in tests/cr150.d/<lane>.cmake (see tests/cr150.d/README.md).
@@ -7457,3 +7491,13 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
     set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
+
+# LAB-o1s2: compiled/executed only by the supervisor's LB-446 build hosts.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_o1s2_native_readers)
+    pineforge_add_unit_test(test_o1s2_native_readers)
+    if(PINEFORGE_BUILD_SOURCE_LAYER)
+        list(APPEND TEST_SOURCES test_o1s2_payload_readers)
+        pineforge_add_unit_test(test_o1s2_payload_readers)
+    endif()
+endif()
