@@ -4,13 +4,45 @@
 // section "O(1) seams s3 and s4", lines 357-767.
 //
 // Interface debt, deliberately left RED:
-//   WorkingRequestCore::bind_scratch_store(ScratchStore&)
-//   PineExecutionAdapter::bind_scratch_store(ScratchStore&)
-//   range_end_trades_.row(index)
-//   OriginRoster::visit_positions_of(handle, visitor)
+//   WorkingRequestCore::bind_scratch_store(ScratchStore&) -> void
+//   PineExecutionAdapter::bind_scratch_store(ScratchStore&) -> void
+//   range_end_trades_.row(std::size_t) const -> const Trade&
+//   OriginRoster::visit_positions_of(const RequestHandle&, Visitor&&) const
+//       -> void; Visitor is a callable bool(std::size_t)
+//   PineExecutionAdapter::fixture_cohort_state(
+//       const SourceId&, std::uint8_t edit, const RequestHandle&, double)
+//       -> std::pair<CohortHandle, const OriginRoster*>
+//   PineExecutionAdapter::fixture_projection_state(
+//       std::uint8_t edit, const RequestHandle&, const PlacementSnapshot*) -> void
+//   PineExecutionAdapter::fixture_queue_state(
+//       std::uint8_t queue, const Request*, const PlacementSnapshot*,
+//       const RequestHandle& handle, const RequestHandle& parent) -> void
+//   PineExecutionAdapter::fixture_source_key(
+//       std::optional<std::uint64_t> key, const RequestHandle*) -> void
+//   BacktestEngine::fixture_open_lot(PositionSide, const PyramidEntry*) -> void
+//   PineExecutionAdapter::fixture_retire_origin_prefixes() -> void
+//   NativeExecutionConsumer::fixture_note_committed(
+//       const EventRange&, bool cohort_receipts) -> void
 // These are minimal test spellings for borrowing the explicitly selected
-// store and reading the terminal descriptor, NOT declarations of production
-// APIs. The spec explicitly leaves that interface decision open (758-763).
+// store, installing fixture inputs and borrowing existing roster/report
+// projections, NOT declarations of production APIs. Request, RequestHandle,
+// CohortHandle and EventRange are native_order types; SourceId,
+// PlacementSnapshot and OriginRoster are source types. The spec explicitly
+// leaves that interface decision open (758-763). Edit/queue codes are the
+// uint8_t values of CohortEdit/ProjectionEdit/QueueId below. Cohort lookup
+// returns the ACTUAL native handle and borrowed OriginRoster (null on absence);
+// no seam computes a predicate, expected result, count or digest. All input
+// pointers are borrowed for the call, never transferred. A null request AND
+// snapshot clears the selected queue; otherwise append one row, with the
+// supplied handle/parent used only by anchored rows. A null source key clears
+// that relation; a present key plus null handle erases just that key.
+// A null lot clears the physical book; otherwise append that lot and update
+// its side/quantity scalars. Projection remember/retire, prefix retirement and
+// native notification MUST invoke the existing production transitions, not
+// recreate their effects in the fixture. Projection put/erase change only the
+// placement; name/unname change only source-live membership. Cohort clear_all
+// changes only source cohort state. Other edits install only their named state.
+// No seam implementation or substitute container is supplied here.
 // The existing bind_scratch_slab is a different substrate, not this binding.
 // Rebinding an owner after orderly same-backing reopen must recover its last
 // committed record/index relation. No cross-process persistence is requested.
@@ -21,9 +53,9 @@
 // and transient allocations are inside it from construction through
 // destruction. S4-RE separately identifies the producer's physical-book input.
 // No warm-up population is a memory allowance. Caller pages are fixed first.
-// The red gate uses the construction high-water byte census as a fixed
-// allowance, never a warm-up population. It sees transient allocate/free peaks
-// as well as final live bytes. Allocation count alone is not a memory bound.
+// The red gate starts at LIVE construction bytes plus the explicit fixed-frame
+// ledger below. It sees transient allocate/free peaks as well as final live
+// bytes. Allocation count alone is not a memory bound.
 // Allocator rounding A and physical charge M still belong to the measuring lane.
 // There is no s3 journal codec, S34-R or S34-B test in this file.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
@@ -73,45 +105,29 @@ void status_is(ScratchStatus actual, ScratchStatus expected, const char* why) {
     }
 }
 
-// Same explicit-instantiation technique as test_origin_roster_retirement.cpp.
-// Access existing members only; do not change visibility or add fixture state
-// to a broker class.
-template<class Tag, auto Member> struct PrivateAccess {
-    friend auto access(Tag) { return Member; }
+// Fixture transport codes, not production enum declarations. erase_opened
+// removes ONE full-handle occurrence; unit edits use the incarnation key even
+// for a zero value. lookup never creates state; ensure alone opens a cohort.
+enum class CohortEdit : std::uint8_t {
+    lookup, ensure, append_origin, append_opened, erase_opened, clear_opened,
+    put_units, erase_units, clear_units, clear_all
 };
-#define MEMBER_TAG(tag, owner, member)                                        \
-    struct tag { friend auto access(tag); };                                 \
-    template struct PrivateAccess<tag, &owner::member>
-MEMBER_TAG(Cohorts, ps::PineExecutionAdapter, cohorts_by_id_);
-MEMBER_TAG(Placements, ps::PineExecutionAdapter, placement_);
-MEMBER_TAG(SourceKeys, ps::PineExecutionAdapter, live_by_source_key_);
-MEMBER_TAG(SourceLive, ps::PineExecutionAdapter, live_handles_);
-MEMBER_TAG(BracketQueue, ps::PineExecutionAdapter, pending_bracket_legs_);
-MEMBER_TAG(EntryQueue, ps::PineExecutionAdapter, pending_entries_);
-MEMBER_TAG(DelayedQueue, ps::PineExecutionAdapter, delayed_market_orders_);
-MEMBER_TAG(SellQueue, ps::PineExecutionAdapter, deferred_open_marketable_sells_);
-MEMBER_TAG(RearmQueue, ps::PineExecutionAdapter, throttled_reopen_rearm_);
-MEMBER_TAG(SameBarQueue, ps::PineExecutionAdapter, pending_same_bar_commands_);
-MEMBER_TAG(ShadowQueue, ps::PineExecutionAdapter, source_shadow_pending_);
-MEMBER_TAG(CoofQueue, ps::PineExecutionAdapter, pending_coof_requests_);
-MEMBER_TAG(RevivalQueue, ps::PineExecutionAdapter, pending_margin_revivals_);
-MEMBER_TAG(AnchoredQueue, ps::PineExecutionAdapter, anchored_relative_legs_);
-MEMBER_TAG(RetireOrigins, ps::PineExecutionAdapter, retire_origin_prefixes);
-MEMBER_TAG(Remember, ps::PineExecutionAdapter, remember);
-MEMBER_TAG(RetireHandle, ps::PineExecutionAdapter, retire);
-MEMBER_TAG(NoteEvents, NativeExecutionConsumer, note_committed_events);
-MEMBER_TAG(NoteCohorts, NativeExecutionConsumer, note_cohort_receipts);
-#undef MEMBER_TAG
-
-template<class Tag> auto& member(ps::PineExecutionAdapter& adapter, Tag tag) {
-    return adapter.*access(tag);
-}
+enum class ProjectionEdit : std::uint8_t { remember, retire, put, erase, name, unname };
+enum class QueueId : std::uint8_t {
+    bracket, entry, delayed, sell, rearm, same_bar, shadow, coof, revival, anchored
+};
 
 // All comparisons of identities in the reference model compare TEXT and the
 // entire run, never SessionKey's interned pointer or incarnation alone.
 bool same_handle(const no::RequestHandle& a, const no::RequestHandle& b) {
     return a.incarnation == b.incarnation && a.run.run_number == b.run.run_number
         && a.run.session_key.string() == b.run.session_key.string();
+}
+bool within_four_ulps(double actual, double expected) {
+    if (!std::isfinite(actual) || !std::isfinite(expected)) return actual == expected;
+    for (unsigned step = 0; step < 4 && expected != actual; ++step)
+        expected = std::nextafter(expected, actual);
+    return actual == expected;
 }
 bool has_handle(const std::vector<no::RequestHandle>& rows, const no::RequestHandle& h) {
     for (const auto& row : rows) if (same_handle(row, h)) return true;
@@ -135,9 +151,30 @@ struct OracleWork {
 struct HeapCensus {
     static inline HeapCensus* active = nullptr;
     std::size_t peak = 0;
-    std::size_t construction_peak = 0;
-    std::size_t construction_calls = 0;
+    std::size_t live_at_seal = 0;
     std::size_t calls = 0;
+    // B_u ledger: post-construction LIVE owners (including W) plus F.
+    // F covers simultaneous old/new immutable definitions and shared control
+    // blocks; old/new live/event frames; old/new source placement frames; one
+    // decoded lot/report row; and one fixed codec transfer frame. These are
+    // frames for ONE update/read, never slots per resident queue/member.
+    // The four-pointer control-block envelope is the s3 ledger's spelling.
+    // Stack caller pages in the tests are disjoint and counted only there.
+    // No population, queue/handle count, record/text length or retained peak
+    // enters this sum; allocator rounding A and physical charge M are separate.
+    using SharedControlFrame = std::array<void*, 4>;
+    using CodecTransferFrame = std::array<std::byte, page_bytes>;
+    static constexpr std::size_t F =
+        2 * (sizeof(no::RequestDefinition) + sizeof(SharedControlFrame))
+            // S4-O (401), S34-T (588): old/new definitions at one publication.
+        + 2 * (sizeof(no::LiveRequest) + sizeof(no::CommandEvent))
+            // S4-M (547), S34-T (588): current and provisional native frames.
+        + 2 * sizeof(ps::PlacementSnapshot)
+            // S4-M (547), S34-T (588): current and provisional source frames.
+        + sizeof(PyramidEntry) + sizeof(Trade)
+            // S4-RE (548): one borrowed lot and one terminal row at a time.
+        + sizeof(CodecTransferFrame);
+            // S34-R (697): bounded field transfer, independent of record length.
     static void allocated(std::size_t) {
         ++active->calls;
         active->peak = std::max(active->peak, global_allocation::live_bytes);
@@ -150,16 +187,19 @@ struct HeapCensus {
         global_allocation::on_recorded = &allocated;
         global_allocation::recording = true;
     }
-    void seal() { construction_peak = peak; construction_calls = calls; }
+    void seal() {
+        live_at_seal = global_allocation::live_bytes;
+        peak = live_at_seal;
+    }
     void fixed(const ScratchStore& store, std::uint64_t resident_at_construction) const {
-        if (peak > construction_peak) {
-            std::fprintf(stderr, "heap census: peak=%zu construction_bound=%zu calls=%zu\n",
-                         peak, construction_peak, calls);
+        if (peak > live_at_seal + F) {
+            std::fprintf(stderr, "heap census: peak=%zu live_at_seal=%zu F=%zu calls=%zu\n",
+                         peak, live_at_seal, F, calls);
         }
         require(store.stats().resident_bytes == resident_at_construction,
                 "ScratchStore workspace never grows");
-        require(peak <= construction_peak,
-                "B_u: a population or transient allocation grew past construction");
+        require(peak <= live_at_seal + F,
+                "B_u: live construction owners plus the fixed simultaneous frames");
     }
     ~HeapCensus() {
         global_allocation::recording = false;
@@ -307,12 +347,8 @@ struct Host final : ps::PineStrategyHost {
         return const_cast<no::WorkingRequestCore&>(consumer().request_core());
     }
     void on_source_bar(const Bar&) override {}
-    using BacktestEngine::pyramid_entries_;
-    using BacktestEngine::position_side_;
-    using BacktestEngine::position_qty_;
     using BacktestEngine::range_end_trades_;
-    using BacktestEngine::commission_type_;
-    using BacktestEngine::commission_value_;
+    using BacktestEngine::calc_commission;
     using ps::PineStrategyHost::source_pending_view;
 };
 
@@ -405,7 +441,7 @@ struct Subject {
     no::WorkingRequestCore& core() { return host.core(); }
     ps::PineExecutionAdapter& adapter() { return host.adapter(); }
     void note(std::size_t first) {
-        (host.consumer().*access(NoteEvents{}))({first, core().history_end() - first});
+        host.consumer().fixture_note_committed({first, core().history_end() - first}, false);
     }
     no::RequestHandle submit(const no::Request& r) {
         const auto first = core().history_end();
@@ -430,31 +466,110 @@ struct Subject {
         require(core().cancel(h, ord).status == no::CancelStatus::Cancelled, "real cancel");
         note(first);
     }
-    void cohort_note() { (host.consumer().*access(NoteCohorts{}))(); }
-    auto cohort(const std::string& id) {
-        auto& table = member(adapter(), Cohorts{});
-        auto found = table.find(id);
-        if (found != table.end()) return found;
-        using Facts = std::remove_reference_t<decltype(found->second)>;
-        Facts facts;
-        facts.handle = core().cohort_open();
-        return table.emplace(id, std::move(facts)).first;
+    void cohort_note() { host.consumer().fixture_note_committed({}, true); }
+    std::pair<no::CohortHandle, const ps::OriginRoster*> cohort_state(
+            const std::string& id, CohortEdit edit,
+            no::RequestHandle h = {}, double units = 0.0) {
+        return adapter().fixture_cohort_state(id, static_cast<std::uint8_t>(edit), h, units);
+    }
+    no::CohortHandle cohort(const std::string& id) {
+        return cohort_state(id, CohortEdit::ensure).first;
+    }
+    const ps::OriginRoster* roster(const std::string& id) {
+        return cohort_state(id, CohortEdit::lookup).second;
     }
     void append(const std::string& id, no::RequestHandle h) {
-        cohort(id)->second.origins.push_back(h);
+        (void)cohort_state(id, CohortEdit::ensure);
+        (void)cohort_state(id, CohortEdit::append_origin, h);
     }
-    void retire() { (adapter().*access(RetireOrigins{}))(); }
+    void projection(ProjectionEdit edit, no::RequestHandle h,
+                    const ps::PlacementSnapshot* snapshot = nullptr) {
+        adapter().fixture_projection_state(static_cast<std::uint8_t>(edit), h, snapshot);
+    }
+    void queue(QueueId id, const no::Request* request = nullptr,
+               const ps::PlacementSnapshot* snapshot = nullptr,
+               no::RequestHandle handle = {}, no::RequestHandle parent = {}) {
+        adapter().fixture_queue_state(static_cast<std::uint8_t>(id),
+                                     request, snapshot, handle, parent);
+    }
+    void source_key(std::optional<std::uint64_t> key, const no::RequestHandle* h = nullptr) {
+        adapter().fixture_source_key(key, h);
+    }
+    void retire() { adapter().fixture_retire_origin_prefixes(); }
     void remember(no::RequestHandle h, ps::PlacementSnapshot snapshot) {
-        (adapter().*access(Remember{}))(h, std::move(snapshot));
+        projection(ProjectionEdit::remember, h, &snapshot);
     }
     void retire_handle(no::RequestHandle h) {
-        (adapter().*access(RetireHandle{}))(h);
+        projection(ProjectionEdit::retire, h);
     }
     void rebind(ScratchStore& reopened) {
         core().bind_scratch_store(reopened);
         adapter().bind_scratch_store(reopened);
     }
 };
+
+std::uint64_t source_hash(Subject& s) {
+    BrokerStateHashSink hash;
+    s.adapter().hash_state(hash);
+    return hash.h;
+}
+
+// Validate the whole source-key relation through its existing semantic fold,
+// including cardinality and full-handle values. Replay ONLY oracle inputs;
+// no fixture returns an expected answer or enumerates a private container.
+void check_source_keys(Subject& s, const Model& model) {
+    const auto before = source_hash(s);
+    s.source_key(std::nullopt);
+    require((source_hash(s) == before) == model.source_keys.empty(),
+            "source-key presence contributes semantic hash bytes");
+    for (const auto& key : model.source_keys) s.source_key(key.first, &key.second);
+    require(source_hash(s) == before,
+            "source-key count and full-handle relation equal the independent model");
+}
+
+void check_current_membership(Subject& s, const std::string& id, const Model& model) {
+    const auto& expected = model.cohorts.at(id);
+    const auto opened = source_hash(s);
+    (void)s.cohort_state(id, CohortEdit::clear_opened);
+    require((source_hash(s) == opened) == expected.opened.empty(),
+            "opened presence contributes semantic hash bytes");
+    for (auto h : expected.opened) (void)s.cohort_state(id, CohortEdit::append_opened, h);
+    require(source_hash(s) == opened,
+            "opened count, full-handle values, duplicates and order equal the model");
+    const auto units = source_hash(s);
+    (void)s.cohort_state(id, CohortEdit::clear_units);
+    require((source_hash(s) == units) == expected.units.empty(),
+            "live-unit key presence contributes semantic hash bytes even at zero");
+    for (const auto& unit : expected.units)
+        (void)s.cohort_state(id, CohortEdit::put_units, {model.run, unit.first}, unit.second);
+    require(source_hash(s) == units,
+            "live-unit key count and values equal the independent model");
+}
+
+// Every current placement is observed through the production pending facade.
+// Seen flags belong to the oracle; a duplicate cannot hide an omitted handle.
+void check_pending_placements(Subject& s, const Model& model) {
+    const auto& pending = s.adapter().pending_intent_view();
+    const int count = pending.size();
+    require(count == static_cast<int>(model.queue.size()),
+            "pending projection has exactly the current executable handle count");
+    std::vector<bool> seen;
+    { OracleWork oracle; seen.resize(model.queue.size()); }
+    for (int i = 0; i < count; ++i) {
+        pf_pending_order_v1_t row{};
+        require(pending.copy_v1(i, &row) >= 0, "production placement projection reads");
+        std::size_t found = 0;
+        while (found < model.queue.size()
+               && model.queue[found].handle.incarnation != row.incarnation) ++found;
+        require(found != model.queue.size(), "pending projection names only a current model handle");
+        require(!seen[found], "one current placement projection per full issued handle");
+        seen[found] = true;
+        require(row.qty == model.queue[found].units,
+                "placement value readback equals the input model");
+    }
+    for (bool present : seen)
+        require(present, "pending projection omits no current model handle");
+}
 
 void check_book(const no::WorkingRequestCore& core, const Model& model) {
     require(core.live_size() == model.queue.size(), "one executable row per model handle");
@@ -477,15 +592,16 @@ void check_book(const no::WorkingRequestCore& core, const Model& model) {
 }
 
 void check_roster(Subject& s, const std::string& id, const Model::Cohort& expected) {
-    const auto facts = s.cohort(id);
-    const auto& actual = facts->second.origins;
+    const auto* roster = s.roster(id);
+    require(roster != nullptr, "the installed cohort has a truthful roster projection");
+    const auto& actual = *roster;
     require(actual.size() == expected.origins.size(), "retirement preserves lifetime size");
     require(actual.digest() == expected.digest, "append digest equals independent word fold");
     require(actual.base() == expected.base, "only the all-false contiguous prefix is released");
     std::size_t position = expected.base;
-    for (const auto& h : actual) {
+    for (; position < actual.size(); ++position) {
         require(position < expected.origins.size()
-                    && same_handle(h, expected.origins[position++]),
+                    && same_handle(actual[position], expected.origins[position]),
                 "roster readback retains exact global order and full handles");
     }
     require(position == expected.origins.size(), "all retained roster rows are addressable");
@@ -549,19 +665,19 @@ void s4_one_queue_owner_kept_handle_order_red() {
         { OracleWork oracle; expected = model.submit(1.0 + i, 50.0 + i); }
         handles[i] = s.submit(limit_order(1.0 + i, 50.0 + i));
         require(same_handle(handles[i], expected), "issued handle equals the input model");
-        member(s.adapter(), SourceKeys{})[100 + i] = handles[i];
+        s.source_key(100 + i, &handles[i]);
         { OracleWork oracle; model.source_keys[100 + i] = expected; }
         ps::PlacementSnapshot snapshot;
         snapshot.source_id = "q";
         snapshot.requested_qty = 1.0 + i;
         s.remember(handles[i], std::move(snapshot));
     }
-    auto& queued = member(s.adapter(), EntryQueue{});
     for (const char* label : {"intent-a", "intent-b"}) {
-        queued.emplace_back();
-        queued.back().request = limit_order(9.0, 40.0, label);
-        queued.back().snapshot.source_id = label;
-        queued.back().snapshot.requested_qty = 9.0;
+        const auto request = limit_order(9.0, 40.0, label);
+        ps::PlacementSnapshot snapshot;
+        snapshot.source_id = label;
+        snapshot.requested_qty = 9.0;
+        s.queue(QueueId::entry, &request, &snapshot);
         { OracleWork oracle; model.queued_labels.emplace_back(label); }
     }
     const auto old = handles[1];
@@ -574,7 +690,7 @@ void s4_one_queue_owner_kept_handle_order_red() {
     successor_projection.source_id = "q";
     successor_projection.requested_qty = 7.0;
     s.remember(successor, std::move(successor_projection));
-    member(s.adapter(), SourceKeys{})[101] = successor;
+    s.source_key(101, &successor);
     { OracleWork oracle; model.source_keys[101] = successor; }
     { OracleWork oracle; model.replace(handles[0], 5.0, 80.0, true); }
     require(same_handle(s.replace(handles[0], limit_order(5.0, 80.0), true), handles[0]),
@@ -641,21 +757,49 @@ void s4_one_queue_owner_kept_handle_order_red() {
     check_book(s.core(), model);
     require(s.core().find_live(old) == nullptr && s.core().find_live(filled) == nullptr,
             "neither projection nor queued intent becomes execution authority");
-    require(queued.size() == model.queued_labels.size(), "source intent remains queued");
-    for (std::size_t i = 0; i < queued.size(); ++i)
-        require(queued[i].request.label == model.queued_labels[i], "queued intent order is unchanged");
-    const auto& projection = member(s.adapter(), SourceLive{});
-    require(projection.size() == model.queue.size(), "retire removes only the handle projection");
-    require(member(s.adapter(), SourceKeys{}).size() == model.source_keys.size(),
-            "source-key projection has no stale retired handle");
-    for (const auto& key : model.source_keys)
-        require(same_handle(member(s.adapter(), SourceKeys{}).at(key.first), key.second),
-                "source-key projection retains its original meaning across replacement");
-    for (const auto& row : model.queue)
-        require(member(s.adapter(), Placements{}).at(row.handle.incarnation).requested_qty == row.units,
-                "placement projection follows the current accepted definition");
-    require(s.host.source_pending_view().size() == model.queue.size() + model.queued_labels.size(),
+    const auto& projection = s.host.source_pending_view();
+    require(projection.size() == model.queue.size() + model.queued_labels.size(),
             "pending observer reads executable projection plus unsubmitted intent");
+    std::size_t queued = 0, live = 0;
+    for (const auto& row : projection) {
+        if (row.id != "q") {
+            require(queued < model.queued_labels.size()
+                        && row.id == model.queued_labels[queued++] && row.qty == 9.0,
+                    "queued intent values and order are unchanged");
+        } else {
+            ++live;
+        }
+    }
+    require(queued == model.queued_labels.size(), "source intent remains queued");
+    require(live == model.queue.size(), "retire removes only the handle projection");
+    const auto& pending = s.adapter().pending_intent_view();
+    require(pending.size() == static_cast<int>(projection.size()),
+            "both public pending projections expose the same logical population");
+    for (const auto& expected : model.queue) {
+        std::size_t matches = 0;
+        for (int i = 0; i < pending.size(); ++i) {
+            pf_pending_order_v1_t row{};
+            require(pending.copy_v1(i, &row) >= 0, "pending projection row reads");
+            if (row.incarnation == expected.handle.incarnation) {
+                ++matches;
+                require(row.qty == expected.units,
+                        "placement projection follows the current accepted definition");
+            }
+        }
+        require(matches == 1, "retired handles do not duplicate current source projections");
+    }
+    // The owning fixture facade projects source_id, not Request::label.
+    // Check the request values/order as well through the existing source fold.
+    const auto queued_state = source_hash(s);
+    s.queue(QueueId::entry);
+    for (const auto& label : model.queued_labels) {
+        const auto request = limit_order(9.0, 40.0, label.c_str());
+        ps::PlacementSnapshot snapshot;
+        snapshot.source_id = label; snapshot.requested_qty = 9.0;
+        s.queue(QueueId::entry, &request, &snapshot);
+    }
+    require(source_hash(s) == queued_state, "queued request labels, values and order equal the model");
+    check_source_keys(s, model);
     require(store.stats().page_writes != 0 && store.record_count() != 0,
             "queue really uses the selected backing");
     rig.accounting(store);
@@ -667,7 +811,7 @@ void s4_one_queue_owner_kept_handle_order_red() {
 // fails to compile: the two Subject bind_scratch_store calls. The later
 // assertion heap.fixed fails on resident definitions, source maps/vectors,
 // roster buckets/positions and retained capacity, even if values are correct.
-// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Fixed memory" (S4-M), clause 2 — Q/P/C growth, drain/reuse and spill keep the construction heap/workspace bound.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Fixed memory" (S4-M), clause 2 — Q/P/C growth, drain/reuse and spill keep the live-at-seal plus F heap/workspace bound.
 void s4_queue_and_membership_islands_fixed_red() {
     for (const unsigned axis : {0u, 1u, 2u}) {
         Model model;
@@ -697,13 +841,12 @@ void s4_queue_and_membership_islands_fixed_red() {
                     require(same_handle(actual, expected), "no capacity refusal on growing population");
                     const std::string id = axis == 2 ? std::to_string(i) : "one";
                     if (axis != 0) {
-                        auto facts = s.cohort(id);
-                        facts->second.origins.push_back(actual);
-                        facts->second.origins.push_back(actual);
-                        facts->second.opened.push_back(actual);
-                        facts->second.live_units_by_origin[actual.incarnation] = 0.0;
-                        s.core().cohort_add(facts->second.handle, actual);
-                        s.core().cohort_add(facts->second.handle, actual);
+                        const auto cohort = s.cohort(id);
+                        s.append(id, actual); s.append(id, actual);
+                        (void)s.cohort_state(id, CohortEdit::append_opened, actual);
+                        (void)s.cohort_state(id, CohortEdit::put_units, actual, 0.0);
+                        s.core().cohort_add(cohort, actual);
+                        s.core().cohort_add(cohort, actual);
                         s.cohort_note();
                         { OracleWork oracle;
                           auto& c = model.cohorts[id];
@@ -726,7 +869,7 @@ void s4_queue_and_membership_islands_fixed_red() {
                         PyramidEntry lot{};
                         lot.price = 100; lot.time = static_cast<std::int64_t>(i);
                         lot.qty = 1; lot.entry_incarnation = actual.incarnation;
-                        s.host.pyramid_entries_.push_back(std::move(lot));
+                        s.host.fixture_open_lot(PositionSide::LONG, &lot);
                         s.cancel(actual); s.retire_handle(actual);
                         { OracleWork oracle; model.erase(expected); }
                     } else if (axis == 2) {
@@ -740,7 +883,9 @@ void s4_queue_and_membership_islands_fixed_red() {
                     const auto moved = s.replace(h, limit_order(3.0, 61.0), true);
                     { OracleWork oracle; model.replace(h, 3.0, 61.0, true); }
                     require(same_handle(h, moved), "repriced_ uses the kept handle");
-                    member(s.adapter(), Placements{}).at(h.incarnation).requested_qty = 3.0;
+                    ps::PlacementSnapshot repriced;
+                    repriced.source_id = "q"; repriced.requested_qty = 3.0;
+                    s.projection(ProjectionEdit::put, h, &repriced);
                     { OracleWork oracle; model.placements.at(h.incarnation).requested_qty = 3.0; }
                     const auto ordinary_target = handles[n / 3];
                     const auto ordinary = s.replace(ordinary_target, limit_order(4.0, 62.0), false);
@@ -751,9 +896,7 @@ void s4_queue_and_membership_islands_fixed_red() {
                     }
                     require(same_handle(ordinary, want), "ordinary replacement changes only its chain row");
                     s.retire_handle(ordinary_target);
-                    auto& placement = member(s.adapter(), Placements{});
-                    if (placement.contains(ordinary_target.incarnation))
-                        placement.erase(ordinary_target.incarnation);
+                    s.projection(ProjectionEdit::erase, ordinary_target);
                     ps::PlacementSnapshot replacement;
                     replacement.source_id = "q"; replacement.requested_qty = 4.0;
                     s.remember(ordinary, std::move(replacement));
@@ -782,15 +925,16 @@ void s4_queue_and_membership_islands_fixed_red() {
             for (const auto h : handles) {
                 if (s.core().find_live(h)) s.cancel(h);
                 s.retire_handle(h);
-                auto& placement = member(s.adapter(), Placements{});
-                if (placement.contains(h.incarnation)) placement.erase(h.incarnation);
+                s.projection(ProjectionEdit::erase, h);
             }
-            for (auto& c : member(s.adapter(), Cohorts{})) {
-                for (const auto h : c.second.opened) s.core().cohort_remove(c.second.handle, h);
-                c.second.opened.clear(); c.second.live_units_by_origin.clear();
+            for (const auto& c : model.cohorts) {
+                const auto cohort = s.cohort(c.first);
+                for (const auto h : c.second.opened) s.core().cohort_remove(cohort, h);
+                (void)s.cohort_state(c.first, CohortEdit::clear_opened);
+                (void)s.cohort_state(c.first, CohortEdit::clear_units);
             }
             s.cohort_note();
-            s.host.pyramid_entries_.clear();
+            s.host.fixture_open_lot(PositionSide::FLAT, nullptr);
             s.retire();
             { OracleWork oracle;
               model.queue.clear();
@@ -814,8 +958,8 @@ void s4_queue_and_membership_islands_fixed_red() {
 // Fixed memory, S4-RE (548). Input: P physical lots, two successive terminal
 // marks, row(index) reads in lot order, clear, then another mark; nonfinite
 // mark refusal. fails to compile: range_end_trades_.row(index), in addition
-// to the store binding. With the old vector reader substituted, peak <=
-// construction_peak fails in append_open_position_report_rows itself (9048),
+// to the store binding. With the old vector reader substituted, the fixed
+// frame allowance fails in append_open_position_report_rows itself (9048),
 // before any C accessor. OpenReportRowSource/materialized_ do not exist here.
 // Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Fixed memory" (S4-RE), clause 3 — repeated marks expose one row per lot, exact row values/left-fold P&L and fixed heap.
 void s4_terminal_mark_descriptor_stays_fixed_red() {
@@ -830,10 +974,8 @@ void s4_terminal_mark_descriptor_stays_fixed_red() {
     for (std::size_t population : {std::size_t{19}, std::size_t{513}, std::size_t{4096}}) {
         std::vector<Expected> model;
         Host host;
-        host.commission_type_ = CommissionType::PERCENT;
-        host.commission_value_ = 0.0;
+        require(host.calc_commission(100.0, 1.0) == 0.0, "terminal fixture has zero default fees");
         host.set_syminfo_pointvalue(1.0);
-        host.position_side_ = PositionSide::LONG;
         // The physical book is the producer's INPUT. Provision it before the
         // producer census: this row measures the terminal descriptor/reader,
         // not a second test of the lot storage covered by S4-M.
@@ -854,8 +996,7 @@ void s4_terminal_mark_descriptor_stays_fixed_red() {
             lot.entry_commission_account = e.entry_fee;
             lot.entry_bar_index = e.entry_bar;
             lot.max_runup = e.favorable; lot.max_drawdown = e.adverse;
-            host.position_qty_ += e.qty;
-            host.pyramid_entries_.push_back(std::move(lot));
+            host.fixture_open_lot(PositionSide::LONG, &lot);
         }
         Rig rig;
         HeapCensus heap;
@@ -889,12 +1030,12 @@ void s4_terminal_mark_descriptor_stays_fixed_red() {
                         "row text survives without a P-row cache");
                 require(row.entry_bar_index == e.entry_bar && row.exit_bar_index == 11,
                         "row bar indexes are input and mark coordinates");
-                require(row.pnl_pct == pnl / (e.price * e.qty) * 100.0,
+                require(within_four_ulps(row.pnl_pct, pnl / (e.price * e.qty) * 100.0),
                         "percentage P&L uses this physical lot's entry cost");
                 // Full lot, zero fees, and pre-existing excursion maxima
                 // greater than every candidate mark's excursion: preserve
                 // those economic inputs, without calling the trade builder.
-                require(row.max_runup == e.favorable && row.max_drawdown == e.adverse,
+                require(row.max_runup >= e.favorable && row.max_drawdown >= e.adverse,
                         "full-lot historical excursion values survive remark");
                 require(row.exit_comment.empty() && row.exit_id.empty()
                             && !row.exit_from_bracket
@@ -946,7 +1087,7 @@ void s34_record_index_publication_rollback_red() {
                         "transaction baseline follows the model");
             }
             const auto target = before.queue[9].handle;
-            const auto cohort = s.cohort("tx")->second.handle;
+            const auto cohort = s.cohort("tx");
             s.core().cohort_add(cohort, target); s.cohort_note();
             { OracleWork oracle; before.cohorts["tx"].canonical.push_back(target); }
             const auto old_digest = store_digest(*store);
@@ -1044,23 +1185,29 @@ void s4_predicate_retained_placement_red() {
     HeapCensus heap;
     ScratchStore store(rig.config(), &rig.backing);
     Subject s(store);
+    heap.seal();
+    const auto resident = store.stats().resident_bytes;
     const auto live = s.submit(limit_order(2.0, 45.0));
     require(same_handle(live, origin), "fixture uses a genuinely issued origin");
     s.cancel(live);
     s.append("p1", origin);
     s.append("p1", expected.origins.back());
-    member(s.adapter(), Placements{}).try_emplace(origin.incarnation, evidence);
+    s.projection(ProjectionEdit::put, origin, &evidence);
     require(s.core().find_live(origin) == nullptr, "native order ended");
-    require(member(s.adapter(), SourceLive{}).empty(), "no live source name");
+    require(s.adapter().pending_intent_view().size() == 0
+                && s.host.source_pending_view().empty(), "no live source name");
     isolated(model, expected, origin, 0);
     s.retire(); model.retire(expected);
     check_roster(s, "p1", expected);
-    require(member(s.adapter(), Placements{}).erase(origin.incarnation), "actual placement erasure");
+    const auto retained = source_hash(s);
+    s.projection(ProjectionEdit::erase, origin);
+    require(source_hash(s) != retained, "actual placement erasure changes semantic state");
     { OracleWork oracle; model.placements.erase(origin.incarnation); model.retire(expected); }
     s.retire();
     check_roster(s, "p1", expected);
     require(expected.base == expected.origins.size(), "removing the sole pin releases the suffix");
     rig.accounting(store);
+    heap.fixed(store, resident);
 }
 
 // The current-membership indexes and the five predicates, S4-P3 (635).
@@ -1080,28 +1227,30 @@ void s4_predicate_live_units_key_presence_red() {
     HeapCensus heap;
     ScratchStore store(rig.config(), &rig.backing);
     Subject s(store);
+    heap.seal();
+    const auto resident = store.stats().resident_bytes;
     const auto real = s.submit(limit_order(1.0, 43.0));
     require(same_handle(real, origin), "issued input handle");
     s.cancel(real);
     for (const char* id : {"alpha", "beta"}) {
         s.append(id, origin);
-        auto facts = s.cohort(id);
-        facts->second.live_units_by_origin[origin.incarnation] = 0.0;
+        (void)s.cohort_state(id, CohortEdit::put_units, origin, 0.0);
         isolated(model, model.cohorts.at(id), origin, 2);
     }
     s.retire();
     for (auto& c : model.cohorts) { model.retire(c.second); check_roster(s, c.first, c.second); }
-    s.cohort("alpha")->second.live_units_by_origin.erase(origin.incarnation);
+    (void)s.cohort_state("alpha", CohortEdit::erase_units, origin);
     { OracleWork oracle; model.cohorts.at("alpha").units.erase(origin.incarnation); }
     s.retire();
     for (auto& c : model.cohorts) { model.retire(c.second); check_roster(s, c.first, c.second); }
     require(model.cohorts.at("alpha").base != model.cohorts.at("beta").base,
             "erasing alpha cannot unpin beta's present zero key");
-    s.cohort("beta")->second.live_units_by_origin.erase(origin.incarnation);
+    (void)s.cohort_state("beta", CohortEdit::erase_units, origin);
     { OracleWork oracle; model.cohorts.at("beta").units.erase(origin.incarnation); }
     s.retire();
     for (auto& c : model.cohorts) { model.retire(c.second); check_roster(s, c.first, c.second); }
     rig.accounting(store);
+    heap.fixed(store, resident);
 }
 
 // The current-membership indexes and the five predicates, S4-P4 (636).
@@ -1112,40 +1261,53 @@ void s4_predicate_live_units_key_presence_red() {
 // rather than making an incarnation-only membership index.
 // Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "The current-membership indexes and the five predicates" (S4-P4), clause 8 — opened membership uses full handles and preserves duplicate pins until the last removal.
 void s4_predicate_opened_full_handle_red() {
-    Model model;
-    const auto a = model.submit(1.0, 42.0);
-    model.erase(a);
-    const no::RequestHandle b{run_id(8), a.incarnation};
-    const std::string long_session(8193, 'x');
-    const no::RequestHandle c{{long_session, a.run.run_number}, a.incarnation};
-    auto& expected = model.cohorts["opened"];
-    // The foreign row comes FIRST: incarnation-only equality would pin it
-    // and hide the correct frontier at the following real member.
-    expected.append(b); expected.append(c); expected.append(a); expected.append(a);
-    expected.opened = {a, a};
-    Rig rig;
-    HeapCensus heap;
-    ScratchStore store(rig.config(), &rig.backing);
-    Subject s(store);
-    const auto real = s.submit(limit_order(1.0, 42.0));
-    require(same_handle(real, a), "issued input handle");
-    s.cancel(real);
-    for (auto h : expected.origins) s.append("opened", h);
-    auto facts = s.cohort("opened");
-    facts->second.opened = expected.opened;
-    isolated(model, expected, a, 3);
-    for (unsigned remaining = 2; remaining != 0; --remaining) {
+    for (std::size_t length : {std::size_t{17}, std::size_t{8193}, std::size_t{65539}}) {
+        // Intern caller-owned identities before measuring. Both the PRESENT
+        // member and a same-length, last-byte-different nonmember are long;
+        // a fixed prefix, an incarnation bucket or a copied text key is not
+        // enough. Length never contributes to F.
+        const std::string session(length, 'x');
+        std::string foreign_session = session;
+        foreign_session.back() = 'y';
+        Model model;
+        model.run = {session, 7};
+        const auto a = model.submit(1.0, 42.0);
+        model.erase(a);
+        const no::RequestHandle b{{session, 8}, a.incarnation};
+        const no::RequestHandle c{{foreign_session, a.run.run_number}, a.incarnation};
+        auto& expected = model.cohorts["opened"];
+        // The foreign rows come FIRST: incarnation-only equality would pin
+        // them and hide the correct frontier at the following real member.
+        expected.append(b); expected.append(c); expected.append(a); expected.append(a);
+        expected.opened = {a, a};
+        Rig rig;
+        HeapCensus heap;
+        ScratchStore store(rig.config(), &rig.backing);
+        Subject s(store);
+        heap.seal();
+        const auto resident = store.stats().resident_bytes;
+        s.core().reset(model.run);
+        const auto real = s.submit(limit_order(1.0, 42.0));
+        require(same_handle(real, a), "issued input handle");
+        s.cancel(real);
+        for (auto h : expected.origins) s.append("opened", h);
+        for (auto h : expected.opened) (void)s.cohort_state("opened", CohortEdit::append_opened, h);
+        isolated(model, expected, a, 3);
+        for (unsigned remaining = 2; remaining != 0; --remaining) {
+            s.retire(); model.retire(expected);
+            check_roster(s, "opened", expected);
+            require(expected.opened.size() == remaining, "oracle retains duplicate multiplicity");
+            check_current_membership(s, "opened", model);
+            (void)s.cohort_state("opened", CohortEdit::erase_opened, a);
+            { OracleWork oracle; remove_one(expected.opened, a); }
+            check_current_membership(s, "opened", model);
+        }
         s.retire(); model.retire(expected);
         check_roster(s, "opened", expected);
-        require(expected.opened.size() == remaining, "oracle retains duplicate multiplicity");
-        facts->second.opened.erase(facts->second.opened.begin());
-        { OracleWork oracle; remove_one(expected.opened, a); }
-        require(facts->second.opened.size() == expected.opened.size(), "one duplicate removed at a time");
+        require(expected.base == expected.origins.size(), "last full-handle member unpins the prefix");
+        rig.accounting(store);
+        heap.fixed(store, resident);
     }
-    s.retire(); model.retire(expected);
-    check_roster(s, "opened", expected);
-    require(expected.base == expected.origins.size(), "last full-handle member unpins the prefix");
-    rig.accounting(store);
 }
 
 // The current-membership indexes and the five predicates, S4-P5 (637).
@@ -1165,9 +1327,11 @@ void s4_predicate_native_canonical_cohort_red() {
     HeapCensus heap;
     auto store = std::make_unique<ScratchStore>(rig.config(), &rig.backing);
     Subject s(*store);
+    heap.seal();
+    const auto resident = store->stats().resident_bytes;
     auto current = s.submit(limit_order(1.0, 41.0));
     require(same_handle(current, root), "real root matches model");
-    const auto cohort = s.cohort("canonical")->second.handle;
+    const auto cohort = s.cohort("canonical");
     s.core().cohort_add(cohort, current); s.cohort_note();
     for (std::size_t i = 0; i < 257; ++i) {
         const bool keep = i % 3 == 1;
@@ -1218,6 +1382,7 @@ void s4_predicate_native_canonical_cohort_red() {
     s.retire();
     check_roster(s, "canonical", expected);
     rig.accounting(*store, open_charges);
+    heap.fixed(*store, resident);
 }
 
 enum class NameField {
@@ -1243,7 +1408,8 @@ void snapshot_name(ps::PlacementSnapshot& row, NameField field, no::RequestHandl
     default: break;
     }
 }
-void request_name(no::Request& row, NameField field, no::RequestHandle h) {
+void request_name(no::Request& row, NameField field, no::RequestHandle h,
+                  std::size_t length) {
     switch (field) {
     case NameField::wait: row.owner = no::WaitForApplied{h}; break;
     case NameField::opening:
@@ -1255,9 +1421,9 @@ void request_name(no::Request& row, NameField field, no::RequestHandle h) {
         row.intent = no::Reduce{no::ExplicitUnits{1}};
         no::BindOpenings owners;
         owners.cycle = 1;
-        // A long QUEUED input, including zero and names unrelated to the
+        // A long QUEUED input, including names unrelated to the
         // target. Only one end names h; checking only front() cannot pass.
-        for (std::uint64_t i = 0; i < 1025; ++i)
+        for (std::size_t i = 0; i < length; ++i)
             owners.openings.push_back({h.run, h.incarnation + 10000 + i});
         owners.openings[field == NameField::openings_first ? 0 : owners.openings.size() - 1] = h;
         row.owner = std::move(owners);
@@ -1266,17 +1432,20 @@ void request_name(no::Request& row, NameField field, no::RequestHandle h) {
     default: break;
     }
 }
-template<class Queue>
-void queued_name(Queue& q, NameField field, no::RequestHandle h) {
-    q.emplace_back();
-    q.back().request = limit_order(1.0, 40.0);
-    snapshot_name(q.back().snapshot, field, h);
-    request_name(q.back().request, field, h);
-}
-template<class Queue>
-void snapshot_queue_name(Queue& q, NameField field, no::RequestHandle h) {
-    q.emplace_back();
-    snapshot_name(q.back().snapshot, field, h);
+QueueId queue_id(NameOwner owner) {
+    switch (owner) {
+    case NameOwner::bracket: return QueueId::bracket;
+    case NameOwner::entry: return QueueId::entry;
+    case NameOwner::delayed: return QueueId::delayed;
+    case NameOwner::sell: return QueueId::sell;
+    case NameOwner::rearm: return QueueId::rearm;
+    case NameOwner::same_bar: return QueueId::same_bar;
+    case NameOwner::shadow: return QueueId::shadow;
+    case NameOwner::coof: return QueueId::coof;
+    case NameOwner::revival: return QueueId::revival;
+    case NameOwner::anchored: return QueueId::anchored;
+    default: throw std::runtime_error("fixture owner is a queue");
+    }
 }
 
 struct InstalledName {
@@ -1284,13 +1453,15 @@ struct InstalledName {
     no::RequestHandle carrier{};
 };
 
-InstalledName install_name(Subject& s, NameCase input, no::RequestHandle origin) {
+InstalledName install_name(Subject& s, NameCase input, no::RequestHandle origin,
+                           std::size_t length = 17) {
     const auto field = input.field;
     const auto owner = input.owner;
     InstalledName result{owner, {}};
     switch (owner) {
     case NameOwner::source_live:
-        member(s.adapter(), SourceLive{}).push_back(origin);
+        result.carrier = origin;
+        s.projection(ProjectionEdit::name, origin);
         break;
     case NameOwner::native_live:
         result.carrier = origin; // submitted by the test; remains live
@@ -1303,29 +1474,40 @@ InstalledName install_name(Subject& s, NameCase input, no::RequestHandle origin)
         result.carrier = s.submit(limit_order(1.0, 47.0));
         ps::PlacementSnapshot row;
         snapshot_name(row, field, origin);
-        member(s.adapter(), Placements{}).try_emplace(result.carrier.incarnation, std::move(row));
+        s.projection(ProjectionEdit::put, result.carrier, &row);
         if (owner == NameOwner::source_snapshot) {
-            member(s.adapter(), SourceLive{}).push_back(result.carrier);
+            s.projection(ProjectionEdit::name, result.carrier);
             s.cancel(result.carrier); // ensure ONLY the source enumeration can see it
         }
         break;
     }
     case NameOwner::native_request: {
         no::Request request = limit_order(1.0, 48.0);
-        request_name(request, field, origin);
+        const bool many = field == NameField::openings_first || field == NameField::openings_last;
+        if (!many) request_name(request, field, origin, length);
         no::CommandContext context;
         context.opening = no::OpeningObservation{origin, 1, no::PositionNonflat{1, no::Side::Long}, true};
-        if (auto* owners = std::get_if<no::BindOpenings>(&request.owner)) {
+        if (many) {
             // Native enrollment has the existing unique, nonzero membership
-            // rules. Exercise each position with real issued handles; the
-            // arbitrarily long queued form above has no enrollment yet.
-            const auto other = s.submit(limit_order(1.0, 49.0));
-            owners->openings = field == NameField::openings_first
-                ? std::vector<no::RequestHandle>{origin, other}
-                : std::vector<no::RequestHandle>{other, origin};
-            for (auto h : owners->openings)
-                context.openings.push_back({h, 1, no::PositionNonflat{1, no::Side::Long}, true});
-            s.cancel(other);
+            // rules. Each length row really enrolls that many issued handles.
+            // Only caller input-vector work is excluded from the census;
+            // issuance, cancellation and apply_submit all remain charged.
+            no::BindOpenings owners;
+            owners.cycle = 1;
+            { OracleWork oracle;
+              owners.openings.reserve(length); context.openings.reserve(length);
+            }
+            const auto target = field == NameField::openings_first ? 0 : length - 1;
+            for (std::size_t i = 0; i < length; ++i) {
+                const auto h = i == target ? origin : s.submit(limit_order(1.0, 49.0));
+                { OracleWork oracle;
+                  owners.openings.push_back(h);
+                  context.openings.push_back({h, 1, no::PositionNonflat{1, no::Side::Long}, true});
+                }
+                if (i != target) s.cancel(h);
+            }
+            request.intent = no::Reduce{no::ExplicitUnits{1}};
+            request.owner = std::move(owners);
         }
         const auto first = s.core().history_end();
         const auto out = s.core().apply_submit(request, context, s.inc, s.ord);
@@ -1336,31 +1518,28 @@ InstalledName install_name(Subject& s, NameCase input, no::RequestHandle origin)
         break;
     }
     case NameOwner::bracket:
-        queued_name(member(s.adapter(), BracketQueue{}), field, origin); break;
     case NameOwner::entry:
-        queued_name(member(s.adapter(), EntryQueue{}), field, origin); break;
     case NameOwner::delayed:
-        queued_name(member(s.adapter(), DelayedQueue{}), field, origin); break;
     case NameOwner::sell:
-        snapshot_queue_name(member(s.adapter(), SellQueue{}), field, origin); break;
     case NameOwner::rearm:
-        member(s.adapter(), RearmQueue{}).emplace_back();
-        snapshot_name(member(s.adapter(), RearmQueue{}).back(), field, origin); break;
     case NameOwner::same_bar:
-        queued_name(member(s.adapter(), SameBarQueue{}), field, origin); break;
     case NameOwner::shadow:
-        snapshot_queue_name(member(s.adapter(), ShadowQueue{}), field, origin); break;
     case NameOwner::coof:
-        queued_name(member(s.adapter(), CoofQueue{}), field, origin); break;
     case NameOwner::revival:
-        snapshot_queue_name(member(s.adapter(), RevivalQueue{}), field, origin); break;
     case NameOwner::anchored: {
-        auto& q = member(s.adapter(), AnchoredQueue{});
-        q.emplace_back();
-        q.back().request = limit_order(1.0, 44.0);
-        if (field == NameField::anchored_handle) q.back().handle = origin;
-        else if (field == NameField::anchored_parent) q.back().parent = origin;
-        else request_name(q.back().request, field, origin);
+        no::Request request;
+        ps::PlacementSnapshot snapshot;
+        { OracleWork oracle; // Borrowed fixture input, never a production call.
+          request = limit_order(1.0, owner == NameOwner::anchored ? 44.0 : 40.0);
+          snapshot_name(snapshot, field, origin);
+          request_name(request, field, origin, length);
+        }
+        const bool snapshot_only = owner == NameOwner::sell || owner == NameOwner::rearm
+            || owner == NameOwner::shadow || owner == NameOwner::revival;
+        s.queue(queue_id(owner), snapshot_only ? nullptr : &request,
+                owner == NameOwner::anchored ? nullptr : &snapshot,
+                field == NameField::anchored_handle ? origin : no::RequestHandle{},
+                field == NameField::anchored_parent ? origin : no::RequestHandle{});
         break;
     }
     }
@@ -1370,10 +1549,10 @@ InstalledName install_name(Subject& s, NameCase input, no::RequestHandle origin)
 void erase_name(Subject& s, InstalledName name) {
     switch (name.owner) {
     case NameOwner::source_live:
-        member(s.adapter(), SourceLive{}).clear(); break;
+        s.projection(ProjectionEdit::unname, name.carrier); break;
     case NameOwner::source_snapshot:
     case NameOwner::native_snapshot:
-        member(s.adapter(), Placements{}).erase(name.carrier.incarnation);
+        s.projection(ProjectionEdit::erase, name.carrier);
         s.retire_handle(name.carrier);
         if (s.core().find_live(name.carrier)) s.cancel(name.carrier);
         break;
@@ -1381,16 +1560,16 @@ void erase_name(Subject& s, InstalledName name) {
     case NameOwner::native_root:
     case NameOwner::native_request:
         s.cancel(name.carrier); break;
-    case NameOwner::bracket: member(s.adapter(), BracketQueue{}).clear(); break;
-    case NameOwner::entry: member(s.adapter(), EntryQueue{}).clear(); break;
-    case NameOwner::delayed: member(s.adapter(), DelayedQueue{}).clear(); break;
-    case NameOwner::sell: member(s.adapter(), SellQueue{}).clear(); break;
-    case NameOwner::rearm: member(s.adapter(), RearmQueue{}).clear(); break;
-    case NameOwner::same_bar: member(s.adapter(), SameBarQueue{}).clear(); break;
-    case NameOwner::shadow: member(s.adapter(), ShadowQueue{}).clear(); break;
-    case NameOwner::coof: member(s.adapter(), CoofQueue{}).clear(); break;
-    case NameOwner::revival: member(s.adapter(), RevivalQueue{}).clear(); break;
-    case NameOwner::anchored: member(s.adapter(), AnchoredQueue{}).clear(); break;
+    case NameOwner::bracket:
+    case NameOwner::entry:
+    case NameOwner::delayed:
+    case NameOwner::sell:
+    case NameOwner::rearm:
+    case NameOwner::same_bar:
+    case NameOwner::shadow:
+    case NameOwner::coof:
+    case NameOwner::revival:
+    case NameOwner::anchored: s.queue(queue_id(name.owner)); break;
     }
 }
 
@@ -1425,7 +1604,11 @@ void s4_predicate_named_by_each_current_owner_red() {
         for (const auto field : request_fields) inputs.push_back({owner, field});
     inputs.push_back({NameOwner::anchored, NameField::anchored_handle});
     inputs.push_back({NameOwner::anchored, NameField::anchored_parent});
-    for (const auto input : inputs) for (const bool primary_first : {false, true}) {
+    for (const auto input : inputs) for (const bool primary_first : {false, true})
+    for (std::size_t length : {std::size_t{17}, std::size_t{1025}, std::size_t{4097}}) {
+        const bool many = input.field == NameField::openings_first
+            || input.field == NameField::openings_last;
+        if (!many && length != 17) continue; // This axis varies BindOpenings only.
         Model model;
         const auto origin = model.submit(1.0, 40.0);
         model.erase(origin);
@@ -1437,8 +1620,10 @@ void s4_predicate_named_by_each_current_owner_red() {
         HeapCensus heap;
         ScratchStore store(rig.config(), &rig.backing);
         Subject s(store);
+        heap.seal();
+        const auto resident = store.stats().resident_bytes;
         require(same_handle(s.submit(limit_order(1.0, 40.0)), origin), "issued named input");
-        const auto primary = install_name(s, input, origin);
+        const auto primary = install_name(s, input, origin, length);
         if (input.owner != NameOwner::native_live && input.owner != NameOwner::native_root)
             s.cancel(origin);
         // Use a different queue for the second reference so clearing either
@@ -1457,6 +1642,7 @@ void s4_predicate_named_by_each_current_owner_red() {
         }
         require(expected.base == expected.origins.size(), "last current owner releases its name");
         rig.accounting(store);
+        heap.fixed(store, resident);
     }
     // All explicit names zero: zero is excluded, even when a queue physically
     // contains a row. It must not pin a zero-incarnation roster position.
@@ -1465,13 +1651,18 @@ void s4_predicate_named_by_each_current_owner_red() {
     auto& expected = zero.cohorts["zero"];
     expected.append(h);
     Rig rig;
+    HeapCensus heap;
     ScratchStore store(rig.config(), &rig.backing);
     Subject s(store);
+    heap.seal();
+    const auto resident = store.stats().resident_bytes;
     s.append("zero", h);
     (void)install_name(s, {NameOwner::entry, NameField::bracket}, h);
     (void)install_name(s, {NameOwner::anchored, NameField::anchored_parent}, h);
     s.retire(); zero.retire(expected);
     check_roster(s, "zero", expected);
+    rig.accounting(store);
+    heap.fixed(store, resident);
 }
 
 // The current-membership indexes and the five predicates, S4-I (638).
@@ -1503,17 +1694,22 @@ void s4_five_pin_frontier_and_indexes_red() {
         Subject s(store);
         const auto resident = store.stats().resident_bytes;
         heap.seal();
+        s.adapter().reset_for_run();
+        const auto empty_source = source_hash(s);
         const auto real = s.submit(limit_order(1.0, 39.0));
         require(same_handle(real, pin), "issued frontier pin");
-        const auto cohort = s.cohort("frontier")->second.handle;
+        const auto cohort = s.cohort("frontier");
         if (mask & 16) { s.core().cohort_add(cohort, real); s.cohort_note(); }
         s.cancel(real);
         for (auto h : c.origins) s.append("frontier", h);
-        if (mask & 1) member(s.adapter(), Placements{}).try_emplace(pin.incarnation);
+        const ps::PlacementSnapshot initial;
+        if (mask & 1) s.projection(ProjectionEdit::put, pin, &initial);
         if (mask & 2) (void)install_name(s, {NameOwner::entry, NameField::bracket}, pin);
-        auto facts = s.cohort("frontier");
-        if (mask & 4) facts->second.live_units_by_origin[pin.incarnation] = 0.0;
-        if (mask & 8) { facts->second.opened.push_back(pin); facts->second.opened.push_back(pin); }
+        if (mask & 4) (void)s.cohort_state("frontier", CohortEdit::put_units, pin, 0.0);
+        if (mask & 8) {
+            (void)s.cohort_state("frontier", CohortEdit::append_opened, pin);
+            (void)s.cohort_state("frontier", CohortEdit::append_opened, pin);
+        }
         s.retire(); model.retire(c);
         check_roster(s, "frontier", c);
         if (mask != 0) {
@@ -1523,19 +1719,19 @@ void s4_five_pin_frontier_and_indexes_red() {
             for (unsigned bit = 0; bit < 5; ++bit) {
                 if (!(mask & (1u << bit))) continue;
                 if (bit == 0) {
-                    member(s.adapter(), Placements{}).erase(pin.incarnation);
+                    s.projection(ProjectionEdit::erase, pin);
                     OracleWork oracle; model.placements.erase(pin.incarnation);
                 } else if (bit == 1) {
-                    member(s.adapter(), EntryQueue{}).clear();
+                    s.queue(QueueId::entry);
                     OracleWork oracle; model.names.clear();
                 } else if (bit == 2) {
-                    facts->second.live_units_by_origin.erase(pin.incarnation);
+                    (void)s.cohort_state("frontier", CohortEdit::erase_units, pin);
                     OracleWork oracle; c.units.clear();
                 } else if (bit == 3) {
-                    facts->second.opened.erase(facts->second.opened.begin());
+                    (void)s.cohort_state("frontier", CohortEdit::erase_opened, pin);
                     { OracleWork oracle; remove_one(c.opened, pin); }
                     s.retire(); model.retire(c); check_roster(s, "frontier", c);
-                    facts->second.opened.clear();
+                    (void)s.cohort_state("frontier", CohortEdit::clear_opened);
                     OracleWork oracle; c.opened.clear();
                 } else {
                     s.core().cohort_remove(cohort, pin); s.cohort_note();
@@ -1550,19 +1746,25 @@ void s4_five_pin_frontier_and_indexes_red() {
         const no::RequestHandle reused{model.run, 20000};
         s.append("frontier", reused);
         { OracleWork oracle; c.append(reused); c.opened.push_back(reused); }
-        facts->second.opened.push_back(reused);
+        (void)s.cohort_state("frontier", CohortEdit::append_opened, reused);
         ps::PlacementSnapshot replacement;
         replacement.requested_qty = 3.0 + mask;
         { OracleWork oracle; model.placements[reused.incarnation] = replacement; }
-        member(s.adapter(), Placements{}).try_emplace(reused.incarnation);
-        member(s.adapter(), Placements{}).replace(reused.incarnation, std::move(replacement));
-        require(member(s.adapter(), Placements{}).at(reused.incarnation).requested_qty
-                    == model.placements.at(reused.incarnation).requested_qty,
+        s.projection(ProjectionEdit::put, reused, &initial);
+        s.projection(ProjectionEdit::put, reused, &replacement);
+        // Borrow the ordinary pending projection to observe this retained
+        // placement; withdraw the temporary name before asking retirement.
+        s.projection(ProjectionEdit::name, reused);
+        const auto& pending = s.adapter().pending_intent_view();
+        pf_pending_order_v1_t row{};
+        require(pending.size() == 1 && pending.copy_v1(0, &row) >= 0
+                    && row.qty == model.placements.at(reused.incarnation).requested_qty,
                 "replacement updates the existing lookup row");
-        member(s.adapter(), Placements{}).erase(reused.incarnation);
+        s.projection(ProjectionEdit::unname, reused);
+        s.projection(ProjectionEdit::erase, reused);
         { OracleWork oracle; model.placements.erase(reused.incarnation); }
         s.retire(); model.retire(c); check_roster(s, "frontier", c);
-        facts->second.opened.clear();
+        (void)s.cohort_state("frontier", CohortEdit::clear_opened);
         { OracleWork oracle; c.opened.clear(); model.retire(c); }
         s.retire(); check_roster(s, "frontier", c);
         rig.accounting(store);
@@ -1570,10 +1772,10 @@ void s4_five_pin_frontier_and_indexes_red() {
                 "suffix/index records spilled beyond the resident slots");
         s.adapter().reset_for_run();
         s.core().reset(run_id(8));
-        require(member(s.adapter(), SourceKeys{}).empty()
-                    && member(s.adapter(), SourceLive{}).empty()
-                    && member(s.adapter(), Placements{}).size() == 0
-                    && member(s.adapter(), Cohorts{}).size() == 0,
+        require(source_hash(s) == empty_source
+                    && s.adapter().pending_intent_view().size() == 0
+                    && s.host.source_pending_view().empty()
+                    && s.roster("frontier") == nullptr,
                 "reset clears every current membership relation");
         require(!s.core().cohort_contains(cohort, pin), "old-run canonical membership is not reused");
         heap.fixed(store, resident);
@@ -1613,7 +1815,7 @@ void s4_membership_hashes_ignore_storage_red() {
         Subject s(*store);
         const auto resident = store->stats().resident_bytes;
         heap.seal();
-        const auto cohort = s.cohort("hash")->second.handle;
+        const auto cohort = s.cohort("hash");
         for (std::size_t i = 0; i < 257; ++i) {
             no::RequestHandle expected;
             { OracleWork oracle; expected = model.submit(1.0 + i % 3, 35.0 + i % 7);
@@ -1626,10 +1828,9 @@ void s4_membership_hashes_ignore_storage_red() {
             snapshot.source_id = "q";
             snapshot.requested_qty = 1.0 + i % 3;
             s.remember(h, snapshot);
-            member(s.adapter(), SourceKeys{})[i + 10] = h;
-            auto facts = s.cohort("hash");
-            facts->second.opened.push_back(h);
-            facts->second.live_units_by_origin[h.incarnation] = i % 2 ? -0.0 : 2.0;
+            s.source_key(i + 10, &h);
+            (void)s.cohort_state("hash", CohortEdit::append_opened, h);
+            (void)s.cohort_state("hash", CohortEdit::put_units, h, i % 2 ? -0.0 : 2.0);
             s.core().cohort_add(cohort, h); s.cohort_note();
             { OracleWork oracle;
               auto& c = model.cohorts["hash"];
@@ -1643,27 +1844,9 @@ void s4_membership_hashes_ignore_storage_red() {
         const auto check_values = [&] {
             check_book(s.core(), model);
             check_roster(s, "hash", model.cohorts.at("hash"));
-            const auto facts = s.cohort("hash");
-            const auto& expected = model.cohorts.at("hash");
-            require(facts->second.opened.size() == expected.opened.size(), "opened order count");
-            for (std::size_t i = 0; i < expected.opened.size(); ++i)
-                require(same_handle(facts->second.opened[i], expected.opened[i]), "opened full-handle order");
-            require(facts->second.live_units_by_origin.size() == expected.units.size(),
-                    "live-unit key count is not a quantity predicate");
-            for (const auto& unit : expected.units) {
-                const auto at = facts->second.live_units_by_origin.find(unit.first);
-                require(at != facts->second.live_units_by_origin.end() && at->second == unit.second,
-                        "live-unit keys and values survive storage changes");
-            }
-            require(member(s.adapter(), SourceKeys{}).size() == model.source_keys.size(),
-                    "source-key lookup cardinality");
-            for (const auto& key : model.source_keys) {
-                const auto& actual = member(s.adapter(), SourceKeys{}).at(key.first);
-                require(same_handle(actual, key.second), "source-key relation agrees with independent model");
-            }
-            for (const auto& placement : model.placements)
-                require(member(s.adapter(), Placements{}).at(placement.first).requested_qty
-                            == placement.second.requested_qty, "placement value readback");
+            check_current_membership(s, "hash", model);
+            check_source_keys(s, model);
+            check_pending_placements(s, model);
         };
         const auto checkpoint = [&](std::size_t phase) {
             check_values();
@@ -1701,11 +1884,9 @@ void s4_membership_hashes_ignore_storage_red() {
         for (std::size_t i = 0; i < 193; ++i) {
             const auto h = handles[i];
             s.cancel(h); s.retire_handle(h);
-            member(s.adapter(), Placements{}).erase(h.incarnation);
-            auto facts = s.cohort("hash");
-            facts->second.live_units_by_origin.erase(h.incarnation);
-            auto& opened = facts->second.opened;
-            opened.erase(std::find(opened.begin(), opened.end(), h));
+            s.projection(ProjectionEdit::erase, h);
+            (void)s.cohort_state("hash", CohortEdit::erase_units, h);
+            (void)s.cohort_state("hash", CohortEdit::erase_opened, h);
             s.core().cohort_remove(cohort, h); s.cohort_note();
             { OracleWork oracle;
               model.erase(h); model.placements.erase(h.incarnation);
@@ -1739,13 +1920,12 @@ void s4_membership_hashes_ignore_storage_red() {
         // Mutation sensitivity: equality of two broken constant hashes is not
         // evidence. One independent durable live-unit value changes the
         // source hash, and restoring it recovers the original word exactly.
-        auto facts = s.cohort("hash");
         const auto key = model.cohorts.at("hash").units.begin()->first;
         const auto units = model.cohorts.at("hash").units.at(key);
-        facts->second.live_units_by_origin.at(key) = units + 3.0;
+        (void)s.cohort_state("hash", CohortEdit::put_units, {model.run, key}, units + 3.0);
         const auto changed = semantic_hashes(s);
         require(changed.source != old.source, "independent live-unit value is hashed");
-        facts->second.live_units_by_origin.at(key) = units;
+        (void)s.cohort_state("hash", CohortEdit::put_units, {model.run, key}, units);
         require(semantic_hashes(s) == old, "restoring the value restores the original folds");
         // Use the real host reset path, including the consumer's running
         // digest reset, rather than clearing core counters behind its back.
@@ -1756,7 +1936,12 @@ void s4_membership_hashes_ignore_storage_red() {
         require(s.host.last_error().empty(), "real empty-strategy run reset succeeds");
         { OracleWork oracle; model = Model{}; }
         check_book(s.core(), model);
-        require(member(s.adapter(), Cohorts{}).size() == model.cohorts.size(), "reset clears cohort indexes");
+        require(s.roster("hash") == nullptr, "reset clears the old cohort's roster/index relation");
+        const auto empty_cohorts = source_hash(s);
+        (void)s.cohort_state("", CohortEdit::clear_all);
+        require(source_hash(s) == empty_cohorts, "reset leaves no other durable cohort/index rows");
+        require(s.adapter().pending_intent_view().size() == 0
+                    && s.host.source_pending_view().empty(), "reset clears source pending projections");
         const auto reset_hash = semantic_hashes(s);
         if (geometry == 2) reference[5] = reset_hash;
         else require(reset_hash == reference[5], "run reset has no storage-dependent hash leaf");
@@ -1909,7 +2094,7 @@ void s34_failures_are_not_empty_membership_red() {
     no::RequestHandle expected_h;
     { OracleWork oracle; expected_h = members.submit(1.0, 33.0); }
     require(same_handle(h, expected_h), "membership fixture uses real issuance");
-    const auto cohort = s.cohort("status")->second.handle;
+    const auto cohort = s.cohort("status");
     s.core().cohort_add(cohort, h); s.cohort_note();
     { OracleWork oracle; members.cohorts["status"].canonical.push_back(expected_h); }
     auto successor = h;
