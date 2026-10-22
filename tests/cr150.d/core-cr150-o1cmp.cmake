@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_open_lots_scale_1k)
+list(APPEND TEST_SOURCES test_open_lots_scale_100k)
+pineforge_add_unit_test(test_open_lots_scale_1k)
+pineforge_add_unit_test(test_open_lots_scale_100k)
+set_tests_properties(test_open_lots_scale_1k PROPERTIES LABELS "slow;mem")
+set_tests_properties(test_open_lots_scale_100k PROPERTIES LABELS "slow;mem")
