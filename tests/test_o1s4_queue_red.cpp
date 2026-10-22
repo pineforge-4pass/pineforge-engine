@@ -534,6 +534,7 @@ std::uint64_t store_digest(ScratchStore& store) {
 // PineExecutionAdapter::bind_scratch_store (Subject). Once bound, the exact
 // failing assertions on this head are the heap gate and nonzero store traffic:
 // the current core/source queues are not owned by this ScratchStore.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Ownership" (S4-O), clause 1 — kept-handle queue order, replacement values and source-only intent match the model.
 void s4_one_queue_owner_kept_handle_order_red() {
     Model model;
     std::array<no::RequestHandle, 4> handles{};
@@ -666,6 +667,7 @@ void s4_one_queue_owner_kept_handle_order_red() {
 // fails to compile: the two Subject bind_scratch_store calls. The later
 // assertion heap.fixed fails on resident definitions, source maps/vectors,
 // roster buckets/positions and retained capacity, even if values are correct.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Fixed memory" (S4-M), clause 2 — Q/P/C growth, drain/reuse and spill keep the construction heap/workspace bound.
 void s4_queue_and_membership_islands_fixed_red() {
     for (const unsigned axis : {0u, 1u, 2u}) {
         Model model;
@@ -815,6 +817,7 @@ void s4_queue_and_membership_islands_fixed_red() {
 // to the store binding. With the old vector reader substituted, peak <=
 // construction_peak fails in append_open_position_report_rows itself (9048),
 // before any C accessor. OpenReportRowSource/materialized_ do not exist here.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Fixed memory" (S4-RE), clause 3 — repeated marks expose one row per lot, exact row values/left-fold P&L and fixed heap.
 void s4_terminal_mark_descriptor_stays_fixed_red() {
     struct Expected {
         std::int64_t time;
@@ -921,6 +924,7 @@ void s4_terminal_mark_descriptor_stays_fixed_red() {
 // and committed digests recoverable; an unattached store has zero fault hits.
 // Counter values after a failed native command are deliberately not rewound
 // by this oracle: their existing refusal semantics are outside this clause.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Transactions and retain windows" (S34-T), clause 4 — every injected update-write failure stays rollback-only and recovers the old committed relation after reopen.
 void s34_record_index_publication_rollback_red() {
     for (const unsigned mutation : {0u, 1u, 2u}) {
         std::uint64_t write_count = 0;
@@ -1024,6 +1028,7 @@ void s34_record_index_publication_rollback_red() {
 // erasure. Other pins false. fails to compile: Subject's store bindings and
 // OriginRoster::visit_positions_of. The value truth is already present on the
 // base; the missing bounded placement/index binding is this row's red seam.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "The current-membership indexes and the five predicates" (S4-P1), clause 5 — retained placement alone pins an ended origin until actual erasure.
 void s4_predicate_retained_placement_red() {
     Model model;
     auto origin = model.submit(2.0, 45.0);
@@ -1063,6 +1068,7 @@ void s4_predicate_retained_placement_red() {
 // only. Other pins false. fails to compile: Subject store bindings and
 // OriginRoster::visit_positions_of. A resident member map must be replaced,
 // not changed into units > 0; expected bases below follow key presence alone.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "The current-membership indexes and the five predicates" (S4-P3), clause 7 — a present zero-valued live-unit key pins only its own cohort until erased.
 void s4_predicate_live_units_key_presence_red() {
     Model model;
     const auto origin = model.submit(1.0, 43.0);
@@ -1104,6 +1110,7 @@ void s4_predicate_live_units_key_presence_red() {
 // fails to compile: Subject bindings and OriginRoster::visit_positions_of.
 // The comparison must retain full-handle identity and ordered multiplicity,
 // rather than making an incarnation-only membership index.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "The current-membership indexes and the five predicates" (S4-P4), clause 8 — opened membership uses full handles and preserves duplicate pins until the last removal.
 void s4_predicate_opened_full_handle_red() {
     Model model;
     const auto a = model.submit(1.0, 42.0);
@@ -1147,6 +1154,7 @@ void s4_predicate_opened_full_handle_red() {
 // Only P5 pins during retirement (all successors have ended by then).
 // fails to compile: Subject bindings and OriginRoster::visit_positions_of.
 // Root reads must use the selected store and propagate I/O, never false/self.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "The current-membership indexes and the five predicates" (S4-P5), clause 9 — live/terminal successors use canonical cohort roots after history retirement and root I/O failure throws.
 void s4_predicate_native_canonical_cohort_red() {
     Model model;
     std::vector<no::RequestHandle> successors;
@@ -1395,6 +1403,7 @@ void erase_name(Subject& s, InstalledName name) {
 // Correct truth already exists for resident inputs; no bounded named workset
 // is connected to the store. Missing external BindOpenings enumeration is
 // additionally exposed if enrollment freezes that vector on this head.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "The current-membership indexes and the five predicates" (S4-P2), clause 6 — each current owner/name field pins until the last reference is removed; zero never pins.
 void s4_predicate_named_by_each_current_owner_red() {
     std::vector<NameCase> inputs;
     const std::array<NameField, 6> snapshot_fields{{
@@ -1471,6 +1480,7 @@ void s4_predicate_named_by_each_current_owner_red() {
 // spill and run reset. fails to compile: Subject bindings and
 // OriginRoster::visit_positions_of. The exact assertion is global frontier/
 // position equality PLUS the construction heap bound behind the pinned suffix.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "The current-membership indexes and the five predicates" (S4-I), clause 10 — all 32 pin combinations preserve the modeled prefix frontier/global positions through spill, release and reset.
 void s4_five_pin_frontier_and_indexes_red() {
     for (unsigned mask = 0; mask != 32; ++mask) {
         Model model;
@@ -1590,6 +1600,7 @@ SemanticHashes semantic_hashes(Subject& s) {
 // source hash collects live-unit/source-key vectors. Expected VALUE/ORDER
 // comes from Model; complete production hashes are compared metamorphically
 // only where that independent model says the two logical states are equal.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Digests" (S4-D), clause 11 — native/source hashes ignore storage changes while a durable live-unit value changes the source hash.
 void s4_membership_hashes_ignore_storage_red() {
     std::array<SemanticHashes, 6> reference{};
     for (std::size_t geometry : {std::size_t{2}, std::size_t{5}}) {
@@ -1876,6 +1887,7 @@ void check_status_contract(const StatusModel& model, const std::string& key) {
 // the spec requires io_error (copy 139-150), so that status assertion is red
 // even after a binding-only implementation. Failed membership must THROW the
 // existing typed I/O failure, never produce false or an empty relation.
+// Spec: scratch-store.md (pinned copy) §"O(1) seams s3 and s4" / "Statuses" (S34-S), clause 12 — capacity spills; I/O/corruption/misuse/cancellation stay distinct from proven absence and failed lookups throw.
 void s34_failures_are_not_empty_membership_red() {
     // Independent ordered key/value/handle model, not a copy of a store walk.
     StatusModel model;
