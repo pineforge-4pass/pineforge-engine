@@ -57,8 +57,8 @@ std::int64_t fixture_execution_counter(const char* site, std::int64_t value) {
 }
 #endif
 
-template<class T>
-void reserve_effects(std::vector<T>& values, size_t extra) {
+template<class Values>
+void reserve_effects(Values& values, size_t extra) {
     if (extra > values.max_size() - values.size())
         throw std::length_error("execution effect capacity exhausted");
     const size_t required = values.size() + extra;
@@ -82,9 +82,10 @@ struct CloseScopeInspection {
 
 // Called only after ordinary price/quantity/book validation. This value is
 // local to the synchronous call and grants no saved allocation authority.
+template<class Lots>
 CloseScopeInspection inspect_close_scope(
         const execution::CloseScope& scope, const execution::Action& action,
-        int64_t current_cycle, const std::vector<PyramidEntry>& lots,
+        int64_t current_cycle, const Lots& lots,
         double whole_book_held) {
     if (std::holds_alternative<execution::Book>(scope))
         return {execution::Status::Applied, whole_book_held};
@@ -103,10 +104,11 @@ CloseScopeInspection inspect_close_scope(
     return {execution::Status::Applied, held};
 }
 
+template<class Lots>
 CloseScopeInspection inspect_selected_opening_set(
         const execution::SelectedOpeningSet& selection,
         const execution::Action& action,
-        int64_t current_cycle, const std::vector<PyramidEntry>& lots,
+        int64_t current_cycle, const Lots& lots,
         std::unordered_set<std::uint64_t>& ids_out) {
     ids_out.clear();
     if (std::holds_alternative<order_action::Transact>(action)
@@ -806,7 +808,7 @@ execution::Status BacktestEngine::allocate_native_settlement_closes(
     stage.closing_quantities.reserve(stage.closes ? pyramid_entries_.size() : 0);
     double closed = 0.0;
     for (size_t index = 0; index < pyramid_entries_.size(); ++index) {
-        const auto& lot = pyramid_entries_[index];
+        const auto lot = pyramid_entries_.value_at(index);
         const bool member = stage.use_selected
             ? stage.selected_ids.count(lot.entry_incarnation) != 0
             : selected_for_close(book_or_opening, lot);
@@ -1239,7 +1241,7 @@ void BacktestEngine::build_native_settlement_close_rows(
     auto& closed_trades = rows.closed_trades;
     closed_trades.reserve(stage.closing_indices.size());
     for (size_t i = 0; i < stage.closing_indices.size(); ++i) {
-        const auto& lot = pyramid_entries_[stage.closing_indices[i]];
+        const auto lot = pyramid_entries_.value_at(stage.closing_indices[i]);
         auto trade = build_close_trade_with_costs(lot, stage.closing_quantities[i],
             fill.price, stage.was_long,
             allocated_entry_commission(lot, stage.closing_quantities[i]),

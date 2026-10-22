@@ -1,4 +1,5 @@
 #include "pine_command_scratch_production.hpp"
+#include <pineforge/detail/scratch_errors.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -36,7 +37,7 @@ public:
         path += "pineforge-command-XXXXXX";
         const int opened = ::mkstemp(path.data());
         if (opened < 0)
-            throw std::system_error(errno, std::generic_category(), "command scratch create");
+            raise_scratch_io_error(errno, "command scratch create");
 
         int result;
         do {
@@ -45,7 +46,7 @@ public:
         if (result < 0) {
             const int error = errno;
             ::close(opened);
-            throw std::system_error(error, std::generic_category(), "command scratch unlink");
+            raise_scratch_io_error(error, "command scratch unlink");
         }
         do {
             result = ::fcntl(opened, F_SETFD, FD_CLOEXEC);
@@ -53,7 +54,7 @@ public:
         if (result < 0) {
             const int error = errno;
             ::close(opened);
-            throw std::system_error(error, std::generic_category(), "command scratch cloexec");
+            raise_scratch_io_error(error, "command scratch cloexec");
         }
         fd_ = opened;
     }
@@ -150,16 +151,18 @@ pineforge::detail::ScratchIoObserver set_command_scratch_io_observer(
 
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size) {
-    if (page_size == 0) throw std::invalid_argument("command scratch page size is zero");
+    if (page_size == 0)
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                           "command scratch page size is zero");
     errno = 0;
     const long platform_page = ::sysconf(_SC_PAGESIZE);
     if (platform_page <= 0)
-        throw std::system_error(errno ? errno : EINVAL, std::generic_category(),
-                                "command scratch platform page size");
+        raise_scratch_io_error(errno ? errno : EINVAL, "command scratch platform page size");
     if (page_size % static_cast<std::size_t>(platform_page) != 0
         || static_cast<std::uintmax_t>(page_size)
             > static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max()))
-        throw std::invalid_argument("command scratch page size is not a representable page multiple");
+        throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+            "command scratch page size is not a representable page multiple");
     return std::make_unique<CommandScratchFile>(page_size, command_scratch_observer);
 }
 

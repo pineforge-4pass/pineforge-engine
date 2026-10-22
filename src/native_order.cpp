@@ -1908,15 +1908,14 @@ struct WorkingRequestCore::WorkingBook {
     std::size_t count = 0;
     std::shared_ptr<detail::working_store::Binding> binding =
         std::make_shared<detail::working_store::Binding>();
-    mutable std::array<std::shared_ptr<LiveRequest>, 2> side{};
-    mutable std::size_t next_side = 0;
+    mutable std::shared_ptr<LiveRequest> compatibility_read;
+    mutable std::shared_ptr<LiveRequest> compatibility_rank_read;
     detail::working_store::Key key(std::uint64_t domain, std::uint64_t item) const {
         return {domain, generation, item};
     }
     std::shared_ptr<LiveRequest> keep(detail::ScratchHandle handle) const {
         auto row = std::make_shared<LiveRequest>(
             detail::working_store::read<LiveRequest>(*store, handle, binding));
-        side[next_side] = row; next_side = (next_side + 1) % side.size();
         return row;
     }
     detail::ScratchHandle by_handle(std::uint64_t incarnation) const {
@@ -2118,7 +2117,8 @@ const LiveRequest& WorkingRequestCore::live_at(std::size_t rank) const {
     if (working_book_) {
         auto cursor = book_begin();
         for (std::size_t i = 0; i < rank; ++i) book_step(cursor);
-        return *working_book_->keep(cursor.at);
+        working_book_->compatibility_rank_read = working_book_->keep(cursor.at);
+        return *working_book_->compatibility_rank_read;
     }
     if (spilled_count() == 0) return live_[rank];
     BookCursor cursor = book_begin();
@@ -2127,6 +2127,15 @@ const LiveRequest& WorkingRequestCore::live_at(std::size_t rank) const {
         return *book_spill_->stash(book_spill_->read(book_spill_->rows.get(cursor.at)));
     }
     return live_[cursor.r];
+}
+
+LiveRequest WorkingRequestCore::read_live_at(std::size_t rank) const {
+    if (!working_book_) return live_at(rank);
+    if (rank >= live_size()) throw std::out_of_range("native live book rank is not live");
+    auto cursor = book_begin();
+    for (std::size_t i = 0; i < rank; ++i) book_step(cursor);
+    return detail::working_store::read<LiveRequest>(
+        *working_book_->store, cursor.at, working_book_->binding);
 }
 
 const LiveRequest& WorkingRequestCore::live_back() const {
@@ -2157,8 +2166,7 @@ void WorkingRequestCore::LiveView::const_iterator::settle() {
     if (core_->book_done(cursor_)) return;
     if (core_->working_book_) { held_ = core_->working_book_->keep(cursor_.at); return; }
     if (core_->book_next_spilled(cursor_)) {
-        // Through the ring, so a reference the view handed out stays valid
-        // for the next few spilled rows it reads, as the header promises.
+        // The iterator owns the row independently of other lookups.
         held_ = core_->book_spill_->keep(core_->book_spill_->read(
                 core_->book_spill_->rows.get(cursor_.at)));
     }
@@ -2640,9 +2648,10 @@ const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) co
     if (working_book_) {
         const auto found = working_book_->by_handle(handle.incarnation);
         if (!found) return nullptr;
-        const auto row = working_book_->keep(found);
+        auto row = working_book_->keep(found);
         if (!row->definition || row->handle() != handle) detail::working_store::check(detail::ScratchStatus::corrupt);
-        return row.get();
+        working_book_->compatibility_read = std::move(row);
+        return working_book_->compatibility_read.get();
     }
     const LiveRequest* resident = nullptr;
     if (!repriced_.empty()) {
@@ -2655,6 +2664,21 @@ const LiveRequest* WorkingRequestCore::find_live(const RequestHandle& handle) co
     // A read cannot bring a row back: a copy of the spilled row is kept for
     // the caller (see BookSpill::stash).
     return spilled_row(handle.incarnation);
+}
+
+std::optional<LiveRequest> WorkingRequestCore::pin_live(const RequestHandle& handle) const {
+    if (!names_run(handle, identity_)) return {};
+    if (working_book_) {
+        const auto found = working_book_->by_handle(handle.incarnation);
+        if (!found) return {};
+        auto row = detail::working_store::read<LiveRequest>(
+            *working_book_->store, found, working_book_->binding);
+        if (!row.definition || row.handle() != handle)
+            detail::working_store::check(detail::ScratchStatus::corrupt);
+        return row;
+    }
+    const auto* row = find_live(handle);
+    return row ? std::optional<LiveRequest>(*row) : std::nullopt;
 }
 
 // The journal's ordinals ascend with its positions, so the lookup is a bisection
@@ -2829,7 +2853,7 @@ bool WorkingRequestCore::issued(const RequestHandle& handle) const {
 std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
         const RequestHandle& origin) const {
     if (!issued(origin)) return std::nullopt;
-    if (const auto* live = find_live(origin)) {
+    if (const auto live = pin_live(origin)) {
         const auto& root = live->definition->root;
         return root ? *root : live->handle();
     }
@@ -2893,7 +2917,7 @@ void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
         receipt.status = CohortReceiptStatus::InvalidHandle;
     } else if (!issued(origin)) {
         receipt.status = CohortReceiptStatus::UnknownOrigin;
-    } else if (!find_live(origin)) {
+    } else if (!pin_live(origin)) {
         receipt.status = CohortReceiptStatus::TerminalOrigin;
     } else if (const auto canonical = canonical_cohort_origin(origin)) {
         const auto found = cohorts_.find(cohort.value);
@@ -2986,7 +3010,7 @@ void WorkingRequestCore::change_working_cohort(CohortHandle cohort, const Reques
     std::optional<RequestHandle> canonical;
     if (!cohort_exists(cohort)) receipt.status = CohortReceiptStatus::InvalidHandle;
     else if (!issued(origin)) receipt.status = CohortReceiptStatus::UnknownOrigin;
-    else if (add && !find_live(origin)) receipt.status = CohortReceiptStatus::TerminalOrigin;
+    else if (add && !pin_live(origin)) receipt.status = CohortReceiptStatus::TerminalOrigin;
     else {
         canonical = canonical_cohort_origin(origin);
         receipt.status = canonical ? CohortReceiptStatus::Applied : CohortReceiptStatus::UnknownOrigin;
@@ -3413,7 +3437,8 @@ void WorkingRequestCore::bind_scratch_store(detail::ScratchStore& store) {
     } else {
         working_book_->store = &store;
         working_book_->binding->store = &store;
-        for (auto& row : working_book_->side) row.reset();
+        working_book_->compatibility_read.reset();
+        working_book_->compatibility_rank_read.reset();
         const auto count = ws::get_word(store, working_book_->key(15, 0));
         if (!count || *count > std::numeric_limits<std::size_t>::max())
             ws::check(detail::ScratchStatus::corrupt);
@@ -3676,7 +3701,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         if (replace_target && wait->parent == *replace_target) {
             return RequestRejectReason::InvalidOwner;
         }
-        if (!find_live(wait->parent)) return RequestRejectReason::InvalidOwner;
+        if (!pin_live(wait->parent)) return RequestRejectReason::InvalidOwner;
         // An unknown visibility is refused rather than read as Working.
         if (wait->visibility != NativeArmVisibility::Working
             && wait->visibility != NativeArmVisibility::PendingUntilArmed) {
@@ -8528,7 +8553,7 @@ void NativeStrategyHost::native_visit_working_requests(
 std::optional<NativeWorkingRequest> NativeStrategyHost::native_working_request(
         const native_order::RequestHandle& handle) const {
     if (!execution_consumer_slot_.ptr) return std::nullopt;
-    const auto* live = as_native_consumer(*execution_consumer_slot_.ptr).request_core().find_live(handle);
+    const auto live = as_native_consumer(*execution_consumer_slot_.ptr).request_core().pin_live(handle);
     if (!live || !reader_visible(*live)) return std::nullopt;
     return reader_working_row(*live);
 }
@@ -8541,7 +8566,7 @@ detail::ScratchStatus NativeStrategyHost::visit_native_open_lots(
     const double point_value = syminfo_.pointvalue;
     const double fx = active_account_currency_fx();
     for (std::size_t i = 0; i < pyramid_entries_.size(); ++i) {
-        const auto& lot = pyramid_entries_[i];
+        const auto lot = pyramid_entries_.value_at(i);
         NativeOpenLotView row;
         row.ordinal = i;
         row.entry_incarnation = lot.entry_incarnation;

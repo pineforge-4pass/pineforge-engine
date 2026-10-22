@@ -22,8 +22,9 @@ namespace pineforge::detail::working_store {
 inline void check(ScratchStatus status) {
     if (status == ScratchStatus::ok) return;
     if (status == ScratchStatus::io_error) throw ScratchIoError(EIO, "working state scratch I/O");
-    if (status == ScratchStatus::corrupt) throw std::logic_error("corrupt working state scratch");
-    throw std::logic_error("unserviceable working state scratch operation");
+    if (status == ScratchStatus::corrupt)
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "corrupt working state scratch");
+    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "unserviceable working state scratch operation");
 }
 
 inline void le(std::uint64_t value, std::byte* out) noexcept {
@@ -204,6 +205,8 @@ template<class T> struct Shared : std::false_type {};
 template<class T> struct Shared<std::shared_ptr<T>> : std::true_type {};
 template<class T> struct Pair : std::false_type {};
 template<class A, class B> struct Pair<std::pair<A, B>> : std::true_type {};
+template<class T> struct Array : std::false_type {};
+template<class T, std::size_t N> struct Array<std::array<T, N>> : std::true_type {};
 
 template<class Ar, class T> void value(Ar&, T&);
 
@@ -216,7 +219,7 @@ public:
     }
     void bytes(const void* data, std::uint64_t size) {
         if (size > std::numeric_limits<std::uint64_t>::max() - position_)
-            throw std::length_error("working state encoding length");
+            throw coded<std::length_error>(RunFailureCode::engine_invariant, {}, "working state encoding length");
         if (out_.size && offset_ < position_ + size && position_ < offset_ + out_.size) {
             const auto start = std::max(position_, offset_);
             const auto end = std::min(position_ + size, offset_ + out_.size);
@@ -374,6 +377,12 @@ void value(Ar& ar, T& item) {
             item.resize(static_cast<std::size_t>(count));
         }
         for (auto& row : item) ar(row);
+    } else if constexpr (Array<T>::value) {
+        std::uint64_t count = item.size(); ar(count);
+        if constexpr (!Ar::saving) {
+            if (count != item.size()) check(ScratchStatus::corrupt);
+        }
+        for (auto& row : item) ar(row);
     } else if constexpr (Pair<T>::value) {
         ar(item.first, item.second);
     } else if constexpr (!std::is_empty_v<T>) {
@@ -404,7 +413,7 @@ inline std::uint64_t allocate(ScratchStore& store) {
     const Key key(1, 0, 0);
     const auto next = get_word(store, key).value_or(1);
     if (next == std::numeric_limits<std::uint64_t>::max())
-        throw std::overflow_error("working scratch version domain exhausted");
+        throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {}, "working scratch version domain exhausted");
     put_word(store, key, next + 1);
     return next;
 }
@@ -458,6 +467,22 @@ T read(const ScratchStore& store, ScratchHandle handle, std::shared_ptr<Binding>
     T out{}; Load ar(bytes(store, handle, std::move(binding))); ar(out);
     if (ar.remaining()) check(ScratchStatus::corrupt);
     return out;
+}
+
+template<class T>
+bool equal_bytes(const T& value, const Bytes& stored) {
+    Source<T> source(value);
+    if (source.size() != stored.size()) return false;
+    std::array<std::byte, 128> left{}, right{};
+    for (std::uint64_t at = 0; at < source.size();) {
+        const auto n = static_cast<std::size_t>(
+            std::min<std::uint64_t>(left.size(), source.size() - at));
+        check(source.read(at, {left.data(), n}));
+        check(stored.read(at, {right.data(), n}));
+        if (std::memcmp(left.data(), right.data(), n)) return false;
+        at += n;
+    }
+    return true;
 }
 
 } // namespace pineforge::detail::working_store

@@ -1797,6 +1797,7 @@ public:
     /// at queue rank `rank` (std::out_of_range when none).
     std::size_t live_size() const noexcept;
     const LiveRequest& live_at(std::size_t rank) const;
+    LiveRequest read_live_at(std::size_t rank) const;
     /// The command journal's retained window, oldest first. Commits append at
     /// the back and retire_history drops a prefix, so the window holds the
     /// absolute journal positions [history_base(), history_end()). A core
@@ -1884,6 +1885,8 @@ public:
         return issued_;
     }
     const LiveRequest* find_live(const RequestHandle& handle) const;
+    // Owning command read: later lookups and mutations cannot expire its row.
+    std::optional<LiveRequest> pin_live(const RequestHandle& handle) const;
     const CommandEvent* event_at(const EventId& id) const;
 
     /// Command-boundary roster maintenance.  A rejected add/remove records a
@@ -2746,10 +2749,12 @@ private:
 // forward iteration, and a conversion to a vector for a reader that wants an
 // owning copy. The resident rows are read in place; the rows outside the heap
 // (a book past its resident bound) are read back one at a time, in queue
-// order, so an iteration holds at most one of them. A reference to a spilled
-// row stays valid until the next few spilled rows are read or the next
-// command. Iterating costs one external read per spilled row; indexing by rank
-// walks to it.
+// order. Each iterator owns its decoded row until that iterator advances or
+// dies; copied iterators share that pin. read_live_at returns an owning value.
+// Ranked references and find_live are compatibility reads: a bound row lasts
+// until the next read on that same surface or command. Use read_live_at and
+// pin_live across another lookup.
+// Iterating costs one external read per spilled row; indexing walks to it.
 class WorkingRequestCore::LiveView {
 public:
     class const_iterator {

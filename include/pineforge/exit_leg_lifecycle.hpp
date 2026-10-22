@@ -52,6 +52,10 @@ struct Definition {
     const Prices& prices() const { static const Prices empty{}; return value_ ? *value_ : empty; }
 private:
     friend class Lifecycle;
+    // Run-local storage restores the value, never replaying lifecycle actions.
+    template<class Archive> friend void scratch_fields(Archive& ar, Definition& v) {
+        ar(v.incarnation_, v.revision_, v.value_);
+    }
     uint64_t incarnation_ = 0;
     uint64_t revision_ = 0;
     std::shared_ptr<const Prices> value_;
@@ -229,6 +233,10 @@ public:
         f.b(last_.has_value()); if (last_) visit_action(f, *last_);
     }
 private:
+    template<class Archive> friend void scratch_fields(Archive& ar, Lifecycle& v) {
+        ar(v.definition_, v.target_, v.revision_, v.generations_,
+           v.retired_, v.suspension_, v.last_);
+    }
     Definition definition_;
     Target target_;
     uint64_t revision_ = 0;

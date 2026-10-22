@@ -65,6 +65,7 @@ public:
     WorkingSequence(const WorkingSequence& other) {
         if (other.store_) {
             store_ = other.store_; domain_ = other.domain_;
+            binding_ = other.binding_;
             for (const auto& row : other) push_back(row);
         } else memory_ = other.memory_;
     }
@@ -77,7 +78,8 @@ public:
     WorkingSequence(WorkingSequence&& other) noexcept
         : store_(other.store_), domain_(other.domain_), owner_(std::exchange(other.owner_, 0)),
           count_(std::exchange(other.count_, 0)), memory_(std::move(other.memory_)),
-          frames_(std::move(other.frames_)), next_frame_(other.next_frame_) {
+          frames_(std::move(other.frames_)), next_frame_(other.next_frame_),
+          binding_(other.binding_) {
         other.drop_frames();
     }
     WorkingSequence& operator=(WorkingSequence&& other) noexcept {
@@ -86,12 +88,25 @@ public:
         store_ = other.store_; domain_ = other.domain_;
         owner_ = std::exchange(other.owner_, 0); count_ = std::exchange(other.count_, 0);
         memory_ = std::move(other.memory_); frames_ = std::move(other.frames_);
-        next_frame_ = other.next_frame_; other.drop_frames();
+        next_frame_ = other.next_frame_; binding_ = other.binding_; other.drop_frames();
         return *this;
     }
     WorkingSequence(std::initializer_list<T> values) : memory_(values) {}
     WorkingSequence(const std::vector<T>& values) : memory_(values) {}
     WorkingSequence(std::vector<T>&& values) noexcept : memory_(std::move(values)) {}
+    WorkingSequence& operator=(const std::vector<T>& values) {
+        if (!store_) { memory_ = values; return *this; }
+        const auto before = count_;
+        try { working_store::transaction(*store_, [&] {
+            clear();
+            for (const auto& row : values) push_back(row);
+        }); } catch (...) { restore_size(before); throw; }
+        return *this;
+    }
+    WorkingSequence& operator=(std::vector<T>&& values) {
+        if (!store_) { memory_ = std::move(values); return *this; }
+        return *this = static_cast<const std::vector<T>&>(values);
+    }
     friend bool operator==(const WorkingSequence& a, const WorkingSequence& b) {
         if (a.size() != b.size()) return false;
         for (std::size_t i = 0; i < a.size(); ++i) if (!(a[i] == b[i])) return false;
@@ -101,6 +116,8 @@ public:
     void bind(ScratchStore& store, std::uint64_t domain, std::uint64_t owner) {
         const bool first = !store_;
         store_ = &store; domain_ = domain;
+        if (!binding_) binding_ = std::make_shared<working_store::Binding>();
+        binding_->store = &store;
         if (first) owner_ = owner;
         drop_frames();
         if (const auto count = working_store::get_word(store, key(0))) {
@@ -124,6 +141,12 @@ public:
         bind(store, domain, owner);
     }
     bool bound() const noexcept { return store_ != nullptr; }
+    void validate() const {
+        if (!store_) return;
+        ScratchRecordInfo ignored{};
+        const auto status = store_->point(0, ignored);
+        if (status != ScratchStatus::not_found) working_store::check(status);
+    }
     void detach() noexcept { store_ = nullptr; owner_ = 0; count_ = 0; drop_frames(); memory_.clear(); }
     void restore_size(std::size_t count) noexcept { count_ = count; drop_frames(); }
     std::size_t size() const noexcept { return store_ ? count_ : memory_.size(); }
@@ -133,6 +156,12 @@ public:
     }
     std::size_t capacity() const noexcept { return store_ ? frames_.size() : memory_.capacity(); }
     void reserve(std::size_t n) { if (!store_) memory_.reserve(n); }
+    T value_at(std::size_t index) const {
+        if (index >= size()) throw std::out_of_range("working sequence position");
+        if (!store_) return memory_[index];
+        flush();
+        return read_row(index);
+    }
     const T& operator[](std::size_t index) const {
         if (!store_) return memory_[index];
         return *load(index).row;
@@ -188,7 +217,7 @@ public:
                 write_row(i - (stop - start), row);
             }
             for (std::size_t i = old - (stop - start); i < old; ++i)
-                working_store::erase_value(*store_, key(i + 1));
+                working_store::erase(*store_, key(i + 1));
             working_store::put_word(*store_, key(0), old - (stop - start));
         });
         count_ = old - (stop - start); drop_frames();
@@ -227,26 +256,63 @@ public:
         drop_frames();
         if (!owner_) { count_ = 0; return; }
         working_store::transaction(*store_, [&] {
-            for (std::size_t i = 0; i < count_; ++i) working_store::erase_value(*store_, key(i + 1));
+            for (std::size_t i = 0; i < count_; ++i) working_store::erase(*store_, key(i + 1));
             working_store::put_word(*store_, key(0), 0);
         });
         count_ = 0;
     }
     void swap(WorkingSequence& other) {
-        if (store_ && !other.store_ && other.empty()) { clear(); return; }
-        if (other.store_ && !store_ && empty()) { other.clear(); return; }
+        if (store_ && !other.store_) {
+            auto rows = std::move(other.memory_);
+            flush();
+            other = std::move(*this);
+            for (const auto& row : rows) push_back(row);
+            return;
+        }
+        if (other.store_ && !store_) { other.swap(*this); return; }
         using std::swap;
         flush(); other.flush();
         swap(store_, other.store_); swap(domain_, other.domain_); swap(owner_, other.owner_);
         swap(count_, other.count_); memory_.swap(other.memory_); drop_frames(); other.drop_frames();
+        binding_.swap(other.binding_);
+    }
+    template<class Compare>
+    void stable_sort(Compare&& compare) {
+        if (!store_) {
+            std::stable_sort(memory_.begin(), memory_.end(), std::forward<Compare>(compare));
+            return;
+        }
+        flush();
+        working_store::transaction(*store_, [&] {
+            for (std::size_t i = 1; i < count_; ++i) {
+                const T value = read_row(i);
+                auto at = i;
+                while (at != 0) {
+                    const T previous = read_row(at - 1);
+                    if (!compare(value, previous)) break;
+                    write_row(at, previous);
+                    --at;
+                }
+                if (at != i) write_row(at, value);
+            }
+        });
+        drop_frames();
     }
     void flush() const {
         if (!store_) return;
+        validate();
         try {
             for (auto& frame : frames_) {
                 if (!frame.dirty || !frame.row) continue;
+                const auto handle = working_store::find(*store_, key(frame.index + 1));
+                if (!handle) working_store::check(ScratchStatus::corrupt);
+                if (working_store::equal_bytes(*frame.row, working_store::bytes(*store_, handle))) {
+                    frame.dirty = false;
+                    continue;
+                }
                 working_store::transaction(*store_, [&] { write_row(frame.index, *frame.row); });
                 frame.dirty = false;
+                frame.row = read_row(frame.index);
             }
         } catch (...) { drop_frames(); throw; }
     }
@@ -263,10 +329,13 @@ private:
     T read_row(std::size_t i) const {
         const auto handle = working_store::find(*store_, key(i + 1));
         if (!handle) working_store::check(ScratchStatus::corrupt);
-        return working_store::read<T>(*store_, handle);
+        return working_store::read<T>(*store_, handle, binding_);
     }
     void write_row(std::size_t i, const T& row) const {
-        working_store::write(*store_, key(i + 1), row);
+        // A copied row may still lend a StoredOpenings reader into the old
+        // version while sorting/shifting its successor. Reclaiming that
+        // version needs a reader-retention proof, not a cache-slot eviction.
+        working_store::write(*store_, key(i + 1), row, true);
     }
     void append_pending(const T& row) {
         if (count_ == max_size()) throw std::overflow_error("working sequence position domain exhausted");
@@ -278,13 +347,13 @@ private:
         for (auto& frame : frames_) { frame.row.reset(); frame.dirty = false; }
     }
     Frame& load(std::size_t index) const {
+        validate();
         for (auto& frame : frames_) if (frame.row && frame.index == index) return frame;
         auto& frame = frames_[next_frame_];
         next_frame_ = (next_frame_ + 1) % frames_.size();
         if (frame.dirty && frame.row) {
             try {
-                working_store::transaction(*store_, [&] { write_row(frame.index, *frame.row); });
-                frame.dirty = false;
+                flush();
             } catch (...) { drop_frames(); throw; }
         }
         frame.row = read_row(index); frame.index = index;
@@ -296,6 +365,7 @@ private:
     std::vector<T> memory_;
     mutable std::array<Frame, 2> frames_{};
     mutable std::size_t next_frame_ = 0;
+    std::shared_ptr<working_store::Binding> binding_;
 };
 
 template<class T>
@@ -318,11 +388,13 @@ public:
     std::size_t count(std::uint64_t key) const { return find(key) == end() ? 0 : 1; }
     bool contains(std::uint64_t key) const { return count(key) != 0; }
     iterator find(std::uint64_t key) {
+        rows_.validate();
         const auto at = lower(key);
         return at < size() && static_cast<const Rows&>(rows_)[at].first == key
             ? iterator(&rows_, at) : end();
     }
     const_iterator find(std::uint64_t key) const {
+        rows_.validate();
         const auto at = lower(key);
         return at < size() && rows_[at].first == key ? const_iterator(&rows_, at) : end();
     }

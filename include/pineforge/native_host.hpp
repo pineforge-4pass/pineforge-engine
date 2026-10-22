@@ -1284,10 +1284,8 @@ public:
     /// Allocation-free live-order reads with the owning accessor's visibility.
     /// Callbacks may read or write their own scratch store, but issue no host
     /// commands. False returns cancelled, even for the last row.
-    detail::ScratchStatus visit_native_working_requests(
-        void*, bool (*)(void*, const NativeWorkingRequest&)) const;
-    void native_visit_working_requests(
-        void*, void (*)(void*, const NativeWorkingRequest&)) const;
+    detail::ScratchStatus visit_native_working_requests(void*, bool (*)(void*, const NativeWorkingRequest&)) const;
+    void native_visit_working_requests(void*, void (*)(void*, const NativeWorkingRequest&)) const;
     std::optional<NativeWorkingRequest> native_working_request(
         const native_order::RequestHandle&) const;
     /// Withdraw every live request, dependants of a cancelled owner included, and
@@ -1324,12 +1322,9 @@ public:
     /// time. Legal wherever physical_position() is; observation only, it
     /// moves no fill, no hash and no row.
     std::vector<NativeOpenLot> native_open_lots(double mark) const;
-    detail::ScratchStatus visit_native_open_lots(
-        double mark, void*, bool (*)(void*, const NativeOpenLotView&)) const;
-    void native_visit_open_lots(
-        double mark, void*, void (*)(void*, const NativeOpenLotView&)) const;
-    detail::ScratchStatus visit_native_open_lot_values(
-        void*, bool (*)(void*, std::uint64_t, double, double)) const;
+    detail::ScratchStatus visit_native_open_lots(double mark, void*, bool (*)(void*, const NativeOpenLotView&)) const;
+    void native_visit_open_lots(double mark, void*, void (*)(void*, const NativeOpenLotView&)) const;
+    detail::ScratchStatus visit_native_open_lot_values(void*, bool (*)(void*, std::uint64_t, double, double)) const;
     /// The account's equity marked at this price: the realized balance plus every open
     /// lot's own fee-net term, which is exactly what native_open_lots(mark) sums. It
     /// moves nothing. C spelling: strategy_native_marked_equity_v1.

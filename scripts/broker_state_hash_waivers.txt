@@ -28,7 +28,15 @@ margin_call_enabled_ # Source provider configuration (PineStrategyHost since L12
 path_order_mode_ # Requested path-mode configuration; selected native path and current decision context are hashed by the consumer.
 probe_suppress_tail_logic_ # Source provider configuration (PineStrategyHost since N14, formerly BacktestEngine); reporting/probe mode that does not alter accepted historical execution decisions.
 qty_step_ # Symbol metadata carrier; quantized request/term facts preserve the executable value at placement.
-range_end_trades_ # Report-only synthetic rows, never a live matching population or future admission input.
+count_ # TerminalRows report descriptor's row count; synthetic report output, never a live matching population or future admission input.
+engine_ # TerminalRows borrows its report producer; no independent execution state or ownership.
+book_epoch_ # TerminalRows pins the physical book's read epoch solely to refuse stale report-row reconstruction; it is report lifetime metadata, never decision state.
+interval_ # TerminalRows report mark's interval; synthetic report output, never a future admission input.
+price_ # TerminalRows report mark's price; synthetic report output, never a fill or position input.
+row_ # TerminalRows decoded report frame and PlacementTable iterator's borrowed row pointer; derived readback, never independent decision state.
+time_ # TerminalRows report mark's timestamp; synthetic report output, never executable time state.
+scratch_store_ # Borrowed source working-store handle; record values retain their existing semantic folds and the backing identity is not broker state.
+scratch_binding_ # Shared borrowed-store readback binding, refreshed on same-backing reopen; no independent durable value.
 realtime_tail_ # Source provider run-mode configuration (PineStrategyHost since N14, formerly BacktestEngine) consumed at begin; native stream lifecycle/hash owns active continuation state.
 realtime_tail_horizon_bars_ # Source provider run-mode configuration (PineStrategyHost since N14, formerly BacktestEngine) consumed at begin; it is not mutated by or read from broker settlement.
 security_calling_close_ms_ # Source-host auxiliary-slice publication cursor, zero outside the slice feed; no order matching or account settlement branch consumes it.

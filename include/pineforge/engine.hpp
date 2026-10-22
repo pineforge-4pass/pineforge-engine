@@ -46,6 +46,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#include <pineforge/detail/working_members.hpp>
 // Generated script lifecycle users must be rebuilt against this runtime.
 // These internal C++ capabilities change no public C POD or C signature.
 #define PINEFORGE_HAS_TRADE_HISTORY_POLICY_V1 1
@@ -168,6 +169,66 @@ struct PyramidEntry {
     // same physical-entry provenance. Zero is reserved for legacy/test-only
     // synthetic lots that were not created by a request record.
     uint64_t entry_incarnation = 0;
+    template<class A> friend void scratch_fields(A& ar, PyramidEntry& v) {
+        ar(v.price, v.time, v.qty, v.entry_id, v.entry_bar_index, v.entry_comment,
+           v.max_runup, v.max_drawdown, v.skip_entry_bar_high, v.skip_entry_bar_low,
+           v.entry_commission_account, v.entry_incarnation);
+    }
+};
+
+// Mutable access expires outstanding terminal-mark readers. An epoch is
+// replaced only while a reader holds it; no counter can wrap or alias a mark.
+class PhysicalLotBook : public detail::WorkingSequence<PyramidEntry> {
+    using Rows = detail::WorkingSequence<PyramidEntry>;
+public:
+    using Rows::Rows;
+    using Rows::operator[];
+    using Rows::at;
+    using Rows::front;
+    using Rows::back;
+    using Rows::begin;
+    using Rows::end;
+    using Rows::rbegin;
+    using Rows::rend;
+    std::shared_ptr<const void> read_epoch() const { return epoch_; }
+    PyramidEntry& operator[](std::size_t i) { touch(); return Rows::operator[](i); }
+    PyramidEntry& at(std::size_t i) { touch(); return Rows::at(i); }
+    PyramidEntry& front() { touch(); return Rows::front(); }
+    PyramidEntry& back() { touch(); return Rows::back(); }
+    iterator begin() { touch(); return Rows::begin(); }
+    iterator end() { return Rows::end(); }
+    reverse_iterator rbegin() { touch(); return Rows::rbegin(); }
+    reverse_iterator rend() { return Rows::rend(); }
+    void push_back(const PyramidEntry& row) { touch(); Rows::push_back(row); }
+    void push_back(PyramidEntry&& row) { touch(); Rows::push_back(std::move(row)); }
+    template<class... Args> void emplace_back(Args&&... args) {
+        touch(); Rows::emplace_back(std::forward<Args>(args)...);
+    }
+    void set(std::size_t i, const PyramidEntry& row) { touch(); Rows::set(i, row); }
+    iterator insert(iterator at, const PyramidEntry& row) {
+        touch(); return Rows::insert(at, row);
+    }
+    void pop_back() { touch(); Rows::pop_back(); }
+    void swap(PhysicalLotBook& other) { touch(); other.touch(); Rows::swap(other); }
+    void clear() { touch(); Rows::clear(); }
+    iterator erase(iterator at) { touch(); return Rows::erase(at); }
+    iterator erase(iterator first, iterator last) { touch(); return Rows::erase(first, last); }
+    PhysicalLotBook& operator=(std::vector<PyramidEntry>&& rows) {
+        touch(); Rows::operator=(std::move(rows)); return *this;
+    }
+    PhysicalLotBook& operator=(const std::vector<PyramidEntry>& rows) {
+        touch(); Rows::operator=(rows); return *this;
+    }
+    PhysicalLotBook& operator=(std::initializer_list<PyramidEntry> rows) {
+        touch(); Rows::clear();
+        for (const auto& row : rows) Rows::push_back(row);
+        return *this;
+    }
+private:
+    void touch() {
+        if (!epoch_.unique()) epoch_ = std::make_shared<const unsigned char>(0);
+    }
+    std::shared_ptr<const void> epoch_ = std::make_shared<const unsigned char>(0);
 };
 
 struct Trade {
@@ -434,7 +495,7 @@ protected:
     // reversal gets a new nonzero id; same-direction pyramid adds retain it.
     int64_t position_cycle_seq_ = 0;
     int64_t next_position_cycle_seq_ = 1;
-    std::vector<PyramidEntry> pyramid_entries_;  // individual entries for trade reporting
+    PhysicalLotBook pyramid_entries_;  // individual entries for trade reporting
 
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;
@@ -552,7 +613,7 @@ protected:
     // trades_, the realized sums, or the live position (a stream continues it).
     class TerminalRows {
     public:
-        void clear() noexcept { count_ = 0; row_ = {}; engine_ = nullptr; }
+        void clear() noexcept { count_ = 0; row_ = {}; engine_ = nullptr; book_epoch_.reset(); }
         bool empty() const noexcept { return count_ == 0; }
         std::size_t size() const noexcept { return count_; }
         const Trade& row(std::size_t) const;
@@ -561,6 +622,7 @@ protected:
                   int interval, double fx, std::size_t count) noexcept {
             engine_ = &engine; price_ = price; time_ = time;
             interval_ = interval; fx_ = fx; count_ = count;
+            book_epoch_ = engine.pyramid_entries_.read_epoch();
         }
     private:
         const BacktestEngine* engine_ = nullptr;
@@ -569,6 +631,7 @@ protected:
         int interval_ = 0;
         std::size_t count_ = 0;
         mutable Trade row_{};
+        std::shared_ptr<const void> book_epoch_;
     } range_end_trades_;
 
     // Best favorable price is updated by the physical open/add helpers for

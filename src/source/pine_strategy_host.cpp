@@ -1313,8 +1313,10 @@ bool source::PineStrategyHost::adapter_has_open_entry_id(
         [&](const PyramidEntry& row) { return row.entry_id == id && row.qty > 0.0; });
 }
 
-const std::vector<source::PineStrategyHost::FixtureIntentRow>&
+const ::pineforge::detail::WorkingSequence<source::PineStrategyHost::FixtureIntentRow>&
 source::PineStrategyHost::source_pending_view() const {
+    if (adapter_.scratch_store_)
+        source_pending_view_cache_.bind(*adapter_.scratch_store_, 64, 1);
     source_pending_view_cache_.clear();
     source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
         + adapter_.pending_entries_.size() + adapter_.pending_bracket_legs_.size()
@@ -1978,7 +1980,7 @@ void source::PineStrategyHost::present_report(ReportC* out) const {
     for (int index = 0; index < out->trades_len; ++index) {
         auto& row = out->trades[index];
         if (!row.open_at_end) continue;
-        const auto& lot = pyramid_entries_[lot_index++];
+        const auto lot = pyramid_entries_.value_at(lot_index++);
         execution::PhysicalExecutionContext context;
         context.effective_time_ms = report_quote_time_ms_;
         context.interval_index = row.exit_bar_index;

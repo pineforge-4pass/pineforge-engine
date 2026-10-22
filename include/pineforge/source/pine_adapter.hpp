@@ -17,6 +17,9 @@
 #include <pineforge/detail/adapter_exposure_storage.hpp>
 #include <pineforge/detail/working_members.hpp>
 #include <pineforge/detail/working_id_table.hpp>
+#include <pineforge/detail/working_row_table.hpp>
+#include <pineforge/detail/working_minima.hpp>
+#include <pineforge/source/working_snapshot_codec.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -141,6 +144,10 @@ struct PineExitLevels {
     double trail_price = std::numeric_limits<double>::quiet_NaN();
     double profit_ticks = std::numeric_limits<double>::quiet_NaN();
     double loss_ticks = std::numeric_limits<double>::quiet_NaN();
+    template<class A> friend void scratch_fields(A& ar, PineExitLevels& v) {
+        ar(v.limit, v.stop, v.trail_points, v.trail_offset, v.trail_price,
+           v.profit_ticks, v.loss_ticks);
+    }
 };
 
 enum class PineCancellationCause : std::int32_t {
@@ -162,6 +169,11 @@ struct PineCancellationReceipt {
     std::uint64_t target_revision = 0;
     double close_claim_consumed = std::numeric_limits<double>::quiet_NaN();
     double close_claim_retired = std::numeric_limits<double>::quiet_NaN();
+    template<class A> friend void scratch_fields(A& ar, PineCancellationReceipt& v) {
+        ar(v.cause, v.state, v.close_claim_release, v.source_incarnation,
+           v.source_sequence, v.target_incarnation, v.target_owner, v.target_revision,
+           v.close_claim_consumed, v.close_claim_retired);
+    }
 };
 
 struct PineSizingSnapshot {
@@ -176,6 +188,9 @@ struct PineSizingSnapshot {
     // where a percent-of-equity default quantity converts it -- a cash
     // commission (default_sizing_reserves_cash_fee); NaN everywhere else.
     double strategy_equity = std::numeric_limits<double>::quiet_NaN();
+    template<class A> friend void scratch_fields(A& ar, PineSizingSnapshot& v) {
+        ar(v.equity, v.price, v.fx, v.mark, v.frozen_units, v.at_fill, v.strategy_equity);
+    }
 };
 
 // Source placement evidence keyed by the native request handle, read by the
@@ -393,6 +408,54 @@ struct PlacementSnapshot {
     bool pooc_global_full_exit_tracks_bound_adds = false;
     bool pooc_global_full_exit_bound_add = false;
     PineCancellationReceipt cancellation{};
+    template<class A> friend void scratch_fields(A& ar, PlacementSnapshot& v) {
+        ar(v.family, v.source_id, v.from_entry, v.comment, v.oca_name, v.oca_type,
+           v.qty_type, v.requested_qty, v.projection_remaining_qty, v.qty_percent,
+           v.is_long, v.immediately, v.opening, v.deferred_cohort,
+           v.reservation_deferred_to_pending_entry, v.void_issue, v.void_global_issue,
+           v.pending_bound_exit, v.per_entry_origin, v.per_entry_units, v.crosses_zero,
+           v.follow_up_fill, v.waypoint_margin_call, v.fixed_exit_reservation,
+           v.frozen_market_instruction, v.frozen_market_own_units,
+           v.frozen_market_transaction_units, v.frozen_market_targeted_close,
+           v.frozen_market_target_was_long, v.direction_gate, v.affordability_policy_active,
+           v.affordability_close_only, v.rounded_signal_cost_close_only,
+           v.affordability_keep_mc_close_surplus, v.reverse_to, v.replaced_opening,
+           v.replacement_predecessor_market, v.terms_priced_reverse,
+           v.frozen_reversal_transaction, v.placement_cycle, v.sequential_group,
+           v.sequential_rank, v.has_full_entry_bracket, v.paired_reversal_parent,
+           v.preserved_by_close_all, v.preserved_close_all_bar, v.bracket_origin,
+           v.source_sequence, v.command_ordinal, v.placement_open_epoch, v.command_sequence,
+           v.close_callsite_token, v.close_batch_calls, v.close_first_id, v.close_first_target,
+           v.close_first_ledger_consumed, v.close_first_carry_valid, v.close_first_carry_qty,
+           v.close_retire_ledger_whole, v.close_pending_later_qty, v.placement_script_open_ms,
+           v.placement_sub_open_ms, v.projection_created_bar, v.projection_created_bar_pinned,
+           v.projection_position_side, v.projection_after_close, v.close_first_entry,
+           v.signal_price_refused, v.projection_over_pyramiding,
+           v.projection_opposite_market_predecessor, v.projection_predecessor,
+           v.chain_origin_sequence, v.recreated_after_named_cancelled_entry_incarnation,
+           v.named_cancel_surviving_exit_incarnation, v.retained_parent_topology,
+           v.defer_until_post_parent_calculation, v.projection_predecessor_market,
+           v.projection_predecessor_exit, v.projection_created_during_coof,
+           v.projection_coof_at_terminal, v.projection_coof_mid_bar, v.forced_execution_price,
+           v.forced_waypoint_print, v.coof_open_stop_next_waypoint, v.projection_tv_carry_qty,
+           v.projection_default_stop_equity, v.projection_default_stop_signal_close,
+           v.projection_explicit_equity, v.projection_explicit_signal_close,
+           v.projection_affordability_equity, v.projection_affordability_signal_price,
+           v.projection_affordability_held_qty, v.sizing, v.exit_levels,
+           v.trail_activation_level, v.retained_trail_best, v.market_admission,
+           v.birth, v.birth_reach, v.leg_activation, v.exit_activation, v.legs,
+           v.restored_after_margin, v.reservation_expansion, v.reservation_growth_source,
+           v.reservation_growth_owner_incarnation, v.stop_limit_activated,
+           v.coof_cascade_seg_i, v.coof_cascade_inflight_fires, v.paired_flat_market_candidate,
+           v.paired_flat_market_own_qty, v.paired_flat_market_signal_close,
+           v.paired_flat_market_signal_equity, v.paired_flat_market_signal_margin_pct,
+           v.paired_flat_market_signal_pointvalue, v.paired_flat_market_signal_fx,
+           v.paired_flat_market_peer_seq, v.paired_flat_market_transaction_qty,
+           v.signal_close_mc_bar, v.signal_close_mc_entry_incarnation, v.signal_close_mc_fill_seq,
+           v.signal_close_mc_remaining_qty, v.pooc_global_full_exit_dynamic_qty,
+           v.pooc_global_full_exit_tracks_bound_adds, v.pooc_global_full_exit_bound_add,
+           v.cancellation);
+    }
 };
 
 class PlacementTable;
@@ -576,6 +639,7 @@ PoocCloseFillViewSwitches& pooc_close_fill_view_switches() noexcept;
 // non-margin source ids -- and by the adapter itself (bracket families,
 // cohorts). high_water() still names the largest incarnation ever inserted.
 class PlacementTable {
+    using StoredRows = ::pineforge::detail::WorkingRowTable<PlacementSnapshot>;
 public:
     template<bool IsConst>
     class Iterator {
@@ -599,6 +663,20 @@ public:
         using reference = Reference;
 
         Iterator() = default;
+        Iterator(const Iterator& other)
+            : owner_(other.owner_), key_(other.key_), row_(other.row_), pin_(other.pin_) {}
+        Iterator(Iterator&& other) noexcept
+            : owner_(other.owner_), key_(other.key_), row_(other.row_), pin_(std::move(other.pin_)) {}
+        Iterator& operator=(const Iterator& other) {
+            if (this == &other) return *this;
+            reference_.reset(); pin_ = other.pin_;
+            owner_ = other.owner_; key_ = other.key_; row_ = other.row_; return *this;
+        }
+        Iterator& operator=(Iterator&& other) {
+            if (this == &other) return *this;
+            reference_.reset(); pin_ = std::move(other.pin_);
+            owner_ = other.owner_; key_ = other.key_; row_ = other.row_; return *this;
+        }
 
         Reference operator*() const { return {key_, *row_}; }
         Reference* operator->() const {
@@ -606,6 +684,14 @@ public:
             return &*reference_;
         }
         Iterator& operator++() {
+            if (owner_->stored_) {
+                reference_.reset();
+                pin_.finish();
+                key_ = owner_->stored_->next_after(key_);
+                if (key_) pin_ = owner_->stored_->find(key_, !IsConst);
+                row_ = pin_ ? &pin_.get() : nullptr;
+                return *this;
+            }
             const auto next = owner_->next_after(key_);
             key_ = next.first;
             row_ = next.second;
@@ -625,6 +711,8 @@ public:
         friend class PlacementTable;
         Iterator(Owner* owner, std::uint64_t key, Snapshot* row)
             : owner_(owner), key_(key), row_(row) {}
+        Iterator(Owner* owner, std::uint64_t key, typename StoredRows::Pin pin)
+            : owner_(owner), key_(key), row_(pin ? &pin.get() : nullptr), pin_(std::move(pin)) {}
 
         // The row is named by its incarnation and its node, never by a
         // position, so an iterator stays valid across every insert and every
@@ -632,6 +720,7 @@ public:
         Owner* owner_ = nullptr;
         std::uint64_t key_ = 0;
         Snapshot* row_ = nullptr;
+        typename StoredRows::Pin pin_;
         mutable std::optional<Reference> reference_;
     };
 
@@ -645,6 +734,8 @@ public:
     PlacementTable& operator=(PlacementTable&&) noexcept = default;
 
     void set_auxiliary_tables_directory(const std::string& directory);
+    void bind_scratch_store(::pineforge::detail::ScratchStore&);
+    void flush() const { if (stored_) stored_->flush(); }
     void bind_auxiliary_scratch_tables(const std::shared_ptr<::pineforge::detail::ScratchSlab>&);
     void fixture_use_memory_auxiliary_tables();
     std::uint64_t auxiliary_disk_bytes() const noexcept;
@@ -659,9 +750,20 @@ public:
     // The window is reserved for the rows a run keeps live at once, not for
     // every incarnation it will allocate: the table stays O(live).
     void reserve(std::size_t count) {
+        if (stored_) return;
         window_.reserve(std::min<std::size_t>(count, kWindowReserve));
     }
-    void clear() noexcept {
+    void clear() {
+        if (stored_) {
+            at_pin_.finish();
+            ::pineforge::detail::working_store::transaction(*store_, [&] {
+                stored_->clear();
+                store_metadata(0, 0, 0, kFoldBasis);
+                ::pineforge::detail::working_store::write(*store_,
+                    ::pineforge::detail::working_store::Key(61, 1, 4),
+                    std::vector<SourceId>{});
+            });
+        }
         window_.clear();
         head_ = 0;
         base_ = 1;
@@ -678,18 +780,30 @@ public:
 #endif
     }
 
-    iterator begin() noexcept {
+    iterator begin() {
+        if (stored_) {
+            const auto key = stored_->next_after(0);
+            return iterator(this, key, key ? stored_->find(key, true) : StoredRows::Pin{});
+        }
         const auto first = next_after(0);
         return iterator(this, first.first, first.second);
     }
     iterator end() noexcept { return iterator(this, 0, nullptr); }
-    const_iterator begin() const noexcept {
+    const_iterator begin() const {
+        if (stored_) {
+            const auto key = stored_->next_after(0);
+            return const_iterator(this, key, key ? stored_->find(key, false) : StoredRows::Pin{});
+        }
         const auto first = next_after(0);
         return const_iterator(this, first.first, first.second);
     }
     const_iterator end() const noexcept { return const_iterator(this, 0, nullptr); }
     // The first row above `incarnation`.
-    const_iterator upper_bound(std::uint64_t incarnation) const noexcept {
+    const_iterator upper_bound(std::uint64_t incarnation) const {
+        if (stored_) {
+            const auto key = stored_->next_after(incarnation);
+            return const_iterator(this, key, key ? stored_->find(key, false) : StoredRows::Pin{});
+        }
         const auto next = next_after(incarnation);
         return const_iterator(this, next.first, next.second);
     }
@@ -699,6 +813,11 @@ public:
     // For a whole-table read: no row is inserted or erased while it runs.
     template<class Visit>
     [[gnu::always_inline]] void visit_rows(Visit&& visit) const {
+        if (stored_) {
+            for (const auto& row : *this)
+                if (visit(row.first, row.second)) return;
+            return;
+        }
         for (const auto& entry : old_) {
             if (visit(entry.first, static_cast<const PlacementSnapshot&>(*entry.second))) return;
         }
@@ -713,7 +832,8 @@ public:
     }
 
 #if PINEFORGE_PLACEMENT_AUDIT
-    iterator find(std::uint64_t incarnation, unsigned line = __builtin_LINE()) noexcept {
+    iterator find(std::uint64_t incarnation, unsigned line = __builtin_LINE()) {
+        if (stored_) return stored_find<false>(incarnation);
         PlacementSnapshot* row = locate(incarnation);
         if (!row) {
             detail::placement_audit_miss(this, incarnation, line);
@@ -722,7 +842,8 @@ public:
         return iterator(this, incarnation, row);
     }
     const_iterator find(std::uint64_t incarnation,
-                        unsigned line = __builtin_LINE()) const noexcept {
+                        unsigned line = __builtin_LINE()) const {
+        if (stored_) return stored_find<true>(incarnation);
         const PlacementSnapshot* row = locate(incarnation);
         if (!row) {
             detail::placement_audit_miss(this, incarnation, line);
@@ -731,11 +852,13 @@ public:
         return const_iterator(this, incarnation, row);
     }
 #else
-    iterator find(std::uint64_t incarnation) noexcept {
+    iterator find(std::uint64_t incarnation) {
+        if (stored_) return stored_find<false>(incarnation);
         PlacementSnapshot* row = locate(incarnation);
         return row ? iterator(this, incarnation, row) : end();
     }
-    const_iterator find(std::uint64_t incarnation) const noexcept {
+    const_iterator find(std::uint64_t incarnation) const {
+        if (stored_) return stored_find<true>(incarnation);
         const PlacementSnapshot* row = locate(incarnation);
         return row ? const_iterator(this, incarnation, row) : end();
     }
@@ -743,25 +866,57 @@ public:
 
     // Whether a row is held, as a fact about the table rather than a read of
     // the row (the tombstone audit does not count it).
-    bool contains(std::uint64_t incarnation) const noexcept {
+    bool contains(std::uint64_t incarnation) const {
+        if (stored_) return stored_->contains(incarnation);
         return locate(incarnation) != nullptr;
+    }
+    iterator pin_at(std::uint64_t incarnation) {
+        auto row = find(incarnation);
+        if (row == end()) throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
+        return row;
+    }
+    const_iterator pin_at(std::uint64_t incarnation) const {
+        auto row = find(incarnation);
+        if (row == end()) throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
+        return row;
     }
 
     PlacementSnapshot& at(std::uint64_t incarnation) {
+        if (stored_) {
+            at_pin_ = stored_->find(incarnation, true);
+            if (!at_pin_) throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
+            return at_pin_.get();
+        }
         PlacementSnapshot* row = locate(incarnation);
-        if (!row) throw std::out_of_range("source placement handle is absent");
+        if (!row) throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
         return *row;
     }
     const PlacementSnapshot& at(std::uint64_t incarnation) const {
+        if (stored_) {
+            at_pin_ = stored_->find(incarnation, false);
+            if (!at_pin_) throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
+            return at_pin_.get();
+        }
         const PlacementSnapshot* row = locate(incarnation);
-        if (!row) throw std::out_of_range("source placement handle is absent");
+        if (!row) throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
         return *row;
     }
 
     template<class... Args>
     std::pair<iterator, bool> try_emplace(std::uint64_t incarnation, Args&&... args) {
         if (incarnation == 0 || incarnation == std::numeric_limits<std::uint64_t>::max()) {
-            throw std::length_error("source placement incarnation is out of range");
+            throw coded<std::length_error>(RunFailureCode::engine_invariant, {}, "source placement incarnation is out of range");
+        }
+        if (stored_) {
+            if (stored_->contains(incarnation)) return {stored_find<false>(incarnation), false};
+            PlacementSnapshot row(std::forward<Args>(args)...);
+            const auto high = std::max(high_water_, incarnation);
+            ::pineforge::detail::working_store::transaction(*store_, [&] {
+                stored_->put(incarnation, row);
+                store_metadata(size_ + 1, high, erased_rows_, erased_digest_);
+            });
+            ++size_; high_water_ = high;
+            return {stored_find<false>(incarnation), true};
         }
         if (PlacementSnapshot* existing = locate(incarnation))
             return {iterator(this, incarnation, existing), false};
@@ -785,6 +940,15 @@ public:
     // Queries scan retained identities directly. Replacement has no scratch
     // workset to refold/reserve, and never changes the erased minima.
     void replace(std::uint64_t incarnation, PlacementSnapshot&& snapshot) {
+        if (stored_) {
+            if (!stored_->contains(incarnation)) {
+                throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
+            }
+            ::pineforge::detail::working_store::transaction(*store_, [&] {
+                stored_->put(incarnation, snapshot);
+            });
+            return;
+        }
         at(incarnation) = std::move(snapshot);
     }
 
@@ -804,6 +968,7 @@ public:
     // its command sequence under its (source_id, from_entry) and, for a
     // non-margin row, its source id. Returns false when no row is there.
     bool erase(std::uint64_t incarnation) {
+        if (stored_) return erase_stored(incarnation);
         const PlacementSnapshot* row = locate(incarnation);
         if (!row) return false;
         preflight_erased_rows([&](const auto& emit) { emit(*row); });
@@ -852,6 +1017,17 @@ public:
     std::uint64_t erased_digest() const noexcept { return erased_digest_; }
 
 private:
+    template<bool Const>
+    auto stored_find(std::uint64_t incarnation) const
+        -> Iterator<Const> {
+        auto pin = stored_->find(incarnation, !Const);
+        auto* owner = const_cast<PlacementTable*>(this);
+        const auto key = pin ? incarnation : 0;
+        return Iterator<Const>(owner, key, std::move(pin));
+    }
+    void store_metadata(std::uint64_t size, std::uint64_t high,
+                        std::uint64_t erased, std::uint64_t digest);
+    bool erase_stored(std::uint64_t);
     static constexpr std::size_t kWindowReserve = 256;
     static constexpr std::size_t kSpareNodes = 64;
     static constexpr std::uint64_t kFoldBasis = 1469598103934665603ULL;
@@ -860,7 +1036,7 @@ private:
     // exact (source_id, from_entry) minimum. Their separate key domains keep
     // an empty from_entry distinct from the any-entry summary. Neither the
     // directory nor old keys allocate per-id RAM in the bounded backend.
-    using Minima = pineforge::detail::IdPairStore<std::uint64_t>;
+    using Minima = pineforge::detail::WorkingMinima;
 
     // A reused node takes its new row in one assignment.
     static void overwrite(PlacementSnapshot& node, PlacementSnapshot&& row) {
@@ -938,6 +1114,11 @@ private:
     // holds the row it was erased with, which nothing reads, until the next
     // placement overwrites it.
     std::vector<std::unique_ptr<PlacementSnapshot>> spare_;
+    ::pineforge::detail::ScratchStore* store_ = nullptr;
+    std::unique_ptr<StoredRows> stored_;
+    // at() is the single-row compatibility read. Production readers that
+    // retain a row across lookups use find()'s owning iterator pin.
+    mutable StoredRows::Pin at_pin_;
 };
 
 // Acceptance-ordered opening roster. size()/digest() describe all accepted
@@ -1554,14 +1735,14 @@ namespace pineforge::source {
 // fixture tests and keeps observer reads side-effect-free.
 class PendingIntentView {
 public:
-    int size() const noexcept;
+    int size() const;
     int probe_fill_qty(int index, double fill_price, double* qty,
-                       int* close_only, int* partition) const noexcept;
-    int level_resolved(int index) const noexcept;
+                       int* close_only, int* partition) const;
+    int level_resolved(int index) const;
     int effective_levels(int index, double* stop, double* limit,
-                         double* trail_activation) const noexcept;
-    int copy_v1(int index, pf_pending_order_v1_t* out) const noexcept;
-    int short_seed_collision_role(int index) const noexcept;
+                         double* trail_activation) const;
+    int copy_v1(int index, pf_pending_order_v1_t* out) const;
+    int short_seed_collision_role(int index) const;
     int last_bar_dual_entry_path() const noexcept;
     double trail_best_price() const noexcept;
 
@@ -1770,7 +1951,7 @@ public:
     double source_unclosed_qty_for(const SourceId& id) const noexcept {
         return cohort_exposure_for(id);
     }
-    int source_entry_slot_count() const noexcept;
+    int source_entry_slot_count() const;
     double fixture_close_logical_units(const SourceId&) const noexcept;
     std::size_t fixture_close_logical_count() const noexcept {
         return close_logical_units_.size();
@@ -1827,7 +2008,7 @@ public:
     bool fixture_coof_cursor_is_bar_close() const noexcept {
         return coof_recalc_active_ && coof_context_.coordinate.path_phase == NativePathPhase::Close;
     }
-    PineCancellationReceipt* fixture_mutable_cancellation(int index) noexcept;
+    PineCancellationReceipt* fixture_mutable_cancellation(int index);
     void fixture_remove_entry_without_named_cancel(const SourceId&);
     void begin_source_evaluation() noexcept {
         named_entry_cancel_tokens_.clear();
@@ -1959,14 +2140,18 @@ private:
         PlacementSnapshot snapshot;
         SourceId replacement_key;
         std::uint64_t family_key = 0;
-        std::uint64_t request_record = 0;
+        template<class A> friend void scratch_fields(A& ar, PendingBracketLeg& v) {
+            ar(v.request, v.snapshot, v.replacement_key, v.family_key);
+        }
     };
 
     struct PendingEntry {
         native_order::Request request;
         PlacementSnapshot snapshot;
         SourceId replacement_key;
-        std::uint64_t request_record = 0;
+        template<class A> friend void scratch_fields(A& ar, PendingEntry& v) {
+            ar(v.request, v.snapshot, v.replacement_key);
+        }
     };
 
     struct DelayedMarketOrder {
@@ -1975,7 +2160,9 @@ private:
         SourceId replacement_key;
         std::uint64_t release_open_epoch = 0;
         bool execute_at_open = false;
-        std::uint64_t request_record = 0;
+        template<class A> friend void scratch_fields(A& ar, DelayedMarketOrder& v) {
+            ar(v.request, v.snapshot, v.replacement_key, v.release_open_epoch, v.execute_at_open);
+        }
     };
 
     // A36/A28: a sell-side stop that is already marketable at the open, while
@@ -1989,6 +2176,9 @@ private:
         double fill_price = std::numeric_limits<double>::quiet_NaN();
         double path_position = 0.0;
         bool open_marketable = false;
+        template<class A> friend void scratch_fields(A& ar, DeferredOpenMarketableSell& v) {
+            ar(v.snapshot, v.replacement_key, v.fill_price, v.path_position, v.open_marketable);
+        }
     };
 
     // The legacy same-bar MARKET transaction is a source-side command batch:
@@ -2009,6 +2199,12 @@ private:
         bool coof_priced_next_open = false;
         bool coof_market_at_second_extreme = false;
         bool paired_all_in_reentry = false;
+        template<class A> friend void scratch_fields(A& ar, EntrySubmissionContext& v) {
+            ar(v.current, v.limit_price, v.stop_price, v.default_sized, v.priced,
+               v.reverses, v.opposite_opening_pending, v.pure_stop_entry,
+               v.coof_market_next_open, v.coof_priced_next_open,
+               v.coof_market_at_second_extreme, v.paired_all_in_reentry);
+        }
     };
 
     struct PendingSameBarCommand {
@@ -2024,7 +2220,11 @@ private:
         std::optional<native_order::Request> unbatched_request;
         std::optional<PlacementSnapshot> unbatched_snapshot;
         EntrySubmissionContext unbatched_context;
-        std::uint64_t request_record = 0;
+        template<class A> friend void scratch_fields(A& ar, PendingSameBarCommand& v) {
+            ar(v.request, v.snapshot, v.replacement_key, v.opening, v.staged_reversal,
+               v.staged_reversal_held_units, v.unbatched_request, v.unbatched_snapshot,
+               v.unbatched_context);
+        }
     };
 
     // A source command can remain observable through the enclosing source
@@ -2034,6 +2234,9 @@ private:
     struct SourceShadowPending {
         PlacementSnapshot snapshot;
         std::string label;
+        template<class A> friend void scratch_fields(A& ar, SourceShadowPending& v) {
+            ar(v.snapshot, v.label);
+        }
     };
 
     struct PendingRelativeExit {
@@ -2075,7 +2278,10 @@ private:
         native_order::Request request;
         bool armed = false;
         double installed_level = std::numeric_limits<double>::quiet_NaN();
-        std::uint64_t request_record = 0;
+        template<class A> friend void scratch_fields(A& ar, AnchoredRelativeLeg& v) {
+            ar(v.exit_id, v.from_entry, v.family, v.handle, v.parent, v.parent_long,
+               v.operand_ticks, v.trail_offset, v.request, v.armed, v.installed_level);
+        }
     };
 
     // A from_entry "" exit with relative legs that covers the position entry
@@ -2108,12 +2314,17 @@ private:
         bool opening = false;
         std::uint64_t family_key = 0;
         bool next_open = false;
-        std::uint64_t request_record = 0;
+        template<class A> friend void scratch_fields(A& ar, PendingCoofRequest& v) {
+            ar(v.request, v.snapshot, v.replacement_key, v.opening, v.family_key, v.next_open);
+        }
     };
 
     struct PendingMarginRevival {
         PlacementSnapshot snapshot;
         std::int32_t decline_bar = -1;
+        template<class A> friend void scratch_fields(A& ar, PendingMarginRevival& v) {
+            ar(v.snapshot, v.decline_bar);
+        }
     };
 
     struct NamedEntryCancelToken {
@@ -2159,28 +2370,28 @@ private:
     // that can no longer be bound, before retiring the adapter's prefix.
     void retire_origin_prefixes();
     void release_closed_cohort_origins();
-    bool lifecycle_readable(const PlacementSnapshot&) const noexcept;
+    bool lifecycle_readable(const PlacementSnapshot&) const;
     // Writes one trade's exit phase, refolding when the write lands below the
     // final mark.
     void set_exit_phase(std::size_t trade_index, std::uint8_t phase);
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const;
     // The units an exit's from_entry holds; none when it names no entry.
-    std::optional<double> from_entry_units(const SourceId&) const noexcept;
+    std::optional<double> from_entry_units(const SourceId&) const;
     bool from_entry_filled_this_cycle(const SourceId&) const;
-    double percent_commission_live_equity(double) const noexcept;
+    double percent_commission_live_equity(double) const;
     // The same equity at an explicit account-currency rate: the rate an
     // execution converts at, which its terms facts carry
     // (NativeExecutionTermsFacts::active_fx); none, the presented clock's.
-    double percent_commission_live_equity(double, std::optional<double> fx) const noexcept;
+    double percent_commission_live_equity(double, std::optional<double> fx) const;
     // The kernel's marked equity at `mark` (every open entry fee charged),
     // at `fx` when given: strategy.equity under a cash commission.
-    double strategy_equity_at(double mark, std::optional<double> fx) const noexcept;
+    double strategy_equity_at(double mark, std::optional<double> fx) const;
     // Records both equities a sizing snapshot carries at `mark`: `equity`
     // (percent_commission_live_equity) and, for a cash-fee percent-of-equity
     // default quantity, `strategy_equity`.
     void mark_sizing_equity(PineSizingSnapshot&, double mark,
-                            std::optional<double> fx = std::nullopt) const noexcept;
+                            std::optional<double> fx = std::nullopt) const;
     double quantize_close_units(double basis, double percent) const noexcept;
     double quantize_percent_exit_units(double requested,
                                        double available) const noexcept;
@@ -2358,7 +2569,7 @@ private:
     void maybe_activate_short_seed_plan();
     void activate_short_seed_plan_at_open(const NativeDecisionContext&);
     bool qualify_short_seed_plan(const ShortSeedPlan&) const;
-    bool short_seed_context_is_live() const noexcept;
+    bool short_seed_context_is_live() const;
     void record_dropped_close(const SourceId&, const std::string&, double, double,
                               bool, std::uint64_t);
     void record_opening_fee(const PlacementSnapshot&,
@@ -2368,7 +2579,7 @@ private:
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
     void consume_closed_trade_rows(const native_order::ExecutionAppliedEvent&,
                                    const PlacementSnapshot*);
-    bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
+    bool origin_is_pending(const native_order::RequestHandle&) const;
     // Roster positions, latest first, of the cohort's origins that are live
     // handles. origin_is_pending() accepts only live handles, so walking these
     // positions meets exactly the pending origins a reverse walk of the whole
@@ -2384,14 +2595,14 @@ private:
     // consumer, or null for a host that is not a PineStrategyHost.
     IExecutionConsumer* bound_consumer() const noexcept;
     // Whether any origin the cohort ever accepted is an opening on that side.
-    bool cohort_opened_on_side(const CohortFacts&, bool is_long) const noexcept;
+    bool cohort_opened_on_side(const CohortFacts&, bool is_long) const;
     // Whether a leg of that kind the (exit id, from_entry) family placed for
     // that origin was consumed: a member of the family neither working nor
     // suspended.
     bool origin_leg_consumed(std::uint64_t family_key, PineOrderFamily,
-                             const native_order::RequestHandle& origin) const noexcept;
+                             const native_order::RequestHandle& origin) const;
     // Whether an immediate strategy.close was placed on that bar.
-    bool immediate_close_placed_on(std::int32_t bar) const noexcept;
+    bool immediate_close_placed_on(std::int32_t bar) const;
     void cancel_bracket_origin(native_order::RequestHandle);
     // executed_at: the ordinal a terminal receipt executed at, when the
     // observer reads it later; a later strategy.exit call's leg accepted
@@ -2499,8 +2710,8 @@ private:
     native_order::Group group_for(const std::string&, int, std::int64_t = 0) const;
     PineSizingSnapshot sizing_snapshot() const;
     std::uint64_t key_for(const SourceId&, const SourceId& = {}) const noexcept;
-    void refresh_pending_view() noexcept;
-    native_order::Request store_queued_request(const native_order::Request&, std::uint64_t&);
+    void refresh_pending_view();
+    native_order::Request store_queued_request(const native_order::Request&);
     OrderBirth capture_order_birth() const;
     bool opening_market_short_scope(PineOrderFamily) const;
     void initialize_l4c_policy(PlacementSnapshot&, native_order::RequestHandle);
@@ -2526,7 +2737,7 @@ private:
     ReceiptHighWaterReader event_high_water_reader_ = nullptr;
     ReceiptHighWaterReader terminal_receipt_high_water_reader_ = nullptr;
     bool is_declined_market_reversal(
-        const native_order::MatchRejectedEvent&) const noexcept;
+        const native_order::MatchRejectedEvent&) const;
     bool follows_same_bar_declined_reversal(
         const PlacementSnapshot&, const NativePrecommitView&) const;
     bool bracket_belongs_to_reversal(
@@ -2551,12 +2762,12 @@ private:
     void purge_brackets_after_applied_reversal(const PlacementSnapshot&);
     void revive_brackets_after_margin(
         const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
-    int projected_pending_size() const noexcept;
-    bool projected_pending_at(int index, const PlacementSnapshot*& snapshot,
-                              native_order::RequestHandle& handle) const noexcept;
+    int projected_pending_size() const;
+    bool projected_pending_at(int index, std::optional<PlacementSnapshot>& snapshot,
+                              native_order::RequestHandle& handle) const;
     int projected_raw_pending_size() const noexcept;
-    bool projected_raw_pending_at(int index, const PlacementSnapshot*& snapshot,
-                                  native_order::RequestHandle& handle) const noexcept;
+    bool projected_raw_pending_at(int index, std::optional<PlacementSnapshot>& snapshot,
+                                  native_order::RequestHandle& handle) const;
     static bool same_projected_order(const PlacementSnapshot& left,
                                      const PlacementSnapshot& right) noexcept;
     void apply_open_market_admission(const NativeDecisionContext&);
@@ -2660,27 +2871,27 @@ private:
     PlacementTable placement_;
     ::pineforge::detail::WorkingMap<native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
-    std::vector<PendingBracketLeg> pending_bracket_legs_;
-    std::vector<PendingEntry> pending_entries_;
-    std::vector<DelayedMarketOrder> delayed_market_orders_;
-    std::vector<DeferredOpenMarketableSell> deferred_open_marketable_sells_;
+    ::pineforge::detail::WorkingSequence<PendingBracketLeg> pending_bracket_legs_;
+    ::pineforge::detail::WorkingSequence<PendingEntry> pending_entries_;
+    ::pineforge::detail::WorkingSequence<DelayedMarketOrder> delayed_market_orders_;
+    ::pineforge::detail::WorkingSequence<DeferredOpenMarketableSell> deferred_open_marketable_sells_;
     // Flat stop entries the per-bar priced-entry throttle refused; re-armed
     // as their original stop at the bar close (validate_precommit is const).
-    mutable std::vector<PlacementSnapshot> throttled_reopen_rearm_;
+    mutable ::pineforge::detail::WorkingSequence<PlacementSnapshot> throttled_reopen_rearm_;
     int entry_openings_interval_index_ = -1;
     int entry_openings_this_interval_ = 0;
-    std::vector<PendingSameBarCommand> pending_same_bar_commands_;
-    std::vector<SourceShadowPending> source_shadow_pending_;
+    ::pineforge::detail::WorkingSequence<PendingSameBarCommand> pending_same_bar_commands_;
+    ::pineforge::detail::WorkingSequence<SourceShadowPending> source_shadow_pending_;
     double pending_same_bar_close_qty_ = 0.0;
     std::vector<PendingRelativeExit> pending_relative_exits_;
     // Mutable: the kernel's arm hook is const and records the level it
     // installed on the leg it restated.
-    mutable std::vector<AnchoredRelativeLeg> anchored_relative_legs_;
+    mutable ::pineforge::detail::WorkingSequence<AnchoredRelativeLeg> anchored_relative_legs_;
     AnchoredRelativeStats anchored_relative_stats_{};
     std::int64_t anchored_cohort_sequence_ = 0;
     std::vector<PerEntryExit> per_entry_exits_;
-    std::vector<PendingCoofRequest> pending_coof_requests_;
-    std::vector<PendingMarginRevival> pending_margin_revivals_;
+    ::pineforge::detail::WorkingSequence<PendingCoofRequest> pending_coof_requests_;
+    ::pineforge::detail::WorkingSequence<PendingMarginRevival> pending_margin_revivals_;
     ::pineforge::detail::WorkingSequence<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     // R5 lane V19-E: the dropped-close receipts were a log no decision reads;
@@ -2953,16 +3164,15 @@ private:
         std::vector<std::uint64_t> askable_origins;
         std::vector<std::uint64_t> live_groups;
         std::vector<std::int32_t> source_bars;
-        std::vector<std::pair<std::uint64_t, const PlacementSnapshot*>> candidates;
+        std::vector<std::uint64_t> candidates;
         std::vector<std::uint64_t> candidate_names;
         std::vector<std::uint64_t> first_reissues;
-        std::vector<const PlacementSnapshot*> origin_pins; // Rebuilt each sweep; not state.
+        std::vector<std::uint64_t> origin_pins; // Rebuilt each sweep; not state.
         std::vector<std::uint64_t> doomed;
         // CR-150 L19G: K1 legs that supersession can release (incarnation,
         // row, read-through high water, released flag); released incarnations sorted.
         struct HeldLeg {
             std::uint64_t incarnation = 0;
-            const PlacementSnapshot* row = nullptr;
             std::uint64_t read_through = 0;
             bool released = false;
         };

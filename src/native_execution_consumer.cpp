@@ -3915,7 +3915,7 @@ bool NativeExecutionConsumer::margin_check_admitted(
     point.mark = mark;
     point.cursor = cursor;
     point.liquidation_resting = margin_liquidation_.has_value()
-        && requests_.find_live(margin_liquidation_->handle) != nullptr;
+        && requests_.pin_live(margin_liquidation_->handle).has_value();
     return host->margin_check_allowed(point);
 }
 
@@ -4095,7 +4095,7 @@ void NativeExecutionConsumer::withdraw_margin_liquidation(BacktestEngine& engine
     if (!margin_liquidation_) return;
     const auto handle = margin_liquidation_->handle;
     margin_liquidation_.reset();
-    if (!requests_.find_live(handle)) return;
+    if (!requests_.pin_live(handle)) return;
     native_order::CommandInstalled<native_order::CancelResult> ok;
     native_order::EventId predicted;
     if (direct_mutation_) {
@@ -4282,7 +4282,7 @@ void NativeExecutionConsumer::maintain_margin_at(
         // the solved level otherwise. margin_call_units has already refused a
         // nonfinite or nonpositive mark.
         const double resting = at_mark ? mark : *level;
-        if (margin_liquidation_ && requests_.find_live(margin_liquidation_->handle) != nullptr
+        if (margin_liquidation_ && requests_.pin_live(margin_liquidation_->handle).has_value()
             && native_matching::double_bits(margin_liquidation_->level)
                 == native_matching::double_bits(resting)
             && native_matching::double_bits(margin_liquidation_->units)
@@ -4790,7 +4790,7 @@ void NativeExecutionConsumer::drain_dependency_queue(
                                     std::size_t sort_from) {
             auto children = requests_.waiting_children(parent);
             for (auto& child : children) {
-                const auto* waiting = requests_.find_live(child);
+                const auto waiting = requests_.pin_live(child);
                 const uint64_t priority = waiting ? waiting->priority() : child.incarnation;
                 queue.push_back(Item{cause.ordinal, cause, std::move(child), priority});
             }
@@ -4816,7 +4816,7 @@ void NativeExecutionConsumer::drain_dependency_queue(
             }
             if (std::holds_alternative<native_order::NoChange>(step)) continue;
             if (!settle_step(engine, std::move(step), operation, cause.ordinal)) return;
-            if (requests_.find_live(child) == nullptr && requests_.last_ordinal() != 0) {
+            if (!requests_.pin_live(child) && requests_.last_ordinal() != 0) {
                 native_order::EventId next_cause = cause;
                 next_cause.ordinal = requests_.last_ordinal();
                 enqueue_children(next_cause, child, i + 1);
@@ -4855,7 +4855,7 @@ void NativeExecutionConsumer::drain_after_applied(
         auto& seeds = drain_seeds_;
         seeds.clear();
         auto note_absent = [&](const native_order::RequestHandle& parent) {
-            if (requests_.find_live(parent) != nullptr || requests_.last_ordinal() == 0) return;
+            if (requests_.pin_live(parent) || requests_.last_ordinal() == 0) return;
             native_order::EventId cause = applied;
             cause.ordinal = requests_.last_ordinal();
             seeds.push_back({std::move(cause), parent});
@@ -4899,7 +4899,7 @@ void NativeExecutionConsumer::drain_after_applied(
         auto* host = native_host(engine);
         const bool anchored_child = std::any_of(
             children.begin(), children.end(), [this](const native_order::RequestHandle& child) {
-                const auto* waiting = requests_.find_live(child);
+                const auto waiting = requests_.pin_live(child);
                 return waiting && std::holds_alternative<native_order::FromOwnerFill>(
                                       waiting->request().anchor);
             });
@@ -4944,14 +4944,14 @@ void NativeExecutionConsumer::drain_after_applied(
         for (const auto& child : children) {
             if (failed()) return;
             std::optional<native_order::OpeningObservation> observation;
-            if (requests_.find_live(child)) {
+            if (requests_.pin_live(child)) {
                 observation = read_opening(engine, filler, engine.position_cycle_seq_);
             }
             // An anchored leg's arm consults the host's restatement, and a
             // hook that fails the run leaves the arm uninstalled: that arm is
             // prepared, and installed only if the run is still going. Every
             // other arm consults nothing and is applied at once.
-            const auto* waiting = requests_.find_live(child);
+            const auto waiting = requests_.pin_live(child);
             const bool restated = arm.resolve_level && waiting
                 && std::holds_alternative<native_order::FromOwnerFill>(
                        waiting->request().anchor);
@@ -4981,8 +4981,8 @@ void NativeExecutionConsumer::drain_after_applied(
         requests_.bound_close_handles(bound);
         for (const auto& handle : bound) {
             if (failed()) return;
-            const auto* live = requests_.find_live(handle);
-            auto target = read_target(engine, live);
+            const auto live = requests_.pin_live(handle);
+            auto target = read_target(engine, live ? &*live : nullptr);
             CoreStep step = direct_mutation_
                 ? core_step(requests_.apply_bound_expiry(applied, handle, target,
                                                          next_timeline_ordinal_))
@@ -5041,7 +5041,7 @@ void NativeExecutionConsumer::observe_trails(
     for (const auto& live : live_requests) handles.push_back(live.handle());
     for (const auto& handle : handles) {
         if (failed()) return;
-        const auto* live = requests_.find_live(handle);
+        const auto live = requests_.pin_live(handle);
         if (!live) continue;
         evaluation.cohort_side = scratch_cohort_side(engine, *live);
         if (std::holds_alternative<native_order::CohortClose>(live->authority)
@@ -5786,7 +5786,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
     const auto P = evaluation.cursor.point.ordinal;
     const bool current = evaluation.driver_class == native_order::DriverEligibilityClass::CurrentExecution;
     try {
-        auto* live = requests_.find_live(handle);
+        auto live = requests_.pin_live(handle);
         if (!live) return std::nullopt;
         // Every resolver, inspection, admission and financial read converts at
         // the execution coordinate's FX activation instant: the rate is
@@ -6073,7 +6073,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P)) {
                 return std::nullopt;
             }
-            live = requests_.find_live(handle);
+            [[maybe_unused]] const auto previous_live = std::move(live);
+            live = requests_.pin_live(handle);
             if (!live) {
                 return terminal_from_history(engine, handle, NativeFailureOperation::Settlement);
             }
@@ -6715,7 +6716,7 @@ void NativeExecutionConsumer::match_path(
     };
 
     auto provenance_still_matches = [&](const CandidateProvenance& row) {
-        const auto* live = requests_.find_live(row.handle);
+        const auto live = requests_.pin_live(row.handle);
         if (!live) return false;
         const auto* target = cached_cohort_target(engine, *live);
         const bool buy = target ? requests_.working_is_buy(*live, side_from_target(*target))
@@ -6805,13 +6806,13 @@ void NativeExecutionConsumer::match_path(
     // The request a row was scanned from. The book does not change between a
     // scan and its winner's first use, so the row's own index names it; the
     // core's handle lookup answers whenever the reuse is switched off.
-    auto scanned_request = [&](const Candidate& row) -> const native_order::LiveRequest* {
+    auto scanned_request = [&](const Candidate& row) -> std::optional<native_order::LiveRequest> {
         const auto& book = requests_.live();
-        if (match_row_reuse_ && row.live_index < book.size()
-            && book[row.live_index].handle() == row.handle) {
-            return &book[row.live_index];
+        if (match_row_reuse_ && row.live_index < book.size()) {
+            auto live = requests_.read_live_at(row.live_index);
+            if (live.handle() == row.handle) return live;
         }
-        return requests_.find_live(row.handle);
+        return requests_.pin_live(row.handle);
     };
 
     while (!failed()) {
@@ -7052,7 +7053,7 @@ void NativeExecutionConsumer::match_path(
         cursor_price = winner->price;
         path_cursor = make_cursor(point, t_cursor);
         eval.cursor = path_cursor;
-        const auto* live = scanned_request(*winner);
+        auto live = scanned_request(*winner);
         if (!live) continue;
         eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point)
             || born_on_remaining_path(*live);
@@ -7135,7 +7136,7 @@ void NativeExecutionConsumer::match_path(
             if (!settle_step(engine, std::move(step), NativeFailureOperation::Settlement, P)) {
                 return;
             }
-            if (requests_.find_live(winner->handle) == nullptr && requests_.last_ordinal() != 0) {
+            if (!requests_.pin_live(winner->handle) && requests_.last_ordinal() != 0) {
                 try {
                     drain_parent_terminal(
                             engine,
@@ -7190,7 +7191,7 @@ void NativeExecutionConsumer::match_path(
                 return;
             }
             if (winner->kind == Kind::ActivateStop || winner->kind == Kind::ActivateTrail) {
-                const auto* activated = requests_.find_live(winner->handle);
+                const auto activated = requests_.pin_live(winner->handle);
                 if (activated) {
                     const bool buy = scratch_request_is_buy(engine, *activated);
                     CandidateProvenance transfer;
@@ -7209,6 +7210,7 @@ void NativeExecutionConsumer::match_path(
             continue;
         }
 
+        [[maybe_unused]] const auto previous_live = std::move(live);
         live = scanned_request(*winner);
         if (!live) continue;
         const bool buy = scratch_request_is_buy(engine, *live);
@@ -7268,7 +7270,7 @@ void NativeExecutionConsumer::match_path(
 
 std::optional<NativeTrailState> NativeExecutionConsumer::trail_state(
         const BacktestEngine& engine, const native_order::RequestHandle& target) const {
-    const auto* live = requests_.find_live(target);
+    const auto live = requests_.pin_live(target);
     if (!live || !std::holds_alternative<native_order::Trail>(live->request().trigger)) {
         return std::nullopt;
     }
@@ -7314,7 +7316,7 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     if (!projection_ok(engine)) return Refusal::ConfigurationMismatch;
     if (command.target.incarnation == 0 || command.target.run != requests_.identity())
         return Refusal::InvalidHandle;
-    const auto* live = requests_.find_live(command.target);
+    const auto live = requests_.pin_live(command.target);
     if (!live) return Refusal::NotWorking;
     if (live->birth().acceptance_ordinal <= current_frame_->acceptance_cutoff)
         return Refusal::NotAcceptedInCallback;
@@ -7357,7 +7359,7 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
         && !std::holds_alternative<native_order::BindOpening>(request.owner)
         && !std::holds_alternative<native_order::BindOpenings>(request.owner))
         return Refusal::UnsupportedRequest;
-    const auto target = read_target(engine, live);
+    const auto target = read_target(engine, live ? &*live : nullptr);
     if (std::holds_alternative<native_order::OpeningClose>(live->authority)) {
         if (!target.opening || !target.opening->has_live_matching_lot) return Refusal::UnreadyOwner;
     } else if (std::holds_alternative<native_order::OpeningsClose>(live->authority)) {
@@ -7406,7 +7408,7 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     NativeCurrentExecutionPreview out;
     out.refusal = validate_current_execution(engine, command);
     if (out.refusal) return out;
-    const auto* live = requests_.find_live(command.target);
+    const auto live = requests_.pin_live(command.target);
     native_order::MatchCursor cursor;
     cursor.point = current_execution_coordinate(next_timeline_ordinal_);
     native_order::EvaluationContext evaluation;
@@ -7636,10 +7638,10 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         evaluation.cursor = make_cursor(point, 0.0);
         evaluation.driver_class = native_order::DriverEligibilityClass::CurrentExecution;
         evaluation.existing_matching_bit = true;
-        const auto* live = requests_.find_live(command.target);
+        auto live = requests_.pin_live(command.target);
         evaluation.cohort_side = live ? cohort_side(engine, *live) : std::nullopt;
         const auto history_before = requests_.history_end();
-        const auto target = read_target(engine, live);
+        const auto target = read_target(engine, live ? &*live : nullptr);
         CoreStep step = direct_mutation_
             ? core_step(requests_.apply_evaluation(command.target, evaluation, target,
                                                    next_timeline_ordinal_))
@@ -7655,7 +7657,8 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
                 throw coded<std::runtime_error>(recorded_cause(),
                                                 "native current evaluation install failed");
         }
-        live = requests_.find_live(command.target);
+        [[maybe_unused]] const auto previous_live = std::move(live);
+        live = requests_.pin_live(command.target);
         if (live && !same_allowance_bits(
                 native_order::WorkingRequestCore::evaluated_allowance(
                     *live, point.coordinate.ordinal), live->allowance)) {
@@ -9050,7 +9053,11 @@ void NativeExecutionConsumer::record_report_point(
 // the branch inert rather than absent.
 const Trade& BacktestEngine::TerminalRows::row(std::size_t index) const {
     if (!engine_ || index >= count_) throw std::out_of_range("terminal report row");
-    const auto& lot = engine_->pyramid_entries_[index];
+    if (book_epoch_ != engine_->pyramid_entries_.read_epoch()
+        || count_ != engine_->pyramid_entries_.size())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "terminal report book changed after mark");
+    const auto lot = engine_->pyramid_entries_.value_at(index);
     execution::PhysicalExecutionContext context;
     context.effective_time_ms = time_; context.interval_index = interval_; context.account_fx = fx_;
     if (!std::isnan(engine_->fold_exit_trail_peak_))
@@ -9060,6 +9067,9 @@ const Trade& BacktestEngine::TerminalRows::row(std::size_t index) const {
         engine_->allocated_entry_commission(lot, lot.qty),
         engine_->calc_commission_at(price_, lot.qty, fx_), context);
     row_.open_at_end = true;
+    if (book_epoch_ != engine_->pyramid_entries_.read_epoch())
+        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                                      "terminal report book changed after mark");
     return row_;
 }
 
@@ -9068,7 +9078,8 @@ double NativeExecutionConsumer::append_open_position_report_rows(
         int interval_index, double account_fx) const {
     const bool was_long = engine.position_side_ == PositionSide::LONG;
     double marked = 0.0;
-    for (const auto& lot : engine.pyramid_entries_) {
+    for (const auto& stored_lot : engine.pyramid_entries_) {
+        const PyramidEntry lot = stored_lot;
         execution::PhysicalExecutionContext context;
         context.effective_time_ms = mark_time_ms;
         context.interval_index = interval_index;
@@ -11495,7 +11506,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
         revoke_activation_birth(target);
     }
     if (predicted_status == native_order::ReplaceStatus::Replaced && ok.result.successor) {
-        const auto* successor = requests_.find_live(*ok.result.successor);
+        const auto successor = requests_.pin_live(*ok.result.successor);
         if (successor && std::holds_alternative<native_order::CohortClose>(successor->authority)) {
             // A resting cohort replacement changes trigger/definition facts,
             // not the physical opening roster captured by this derived view.
@@ -11661,7 +11672,7 @@ std::size_t NativeExecutionConsumer::cancel_all(BacktestEngine& engine) {
     handles.reserve(before);
     for (const auto& live : requests_.live()) handles.push_back(live.handle());
     for (const auto& handle : handles) {
-        if (!requests_.find_live(handle)) continue;
+        if (!requests_.pin_live(handle)) continue;
         cancel(engine, handle);
     }
     const std::size_t after = requests_.live().size();
@@ -11686,7 +11697,7 @@ std::size_t NativeExecutionConsumer::cancel_where(BacktestEngine& engine,
     }
     std::size_t cancelled = 0;
     for (const auto& handle : handles) {
-        if (!requests_.find_live(handle)) continue;
+        if (!requests_.pin_live(handle)) continue;
         if (cancel(engine, handle).status == native_order::CancelStatus::Cancelled) ++cancelled;
     }
     return cancelled;
@@ -12238,7 +12249,7 @@ std::vector<NativeOpenLot> NativeExecutionConsumer::open_lots(
     const double point_value = engine.syminfo_.pointvalue;
     const double fx = engine.active_account_currency_fx();
     for (std::size_t i = 0; i < n; ++i) {
-        const PyramidEntry& lot = engine.pyramid_entries_[i];
+        const PyramidEntry lot = engine.pyramid_entries_.value_at(i);
         NativeOpenLot row;
         row.ordinal = i;
         row.entry_incarnation = lot.entry_incarnation;

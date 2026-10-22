@@ -493,6 +493,16 @@ public:
         // The adapter currently has no pair-review receipt for this request;
         // an empty Draft truthfully represents that absence to a fixture.
         MarketAdmissionDraft market_admission{};
+        template<class A> friend void scratch_fields(A& ar, FixtureIntentRow& v) {
+            ar(v.id, v.type, v.default_stop_placement_qty, v.default_stop_sizing_price,
+               v.frozen_market_own_units, v.frozen_market_transaction_units,
+               v.from_entry, v.is_long, v.qty, v.qty_percent, v.created_bar,
+               v.created_seq, v.incarnation, v.over_pyramiding_cap_at_placement,
+               v.paired_flat_market_peer_seq, v.paired_flat_market_transaction_qty,
+               v.frozen_default_qty, v.default_stop_placement_equity,
+               v.default_stop_placement_signal_close, v.affordability_placement_equity,
+               v.market_admission);
+        }
     };
 
 public:
@@ -782,7 +792,7 @@ protected:
                                    std::int64_t bar_ms) const {
         return pineforge::pine_session_ispostmarket(session, timezone, bar_ms, script_tf_);
     }
-    const std::vector<FixtureIntentRow>& source_pending_view() const;
+    const ::pineforge::detail::WorkingSequence<FixtureIntentRow>& source_pending_view() const;
     // request.security registration, as generated configure_security_evaluators()
     // spells it. The kernel registers the aggregating evaluator; Pine's
     // publication semantics for the site (barmerge.lookahead, barmerge.gaps,
@@ -1288,7 +1298,7 @@ protected:
     bool security_history_publication_replay_ = false;
 
     // Read-only test projection cache; no future execution can observe it.
-    mutable std::vector<FixtureIntentRow> source_pending_view_cache_;
+    mutable ::pineforge::detail::WorkingSequence<FixtureIntentRow> source_pending_view_cache_;
 
     // Held units the applied request's precommit saw (the owner's pre-fill
     // position_qty_); cleared after the applied notification.
