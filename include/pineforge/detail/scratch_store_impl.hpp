@@ -225,15 +225,21 @@ public:
 
     Status bread(std::uint64_t id, Byte* destination) noexcept {
         ++reads_;
-        return backing_->read_page(id, ScratchBuffer{reinterpret_cast<std::byte*>(destination), page_});
+        const Status st = backing_->read_page(id, ScratchBuffer{reinterpret_cast<std::byte*>(destination), page_});
+        if (st == Status::io_error) backing_io_failed_ = true;
+        return st;
     }
     Status bwrite(std::uint64_t id, const Byte* source) noexcept {
         ++writes_;
-        return backing_->write_page(id, ScratchBytes{reinterpret_cast<const std::byte*>(source), page_});
+        const Status st = backing_->write_page(id, ScratchBytes{reinterpret_cast<const std::byte*>(source), page_});
+        if (st == Status::io_error) backing_io_failed_ = true;
+        return st;
     }
     Status bsync(ScratchDurability durability) noexcept {
         ++syncs_;
-        return backing_->sync(durability);
+        const Status st = backing_->sync(durability);
+        if (st == Status::io_error) backing_io_failed_ = true;
+        return st;
     }
     static Status structural(Status status) noexcept {
         return status == Status::not_found ? Status::corrupt : status;
@@ -1330,11 +1336,12 @@ public:
 
     Status put(const ScratchByteSource& key, const ScratchByteSource& value, ScratchHandle& result) noexcept {
         if (open_status_ != Status::ok || !active_ || poisoned_ || busy_ != 0) return Status::programming_error;
+        backing_io_failed_ = false;
         std::uint64_t handle = 0;
         const Status st = put_impl(key, value, handle);
         if (st != Status::ok) {
             poisoned_ = true;
-            return Status::programming_error;
+            return backing_io_failed_ ? Status::io_error : Status::programming_error;
         }
         result = handle;
         return Status::ok;
@@ -1386,18 +1393,19 @@ public:
 
     Status erase(ScratchHandle handle) noexcept {
         if (open_status_ != Status::ok || !active_ || poisoned_ || busy_ != 0) return Status::programming_error;
+        backing_io_failed_ = false;
         Entry entry;
         bool present = false;
         Status st = hget(handle, entry, present);
         if (st != Status::ok) {
             poisoned_ = true;
-            return Status::programming_error;
+            return backing_io_failed_ ? Status::io_error : Status::programming_error;
         }
         if (!present || (entry.val_word & 3) != kLive) return Status::not_found;
         st = erase_impl(handle, entry);
         if (st != Status::ok) {
             poisoned_ = true;
-            return Status::programming_error;
+            return backing_io_failed_ ? Status::io_error : Status::programming_error;
         }
         return Status::ok;
     }
@@ -1716,6 +1724,9 @@ public:
     std::uint64_t used_count_ = 0;
     std::uint64_t tainted_slot_ = kNoSlot;
     std::uint32_t busy_ = 0;
+
+private:
+    bool backing_io_failed_ = false;
 };
 
 } // namespace scratch_impl
