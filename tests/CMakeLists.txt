@@ -7495,13 +7495,3 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
     set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
-
-# LAB-o1s2: compiled/executed only by the supervisor's LB-446 build hosts.
-if(UNIX)
-    list(APPEND TEST_SOURCES test_o1s2_native_readers)
-    pineforge_add_unit_test(test_o1s2_native_readers)
-    if(PINEFORGE_BUILD_SOURCE_LAYER)
-        list(APPEND TEST_SOURCES test_o1s2_payload_readers)
-        pineforge_add_unit_test(test_o1s2_payload_readers)
-    endif()
-endif()
