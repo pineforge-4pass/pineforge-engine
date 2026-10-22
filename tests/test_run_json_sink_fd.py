@@ -828,7 +828,7 @@ def test_native_fd_matches_file_document_and_wire(tmp_path, transport, outputs):
     assert all(event["closed"] for event in actual[4][1:])
 
 
-def test_native_fd_fsize_zero_has_no_python_file_operations(tmp_path):
+def test_native_fd_fsize_zero_without_arena_refuses_before_file_operations(tmp_path):
     source = bars.csv_file(tmp_path, count=17)
     extra = ["--so", native_module(False), "--input-tf", "1", "--script-tf", "1"]
     path, work, temporary = tmp_path / "native.sink", tmp_path / "work", tmp_path / "tmp"
@@ -840,10 +840,18 @@ def test_native_fd_fsize_zero_has_no_python_file_operations(tmp_path):
     temporary.chmod(0o555)
     try:
         before = snapshot(work, temporary)
-        actual = child_run(source, extra, stub=False, jail=True, work=work, temporary=temporary)
-        assert actual[0] == 0 and actual[2] == "", actual
-        assert_document(actual[1], projection(reference[1]))
-        assert actual[3] == path.read_bytes() and snapshot(work, temporary) == before
+        # Stage-0 admission belongs to the jailed profile; an unjailed fd
+        # request does not require an arena. Keep the resource restrictions,
+        # but reach that admission explicitly without inherited backing.
+        actual = child_run(source, [*extra, "--profile", "jailed"], stub=False, jail=True,
+                           work=work, temporary=temporary, without_arena=True)
+        assert actual[0] == 1 and actual[2] == "", actual
+        failure = json.loads(actual[1])
+        assert (failure["code"], failure["args"]) == (
+            "report_sink_failed", {"reason": "arena_backing"})
+        assert set(failure) == {"engine", "error", "code", "args"}
+        assert len(actual[1].splitlines()) == 1 and "summary" not in failure
+        assert actual[3] == b"" and snapshot(work, temporary) == before
         refused = child_run(source, [*extra, "--report-sink", str(work / "bad.sink")],
                             stub=False, jail=True, work=work, temporary=temporary)
         assert refused[0] == 1 and refused[2] == "", refused
