@@ -10,8 +10,8 @@
 // a proposed ABI. The implementing lane must settle that binding. Decode into
 // an owning event is a diagnostic oracle only, never the production reader.
 //
-// Define PINEFORGE_O1S3_CLAUSE=1..10 to compile just one clause body, in the
-// order of the case table at the end. Zero selects all ten. This lets the box
+// Define PINEFORGE_O1S3_CLAUSE=1..11 to compile just one clause body, in the
+// order of the case table at the end. Zero selects all eleven. This lets the box
 // record the first diagnostic separately, including the two assertion reds
 // (6 and 8) that use the existing interfaces. There is no skipped-case success.
 //
@@ -26,11 +26,13 @@
 #include "global_allocation_replacement.hpp"
 
 #include <pineforge/compat/pine/market_admission.hpp>
+#include <pineforge/detail/journal_codec.hpp>
 #include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_store.hpp>
 #include <pineforge/native_order.hpp>
 #include <pineforge/source/pine_adapter.hpp>
 #include "../src/native_execution_consumer.hpp"
+#include "../src/source/admission_journal_codec.hpp"
 #include "../src/source/pine_command_scratch_production.hpp"
 
 #include <algorithm>
@@ -475,6 +477,7 @@ MEMBER(AdmissionRunFold, pineforge::source::PineExecutionAdapter, fold_admission
 MEMBER(AdmissionCount, pineforge::source::PineExecutionAdapter, admission_events_folded_);
 MEMBER(AdmissionDigest, pineforge::source::PineExecutionAdapter, admission_events_digest_);
 MEMBER(AdmissionLast, pineforge::source::PineExecutionAdapter, admission_events_last_);
+MEMBER(AdmissionOutstanding, ad::Journal, outstanding_count_);
 MEMBER(NativeCore, pineforge::NativeExecutionConsumer, requests_);
 MEMBER(NativeNote, pineforge::NativeExecutionConsumer, note_committed_events);
 MEMBER(NativeNoteCohorts, pineforge::NativeExecutionConsumer, note_cohort_receipts);
@@ -2231,6 +2234,99 @@ void s34_backing_physical_charge_and_lifetime_red() {
 }
 #endif
 
+#if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 11
+// CR150-CX, O1-SEAM-MERGE iii: unknown birth causes must refuse before storage.
+void s3_admission_unknown_birth_cause_refused_red() {
+    Rig rig;
+    CommandScratchStore store(rig.config(), &rig.backing);
+    ad::Journal journal;
+    bind_journal_codec(journal, store);
+    std::array<std::byte, 512> page{};
+    const std::array<pineforge::OrderBirth, 4> births{{
+        pineforge::OrderBirth{},
+        pineforge::OrderBirth::direct_command(7, 101),
+        pineforge::OrderBirth::chart_evaluation(7, 101),
+        pineforge::OrderBirth::fill_evaluation(7, 101,
+            pineforge::BirthCursor::point(pineforge::BirthCursorDomain::MagnifierTicks, 1, 3),
+            12.5, 13, 15, 17)
+    }};
+    for (const auto& birth : births) {
+        const auto id = journal.next_sequence();
+        auto input = command(id, 7);
+        auto observation = std::make_shared<ad::CommandObservation>(*input.observation);
+        observation->birth = birth;
+        input.observation = std::move(observation);
+        const ad::Event event = std::move(input);
+        AdmissionModel model(event);
+        const auto bytes = model.storage();
+        auto encoded = encode_journal_record(event);
+        equals_bytes(encoded, bytes);
+
+        // Change exactly one field value, preserving its path, tag and all
+        // other rows. Raw 99 fits int32_t but names no OrderBirthCause.
+        std::size_t changed = 0;
+        for (auto& row : model.rows) {
+            if (row.path == "event.observation.birth.cause") {
+                std::get<std::int64_t>(row.value) = 99;
+                ++changed;
+            }
+        }
+        require(changed == 1, "corruption targets exactly the command birth cause");
+        const auto invalid_bytes = model.storage();
+        require(invalid_bytes.size() == bytes.size() && invalid_bytes != bytes,
+                "unknown cause changes a value without changing record framing");
+        const pd::ScratchSpanSource invalid(view(invalid_bytes));
+        const auto event_count = journal.event_count();
+        const auto codec_count = journal_readback(journal).record_count();
+        const auto stored_count = store.record_count();
+        const auto frontier = journal.sequence_frontier();
+        const auto outstanding = journal.*access(AdmissionOutstanding{});
+        require(outstanding == 1, "one allocated sequence awaits admission");
+
+        status_is(append_journal_record(journal, invalid), ScratchStatus::corrupt,
+                  "unknown birth cause is refused before storage");
+        require(journal.event_count() == event_count
+                && journal_readback(journal).record_count() == codec_count
+                && store.record_count() == stored_count,
+                "refused cause changes neither event, codec nor stored record counts");
+        require(journal.sequence_frontier() == frontier
+                && journal.*access(AdmissionOutstanding{}) == outstanding
+                && journal.has_unfinished_events(),
+                "refused cause leaves its sequence allocated and outstanding");
+        require(!store.transaction_active(), "refused cause leaves no store transaction");
+        pd::ScratchRecordInfo info;
+        status_is(pd::journal_codec::find(store, id, info), ScratchStatus::not_found,
+                  "refused sequence has no stored record");
+        ad::JournalRecordSummary summary;
+        status_is(scan_journal_record(invalid, {page.data(), page.size()}, summary),
+                  ScratchStatus::corrupt, "non-owning scan rejects the unknown cause");
+
+        // The same allocated sequence remains usable with its original bytes.
+        // Each of the four known causes must store and decode identically.
+        const pd::ScratchSpanSource valid(view(bytes));
+        status_is(append_journal_record(journal, valid), ScratchStatus::ok,
+                  "known birth cause is admitted on the unchanged allocation");
+        require(journal.event_count() == event_count + 1
+                && journal_readback(journal).record_count() == codec_count + 1
+                && store.record_count() == stored_count + 1
+                && journal.sequence_frontier() == frontier
+                && journal.*access(AdmissionOutstanding{}) == outstanding - 1
+                && !journal.has_unfinished_events(),
+                "valid retry stores one record and consumes only its allocation");
+        status_is(pd::journal_codec::find(store, id, info), ScratchStatus::ok,
+                  "admitted sequence reads back");
+        const StoreValue stored(journal_readback(journal), info.handle, info.value_bytes);
+        equals_bytes(stored, bytes);
+        ad::Event decoded;
+        status_is(decode_journal_record(stored, {page.data(), page.size()}, decoded),
+                  ScratchStatus::ok, "known birth cause decodes after storage");
+        require(AdmissionModel(decoded).storage() == bytes,
+                "all known birth causes and every other field read back identically");
+    }
+    rig.audit(store);
+}
+#endif
+
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 1
@@ -2263,8 +2359,11 @@ const Case cases[] = {
 #if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 10
     {"s34_backing_physical_charge_and_lifetime_red", &s34_backing_physical_charge_and_lifetime_red},
 #endif
+#if PINEFORGE_O1S3_CLAUSE == 0 || PINEFORGE_O1S3_CLAUSE == 11
+    {"s3_admission_unknown_birth_cause_refused_red", &s3_admission_unknown_birth_cause_refused_red},
+#endif
 };
-static_assert(PINEFORGE_O1S3_CLAUSE >= 0 && PINEFORGE_O1S3_CLAUSE <= 10,
+static_assert(PINEFORGE_O1S3_CLAUSE >= 0 && PINEFORGE_O1S3_CLAUSE <= 11,
               "select a real clause, never an empty/disabled test");
 } // namespace
 

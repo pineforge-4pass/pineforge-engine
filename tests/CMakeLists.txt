@@ -7157,7 +7157,7 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
-# O(1) seam 3 journal-codec red clauses: ten executables over one test file, one clause each.
+# O(1) seam 3 journal-codec red clauses: eleven executables over one test file, one clause each.
 # They link the source layer (pine_adapter.hpp, pine_command_scratch_production.hpp), so a
 # kernel-only configure must not create them.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
@@ -7172,7 +7172,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         s3_native_digest_survives_nonzero_base_red
         s3_admission_digest_refuses_zero_refold_red
         s34_readback_never_collects_population_red
-        s34_backing_physical_charge_and_lifetime_red)
+        s34_backing_physical_charge_and_lifetime_red
+        s3_admission_unknown_birth_cause_refused_red)
         math(EXPR _o1s3_row "${_o1s3_row} + 1")
         add_executable(${_o1s3_case} test_o1s3_journal_red.cpp)
         target_link_libraries(${_o1s3_case} PRIVATE pineforge)
