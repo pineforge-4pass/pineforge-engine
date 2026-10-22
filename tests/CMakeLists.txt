@@ -7457,3 +7457,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
     set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
+
+# TX-PRERC / CR-249: a public, stdlib-only script suite, like test_ci_preflight.
+# Append here to preserve the existing registration line pins.
+add_test(NAME test_emit_abi_export_list
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/test_emit_abi_export_list.py)
