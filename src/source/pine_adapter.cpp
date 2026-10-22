@@ -42,6 +42,11 @@
 #ifndef PINEFORGE_TAIL_WORK
 #define PINEFORGE_TAIL_WORK(site, count) ((void)0)
 #endif
+// Separate from the retirement-loop observer's fixed site vocabulary.
+// Overrides observe lookup work only; the default has no storage or I/O.
+#ifndef PINEFORGE_LOOKUP_INDEX_WORK
+#define PINEFORGE_LOOKUP_INDEX_WORK(site, owner, run, count) ((void)0)
+#endif
 #ifndef PINEFORGE_RETIREMENT_OBSERVE
 #define PINEFORGE_RETIREMENT_OBSERVE(rows, cycle, askable, roots, candidates, first) ((void)0)
 #endif
@@ -1868,6 +1873,7 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
             (opening->second.is_long ? sides.opened_long : sides.opened_short) = true;
         }
         ++index->answers;
+        PINEFORGE_LOOKUP_INDEX_WORK("cohort_side_answer", this, run_counter_, 1);
         const bool opened = erased || (is_long ? sides.opened_long : sides.opened_short);
         assert(opened == walk());
         return opened;
@@ -1879,6 +1885,7 @@ bool PineExecutionAdapter::cohort_opened_on_side(const CohortFacts& cohort,
 bool PineExecutionAdapter::origin_leg_consumed(
         std::uint64_t family_key, PineOrderFamily family,
         const native_order::RequestHandle& origin) const noexcept {
+    PINEFORGE_LOOKUP_INDEX_WORK("consumed_leg_probe", this, run_counter_, 1);
     const auto members = bracket_families_.find(family_key);
     if (members == bracket_families_.end()) return false;
     // A consumed member whose row was erased left the (leg kind, origin) it
@@ -1927,6 +1934,7 @@ bool PineExecutionAdapter::origin_leg_consumed(
             }
         }
         ++index->answers;
+        PINEFORGE_LOOKUP_INDEX_WORK("consumed_leg_answer", this, run_counter_, 1);
         assert(answer == walk());
         return answer;
     } catch (const std::bad_alloc&) {
@@ -1964,6 +1972,7 @@ bool PineExecutionAdapter::immediate_close_placed_on(std::int32_t bar) const noe
             }
         }
         ++index->answers;
+        PINEFORGE_LOOKUP_INDEX_WORK("same_bar_answer", this, run_counter_, 1);
         assert(answer == walk());
         return answer;
     } catch (const std::bad_alloc&) {
@@ -6222,6 +6231,7 @@ void PineExecutionAdapter::consume_closed_trade_rows(
         }
         std::sort(carrying.begin(), carrying.end());
         ++lookup->answers;
+        PINEFORGE_LOOKUP_INDEX_WORK("closed_trade_origin_answer", this, run_counter_, 1);
         for (const auto& origin : carrying)
             if (!consume_origin(origin.second)) break;
     }
@@ -12730,6 +12740,16 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // The consumed-leg lookup decides the skip only: a bracket
             // reissued on every bar keeps its live leg and never reaches it.
             const auto consumed_origin_leg = [&] {
+                if (const auto archived = settled_bracket_families_.find(family_key);
+                    archived != settled_bracket_families_.end()) {
+                    PINEFORGE_LOOKUP_INDEX_WORK("archived_family_probe", this, run_counter_, 1);
+                    PINEFORGE_LOOKUP_INDEX_WORK("archived_family_index_eligible", this, run_counter_,
+                                               archived->second.count > kIndexedFrom ? 1 : 0);
+                    // Restore only the requested immutable prefix, as an append
+                    // does. Its logical size selects the existing index path;
+                    // no retired handles or placement rows are materialized.
+                    (void)bracket_family(family_key);
+                }
                 return origin_leg_consumed(family_key, family, origin);
             };
             if (origin.incarnation != 0 && !has_live_leg && !origin_is_pending(origin)
