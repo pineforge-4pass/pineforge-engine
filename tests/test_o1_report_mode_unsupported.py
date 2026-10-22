@@ -1,9 +1,9 @@
-"""Real legacy provider: SUMMARY_ONLY must be a typed pre-execution refusal.
+"""Real legacy provider: FULL is legacy; the other modes refuse before execution.
 
 Fail-before expectation on 583c2217d2: the populated legacy control succeeds,
 then run_json reports run_request_invalid for the unknown --report-mode option
-instead of report_mode_unsupported. This is an expected RED until the transport
-lane implements negotiation. No fabricated report, optional library or skip.
+instead of report_mode_unsupported. On 03d3d10a3d40, explicit FULL is incorrectly
+refused too. No fabricated report, optional library or skip.
 """
 from __future__ import annotations
 
@@ -12,9 +12,11 @@ import csv
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 
 def require(condition: bool, message: str) -> None:
@@ -48,7 +50,8 @@ def main() -> None:
     require(len(population) == expected["input_bars"], "fixture bar population changed")
     require(options.module.is_file(), f"required real legacy provider missing: {options.module}")
     command = [
-        sys.executable, "-B", str(options.runner), "--so", str(options.module),
+        sys.executable, "-B", str(Path(__file__).resolve()), "--run-json", str(options.runner),
+        "--so", str(options.module),
         "--ohlcv", str(feed), "--input-tf", "1", "--script-tf", "1",
     ]
     with tempfile.TemporaryDirectory(prefix="o1-contract-") as temporary:
@@ -69,6 +72,18 @@ def main() -> None:
                 "control callback witness must consume the actual ordered population")
         marker.unlink()
 
+        explicit_full = subprocess.run(command + ["--report-mode", "FULL"],
+                                       capture_output=True, text=True, env=environment)
+        require(explicit_full.returncode == 0,
+                f"explicit FULL failed: {explicit_full.stdout}\n{explicit_full.stderr}")
+        require(document(explicit_full.stdout) == report,
+                "explicit FULL must return the populated legacy report unchanged")
+        require(explicit_full.stdout == full.stdout,
+                "explicit FULL must be byte-for-byte identical to omitting --report-mode")
+        require(marker.read_text(encoding="utf-8").splitlines() == visits,
+                "explicit FULL must execute the same ordered callback population")
+        marker.unlink()
+
         refused = subprocess.run(command + ["--report-mode", request["mode"]],
                                  capture_output=True, text=True, env=environment)
         failure = document(refused.stdout)
@@ -84,20 +99,48 @@ def main() -> None:
         require(set(failure) == {"engine", "error", "code", "args"},
                 "an unsupported request must not masquerade as a full or empty report")
         require(not marker.exists(), "an unsupported SUMMARY_ONLY request must not execute callbacks")
-        # An explicit FULL also requests the envelope, not the legacy array
-        # report. Sink support cannot stand in for STREAMED envelope support.
-        for mode in ("FULL", "STREAMED"):
-            refused = subprocess.run(command + ["--report-mode", mode],
-                                     capture_output=True, text=True, env=environment)
-            failure = document(refused.stdout)
-            require(refused.returncode == unsupported["exit_status"]
+        # Sink support cannot stand in for STREAMED envelope support.
+        refused = subprocess.run(command + ["--report-mode", "STREAMED"],
+                                 capture_output=True, text=True, env=environment)
+        failure = document(refused.stdout)
+        require(refused.returncode == unsupported["exit_status"]
+                and failure.get("code") == unsupported["code"],
+                f"legacy provider accepted an unsupported STREAMED envelope: {refused.stdout}")
+        require(failure.get("args") == {"mode": "STREAMED", "contract": request["contract"]},
+                "envelope refusal did not preserve the STREAMED request")
+        require("unsupported report mode: STREAMED" in failure.get("error", ""),
+                "unsupported STREAMED mode needs an explicit diagnostic")
+        require(set(failure) == {"engine", "error", "code", "args"},
+                "an unsupported STREAMED request must not masquerade as a report")
+        require(not marker.exists(), "unsupported STREAMED envelope executed callbacks")
+        # These inputs cannot be opened. A mode refused after feed access or
+        # library loading would produce a different typed failure.
+        missing_feed = Path(temporary) / "missing.csv"
+        missing_module = Path(temporary) / "missing.so"
+        require(not missing_feed.exists() and not missing_module.exists(),
+                "early-refusal controls must name missing inputs")
+        for mode in (request["mode"], "STREAMED"):
+            early = subprocess.run(command + [
+                "--so", str(missing_module), "--ohlcv", str(missing_feed), "--report-mode", mode,
+            ], capture_output=True, text=True, env=environment)
+            failure = document(early.stdout)
+            require(early.returncode == unsupported["exit_status"]
                     and failure.get("code") == unsupported["code"],
-                    f"legacy provider accepted an unsupported {mode} envelope: {refused.stdout}")
+                    f"{mode} refusal happened after opening an input: {early.stdout}")
             require(failure.get("args") == {"mode": mode, "contract": request["contract"]},
-                    f"envelope refusal did not preserve the {mode} request")
-            require(not marker.exists(), f"unsupported {mode} envelope executed callbacks")
-    print("PASS O1 unsupported mode: populated legacy control; SUMMARY_ONLY refused before execution")
+                    f"early refusal lost the {mode} request")
+            require(not marker.exists(), f"early {mode} refusal executed callbacks")
+    print("PASS O1 modes: FULL equals legacy; SUMMARY_ONLY and STREAMED refused before execution")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) >= 3 and sys.argv[1] == "--run-json":
+        runner = Path(sys.argv[2]).resolve()
+        sys.argv = [str(runner), *sys.argv[3:]]
+        sys.path.insert(0, str(runner.parent))
+        # Preserve the complete JSON, including elapsed_seconds, when
+        # comparing two executions of the real populated legacy provider.
+        with mock.patch("time.time", return_value=10.0):
+            runpy.run_path(str(runner), run_name="__main__")
+    else:
+        main()
