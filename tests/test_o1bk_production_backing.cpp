@@ -2,6 +2,7 @@
 // or local factory definition. Fail-before and execution belong to the remote
 // lab; this edit-only lane has not compiled or run this translation unit.
 #include "../src/source/pine_command_scratch_production.hpp"
+#include <pineforge/detail/scratch_arena.hpp>
 
 #include <algorithm>
 #include <array>
@@ -15,9 +16,11 @@
 #include <fcntl.h>
 #include <limits>
 #include <memory>
+#include <signal.h>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
@@ -700,6 +703,107 @@ void short_reads_and_syscall_errors(std::size_t page) {
     backing.reset();
 }
 
+struct ArenaAttachment {
+    static constexpr std::uint64_t bytes = 3 * ScratchArena::kChunkBytes;
+    int fd = -1;
+    struct sigaction previous_signal{};
+
+    explicit ArenaAttachment(const std::string& directory) {
+        require(::sigaction(SIGXFSZ, nullptr, &previous_signal) == 0,
+                "read host file-size signal disposition");
+        std::string path = directory + "/arena-XXXXXX";
+        fd = ::mkstemp(path.data());
+        require(fd >= 0, "prepare inherited arena");
+        require(::unlink(path.c_str()) == 0, "unlink prepared arena");
+        require(::ftruncate(fd, static_cast<off_t>(bytes)) == 0,
+                "size inherited arena before the jail");
+        ScratchArena::attach(fd, bytes);
+    }
+    ~ArenaAttachment() {
+        ScratchArena::detach();
+        ::close(fd);
+        ::sigaction(SIGXFSZ, &previous_signal, nullptr);
+    }
+};
+
+struct ZeroFileSize {
+    struct rlimit previous{};
+    ZeroFileSize() {
+        require(::getrlimit(RLIMIT_FSIZE, &previous) == 0, "read file-size limit");
+        auto limit = previous;
+        limit.rlim_cur = 0;
+        require(::setrlimit(RLIMIT_FSIZE, &limit) == 0, "enforce zero file-size limit");
+    }
+    ~ZeroFileSize() { ::setrlimit(RLIMIT_FSIZE, &previous); }
+};
+
+void attached_arena_with_zero_fsize(std::size_t page, const std::string& directory) {
+    require(ScratchArena::attached() == nullptr, "arena fixture starts unattached");
+    ArenaAttachment arena(directory);
+    ZeroFileSize jail;
+    const auto descriptors = open_descriptors();
+    Charges charges;
+    ObserverRegistration observer(charges.observer());
+    {
+        ByteCapRegistration cap(std::uint64_t{4} * page);
+        auto a = make_command_scratch_backing(page);
+        auto b = make_command_scratch_backing(page);
+        const auto first = pattern(page, 31);
+        const auto second = pattern(page, 47);
+        std::vector<std::byte> out(page);
+        // OLD factory ignores the attachment: ftruncate under this limit
+        // returns EFBIG, hence programming_error (the measured status=4).
+        require_status(a->write_page(2, bytes(first)), ScratchStatus::ok,
+                       "attached scratch must grow without ftruncate under zero fsize");
+        require_charge(charges, 0, ScratchIoOperation::write_page, 2, page, ScratchStatus::ok);
+        require_status(a->read_page(0, buffer(out)), ScratchStatus::ok, "read sparse arena hole");
+        require_charge(charges, 1, ScratchIoOperation::read_page, 0, page, ScratchStatus::ok);
+        require(std::all_of(out.begin(), out.end(), [](std::byte value) {
+                    return value == std::byte{0};
+                }), "sparse arena pages are zero-filled");
+        require_status(b->write_page(0, bytes(second)), ScratchStatus::ok, "write exclusive arena region");
+        require_charge(charges, 2, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
+        require_status(a->read_page(2, buffer(out)), ScratchStatus::ok, "read first arena region");
+        require_charge(charges, 3, ScratchIoOperation::read_page, 2, page, ScratchStatus::ok);
+        require(out == first, "another store cannot overwrite this arena region");
+        require_status(b->read_page(0, buffer(out)), ScratchStatus::ok, "read second arena region");
+        require_charge(charges, 4, ScratchIoOperation::read_page, 0, page, ScratchStatus::ok);
+        require(out == second, "arena region preserves exact caller bytes");
+        require_status(a->write_page(3, bytes(first)), ScratchStatus::io_error,
+                       "arena mode retains the shared byte cap");
+        require_charge(charges, 5, ScratchIoOperation::write_page, 3, page, ScratchStatus::io_error);
+        require(a->page_count() == 3, "over-cap extension cannot invent an arena page");
+        a.reset();
+        require_status(b->write_page(2, bytes(second)), ScratchStatus::ok,
+                       "destroying an arena backing releases its byte budget");
+        require_charge(charges, 6, ScratchIoOperation::write_page, 2, page, ScratchStatus::ok);
+        require_status(b->sync(ScratchDurability::buffered), ScratchStatus::ok, "buffered arena sync");
+        require_charge(charges, 7, ScratchIoOperation::sync, scratch_no_page, 0, ScratchStatus::ok);
+        require_status(b->sync(ScratchDurability::full), ScratchStatus::programming_error,
+                       "arena cannot promise durable sync");
+        require_charge(charges, 8, ScratchIoOperation::sync, scratch_no_page, 0,
+                       ScratchStatus::programming_error);
+        require(open_descriptors() == descriptors, "arena stores must not open private scratch files");
+    }
+    require(ScratchArena::attached()->stats().bytes_used == 0, "destruction releases arena regions");
+    {
+        ByteCapRegistration uncapped(std::uint64_t{0});
+        auto backing = make_command_scratch_backing(page);
+        const auto image = pattern(page, 59);
+        require_status(backing->write_page(ArenaAttachment::bytes / page, bytes(image)),
+                       ScratchStatus::programming_error, "fixed arena exhaustion keeps its status");
+        require_charge(charges, 9, ScratchIoOperation::write_page, ArenaAttachment::bytes / page,
+                       page, ScratchStatus::programming_error);
+        require(backing->page_count() == 0 && ScratchArena::attached()->stats().bytes_used == 0,
+                "refused arena growth claims no pages or chunks");
+    }
+    struct stat status{};
+    require(::fstat(arena.fd, &status) == 0
+            && status.st_size == static_cast<off_t>(ArenaAttachment::bytes),
+            "command scratch never resizes the inherited arena");
+    require_empty_directory(directory);
+}
+
 } // namespace
 
 int main() {
@@ -743,6 +847,7 @@ int main() {
             run("byte_cap_failed_extension_accounting", [&] { byte_cap_failed_extension_accounting(page); });
             run("selected_directory_failure", [&] { selected_directory_failure(page, directory.path); });
             run("short_reads_and_syscall_errors", [&] { short_reads_and_syscall_errors(page); });
+            run("attached_arena_with_zero_fsize", [&] { attached_arena_with_zero_fsize(page, directory.path); });
         }
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

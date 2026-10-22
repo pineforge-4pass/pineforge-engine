@@ -6,6 +6,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 
 #include <algorithm>
 #include <array>
@@ -538,6 +539,26 @@ private:
     std::string old_tmp_;
 };
 
+class ArenaScope {
+public:
+    explicit ArenaScope(const fs::path& directory)
+        : backing_(::open((directory / "inherited-arena").c_str(),
+                          O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600)) {
+        require(backing_.get() >= 0, "cannot prepare inherited scratch arena");
+        require(::unlink((directory / "inherited-arena").c_str()) == 0,
+                "cannot unlink inherited scratch arena");
+        constexpr std::uint64_t bytes = 16 * 1024 * 1024;
+        require(::ftruncate(backing_.get(), static_cast<off_t>(bytes)) == 0,
+                "cannot size inherited scratch arena before the jail");
+        pineforge::detail::ScratchArena::attach(backing_.get(), bytes);
+    }
+    ~ArenaScope() { pineforge::detail::ScratchArena::detach(); }
+    ArenaScope(const ArenaScope&) = delete;
+    ArenaScope& operator=(const ArenaScope&) = delete;
+private:
+    Descriptor backing_;
+};
+
 void jailed(const fs::path& directory, const std::vector<Bar>& bars,
             const Result& expected, const std::string& bytes) {
     const auto jail = directory / "jail";
@@ -545,6 +566,9 @@ void jailed(const fs::path& directory, const std::vector<Bar>& bars,
     std::string captured;
     {
         SignalScope size_signal(SIGXFSZ, SIG_IGN);
+        // The fd transport supplies output only. The host must separately
+        // provision scratch before enforcing RLIMIT_FSIZE=0 (ruling F).
+        ArenaScope arena(directory);
         JailScope limits(jail); // applies BEFORE constructing/running the engine
         struct rlimit current{};
         require(::getrlimit(RLIMIT_FSIZE, &current) == 0 && current.rlim_cur == 0,
