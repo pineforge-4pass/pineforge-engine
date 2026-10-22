@@ -2537,10 +2537,20 @@ void WorkingRequestCore::seal_plan(MutationPlan& plan) {
 }
 
 // The journal is no longer one vector a caller can presize: its resident part
-// has a fixed bound and the rest is external, so the expected length of a run
-// no longer reserves anything for it (nothing reads the capacity).
+// has a fixed bound and the rest is external. Still reserve the requested
+// retained-window capacity while it fits, so preallocated command output does
+// not allocate chunks during the bounded operation.
 void WorkingRequestCore::reserve(std::size_t expected_events) {
-    (void) expected_events;
+    if (journal_ && expected_events > journal_->end - history_base_) {
+        const auto resident = journal_->resident_count();
+        if (resident < JournalStore::kMaxResident) {
+            const auto available = JournalStore::kMaxResident - resident;
+            const auto incoming = std::min<std::size_t>(
+                expected_events - (static_cast<std::size_t>(journal_->end) - history_base_),
+                available);
+            journal_->make_room(incoming);
+        }
+    }
     if (live_.capacity() < 8) live_.reserve(8);
 }
 
