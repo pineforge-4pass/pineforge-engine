@@ -1251,3 +1251,68 @@ split. Cancelled/failed jobs did skip the old compiler post-save, which reduced
 cache freshness; the new save ordering addresses that independently. The
 historical ASan startup assertion remains a separate diagnosis, and splitting
 jobs does not establish a runtime fix or dismiss a sanitizer failure.
+
+### Release guard phases
+
+The release guard requires exactly `pineforge/verify` and `pineforge/parity`
+to be `success`; lite variants never satisfy either requirement. Phase 1 is
+the **transitional** merged-PR-head path for main commits that predate the
+main watcher. The guard reads `repos/{repo}/branches/main` (`.commit.sha`)
+and requires the release sha to equal that branch's current head. It requires
+exactly one associated merged PR targeting `main`, with `merge_commit_sha`
+equal to the release sha and a head tree matching the released tree, then
+reads that head's full contexts through the statuses API. PRs targeting other
+bases or naming a different merge commit are ignored; malformed fields refuse.
+Zero matches refuse; multiple matches refuse and name every matching PR, with
+no preference for the newest.
+
+Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
+`scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
+receipt reader, the cut-over is the watcher's **first recorded main sha**,
+fixed in that constant by a reviewed PR. The release job cannot configure it
+through an environment variable or workflow input. At that sha and every
+descendant, the guard requires a main-proof receipt for the **exact main
+sha** with both full contexts green and does not consult PR heads. Missing,
+unreadable or non-green receipts refuse, with no transitional fallback.
+Commits preceding the cut-over retain phase 1; unknown ancestry refuses.
+The reader seam defines normalized context states, not a receipt storage format.
+
+Every API call is a read using the release job's own App token. Rate limits
+and upstream 5xx responses refuse immediately, naming the failure, without
+sleeping or retrying; empty or unparseable evidence also refuses. An empty JSON
+array is a valid list response; each caller refuses if its required PR or
+context evidence is absent. An empty single-object payload still refuses.
+
+Prebuilt jobs build the commit sha emitted after the release job's atomic
+push, and assert that the release tag still resolves to that sha before
+building. A missing or malformed sha or a changed tag fails the job. Dry runs
+build `github.sha` and skip the tag assertion because no tag exists. A
+separate tag ruleset forbids updates and deletion of `v*` tags; see "Release
+tag immutability and recovery" below.
+
+#### Release tag immutability and recovery
+
+Release tags `v*` are protected by active GitHub ruleset `25591564`
+(`release tags immutable (v*)`), with `update` and `deletion` rules and no
+bypass actors. Creating a new `v*` tag is still allowed, so the workflow's
+annotated-tag push is unchanged. Moving or deleting an existing `v*` tag is
+refused for every workflow, script and token.
+
+Any recovery that requires deleting or moving a `v*` tag now requires a
+human administrator to explicitly edit ruleset `25591564`; nothing in this
+repository may assume it can re-tag. The workflow's
+["Refuse if tag already exists" step in `release.yml`](../.github/workflows/release.yml#L140)
+also refuses an existing tag before creating one.
+
+#### Allowed status creators
+
+In phase 1, the newest statuses API row for each full context must have a
+`creator.login` and `creator.type` pair in `ALLOWED_STATUS_CREATORS` in
+`scripts/ci_release_gate.py`. Missing or malformed creators and every other
+identity refuse, even when an older row from an allowed creator succeeded.
+
+| Login | Type | Confirmed producer |
+| --- | --- | --- |
+| `luisleo526` | `User` | The operator PAT that posts `pineforge/verify` / `pineforge/parity` via `lab verify record` / `lab verify parity`. |
+
+Adding a creator is a code change reviewed like any other.
