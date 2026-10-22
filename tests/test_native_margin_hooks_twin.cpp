@@ -130,10 +130,12 @@ struct TvAdapterHost final : source::PineStrategyHost {
     Trade row(int index) const { return get_trade(index); }
     double level() const { return margin_liquidation_price(); }
     double position() const { return physical_position().signed_units; }
-    std::vector<const Trade*> margin_rows() const {
-        std::vector<const Trade*> out;
+    // get_trade() returns an owning row value: keep copies, never addresses.
+    std::vector<Trade> margin_rows() const {
+        std::vector<Trade> out;
         for (int i = 0; i < trade_count(); ++i) {
-            if (get_trade(i).exit_comment == "Margin call") out.push_back(&get_trade(i));
+            Trade row = get_trade(i);
+            if (row.exit_comment == "Margin call") out.push_back(std::move(row));
         }
         return out;
     }
@@ -290,7 +292,7 @@ std::vector<Slice> native_slices(const Host& host) {
 }
 std::vector<Slice> adapter_slices(const TvAdapterHost& host) {
     std::vector<Slice> out;
-    for (const auto* row : host.margin_rows()) out.push_back({row->qty, row->exit_price});
+    for (const auto& row : host.margin_rows()) out.push_back({row.qty, row.exit_price});
     return out;
 }
 
