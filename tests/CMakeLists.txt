@@ -1,26 +1,3 @@
-set(_o1s3_row 0)
-foreach(_o1s3_case IN ITEMS
-    s3_separate_journal_owners_and_reset_red
-    s3_native_codec_all_values_cross_page_red
-    s3_admission_codec_allocations_and_order_red
-    s3_journal_islands_fixed_under_pins_red
-    s3_native_window_dependency_frontier_red
-    s3_admission_window_requires_closed_prefix_red
-    s3_native_digest_survives_nonzero_base_red
-    s3_admission_digest_refuses_zero_refold_red
-    s34_readback_never_collects_population_red
-    s34_backing_physical_charge_and_lifetime_red)
-    math(EXPR _o1s3_row "${_o1s3_row} + 1")
-    add_executable(${_o1s3_case} test_o1s3_journal_red.cpp)
-    target_link_libraries(${_o1s3_case} PRIVATE pineforge)
-    target_compile_features(${_o1s3_case} PRIVATE cxx_std_17)
-    target_compile_definitions(${_o1s3_case} PRIVATE PINEFORGE_O1S3_CLAUSE=${_o1s3_row})
-    target_compile_options(${_o1s3_case} PRIVATE -ffp-contract=off -UNDEBUG)
-    add_test(NAME ${_o1s3_case} COMMAND ${_o1s3_case} ${_o1s3_case})
-endforeach()
-unset(_o1s3_case)
-unset(_o1s3_row)
-
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     add_library(native_live_equivalence_observer OBJECT native_live_equivalence_observer.cpp)
     target_link_libraries(native_live_equivalence_observer PRIVATE pineforge)
@@ -7149,6 +7126,34 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     pineforge_add_unit_test(test_heap_census_unique_ids)
     target_link_libraries(test_heap_census_unique_ids PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(test_heap_census_unique_ids PROPERTIES ENABLE_EXPORTS ON)
+endif()
+
+# O(1) seam 3 journal-codec red clauses: ten executables over one test file, one clause each.
+# They link the source layer (pine_adapter.hpp, pine_command_scratch_production.hpp), so a
+# kernel-only configure must not create them.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    set(_o1s3_row 0)
+    foreach(_o1s3_case IN ITEMS
+        s3_separate_journal_owners_and_reset_red
+        s3_native_codec_all_values_cross_page_red
+        s3_admission_codec_allocations_and_order_red
+        s3_journal_islands_fixed_under_pins_red
+        s3_native_window_dependency_frontier_red
+        s3_admission_window_requires_closed_prefix_red
+        s3_native_digest_survives_nonzero_base_red
+        s3_admission_digest_refuses_zero_refold_red
+        s34_readback_never_collects_population_red
+        s34_backing_physical_charge_and_lifetime_red)
+        math(EXPR _o1s3_row "${_o1s3_row} + 1")
+        add_executable(${_o1s3_case} test_o1s3_journal_red.cpp)
+        target_link_libraries(${_o1s3_case} PRIVATE pineforge)
+        target_compile_features(${_o1s3_case} PRIVATE cxx_std_17)
+        target_compile_definitions(${_o1s3_case} PRIVATE PINEFORGE_O1S3_CLAUSE=${_o1s3_row})
+        target_compile_options(${_o1s3_case} PRIVATE -ffp-contract=off -UNDEBUG)
+        add_test(NAME ${_o1s3_case} COMMAND ${_o1s3_case} ${_o1s3_case})
+    endforeach()
+    unset(_o1s3_case)
+    unset(_o1s3_row)
 endif()
 
 add_test(NAME test_cr150_cmake_d COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/check_cr150_cmake_d.py)
