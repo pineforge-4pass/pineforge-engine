@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
+#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -197,6 +199,27 @@ void record_bytes(std::size_t) {
     peak_bytes = std::max(peak_bytes, global_allocation::live_bytes);
 }
 
+std::size_t reserve_bytes(no::WorkingRequestCore& core, std::size_t expected_events) {
+    struct RestoreRecorder {
+        const bool recording = global_allocation::recording;
+        const std::size_t live = global_allocation::live_bytes;
+        const std::size_t peak = peak_bytes;
+        void (*const callback)(std::size_t) = global_allocation::on_recorded;
+        ~RestoreRecorder() {
+            global_allocation::recording = recording;
+            global_allocation::live_bytes = live;
+            global_allocation::on_recorded = callback;
+            peak_bytes = peak;
+        }
+    } restore;
+    const auto before = global_allocation::live_bytes;
+    peak_bytes = before;
+    global_allocation::on_recorded = record_bytes;
+    global_allocation::recording = true;
+    core.reserve(expected_events);
+    return peak_bytes - before;
+}
+
 struct Host final : NativeStrategyHost {
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
     NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
@@ -204,13 +227,30 @@ struct Host final : NativeStrategyHost {
 
 enum class Shape { Wide, Deep, Tree, ManySeeds };
 
-Probe::Seeds populate(NativeExecutionConsumer& consumer, std::size_t population, Shape shape) {
+// Mirrors JournalStore's private constants; the event value itself is public.
+constexpr std::size_t kJournalMaxResident = 16384;
+constexpr std::size_t kJournalChunk = 32;
+constexpr std::size_t kDrainBytes = 4096;
+
+void print_reserve(std::size_t population, Shape shape, bool direct, std::size_t reserve_peak) {
+    std::printf("X08 reserve population=%zu shape=%d direct=%d reserve_peak=%zu "
+                "event_bytes=%zu slot_bytes=%zu cap_slot_bytes=%zu chunk_pointer_bytes=%zu\n",
+                population, static_cast<int>(shape), direct, reserve_peak,
+                sizeof(no::CommandEvent), sizeof(std::optional<no::CommandEvent>),
+                kJournalMaxResident * sizeof(std::optional<no::CommandEvent>),
+                (kJournalMaxResident / kJournalChunk + 4) * sizeof(std::unique_ptr<std::byte>));
+}
+
+Probe::Seeds populate(NativeExecutionConsumer& consumer, std::size_t population, Shape shape,
+                      std::size_t* reserve_peak = nullptr) {
     auto& core = Probe::core(consumer);
     core.reset(no::RunIdentity{"x08-scratch", 1});
     const auto root_count = shape == Shape::ManySeeds ? population : 2;
     // Retained command output is not queue scratch. Allocate it before the
     // measured drain so the census charges only the drain and one mutation.
-    core.reserve(2 * population + 2 * root_count + 64);
+    const auto expected_events = 2 * population + 2 * root_count + 64;
+    if (reserve_peak) *reserve_peak = reserve_bytes(core, expected_events);
+    else core.reserve(expected_events);
     std::uint64_t incarnation = 1;
     std::uint64_t ordinal = 1;
     std::vector<no::RequestHandle> roots;
@@ -287,7 +327,9 @@ void exercise(std::size_t population, Shape shape, bool direct) {
 #ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
     consumer.set_dependency_scratch(scratch.store);
 #endif
-    const auto seeds = populate(consumer, population, shape);
+    std::size_t reserve_peak = 0;
+    const auto seeds = populate(consumer, population, shape, &reserve_peak);
+    print_reserve(population, shape, direct, reserve_peak);
     const auto reference_seeds = populate(oracle, population, shape);
     CHECK(!seeds.empty());
     CHECK(!reference_seeds.empty());
@@ -353,7 +395,6 @@ void exercise(std::size_t population, Shape shape, bool direct) {
     CHECK(consumer.continuation_hash() == oracle.continuation_hash());
     // No population-scaled allowance: this includes the peak live bytes of
     // the prepared mutation when direct mutation is disabled.
-    constexpr std::size_t kDrainBytes = 4096;
     CHECK(peak_bytes <= kDrainBytes);
     std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",
                 population, static_cast<int>(shape), direct, peak_bytes, kDrainBytes);
@@ -369,6 +410,88 @@ void exercise(std::size_t population, Shape shape, bool direct) {
     CHECK(Probe::stats(consumer).book_rows == 0);
     CHECK(Probe::stats(consumer).queued_rows == 0);
 #endif
+}
+
+std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
+    // Wide needs only two roots and tests the same journal capacity as Deep
+    // and Tree. Avoid the oracle's per-child book scans at these populations.
+    constexpr auto shape = Shape::Wide;
+    constexpr std::size_t root_count = 2;
+    CHECK(2 * population + 2 * root_count + 64 > kJournalMaxResident);
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    ScratchFixture scratch;
+    CHECK(scratch.store.status() == detail::ScratchStatus::ok);
+    const auto scratch_digest = scratch.digest();
+#endif
+    Host actual;
+    auto& consumer = actual.consumer();
+    consumer.set_direct_mutation(direct);
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    consumer.set_dependency_scratch(scratch.store);
+#endif
+    std::size_t reserve_peak = 0;
+    const auto seeds = populate(consumer, population, shape, &reserve_peak);
+    print_reserve(population, shape, direct, reserve_peak);
+    CHECK(reserve_peak >= kJournalMaxResident * sizeof(std::optional<no::CommandEvent>));
+    CHECK(!seeds.empty());
+    if (seeds.empty()) return reserve_peak;
+    const auto before = consumer.request_core().history_end();
+    // One acceptance per child/root, one re-price and two root cancellations.
+    // Cross the actual retained-event limit too, rather than just reserving it.
+    CHECK(before == population + root_count + 1 + root_count);
+    CHECK(before + population > kJournalMaxResident);
+
+    // Reserve's marked chunks are recycled through JournalStore::spare during
+    // these one-event appends, not freed against this separate recording window.
+    peak_bytes = 0;
+    global_allocation::live_bytes = 0;
+    global_allocation::on_recorded = record_bytes;
+    global_allocation::recording = true;
+    Probe::drain(consumer, actual, seeds);
+    global_allocation::recording = false;
+    global_allocation::on_recorded = nullptr;
+    CHECK(peak_bytes <= kDrainBytes);
+    std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",
+                population, static_cast<int>(shape), direct, peak_bytes, kDrainBytes);
+
+    CHECK(!Probe::failed(consumer));
+    CHECK(consumer.request_core().live().empty());
+    CHECK(consumer.request_core().history_end() - before == population);
+    std::size_t drained = 0;
+    for (std::size_t index = before; index < consumer.request_core().history_end(); ++index) {
+        const auto* row = std::get_if<no::CancelledEvent>(
+            &consumer.request_core().history_at(index));
+        CHECK(row && row->reason == no::CancelReason::OwnerGone && row->cause);
+        if (row) ++drained;
+    }
+    CHECK(drained == population);
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    scratch.check_empty();
+    CHECK(scratch.digest() == scratch_digest);
+    const auto census = Probe::stats(consumer);
+    CHECK(census.book_rows == population && census.waiting_rows == population);
+    CHECK(census.seed_rows == seeds.size());
+    CHECK(census.popped_rows >= population && census.popped_rows == census.queued_rows);
+    CHECK(census.edge_rows >= population);
+    CHECK(census.edge_rows <= 3 * population + seeds.size());
+    CHECK(census.lookups <= census.edge_rows + census.queued_rows + population + seeds.size() + 1);
+    std::size_t levels = 0;
+    for (auto count = population + census.queued_rows; count; count >>= 1) ++levels;
+    CHECK(census.max_lookup_reads <= 16 * (levels + 1));
+#endif
+    const auto finished_hash = consumer.continuation_hash();
+    const auto finished_history = consumer.request_core().history_end();
+    Probe::drain(consumer, actual, seeds);
+    CHECK(!Probe::failed(consumer));
+    CHECK(consumer.continuation_hash() == finished_hash);
+    CHECK(consumer.request_core().history_end() == finished_history);
+#ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+    scratch.check_empty();
+    CHECK(scratch.digest() == scratch_digest);
+    CHECK(Probe::stats(consumer).book_rows == 0);
+    CHECK(Probe::stats(consumer).queued_rows == 0);
+#endif
+    return reserve_peak;
 }
 
 void invalid_cause(bool direct) {
@@ -412,6 +535,13 @@ int main() {
         exercise(512, Shape::Tree, direct);
         exercise(64, Shape::ManySeeds, direct);
         exercise(512, Shape::ManySeeds, direct);
+        // The smallest adjacent populations whose 2*N + 5 actual events spill;
+        // their reserve requests are 16448 and 16450, both above 16384.
+        // Without the cap, these requests need different numbers of chunks.
+        const auto reserve_peak_at_cap = exercise_beyond_cap(8190, direct);
+        const auto reserve_peak_beyond_cap = exercise_beyond_cap(8191, direct);
+        CHECK(reserve_peak_at_cap > 0);
+        CHECK(reserve_peak_at_cap == reserve_peak_beyond_cap);
         invalid_cause(direct);
     }
     std::printf("%s X08 parent-terminal scratch (%d failures)\n",
