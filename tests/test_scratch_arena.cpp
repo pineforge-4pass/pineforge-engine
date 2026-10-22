@@ -1140,8 +1140,7 @@ void finalizer_epipe(ScratchArenaBackend backend) {
     int descriptors[2]{};
     require(::pipe(descriptors) == 0, "create finalizer pipe");
     Backing reader(descriptors[0], 0), writer_fd(descriptors[1], 0);
-    const auto path = std::string("/proc/self/fd/") + std::to_string(writer_fd.fd);
-    const pf_report_sink_v1 descriptor{sizeof(pf_report_sink_v1), 1, path.c_str(), "", "."};
+    const pf_report_sink_fd_v1 descriptor{sizeof(pf_report_sink_fd_v1), 1, writer_fd.fd, ""};
     pineforge::report_sink::LineWriter writer(descriptor);
     writer.write_header({false, false, false, 0, 0}); // Buffered until the trailer flush.
     require(::close(std::exchange(reader.fd, -1)) == 0, "close pipe reader before finalization");
