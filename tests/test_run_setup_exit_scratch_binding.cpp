@@ -147,6 +147,30 @@ std::size_t command_scratch_descriptor_count(const DescriptorSnapshot& descripto
         }));
 }
 
+bool descriptors_match_with_trade_ledger(const DescriptorSnapshot& before,
+                                         const DescriptorSnapshot& after) {
+    for (const auto& descriptor : before) {
+        if (std::find(after.begin(), after.end(), descriptor) == after.end())
+            return false;
+    }
+    bool extra_index = false;
+    bool extra_payload = false;
+    for (const auto& descriptor : after) {
+        if (std::find(before.begin(), before.end(), descriptor) != before.end())
+            continue;
+        if (descriptor_has_prefix(descriptor.second, "pineforge-trade-index-")) {
+            if (extra_index) return false;
+            extra_index = true;
+        } else if (descriptor_has_prefix(descriptor.second, "pineforge-trade-payload-")) {
+            if (extra_payload) return false;
+            extra_payload = true;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 const char* descriptor_kind(const std::string& target) {
     if (descriptor_has_prefix(target, "pineforge-command-")) return "command scratch";
     if (descriptor_has_prefix(target, "pineforge-trade-index-")) return "trade ledger index";
@@ -306,8 +330,8 @@ void run_owner_reversal_without_adapter_starts_each_run_empty() {
             "run completion clears the dependency borrower");
     const auto after_first = snapshot_descriptors(open_descriptors());
     report_descriptor_changes(before, after_first, "run completion");
-    // The live host retains its trade ledger; command workspaces must close.
-    require(command_scratch_descriptor_count(after_first) == before_command_files,
+    // Only one extra trade index and one extra payload may remain open.
+    require(descriptors_match_with_trade_ledger(before, after_first),
             "run completion releases command scratch backing files");
     const auto first_events = host.native_events(0).size();
     const auto first_hash = host.native_continuation_hash();
@@ -340,7 +364,7 @@ void run_owner_reversal_without_adapter_starts_each_run_empty() {
             "restart completion leaves no dangling dependency borrower");
     const auto after_restart = snapshot_descriptors(open_descriptors());
     report_descriptor_changes(before, after_restart, "restart completion");
-    require(command_scratch_descriptor_count(after_restart) == before_command_files,
+    require(descriptors_match_with_trade_ledger(before, after_restart),
             "restart releases every command scratch backing file");
 }
 
