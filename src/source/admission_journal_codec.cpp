@@ -155,21 +155,33 @@ template<class A> struct Schema {
         field(p,"cursor_index",index); field(p,"cursor_count",count);
         field(p,"cursor_price",price); field(p,"first_fill",first);
         field(p,"last_fill",last); field(p,"evaluation_ordinal",ordinal);
-        if constexpr (A::loading && A::owning) {
-            if (!a.good()) return;
+        if constexpr (A::loading) {
+            if constexpr (A::owning) {
+                if (!a.good()) return;
+            }
             switch (cause) {
-            case OrderBirthCause::Unattributed: value = OrderBirth{}; break;
-            case OrderBirthCause::DirectCommand: value = OrderBirth::direct_command(bar,timestamp); break;
-            case OrderBirthCause::ChartEvaluation: value = OrderBirth::chart_evaluation(bar,timestamp); break;
+            case OrderBirthCause::Unattributed:
+                if constexpr (A::owning) value = OrderBirth{};
+                break;
+            case OrderBirthCause::DirectCommand:
+                if constexpr (A::owning) value = OrderBirth::direct_command(bar,timestamp);
+                break;
+            case OrderBirthCause::ChartEvaluation:
+                if constexpr (A::owning) value = OrderBirth::chart_evaluation(bar,timestamp);
+                break;
             case OrderBirthCause::FillEvaluation: {
-                const auto cursor = position == BirthCursorPosition::Point
-                    ? BirthCursor::point(domain,index,count) : BirthCursor::segment(domain,index,count);
-                value = OrderBirth::fill_evaluation(bar,timestamp,cursor,price,first,last,ordinal);
+                if constexpr (A::owning) {
+                    const auto cursor = position == BirthCursorPosition::Point
+                        ? BirthCursor::point(domain,index,count) : BirthCursor::segment(domain,index,count);
+                    value = OrderBirth::fill_evaluation(bar,timestamp,cursor,price,first,last,ordinal);
+                }
                 break;
             }
             default:
-                throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
-                                                   "invalid admission birth");
+                if constexpr (A::owning)
+                    throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
+                                                       "invalid admission birth");
+                else a.in.status = Status::corrupt;
             }
         }
     }
