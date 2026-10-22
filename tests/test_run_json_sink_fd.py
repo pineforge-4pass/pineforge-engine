@@ -286,13 +286,31 @@ def forbid_report_files():
                      "TemporaryDirectory", "mkdtemp"):
             stack.enter_context(mock.patch.object(run_json.tempfile, name, forbidden))
         for name in ("_ReportSink", "_TemporaryReportSink", "_json_temporary",
-                     "_JSONColumn", "_prepare_stream_report"):
+                     "_prepare_stream_report"):
             stack.enter_context(mock.patch.object(run_json, name, forbidden))
+        # The serializer uses this class as an isinstance target on every
+        # value. Forbid construction without replacing the type itself.
+        stack.enter_context(mock.patch.object(run_json._JSONColumn, "__init__", forbidden))
         stack.enter_context(mock.patch.object(pf_sink, "SinkReader", forbidden))
         stack.enter_context(mock.patch.object(builtins, "open", read_only_open))
         stack.enter_context(mock.patch.object(io, "open", read_only_open))
         stack.enter_context(mock.patch.object(os, "open", read_only_os_open))
         yield
+
+
+@pytest.mark.parametrize("profile", ["unjailed", "jailed"])
+def test_fd_file_guard_allows_serialization_and_refuses_columns(profile):
+    rows = [{"value": -0.0}, {"value": 'quote"\n漢'}]
+    document = {"rows": run_json._JSONRecordArray(lambda: iter(rows), len(rows))}
+    args = argparse.Namespace(profile=profile, spill_dir=None)
+    with forbid_report_files(), contextlib.ExitStack() as resources:
+        buffer = run_json._prepare_report_json(
+            document, resources, args, types.SimpleNamespace(fd_mode=True))
+        assert buffer.read() == json.dumps(
+            {"rows": rows}, separators=(",", ":"), allow_nan=False) + "\n"
+        with pytest.raises(AssertionError, match="report tempfile or sink read-back"):
+            run_json._JSONColumn(resources, None)
+    assert buffer.closed
 
 
 class Stream:
@@ -849,7 +867,8 @@ def test_native_fd_fsize_zero_without_arena_refuses_before_file_operations(tmp_p
         failure = json.loads(actual[1])
         assert (failure["code"], failure["args"]) == (
             "report_sink_failed", {"reason": "arena_backing"})
-        assert set(failure) == {"engine", "error", "code", "args"}
+        assert set(failure) == {"engine", "error", "code", "args", "reason"}
+        assert failure["reason"] == failure["args"]["reason"]
         assert len(actual[1].splitlines()) == 1 and "summary" not in failure
         assert actual[3] == b"" and snapshot(work, temporary) == before
         refused = child_run(source, [*extra, "--report-sink", str(work / "bad.sink")],
