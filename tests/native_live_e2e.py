@@ -17,6 +17,8 @@ import threading
 import base64
 import struct
 
+from native_live_receipts import receipts_by_sequence
+
 runner, library = sys.argv[1:]
 received = []
 responses = []
@@ -26,7 +28,8 @@ stream_messages = []
 
 
 def ordered_receipts():
-    return sorted(received, key=lambda event: event['sequence'])
+    indexed = receipts_by_sequence(received)
+    return [indexed[sequence] for sequence in sorted(indexed)]
 
 
 class Receiver(BaseHTTPRequestHandler):
@@ -157,16 +160,21 @@ try:
         options = ['--mode', 'bars', '--feed', str(feed), '--ledger', str(ledger)]
         invoke(options+['--max-attempts', '1'])
         assert len(received) == 4
-        first = received[0]
+        original = receipts_by_sequence(received)
         invoke(options)
         assert len(received) == 4
         with sqlite3.connect(ledger) as db:
             deployment = db.execute('SELECT identity FROM metadata WHERE singleton=1').fetchone()[0]
+            failed = receipts_by_sequence(json.loads(row[0]) for row in
+                db.execute('SELECT payload FROM events WHERE acknowledged=0'))
+        assert len(failed) == 1
+        assert failed == {sequence: original[sequence] for sequence in failed}
         retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--deployment', deployment,
                                 '--target', 'default', '--failed-only'],
                                capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret))
         assert retry.returncode == 0, retry.stderr
-        assert received[4] == first
+        assert len(received) == 5
+        assert receipts_by_sequence(received[4:]) == failed
         assert len({e['event_id'] for e in received}) == 4
 
         # Redirect refusal is permanent and does not stop later actions.
@@ -189,16 +197,22 @@ try:
         with sqlite3.connect(ledger) as db:
             assert db.execute('SELECT COUNT(*) FROM inputs').fetchone()[0] == 1
             assert db.execute('SELECT COUNT(*) FROM events').fetchone()[0] == 4
-        first = received[0]
+        assert len(received) == 4
+        original = receipts_by_sequence(received)
         invoke(options)
         assert len(received) == 4 and len({e['event_id'] for e in received}) == 4
         with sqlite3.connect(ledger) as db:
             deployment = db.execute('SELECT identity FROM metadata WHERE singleton=1').fetchone()[0]
+            failed = receipts_by_sequence(json.loads(row[0]) for row in
+                db.execute('SELECT payload FROM events WHERE acknowledged=0'))
+        assert len(failed) == 1
+        assert failed == {sequence: original[sequence] for sequence in failed}
         retry = subprocess.run([runner, 'redeliver', '--ledger', str(ledger), '--deployment', deployment,
                                 '--target', 'default', '--failed-only'],
                                capture_output=True, text=True, env=dict(os.environ, PINEFORGE_TEST_HMAC=secret))
         assert retry.returncode == 0, retry.stderr
-        assert received[4] == first
+        assert len(received) == 5
+        assert receipts_by_sequence(received[4:]) == failed
 
         # A later invalid event in a batch must not commit any of the message.
         received.clear()
