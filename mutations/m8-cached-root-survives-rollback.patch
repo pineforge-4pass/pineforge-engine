@@ -1,0 +1,15 @@
+Expected red: cohort_unit_rollback (reattach trusts a cached newer-generation root after rollback).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -155,4 +155,9 @@
+ inline CohortUnitOwner::Descriptor CohortUnitOwner::descriptor(std::uint64_t cohort) const {
+     check_attached();
+-    return load_descriptor(load_header().table_epoch, cohort);
++    const auto fresh = load_descriptor(load_header().table_epoch, cohort);
++    static Descriptor cached;
++    if (fresh.cohort == cached.cohort && fresh.unit_epoch < cached.unit_epoch)
++        return cached;
++    cached = fresh;
++    return fresh;
+ }

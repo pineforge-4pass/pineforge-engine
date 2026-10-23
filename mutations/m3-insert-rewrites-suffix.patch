@@ -1,0 +1,14 @@
+Expected red: cohort_unit_cost (insert-absent growth exceeds the log-squared ratio).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -369,4 +369,9 @@
+     d.unit_count = count;
++    for (auto suffix = n.next; suffix;) {
++        auto successor = load_node(suffix, d);
++        suffix = successor.next;
++        save_node(successor);
++    }
+     balance(d, parent);
+     return true;
+ }

@@ -7255,6 +7255,18 @@ if(UNIX)
 endif()
 
 # LAB-o1s4 E3: pure arithmetic gate, intentionally no engine link dependency.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_cohort_unit_owner)
+    pineforge_add_unit_test(test_cohort_unit_owner)
+    target_compile_features(test_cohort_unit_owner PRIVATE cxx_std_17)
+    foreach(_pf_unit_owner_case IN ITEMS
+            differential order_bits stable_erase direct_iteration slots refusal directory
+            bootstrap rollback fault reopen reclaim cost)
+        add_test(NAME cohort_unit_${_pf_unit_owner_case}
+            COMMAND test_cohort_unit_owner cohort_unit_${_pf_unit_owner_case})
+    endforeach()
+endif()
+
 list(APPEND TEST_SOURCES test_cohort_exposure_bits)
 add_executable(test_cohort_exposure_bits test_cohort_exposure_bits.cpp)
 target_compile_features(test_cohort_exposure_bits PRIVATE cxx_std_17)

@@ -1,0 +1,16 @@
+Expected red: cohort_unit_order_bits (unsigned incarnation order differs from reversed-byte order).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -349,4 +349,10 @@
+         parent = cursor;
+-        left_child = incarnation < n.incarnation;
++        const auto internal_key = [](std::uint64_t x) {
++            std::uint64_t reversed = 0;
++            for (unsigned byte = 0; byte < 8; ++byte)
++                reversed = (reversed << 8) | ((x >> (byte * 8)) & 255U);
++            return reversed;
++        };
++        left_child = internal_key(incarnation) < internal_key(n.incarnation);
+         if (left_child) { next = cursor; cursor = n.left; }
+         else { previous = cursor; cursor = n.right; }

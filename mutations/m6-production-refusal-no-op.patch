@@ -1,0 +1,11 @@
+Expected red: cohort_unit_refusal (production second append no longer throws).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -531,5 +531,5 @@
+     const auto old = load_slot(d, incarnation);
+-    if (!fixture && (old.count || h.duplicate_slots))
++    if (!fixture && (old.count || h.duplicate_slots) && false)
+         throw ExposureOwnerFailure(ExposureOwnerError::duplicate_origin_incarnation,
+                                    d.cohort, incarnation, old.count, position);
+     const auto count = increment(old.count);

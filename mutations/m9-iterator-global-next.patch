@@ -1,0 +1,14 @@
+Expected red: cohort_unit_direct_iteration (reverse global key order differs from direct unit links).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -671,5 +671,8 @@
+     refresh();
+-    id_ = next_; // Direct unit link; never ScratchStore::next.
++    Handle next = 0;
++    const auto status = owner_->store_->next(id_, next);
++    if (status != Status::end) cohort_unit_detail::ws::check(status);
++    id_ = status == Status::end ? 0 : next;
+     if (id_) {
+         const auto n = owner_->load_node(id_, table_epoch_, cohort_, unit_epoch_);
+         next_ = n.next; bits_ = n.bits; row_.first = n.incarnation;
