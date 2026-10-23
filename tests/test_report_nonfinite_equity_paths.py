@@ -351,3 +351,15 @@ def test_fd_sink_native_nonfinite(tmp_path, native_writer, field, bad):
         assert diagnostic["args"] == {
             "field": "equity_curve." + field, "reason": "nonfinite",
         }, evidence
+
+
+def test_report_schema_documents_e_descriptor():
+    document = (ROOT / "docs/pages/report-schema.md").read_text(encoding="utf-8")
+    paragraph = " ".join(document.split("For path and fd report sinks,", 1)[1]
+                         .split("\n\n", 1)[0].split())
+    for clause in (
+            "v1 E descriptor keeps the nullable `f64?`",
+            "byte compatibility",
+            "writer never emits `null` for E",
+            "converter and finalizer refuse a null E with exit 3 `report_result_invalid`"):
+        assert clause in paragraph
