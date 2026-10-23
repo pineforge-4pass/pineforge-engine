@@ -152,7 +152,7 @@ exact engine and codegen HEADs for baseline promotion.
 Merged single-axis PRs advance the campaign baseline automatically through
 `.github/workflows/promote-baseline.yml`, installed from the private
 pineforge-workflow repository's `campaign/ci/promote-baseline.yml`. `main`'s own copy runs
-on the closed PR (`pull_request_target`) and runs no PR code. It promotes only
+on a `push` to `main` (it resolves the merged PR from the pushed commit) and runs no PR code. It promotes only
 when the merge commit on `main` carries the gated PR head's tree (PRs are
 squash-merged, so the head itself never lands on `main`), both required
 statuses are success on that head, and the maintainers' private campaign tool finds the merge gate's
