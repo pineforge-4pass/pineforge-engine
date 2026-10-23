@@ -377,6 +377,19 @@ void ScratchArena::attach_from_environment() {
         arena_error(EINVAL, "scratch arena environment fd", "arena_backing");
     const auto bytes = decimal(std::getenv("PF_SCRATCH_ARENA_BYTES"),
                                "scratch arena environment bytes");
+    const char* profile = std::getenv("PF_SCRATCH_ARENA_JAILED");
+    const bool jailed = profile && std::strcmp(profile, "1") == 0;
+    if (profile && !jailed && std::strcmp(profile, "0") != 0)
+        arena_error(EINVAL, "scratch arena seals (jailed)", "arena_backing");
+    if (jailed) {
+        // A live attachment retains its backing even if fd 5 was rebound.
+        // Check that backend before attach's idempotent no-op.
+        const auto backend = singleton_
+            ? singleton_->impl_->counters.backend
+            : validate_backing(kInheritedFd, bytes);
+        if (backend != ScratchArenaBackend::sealed_memfd)
+            arena_error(EINVAL, "scratch arena seals (jailed)", "arena_backing");
+    }
     attach(kInheritedFd, bytes);
 }
 

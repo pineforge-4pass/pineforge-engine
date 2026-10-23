@@ -74,6 +74,8 @@ class ScratchFile;
 // S_ISREG and exactly the supplied size. On Linux, F_GET_SEALS returning
 // exactly SEAL (sealing disabled) or EINVAL selects a regular file;
 // GROW|SHRINK|SEAL selects sealed_memfd. All other seal masks are refused.
+// Environment attachment with PF_SCRATCH_ARENA_JAILED=1 additionally requires
+// sealed_memfd; direct attach(fd, bytes) keeps the backing rules above.
 // The wrapper preallocates regular files in a root-owned 0700 directory,
 // mode 0600, and passes O_RDWR. New mappings and short preads recheck size.
 // The one unrecoverable case is SIGBUS after a concurrent shrink invalidates
@@ -111,6 +113,9 @@ public:
 
     // No PF_SCRATCH_ARENA_FD => no-op (even if the size variable is present).
     // Otherwise require FD=5 and a positive decimal PF_SCRATCH_ARENA_BYTES.
+    // PF_SCRATCH_ARENA_JAILED: exactly "1" requires sealed_memfd, unset or
+    // exactly "0" keeps the regular-file path; all other values are refused.
+    // The jailed requirement also applies to an existing attachment.
     // attach also reads PF_SCRATCH_WINDOW_BYTES: a total mapping cap, default
     // 32 MiB, rounded down to whole pages; less than one page is refused.
     static void attach_from_environment();

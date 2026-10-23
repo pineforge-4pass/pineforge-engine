@@ -162,6 +162,17 @@ execution and no TMPDIR fallback. `--spill-dir` is refused in this profile;
 `--report-sink-fd 5` is refused in every profile because 5 is the engine's
 fixed arena slot. The wrapper must charge the arena as well as the table slab.
 
+The host sets `PF_SCRATCH_ARENA_JAILED=1` for jailed arena attachment. Only
+exactly `"1"` enables this requirement; unset or exactly `"0"` preserves
+the unjailed backing rules, and every other value (including an empty string)
+is refused as a malformed profile. A jailed arena must be a sealed memfd
+with at least `F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`; ordinary files,
+sealing-disabled memfds and unsupported seals queries are refused before
+arena setup, store opening or execution with typed `ReportScratchIoError`
+(`report_sink_failed` / `arena_backing`, `EINVAL`). With no
+`PF_SCRATCH_ARENA_FD`, attachment remains a no-op; direct `attach(fd, bytes)`
+keeps its unjailed meaning.
+
 The setter is an optional ctypes binding for old libraries in the unjailed
 profile. In the jailed profile, an absent setter refuses before execution as
 `strategy_library_incompatible` with `{"reason":"setter_missing"}`. The
