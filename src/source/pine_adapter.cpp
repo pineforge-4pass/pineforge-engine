@@ -85,6 +85,17 @@
 #define PF_RARE(condition) __builtin_expect(static_cast<bool>(condition), 0)
 
 namespace pineforge::source {
+#ifdef PINEFORGE_CR277_DIAGNOSTIC
+namespace {
+// Process totals: 0 = close(""), 1 = close_all(). Each counted push below
+// transfers an already-pending, same-callback entry with that source id.
+std::atomic<std::uint64_t> cr277_pending_close_pushes[2]{};
+}
+extern "C" std::uint64_t pineforge_cr277_diagnostic_hits(int site) noexcept {
+    return site >= 0 && site < 2
+        ? cr277_pending_close_pushes[site].load(std::memory_order_relaxed) : 0;
+}
+#endif
 #ifdef PINEFORGE_VALUE_INVALID_FIXTURES
 namespace {
 thread_local double (*adapter_execution_value_fixture)(const char*, double) = nullptr;
@@ -10274,7 +10285,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                         : native_order::OrderIntent{native_order::Transact{target}};
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
-                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
+                    const SourceId replacement_key = entry_snapshot.source_id;
+                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), replacement_key});
+#ifdef PINEFORGE_CR277_DIAGNOSTIC
+                    cr277_pending_close_pushes[0].fetch_add(1, std::memory_order_relaxed);
+#endif
                 }
             }
             for (auto it = pending_same_bar_commands_.begin(); it != pending_same_bar_commands_.end();) {
@@ -11040,7 +11055,11 @@ void PineExecutionAdapter::close_all() {
                         : native_order::OrderIntent{native_order::Transact{target}};
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
-                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
+                    const SourceId replacement_key = entry_snapshot.source_id;
+                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), replacement_key});
+#ifdef PINEFORGE_CR277_DIAGNOSTIC
+                    cr277_pending_close_pushes[1].fetch_add(1, std::memory_order_relaxed);
+#endif
                 }
             }
             for (auto it = pending_same_bar_commands_.begin(); it != pending_same_bar_commands_.end();) {
