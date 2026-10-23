@@ -7456,3 +7456,21 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
     set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
+
+# CR-289 step 1B: ctypes needs a test-only bridge to the hidden C++ writer.
+# Like test_report_sink_fd, this uses UNIX pipe descriptors and the configured
+# Python interpreter. Missing bridge/pytest is a failure, never a skip.
+if(UNIX)
+    add_library(report_nonfinite_equity_fd MODULE test_report_nonfinite_equity_fd.cpp)
+    target_link_libraries(report_nonfinite_equity_fd PRIVATE pineforge)
+    target_compile_options(report_nonfinite_equity_fd PRIVATE -ffp-contract=off -UNDEBUG)
+    set_target_properties(report_nonfinite_equity_fd PROPERTIES
+        PREFIX "" SUFFIX ".so"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/report_nonfinite_equity")
+    add_test(NAME test_report_nonfinite_equity_paths
+        COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider
+            ${PROJECT_SOURCE_DIR}/tests/test_report_nonfinite_equity_paths.py
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+    set_property(TEST test_report_nonfinite_equity_paths APPEND PROPERTY ENVIRONMENT
+        "PINEFORGE_REPORT_NONFINITE_EQUITY_WRITER=$<TARGET_FILE:report_nonfinite_equity_fd>")
+endif()
