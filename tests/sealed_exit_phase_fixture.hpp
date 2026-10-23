@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -17,6 +17,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 namespace sealed_exit_phase_fixture {
 using namespace pineforge;
@@ -29,23 +30,34 @@ inline void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
-// Keep the lab artifacts under the source worktree's named scratch directory.
-// No test cleanup removes them: a failed row leaves its actual sink readable.
+// Successful rows remove only their own mkdtemp directory's named sink files.
+// Keep a failed row's actual sinks available for diagnosis.
 struct Directory {
-    std::string path;
-    Directory() {
-        const auto root = std::filesystem::path(__FILE__).parent_path().parent_path()
-            / "scratch-s4e";
-        std::filesystem::create_directories(root);
-        const auto pattern = (root / "exit-phase-seal-XXXXXX").string();
+    const std::string path;
+    Directory() : path(make_path()) {
+        std::fprintf(stderr, "exit-phase artifacts: %s\n", path.c_str());
+    }
+    Directory(const Directory&) = delete;
+    Directory& operator=(const Directory&) = delete;
+    ~Directory() {
+        if (std::uncaught_exceptions() != 0) return;
+        ::unlink(file("stream.ndjson").c_str());
+        ::unlink(file("reference.ndjson").c_str());
+        ::rmdir(path.c_str());
+    }
+    std::string file(const char* name) const { return path + '/' + name; }
+
+private:
+    static std::string make_path() {
+        const char* root = std::getenv("TMPDIR");
+        const auto pattern = std::string(root && *root ? root : "/tmp")
+            + "/exit-phase-seal-XXXXXX";
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
         const char* made = ::mkdtemp(buffer.data());
         require(made != nullptr, "cannot create exit-phase scratch directory");
-        path = made;
-        std::fprintf(stderr, "exit-phase artifacts: %s\n", path.c_str());
+        return made;
     }
-    std::string file(const char* name) const { return path + '/' + name; }
 };
 
 struct Report {
@@ -65,7 +77,7 @@ struct Observation {
     std::vector<Row> rows;
 };
 
-enum class Shape { SameBar, GlobalRecut };
+enum class Shape { SameBar, SameBarNone, GlobalRecut };
 
 class Host final : public source::PineStrategyHost {
 public:
@@ -80,7 +92,7 @@ public:
         config.pyramiding = 3;
         config.commission_value = 0.0;
         config.calc_on_order_fills = false;
-        config.process_orders_on_close = false;
+        config.process_orders_on_close = shape == Shape::SameBarNone;
         config.close_entries_rule_any = false;
         configure_pine_strategy(config);
         set_trade_history_streamable(true);
@@ -92,6 +104,9 @@ public:
         return NativeExecutionConsumer::bound(*this);
     }
     std::uint8_t phase(std::size_t index) const { return adapter_.exit_phase_value(index); }
+    std::uint64_t exit_sequence(const char* id) const {
+        return adapter_.command_sequence_for_exit(id, "mixed");
+    }
 
     std::vector<Observation> observations;
     std::vector<Row> mixed_fills;
@@ -123,7 +138,7 @@ public:
         }
         if (index == 24) {
             base_before_entry = consumer().closed_trade_prefix().base;
-            if (shape_ == Shape::SameBar) {
+            if (shape_ != Shape::GlobalRecut) {
                 strategy_entry("mixed", true, missing, missing, 2.0);
             } else {
                 // Z's bucket follows A's. A's two-unit child consumes two
@@ -138,11 +153,24 @@ public:
                               missing, missing, missing, 100.0, "high first", 1.0);
                 strategy_exit("open", "mixed", 103.0, 50.0,
                               missing, missing, missing, 100.0, "gap second", 1.0);
+            } else if (shape_ == Shape::SameBarNone) {
+                // The earlier command initially rests out of reach. Its
+                // replacement retains that command's minimum sort sequence.
+                strategy_exit("calculation", "mixed", 110.0, missing,
+                              missing, missing, missing, 100.0, "close second", 1.0);
+                strategy_exit("intrabar", "mixed", 101.0, missing,
+                              missing, missing, missing, 100.0, "high first", 1.0);
             } else {
                 // Distinct entry bars make Z the oldest lot independently
                 // of any same-point market-entry ordering policy.
                 strategy_entry("A", true, missing, missing, 2.0);
             }
+        }
+        if (index == 26 && shape_ == Shape::SameBarNone) {
+            // High has filled the later command. POOC converts this reached
+            // replacement to a market reduction at the calculation (None).
+            strategy_exit("calculation", "mixed", 99.0, missing,
+                          missing, missing, missing, 100.0, "close second", 1.0);
         }
         if (index == 26 && shape_ == Shape::GlobalRecut)
             strategy_exit("global", "", 101.0, missing);
@@ -170,8 +198,8 @@ private:
 };
 
 inline std::vector<Bar> tape(Shape shape) {
-    const int inputs_per_chart_bar = shape == Shape::SameBar ? 5 : 1;
-    const int touch_bar = shape == Shape::SameBar ? 26 : 27;
+    const int inputs_per_chart_bar = shape == Shape::GlobalRecut ? 1 : 5;
+    const int touch_bar = shape == Shape::GlobalRecut ? 27 : 26;
     std::vector<Bar> bars;
     for (int i = 0; i < 46 * inputs_per_chart_bar; ++i) {
         Bar bar{100.0, 100.25, 99.75, 100.0, 1.0, start_ms + i * minute_ms};
@@ -236,6 +264,8 @@ inline void compare(const Host& reference, const Host& streamed) {
         const auto at = " at callback " + std::to_string(callback);
         require(a.bar == b.bar && a.size == b.size, "sink changed logical rows" + at);
         require(a.base == 0 && b.base <= b.size, "invalid seal fixture" + at);
+        require(a.extension == b.extension, "sink changed per-callback extension hash" + at);
+        require(a.broker == b.broker, "sink changed per-callback broker hash" + at);
         bool saw_affected = false;
         for (std::size_t offset = 0; offset < b.rows.size(); ++offset) {
             const auto& expected = a.rows[b.base + offset];
@@ -249,15 +279,15 @@ inline void compare(const Host& reference, const Host& streamed) {
             require(expected.phase == actual.phase, "exit phase detached from its row" + at);
             if (actual.trade.entry_id == "mixed" || actual.trade.exit_id == "global") {
                 const auto wanted = actual.trade.exit_id == "open"
-                    ? NativePathPhase::Open : NativePathPhase::High;
+                    ? NativePathPhase::Open
+                    : actual.trade.exit_id == "calculation"
+                        ? NativePathPhase::None : NativePathPhase::High;
                 require(actual.phase == static_cast<std::uint8_t>(wanted),
                         "affected row has the wrong fill phase" + at);
                 saw_affected = true;
             }
         }
         if (saw_affected) ++affected_publications;
-        require(a.broker == b.broker, "sink changed per-callback broker hash" + at);
-        require(a.extension == b.extension, "sink changed per-callback extension hash" + at);
     }
     require(affected_publications >= 2, "affected tail was not revisited on later publications");
 }
@@ -272,7 +302,7 @@ inline void exercise(Shape shape) {
     const auto bars = tape(shape);
     for (Host* host : {&reference, &streamed}) {
         host->run(bars.data(), static_cast<int>(bars.size()), "1",
-                  shape == Shape::SameBar ? "5" : "1", shape == Shape::SameBar);
+                  shape == Shape::GlobalRecut ? "1" : "5", shape != Shape::GlobalRecut);
         require(host->last_error().empty(), "run failed: " + host->last_error());
     }
     require(reference.base_before_entry == 0 && reference.ledger().base() == 0,
@@ -301,6 +331,32 @@ inline void exercise(Shape shape) {
         require(reference.ledger()[6].exit_id == "open"
                 && reference.ledger()[7].exit_id == "intrabar",
                 "Open exit must sort before the earlier-appended intrabar exit");
+    } else if (shape == Shape::SameBarNone) {
+        for (const Host* host : {&reference, &streamed}) {
+            require(host->mixed_fills.size() == 2, "expected High then calculation bracket fills");
+            const auto& first = host->mixed_fills[0];
+            const auto& second = host->mixed_fills[1];
+            require(first.trade.exit_id == "intrabar" && second.trade.exit_id == "calculation"
+                    && first.phase == static_cast<std::uint8_t>(NativePathPhase::High)
+                    && second.phase == static_cast<std::uint8_t>(NativePathPhase::None),
+                    "fixture did not append High before the None-phase calculation exit");
+            require(first.trade.exit_from_bracket && second.trade.exit_from_bracket
+                    && first.trade.qty == 1.0 && second.trade.qty == 1.0
+                    && first.trade.exit_time == second.trade.exit_time
+                    && first.trade.entry_time == second.trade.entry_time,
+                    "High and None fills do not form one same-bar bracket sort group");
+            require(host->exit_sequence("calculation") < host->exit_sequence("intrabar"),
+                    "calculation exit did not retain the earlier command sequence");
+        }
+        const auto first = reference.affected_end - reference.mixed_fills.size();
+        require(streamed.affected_end == reference.affected_end
+                && first >= streamed.affected_end - streamed.base_at_fill,
+                "sealed base is too small to expose the old global/local write guard");
+        require(reference.ledger()[first].exit_id == "calculation"
+                && reference.phase(first) == static_cast<std::uint8_t>(NativePathPhase::None)
+                && reference.ledger()[first + 1].exit_id == "intrabar"
+                && reference.phase(first + 1) == static_cast<std::uint8_t>(NativePathPhase::High),
+                "earlier calculation exit must sort onto the former High slot and clear it");
     } else {
         require(reference.ledger()[6].entry_id == "Z" && reference.ledger()[6].qty == 2.0
                 && reference.ledger()[7].entry_id == "Z" && reference.ledger()[7].qty == 1.0

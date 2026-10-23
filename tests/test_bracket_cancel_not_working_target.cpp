@@ -1,9 +1,10 @@
 // A-4b contract pin: source bracket cancellation normalizes every non-working
 // member to the same-run UINT64_MAX target, including before roster settlement.
-// This is intentionally already implemented on BASE, so this pin cannot serve
-// as a BASE-red test. REPORT-fix-a1.md records that unresolved brief constraint.
+// A-4b changes only a production contract comment, so this pin cannot be red
+// on BASE; its sentinel mutation changes the never-issued-target constant.
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -44,8 +45,13 @@ struct Key {
     friend type member(Key);
 };
 template struct Access<Key, &ps::PineExecutionAdapter::key_for>;
+struct LiveHandles {
+    using type = std::vector<no::RequestHandle> ps::PineExecutionAdapter::*;
+    friend type member(LiveHandles);
+};
+template struct Access<LiveHandles, &ps::PineExecutionAdapter::live_handles_>;
 
-enum class Storage { NonWorkingTail, SettledArchive };
+enum class Storage { NonWorkingTail, SettledArchive, MixedTail };
 
 class Host final : public ps::PineStrategyHost {
 public:
@@ -84,19 +90,25 @@ public:
                               missing, missing, missing, 50.0);
             } else {
                 // A named limit-only partial exit has no revival protection.
-                // O1W releases its terminal row and archives the family while
-                // the four remaining entry units are still open.
+                // O1W later archives it; MixedTail cancels on the fill bar,
+                // before that retirement pass, after adding a live stop.
                 strategy_exit("X", "E", 100.5, missing,
                               missing, missing, missing, 50.0);
             }
         }
-        const int cancel_bar = storage_ == Storage::NonWorkingTail ? 2 : 6;
+        const int cancel_bar = storage_ == Storage::SettledArchive ? 6 : 2;
         if (index != cancel_bar) return;
+        if (storage_ == Storage::MixedTail) {
+            // The four-unit limit filled earlier on this bar. A new stop
+            // appends to the same (X, E) roster while four entry units remain;
+            // it was not present for the fill's OCA/sibling cancellation.
+            strategy_exit("X", "E", missing, 50.0);
+        }
 
         const auto key = (adapter_.*member(Key{}))("X", "E");
         const auto& active = adapter_.*member(Families{});
         const auto& archived = adapter_.*member(Archive{});
-        const std::size_t expected_count = storage_ == Storage::NonWorkingTail ? 2 : 1;
+        const std::size_t expected_count = storage_ == Storage::SettledArchive ? 1 : 2;
         require(trade_count() == 1, "fixture did not fill its bracket exit");
         const auto trade = get_trade(0);
         require(trade.entry_id == "E" && trade.exit_id == "X"
@@ -107,11 +119,11 @@ public:
                     + " exit_bar=" + std::to_string(trade.exit_bar_index)
                     + " qty=" + std::to_string(trade.qty)
                     + " entry_id=" + trade.entry_id + " exit_id=" + trade.exit_id);
-        if (storage_ == Storage::NonWorkingTail) {
+        if (storage_ != Storage::SettledArchive) {
             const auto found = active.find(key);
             require(found != active.end() && found->second.settled_count() == 0
                     && found->second.members().size() == 2,
-                    "fixture did not retain both non-working tail members");
+                    "fixture did not retain both unsealed tail members");
             require(archived.find(key) == archived.end(),
                     "unsealed family also appeared in the settled archive");
         } else {
@@ -139,7 +151,7 @@ public:
                     + " expected=" + std::to_string(expected_count));
         require(std::holds_alternative<no::Limit>(accepted[0].request().trigger),
                 "first accepted bracket member is not a limit");
-        if (storage_ == Storage::NonWorkingTail) {
+        if (storage_ != Storage::SettledArchive) {
             require(std::holds_alternative<no::Stop>(accepted[1].request().trigger),
                     "second accepted bracket member is not a stop");
             const auto members = active.at(key).members();
@@ -178,16 +190,24 @@ public:
                 "fixture did not observe its limit fill and designed OCA cancellation: limit_fills="
                     + std::to_string(limit_fills) + " stop_cancels=" + std::to_string(stop_cancels));
         const auto working = native_working_requests();
-        for (const auto& event : accepted) {
-            const auto& handle = event.handle();
+        for (std::size_t member_index = 0; member_index < accepted.size(); ++member_index) {
+            const auto& handle = accepted[member_index].handle();
             require(handle.incarnation != 0
                     && handle.incarnation != std::numeric_limits<std::uint64_t>::max(),
                     "accepted member has an invalid incarnation: "
                         + std::to_string(handle.incarnation));
-            for (const auto& request : working)
-                require(request.definition->handle != handle,
-                        "fixture bracket member is still working: incarnation="
-                            + std::to_string(handle.incarnation));
+            if (storage_ == Storage::MixedTail && member_index == 1) {
+                require(working.size() == 1 && working[0].definition->handle == handle,
+                        "mixed roster does not have exactly its live stop working");
+                const auto& live = adapter_.*member(LiveHandles{});
+                require(std::find(live.begin(), live.end(), handle) != live.end(),
+                        "mixed roster's working stop is absent from source live handles");
+            } else {
+                for (const auto& request : working)
+                    require(request.definition->handle != handle,
+                            "fixture bracket member is still working: incarnation="
+                                + std::to_string(handle.incarnation));
+            }
         }
 
         // This is the source command facade that reaches exit_cancel_bracket.
@@ -197,9 +217,23 @@ public:
         std::size_t count = 0;
         for (const auto& row : native_events(cursor)) {
             if (!row.command) continue;
+            require(count < accepted.size(), "bracket cancel emitted an extra member outcome");
+            if (storage_ == Storage::MixedTail && count == 1) {
+                const auto* event = std::get_if<no::CancelledEvent>(&*row.command);
+                require(event != nullptr, "live member did not produce its CancelledEvent");
+                require(event->handle() == accepted[1].handle()
+                        && event->request().label == "X"
+                        && std::holds_alternative<no::Stop>(event->request().trigger)
+                        && event->reason == no::CancelReason::User
+                        && event->cause.has_value()
+                        && event->cause->run == event->handle().run
+                        && event->cause->ordinal == event->ordinal,
+                        "live member cancellation lost its own handle or explicit-cancel reason");
+                ++count;
+                continue;
+            }
             const auto* event = std::get_if<no::NotWorkingEvent>(&*row.command);
             require(event != nullptr, "bracket cancel produced a non-NotWorking command event");
-            require(count < accepted.size(), "bracket cancel emitted an extra member outcome");
             require(event->target.run == accepted[count].handle().run,
                     "normalized target lost its member's run identity");
             require(event->target.incarnation == std::numeric_limits<std::uint64_t>::max(),
@@ -212,8 +246,17 @@ public:
             ++count;
         }
         require(count == expected_count,
-                "bracket cancel lost a member's NotWorking outcome: observed="
+                "bracket cancel lost a member's cancellation outcome: observed="
                     + std::to_string(count) + " expected=" + std::to_string(expected_count));
+        if (storage_ == Storage::MixedTail) {
+            require(native_working_requests().empty(),
+                    "cancelled live stop remains working in the kernel");
+            const auto& live = adapter_.*member(LiveHandles{});
+            require(std::find(live.begin(), live.end(), accepted[1].handle()) == live.end(),
+                    "cancelled live stop was not retired from source live handles");
+            require(trade_count() == 1 && live_position_size() == 4.0,
+                    "cancelling the mixed roster changed its trades or remaining position");
+        }
         require(active.find(key) == active.end() && archived.find(key) == archived.end(),
                 "cancelled bracket family remains active or archived");
         checked = true;
@@ -230,7 +273,9 @@ private:
         const auto found = active.find(key);
         const auto settled = archived.find(key);
         return " [storage=" + std::string(storage_ == Storage::NonWorkingTail
-                                             ? "NonWorkingTail" : "SettledArchive")
+                                             ? "NonWorkingTail"
+                                             : storage_ == Storage::SettledArchive
+                                                 ? "SettledArchive" : "MixedTail")
             + " bar=" + std::to_string(pine_bar_index())
             + " settled_count="
             + (found == active.end() ? std::string{"absent"}
@@ -262,6 +307,7 @@ int main() {
     try {
         exercise(Storage::NonWorkingTail);
         exercise(Storage::SettledArchive);
+        exercise(Storage::MixedTail);
         std::puts("PASS test_bracket_cancel_not_working_target");
         return 0;
     } catch (const std::exception& error) {

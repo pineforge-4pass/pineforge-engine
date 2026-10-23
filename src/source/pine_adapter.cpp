@@ -6664,8 +6664,9 @@ void PineExecutionAdapter::permute_exit_phases(std::size_t start,
 void PineExecutionAdapter::permute_exit_phase_rows(
         std::size_t start, std::size_t count,
         const std::function<std::size_t(std::size_t)>& source_at) {
-    // Both same-bar permutation and global-child re-cut use this seam,
-    // including amendments which leave the closed-row count unchanged.
+    // Tests use this permutation seam, including amendments which leave the
+    // closed-row count unchanged. Production same-bar sorts and global-child
+    // re-cuts read exit_phase_value and write set_exit_phase directly.
     if (position_tail_summary_)
         position_tail_summary_->invalidate(PositionTailGuard::Amendment,
                                            PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
@@ -14984,10 +14985,11 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
         found_family = true;
     }
     if (!found_family) return;
-    // Source bracket-cancel target contract (L19h): every non-working
-    // member, including the settled prefix, records one NotWorking outcome
-    // targeting same-run UINT64_MAX in roster order. Settled members retain
-    // only count/digest state, so normalize the non-working tail too: the
+    // Source bracket-cancel target contract (L19h). The pin below covers the
+    // non-working tail, archived prefix, and mixed filled/live rosters.
+    // Every non-working member, including the settled prefix, records one
+    // NotWorking outcome targeting same-run UINT64_MAX in roster order.
+    // Settled members retain only count/digest state, so normalize the tail: the
     // recorded target must not depend on placement-retirement timing.
     // Working members still target their own handles. Pinned by
     // test_bracket_cancel_not_working_target; no hash domain is changed.
