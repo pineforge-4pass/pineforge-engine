@@ -89,6 +89,11 @@ EXIT_SCRATCH_OBSERVATION_WAIVERS = {
     "observation": "Borrowed instrumentation context; no trading decision reads it.",
     "observe_rows": "Reports temporary scope row counts; does not supply trading state.",
     "observe_lookup": "Reports lookup work; does not supply trading state.",
+    "teardown_failure": (
+        "Run-local failure memory of a failed scope teardown, rethrown at the next "
+        "entry point; the run then ends in a typed failure, no trading decision "
+        "reads it and no durable state carries it."
+    ),
 }
 
 

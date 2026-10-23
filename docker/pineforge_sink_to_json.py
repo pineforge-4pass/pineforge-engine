@@ -344,7 +344,7 @@ _WINDOW = {
              "input_tf_seconds": _count, "script_tf": _text,
              "source_bytes_sha256": _sha, "source_values_sha256": _sha,
              "evaluated_source_values_sha256": _sha},
-    "calendar": {"timezone": _text, "session": _text},
+    "calendar": {"timezone": _text, "session": _S},
     "preroll": {**{key: _count for key in (
         "requested_script_bars", "available_script_bars", "used_script_bars",
         "trimmed_script_bars", "trimmed_input_bars")},
