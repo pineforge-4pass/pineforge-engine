@@ -43,12 +43,24 @@ template struct PrivateAccess<PlacementTag,
     &source::PineExecutionAdapter::placement_>;
 
 struct LiveHandlesTag {
-    using type = ::pineforge::detail::WorkingSequence<no::RequestHandle>
-        source::PineExecutionAdapter::*;
+    using type = source::PendingRoster source::PineExecutionAdapter::*;
     friend type access(LiveHandlesTag);
 };
 template struct PrivateAccess<LiveHandlesTag,
     &source::PineExecutionAdapter::live_handles_>;
+
+struct MoveLiveFrontToBack {
+    source::PendingRoster& live;
+    no::RequestHandle handle;
+    void operator()() const { CHECK(live.move_to_back(handle)); }
+};
+
+struct PendingProjectionTransactionTag {
+    using type = void (source::PineExecutionAdapter::*)(MoveLiveFrontToBack&&);
+    friend type access(PendingProjectionTransactionTag);
+};
+template struct PrivateAccess<PendingProjectionTransactionTag,
+    &source::PineExecutionAdapter::pending_projection_transaction<MoveLiveFrontToBack>>;
 
 struct CohortsTag {
     friend auto access(CohortsTag);
@@ -201,7 +213,17 @@ public:
             auto& snapshot = placement.at(handle.incarnation);
             if (snapshot.source_id == "B") snapshot.projection_over_pyramiding = true;
         }
-        std::reverse(live.begin(), live.end());
+        const auto first = live.front();
+        const auto last = live.back();
+        const int projected = adapter_.pending_intent_view().size();
+        // With exactly two handles, moving the front to the back reverses
+        // the entire roster. Both rows stay inside INT_MAX's visible prefix,
+        // so no group multiplicity changes (as in order_same_point_entries).
+        (adapter_.*access(PendingProjectionTransactionTag{}))(
+            MoveLiveFrontToBack{live, first});
+        CHECK(live.front() == last);
+        CHECK(live.back() == first);
+        CHECK(adapter_.pending_intent_view().size() == projected);
     }
 };
 

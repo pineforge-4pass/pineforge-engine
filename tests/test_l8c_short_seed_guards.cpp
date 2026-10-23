@@ -57,13 +57,12 @@ struct PlacementTag {
 template struct PrivateAccess<PlacementTag,
     &source::PineExecutionAdapter::placement_>;
 
-struct LiveHandlesTag {
-    using type = ::pineforge::detail::WorkingSequence<no::RequestHandle>
-        source::PineExecutionAdapter::*;
-    friend type access(LiveHandlesTag);
+struct AppendProjectedRosterTag {
+    using type = void (source::PineExecutionAdapter::*)(const no::RequestHandle&);
+    friend type access(AppendProjectedRosterTag);
 };
-template struct PrivateAccess<LiveHandlesTag,
-    &source::PineExecutionAdapter::live_handles_>;
+template struct PrivateAccess<AppendProjectedRosterTag,
+    &source::PineExecutionAdapter::append_projected_roster>;
 
 struct BrokerEpochTag {
     using type = std::uint64_t source::PineExecutionAdapter::*;
@@ -175,7 +174,6 @@ public:
             break;
         }
         case QualificationCase::IncarnationGap: {
-            auto& live = adapter_.*access(LiveHandlesTag{});
             const auto original = pending.plan.final_short;
             no::RequestHandle replacement = original;
             replacement.incarnation += 10U;
@@ -183,7 +181,9 @@ public:
             const auto inserted = placements.try_emplace(
                 replacement.incarnation, replacement_snapshot);
             CHECK(inserted.second);
-            live.push_back(replacement);
+            const int projected = adapter_.pending_intent_view().size();
+            (adapter_.*access(AppendProjectedRosterTag{}))(replacement);
+            CHECK(adapter_.pending_intent_view().size() == projected + 1);
             pending.plan.final_short = replacement;
             break;
         }
