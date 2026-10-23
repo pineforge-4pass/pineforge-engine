@@ -1,0 +1,8 @@
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_core_spills_follow_sink_scratch_dir)
+    pineforge_add_unit_test(test_core_spills_follow_sink_scratch_dir)
+endif()
+if(UNIX)
+    list(APPEND TEST_SOURCES test_selected_sink_hook_window_release)
+    pineforge_add_unit_test(test_selected_sink_hook_window_release)
+endif()

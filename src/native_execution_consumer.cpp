@@ -3075,6 +3075,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     engine.bar_magnifier_enabled_ = !spec.intrabar.is_none();
     requests_.reset(spec.identity);
     requests_.bind_scratch_slab(engine.scratch_table_run_.slab);
+    if (!engine.report_sink_state_.scratch_dir.empty())
+        requests_.set_successor_roots_directory(engine.report_sink_state_.scratch_dir);
     host_cache_.reset();
     clear_cohort_target_cache();
     terminal_receipt_high_water_ = 0;
@@ -12962,14 +12964,12 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
         if (sink_window) {
             const int64_t window_len = local.equity_curve_len;
             engine.present_report(&local);
-#ifndef NDEBUG
             // The hook borrows this bounded window: it may edit or shrink it,
             // but may neither replace its storage nor expose additional points.
             if (local.equity_curve != tail.data() || local.equity_curve_len < 0
                 || local.equity_curve_len > window_len)
                 refuse_selected_capture(
                     "native selected report: presentation exceeded its tail window");
-#endif
             const int64_t cut = window_len - local.equity_curve_len;
             local.equity_curve = nullptr; // borrowed stack storage is never freed
             local.equity_curve_len = metric_equity_len - cut;
