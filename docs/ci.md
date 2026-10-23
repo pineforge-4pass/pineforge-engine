@@ -863,7 +863,7 @@ without promoting.
 `promote-guard` resolves the pushed SHA and must pass before the credential job runs.
 It reads the selected PR's full API response to obtain the merger, checking
 that its merge commit, base, head and merge time match the selected result.
-The guard has only `contents: read` and `pull-requests: read` permissions for
+The guard has only `pull-requests: read` permission for
 these API reads, with no checkout, release secrets or OIDC permission.
 Every resolved PR requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
 The permission fallback admits private organization members reported as `CONTRIBUTOR`; a failed or empty author lookup refuses promotion.
@@ -1190,7 +1190,7 @@ The checker retains the bans on paid larger-runner labels and
 
 The read-only `promote-guard` stays hosted on `ubuntu-latest`; the credential
 job keeps main's isolated release runner. Preflight pins the complete guard
-block, including its two read scopes, API resolution, identity bindings,
+block, including its sole `pull-requests: read` scope, API resolution, identity bindings,
 refusal script, authorization output and separator. It also pins the
 credential job's dependency and successful-authorization condition.
 Decision tests execute the real guard scripts with fixture API transport;

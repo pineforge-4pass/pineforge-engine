@@ -756,12 +756,26 @@ class PreflightFailures(unittest.TestCase):
         findings = self.mutated_file_findings(2, 'promote', anchor, checkout + anchor)
         self.assertIn(finding, findings)
 
+    def test_promotion_guard_rejects_added_contents_read_permission(self):
+        finding = 'baseline promotion must start with the pinned read-only promote-guard'
+        findings = self.mutated_file_findings(
+            2, 'promote-guard',
+            '    permissions:\n      pull-requests: read\n',
+            '    permissions:\n      contents: read\n      pull-requests: read\n')
+        self.assertIn(finding, findings)
+
+    def test_promotion_guard_rejects_missing_pull_requests_read_permission(self):
+        finding = 'baseline promotion must start with the pinned read-only promote-guard'
+        findings = self.mutated_file_findings(
+            2, 'promote-guard', '      pull-requests: read\n', '')
+        self.assertIn(finding, findings)
+
     def test_promotion_guard_rejects_mutations_of_the_real_workflow(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
         jobs = _jobs(original[2])
         self.assertEqual(ci_preflight._job_values(jobs['promote-guard'], 'permissions'),
-                         ['contents: read pull-requests: read'])
+                         ['pull-requests: read'])
         for forbidden in ('secrets.', 'checkout', 'id-token'):
             self.assertNotIn(forbidden, jobs['promote-guard'])
         self.assertEqual(ci_preflight._job_values(jobs['promote'], 'needs'), ['[promote-guard]'])
@@ -780,7 +794,7 @@ class PreflightFailures(unittest.TestCase):
                          '--jq .permission 2>/dev/null || echo none)\n')
         default = ('            *) fail "event $EVENT does not run baseline promotion '
                    '(only push and workflow_dispatch are allowed)" ;;\n')
-        permissions = '    permissions:\n      contents: read\n      pull-requests: read\n'
+        permissions = '    permissions:\n      pull-requests: read\n'
         mutations = [
             ('promote-guard', run_block, '        run: |\n          exit 0\n', guard_finding),
             ('promote-guard', fail, '          fail() { :; }\n', guard_finding),

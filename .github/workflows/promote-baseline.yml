@@ -112,7 +112,6 @@ jobs:
     runs-on: ubuntu-latest
     # Resolution needs read access in private repos; no secrets or OIDC here.
     permissions:
-      contents: read
       pull-requests: read
     outputs:
       ok: ${{ steps.authorize.outputs.ok }}

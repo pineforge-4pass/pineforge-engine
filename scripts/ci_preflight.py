@@ -392,7 +392,6 @@ PROMOTE_GUARD = r'''  promote-guard:
     runs-on: ubuntu-latest
     # Resolution needs read access in private repos; no secrets or OIDC here.
     permissions:
-      contents: read
       pull-requests: read
     outputs:
       ok: ${{ steps.authorize.outputs.ok }}
@@ -1631,6 +1630,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     promotion_text = _jobs_text(promote) or ''
     promotion_headers = list(_JOB_HEADER.finditer(promotion_text))
     if ([header.group(1) for header in promotion_headers] != ['promote-guard', 'promote']
+            or _job_values(guard_job, 'permissions') != ['pull-requests: read']
             or promotion_text[promotion_headers[0].start():promotion_headers[1].start()]
             != PROMOTE_GUARD):
         findings.append('baseline promotion must start with the pinned read-only promote-guard')
