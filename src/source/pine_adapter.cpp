@@ -85,6 +85,18 @@
 #define PF_RARE(condition) __builtin_expect(static_cast<bool>(condition), 0)
 
 namespace pineforge::source {
+#ifdef PINEFORGE_CR277_DIAGNOSTIC
+namespace {
+// Process totals: 0 = close(""), 1 = close_all(). Count successful transfers
+// of a live, unpriced Entry placed on this script bar, including same-side
+// entries. This does not count batch transfers or prove a later reissue.
+std::atomic<std::uint64_t> cr277_pending_close_pushes[2]{};
+}
+extern "C" std::uint64_t pineforge_cr277_diagnostic_hits(int site) noexcept {
+    return site >= 0 && site < 2
+        ? cr277_pending_close_pushes[site].load(std::memory_order_relaxed) : 0;
+}
+#endif
 #ifdef PINEFORGE_VALUE_INVALID_FIXTURES
 namespace {
 thread_local double (*adapter_execution_value_fixture)(const char*, double) = nullptr;
@@ -9122,6 +9134,20 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         current, limit_price, stop_price, default_sized, priced, reverses,
         opposite_opening_pending, pure_stop_entry, coof_market_next_open,
         coof_priced_next_open, coof_market_at_second_extreme, paired_all_in_reentry};
+    if (close_all_precedes && preceding_close_all.incarnation != 0) {
+        // A full close moved the prior entry out of the live/batched book.
+        // Replace it where it waits for that close, before selecting a new
+        // batch or appending a second definition behind the same parent.
+        auto queued = std::find_if(pending_entries_.begin(), pending_entries_.end(),
+            [&](const PendingEntry& prior) {
+                return prior.replacement_key == id
+                    && prior.snapshot.paired_reversal_parent == preceding_close_all;
+            });
+        if (queued != pending_entries_.end()) {
+            *queued = PendingEntry{std::move(request), std::move(snapshot), id};
+            return;
+        }
+    }
     if (same_bar_market_candidate && fixed_market_batch_candidate
         && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
         && !close_all_precedes) {
@@ -10274,7 +10300,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                         : native_order::OrderIntent{native_order::Transact{target}};
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
-                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
+                    const SourceId replacement_key = entry_snapshot.source_id;
+                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), replacement_key});
+#ifdef PINEFORGE_CR277_DIAGNOSTIC
+                    cr277_pending_close_pushes[0].fetch_add(1, std::memory_order_relaxed);
+#endif
                 }
             }
             for (auto it = pending_same_bar_commands_.begin(); it != pending_same_bar_commands_.end();) {
@@ -11040,7 +11070,11 @@ void PineExecutionAdapter::close_all() {
                         : native_order::OrderIntent{native_order::Transact{target}};
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
-                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
+                    const SourceId replacement_key = entry_snapshot.source_id;
+                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), replacement_key});
+#ifdef PINEFORGE_CR277_DIAGNOSTIC
+                    cr277_pending_close_pushes[1].fetch_add(1, std::memory_order_relaxed);
+#endif
                 }
             }
             for (auto it = pending_same_bar_commands_.begin(); it != pending_same_bar_commands_.end();) {
