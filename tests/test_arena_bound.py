@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from arena_bound import (  # noqa: E402
     CHUNK_BYTES, FACTS_SCHEMA, MAX_U64, FactsError, arena_bound, index_peak,
-    per_user_bytes, slots,
+    fold_opened_segments, ordered_fold_bytes, per_user_bytes, slots,
 )
 from arena_bound_manifest import (  # noqa: E402
     bound_probe, engine_fingerprint, plan_fingerprint,
@@ -80,6 +80,44 @@ class FormulaTests(unittest.TestCase):
                                   (65, 256, 6144)):
             self.assertEqual(slots(keys), count)
             self.assertEqual(index_peak(keys), peak)
+
+    def test_current_store_inventory_and_fold_record_derivation(self):
+        inputs = {name: {"value": value}
+                  for name, value in zip("TDQLRE", (2, 2, 4, 2, 2, 2))}
+        peaks = per_user_bytes(inputs)
+        self.assertEqual(set(peaks), {
+            "equity", "positionTail", "cohorts", "exitRank",
+            "erasedData", "erasedIndex", "consumedData", "consumedIndex",
+            "orderedFold", "successorRoots", "openings",
+        })
+        self.assertEqual(len(peaks), 11)  # Ten contributions and one explicit exclusion.
+        self.assertNotIn("sequenceData", peaks)
+        self.assertNotIn("sequenceIndex", peaks)
+        self.assertEqual(peaks["openings"], 0)  # Stock source owns vectors.
+        # Four ever-keys: <=4 leaves, <=3 binary branches, <=4 saved nodes.
+        self.assertEqual(peaks["orderedFold"], 136 * 4 + 2088 * 3 + 2096 * 4)
+        self.assertEqual(sum(peaks.values()), 18146)
+        self.assertEqual(ordered_fold_bytes(0, 4097), 0)
+        self.assertEqual(ordered_fold_bytes(1, 0), 2232)
+        self.assertEqual(ordered_fold_bytes(16, 0), 67032)
+        self.assertEqual(ordered_fold_bytes(17, 0), 71352)
+        # With L=0 the joined key is one byte; <=18 branch snapshots
+        # plus the final leaf. This pins 2L+1 and the extra saved leaf.
+        self.assertEqual(ordered_fold_bytes(32, 0), 108904)
+        # Distinct-ever membership, not live count, feeds Q. Erase does not
+        # reduce any of the three physical high-water marks.
+        self.assertGreater(ordered_fold_bytes(33, 64), ordered_fold_bytes(32, 64))
+
+    def test_fold_segment_rule_at_each_record_size(self):
+        for record, at_64 in ((136, 3), (2088, 64), (2096, 64)):
+            per_segment = 4095 // record
+            self.assertEqual(fold_opened_segments(0, record, 4095), 0)
+            self.assertEqual(fold_opened_segments(1, record, 4095), 1)
+            self.assertEqual(fold_opened_segments(per_segment, record, 4095), 1)
+            self.assertEqual(fold_opened_segments(per_segment + 1, record, 4095), 2)
+            self.assertEqual(fold_opened_segments(64, record, 4095), at_64)
+        with self.assertRaises(FactsError):
+            fold_opened_segments(1, 2096, 2095)
 
     def test_no_float_bool_negative_missing_or_guessed_bounds(self):
         seed = self.vectors[1]["facts"]
@@ -350,6 +388,8 @@ def compile_module(build: Path, generated: Path, destination: Path) -> Path:
         str(generated), str(ROOT / "tests/arena_bound_bridge.cpp"),
         "-Wl,--whole-archive", str(archive), "-Wl,--no-whole-archive",
         "-Wl,--wrap=pwrite", "-Wl,--wrap=write", "-Wl,--wrap=ftruncate",
+        "-Wl,--wrap=mkstemp", "-Wl,--wrap=mkostemp",
+        "-Wl,--wrap=open", "-Wl,--wrap=openat",
         "-pthread", "-o", str(destination),
     ]
     completed = subprocess.run(command, cwd=record["directory"],
@@ -432,7 +472,9 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
             lib.arena_bound_test_detach.restype = ctypes.c_int
             lib.arena_bound_test_error.argtypes = []
             lib.arena_bound_test_error.restype = ctypes.c_char_p
-            for name in ("high_water", "bytes_used", "legacy_writes"):
+            lib.arena_bound_test_creation_probe.argtypes = []
+            lib.arena_bound_test_creation_probe.restype = ctypes.c_int
+            for name in ("high_water", "bytes_used", "legacy_writes", "legacy_creations"):
                 function = getattr(lib, "arena_bound_test_" + name)
                 function.argtypes = []
                 function.restype = ctypes.c_uint64
@@ -499,6 +541,8 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                 check(self.lib.arena_bound_test_attach(fd, supplied) == 0,
                       f"arena attach: {self.lib.arena_bound_test_error()!r}")
                 attached = True
+                check(self.lib.arena_bound_test_creation_probe() == 0,
+                      "creation guard must refuse and count empty mkstemp/open/openat files")
                 print(f"arena_bound: begin probe={probe.name} params={params!r} "
                       f"half={half} supplied={supplied} certified={certified}",
                       file=sys.stderr, flush=True)
@@ -512,6 +556,7 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                           f"high_water={int(self.lib.arena_bound_test_high_water())} "
                           f"bytes_used={int(self.lib.arena_bound_test_bytes_used())} "
                           f"legacy_writes={int(self.lib.arena_bound_test_legacy_writes())} "
+                          f"legacy_creations={int(self.lib.arena_bound_test_legacy_creations())} "
                           f"error={error!r}",
                           file=sys.stderr, flush=True)
                     if not half:
@@ -528,6 +573,8 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                 used = int(self.lib.arena_bound_test_bytes_used())
                 check(self.lib.arena_bound_test_legacy_writes() == 0,
                       "a physical scratch user bypassed ScratchFile/arena")
+                check(self.lib.arena_bound_test_legacy_creations() == 0,
+                      "a scratch user attempted file creation while an arena was attached")
                 check(0 <= used <= actual <= certified,
                       f"{probe.name}: actual={actual}, used={used}, bound={certified}")
                 stream = all_terms["terms"]["finalizerStream"]

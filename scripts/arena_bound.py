@@ -115,11 +115,48 @@ def index_peak(keys: int) -> int:
     return _mul(24, slots(keys))
 
 
+def fold_opened_segments(rows: int, record_bytes: int,
+                        off_max: int = (1 << 63) - 1) -> int:
+    """Lazy IdPairFoldFile regions, id_pair_ordered_fold.hpp:59-89.
+
+    off_max is explicit for the existing reduced-offset fixture. Production
+    uses signed 64-bit off_t. No per-record padding is added at a boundary.
+    """
+    rows = _integer(rows, "fold rows")
+    record_bytes = _integer(record_bytes, "fold record bytes")
+    off_max = _integer(off_max, "fold OFF_MAX")
+    if record_bytes == 0 or off_max < record_bytes:
+        raise FactsError("a fold record must fit in OFF_MAX")
+    rows_per_segment = off_max // record_bytes
+    return rows // rows_per_segment + int(rows % rows_per_segment != 0)
+
+
+def ordered_fold_bytes(keys: int, component_bytes: int) -> int:
+    """Distinct-EVER joined keys, including tombstones and staged appends.
+
+    id_pair_ordered_fold.hpp:161-184 pins Leaf=136, Branch=2088 (including
+    its 2056-byte map), Snapshot=2096. Its binary splits reuse the old leaf
+    and add at most one leaf/branch per new key (:282-336). Thus leaves<=Q,
+    branches<=Q-1. Pivots strictly increase (:101-102); the joined key has
+    <=2L+1 bytes. The saved mutation path includes its final leaf (:247-258).
+    """
+    keys = _integer(keys, "fold keys")
+    component_bytes = _integer(component_bytes, "fold component bytes")
+    if keys == 0:
+        return 0
+    leaves, branches = keys, keys - 1
+    joined_length = _add(_mul(2, component_bytes), 1)
+    saved_path = _add(min(branches, _mul(9, _add(joined_length, 1))), 1)
+    return _add(_mul(136, leaves), _mul(2088, branches), _mul(2096, saved_path))
+
+
 def per_user_bytes(inputs: Mapping) -> dict[str, int]:
-    """The eleven logical peaks, before arena chunk rounding.
+    """Ten storage contributions plus the explicit stock-source openings zero.
 
     Accepts the ``inputs`` member returned by arena_bound.  Kept separate so
-    arena_bound's public result has EXACTLY the A5 fields.
+    arena_bound's public result has EXACTLY the A5 fields. There are still
+    eleven entries, but no sequence-minima store: ScratchManifest reserves
+    K_q/B_q as zero (scratch_tables.hpp:16, scratch_slab.hpp:78).
     """
     counts = {
         name: _integer(_object(inputs[name], name)["value"], name)
@@ -137,13 +174,19 @@ def per_user_bytes(inputs: Mapping) -> dict[str, int]:
         "positionTail": _mul(_add(30, length), t),
         "cohorts": _add(_mul(_add(96, length), d), int(d != 0)),
         "exitRank": _add(_mul(_add(60, length), rank), int(rank != 0)),
-        "sequenceData": pair_data,
-        "sequenceIndex": pair_index,
         "erasedData": pair_data,
         "erasedIndex": pair_index,
         "consumedData": _mul(_add(41, _mul(2, length)), q),
         "consumedIndex": index_peak(q),
+        "orderedFold": ordered_fold_bytes(q, length),
         "successorRoots": _mul(16, roots),
+        # Certified EngineRecorded stock-source profile ONLY: its owners
+        # build vectors, never external_openings (pine_adapter.cpp:6983,
+        # :6990, :9669). Generic C++ external readbacks are excluded.
+        # Each admitted external freeze would instead retain 8*N bytes;
+        # N>=2 has 16*N sort peak, plus all other simultaneously retained
+        # owners. See native_order.cpp:111-179 and arena-bound.md.
+        "openings": 0,
     }
 
 
