@@ -218,10 +218,16 @@ struct CommandObserver {
             return;
         }
         const bool write = charge.operation == pd::ScratchIoOperation::write_page;
-        self.invalid |= charge.bytes != platform_page || !last_page_io.valid
-            || last_page_io.write != write || last_page_io.fd != counters.page_fd
-            || last_page_io.offset < 0
-            || static_cast<Count>(last_page_io.offset) != charge.page * platform_page;
+        // Every WRITE charge is the page write that just reached the file. A READ
+        // charge is either that physical pread (a miss) or, with a cache above the
+        // backing, a HIT that issued no syscall (no valid last page I/O); a valid
+        // last page I/O that does not match the charged page is still an error.
+        const bool cache_hit = !write && !last_page_io.valid;
+        self.invalid |= charge.bytes != platform_page
+            || (!cache_hit && (!last_page_io.valid
+                || last_page_io.write != write || last_page_io.fd != counters.page_fd
+                || last_page_io.offset < 0
+                || static_cast<Count>(last_page_io.offset) != charge.page * platform_page));
         last_page_io.valid = false;
         if (!write) {
             ++self.reads;
