@@ -7254,6 +7254,13 @@ if(UNIX)
     endif()
 endif()
 
+# LAB-o1s4 E3: pure arithmetic gate, intentionally no engine link dependency.
+list(APPEND TEST_SOURCES test_cohort_exposure_bits)
+add_executable(test_cohort_exposure_bits test_cohort_exposure_bits.cpp)
+target_compile_features(test_cohort_exposure_bits PRIVATE cxx_std_17)
+target_compile_options(test_cohort_exposure_bits PRIVATE -fno-fast-math -ffp-contract=off -UNDEBUG)
+add_test(NAME test_cohort_exposure_bits COMMAND test_cohort_exposure_bits)
+
 # LAB-O1SEAMS s4: one executable, one independently selected row per clause.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_o1s4_queue_red)
@@ -7271,6 +7278,25 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         COMMAND test_o1s4_queue_red s4_pending_size_read_bound_red)
     add_test(NAME s4_pending_copy_read_bound_red
         COMMAND test_o1s4_queue_red s4_pending_copy_read_bound_red)
+    # E3 uses only fixture APIs already present at 3ed909c416. Keep its
+    # measured exposure reds and bit controls independent of existing s4 rows.
+    list(APPEND TEST_SOURCES test_o1s4_cohort_exposure)
+    add_executable(test_o1s4_cohort_exposure test_o1s4_cohort_exposure.cpp)
+    target_link_libraries(test_o1s4_cohort_exposure PRIVATE pineforge)
+    target_compile_features(test_o1s4_cohort_exposure PRIVATE cxx_std_17)
+    target_compile_options(test_o1s4_cohort_exposure PRIVATE -fno-fast-math -ffp-contract=off -UNDEBUG)
+    add_test(NAME s4_cohort_exposure_read_bound_red
+        COMMAND test_o1s4_cohort_exposure s4_cohort_exposure_read_bound_red)
+    add_test(NAME s4_cohort_exposure_seeded_bits
+        COMMAND test_o1s4_cohort_exposure s4_cohort_exposure_seeded_bits)
+    add_test(NAME s4_cohort_exposure_middle_delete_bits
+        COMMAND test_o1s4_cohort_exposure s4_cohort_exposure_middle_delete_bits)
+    add_test(NAME s4_cohort_exposure_filters_and_regain_bits
+        COMMAND test_o1s4_cohort_exposure s4_cohort_exposure_filters_and_regain_bits)
+    add_test(NAME s4_cohort_exposure_positions_and_ties
+        COMMAND test_o1s4_cohort_exposure s4_cohort_exposure_positions_and_ties)
+    add_test(NAME s4_named_pending_exposure_bound_red
+        COMMAND test_o1s4_cohort_exposure s4_named_pending_exposure_bound_red)
     add_test(NAME s4_terminal_mark_descriptor_stays_fixed_red
         COMMAND test_o1s4_queue_red s4_terminal_mark_descriptor_stays_fixed_red)
     add_test(NAME s34_record_index_publication_rollback_red
