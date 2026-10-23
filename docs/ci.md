@@ -1286,8 +1286,42 @@ exactly one associated merged PR targeting `main`, with `merge_commit_sha`
 equal to the release sha and a head tree matching the released tree, then
 reads that head's full contexts through the statuses API. PRs targeting other
 bases or naming a different merge commit are ignored; malformed fields refuse.
-Zero matches refuse; multiple matches refuse and name every matching PR, with
-no preference for the newest.
+When qualifying merged PRs exist, zero tree matches refuse; multiple matches
+refuse and name every matching PR, with no preference for the newest. A failed
+tree or status check never falls back to a release bump.
+
+When there is no qualifying merged PR for the current main sha, phase 1 permits
+one release bump only when all three conditions hold:
+
+1. GitHub's `repos/{repo}/actions/runs?head_sha=<sha>&per_page=100` returns at
+   least one run with `event == "push"`, `head_branch == "main"` and
+   `head_sha == <sha>`. Every such run must have both `actor.login` and
+   `triggering_actor.login` equal to the gate's fixed `RELEASE_PUSH_ACTOR`,
+   `pineforge-app[bot]`, the release App installation token used by
+   `release.yml`. All pages are read; missing/malformed pages, changing
+   `total_count` or a row count different from that total refuse. Reaching the
+   filtered API's 1000-run limit also refuses, because completeness at that
+   boundary cannot be inferred. Zero matching runs refuse. A bump pushed seconds
+   ago may not have a post-merge run yet; retry the release once that push run exists.
+2. The bump has exactly one parent, and that parent passes the ordinary
+   phase-1 merged-PR/tree/full-status checks above, including the allowed
+   status creator. This depth is exactly one: a bump on another bump refuses
+   even when its grandparent was gated. A merge commit also refuses.
+3. The complete parent-to-bump file diff is exactly `VERSION` and
+   `docker/run_failure_codes_diff.json`, both status `M`, both regular blobs
+   with mode `100644` before and after. The gate compares complete recursive
+   Git trees, derives `M` from an existing path with a changed blob, and
+   refuses truncated trees. Added, deleted or renamed files, mode changes,
+   any extra file (including README or CHANGELOG), either missing
+   modification, and an empty diff refuse.
+
+Condition 1 proves who pushed this sha to main. It does not prove that the
+pushed content is what a particular release run built, or exclusive use of
+the App credential by this workflow. Commit author, committer and verification
+metadata provide no push-identity evidence. Condition 3 bounds the content
+changes to the two files whose values the release workflow computes: the next
+version and the reset catalog diff. Preflight pins the exact writer, staging,
+commit and atomic-push step and the App-token checkout wiring.
 
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
 `scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
@@ -1296,7 +1330,7 @@ fixed in that constant by a reviewed PR. The release job cannot configure it
 through an environment variable or workflow input. At that sha and every
 descendant, the guard requires a main-proof receipt for the **exact main
 sha** with both full contexts green and does not consult PR heads. Missing,
-unreadable or non-green receipts refuse, with no transitional fallback.
+unreadable or non-green receipts refuse, with no PR or release-bump fallback.
 Commits preceding the cut-over retain phase 1; unknown ancestry refuses.
 The reader seam defines normalized context states, not a receipt storage format.
 

@@ -1115,6 +1115,52 @@ def _step_block(step: str, key: str) -> list[str]:
     return _job_block(re.sub(r'^( *)- ', r'\1  ', step, count=1), key)
 
 
+# ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
+RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
+        id: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT:  ${{ steps.bump.outputs.next }}
+          TAG:   ${{ steps.bump.outputs.tag }}
+          RESET: ${{ steps.catalog.outputs.reset }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${NEXT}" > VERSION
+          cp "${RESET}" docker/run_failure_codes_diff.json
+          git add VERSION docker/run_failure_codes_diff.json
+          git commit -m "chore(release): ${TAG}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          python3 scripts/gen_run_failure_catalog_diff.py --check
+          git push --atomic origin HEAD "${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+'''
+
+
+def release_bump_workflow_findings(workflow: str) -> list[str]:
+    steps = _steps(_jobs(workflow).get('release', ''))
+    publish = _step_named(steps, '      - name: Write bumped VERSION, commit, tag, push')
+    findings = []
+    if _code(publish) != _code(RELEASE_BUMP_PUBLISH_STEP):
+        findings.append('release.yml must keep the exact two-file release bump writer, '
+                        'commit and atomic push')
+    app = _step_named(steps, '      - name: Mint org App token')
+    checkout = _step_named(steps, '      - name: Checkout (full history)')
+    if (_step_values(app, 'id') != ['app']
+            or _step_values(app, 'uses') != ['actions/create-github-app-token@v1']
+            or _step_block(app, 'with') != [
+                '        with:',
+                '          app-id: ${{ secrets.PINEFORGE_APP_ID }}',
+                '          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}',
+                '          owner: ${{ github.repository_owner }}',
+                '          repositories: pineforge-engine']
+            or _step_values(checkout, 'uses') != ['actions/checkout@v4']
+            or _step_block(checkout, 'with') != [
+                '        with:', '          fetch-depth: 0',
+                '          token: ${{ steps.app.outputs.token }}']):
+        findings.append('release.yml bump push must use the release App installation token')
+    return findings
+
+
 def fast_rows(cmake: str) -> list[str]:
     """Read the single CMake population; no duplicate Python list of rows."""
     blocks = re.findall(r'^set\(PINEFORGE_PR_FAST_TESTS\n(.*?)^\)', cmake,
@@ -1537,6 +1583,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or _job_values(_jobs(subset).get('corpus-parity-subset', ''), 'if')):
         findings.append('PR parity workflow must retain only workflow_call, authz and an unconditional subset job')
     findings += docs_workflow_findings(docs, docs_post)
+    if 'release.yml' in workflows:
+        findings += release_bump_workflow_findings(workflows['release.yml'])
     for name, workflow in workflows.items():
         if name in RELEASE_JOB_RUNNERS:
             continue
@@ -1878,6 +1926,7 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_report_outputs_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
+        # Includes authenticated bump identity, gated parent and exact tree diff.
         ('release-gate-tests', [sys.executable, str(source / 'scripts/test_ci_release_gate.py')]),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are

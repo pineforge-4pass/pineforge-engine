@@ -28,6 +28,12 @@ WATCHER_FIRST_SHA = "f" * 40
 MAIN_API = f"repos/{REPO}/branches/main"
 PULLS_API = f"repos/{REPO}/commits/{SHA}/pulls"
 STATUSES_API = f"repos/{REPO}/commits/{HEAD}/statuses?per_page=100"
+BUMP_PARENT = OTHER_HEAD
+BUMP_API = f"repos/{REPO}/commits/{SHA}"
+PARENT_PULLS_API = f"repos/{REPO}/commits/{BUMP_PARENT}/pulls"
+RUNS_API = f"repos/{REPO}/actions/runs?head_sha={SHA}&per_page=100"
+BEFORE_TREE_API = f"repos/{REPO}/git/trees/{TREE}?recursive=1"
+AFTER_TREE_API = f"repos/{REPO}/git/trees/{OTHER_TREE}?recursive=1"
 GATE_NAME = "Refuse unless pineforge/verify and pineforge/parity are green"
 
 
@@ -69,6 +75,35 @@ def http_response(code, body, headers=None):
             + "\r\n" + body)
 
 
+def push_run(*, actor="pineforge-app[bot]", triggering_actor="pineforge-app[bot]",
+             event="push", branch="main", sha=SHA):
+    return {"event": event, "head_branch": branch, "head_sha": sha,
+            "actor": {"login": actor}, "triggering_actor": {"login": triggering_actor}}
+
+
+def runs_page(rows, *, total=None):
+    return json.dumps({"total_count": len(rows) if total is None else total,
+                       "workflow_runs": rows})
+
+
+def tree_entry(path, sha, *, mode="100644", kind="blob"):
+    return {"path": path, "sha": sha, "mode": mode, "type": kind}
+
+
+def bump_files(*, after=False):
+    return [
+        tree_entry("VERSION", ("4" if after else "1") * 40),
+        tree_entry("docker", ("6" if after else "7") * 40, mode="040000", kind="tree"),
+        tree_entry("docker/run_failure_codes_diff.json", ("5" if after else "2") * 40),
+        tree_entry("src", "8" * 40, mode="040000", kind="tree"),
+        tree_entry("src/unchanged.cpp", "3" * 40),
+    ]
+
+
+def git_tree(sha, entries, *, truncated=False):
+    return json.dumps({"sha": sha, "truncated": truncated, "tree": entries})
+
+
 class FakeAPI:
     """Raw gh responses keyed by exact endpoint, including jq/pagination flags."""
 
@@ -79,6 +114,7 @@ class FakeAPI:
             PULLS_API: json.dumps([pull()]),
             f"repos/{REPO}/commits/{HEAD}": json.dumps(commit(HEAD, TREE)),
             STATUSES_API: json.dumps(successes()),
+            RUNS_API: runs_page([]),
         }
         self.calls = []
 
@@ -93,6 +129,20 @@ class FakeAPI:
 
     def statuses(self, rows):
         self.responses[STATUSES_API] = json.dumps(rows)
+
+    def release_bump(self):
+        candidate = commit(SHA, OTHER_TREE)
+        candidate["parents"] = [{"sha": BUMP_PARENT}]
+        candidate["commit"]["verification"] = {"verified": False}
+        self.responses.update({
+            PULLS_API: "[]",
+            BUMP_API: json.dumps(candidate),
+            RUNS_API: runs_page([push_run()]),
+            PARENT_PULLS_API: json.dumps([pull(merge_sha=BUMP_PARENT)]),
+            f"repos/{REPO}/commits/{BUMP_PARENT}": json.dumps(commit(BUMP_PARENT, TREE)),
+            BEFORE_TREE_API: git_tree(TREE, bump_files()),
+            AFTER_TREE_API: git_tree(OTHER_TREE, bump_files(after=True)),
+        })
 
 
 class GateTests(unittest.TestCase):
@@ -675,6 +725,301 @@ class GateTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         self.assertIn(f"PR #902 head {other_head}", stdout)
         self.assertIn(f"tree {other_tree}", stdout)
+
+
+class ReleaseBumpTests(unittest.TestCase):
+    # Reuse the real CLI harness without inheriting/rerunning GateTests' cases.
+    run_gate = GateTests.run_gate
+    assert_refused = GateTests.assert_refused
+    enable_watcher = GateTests.enable_watcher
+
+    def setUp(self):
+        GateTests.setUp(self)
+        self.api.release_bump()
+
+    def reset_bump(self):
+        self.api = FakeAPI()
+        self.api.release_bump()
+
+    def assert_bump_green(self):
+        code, stdout, stderr = self.run_gate()
+        self.assertEqual(code, 0, (stdout, stderr))
+        self.assertEqual(stderr, "")
+        self.assertEqual(stdout, (
+            f"release gate green: release bump {SHA}; parent {BUMP_PARENT}; "
+            f"PR #17 head {HEAD}; pineforge/verify=success; "
+            f"pineforge/parity=success; tree {TREE}\n"))
+
+    def test_bump_on_a_gated_parent_passes(self):
+        # RED on main: the exact empty associated-pulls input refuses there.
+        self.assert_bump_green()
+        self.assertIn((RUNS_API, True, None), self.api.calls)
+        self.assertIn((PARENT_PULLS_API, True, None), self.api.calls)
+        self.assertIn((STATUSES_API, True, None), self.api.calls)
+        self.assertIn((BEFORE_TREE_API, False, None), self.api.calls)
+        self.assertIn((AFTER_TREE_API, False, None), self.api.calls)
+        self.assertTrue(all(count == 1 for count in
+                            Counter(endpoint for endpoint, _, _ in self.api.calls).values()))
+        self.git.assert_not_called()
+        self.proof.assert_not_called()
+
+    def test_bump_plus_one_code_file_refuses(self):
+        # Condition (c) mutation control: all identity/parent evidence is green.
+        entries = bump_files(after=True) + [tree_entry("src/extra.cpp", "9" * 40)]
+        self.api.responses[AFTER_TREE_API] = git_tree(OTHER_TREE, entries)
+        self.assert_refused("release bump must modify exactly VERSION and "
+                            "docker/run_failure_codes_diff.json")
+
+    def test_human_push_or_rerun_refuses_even_with_forged_commit_identity(self):
+        candidate = json.loads(self.api.responses[BUMP_API])
+        candidate.update(author={"login": "github-actions[bot]"},
+                         committer={"login": "github-actions[bot]"})
+        candidate["commit"].update(
+            author={"name": "github-actions[bot]"},
+            committer={"name": "github-actions[bot]"},
+            verification={"verified": True})
+        for actor, trigger in (("luisleo526", "luisleo526"),
+                               ("luisleo526", "pineforge-app[bot]"),
+                               ("pineforge-app[bot]", "luisleo526")):
+            with self.subTest(actor=actor, triggering_actor=trigger):
+                self.reset_bump()
+                self.api.responses[BUMP_API] = json.dumps(candidate)
+                self.api.responses[RUNS_API] = runs_page([
+                    push_run(actor=actor, triggering_actor=trigger)])
+                self.assert_refused("release bump push actor must be pineforge-app[bot] "
+                                    "for both actor and triggering_actor")
+
+    def test_zero_runs_refuses(self):
+        self.api.responses[RUNS_API] = runs_page([])
+        self.assert_refused(f"no exact-main push workflow run for release bump {SHA}")
+
+    def test_unrelated_runs_cannot_supply_push_identity(self):
+        for row in (push_run(event="workflow_dispatch"), push_run(branch="release"),
+                    push_run(sha=BUMP_PARENT)):
+            with self.subTest(row=row):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = runs_page([row])
+                self.assert_refused(f"no exact-main push workflow run for release bump {SHA}")
+
+    def test_every_matching_push_run_must_have_both_app_actors(self):
+        for rows in ([push_run(), push_run(actor="luisleo526")],
+                     [push_run(triggering_actor="luisleo526"), push_run()]):
+            with self.subTest(rows=rows):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = runs_page(rows)
+                self.assert_refused("release bump push actor must be pineforge-app[bot]")
+
+    def test_runs_on_later_pages_are_all_read_with_adjacent_object_headers(self):
+        for headers in (False, True):
+            with self.subTest(headers=headers):
+                self.reset_bump()
+                pages = [runs_page([push_run(event="workflow_dispatch") for _ in range(100)],
+                                   total=101),
+                         runs_page([push_run()], total=101)]
+                self.api.responses[RUNS_API] = "".join(
+                    http_response(200, page) if headers else page for page in pages)
+                self.assert_bump_green()
+                self.assertIn((RUNS_API, True, None), self.api.calls)
+
+    def test_human_push_on_a_later_page_refuses(self):
+        self.api.responses[RUNS_API] = (
+            runs_page([push_run() for _ in range(100)], total=101)
+            + runs_page([push_run(actor="luisleo526")], total=101))
+        self.assert_refused("release bump push actor must be pineforge-app[bot]")
+
+    def test_later_runs_page_errors_cannot_hide_behind_a_good_page(self):
+        for trailing, fragment in (
+                (http_response(503, "unavailable"), "upstream error 503"),
+                (http_response(200, ""), "returned an empty payload"),
+                (http_response(200, "not JSON"), "returned invalid JSON")):
+            with self.subTest(fragment=fragment):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = (
+                    http_response(200, runs_page([push_run()], total=2)) + trailing)
+                self.assert_refused(f"API {RUNS_API} {fragment}")
+                self.assertEqual(self.api.calls[-1], (RUNS_API, True, None))
+
+    def test_truncated_run_list_or_inconsistent_totals_refuse(self):
+        for payload in (runs_page([push_run()], total=1001),
+                        "".join(runs_page([push_run()] * 100, total=1000) for _ in range(10)),
+                        runs_page([push_run()], total=2)
+                        + runs_page([push_run()], total=3)):
+            with self.subTest(payload=payload):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = payload
+                self.assert_refused(f"API {RUNS_API} returned incomplete workflow_runs pagination")
+
+    def test_malformed_runs_or_actors_refuse(self):
+        for payload, fragment in (
+                ("[]", "invalid workflow_runs page"),
+                ('{"total_count":true,"workflow_runs":[]}', "invalid workflow_runs page"),
+                ('{"total_count":1,"workflow_runs":{}}', "invalid workflow_runs page"),
+                (runs_page([None]), "invalid workflow run"),
+                (runs_page([{"event": "push"}]), "invalid workflow run"),
+                (runs_page([{**push_run(), "actor": None}]), "push actor must be"),
+                (runs_page([{**push_run(), "triggering_actor": {}}]), "push actor must be")):
+            with self.subTest(payload=payload):
+                self.reset_bump()
+                self.api.responses[RUNS_API] = payload
+                self.assert_refused(fragment)
+
+    def test_bump_on_an_ungated_parent_refuses(self):
+        # Condition (b) mutation control: identity and the two-file diff are green.
+        for context in ("pineforge/verify", "pineforge/parity"):
+            with self.subTest(context=context):
+                self.reset_bump()
+                self.api.statuses([row for row in successes() if row["context"] != context])
+                self.assert_refused(f"PR #17 head {HEAD}: missing {context}")
+
+    def test_parent_still_requires_trusted_newest_success_and_matching_tree(self):
+        for variant, fragment in (
+                ("red", "pineforge/verify=failure (expected success)"),
+                ("creator", "refused status creator"),
+                ("tree", f"no merged pull request head matches release tree {TREE}"),
+                ("ambiguous", "multiple merged PR heads match (#17, #18)")):
+            with self.subTest(variant=variant):
+                self.reset_bump()
+                if variant == "red":
+                    self.api.statuses([status("pineforge/verify", "failure"), *successes()])
+                elif variant == "creator":
+                    rows = successes()
+                    rows[0]["creator"] = {"login": "outsider", "type": "User"}
+                    self.api.statuses(rows)
+                elif variant == "tree":
+                    self.api.responses[f"repos/{REPO}/commits/{HEAD}"] = json.dumps(
+                        commit(HEAD, OTHER_TREE))
+                else:
+                    self.api.responses[PARENT_PULLS_API] = json.dumps([
+                        pull(merge_sha=BUMP_PARENT), pull(number=18, merge_sha=BUMP_PARENT)])
+                self.assert_refused(fragment)
+
+    def test_bump_on_bump_refuses_despite_a_gated_grandparent(self):
+        grandparent, grandtree = "9" * 40, "0" * 40
+        parent = commit(BUMP_PARENT, TREE)
+        parent["parents"] = [{"sha": grandparent}]
+        self.api.responses.update({
+            PARENT_PULLS_API: "[]",
+            f"repos/{REPO}/commits/{BUMP_PARENT}": json.dumps(parent),
+            f"repos/{REPO}/actions/runs?head_sha={BUMP_PARENT}&per_page=100":
+                runs_page([push_run(sha=BUMP_PARENT)]),
+            f"repos/{REPO}/commits/{grandparent}/pulls":
+                json.dumps([pull(merge_sha=grandparent)]),
+            f"repos/{REPO}/commits/{grandparent}": json.dumps(commit(grandparent, grandtree)),
+            f"repos/{REPO}/commits/{HEAD}": json.dumps(commit(HEAD, grandtree)),
+            f"repos/{REPO}/git/trees/{grandtree}?recursive=1":
+                git_tree(grandtree, [
+                    {**row, "sha": "a" * 40}
+                    if row["path"] in ("VERSION", "docker/run_failure_codes_diff.json") else row
+                    for row in bump_files()]),
+        })
+        self.assert_refused(f"no merged pull request associated with {BUMP_PARENT}")
+        self.assertFalse(any(grandparent in endpoint for endpoint, _, _ in self.api.calls))
+
+    def test_merge_root_and_malformed_parent_lists_refuse(self):
+        for parents in ([], [{"sha": BUMP_PARENT}, {"sha": HEAD}],
+                        None, [{"sha": "bad"}], [{}]):
+            with self.subTest(parents=parents):
+                self.reset_bump()
+                candidate = commit(SHA, OTHER_TREE)
+                candidate["parents"] = parents
+                self.api.responses[BUMP_API] = json.dumps(candidate)
+                self.assert_refused("release bump requires exactly one valid parent")
+
+    def test_deleted_renamed_added_or_missing_allowlisted_file_refuses(self):
+        for path in ("VERSION", "docker/run_failure_codes_diff.json"):
+            for change in ("deleted", "renamed", "added", "unchanged"):
+                with self.subTest(path=path, change=change):
+                    self.reset_bump()
+                    before, after = bump_files(), bump_files(after=True)
+                    if change == "deleted":
+                        after = [row for row in after if row["path"] != path]
+                    elif change == "renamed":
+                        after = [{**row, "path": path + ".renamed"}
+                                 if row["path"] == path else row for row in after]
+                    elif change == "added":
+                        before = [row for row in before if row["path"] != path]
+                    else:
+                        original = next(row for row in before if row["path"] == path)
+                        after = [original if row["path"] == path else row for row in after]
+                    self.api.responses[BEFORE_TREE_API] = git_tree(TREE, before)
+                    self.api.responses[AFTER_TREE_API] = git_tree(OTHER_TREE, after)
+                    self.assert_refused("release bump must modify exactly VERSION and "
+                                        "docker/run_failure_codes_diff.json")
+
+    def test_mode_change_or_nonregular_file_on_either_side_refuses(self):
+        for path in ("VERSION", "docker/run_failure_codes_diff.json"):
+            for sides in (("before",), ("after",), ("before", "after")):
+                for mode, kind in (("100755", "blob"), ("120000", "blob"),
+                                   ("160000", "commit")):
+                    with self.subTest(path=path, sides=sides, mode=mode):
+                        self.reset_bump()
+                        for side in sides:
+                            entries = [{**row, "mode": mode, "type": kind}
+                                       if row["path"] == path else row
+                                       for row in bump_files(after=side == "after")]
+                            endpoint, tree = ((BEFORE_TREE_API, TREE) if side == "before"
+                                              else (AFTER_TREE_API, OTHER_TREE))
+                            self.api.responses[endpoint] = git_tree(tree, entries)
+                        self.assert_refused(f"release bump path {path} must stay mode 100644")
+
+    def test_zero_changed_files_refuses(self):
+        for same_tree in (False, True):
+            with self.subTest(same_tree=same_tree):
+                self.reset_bump()
+                self.api.responses[AFTER_TREE_API] = git_tree(OTHER_TREE, bump_files())
+                if same_tree:
+                    candidate = json.loads(self.api.responses[BUMP_API])
+                    candidate["commit"]["tree"]["sha"] = TREE
+                    self.api.responses[BUMP_API] = json.dumps(candidate)
+                self.assert_refused("release bump must modify exactly VERSION and "
+                                    "docker/run_failure_codes_diff.json")
+                self.assertEqual(Counter(endpoint for endpoint, _, _ in self.api.calls)[
+                    BEFORE_TREE_API], 1)
+                if same_tree:
+                    self.assertNotIn((AFTER_TREE_API, False, None), self.api.calls)
+
+    def test_truncated_or_malformed_git_trees_refuse(self):
+        for endpoint, tree, after in ((BEFORE_TREE_API, TREE, False),
+                                      (AFTER_TREE_API, OTHER_TREE, True)):
+            for payload, fragment in (
+                    (git_tree(tree, bump_files(after=after), truncated=True),
+                     "invalid or truncated git tree"),
+                    (git_tree("9" * 40, bump_files(after=after)), "invalid or truncated git tree"),
+                    (json.dumps({"sha": tree, "tree": []}), "invalid or truncated git tree"),
+                    (git_tree(tree, [None]), "invalid git tree entry"),
+                    (git_tree(tree, [tree_entry("VERSION", "bad")]), "invalid git tree entry"),
+                    (git_tree(tree, [*bump_files(after=after), bump_files(after=after)[0]]),
+                     "duplicate git tree path")):
+                with self.subTest(endpoint=endpoint, payload=payload):
+                    self.reset_bump()
+                    self.api.responses[endpoint] = payload
+                    self.assert_refused(f"API {endpoint} returned {fragment}")
+
+    def test_bump_evidence_read_errors_stop_without_retry_or_later_reads(self):
+        for endpoint in (RUNS_API, BUMP_API, PARENT_PULLS_API,
+                         f"repos/{REPO}/commits/{BUMP_PARENT}", STATUSES_API,
+                         BEFORE_TREE_API, AFTER_TREE_API):
+            for payload, fragment in ((http_response(503, "unavailable"), "upstream error 503"),
+                                      ("", "returned an empty payload"),
+                                      ("not JSON", "returned invalid JSON")):
+                with self.subTest(endpoint=endpoint, payload=payload):
+                    self.reset_bump()
+                    self.api.responses[endpoint] = payload
+                    self.assert_refused(f"API {endpoint} {fragment}")
+                    self.assertEqual(self.api.calls[-1][0], endpoint)
+                    self.assertTrue(all(count == 1 for count in Counter(
+                        called for called, _, _ in self.api.calls).values()))
+
+    def test_phase_two_missing_receipt_cannot_use_a_valid_bump(self):
+        self.enable_watcher()
+        self.assert_refused(f"main-proof receipt is missing for {SHA}")
+        self.assertEqual(self.api.calls, [(MAIN_API, False, ".commit.sha")])
+        self.proof.assert_called_once_with(REPO, SHA)
+
+    def test_failed_candidate_pr_check_cannot_use_an_otherwise_valid_bump(self):
+        self.api.responses[PULLS_API] = json.dumps([pull()])
+        self.assert_refused(f"no merged pull request head matches release tree {OTHER_TREE}")
+        self.assertNotIn((RUNS_API, True, None), self.api.calls)
 
 
 class APICommandTests(unittest.TestCase):
