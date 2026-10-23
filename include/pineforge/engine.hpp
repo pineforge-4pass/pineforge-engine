@@ -2575,6 +2575,9 @@ private:
         bool trade_history_streamable = false;
         std::string path, run_id, scratch_dir;
         int fd = -1; // borrowed stream; -1 selects the owned path writer
+        std::uint64_t fd_device = 0;
+        std::uint64_t fd_inode = 0;
+        bool fd_identity_valid = false;
         std::uint32_t active_calls = 0;
         std::uint32_t stream_calls = 0;
         std::unique_ptr<report_sink::LineWriter> writer;
@@ -2766,6 +2769,7 @@ private:
     // state they add, and no reader observes it as part of the run's report.
     mutable report_sequence::OptionalSequenceSummary sequence_witness_;
     mutable std::size_t sequence_hash_folded_ = 0;
+    mutable std::uint64_t sequence_hash_folded_leaf_ = 0;
     mutable bool sequence_row_folded_ = false;
     report_sequence::SequenceWitness output_row_witness_base_;
     report_sequence::SequenceWitness output_event_row_witness_;
