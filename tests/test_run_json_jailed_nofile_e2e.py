@@ -1,9 +1,11 @@
-"""CR-281: port CR-224's real-native sink-OFF file-jail test to 1.7.0.
+"""CR-281/CR-267: real-native sink-OFF file jail and internal arena admission.
 
 CTest builds the unchanged WIDE corpus probe. The jailed children use the real
 run_json profile, table setter and arena admission. Only the unjailed reference
 and negative control suppress the Python report-sink factory, as that profile
 has no sink-OFF CLI switch. No ctypes loader or native export is replaced.
+The child environment is APP's allowlist plus FD/BYTES for an arena; no caller
+sets PF_SCRATCH_ARENA_JAILED, including for the admitted sealed arena.
 """
 from __future__ import annotations
 
@@ -35,14 +37,21 @@ F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
 F_SEAL_SEAL = getattr(fcntl, "F_SEAL_SEAL", 0x0001)
 F_SEAL_SHRINK = getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
 F_SEAL_GROW = getattr(fcntl, "F_SEAL_GROW", 0x0004)
-CHUNK_BYTES = 1024 * 1024
 # Use the line's hosting default, not a guessed bound for an unavailable FACTS
 # record: test_arena_bound.py:47-49 and docs/design/arena-bound.md:82-87.
 ARENA_BYTES = 1 << 30
-WINDOW_BYTES = 32 * CHUNK_BYTES  # ScratchArena::kDefaultWindowBytes.
+APP_ENVIRONMENT_KEYS = frozenset({
+    "PATH", "PYTHONPATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "PINEFORGE_PREFIX",
+})
 CONSTRAINTS_OK = "CR281 constraints: RLIMIT_FSIZE=0/0 SIGXFSZ=SIG_IGN write=EFBIG pwrite=EFBIG"
 ARENA_OK = f"CR281 arena: fd=5 bytes={ARENA_BYTES} seals=GROW|SHRINK|SEAL pwrite=EFBIG"
 NO_ARENA_OK = "CR281 arena: fd=5 absent"
+FILE_ARENA_OK = f"CR267 arena: fd=5 bytes={ARENA_BYTES} backing=regular_file pwrite=EFBIG"
+ARENA_RECEIPTS = {
+    None: NO_ARENA_OK,
+    "sealed_memfd": ARENA_OK,
+    "regular_file": FILE_ARENA_OK,
+}
 TRACE_CALL = re.compile(r"^(openat|open|creat|memfd_create)\(")
 TRACE_PREFIX = re.compile(r"^(?:(?:\[pid\s+(\d+)\]|(\d+))\s+)?(.*)$")
 
@@ -57,26 +66,21 @@ def _library():
 
 
 def _child_environment(cwd, temporary, *, profile, arena):
-    # An allowlist, not a filtered copy: no inherited writable HOME/cache,
-    # spill/output path, loader injection, Python path or profiler destination.
+    # Exactly APP's allowlist, with explicit repo paths instead of inherited
+    # settings. -B on the child command prevents bytecode writes.
     environment = {
         "PATH": os.defpath,
+        "PYTHONPATH": str(ROOT / "docker"),
         "HOME": str(cwd),
-        "TMPDIR": str(temporary), "TEMP": str(temporary), "TMP": str(temporary),
-        "XDG_CACHE_HOME": str(temporary), "XDG_CONFIG_HOME": str(temporary),
-        "XDG_DATA_HOME": str(temporary), "XDG_STATE_HOME": str(temporary),
-        "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
-        "PYTHONCOERCECLOCALE": "0",
-        "LC_ALL": "C", "TZ": "UTC",
+        "LANG": "C", "LC_ALL": "C", "TZ": "UTC",
+        "TMPDIR": str(temporary),
+        "PINEFORGE_PREFIX": str(ROOT),
     }
-    if profile == "jailed":
-        environment["PF_SCRATCH_ARENA_JAILED"] = "1"
     if arena:
         assert profile == "jailed"
         environment.update(
             PF_SCRATCH_ARENA_FD=str(ARENA_FD),
             PF_SCRATCH_ARENA_BYTES=str(ARENA_BYTES),
-            PF_SCRATCH_WINDOW_BYTES=str(WINDOW_BYTES),
         )
     return environment
 
@@ -122,8 +126,35 @@ def _new_arena():
         raise
 
 
-def _install_arena(source_fd):
+def _assert_regular_arena(fd):
+    # Match validate_backing's ordinary filesystem/tmpfs classification.
+    try:
+        seals = fcntl.fcntl(fd, F_GET_SEALS)
+    except OSError as error:
+        assert error.errno == errno.EINVAL, repr(error)
+    else:
+        assert seals == F_SEAL_SEAL, seals
+
+
+def _new_file_arena(path):
+    # A real parent-created ordinary file, never memfd_create. The fixture is
+    # outside the child's empty cwd/TMPDIR, and sized before RLIMIT_FSIZE=0.
+    fd = _keep_above_arena_slot(os.open(
+        path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600))
+    try:
+        os.ftruncate(fd, ARENA_BYTES)
+        assert stat.S_ISREG(os.fstat(fd).st_mode)
+        assert os.fstat(fd).st_size == ARENA_BYTES
+        _assert_regular_arena(fd)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _install_arena(source_fd, *, arena):
     if source_fd >= 0:
+        assert arena in ("sealed_memfd", "regular_file")
         assert source_fd > ARENA_FD
         # pass_fds preserves the parent's backing across subprocess's fd
         # cleanup. Remap here, rather than risking a preexec dup being closed
@@ -132,11 +163,14 @@ def _install_arena(source_fd):
         os.close(source_fd)
         status = os.fstat(ARENA_FD)
         assert stat.S_ISREG(status.st_mode) and status.st_size == ARENA_BYTES
-        seals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL
-        assert fcntl.fcntl(ARENA_FD, F_GET_SEALS) == seals
+        if arena == "sealed_memfd":
+            seals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL
+            assert fcntl.fcntl(ARENA_FD, F_GET_SEALS) == seals
+        else:
+            _assert_regular_arena(ARENA_FD)
         assert fcntl.fcntl(ARENA_FD, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR
     else:
-        assert source_fd == -1
+        assert source_fd == -1 and arena is None
         try:
             os.fstat(ARENA_FD)
         except OSError as error:
@@ -171,6 +205,10 @@ def _check_child_constraints(canary_fd, *, profile, arena):
     cwd = Path.cwd()
     temporary = Path(os.environ["TMPDIR"])
     assert cwd != temporary
+    expected_keys = APP_ENVIRONMENT_KEYS | (
+        {"PF_SCRATCH_ARENA_FD", "PF_SCRATCH_ARENA_BYTES"} if arena else set())
+    assert set(os.environ) == expected_keys, dict(os.environ)
+    assert "PF_SCRATCH_ARENA_JAILED" not in os.environ
     assert os.environ == _child_environment(cwd, temporary, profile=profile, arena=arena)
     for directory in (cwd, temporary):
         assert stat.S_IMODE(directory.stat().st_mode) == 0o555
@@ -184,22 +222,24 @@ def _check_child_constraints(canary_fd, *, profile, arena):
         _expect_efbig(canary_fd, positional=True)
         assert os.fstat(canary_fd).st_size == 0
     finally:
-        os.close(canary_fd)  # No ordinary writable file fd reaches the engine.
+        os.close(canary_fd)  # The write canary never reaches the engine.
     if arena:
-        # Even an in-size pwrite to a memfd is forbidden by RLIMIT_FSIZE=0.
+        # Even an in-size pwrite to either backing is forbidden at FSIZE=0.
         # Successful native execution must use the real arena's MAP_SHARED
         # copies (scratch_arena.cpp), not a relaxed limit or syscall writes.
         _expect_efbig(ARENA_FD, positional=True)
         assert os.fstat(ARENA_FD).st_size == ARENA_BYTES
-        print(ARENA_OK, file=sys.stderr, flush=True)
+        print(ARENA_RECEIPTS[arena], file=sys.stderr, flush=True)
     print(CONSTRAINTS_OK + f" euid={os.geteuid()}", file=sys.stderr, flush=True)
 
 
 def _native_child(argv):
     canary_fd, source_fd, profile = int(argv[0]), int(argv[1]), argv[2]
-    _install_arena(source_fd)
+    arena = None if argv[3] == "none" else argv[3]
+    assert arena in ARENA_RECEIPTS
+    _install_arena(source_fd, arena=arena)
     if canary_fd >= 0:
-        _check_child_constraints(canary_fd, profile=profile, arena=source_fd >= 0)
+        _check_child_constraints(canary_fd, profile=profile, arena=arena)
     sys.path.insert(0, str(ROOT / "docker"))
     import run_json
 
@@ -213,14 +253,15 @@ def _native_child(argv):
             sink_requests.append(state)
             return None
         run_json._new_report_sink = sink_off
-    status = run_json.main(["--profile", profile, *argv[3:]])
+    status = run_json.main(["--profile", profile, *argv[4:]])
     if profile == "unjailed":
         assert len(sink_requests) == 1, "the real body run did not reach sink-OFF setup"
     return status
 
 
-def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=False,
+def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=None,
                tracer=None):
+    assert arena in ARENA_RECEIPTS
     assert not arena or (profile == "jailed" and restricted)
     directory = (tmp_path / name).resolve()
     directory.mkdir()
@@ -238,14 +279,17 @@ def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=Fals
             canary_fd = _keep_above_arena_slot(os.open(
                 canary, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600))
             canary.chmod(0o444)
-        if arena:
+        if arena == "sealed_memfd":
             arena_fd = _new_arena()
+        elif arena == "regular_file":
+            arena_fd = _new_file_arena(directory / "ordinary-arena")
         command = [sys.executable, "-B", str(Path(__file__).resolve()),
                    "--native-child", str(canary_fd), str(arena_fd), profile,
+                   arena or "none",
                    "--so", str(library), "--ohlcv", str(tape),
                    "--input-tf", "1", "--script-tf", "15"]
         if tracer:
-            # The parent creates the canary and memfd outside this census.
+            # The parent creates the canary and arena outside this census.
             # Trace the entire child, including imports and the fd-5 remap.
             # stderr is a PIPE: a strace -o file could not grow at FSIZE=0.
             command = [tracer, "-f", "-qq", "-s", "65535", "-e",
@@ -265,7 +309,7 @@ def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=Fals
         (directory / "census.json").write_text(json.dumps(census), encoding="utf-8")
         print(f"CR281 {name}: exit={result.returncode} census={census} logs={directory}",
               flush=True)
-        assert (ARENA_OK if arena else NO_ARENA_OK) in result.stderr, result.stderr
+        assert ARENA_RECEIPTS[arena] in result.stderr, result.stderr
         if restricted:
             assert canary.stat().st_size == 0, f"write canary grew: {canary}"
             receipt = re.search(re.escape(CONSTRAINTS_OK) + r" euid=\d+", result.stderr)
@@ -273,7 +317,7 @@ def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=Fals
             print(f"CR281 {name}: {receipt.group(0)}", flush=True)
         if arena:
             assert os.fstat(arena_fd).st_size == ARENA_BYTES
-            print(ARENA_OK, flush=True)
+            print(ARENA_RECEIPTS[arena], flush=True)
         return result, census
     finally:
         for fd in (canary_fd, arena_fd):
@@ -407,7 +451,7 @@ def test_a_real_jailed_sink_off_with_admitted_arena_creates_no_scratch_file(tmp_
         print(f"CR281 reference: probe={PROBE.name} native sink-OFF trades={len(expected)}",
               flush=True)
         jailed, census = _run_child(tmp_path, "jailed-with-arena", library, tape,
-                                    profile="jailed", restricted=True, arena=True,
+                                    profile="jailed", restricted=True, arena="sealed_memfd",
                                     tracer=tracer)
         assert census == {"cwd": [], "TMPDIR": []}, census
         if tracer:
@@ -466,6 +510,22 @@ def test_c_real_unjailed_disk_scratch_negative_control_fails_under_same_limits(t
                   flush=True)
         print(f"CR281 CHECK (c) PASS: exit=1 native {failure['code']} "
               f"args={failure['args']}; no report body/trades", flush=True)
+
+
+def test_d_real_jailed_ordinary_file_arena_refuses_without_caller_jailed_flag(tmp_path):
+    tracer = _tracer()
+    with _inputs(tmp_path) as (library, tape):
+        refused, census = _run_child(tmp_path, "jailed-ordinary-file-arena", library, tape,
+                                     profile="jailed", restricted=True, arena="regular_file",
+                                     tracer=tracer)
+        failure = _failure(refused, "report_sink_failed", {"reason": "arena_backing"})
+        assert census == {"cwd": [], "TMPDIR": []}, census
+        if tracer:
+            _assert_no_scratch_opens(refused.stderr, library, tape)
+        print(f"CR267 CHECK (d) PASS: ordinary-file fd 5; no caller jailed flag; "
+              f"exit=1 code={failure['code']} args={failure['args']} "
+              f"reason={failure['reason']}; no report body/trades; "
+              "cwd=empty TMPDIR=empty", flush=True)
 
 
 if __name__ == "__main__":
