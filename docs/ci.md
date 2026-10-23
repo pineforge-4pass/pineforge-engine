@@ -850,11 +850,22 @@ requires these two commit statuses. GitHub Actions jobs, including `build`,
 (`promote-baseline.yml`, installed from the maintainers' private campaign
 tooling) runs `main`'s own copy on the closed PR
 (`pull_request_target`) and runs no PR code. It requires both statuses to be
-successful on the verified PR head and a merge commit on `main` that carries
+successful on the verified PR head and a merge commit on the PR's base branch that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
-on `main`). It hands the campaign tool the merge commit, the PR head and that
+on the base branch). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
-for the tree; every other case exits green without promoting.
+for the tree; after the guard succeeds, ineligible baseline cases exit green
+without promoting.
+
+`promote-guard` must pass before the credential job runs.
+Every `pull_request_target` close requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
+The permission fallback admits private organization members reported as `CONTRIBUTOR`; a failed or empty author lookup refuses promotion.
+Only after those checks can an unmerged close pass without a merger lookup and skip `promote`.
+For a merged PR, the merger login must be nonempty and must be an allowlisted bot or have `admin`, `maintain` or `write` permission; a failed or empty lookup refuses promotion.
+Only `dependabot[bot]` and `pineforge-app[bot]` are allowlisted bots.
+Manual `workflow_dispatch` events pass the guard because dispatch requires write access.
+Every other event fails the guard before credentials are available.
+The trigger has no `branches:` filter and the guard does not require a `main` base ref; the existing tree check reads the PR's base ref, defaulting to `main` for dispatch.
 
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
@@ -1140,6 +1151,13 @@ parity commands use `$(getconf _NPROCESSORS_ONLN)` for parallelism.
 No job or step declares `timeout-minutes`, and no proof continues on error.
 The checker retains the bans on paid larger-runner labels and
 `larger_runner` keys. GitHub's platform maximum remains the only time bound.
+
+The credential-free `promote-guard` stays hosted on `ubuntu-latest`; the credential job keeps main's isolated release runner.
+The same stage pins the complete shared `promote-guard` block byte for byte, including comments, empty permissions, payload bindings, refusal script and separator, and the merged-or-dispatch credential job's dependency on it.
+Decision tests execute the guard script extracted from the real workflow with bash and an executable `gh` stub first on PATH that returns separate author and merger permissions by username.
+Mutation tests alter the real promotion workflow to replace the script with `exit 0`, move the unmerged exit before authorization, remove author or merger lookups and other checks, disable `fail`, bypass failed author or merger lookups, add guard credentials or a checkout, or disconnect the credential job.
+The release pool is restricted to the existing pinned release and promotion jobs; reusable call edges cannot admit PR events to them.
+Retired `pf-ci-release` labels remain refused, and an unpinned `flat-peak.yml` receives no release-pool exception.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at

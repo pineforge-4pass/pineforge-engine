@@ -135,7 +135,11 @@ JOB_COMMANDS = {
 }
 # LB-535: macOS is the sole hosted exception; pf-gcp-post is the Linux fleet.
 # This fixed exception never applies to a pull_request-reachable workflow.
-HOSTED_JOB_RUNNERS = {'ci-post.yml': {'build-macos': 'macos-26'}}
+HOSTED_JOB_RUNNERS = {
+    'ci-post.yml': {'build-macos': 'macos-26'},
+    # SEC846: the shared credential-free guard stays hosted in every copy.
+    'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'},
+}
 # LB-435 plus addendum 2: isolate releases and the named promotion exception.
 # The strategy pin keeps the existing macOS and Linux ARM hosted legs.
 RELEASE_JOB_RUNNERS = {
@@ -151,6 +155,9 @@ STANDARD_RUNNERS = ('ubuntu-24.04', 'macos-26')
 _LARGER_RUNNER_LABEL = re.compile(
     r'(?<![\w.-])(?:pf-linux-x64-16|[\w.-]+-(?:xlarge|large))(?![\w.-])')
 _LARGER_RUNNER_KEY = re.compile(r'(?<![\w.-])["\']?larger_runner["\']?[ \t]*:')
+# Retired release labels remain refused by the runner pins as well. Neither
+# spelling may grant an arbitrary workflow access to the isolated release pool.
+_RELEASE_POOL_LABEL = re.compile(r'(?<![\w.-])(?:pf-ci-release|pf-gcp-main)(?![\w.-])')
 # A docs-only change (scripts/ci_docs_only.py) skips the proof jobs. Each waits
 # for authz and changes and skips only when changes succeeded and answered
 # docs-only -- exactly the skip the build aggregate accepts -- so a failed or
@@ -375,6 +382,70 @@ GITHUB_ONLY_STEP = r'''      - name: Read the PR diff independently
               output.write("github_only=" + str(github_only).lower() + "\n")
 '''
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
+# SEC846: an independent literal pins the promotion-specific canon variant.
+# No checkout, secrets, inherited OIDC, skip condition or error suppression may
+# be inserted into this job. Include the header, comments and separator exactly;
+# the codegen and campaign pins must carry this same literal, without repo edits.
+PROMOTE_GUARD = '''  promote-guard:
+    name: promote-guard
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Only our own merged pull requests and dispatches promote the baseline
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: permission lookups for the PR author and merger
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            workflow_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            pull_request_target)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac
+              # Only our own authorised unmerged closes pass without promotion.
+              [ "$MERGED" = "true" ] || { echo "promote-guard: unmerged pull request; promotion is skipped" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+              [ -n "$MERGED_BY" ] || fail "pull_request_target merger is empty"
+              case " $ALLOWED_BOTS " in
+                *" $MERGED_BY "*) ;;
+                *)
+                  # No author_association exists for the merger: ask GitHub for the merger's permission on
+                  # this repository; anything but admin/maintain/write (or a failed call) refuses.
+                  perm=$(gh api "repos/$REPO/collaborators/$MERGED_BY/permission" --jq .permission 2>/dev/null || echo none)
+                  case "$perm" in admin|maintain|write) ;; *) fail "pull_request_target merger ${MERGED_BY:-unknown} has permission '$perm', not write" ;; esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run baseline promotion (only pull_request_target and workflow_dispatch are allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+'''
+PROMOTE_IF = "${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}"
 GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
 POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-macos, sanitizers, native-live, kernel-only, '
                    'corpus-parity-subset, preflight-slow, corpus-parity]')
@@ -733,12 +804,22 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 and _events(workflow) != {'pull_request_target', 'workflow_dispatch'}):
             findings.append(f'{name} must retain pull_request_target and workflow_dispatch '
                             'only for pf-gcp-main promotion')
+        release_events = ({'pull_request_target', 'workflow_dispatch'}
+                          if name == 'promote-baseline.yml' else {'workflow_dispatch'})
+        if fixed_release and not routes[name] <= release_events:
+            findings.append(f'{name} must not admit untrusted caller events to isolated release jobs')
         if _unparsed(workflow):
             findings.append(f'{name} has jobs lines the runner contract cannot read')
         jobs = _jobs(workflow)
         findings += [f'{name} is missing job {job}' for job in pinned if job not in jobs]
         for job, body in jobs.items():
             runs_on, uses = _job_values(body, 'runs-on'), _job_values(body, 'uses')
+            runner_text = ' '.join(runs_on + _job_block(body, 'strategy'))
+            if _RELEASE_POOL_LABEL.search(runner_text) and job not in fixed_release:
+                # No flat-peak.yml exception: event reachability alone cannot
+                # establish a release-only caller, and no such job is pinned.
+                findings.append(f'{name} job {job} may use release pool labels '
+                                'only in a pinned isolated release job')
             if any(not value.startswith('./.github/workflows/') for value in uses):
                 findings.append(f'{name} job {job} calls a workflow the runner contract '
                                 'cannot see; call one under ./.github/workflows/')
@@ -1320,6 +1401,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     # engine axis needs the newest pineforge/verify and pineforge/parity
     # statuses on the PR head.
     if ('  pull_request_target:\n    types: [closed]' not in promote
+            or _events(promote) != {'pull_request_target', 'workflow_dispatch'}
             or re.search(r'^  pull_request:', promote, re.MULTILINE)
             or '  statuses: read' not in promote
             or '  id-token: write' not in promote
@@ -1332,6 +1414,17 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or '.["pineforge/parity"] == "success"' not in promote
             or promote.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
         findings.append("baseline promotion must run main's copy and require the latest two head statuses")
+    promotion_jobs = _jobs(promote)
+    promotion_text = _jobs_text(promote) or ''
+    promotion_headers = list(_JOB_HEADER.finditer(promotion_text))
+    if ([header.group(1) for header in promotion_headers] != ['promote-guard', 'promote']
+            or promotion_text[promotion_headers[0].start():promotion_headers[1].start()]
+            != PROMOTE_GUARD):
+        findings.append('baseline promotion must start with the pinned credential-free promote-guard')
+    promotion = promotion_jobs.get('promote', '')
+    if (_job_values(promotion, 'needs') != ['[promote-guard]']
+            or _job_values(promotion, 'if') != [PROMOTE_IF]):
+        findings.append('baseline promotion must need promote-guard and keep its merged-or-dispatch condition')
     # PRs are squash-merged, so the PR head is never an ancestor of the base
     # branch. The merge commit (the event's merge_commit_sha, or the dispatch
     # input) must be on the base branch and carry the gated PR head's tree; the

@@ -183,6 +183,76 @@ class WorkflowEventFleets(unittest.TestCase):
                           ci_preflight.runner_findings({name: caller, 'nested.yml': nested,
                                                         'leaf.yml': leaf}))
 
+    def test_release_pool_labels_are_refused_on_real_pull_request_jobs(self):
+        workflows = self.workflows()
+        original = workflows['ci.yml']
+        self.assertEqual(ci_preflight._events(original), {'pull_request'})
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        for runner in ('["self-hosted","pf-ci","pf-ci-release"]',
+                       '["self-hosted","pf-gcp-main"]'):
+            with self.subTest(runner=runner):
+                changed = in_job(original, 'preflight',
+                                 '    runs-on: ["self-hosted","pf-gcp-pr"]\n',
+                                 f'    runs-on: {runner}\n')
+                self.assertNotEqual(changed, original)
+                self.assertIn('ci.yml job preflight may use release pool labels '
+                              'only in a pinned isolated release job',
+                              ci_preflight.runner_findings({**workflows, 'ci.yml': changed}))
+                # A new filename has no job pin to rely on.
+                self.assertIn('arbitrary-pr.yml job preflight may use release pool labels '
+                              'only in a pinned isolated release job',
+                              ci_preflight.runner_findings({'arbitrary-pr.yml': changed}))
+
+    def test_release_keeps_its_current_pool_and_refuses_the_retired_label(self):
+        release = self.workflows()['release.yml']
+        self.assertEqual(ci_preflight._events(release), {'workflow_dispatch'})
+        self.assertEqual(ci_preflight._job_values(_jobs(release)['release'], 'runs-on'),
+                         ['["self-hosted","pf-gcp-main"]'])
+        self.assertEqual(ci_preflight.runner_findings({'release.yml': release}), [])
+        changed = in_job(release, 'release',
+                         '    runs-on: ["self-hosted","pf-gcp-main"]\n',
+                         '    runs-on: ["self-hosted","pf-ci","pf-ci-release"]\n')
+        self.assertNotEqual(changed, release)
+        self.assertIn('release.yml job release must run on ["self-hosted","pf-gcp-main"] '
+                      '(isolated release)', ci_preflight.runner_findings({'release.yml': changed}))
+
+    def test_flat_peak_release_pool_has_no_unproven_reusable_exception(self):
+        workflows = self.workflows()
+        original = workflows['corpus-parity-subset.yml']
+        self.assertEqual(ci_preflight._events(original), {'workflow_call'})
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        for label in ('pf-ci-release', 'pf-gcp-main'):
+            flat = original.replace('"pf-gcp-pr"', f'"{label}"')
+            self.assertNotEqual(flat, original)
+            finding = ('flat-peak.yml job corpus-parity-subset may use release pool labels '
+                       'only in a pinned isolated release job')
+            with self.subTest(label=label, caller='none'):
+                self.assertIn(finding, ci_preflight.runner_findings({'flat-peak.yml': flat}))
+            # A PR caller and a trusted post-merge caller both fail: this
+            # event-only graph does not prove that a caller is release.yml.
+            for name, job, callee in (
+                    ('ci.yml', 'corpus-parity-subset', 'corpus-parity-subset.yml'),
+                    ('ci-post.yml', 'corpus-parity-subset', 'corpus-parity.yml')):
+                with self.subTest(label=label, caller=name):
+                    caller = in_job(workflows[name], job,
+                                    f'    uses: ./.github/workflows/{callee}\n',
+                                    '    uses: ./.github/workflows/flat-peak.yml\n')
+                    self.assertNotEqual(caller, workflows[name])
+                    self.assertIn(finding, ci_preflight.runner_findings(
+                        {**workflows, name: caller, 'flat-peak.yml': flat}))
+
+    def test_release_pins_cannot_hide_pull_request_callers(self):
+        workflows = self.workflows()
+        self.assertEqual(ci_preflight.runner_findings(workflows), [])
+        for callee in ('release.yml', 'promote-baseline.yml'):
+            with self.subTest(callee=callee):
+                caller = in_job(workflows['ci.yml'], 'corpus-parity-subset',
+                                '    uses: ./.github/workflows/corpus-parity-subset.yml\n',
+                                f'    uses: ./.github/workflows/{callee}\n')
+                self.assertNotEqual(caller, workflows['ci.yml'])
+                self.assertIn(f'{callee} must not admit untrusted caller events to isolated release jobs',
+                              ci_preflight.runner_findings({**workflows, 'ci.yml': caller}))
+
     def test_post_macos_build_rejects_the_linux_post_fleet(self):
         workflows = self.workflows()
         post = workflows['ci-post.yml']
@@ -317,8 +387,9 @@ class PreflightFailures(unittest.TestCase):
             for job, body in _jobs(workflow).items():
                 if ci_preflight._job_values(body, 'uses'):
                     continue
-                if (name, job) == ('ci-post.yml', 'build-macos'):
-                    continue  # The hosted exception has its own negative controls.
+                if (name, job) in (('ci-post.yml', 'build-macos'),
+                                   ('promote-baseline.yml', 'promote-guard')):
+                    continue  # Both hosted exceptions have their own negative controls.
                 if (name, job) == ('release.yml', 'prebuilt'):
                     yield name, job, fleet, f'            runner: {RELEASE_RUNNER}\n', RELEASE_MATRIX_FINDING
                     continue
@@ -660,6 +731,368 @@ class PreflightFailures(unittest.TestCase):
                 changed[index] = changed[index].replace(before, after, 1)
                 self.assertNotEqual(changed[index], original[index])
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
+
+    def test_promotion_guard_rejects_mutations_of_the_real_workflow(self):
+        original = self.ci_sources()
+        self.assertEqual(ci_workflow_findings(*original), [])
+        jobs = _jobs(original[2])
+        self.assertEqual(ci_preflight._job_values(jobs['promote-guard'], 'permissions'), ['{}'])
+        for forbidden in ('secrets.', 'checkout', 'id-token'):
+            self.assertNotIn(forbidden, jobs['promote-guard'])
+        self.assertEqual(ci_preflight._job_values(jobs['promote'], 'needs'), ['[promote-guard]'])
+        guard_finding = 'baseline promotion must start with the pinned credential-free promote-guard'
+        needs_finding = ('baseline promotion must need promote-guard and keep its '
+                         'merged-or-dispatch condition')
+        run_block = '        run: |\n' + ''.join(
+            '          ' + line + '\n'
+            for line in job_script(original[2], 'promote-guard').splitlines())
+        fail = ('          fail() { echo "::error title=authz::$1"; '
+                'echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }\n')
+        lookup = ('                  perm=$(gh api "repos/$REPO/collaborators/$MERGED_BY/permission" '
+                  '--jq .permission 2>/dev/null || echo none)\n')
+        author_lookup = ('                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" '
+                         '--jq .permission 2>/dev/null || echo none)\n')
+        default = ('            *) fail "event $EVENT does not run baseline promotion '
+                   '(only pull_request_target and workflow_dispatch are allowed)" ;;\n')
+        unmerged = ('              [ "$MERGED" = "true" ] || { echo '
+                    '"promote-guard: unmerged pull request; promotion is skipped" '
+                    '>> "$GITHUB_STEP_SUMMARY"; exit 0; }\n')
+        mutations = [
+            ('promote-guard', run_block, '        run: |\n          exit 0\n', guard_finding),
+            ('promote-guard', fail, '          fail() { :; }\n', guard_finding),
+            ('promote-guard',
+             '              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"\n',
+             '', guard_finding),
+            ('promote-guard',
+             '              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"\n',
+             '', guard_finding),
+            ('promote-guard', '                OWNER|MEMBER|COLLABORATOR) ;;\n',
+             '                *) ;;\n', guard_finding),
+            ('promote-guard', '"dependabot[bot] pineforge-app[bot]"',
+             '"dependabot[bot] pineforge-app[bot] another[bot]"', guard_finding),
+            ('promote-guard', author_lookup, '', guard_finding),
+            ('promote-guard', author_lookup,
+             author_lookup.replace('|| echo none)', '|| echo write)'), guard_finding),
+            ('promote-guard', lookup, '', guard_finding),
+            ('promote-guard',
+             '              [ -n "$MERGED_BY" ] || fail "pull_request_target merger is empty"\n',
+             '', guard_finding),
+            ('promote-guard', lookup,
+             lookup.replace('|| echo none)', '|| echo write)'), guard_finding),
+            ('promote-guard', 'admin|maintain|write)', 'admin|maintain|write|read)', guard_finding),
+            ('promote-guard',
+             'case "$perm" in admin|maintain|write) ;; *) fail "pull_request_target merger ',
+             'case "$perm" in admin|maintain|write|read) ;; *) fail "pull_request_target merger ',
+             guard_finding),
+            ('promote-guard', default, '', guard_finding),
+            ('promote-guard', '            workflow_dispatch)\n',
+             '            push|workflow_dispatch)\n', guard_finding),
+            ('promote-guard', '            pull_request_target)\n',
+             '            pull_request_target)\n' + unmerged, guard_finding),
+            ('promote-guard', '    permissions: {}\n', '', guard_finding),
+            ('promote-guard', '    permissions: {}\n',
+             '    permissions: {id-token: write}\n', guard_finding),
+            ('promote-guard', '    steps:\n',
+             '    env:\n      KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n'
+             '    steps:\n', guard_finding),
+            ('promote-guard', '    steps:\n',
+             '    steps:\n      - uses: actions/checkout@v4\n', guard_finding),
+            ('promote-guard', '    steps:\n',
+             '    if: false\n    steps:\n', guard_finding),
+            ('promote-guard', '    steps:\n',
+             '    continue-on-error: true\n    steps:\n', guard_finding),
+            ('promote-guard', '        run: |\n',
+             '        continue-on-error: true\n        run: |\n', guard_finding),
+            ('promote-guard', '    runs-on: ubuntu-latest\n',
+             '    runs-on: ubuntu-24.04\n', guard_finding),
+            ('promote-guard',
+             '          # and the org\'s own GitHub App bot logins by name (space-separated), nothing else.\n',
+             '', guard_finding),
+            ('promote-guard',
+             '      - name: Only our own merged pull requests and dispatches promote the baseline\n',
+             '      - name: Changed promotion guard step\n', guard_finding),
+            ('promote-guard', '\n\n', '\n', guard_finding),
+            ('promote', '    needs: [promote-guard]\n', '', needs_finding),
+            ('promote', '    needs: [promote-guard]\n',
+             '    needs: []\n', needs_finding),
+            ('promote', '    needs: [promote-guard]\n',
+             '    needs: [promote-guard, another-job]\n', needs_finding),
+            ('promote',
+             "    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}\n",
+             '    if: ${{ always() }}\n', needs_finding),
+        ]
+        # Each payload binding is independently required, not merely a word
+        # elsewhere in the file. In particular HEAD_IS_FORK must not disappear.
+        for key, value in (
+                ('EVENT', '${{ github.event_name }}'),
+                ('REPO', '${{ github.repository }}'),
+                ('HEAD_REPO', '${{ github.event.pull_request.head.repo.full_name }}'),
+                ('HEAD_IS_FORK', '${{ github.event.pull_request.head.repo.fork }}'),
+                ('ASSOCIATION', '${{ github.event.pull_request.author_association }}'),
+                ('PR_AUTHOR', '${{ github.event.pull_request.user.login }}'),
+                ('MERGED', '${{ github.event.pull_request.merged }}'),
+                ('MERGED_BY', '${{ github.event.pull_request.merged_by.login }}'),
+                ('GH_TOKEN', '${{ github.token }}   # read-only use: permission lookups for the PR author and merger'),
+                ('ALLOWED_BOTS', '"dependabot[bot] pineforge-app[bot]"')):
+            mutations.append(('promote-guard', f'          {key}: {value}\n', '', guard_finding))
+        for job, before, after, finding in mutations:
+            with self.subTest(job=job, before=before, after=after):
+                changed = original.copy()
+                changed[2] = in_job(changed[2], job, before, after)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn(finding, ci_workflow_findings(*changed))
+        for before, after in (
+                ('jobs:\n  promote-guard:\n', 'jobs:\n  unexpected:\n    runs-on: ubuntu-latest\n  promote-guard:\n'),
+                ('  promote-guard:\n', '  promote-guard: # changed header\n'),
+                ('  promote-guard:\n', '  renamed-guard:\n'),
+                ('  promote:\n', '  promote-guard:\n')):
+            with self.subTest(header=after):
+                changed = original.copy()
+                self.assertIn(before, changed[2])
+                changed[2] = changed[2].replace(before, after, 1)
+                self.assertIn(guard_finding, ci_workflow_findings(*changed))
+        # Keeping both bodies but moving the guard after promote still
+        # violates the first-job contract.
+        guard_at = original[2].index('\n  promote-guard:')
+        promote_at = original[2].index('\n  promote:')
+        changed = original.copy()
+        changed[2] = (original[2][:guard_at] + original[2][promote_at:]
+                      + original[2][guard_at:promote_at])
+        self.assertIn(guard_finding, ci_workflow_findings(*changed))
+        for before, after in (
+                ('  workflow_dispatch:\n', '  push:\n'),
+                ('    types: [closed]\n', '    types: [opened, closed]\n')):
+            with self.subTest(trigger=after):
+                changed = original.copy()
+                self.assertIn(before, changed[2])
+                changed[2] = changed[2].replace(before, after, 1)
+                self.assertIn("baseline promotion must run main's copy and require the latest two head statuses",
+                              ci_workflow_findings(*changed))
+
+    def promotion_guard_result(self, *, workflow=None, **overrides):
+        """Run the real workflow shell; only the external gh CLI is stubbed."""
+        bash = shutil.which('bash')
+        if bash is None:
+            self.fail('NOT RUN: bash is required to execute the promote-guard decision cases')
+        if workflow is None:
+            workflow = self.ci_sources()[2]
+        with tempfile.TemporaryDirectory() as directory:
+            summary = Path(directory) / 'summary'
+            lookup = Path(directory) / 'lookup'
+            gh = Path(directory) / 'gh'
+            # Put an executable stub first on PATH. The shell under test is
+            # extracted unchanged from the workflow, with no driver prepended.
+            gh.write_text(f'#!{bash}\n' + r'''printf '%s\n' "$*" >> "$LOOKUP_LOG"
+[ "$#" -eq 4 ] && [ "$1" = api ] &&
+  [ "$3" = --jq ] && [ "$4" = .permission ] || exit 2
+case "$2" in
+  "repos/$REPO/collaborators/$PR_AUTHOR/permission")
+    [ -n "$PR_AUTHOR" ] || exit 2
+    lookup_permission=$AUTHOR_PERMISSION
+    lookup_exit=$AUTHOR_LOOKUP_EXIT ;;
+  "repos/$REPO/collaborators/$MERGED_BY/permission")
+    [ -n "$MERGED_BY" ] || exit 2
+    lookup_permission=$MERGER_PERMISSION
+    lookup_exit=$MERGER_LOOKUP_EXIT ;;
+  *) exit 2 ;;
+esac
+if [ -n "$lookup_permission" ]; then printf '%s\n' "$lookup_permission"; fi
+exit "$lookup_exit"
+''')
+            gh.chmod(0o755)
+            env = {
+                'PATH': directory + os.pathsep + os.environ.get('PATH', '/usr/bin:/bin'),
+                'GITHUB_STEP_SUMMARY': str(summary), 'LOOKUP_LOG': str(lookup),
+                'EVENT': 'pull_request_target', 'REPO': 'pineforge-4pass/pineforge-engine',
+                'HEAD_REPO': 'pineforge-4pass/pineforge-engine', 'HEAD_IS_FORK': 'false',
+                'ASSOCIATION': 'MEMBER', 'PR_AUTHOR': 'author',
+                'MERGED': 'true', 'MERGED_BY': 'merger',
+                'ALLOWED_BOTS': 'dependabot[bot] pineforge-app[bot]',
+                'AUTHOR_PERMISSION': 'none', 'AUTHOR_LOOKUP_EXIT': '0',
+                'MERGER_PERMISSION': 'write', 'MERGER_LOOKUP_EXIT': '0',
+            }
+            env.update(overrides)
+            result = subprocess.run(
+                [bash, '--noprofile', '--norc', '-eo', 'pipefail', '-c',
+                 job_script(workflow, 'promote-guard')],
+                env=env, capture_output=True, text=True)
+            return (result, summary.read_text() if summary.exists() else '',
+                    lookup.read_text() if lookup.exists() else '')
+
+    def test_promotion_guard_accepts_only_authorised_merges_and_dispatches(self):
+        cases = [({'ASSOCIATION': association}, ('merger',))
+                 for association in ('OWNER', 'MEMBER', 'COLLABORATOR')]
+        cases += [({'ASSOCIATION': 'NONE', 'PR_AUTHOR': bot}, ('merger',))
+                  for bot in ('dependabot[bot]', 'pineforge-app[bot]')]
+        cases += [({'MERGER_PERMISSION': permission}, ('merger',))
+                  for permission in ('admin', 'maintain', 'write')]
+        cases += [({'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': permission},
+                   ('author', 'merger'))
+                  for permission in ('admin', 'maintain', 'write')]
+        cases += [({'MERGED_BY': bot, 'MERGER_LOOKUP_EXIT': '1'}, ())
+                  for bot in ('dependabot[bot]', 'pineforge-app[bot]')]
+        cases.append(({'EVENT': 'workflow_dispatch', 'MERGED': '', 'HEAD_REPO': 'outside/fork',
+                       'HEAD_IS_FORK': 'true', 'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider',
+                       'MERGED_BY': '', 'AUTHOR_LOOKUP_EXIT': '1',
+                       'MERGER_LOOKUP_EXIT': '1'}, ()))
+        for overrides, usernames in cases:
+            with self.subTest(overrides=overrides):
+                result, summary, lookup = self.promotion_guard_result(**overrides)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('authz: allowed (', summary)
+                self.assertNotIn('REFUSED', summary)
+                self.assertEqual(lookup, ''.join(
+                    f'api repos/pineforge-4pass/pineforge-engine/collaborators/{username}/permission '
+                    '--jq .permission\n' for username in usernames))
+        # An authorised own unmerged close passes without a merger lookup;
+        # promote retains the separately pinned merged-only condition.
+        for author, usernames in (({}, ()), ({'ASSOCIATION': 'CONTRIBUTOR',
+                                             'AUTHOR_PERMISSION': 'write'}, ('author',))):
+            with self.subTest(unmerged_author=author):
+                result, summary, lookup = self.promotion_guard_result(
+                    MERGED='false', MERGED_BY='', MERGER_LOOKUP_EXIT='1', **author)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(summary, 'promote-guard: unmerged pull request; promotion is skipped\n')
+                self.assertEqual(lookup, ''.join(
+                    f'api repos/pineforge-4pass/pineforge-engine/collaborators/{username}/permission '
+                    '--jq .permission\n' for username in usernames))
+
+    def test_promotion_guard_refuses_foreign_heads_authors_mergers_and_lookup_errors(self):
+        cases = [
+            ({'HEAD_REPO': 'outside/fork'}, 'pull request from another repository (outside/fork)', ()),
+            ({'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'false'},
+             'pull request from another repository (outside/fork)', ()),
+            ({'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'true'},
+             'pull request from another repository (outside/fork)', ()),
+            ({'HEAD_REPO': 'outside/fork', 'PR_AUTHOR': 'dependabot[bot]', 'ASSOCIATION': 'NONE'},
+             'pull request from another repository (outside/fork)', ()),
+            ({'HEAD_REPO': ''}, 'pull request from another repository (unknown)', ()),
+            ({'HEAD_IS_FORK': 'true'}, 'pull request from a fork', ()),
+            ({'HEAD_IS_FORK': 'true', 'MERGED': 'false'}, 'pull request from a fork', ()),
+            ({'HEAD_IS_FORK': ''}, 'pull request from a fork', ()),
+            ({'HEAD_IS_FORK': 'true', 'PR_AUTHOR': 'pineforge-app[bot]', 'ASSOCIATION': 'NONE'},
+             'pull request from a fork', ()),
+            ({'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true',
+              'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': 'write'},
+             'pull request from another repository (outside/fork)', ()),
+            ({'HEAD_IS_FORK': 'true', 'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': 'write'},
+             'pull request from a fork', ()),
+            ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider'},
+             "author outsider (NONE) has permission 'none', not write, and is not an allowlisted bot",
+             ('outsider',)),
+            ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider', 'MERGED': 'false'},
+             "author outsider (NONE) has permission 'none', not write, and is not an allowlisted bot",
+             ('outsider',)),
+            ({'ASSOCIATION': 'UNKNOWN', 'PR_AUTHOR': 'outsider'},
+             "author outsider (UNKNOWN) has permission 'none', not write, and is not an allowlisted bot",
+             ('outsider',)),
+            ({'ASSOCIATION': 'CONTRIBUTOR', 'PR_AUTHOR': 'another[bot]'},
+             "author another[bot] (CONTRIBUTOR) has permission 'none', not write, and is not an allowlisted bot",
+             ('another[bot]',)),
+            ({'ASSOCIATION': '', 'PR_AUTHOR': ''},
+             "author unknown (NONE) has permission 'none', not write, and is not an allowlisted bot", ('',)),
+            ({'MERGED_BY': ''}, 'pull_request_target merger is empty', ()),
+            ({'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': 'write', 'MERGER_PERMISSION': 'read'},
+             "pull_request_target merger merger has permission 'read', not write", ('author', 'merger')),
+        ]
+        cases += [({'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': permission},
+                   f"author author (CONTRIBUTOR) has permission '{permission}', not write, "
+                   "and is not an allowlisted bot", ('author',))
+                  for permission in ('read', 'triage', 'none', '')]
+        cases.append(({'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': '', 'AUTHOR_LOOKUP_EXIT': '1'},
+                      "author author (CONTRIBUTOR) has permission 'none', not write, "
+                      "and is not an allowlisted bot", ('author',)))
+        cases.append(({'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': 'write', 'AUTHOR_LOOKUP_EXIT': '1'},
+                      "author author (CONTRIBUTOR) has permission 'write\nnone', not write, "
+                      "and is not an allowlisted bot", ('author',)))
+        cases += [({'MERGER_PERMISSION': permission},
+                   f"pull_request_target merger merger has permission '{permission}', not write", ('merger',))
+                  for permission in ('read', 'triage', 'none', '')]
+        cases.append(({'MERGER_PERMISSION': '', 'MERGER_LOOKUP_EXIT': '1'},
+                      "pull_request_target merger merger has permission 'none', not write", ('merger',)))
+        # Even a failed call that printed 'write' must refuse.
+        cases.append(({'MERGER_PERMISSION': 'write', 'MERGER_LOOKUP_EXIT': '1'},
+                      "pull_request_target merger merger has permission 'write\nnone', not write", ('merger',)))
+        cases += [({'EVENT': event},
+                   f'event {event} does not run baseline promotion '
+                   '(only pull_request_target and workflow_dispatch are allowed)', ())
+                  for event in ('pull_request', 'workflow_run', 'push', 'schedule', '')]
+        for overrides, message, usernames in cases:
+            with self.subTest(overrides=overrides):
+                result, summary, lookup = self.promotion_guard_result(**overrides)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('::error title=authz::' + message, result.stdout)
+                self.assertIn('authz: REFUSED: ' + message, summary)
+                self.assertNotIn('authz: allowed', summary)
+                self.assertEqual(lookup, ''.join(
+                    f'api repos/pineforge-4pass/pineforge-engine/collaborators/{username}/permission '
+                    '--jq .permission\n' for username in usernames))
+
+    def test_promotion_guard_decisions_detect_disabled_refusals_in_real_workflow(self):
+        original = self.ci_sources()
+        run_block = '        run: |\n' + ''.join(
+            '          ' + line + '\n'
+            for line in job_script(original[2], 'promote-guard').splitlines())
+        fail = ('          fail() { echo "::error title=authz::$1"; '
+                'echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }\n')
+        unmerged = ('              [ "$MERGED" = "true" ] || { echo '
+                    '"promote-guard: unmerged pull request; promotion is skipped" '
+                    '>> "$GITHUB_STEP_SUMMARY"; exit 0; }\n')
+        cases = (
+            ('guard script replaced by exit 0', run_block,
+             '        run: |\n          exit 0\n',
+             {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'false'}),
+            ('fail made a no-op', fail, '          fail() { :; }\n',
+             {'HEAD_IS_FORK': 'true'}),
+            ('fork check deleted',
+             '              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"\n',
+             '', {'HEAD_IS_FORK': 'true'}),
+            ('head repository check deleted',
+             '              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"\n',
+             '', {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'false'}),
+            ('unmerged exit before head and author checks', '            pull_request_target)\n',
+             '            pull_request_target)\n' + unmerged,
+             {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'false'}),
+        )
+        for name, before, after, overrides in cases:
+            with self.subTest(mutation=name):
+                baseline, _, _ = self.promotion_guard_result(**overrides)
+                self.assertEqual(baseline.returncode, 1, baseline.stdout + baseline.stderr)
+                changed = original.copy()
+                changed[2] = in_job(changed[2], 'promote-guard', before, after)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn('baseline promotion must start with the pinned credential-free promote-guard',
+                              ci_workflow_findings(*changed))
+                result, _, _ = self.promotion_guard_result(
+                    workflow=changed[2], **overrides)
+                # Each disabled refusal must change a required exit 1 into
+                # exit 0; an unrelated shell error is not evidence.
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotEqual(result.returncode, baseline.returncode)
+
+    def test_promotion_guard_decisions_detect_author_lookup_mutations(self):
+        original = self.ci_sources()
+        author_lookup = ('                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" '
+                         '--jq .permission 2>/dev/null || echo none)\n')
+        cases = (
+            ('author lookup deleted', '', {'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': 'write'},
+             0, 1),
+            ('failed author lookup passes', author_lookup.replace('|| echo none)', '|| echo write)'),
+             {'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': '', 'AUTHOR_LOOKUP_EXIT': '1'},
+             1, 0),
+        )
+        for name, replacement, overrides, expected, mutated_expected in cases:
+            with self.subTest(mutation=name):
+                baseline, _, _ = self.promotion_guard_result(**overrides)
+                self.assertEqual(baseline.returncode, expected, baseline.stdout + baseline.stderr)
+                changed = original.copy()
+                changed[2] = in_job(changed[2], 'promote-guard', author_lookup, replacement)
+                self.assertNotEqual(changed[2], original[2])
+                self.assertIn('baseline promotion must start with the pinned credential-free promote-guard',
+                              ci_workflow_findings(*changed))
+                result, _, _ = self.promotion_guard_result(workflow=changed[2], **overrides)
+                self.assertEqual(result.returncode, mutated_expected, result.stdout + result.stderr)
+                self.assertNotEqual(result.returncode, baseline.returncode)
 
     def test_build_matrix_keeps_one_pr_smoke_and_every_full_event_leg(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -1229,7 +1662,8 @@ class PreflightFailures(unittest.TestCase):
         self.assertEqual(HOSTED_MATRIX_RUNNER, '${{ matrix.runner }}')
         self.assertEqual(RELEASE_RUNNER, '["self-hosted","pf-gcp-main"]')
         self.assertEqual(ci_preflight.HOSTED_JOB_RUNNERS,
-                         {'ci-post.yml': {'build-macos': 'macos-26'}})
+                         {'ci-post.yml': {'build-macos': 'macos-26'},
+                          'promote-baseline.yml': {'promote-guard': 'ubuntu-latest'}})
         self.assertEqual(JOB_COMMANDS['corpus-parity.yml'], {
             'authz': None,
             'corpus-parity': ci_preflight.PARITY,
@@ -2407,10 +2841,11 @@ finally:
                      'release.yml': others['release.yml']}
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         self.assertNotIn('PF_CI_LABELS', workflows['release.yml'])
-        for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote',)),
+        for name, jobs in (('docs.yml', ('build',)), ('promote-baseline.yml', ('promote-guard', 'promote')),
                            ('release.yml', ('release', 'prebuilt', 'notify-hub'))):
             for job in jobs:
                 before = (HOSTED_MATRIX_RUNNER if job == 'prebuilt' else
+                          'ubuntu-latest' if job == 'promote-guard' else
                           '["self-hosted", "pf-gcp-pr"]' if name == 'docs.yml' else RELEASE_RUNNER)
                 after = 'ubuntu-latest' if name == 'docs.yml' else PR_RUNNER
                 pool = in_job(workflows[name], job, f'    runs-on: {before}\n',
@@ -2418,6 +2853,7 @@ finally:
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: pool}))
                 finding = (f'{name} job {job} must run on {PR_RUNNER}' if name == 'docs.yml' else
+                           f'{name} job {job} must run on ubuntu-latest (hosted)' if job == 'promote-guard' else
                            f'{name} job {job} must run on {before} (isolated release)')
                 self.assertIn(finding, findings)
                 marker = f"      PF_CI_LABELS: '{PR_RUNNER}'\n"
@@ -2433,7 +2869,8 @@ finally:
                                  [PR_RUNNER], f'{name} job {job} fixture must set job-level PF_CI_LABELS')
                 findings = ci_preflight.runner_findings(dict(
                     {'ci.yml': original[0], **workflows}, **{name: hosted}))
-                route = 'a gated docs job' if name == 'docs.yml' else 'an isolated release job'
+                route = ('a gated docs job' if name == 'docs.yml' else
+                         'a hosted job' if job == 'promote-guard' else 'an isolated release job')
                 self.assertIn(f'{name} job {job} must not set PF_CI_LABELS on {route}', findings)
 
     def test_release_dry_run_never_reaches_the_hub_dispatch(self):
