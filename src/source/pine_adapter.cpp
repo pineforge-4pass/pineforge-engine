@@ -87,8 +87,9 @@
 namespace pineforge::source {
 #ifdef PINEFORGE_CR277_DIAGNOSTIC
 namespace {
-// Process totals: 0 = close(""), 1 = close_all(). Each counted push below
-// transfers an already-pending, same-callback entry with that source id.
+// Process totals: 0 = close(""), 1 = close_all(). Count successful transfers
+// of a live, unpriced Entry placed on this script bar, including same-side
+// entries. This does not count batch transfers or prove a later reissue.
 std::atomic<std::uint64_t> cr277_pending_close_pushes[2]{};
 }
 extern "C" std::uint64_t pineforge_cr277_diagnostic_hits(int site) noexcept {
@@ -9133,6 +9134,20 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         current, limit_price, stop_price, default_sized, priced, reverses,
         opposite_opening_pending, pure_stop_entry, coof_market_next_open,
         coof_priced_next_open, coof_market_at_second_extreme, paired_all_in_reentry};
+    if (close_all_precedes && preceding_close_all.incarnation != 0) {
+        // A full close moved the prior entry out of the live/batched book.
+        // Replace it where it waits for that close, before selecting a new
+        // batch or appending a second definition behind the same parent.
+        auto queued = std::find_if(pending_entries_.begin(), pending_entries_.end(),
+            [&](const PendingEntry& prior) {
+                return prior.replacement_key == id
+                    && prior.snapshot.paired_reversal_parent == preceding_close_all;
+            });
+        if (queued != pending_entries_.end()) {
+            *queued = PendingEntry{std::move(request), std::move(snapshot), id};
+            return;
+        }
+    }
     if (same_bar_market_candidate && fixed_market_batch_candidate
         && !close_precedes_entry && pending_same_bar_close_qty_ == 0.0
         && !close_all_precedes) {
