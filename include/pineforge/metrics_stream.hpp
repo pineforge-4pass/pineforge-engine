@@ -143,10 +143,14 @@ pf_equity_stats_t compute_equity_stats(
 // formula, float operation grouping, calendar/NaN guard and presented value.
 // Source/read failures propagate; never adapt by materializing an array.
 //
-// SUMMARY_ONLY does not create a captured provider or a private curve tape.
-// Its fixed execution replay passes use the same by-value EquityVisitorV1
-// inputs and held-point rule, then freeze the witnessed metrics for envelope
-// reads. Release the non-recursive timezone guard before execution dispatch.
+// F3: SUMMARY_ONLY does not create a captured provider or a private curve tape.
+// These overloads only read captured points; they never dispatch a replay.
+// When a second pass is needed:
+// The host runs EquityMetricsSecondPass and calls install_equity_ratio_result().
+// Until then, reports carry NaN Sharpe/Sortino ratios, monthly and per-bar.
+// BacktestEngine::equity_summary_ratios_ready() is false until installation.
+// A host that never runs that pass must not present those four ratio fields.
+// Release the non-recursive timezone guard before execution dispatch.
 pf_equity_stats_t compute_equity_stats(
     const report::EquityPointSourceV1& curve, std::int64_t n,
     double initial_capital, const std::string& chart_tz,
