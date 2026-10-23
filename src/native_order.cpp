@@ -7963,7 +7963,12 @@ struct WorkingRequestCore::SuccessorRootIndex {
 
     void open_file() {
         assert(!slab);
-        file.open("pineforge-roots");
+        try {
+            file.open("pineforge-roots");
+        } catch (const detail::AuxiliaryScratchIoError& error) {
+            // Preserve the roots diagnostic without catching arena resource failures.
+            throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots create");
+        }
     }
 
     void prepare_append() {
@@ -7995,7 +8000,11 @@ struct WorkingRequestCore::SuccessorRootIndex {
                         "native successor roots file offset exhausted");
             }
             open_file();
-            file.write(disk_rows * sizeof(Row), tail.data(), length);
+            try {
+                file.write(disk_rows * sizeof(Row), tail.data(), length);
+            } catch (const detail::AuxiliaryScratchIoError& error) {
+                throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots write");
+            }
         }
         // Publish only a complete batch. A short/error write leaves the
         // authoritative tail intact; retry overwrites the same file offset.
@@ -8017,7 +8026,11 @@ struct WorkingRequestCore::SuccessorRootIndex {
             slab->read_at(detail::ScratchResource::successor_roots,
                           index * sizeof(Row), &row, sizeof(Row));
         } else {
-            file.read(index * sizeof(Row), &row, sizeof(Row));
+            try {
+                file.read(index * sizeof(Row), &row, sizeof(Row));
+            } catch (const detail::AuxiliaryScratchIoError& error) {
+                throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots read");
+            }
         }
         if (row.root == 0 || row.root >= row.successor) {
             throw detail::AuxiliaryScratchIoError(EIO, "native successor roots invalid row");

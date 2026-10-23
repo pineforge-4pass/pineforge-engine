@@ -867,7 +867,9 @@ def fixture_run(build: Path, work: Path, arena_directory: Path) -> list:
         ("partial-exit-ladders", 4, 64),
         ("pyramiding-at-limit", 5, 32),
         ("successor-replacements", 6, 512),
-        ("selected-window", 7, 512),
+        # Feed 128 pre-roll + 256 window bars, all before the exclusive end.
+        # The selected-window descriptor does not trim the primary feed.
+        ("selected-window", 7, 384),
         ("large-curve", 0, 1_048_576),
     )
     for name, which, count in scenarios:

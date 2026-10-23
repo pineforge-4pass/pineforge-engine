@@ -7506,10 +7506,10 @@ endif()
 # --- CR-150 core-cr150-arena end ---
 
 # --- CR-150 core-cr150-privmoves begin ---
-# Set A uses only the c7b06a6a19 API. Compare is expected to match on that
-# implementation; jail/directory rows are intended behavioral fail-before.
+# All rows share test_privmoves.cpp. The lane-file checker requires a source
+# named after each compiled add_test row, so aliases stay with the target.
+# TEST_SOURCES inventory lives in cr150.d/core-cr150-privmoves.cmake.
 if(UNIX)
-    list(APPEND TEST_SOURCES test_privmoves)
     add_executable(test_privmoves test_privmoves.cpp)
     target_link_libraries(test_privmoves PRIVATE pineforge)
     target_compile_options(test_privmoves PRIVATE -ffp-contract=off -UNDEBUG)
