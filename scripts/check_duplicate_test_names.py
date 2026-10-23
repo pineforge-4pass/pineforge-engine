@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Refuse duplicate method names in test classes and duplicate top-level test functions.
+"""Refuse duplicate methods, test functions, and class bindings.
 
-Parses every ``scripts/test_*.py`` and ``docker/*_test.py`` with ``ast`` (never
-importing the target modules) and exits 1 naming ``file:line`` for any class
-with two methods of the same name or any module with two top-level ``test_*``
-functions of the same name; exits 0 otherwise.
+Parses the Python test/driver inventory with ``ast``, never importing targets.
+Control-flow suites share their enclosing module or class namespace. Exits 1
+with ``file:line`` diagnostics for duplicates, absent inventory directories,
+or an inspection with no files or no ``test_*`` names; exits 0 otherwise.
 """
 from __future__ import annotations
 
@@ -16,60 +16,90 @@ from typing import Iterable, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST_GLOBS = (
-    ('scripts', 'test_*.py'),
+    # CMake registers test_*, *_self_test, --self-test drivers and source
+    # guards in scripts; tests also has e2e/receipt/equivalence driver names.
+    # Scan the whole directories so those naming variants cannot evade this.
+    ('scripts', '*.py'),
     ('docker', '*_test.py'),
+    ('tests', '*.py'),
+    ('tests/ownership', 'test_*.py'),
+    ('benchmarks', '*.py'),
+    ('benchmarks/tests', 'test_*.py'),
 )
 
 
 def default_test_files(root: Path = ROOT) -> list[Path]:
+    if not root.is_dir():
+        raise ValueError(f'missing repository root: {root}')
     files: list[Path] = []
     for subdir, pattern in TEST_GLOBS:
         directory = root / subdir
-        if directory.is_dir():
-            files.extend(sorted(directory.glob(pattern)))
+        if not directory.is_dir():
+            raise ValueError(f'missing expected test directory: {directory}')
+        files.extend(sorted(directory.glob(pattern)))
     return files
 
 
-def _iter_classes(nodes: Iterable[ast.stmt]) -> Iterable[ast.ClassDef]:
+def _scope_statements(nodes: Iterable[ast.AST]) -> Iterable[ast.stmt]:
+    """Walk all control-flow suites, stopping at namespace boundaries."""
     for node in nodes:
-        if isinstance(node, ast.ClassDef):
+        if isinstance(node, ast.stmt):
             yield node
-            yield from _iter_classes(node.body)
+        if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            yield from _scope_statements(ast.iter_child_nodes(node))
 
 
-def check_file(path: Path) -> list[tuple[Path, int, str]]:
-    source = path.read_text(encoding='utf-8')
-    tree = ast.parse(source, filename=str(path))
-    findings: list[tuple[Path, int, str]] = []
-
-    seen_top: dict[str, int] = {}
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name.startswith('test_'):
-            if stmt.name in seen_top:
+def _check_scope(
+    path: Path,
+    nodes: Iterable[ast.stmt],
+    findings: list[tuple[Path, int, str]],
+    class_name: str | None = None,
+) -> int:
+    seen_functions: dict[str, int] = {}
+    seen_classes: dict[str, int] = {}
+    test_names = 0
+    for stmt in _scope_statements(nodes):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            is_test = stmt.name.startswith('test_')
+            test_names += int(is_test)
+            if class_name is None and not is_test:
+                continue
+            kind = f'method {class_name}.{stmt.name}' if class_name else f'top-level test function {stmt.name}'
+            if stmt.name in seen_functions:
                 findings.append((
                     path,
                     stmt.lineno,
-                    f'duplicate top-level test function {stmt.name} '
-                    f'(first defined at line {seen_top[stmt.name]})',
+                    f'duplicate {kind} '
+                    f'(first defined at line {seen_functions[stmt.name]})',
                 ))
             else:
-                seen_top[stmt.name] = stmt.lineno
+                seen_functions[stmt.name] = stmt.lineno
+        elif isinstance(stmt, ast.ClassDef):
+            qualified = f'{class_name}.{stmt.name}' if class_name else stmt.name
+            test_names += _check_scope(path, stmt.body, findings, qualified)
+            # An empty body can inherit tests; refuse the rebinding without
+            # trying to execute imports or resolve the class's ancestry.
+            if stmt.name in seen_classes:
+                findings.append((
+                    path,
+                    stmt.lineno,
+                    f'duplicate test class {qualified} '
+                    f'(first defined at line {seen_classes[stmt.name]})',
+                ))
+            else:
+                seen_classes[stmt.name] = stmt.lineno
+    return test_names
 
-    for cls in _iter_classes(tree.body):
-        seen_methods: dict[str, int] = {}
-        for stmt in cls.body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if stmt.name in seen_methods:
-                    findings.append((
-                        path,
-                        stmt.lineno,
-                        f'duplicate method {cls.name}.{stmt.name} '
-                        f'(first defined at line {seen_methods[stmt.name]})',
-                    ))
-                else:
-                    seen_methods[stmt.name] = stmt.lineno
 
-    return findings
+def _inspect_file(path: Path) -> tuple[list[tuple[Path, int, str]], int]:
+    tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+    findings: list[tuple[Path, int, str]] = []
+    test_names = _check_scope(path, tree.body, findings)
+    return findings, test_names
+
+
+def check_file(path: Path) -> list[tuple[Path, int, str]]:
+    return _inspect_file(path)[0]
 
 
 def collect_files(root: Path, paths: Sequence[Path]) -> list[Path]:
@@ -78,21 +108,24 @@ def collect_files(root: Path, paths: Sequence[Path]) -> list[Path]:
     collected: list[Path] = []
     for item in paths:
         if item.is_dir():
-            nested = default_test_files(item)
-            if nested:
-                collected.extend(nested)
+            if any((item / subdir).exists() for subdir, _ in TEST_GLOBS):
+                collected.extend(default_test_files(item))
             else:
-                collected.extend(sorted(item.glob('test_*.py')))
-                collected.extend(sorted(item.glob('*_test.py')))
+                collected.extend(sorted(item.glob('*.py')))
         else:
             collected.append(item)
-    return collected
+    return list(dict.fromkeys(collected))
 
 
 def check_paths(paths: Sequence[Path]) -> list[tuple[Path, int, str]]:
     findings: list[tuple[Path, int, str]] = []
+    test_names = 0
     for path in paths:
-        findings.extend(check_file(path))
+        file_findings, file_test_names = _inspect_file(path)
+        findings.extend(file_findings)
+        test_names += file_test_names
+    if paths and test_names == 0:
+        findings.append((paths[0], 1, 'no test names inspected'))
     return findings
 
 
@@ -115,8 +148,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    files = collect_files(args.root, args.paths)
-    findings = check_paths(files)
+    try:
+        files = collect_files(args.root, args.paths)
+        if not files:
+            print('no test files inspected', file=sys.stderr)
+            return 1
+        findings = check_paths(files)
+    except (OSError, SyntaxError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 1
     if findings:
         for path, lineno, detail in findings:
             print(f'{path}:{lineno}: {detail}', file=sys.stderr)

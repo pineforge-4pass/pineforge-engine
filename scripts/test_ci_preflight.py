@@ -3111,6 +3111,24 @@ finally:
                     'run-json-harness-tests']
         self.assertEqual(argv[9:], ['/nonexistent-pineforge-src/docker/run_json_*_test.py'])
 
+    def test_duplicate_test_name_stages_are_binding_and_pin_the_source_root(self):
+        source = Path('/src')
+        commands = check_commands(source)
+        plan = {entry[0]: entry for entry in commands}
+        tests = 'duplicate-test-names-tests'
+        check = 'duplicate-test-names'
+        self.assertEqual(plan[tests], (
+            tests, [sys.executable, str(source / 'scripts/test_check_duplicate_test_names.py')],
+        ))
+        self.assertEqual(plan[check], (
+            check, [sys.executable, str(source / 'scripts/check_duplicate_test_names.py'),
+                    '--root', str(source)],
+        ))
+        names = [entry[0] for entry in commands]
+        self.assertLess(names.index(tests), names.index(check))
+        fast_names = {entry[0] for entry in check_commands(source, tier='fast')}
+        self.assertTrue({tests, check} <= fast_names)
+
     def test_no_stage_is_advisory_today(self):
         for entry in check_commands(Path('/src')):
             self.assertFalse(len(entry) > 2 and entry[2], entry[0])
