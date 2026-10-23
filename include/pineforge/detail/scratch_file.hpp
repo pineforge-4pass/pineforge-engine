@@ -236,6 +236,8 @@ public:
     // No descriptor escape: even fixture prefix writes select the arena.
     ssize_t write_some(std::uint64_t offset, const void* data, std::size_t length) {
         check_extent(offset, length, arena_ != nullptr, io_raiser_);
+        // This window-edge cap is inert for current users: IdPairScratchFile
+        // does not enable bound_cache(), and cache-bound users call write().
         const auto count = std::min(length, bounded_cache_
             ? kCacheBytes - static_cast<std::size_t>(offset % kCacheBytes)
             : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
@@ -255,6 +257,8 @@ public:
     }
     ssize_t read_some(std::uint64_t offset, void* data, std::size_t length) const {
         check_extent(offset, length, arena_ != nullptr, io_raiser_);
+        // This window cap is likewise inert for current users: IdPairScratchFile
+        // leaves bound_cache() off, and cache-bound users call read().
         const auto count = std::min(length, bounded_cache_ ? kCacheBytes
             : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
         if (slab_) slab_->read_at(resource_, offset, data, count);

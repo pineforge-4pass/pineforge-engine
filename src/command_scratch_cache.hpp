@@ -36,6 +36,8 @@ public:
     std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override {
         return inner_->arena_capacity_bytes();
     }
+    // Forwards the inner backing's last failure. A cache hit does not reset
+    // it, so this is meaningful only after a failed logical operation.
     const ReportScratchIoError* carried_failure() const noexcept override {
         return inner_->carried_failure();
     }
