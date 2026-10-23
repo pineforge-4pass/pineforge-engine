@@ -1,6 +1,7 @@
 // X08: the actual waiting population and every descendant are drained in the
-// base queue's order: kDrainBytes up to the populations where the book-read
-// definition reuse applies, the per-engine cap plateau (kDrainPlateauBytes) beyond.
+// base queue's order: kDrainBytes while the book and causes stay resident, the
+// per-engine cap plateau (kDrainPlateauBytes) beyond. Book reads still reuse a
+// definition when its acceptance or kept-handle replacement event is resident.
 // The production exercise also compiles on 21ba62bd; there the byte assertion
 // fails because Item rows survive in the queue. Only the store audit is gated.
 #include "../src/native_execution_consumer.hpp"
@@ -234,7 +235,7 @@ struct Host final : NativeStrategyHost {
 enum class Shape { Wide, Deep, Tree, ManySeeds };
 
 // Mirrors JournalStore's private constants; the event value itself is public.
-constexpr std::size_t kJournalMaxResident = 16384;
+constexpr std::size_t kJournalMaxResident = 2048;
 constexpr std::size_t kJournalChunk = 32;
 constexpr std::size_t kJournalSpillPageBytes = 32768;
 // src/native_order.cpp:1582: std::array<Cached, 4>; :1567 has four read buffers.
@@ -244,8 +245,18 @@ constexpr std::size_t kJournalCacheSlots = 4;
 constexpr std::size_t kBookMaxResident = 4096;
 constexpr std::size_t kBookSideRows = 8;
 constexpr std::size_t kWideRootCount = 2;
-constexpr std::size_t kBookOnlyPopulation = 5000;
-constexpr std::size_t kLastTargetedPopulation = kJournalMaxResident / 2 - 1;
+constexpr std::size_t kSpilledBookPopulation = 5000;
+constexpr std::size_t kJournalBoundaryPopulation = kJournalMaxResident / 2 - 1;
+// Two roots coexist with every child during setup: book spill starts at 4095.
+constexpr std::size_t kLastResidentBookPopulation = kBookMaxResident - kWideRootCount;
+// A cause can become cold sooner. Its position is P+4; before the last cancel
+// the end is 2*P+4. The last cause chunk below the cap starts at cap-32, so
+// keeping it resident requires 2*P+4 <= 2*cap-32: P <= cap-16-2 = 2030.
+// Later populations can align differently; retain one continuous guard.
+constexpr auto kResidentCauseGuardPopulation =
+    kJournalMaxResident - kJournalChunk / 2 - kWideRootCount;
+constexpr auto kLastTargetedPopulation =
+    std::min(kLastResidentBookPopulation, kResidentCauseGuardPopulation);
 constexpr std::size_t kDrainBytes = 4096;
 
 // GNU make_shared: one vptr and two uint32_t reference counts. Other standard
@@ -291,10 +302,12 @@ constexpr auto kPlateauBookDefinitions = kBookMaxResident / 2 + kWideRootCount;
 // One cold cause chunk includes a replacement with two definitions.
 constexpr auto kPlateauCauseDefinitions = kJournalChunk + 1;
 // Per ENGINE, constant and independent of symbol count and trades. This Wide
-// fixture's pre-reuse plateau holds a full journal, the promoted half-book
-// (plus the two-root displacement), one cause page, the side ring and the
-// overlapping book writer buffers. Reuse should shrink the measured peak;
-// larger populations retain this cap bound, not a general kDrainBytes claim.
+// fixture's plateau holds a full journal, the promoted half-book (plus the
+// two-root displacement), one cause page, the side ring and the overlapping
+// book writer buffers. Reuse applies only while the matching birth event is
+// resident. GNU x86-64: 456*(2048+2050+33)+6720+524=1,890,980 B.
+// During growth the side owners plus the book read are 6720+216=6936 B;
+// at the plateau the overlapping writer buffers replace that read term.
 constexpr auto kDrainPlateauBytes =
     (kJournalMaxResident + kPlateauBookDefinitions + kPlateauCauseDefinitions)
     * kDefinitionAllocationBytes + kDrainSideBytes + kBookWriterOverlapBytes;
@@ -480,15 +493,12 @@ void exercise(std::size_t population, Shape shape, bool direct) {
 }
 
 std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
-    // Wide needs only two roots. The book-only case isolates definition
-    // duplication; the others cross the journal cap as Deep and Tree do.
-    // Avoid the oracle's per-child book scans at these populations.
+    // Wide needs only two roots. Every case crosses the journal cap; larger
+    // populations also spill the book. At this cap a book-only spill is
+    // impossible. Avoid the oracle's per-child book scans at these populations.
     constexpr auto shape = Shape::Wide;
     constexpr auto root_count = kWideRootCount;
-    const bool book_only = population == kBookOnlyPopulation;
-    CHECK(population + root_count > kBookMaxResident);
-    if (book_only) CHECK(2 * population + 2 * root_count + 64 <= kJournalMaxResident);
-    else CHECK(2 * population + 2 * root_count + 64 > kJournalMaxResident);
+    CHECK(2 * population + 2 * root_count + 64 > kJournalMaxResident);
 #ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
     ScratchFixture scratch;
     CHECK(scratch.store.status() == detail::ScratchStatus::ok);
@@ -503,28 +513,24 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     std::size_t reserve_peak = 0;
     const auto seeds = populate(consumer, population, shape, &reserve_peak);
     print_reserve(population, shape, direct, reserve_peak);
-    if (!book_only)
-        CHECK(reserve_peak >= kJournalMaxResident * sizeof(std::optional<no::CommandEvent>));
+    CHECK(reserve_peak >= kJournalMaxResident * sizeof(std::optional<no::CommandEvent>));
     CHECK(!seeds.empty());
     if (seeds.empty()) return reserve_peak;
     const auto before = consumer.request_core().history_end();
     const auto live_before = consumer.request_core().live_size();
     // These are the case's actual book/history counts, not its reserve request.
-    // A live population above the fixed book cap necessarily has spilled rows;
-    // this reset, unretired journal spills only after its actual event cap.
-    const bool book_spilled = live_before > kBookMaxResident;
+    // Both roots were live before their cancellations. Cancelling them does
+    // not promote the newest rows that setup spilled from the full book.
+    // This reset, unretired journal spills only after its actual event cap.
+    const bool book_spilled = live_before + root_count > kBookMaxResident;
     const bool journal_spilled_before = before > kJournalMaxResident;
     CHECK(live_before == population);
-    CHECK(book_spilled);
+    CHECK(book_spilled == (population > kLastResidentBookPopulation));
     // One acceptance per child/root, one re-price and two root cancellations.
     CHECK(before == population + root_count + 1 + root_count);
-    if (book_only) {
-        CHECK(!journal_spilled_before);
-        CHECK(before + population <= kJournalMaxResident);
-    } else {
-        // Cross the actual retained-event limit, not just its reservation.
-        CHECK(before + population > kJournalMaxResident);
-    }
+    CHECK(journal_spilled_before == (population + 2 * root_count + 1 > kJournalMaxResident));
+    // Cross the actual retained-event limit, not just its reservation.
+    CHECK(before + population > kJournalMaxResident);
 
     // Reserve's marked chunks are recycled through JournalStore::spare during
     // these one-event appends, not freed against this separate recording window.
@@ -535,26 +541,26 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     Probe::drain(consumer, actual, seeds);
     global_allocation::recording = false;
     global_allocation::on_recorded = nullptr;
-    // L6 08:53 (drain ruling (i)): for every population up to kLastTargetedPopulation
-    // (5,000 / 8,190 / 8,191) the drain is held to kDrainBytes, the REGRESSION GUARD
-    // of the definition reuse: a build that disables the reuse takes these to 1.87 MB
-    // and turns the check RED. Beyond it (16,382 / 65,536) the original definitions
-    // are spilled with their events, no resident event owns them and the reuse cannot
-    // apply: the drain is held to the per-engine cap plateau kDrainPlateauBytes
-    // (documented in docs/scratch-store.md) until the non-owning terminal path (CR-262).
+    // Preserve the L6 drain guard through the continuous resident-book/cause
+    // region (2030 children). At 2031 chunk rounding makes the late cause
+    // cold before its last use, requiring 33 decoded definitions. At 4095
+    // spilled book reads add owners when their birth event is no longer
+    // resident. Both paths retain the per-engine cap plateau until CR-262.
     const auto bound = population <= kLastTargetedPopulation ? kDrainBytes : kDrainPlateauBytes;
     CHECK(peak_bytes <= bound);
     std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",
                 population, static_cast<int>(shape), direct, peak_bytes, bound);
-    std::printf("X08 plateau population=%zu direct=%d peak=%zu plateau=%zu\n",
-                population, direct, peak_bytes, kDrainPlateauBytes);
+    std::printf("X08 plateau population=%zu direct=%d peak=%zu plateau=%zu "
+                "side_bytes=%zu book_read_bytes=%zu writer_overlap_bytes=%zu\n",
+                population, direct, peak_bytes, kDrainPlateauBytes,
+                kDrainSideBytes, kWaitingBookRowBytes, kBookWriterOverlapBytes);
 
     CHECK(!Probe::failed(consumer));
     CHECK(consumer.request_core().live().empty());
     CHECK(consumer.request_core().history_end() - before == population);
     const auto after = consumer.request_core().history_end();
     const bool journal_spilled = after > kJournalMaxResident;
-    CHECK(journal_spilled == !book_only);
+    CHECK(journal_spilled);
     std::printf("X08 spill_state population=%zu direct=%d events_before=%zu events_after=%zu "
                 "book_spilled=%d journal_spilled_before=%d journal_spilled=%d\n",
                 population, direct, before, after, book_spilled,
@@ -681,7 +687,7 @@ void exercise_reload_control(bool direct, const no::Request& request, const no::
 }
 
 void exercise_reload(bool direct) {
-    constexpr std::size_t population = 8191;
+    constexpr std::size_t population = kJournalBoundaryPopulation;
     const no::Request root_request{no::Transact{1.0}, "root", ""};
     const no::Request child_request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
     const no::Request filler{no::Transact{0.0}, "filler", ""};
@@ -717,7 +723,7 @@ void exercise_reload(bool direct) {
     constexpr std::size_t arena_chunk_bytes = detail::ScratchArena::kChunkBytes;
     constexpr auto max_arena_chunks = (max_spill_bytes + arena_chunk_bytes - 1) / arena_chunk_bytes;
     // src/scratch_arena.cpp:295-301 doubles the uint32_t table capacity:
-    // at most five growths, 1 -> 2 -> 4 -> 8 -> 16 -> 32 (17 chunks needed).
+    // at most two growths, 1 -> 2 -> 4 (three chunks needed at this cap).
     // Sum every allocation, including replaced tables, to bound the live peak.
     constexpr auto arena_chunk_table_bytes = [] {
         std::size_t bytes = 0;
@@ -727,15 +733,20 @@ void exercise_reload(bool direct) {
     }();
     const auto cache_reload_budget_bytes =
         definition_bytes + string_bytes + id_vector_bytes + arena_chunk_table_bytes;
-    // Original definitions need not still be resident when a spilled book
-    // row is promoted. Bound the full book cap, the eight side rows (each
-    // with a definition and LiveRequest owner), and one serialized read row.
-    constexpr auto promoted_book_definition_bytes = kBookMaxResident * kDefinitionAllocationBytes;
+    // At this cap the reload population plus both roots fits in the book:
+    // no promoted definitions, side owners or serialized book read are needed.
+    // Keep those terms explicit in the budget and diagnostic.
+    constexpr auto book_can_spill = population + kWideRootCount > kBookMaxResident;
+    constexpr auto promoted_book_definition_bytes =
+        book_can_spill ? kBookMaxResident * kDefinitionAllocationBytes : 0;
+    constexpr auto reload_side_bytes = book_can_spill ? kDrainSideBytes : 0;
+    constexpr auto reload_book_read_bytes = book_can_spill ? kWaitingBookRowBytes : 0;
     // Per ENGINE, constant and independent of symbol count and trades, like
     // kDrainPlateauBytes. Only fixed production caps and case payloads enter.
     const auto reload_budget_bytes =
         cache_reload_budget_bytes + promoted_book_definition_bytes
-        + kDrainSideBytes + kWaitingBookRowBytes;
+        + reload_side_bytes + reload_book_read_bytes;
+    CHECK(!book_can_spill);
     CHECK(population < kJournalMaxResident);
     // A fifth full decoded page must exceed the cache-only control's SAME
     // tighter budget; book promotion must not hide growing the journal cache.
@@ -785,6 +796,8 @@ void exercise_reload(bool direct) {
     CHECK(cancelled.status == no::CancelStatus::Cancelled);
     seeds.push_back({no::EventId{core.identity(), cancelled.event_ordinal}, roots[1]});
     CHECK(core.live().size() == population);
+    CHECK(core.history_end() == population + 2 * kWideRootCount);
+    CHECK(core.history_end() <= kJournalMaxResident);
     CHECK(cause_position == 3 && cause_position < kJournalChunk);
     const auto cause_address = reinterpret_cast<std::uintptr_t>(&core.history_at(cause_position));
     const auto cause_value = full_fold::value(core.history_at(cause_position));
@@ -820,7 +833,7 @@ void exercise_reload(bool direct) {
                 "book_read_bytes=%zu cache_budget=%zu\n",
                 population, direct, measured_reload_peak, reload_budget_bytes,
                 kJournalCacheSlots, sizeof(no::RequestDefinition), promoted_book_definition_bytes,
-                kDrainSideBytes, kWaitingBookRowBytes, cache_reload_budget_bytes);
+                reload_side_bytes, reload_book_read_bytes, cache_reload_budget_bytes);
     // Cold-cause reload has its own budget; the targeted drains still check
     // kDrainBytes, and the cache-only control keeps its tighter allowance.
     CHECK(measured_reload_peak <= reload_budget_bytes);
@@ -1049,16 +1062,25 @@ int main() {
         exercise(512, Shape::Tree, direct);
         exercise(64, Shape::ManySeeds, direct);
         exercise(512, Shape::ManySeeds, direct);
-        exercise_beyond_cap(kBookOnlyPopulation, direct);
         // The smallest adjacent populations whose 2*N + 5 actual events spill;
-        // their reserve requests are 16448 and 16450, both above 16384.
+        // their reserve requests are 2112 and 2114, both above 2048.
         // Without the cap, these requests need different numbers of chunks.
-        const auto reserve_peak_at_cap = exercise_beyond_cap(8190, direct);
-        const auto reserve_peak_beyond_cap = exercise_beyond_cap(8191, direct);
+        const auto reserve_peak_at_cap =
+            exercise_beyond_cap(kJournalBoundaryPopulation - 1, direct);
+        const auto reserve_peak_beyond_cap =
+            exercise_beyond_cap(kJournalBoundaryPopulation, direct);
         CHECK(reserve_peak_at_cap > 0);
         CHECK(reserve_peak_at_cap == reserve_peak_beyond_cap);
         exercise_beyond_cap(kJournalMaxResident - 2, direct);
+        exercise_beyond_cap(kLastTargetedPopulation, direct);
+        exercise_beyond_cap(kLastTargetedPopulation + 1, direct);
+        exercise_beyond_cap(kLastResidentBookPopulation, direct);
+        exercise_beyond_cap(kLastResidentBookPopulation + 1, direct);
+        exercise_beyond_cap(kSpilledBookPopulation, direct);
         exercise_beyond_cap(4 * kJournalMaxResident, direct);
+        // Keep the original spilled-book populations and reach the new plateau.
+        for (const auto population : {8190u, 8191u, 16382u, 65536u})
+            exercise_beyond_cap(population, direct);
         exercise_reload(direct);
         exercise_limits(direct);
         invalid_cause(direct);

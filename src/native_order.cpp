@@ -1566,14 +1566,13 @@ struct WorkingRequestCore::JournalStore {
         return *codec_values[slot];
     }
     // A page holds a contiguous prefix of one chunk, bounded by bytes as well
-    // as kChunk events. The resident part may hold up to
-    // kMaxResident events -- far past what a run that retires its journal ever
-    // keeps, so a windowed run never writes a page -- and a journal pinned or
-    // retained past it spills its oldest chunks to pages. A spill never takes
+    // as kChunk events. The resident part may hold up to kMaxResident events;
+    // a window that grows past it, including within one bar before retirement,
+    // spills its oldest chunks to pages. A spill never takes
     // the resident part below kKeepResident events, so the newest events stay
     // in memory.
     static constexpr std::size_t kChunk = 32;
-    static constexpr std::size_t kMaxResident = 16384;
+    static constexpr std::size_t kMaxResident = 2048;
     static constexpr std::size_t kKeepResident = 128;
     // Page layout: concatenated events, each starting with a uint32_t
     // alternative and a uint64_t ordinal, followed by its fields. This 32,768 B

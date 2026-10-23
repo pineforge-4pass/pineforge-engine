@@ -89,16 +89,48 @@ different ones.
 
 ### Resident bound of the parent-terminal drain (native order)
 
+The native request core's `JournalStore` has a resident cap of 2,048
+committed events in 32-event chunks, with a keep-resident floor of 128.
+A single bar can exceed the cap before its journal is retired; older events
+then spill to pages and remain readable at their original positions and
+ordinals. The spill page remains 32,768 bytes and the decoded cache has four
+slots. The separately bound `CommandScratchStore` codec uses its own fixed
+workspace instead of this resident tail.
+
 This is a bound of the native request core, not of `CommandScratchStore`: the
-parent-terminal drain holds at most about 8.4 MB of resident definitions at the
-caps (book 4,096 + journal 16,384 events), constant, independent of symbols,
-window and trades. The test pins it as `kDrainPlateauBytes` (8,428,196 B on the
+parent-terminal drain holds at most about 1.9 MB of resident definitions at the
+caps (book 4,096 + journal 2,048 events), constant, independent of symbols,
+window and trades. The test pins it as `kDrainPlateauBytes` (1,890,980 B on the
 GNU 13.4 x86-64 sizes, a per-engine figure derived from the caps and the
 allocation sizes in `tests/test_parent_terminal_scratch.cpp`). Below it the drain
-is held to 4,096 B for every population up to 8,191, where the resident journal
-events own the definitions the spilled book rows need (the definition reuse in
-`BookSpill::read`); beyond that the original definitions are spilled with their
-events and the plateau applies until the non-owning terminal path (CR-262) lands.
+is held to 4,096 B for every population up to 2,030
+(`2048-32/2-2`), where both the book and the causes stay resident.
+At 2,031 children the late cause is at position 2,035 in chunk `[2016,2048)`.
+The append ending at 4,065 spills that chunk before the final two cause
+lookups, which decode 33 definitions. The plateau therefore applies from
+this first cold-cause population, even though the book still fits.
+Both roots coexist with the children during setup, so book spill starts
+later, at 4,095 (`4096-2+1`) children. `BookSpill::read` still reuses a
+resident event's definition after a complete value match; otherwise the
+decoded owner remains. The plateau applies until the non-owning terminal
+path (CR-262) lands.
+
+The plateau derivation is
+`456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524 = 1890980` bytes.
+The terms are the journal definitions, promoted half-book plus two roots,
+one decoded cause chunk with a two-definition replacement, eight side owners,
+and overlapping book-writer buffers. During growth, the side owners and a
+216-byte book read instead contribute the fixed `6720+216=6936` bytes;
+that read buffer is not the plateau's 524-byte writer overlap.
+This definition budget excludes the journal event slots and spill buffers
+reserved before the drain, and does not bound arbitrary request strings or
+nested payloads.
+
+`test_journal_resident_cap` samples residency after every command in a single
+unretired 18,000-event window, requires a peak no greater than `2048+32`,
+and reads expired original definitions back from spilled events. Its receipt
+and core-state oracles are constructed independently; a one-bar settlement
+fixture separately checks 3,000 literal round-trip trades.
 
 ## Transactions, rollback and commit
 

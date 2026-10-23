@@ -671,6 +671,26 @@ flag is false. This flag is informational: it does not affect the top-level
 verdict, its reason or `unboundedTerms`. Private growth is capped by the
 child's `RLIMIT_AS` and a breach is the strategy's typed `memory_limit`.
 
+The native request `JournalStore` has a resident cap of 2,048 committed
+events in 32-event chunks, with a keep-resident floor of 128, a 32,768-byte
+spill page and four decoded cache slots. A bar that exceeds the cap spills
+before retirement. For the short waiting-child parent-terminal fixture,
+the book's 4,096-row cap and this journal cap give the per-engine definition
+plateau `456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524 = 1890980` bytes
+on GNU 13.4 x86-64, independent of symbols, window and trades.
+The [scratch-store derivation](../scratch-store.md#resident-bound-of-the-parent-terminal-drain-native-order)
+separates the growth-time 6,936-byte fixed term from the plateau's writer
+overlap and lists the excluded event slots, buffers and arbitrary payloads.
+
+`scripts/arena_bound.py` has no `kMaxResident` input or native journal-page
+term. The resident-cap change therefore changes neither its per-user storage
+terms nor its command-store shares, closed form or hand vectors.
+The unbound journal's `ExtFile` uses `ScratchFile`, which can claim arena
+regions; spilling earlier is not itself a certificate for that backing's
+complete lifetime extent. The bound codec uses the existing command-store
+share. This resident definition budget supplies no new private RSS/AS
+certification.
+
 CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident
 constant**, referring to Q2 at 15:43. That is a historical measurement,
 not a source-derived upper bound for this merged tree or arbitrary
