@@ -254,3 +254,9 @@ Template scope omitted from the prior handoff (P3 T2), current template paths:
   require AUTHZ_RESULT. These are necessary to preserve the trusted checker
   and fail-closed reporter during item B's event port; keep them with that
   port, rather than silently omitting them from its scope record.
+
+FINAL INTEGRATION RECORD (supervisor, 10-23 15:15; supersedes every earlier "pending merge", "unmerged", "remaining copying" and "still requires restoration" passage above, which are checkpoint accounts):
+- This is the completed merge commit of `ci/sec846-engine`: parents `dcbdc1f16fb9ddec6bb4e01b084ca6a057762b3f` and origin/main `3a0d1504fd1b7b754ca08fb4fbdbaa7cecb2bbd6`; conflicts in docs/ci.md, scripts/ci_preflight.py and scripts/test_ci_preflight.py resolved by union.
+- The promote-guard block has MD5 933cc1f869787b37f3b339978d3828a2 in engine, codegen-oss and the workflow template; each pin compares the whole block to one independent literal.
+- The template's extra header comments are already restored to main's text, and its cloud SQL proxy wait is identical to the template's origin/main (not synchronised with codegen, whose wait differs on main); the whole codegen and template promotion files are intentionally not byte-equal at that wait.
+- Nothing was run on the authoring machine (NOT RUN).

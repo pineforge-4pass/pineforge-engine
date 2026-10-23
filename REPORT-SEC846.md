@@ -362,3 +362,10 @@ tree, real metadata-token lookup permissions, deployed IAM/OIDC, repository
 fork settings, final codegen/template synchronization and the supervisor's
 handoff installation remain unchecked. The supervisor must run required
 verification and commit the merge after the remaining lanes finish.
+
+## FINAL INTEGRATION RECORD (supervisor, 10-23 15:15; supersedes every earlier "pending merge", "HEAD remains", "unmerged index" and "remaining lane" passage above, which are checkpoint accounts)
+
+- This file is part of the completed two-parent merge commit of branch `ci/sec846-engine`: first parent `dcbdc1f16fb9ddec6bb4e01b084ca6a057762b3f` (the earlier SEC846 branch), second parent `3a0d1504fd1b7b754ca08fb4fbdbaa7cecb2bbd6` (origin/main). The three conflict files (`docs/ci.md`, `scripts/ci_preflight.py`, `scripts/test_ci_preflight.py`) are resolved by union; no conflict marker remains.
+- Cross-repository adoption is finished: the `promote-guard` block (job header through its blank separator) has the same MD5, `933cc1f869787b37f3b339978d3828a2`, in engine, codegen-oss and the workflow template, and each repo's pin compares the whole block to one independent literal. The pre-adoption hashes and "remaining copying work" above are history.
+- Template scope as it stands: the template's cloud SQL proxy wait is IDENTICAL to the template's own origin/main; it was deliberately NOT synchronised with codegen's (the two files differ there on main), so the whole codegen and template promotion files are intentionally not byte-equal at that wait. The extra header comments of the template's promotion file are already restored to main's text; its diff against origin/main is the guard and `needs` insertion only. Any earlier statement here that the proxy loop was copied, or that whole-file MD5s are equal, is a superseded checkpoint observation.
+- Nothing was run on the authoring machine (tests, collection, scripts, workflows: NOT RUN).
