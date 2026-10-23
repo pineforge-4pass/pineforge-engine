@@ -1,7 +1,7 @@
 {
   "schema": "pineforge-arena-bound-vectors/v1",
   "arithmetic": "unsigned 64-bit checked integers; TypeScript BigInt; JSON integers decoded losslessly",
-  "provenance": "All eight vectors are hand-derived, not harvested from execution. CR150-CX removes one obsolete pair-data/index allowance and adds 136*Q + 2088*max(Q-1,0) + 2096*savedPath, with stock-source external openings explicitly zero. The arena rounding formula is unchanged. See docs/design/arena-bound.md for each subtraction/addition. Only arena, ohlcv and finalizerStream affect the top-level verdict; childPrivate is informational.",
+  "provenance": "All eight vectors are hand-derived, not harvested from execution. The current non-command inventory includes 136*Q + 2088*max(Q-1,0) + 2096*savedPath and stock-source external openings zero. CR150-CX retains Bcert=chunkCeil(B)+14*C, then reserves three command shares: b=Bcert/C, q=max(1,floor((b-3)/13)), arenaBytes=(b+3*q)*C, C=1048576, f=1/16. See docs/design/arena-bound.md for every vector's arithmetic. Unbounded arena output is unchanged, including its legacy derivation metadata. Only arena, ohlcv and finalizerStream affect the top-level verdict; childPrivate is informational.",
   "vectors": [
     {
       "name": "empty-run-common-empty-id",
@@ -17,7 +17,7 @@
         }
       },
       "expected": {"terms": {"arena": {
-        "arenaBytes": 15728640,
+        "arenaBytes": 18874368,
         "inputs": {
           "T": {"value": 0, "derivation": {"formula": "(scriptBars * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows", "sources": ["hand", "hand", "hand"]}},
           "D": {"value": 1, "derivation": {"formula": "|unique(ids.literals union {empty})| + scriptBars * ids.freshPerBar + ids.fixedFresh", "sources": ["hand", "hand", "hand"]}},
@@ -26,8 +26,8 @@
           "R": {"value": 0, "derivation": {"formula": "scriptBars * successors.perBar + successors.fixed", "sources": ["hand", "hand", "hand"]}},
           "E": {"value": 0, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
-        "unbounded": false, "bytes": 15728640,
-        "derivation": {"formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576", "sources": ["docs/design/arena-bound.md storage derivation"]}
+        "unbounded": false, "bytes": 18874368,
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -49,7 +49,7 @@
         }
       },
       "expected": {"terms": {"arena": {
-        "arenaBytes": 17825792,
+        "arenaBytes": 20971520,
         "inputs": {
           "T": {"value": 500, "derivation": {"formula": "(scriptBars * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows", "sources": ["hand", "hand", "hand"]}},
           "D": {"value": 500, "derivation": {"formula": "|unique(ids.literals union {empty})| + scriptBars * ids.freshPerBar + ids.fixedFresh", "sources": ["hand", "hand", "hand"]}},
@@ -58,8 +58,8 @@
           "R": {"value": 10000, "derivation": {"formula": "scriptBars * successors.perBar + successors.fixed", "sources": ["hand", "hand", "hand"]}},
           "E": {"value": 2001, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
-        "unbounded": false, "bytes": 17825792,
-        "derivation": {"formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576", "sources": ["docs/design/arena-bound.md storage derivation"]}
+        "unbounded": false, "bytes": 20971520,
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -81,7 +81,7 @@
         }
       },
       "expected": {"terms": {"arena": {
-        "arenaBytes": 1581252608,
+        "arenaBytes": 1943011328,
         "inputs": {
           "T": {"value": 400000, "derivation": {"formula": "(scriptBars * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows", "sources": ["hand", "hand", "hand"]}},
           "D": {"value": 400000, "derivation": {"formula": "|unique(ids.literals union {empty})| + scriptBars * ids.freshPerBar + ids.fixedFresh", "sources": ["hand", "hand", "hand"]}},
@@ -90,8 +90,8 @@
           "R": {"value": 8000000, "derivation": {"formula": "scriptBars * successors.perBar + successors.fixed", "sources": ["hand", "hand", "hand"]}},
           "E": {"value": 8000001, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
-        "unbounded": false, "bytes": 1581252608,
-        "derivation": {"formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576", "sources": ["docs/design/arena-bound.md storage derivation"]}
+        "unbounded": false, "bytes": 1943011328,
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -113,7 +113,7 @@
         }
       },
       "expected": {"terms": {"arena": {
-        "arenaBytes": 15728640,
+        "arenaBytes": 18874368,
         "inputs": {
           "T": {"value": 0, "derivation": {"formula": "(scriptBars * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows", "sources": ["hand", "hand", "hand"]}},
           "D": {"value": 32, "derivation": {"formula": "|unique(ids.literals union {empty})| + scriptBars * ids.freshPerBar + ids.fixedFresh", "sources": ["hand", "hand", "hand"]}},
@@ -122,8 +122,8 @@
           "R": {"value": 0, "derivation": {"formula": "scriptBars * successors.perBar + successors.fixed", "sources": ["hand", "hand", "hand"]}},
           "E": {"value": 1, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
-        "unbounded": false, "bytes": 15728640,
-        "derivation": {"formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576", "sources": ["docs/design/arena-bound.md storage derivation"]}
+        "unbounded": false, "bytes": 18874368,
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -145,7 +145,7 @@
         }
       },
       "expected": {"terms": {"arena": {
-        "arenaBytes": 15728640,
+        "arenaBytes": 18874368,
         "inputs": {
           "T": {"value": 2, "derivation": {"formula": "(scriptBars * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows", "sources": ["hand", "hand", "hand"]}},
           "D": {"value": 2, "derivation": {"formula": "|unique(ids.literals union {empty})| + scriptBars * ids.freshPerBar + ids.fixedFresh", "sources": ["hand", "hand", "hand"]}},
@@ -154,8 +154,8 @@
           "R": {"value": 2, "derivation": {"formula": "scriptBars * successors.perBar + successors.fixed", "sources": ["hand", "hand", "hand"]}},
           "E": {"value": 2, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
-        "unbounded": false, "bytes": 15728640,
-        "derivation": {"formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576", "sources": ["docs/design/arena-bound.md storage derivation"]}
+        "unbounded": false, "bytes": 18874368,
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -177,7 +177,7 @@
         }
       },
       "expected": {"terms": {"arena": {
-        "arenaBytes": 40894464,
+        "arenaBytes": 47185920,
         "inputs": {
           "T": {"value": 0, "derivation": {"formula": "(scriptBars * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows", "sources": ["hand", "hand", "hand"]}},
           "D": {"value": 1, "derivation": {"formula": "|unique(ids.literals union {empty})| + scriptBars * ids.freshPerBar + ids.fixedFresh", "sources": ["hand", "hand", "hand"]}},
@@ -186,8 +186,8 @@
           "R": {"value": 0, "derivation": {"formula": "scriptBars * successors.perBar + successors.fixed", "sources": ["hand", "hand", "hand"]}},
           "E": {"value": 1048576, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
-        "unbounded": false, "bytes": 40894464,
-        "derivation": {"formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576", "sources": ["docs/design/arena-bound.md storage derivation"]}
+        "unbounded": false, "bytes": 47185920,
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {"residentBytes": null, "asBytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing complete pre-start feed/mapping inventory"]}},
         "finalizerStream": {"bytes": null, "unbounded": true, "derivation": {"formula": "no certified pre-start value", "sources": ["missing pre-start open-at-end and O/V/K/X/H counts"]}},
@@ -225,7 +225,7 @@
         }
       },
       "expected": {"terms": {"arena": {
-        "arenaBytes": 15728640,
+        "arenaBytes": 18874368,
         "inputs": {
           "T": {"value": 2, "derivation": {"formula": "(scriptBars * fills.perBar + fills.fixed) * fills.rowsPerFill + fills.fixedRows", "sources": ["hand", "hand", "hand"]}},
           "D": {"value": 2, "derivation": {"formula": "|unique(ids.literals union {empty})| + scriptBars * ids.freshPerBar + ids.fixedFresh", "sources": ["hand", "hand", "hand"]}},
@@ -234,8 +234,8 @@
           "R": {"value": 2, "derivation": {"formula": "scriptBars * successors.perBar + successors.fixed", "sources": ["hand", "hand", "hand"]}},
           "E": {"value": 2, "derivation": {"formula": "selected ? windowBars + 1 : scriptBars", "sources": ["hand"]}}
         },
-        "unbounded": false, "bytes": 15728640,
-        "derivation": {"formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576", "sources": ["docs/design/arena-bound.md storage derivation"]}
+        "unbounded": false, "bytes": 18874368,
+        "derivation": {"formula": "b = ceil(sum(perUserBytes) / 1048576) + 14; q = max(1, floor((b - 3) / (16 - 3))); arenaBytes = (b + 3 * q) * 1048576; f = 1/16", "sources": ["docs/design/arena-bound.md storage derivation", "src/command_scratch_production.hpp kCommandScratchArenaShare", "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes"]}
       },
         "ohlcv": {
           "residentBytes": 36864, "asBytes": 24576, "unbounded": false,
