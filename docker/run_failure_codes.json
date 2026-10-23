@@ -828,6 +828,23 @@
    "retryable": false,
    "since": "1.4.0"
   },
+  "report_mode_unsupported": {
+   "args": {
+    "contract": {
+     "kind": "string"
+    },
+    "mode": {
+     "kind": "string"
+    }
+   },
+   "class": "unsupported",
+   "description": "The host has no provider bridge for the requested report mode and contract.",
+   "english": [
+    "unsupported report mode: {mode} (no {contract} provider bridge for this host)"
+   ],
+   "retryable": false,
+   "since": "1.7.0"
+  },
   "report_platform_unavailable": {
    "args": {
     "field": {

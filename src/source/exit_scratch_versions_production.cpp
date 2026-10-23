@@ -557,10 +557,12 @@ template<class... T> std::uint64_t put_version(CommandScratchStore& store,
 
 std::uint64_t ExitScratchVersionsProduction::placement(
         std::uint64_t scope, const PlacementSnapshot& value) {
+    check_teardown_failure();
     return put_version(store_, scope, placement_kind, value);
 }
 
 PlacementSnapshot ExitScratchVersionsProduction::placement(std::uint64_t version) const {
+    check_teardown_failure();
     PlacementSnapshot value;
     read_payload(store_, version, placement_kind, value);
     return value;
@@ -568,10 +570,12 @@ PlacementSnapshot ExitScratchVersionsProduction::placement(std::uint64_t version
 
 std::uint64_t ExitScratchVersionsProduction::request(
         std::uint64_t scope, const native_order::Request& value) {
+    check_teardown_failure();
     return put_version(store_, scope, request_kind, value);
 }
 
 native_order::Request ExitScratchVersionsProduction::request(std::uint64_t version) const {
+    check_teardown_failure();
     native_order::Request value;
     read_payload(store_, version, request_kind, value);
     return value;
@@ -580,11 +584,13 @@ native_order::Request ExitScratchVersionsProduction::request(std::uint64_t versi
 std::uint64_t ExitScratchVersionsProduction::pending(std::uint64_t scope,
         const native_order::Request& request, const PlacementSnapshot& placement,
         const std::string& key) {
+    check_teardown_failure();
     return put_version(store_, scope, pending_kind, request, placement, key);
 }
 
 void ExitScratchVersionsProduction::pending(std::uint64_t version,
         native_order::Request& request, PlacementSnapshot& placement, std::string& key) const {
+    check_teardown_failure();
     native_order::Request saved_request;
     PlacementSnapshot saved_placement;
     std::string saved_key;
@@ -597,6 +603,7 @@ void ExitScratchVersionsProduction::pending(std::uint64_t version,
 native_order::Owner ExitScratchVersionsProduction::freeze_openings(
         const native_order::RunIdentity& run, std::int64_t cycle, std::uint64_t count,
         void* context, OpeningReader read) {
+    check_teardown_failure();
     if (!read || cycle <= 0)
         exit_scratch_failure(ScratchStatus::programming_error);
     // The existing Owner ABI carries fixed membership as a native-owned vector.
@@ -617,17 +624,8 @@ native_order::Owner ExitScratchVersionsProduction::freeze_openings(
 }
 
 void ExitScratchVersionsProduction::release_scope(std::uint64_t scope) noexcept {
-    ExitScratchContext context{store_, {}};
-    const ExitScratchKey key(scope, sequence_kind);
-    for (;;) {
-        const auto handle = exit_scratch_seek(context, key);
-        if (!handle) break;
-        const auto words = exit_scratch_words(context, handle);
-        if (words[0] != scope || words[1] > pending_kind) break;
-        // Like ExitScratchScope's destructor, an unrecoverable backing failure
-        // cannot be ignored or escape this noexcept lifetime boundary.
-        exit_scratch_edit(context, [&] { return store_.erase(handle); });
-    }
+    exit_scratch_erase_scope_noexcept(
+        store_, scope, sequence_kind, pending_kind, teardown_failure_);
 }
 
 } // namespace pineforge::source::detail
