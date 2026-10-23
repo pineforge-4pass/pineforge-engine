@@ -108,6 +108,13 @@ ScratchArenaBackend validate_backing(int fd, std::uint64_t bytes) {
         if (seals == F_SEAL_SEAL) return ScratchArenaBackend::regular_file;
         if ((seals & required) != required)
             arena_error(EINVAL, "scratch arena seals", "arena_backing");
+#if defined(F_SEAL_FUTURE_WRITE)
+        constexpr int future_write_seal = F_SEAL_FUTURE_WRITE;
+#else
+        constexpr int future_write_seal = 0x0010; // Linux UAPI, for older build headers.
+#endif
+        if (seals & (F_SEAL_WRITE | future_write_seal))
+            arena_error(EINVAL, "scratch arena seals", "arena_backing");
         return ScratchArenaBackend::sealed_memfd;
     }
     if (errno != EINVAL) arena_error(errno, "scratch arena seals", "arena_backing");

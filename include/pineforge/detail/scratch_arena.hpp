@@ -72,10 +72,17 @@ class ScratchFile;
 // write/pwrite, or changes seals on the backing fd. It owns a CLOEXEC dup;
 // the caller keeps ownership of the supplied fd. Both backends require
 // S_ISREG and exactly the supplied size. On Linux, F_GET_SEALS returning
-// exactly SEAL (sealing disabled) or EINVAL selects a regular file;
-// GROW|SHRINK|SEAL selects sealed_memfd. All other seal masks are refused.
-// Environment attachment with PF_SCRATCH_ARENA_JAILED=1 additionally requires
-// sealed_memfd; direct attach(fd, bytes) keeps the backing rules above.
+// exactly F_SEAL_SEAL (sealing disabled) or EINVAL selects regular_file.
+// A mask containing F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL selects
+// sealed_memfd; F_SEAL_EXEC and other non-write seals may be added (e.g.
+// MFD_NOEXEC_SEAL). A mask containing F_SEAL_WRITE or F_SEAL_FUTURE_WRITE
+// is refused with report_sink_failed/arena_backing in every profile.
+// Masks missing a required seal, except the regular-file cases, are refused.
+// PF_SCRATCH_ARENA_JAILED=1 additionally requires sealed_memfd at attachment;
+// direct attach(fd, bytes), unset or "0" may attach ordinary files.
+// strategy_require_report_scratch_arena_v1 itself requires sealed_memfd on
+// Linux regardless of PF_SCRATCH_ARENA_JAILED; off Linux it admits any
+// attached arena.
 // The wrapper preallocates regular files in a root-owned 0700 directory,
 // mode 0600, and passes O_RDWR. New mappings and short preads recheck size.
 // The one unrecoverable case is SIGBUS after a concurrent shrink invalidates
@@ -113,9 +120,12 @@ public:
 
     // No PF_SCRATCH_ARENA_FD => no-op (even if the size variable is present).
     // Otherwise require FD=5 and a positive decimal PF_SCRATCH_ARENA_BYTES.
-    // PF_SCRATCH_ARENA_JAILED: exactly "1" requires sealed_memfd, unset or
-    // exactly "0" keeps the regular-file path; all other values are refused.
-    // The jailed requirement also applies to an existing attachment.
+    // PF_SCRATCH_ARENA_JAILED: exactly "1" requires sealed_memfd at attachment;
+    // unset or exactly "0" permits regular_file; all other values are refused.
+    // Write-sealed masks are refused in every profile. The attach-time sealed
+    // requirement also applies to an existing attachment. The admission export
+    // requires sealed_memfd on Linux regardless of this variable; off Linux
+    // it admits any attached arena.
     // attach also reads PF_SCRATCH_WINDOW_BYTES: a total mapping cap, default
     // 32 MiB, rounded down to whole pages; less than one page is refused.
     static void attach_from_environment();
