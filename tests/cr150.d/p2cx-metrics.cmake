@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_metrics_provider_overload_links)
+pineforge_add_unit_test(test_metrics_provider_overload_links)

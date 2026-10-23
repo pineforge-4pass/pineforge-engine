@@ -1,6 +1,6 @@
 #pragma once
 
-// CR-150 P00 declarations only. DESIGN.md revision 6, section 3.3:513-567,
+// Streamed metric sources and adapters. DESIGN.md revision 6, section 3.3:513-567,
 // with scratch storage in 3.8:902-909 and selected observations in 3.6:745-773.
 // Existing array entry points in metrics.hpp remain unchanged.
 #include <pineforge/metrics.hpp>
@@ -49,8 +49,8 @@ private:
 /// Array point source, the first source of 3.3:535-543. data stays caller-
 /// owned and alive throughout the metric walk. Indexing returns a point
 /// value, so callers do not keep references to a source's refillable window.
-/// Required structural interface for BOTH sources: size() -> int64_t and
-/// source[int64_t] -> pf_equity_point_t, with 0 <= index < size().
+/// ArrayCurve and SpillCurve share the indexed interface size() -> int64_t
+/// and source[int64_t] -> pf_equity_point_t, with 0 <= index < size().
 class ArrayCurve {
 public:
     ArrayCurve(const pf_equity_point_t* data, std::int64_t point_count);
@@ -116,7 +116,10 @@ private:
 /// today's final-n/span risk-free rate. Do not change grouping/rounding or
 /// -ffp-contract=off (3.3:518-543). A non-UTC chart holds ONE ScopedTimezone
 /// for the whole fill-time walk, never a nested lock (3.3:545-546).
-/// These are template declarations, with no metric bodies/instantiations.
+/// Definitions live in engine_metrics.cpp, with instantiations for ArrayCurve,
+/// SpillCurve and the internal report_sink::ScratchCurveWindow. Other callers
+/// use the array or report-point provider overloads; arbitrary PointSource
+/// specializations are not supplied by this header.
 template <class PointSource>
 pf_equity_stats_t compute_equity_stats(
     const PointSource& curve, std::int64_t n, double initial_capital,
@@ -136,9 +139,9 @@ pf_equity_stats_t compute_equity_stats(
     std::int64_t bars_in_market, double net_profit,
     std::int64_t observation_count);
 
-// O1 report-point provider overloads: declarations only, metrics-lane bodies.
+// O1 report-point provider overloads share the indexed metric body.
 // FULL/STREAMED can reread captured final points in the same five ordered
-// walks through visit()/bounded pages. n counts points, observation_count
+// walks through by-value at() reads. n counts points, observation_count
 // counts observations (selected M+1 points, M observations). Preserve every
 // formula, float operation grouping, calendar/NaN guard and presented value.
 // Source/read failures propagate; never adapt by materializing an array.

@@ -7,6 +7,7 @@
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/metrics_fold.hpp>
 #include <pineforge/native_calendar.hpp>
+#include <pineforge/run_failure.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <ctime>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include "metrics_month_memo.hpp"
@@ -38,6 +40,19 @@ pf_equity_point_t ArrayCurve::operator[](std::int64_t index) const {
 
 namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+// F2: retain only the borrowed provider and the requested prefix length.
+// Each indexed read is detached; the provider owns any refillable window.
+struct ReportPointCurve {
+    const report::EquityPointSourceV1& source;
+    std::int64_t point_count;
+
+    std::int64_t size() const { return point_count; }
+    pf_equity_point_t operator[](std::int64_t index) const {
+        return source.at(static_cast<report::LogicalIndexV1>(index));
+    }
+};
+
 inline bool match(const TradeC& t, TradeFilter f) {
     return f == TradeFilter::ALL || (f == TradeFilter::LONG) == (t.is_long != 0);
 }
@@ -255,6 +270,10 @@ struct TradeStatsAccumulator::State {
     void fold(const TradeC& t) {
         if (!match(t, filter)) return;
         pf_trade_stats_t& s = stats;
+        // F4: the total also bounds every category count and streak.
+        if (s.num_trades == std::numeric_limits<std::int32_t>::max())
+            throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
+                "report trade counter exhausted");
         // Independent filters can be fed together, but the report finishes
         // ALL before LONG before SHORT. Retain each walk's first failure so
         // an eager LONG failure cannot overtake a later ALL failure.
@@ -576,6 +595,27 @@ pf_equity_stats_t compute_equity_stats(const PointSource& curve, int64_t n,
     return e;
 }
 
+pf_equity_stats_t compute_equity_stats(
+        const report::EquityPointSourceV1& curve, std::int64_t n,
+        double initial_capital, const std::string& chart_tz,
+        double first_open, double last_close, std::int64_t bars_in_market,
+        double net_profit) {
+    return compute_equity_stats(
+        curve, n, initial_capital, chart_tz, first_open, last_close,
+        bars_in_market, net_profit, n);
+}
+
+pf_equity_stats_t compute_equity_stats(
+        const report::EquityPointSourceV1& curve, std::int64_t n,
+        double initial_capital, const std::string& chart_tz,
+        double first_open, double last_close, std::int64_t bars_in_market,
+        double net_profit, std::int64_t observation_count) {
+    const ReportPointCurve source{curve, n};
+    return compute_equity_stats<ReportPointCurve>(
+        source, n, initial_capital, chart_tz, first_open, last_close,
+        bars_in_market, net_profit, observation_count);
+}
+
 // ArrayCurve and the L7c SpillCurve instantiations share this metric body.
 template pf_equity_stats_t compute_equity_stats<ArrayCurve>(
     const ArrayCurve&, int64_t, double, const std::string&, double, double,
@@ -645,10 +685,10 @@ void BacktestEngine::reset_trade_percent_prefix() {
 
 }  // namespace pineforge
 
-// CR-150 L6b-4 read-side binding. Keep the existing metric implementation and
-// its array instantiations above unchanged; L7c owns the public SpillCurve
-// instantiations. The internal window can exercise the real scratch reader
-// before that downstream adapter is merged.
+// F5: production uses report_sink::ScratchCurveWindow in
+// BacktestEngine::compute_report_sink_metrics on the sink path and SpillCurve
+// in NativeExecutionConsumer's selected capture path. Both readers use the
+// same metric body; instantiate the sink reader alongside SpillCurve.
 #include "report_scratch.hpp"
 
 namespace pineforge {
