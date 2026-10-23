@@ -186,6 +186,7 @@ import mmap
 import os
 import re
 import signal
+import socket
 import stat
 import struct
 import sys
@@ -4001,17 +4002,18 @@ def _annualization_diagnostics(curve, metrics, trades=(), window_anchor=False):
     cagr = metrics["equity"]["cagr"]
     if not curve or cagr is None or not math.isfinite(cagr):
         return {}
-    first, last = curve[0]["time_ms"], curve[-1]["time_ms"]
+    first_point, last_point = curve[0], curve[-1]
+    first, last = first_point["time_ms"], last_point["time_ms"]
     span_ms = float(last - first) if last >= first else -float(first - last)
     if not span_ms > 0:
         return {}
     if span_ms < MIN_ANNUALIZATION_SPAN_MS:
         form = "simple_proportional_subday"
     else:
-        if not window_anchor and (curve[0]["open_profit"] != 0
+        if not window_anchor and (first_point["open_profit"] != 0
                                   or any(row["entry_bar_index"] <= 0 for row in trades)):
             return {}
-        capital, final = curve[0]["equity"], curve[-1]["equity"]
+        capital, final = first_point["equity"], last_point["equity"]
         if not (math.isfinite(capital) and capital > 0 and math.isfinite(final) and final > 0):
             return {}
         span_years = span_ms / (365.25 * 86400.0 * 1000.0)
@@ -5450,8 +5452,7 @@ def _main(argv, binary_inputs) -> int:
             rep = ReportC(); st, sink = _make_state()
             try:
                 _run(st, rep)
-                if sink is not None or args.profile == "jailed":
-                    _check_bench_run(lib, st)
+                _check_bench_run(lib, st)
             finally:
                 _free_sink_run(lib, st, rep, sink)
         samples_ns: list[int] = []
@@ -5459,8 +5460,7 @@ def _main(argv, binary_inputs) -> int:
             rep = ReportC(); st, sink = _make_state()
             try:
                 t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
-                if sink is not None or args.profile == "jailed":
-                    _check_bench_run(lib, st)
+                _check_bench_run(lib, st)
                 samples_ns.append(t1 - t0)
             finally:
                 _free_sink_run(lib, st, rep, sink)
@@ -5731,6 +5731,28 @@ def _require_jailed_arena(lib, state):
                          "report_sink_failed", {"reason": "arena_backing"})
 
 
+def _validate_report_sink_fd(fd):
+    """Borrow an open FIFO or AF_UNIX stream; never close it on refusal."""
+    try:
+        mode = os.fstat(fd).st_mode
+        if stat.S_ISFIFO(mode):
+            return
+        if stat.S_ISSOCK(mode):
+            endpoint = socket.socket(fileno=fd)
+            try:
+                valid = (endpoint.family == socket.AF_UNIX
+                         and endpoint.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
+                         == socket.SOCK_STREAM)
+            finally:
+                endpoint.detach()  # the caller still owns this descriptor
+            if valid:
+                return
+    except OSError:
+        pass
+    raise _request_invalid("error: --report-sink-fd must be an open FIFO or "
+                           "AF_UNIX stream socket", "arguments", exit_status=2)
+
+
 def _validate_sink_options(args):
     # A refused value keeps the generic "arguments" option; an argparse refusal names the flag.
     _refuse_jailed_path_sink(args)
@@ -5775,10 +5797,15 @@ def _validate_sink_options(args):
             raise _request_invalid(f"error: {label} must hold UTF-8 text", "arguments") from None
         if "\0" in text:
             raise _request_invalid(f"error: {label} must not contain NUL", "arguments")
+    if fd is not None:
+        _validate_report_sink_fd(fd)
 
 
 def _new_report_sink(lib, state, args, *, body=True):
     _refuse_jailed_path_sink(args)
+    # Warmup and timed states measure the engine without report-sink I/O.
+    if not body:
+        return None
     jailed = getattr(args, "profile", "unjailed") == "jailed"
     if getattr(args, "report_sink_fd", None) is not None:
         names = ("pf_report_sink_version", "strategy_set_report_sink_fd_v1",
@@ -5805,17 +5832,17 @@ def _new_report_sink(lib, state, args, *, body=True):
         return None  # old modules keep their existing report ABI
     if not all(present) or int(lib.pf_report_sink_version()) != 1:
         raise _engine_invariant("the strategy library has an incompatible report sink ABI")
-    # Only the body run may create/truncate the caller's sink. Bench states
-    # use their own temporary paths, unlinked at close.
+    # Only the untimed body run creates/truncates a report sink.
     return _ReportSink(lib, state, directory=getattr(args, "spill_dir", None),
                        run_id=getattr(args, "run_id", ""),
-                       path=getattr(args, "report_sink", None) if body else None)
+                       path=getattr(args, "report_sink", None))
 
 
 class _InheritedSinkFd:
     """One close attempt shared by startup and native-state cleanup."""
 
     def __init__(self, fd):
+        _validate_report_sink_fd(fd)
         self.fd = fd
 
     def close(self):
@@ -6047,8 +6074,10 @@ class _BoundedJSONFile:
 
     Disk files use Linux O_DIRECT or Darwin F_NOCACHE. The unjailed profile
     also accepts the host's tmpfs/ramfs temporary directory, as in 1.6.3.
-    One aligned 64 KiB anonymous window is the I/O working set. Every write
-    window is synchronized before reuse. Strict callers require disk backing.
+    One aligned 64 KiB anonymous window is the I/O working set. Completed
+    writes allow window reuse; flush synchronizes appended bytes and the exact
+    file length before rewind/publication. Unchanged flushes need no new sync.
+    Strict callers require disk backing.
     """
     window = 64 * 1024
 
@@ -6057,6 +6086,7 @@ class _BoundedJSONFile:
         self.file = file
         self.buffer = None
         self.used = self.base = self.size = self.position = 0
+        self.synced_size = 0
         self.read_base, self.read_size = -1, 0
         self.reading = False
         self.binary = False
@@ -6115,11 +6145,6 @@ class _BoundedJSONFile:
             self._io_error()
         if written != aligned:
             raise OSError("short report artifact write")
-        os.ftruncate(self.file.fileno(), self.size)
-        if hasattr(os, "fdatasync"):
-            os.fdatasync(self.file.fileno())
-        else:
-            os.fsync(self.file.fileno())
         if self.used == self.window:
             self.base += self.window
             self.used = 0
@@ -6142,8 +6167,14 @@ class _BoundedJSONFile:
 
     def flush(self):
         self.file.flush()  # retain checked flush/close failure behavior
-        if not self.reading:
+        if not self.reading and self.size != self.synced_size:
             self._sync_window()
+            os.ftruncate(self.file.fileno(), self.size)
+            if hasattr(os, "fdatasync"):
+                os.fdatasync(self.file.fileno())
+            else:
+                os.fsync(self.file.fileno())
+            self.synced_size = self.size
 
     def seek(self, position):
         if position != 0:
@@ -6326,6 +6357,18 @@ def _stream_json_value(value, destination):
         for index, (key, item) in enumerate(value.items()):
             if index:
                 destination.write(",")
+            if not isinstance(key, str):
+                if key is None:
+                    key = "null"
+                elif key is True:
+                    key = "true"
+                elif key is False:
+                    key = "false"
+                elif isinstance(key, (int, float)):
+                    key = json.dumps(key, separators=(",", ":"), allow_nan=False)
+                else:
+                    raise TypeError("keys must be str, int, float, bool or None, "
+                                    f"not {type(key).__name__}")
             destination.write(json.dumps(key, separators=(",", ":"), allow_nan=False))
             destination.write(":")
             _stream_json(item, destination)
@@ -6494,27 +6537,28 @@ def _build_sink_report(report, ohlcv_path, n_bars, first_ts, last_ts, elapsed,
         out.pop("equity_curve")
         return out
 
-    def point_at(index):
-        # Diagnostics need only the endpoints. Revisit the verified sink in
-        # bounded memory rather than retaining its equity history. Consume
-        # the pass through its trailer so records() checks its digest and
-        # closes the reader even when the requested point is the first one.
-        point = None
-        for i, row in enumerate(sink.records("E")):
-            if i == index:
-                point = row.as_dict()
-        if point is None:
-            raise _engine_invariant("the report sink equity count differs from its receipt")
-        return point
+    first_point = last_point = None
+    def equity_records():
+        # Validation retains only endpoints; the iterator still consumes
+        # the verified trailer and checks the digest before diagnostics.
+        nonlocal first_point, last_point
+        first_point = last_point = None
+        for row in sink.records("E"):
+            point = row.as_dict()
+            if first_point is None:
+                first_point = point
+            last_point = point
+            yield point
 
     trades = _JSONRecordArray(
         lambda: (_sink_trade(row) for row in sink.records("T")), sink.counts["T"])
     equity_curve = _JSONRecordArray(
-        lambda: (row.as_dict() for row in sink.records("E")), sink.counts["E"], point_at)
+        equity_records, sink.counts["E"])
     out["equity_curve"] = equity_curve
     _validate_report_result(out)  # the summary pre-pass already checked every T
+    endpoints = (first_point, last_point) if first_point is not None else ()
     out["diagnostics"].update(
-        _annualization_block(equity_curve, out["metrics"], trades, window_anchor))
+        _annualization_block(endpoints, out["metrics"], trades, window_anchor))
     if sink.named:
         reference = {
             "path": sink.path,

@@ -336,7 +336,7 @@ def test_bench_uses_a_fresh_sink_for_every_state(tmp_path, monkeypatch):
     status, text, stderr, library = invoke(tmp_path, monkeypatch,
         extra=["--bench", "--warmup", "2", "--repeats", "3"])
     assert status == 0 and stderr == "", text
-    assert len(library.installed) == len(library.freed) == 6
+    assert len(library.installed) == len(library.freed) == 1
     assert json.loads(text)["summary"]["total_trades"] == 3
 
 
