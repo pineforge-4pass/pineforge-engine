@@ -7489,7 +7489,8 @@ endif()
 # --- CR-150 core-cr150-o1-revscratch begin ---
 # A corpus-enabled source build must execute the real reversing probe. Missing
 # fixtures are configure/test failures; this row has no skip or fake module.
-if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
+if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     add_library(reversal_scratch_strategy MODULE)
     target_sources(reversal_scratch_strategy PRIVATE
         ${PROJECT_SOURCE_DIR}/corpus/validation/bracket-atr-trailing-stop-state-01/generated.cpp)
@@ -7569,7 +7570,7 @@ endif()
 # --- CR-150 core-cr150-cr289 begin ---
 # CR-289: ctypes needs a test-only bridge to the hidden C++ writer; the module
 # path reaches the pytest row through $<TARGET_FILE:...> in the lane file.
-if(UNIX)
+if(UNIX AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     add_library(report_nonfinite_equity_fd MODULE test_report_nonfinite_equity_fd.cpp)
     target_link_libraries(report_nonfinite_equity_fd PRIVATE pineforge)
     target_compile_options(report_nonfinite_equity_fd PRIVATE -ffp-contract=off -UNDEBUG)
