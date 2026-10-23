@@ -1,0 +1,19 @@
+Expected red: cohort_unit_reclaim (clear changes only a frame; the persisted old chain survives).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -497,12 +497,4 @@
+ inline void CohortUnitOwner::clear(std::uint64_t cohort) {
+-    edit(cohort, [&](Descriptor& d, Header& h) {
+-        if (d.unit_count) {
+-            const auto epoch = increment(d.unit_epoch);
+-            enqueue(d, h);
+-            d.unit_epoch = epoch;
+-            d.unit_root = d.unit_first = d.unit_last = 0;
+-            d.unit_count = 0;
+-        }
+-        d.answer_bits = 0;
+-    });
++    (void)cohort;
++    workspace_ = {}; ++revision_;
+ }

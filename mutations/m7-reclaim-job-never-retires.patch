@@ -1,0 +1,10 @@
+Expected red: cohort_unit_reclaim (regain leaves an exhausted persisted job).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -487,4 +487,5 @@
+             save_job(j);
+         } else {
++            return;
+             h.reclaim_first = j.next;
+             if (!h.reclaim_first) h.reclaim_last = 0;

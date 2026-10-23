@@ -1,0 +1,9 @@
+Expected red: cohort_unit_slots (independent retained-position set disagrees after 3->2).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -558,3 +558,3 @@
+             || (old.count == 2 && (!sole_survivor || *sole_survivor == position))) invalid();
+-        const auto count = old.count - 1;
++        const auto count = old.count;
+         if (old.count == 2) {

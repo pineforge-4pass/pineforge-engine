@@ -1,0 +1,10 @@
+Expected red: cohort_unit_order_bits (present-zero row disappears from the full enumeration).
+diff --git a/include/pineforge/source/cohort_unit_owner_impl.hpp b/include/pineforge/source/cohort_unit_owner_impl.hpp
+--- a/include/pineforge/source/cohort_unit_owner_impl.hpp
++++ b/include/pineforge/source/cohort_unit_owner_impl.hpp
+@@ -426,4 +426,5 @@
+ inline void CohortUnitOwner::set_bits(
+         std::uint64_t cohort, std::uint64_t incarnation, std::uint64_t bits) {
++    if (bits == 0) { (void)erase(cohort, incarnation); return; }
+     edit(cohort, [&](Descriptor& d, Header&) { (void)upsert(d, incarnation, bits, true); });
+ }
