@@ -5,6 +5,7 @@ Same harness style as run_json_syminfo_test.py: docker/ is on sys.path, the stra
 library is a fake whose exports record their calls. Every code and argument the
 tests see is also checked against the catalog, docker/run_failure_codes.json.
 """
+import ast
 import contextlib
 import ctypes
 import io
@@ -1497,6 +1498,31 @@ def test_a_failed_checked_create_is_strategy_create_failed(harness, create, text
 
 
 def test_every_own_code_is_catalogued():
+    source = Path(__file__).resolve().parent / "run_json.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name)
+             and node.func.id in {"RunFailure", "write_failure", "failure_line"}]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and any(
+                isinstance(base, ast.Name) and base.id == "RunFailure" for base in node.bases):
+            calls.extend(child for child in ast.walk(node) if isinstance(child, ast.Call)
+                         and isinstance(child.func, ast.Attribute)
+                         and child.func.attr == "__init__"
+                         and isinstance(child.func.value, ast.Call)
+                         and isinstance(child.func.value.func, ast.Name)
+                         and child.func.value.func.id == "super")
+    emitted = set()
+    for call in calls:
+        code = call.args[1] if len(call.args) > 1 else None
+        code = next((item.value for item in call.keywords if item.arg == "code"), code)
+        if isinstance(code, ast.Constant) and isinstance(code.value, str):
+            emitted.add(code.value)
+    assert emitted, "the source scan must reach the failure emitters"
+    assert not emitted - CATALOG["codes"].keys(), sorted(emitted - CATALOG["codes"].keys())
+
+    # Retain the original typed-argument controls. Coverage of the emitted
+    # vocabulary comes from the source above, independently of these fixtures.
     for code, args in [
             ("setting_rejected", {"entrypoint": e, "reason": r})
             for e in ("strategy_set_input", "strategy_set_override")

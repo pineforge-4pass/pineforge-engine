@@ -6045,15 +6045,14 @@ class _JSONUTF8:
 class _BoundedJSONFile:
     """Append, synchronize, then read a transactional ASCII artifact.
 
-    Deployment: a real disk filesystem supporting Linux O_DIRECT or Darwin
-    F_NOCACHE. RAM filesystems are not external storage. One aligned 64 KiB
-    anonymous window is the entire I/O working set; direct reads/writes bypass
-    the data page cache. Every write window is synchronized before reuse.
-    There is deliberately no buffered-I/O fallback or advisory eviction claim.
+    Disk files use Linux O_DIRECT or Darwin F_NOCACHE. The unjailed profile
+    also accepts the host's tmpfs/ramfs temporary directory, as in 1.6.3.
+    One aligned 64 KiB anonymous window is the I/O working set. Every write
+    window is synchronized before reuse. Strict callers require disk backing.
     """
     window = 64 * 1024
 
-    def __init__(self, file):
+    def __init__(self, file, *, require_disk=True):
         import fcntl
         self.file = file
         self.buffer = None
@@ -6072,9 +6071,11 @@ class _BoundedJSONFile:
             if self.libc.fstatfs(fd, ctypes.byref(filesystem)) != 0:
                 self._io_error()
             kind = ctypes.c_long.from_buffer(filesystem).value
-            if kind in (0x01021994, 0x858458f6):  # tmpfs, ramfs (also memfd)
+            memory_backed = kind in (0x01021994, 0x858458f6)  # tmpfs, ramfs (also memfd)
+            if memory_backed and require_disk:
                 raise OSError("report artifacts require disk backing, not tmpfs or ramfs")
-            fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_DIRECT)
+            if not memory_backed:
+                fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_DIRECT)
         elif sys.platform == "darwin":
             fcntl.fcntl(fd, 48, 1)  # F_NOCACHE: synchronous uncached file I/O
         else:
@@ -6190,7 +6191,7 @@ class _UncachedSinkFile(_BoundedJSONFile):
     """Binary readback after the fixed sink reader has validated its header."""
     def __init__(self, file):
         position = file.tell()
-        super().__init__(file)
+        super().__init__(file, require_disk=False)  # path sinks are unjailed only
         self.binary = self.reading = True
         self.position, self.size = position, os.fstat(file.fileno()).st_size
 
@@ -6261,7 +6262,7 @@ def _json_temporary(resources, directory):
         raise RunFailure("report sink open failed", "report_sink_failed",
                          {"reason": "scratch_io"}) from error
     try:
-        file = _BoundedJSONFile(file)
+        file = _BoundedJSONFile(file, require_disk=False)  # unjailed report artifacts
         resources.callback(_close_json_temporary, file)
     except OSError as error:
         file.close()

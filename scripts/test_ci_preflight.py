@@ -1401,6 +1401,31 @@ exit "$lookup_exit"
                 self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
                               findings)
 
+    def test_fast_rows_cannot_be_rewritten_after_validation(self):
+        sources = self.ci_sources()
+        block = ci_preflight.FAST_TEST_REGISTRATION
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertEqual(sources[3].count(block), 1)
+        # A terminal block is the positive control even on the BASE tree,
+        # whose real block precedes the lane includes.
+        sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
+        self.assertNotIn(finding, ci_workflow_findings(*sources))
+        for properties in ('SKIP_RETURN_CODE 1', 'LABELS "slow"'):
+            with self.subTest(properties=properties):
+                changed = list(sources)
+                changed[3] += f'set_tests_properties(test_ta PROPERTIES {properties})\n'
+                self.assertIn(finding, ci_workflow_findings(*changed))
+
+    def test_fast_validation_cannot_precede_a_lane_include(self):
+        sources = self.ci_sources()
+        block = ci_preflight.FAST_TEST_REGISTRATION
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertEqual(sources[3].count(block), 1)
+        sources[3] = sources[3].replace(block, '', 1).rstrip() + '\n' + block
+        self.assertNotIn(finding, ci_workflow_findings(*sources))
+        sources[3] += 'include("${CMAKE_CURRENT_SOURCE_DIR}/cr150.d/late-properties.cmake")\n'
+        self.assertIn(finding, ci_workflow_findings(*sources))
+
     def test_reusable_heavy_profiles_keep_full_populations_and_dispatch(self):
         for before, after in (
                 ('  workflow_dispatch:\n', ''),

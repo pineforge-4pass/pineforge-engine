@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -34,8 +35,30 @@ using pineforge::detail::ScratchSpanSource;
 using pineforge::detail::ScratchStatus;
 using pineforge::detail::CommandScratchStore;
 
-// CR-257 acceptance geometry only; clear() does not use batching yet.
+// CR-265: at most this many scope rows per teardown transaction. The final
+// partial batch commits once; scope population never sizes resident storage.
 inline constexpr std::size_t kExitScopeEraseBatch = 64;
+
+// Terminal diagnostic only, like CommandScratchStore::carried_failure().
+// Retain the first teardown failure across rollback and further unwinding;
+// it is neither logical scratch state nor a population-sized allocation.
+class ExitScratchTeardownFailure {
+public:
+    bool pending() const noexcept { return status_ != ScratchStatus::ok; }
+    void remember(ScratchStatus status, const ScratchReadback& store) noexcept {
+        if (pending() || status == ScratchStatus::ok) return;
+        status_ = status;
+        if (status == ScratchStatus::io_error)
+            if (const auto* failure = store.carried_failure()) failure_ = *failure;
+    }
+    void check() const;
+private:
+    ScratchStatus status_ = ScratchStatus::ok;
+    std::optional<pineforge::detail::ReportScratchIoError> failure_;
+};
+static_assert(std::is_nothrow_copy_constructible_v<pineforge::detail::ReportScratchIoError>
+              && std::is_nothrow_copy_assignable_v<pineforge::detail::ReportScratchIoError>,
+              "teardown must retain the typed backing failure without throwing");
 
 // The source run owner provisions the CX-O1C store. The version owner must retain
 // every payload field externally until release_scope, including across nested
@@ -60,6 +83,10 @@ public:
     virtual native_order::Owner freeze_openings(const native_order::RunIdentity&,
         std::int64_t cycle, std::uint64_t count, void*, OpeningReader) = 0;
     virtual void release_scope(std::uint64_t scope) noexcept = 0;
+    void check_teardown_failure() const { teardown_failure_.check(); }
+    bool teardown_failed() const noexcept { return teardown_failure_.pending(); }
+protected:
+    ExitScratchTeardownFailure teardown_failure_;
 };
 
 struct ExitScratchContext {
@@ -74,6 +101,7 @@ struct ExitScratchContext {
                          bool (*)(void*, const NativeOpenLot&)) = nullptr;
     ScratchStatus (*working)(const NativeStrategyHost&, void*,
                             bool (*)(void*, const NativeWorkingRequest&)) = nullptr;
+    ExitScratchTeardownFailure teardown_failure;
 };
 
 class ExitScratchError final : public coded<std::logic_error> {
@@ -100,13 +128,24 @@ inline void exit_scratch_check(ScratchStatus status) {
 inline void exit_scratch_check(ScratchStatus status, const ScratchReadback& store) {
     if (status != ScratchStatus::ok) exit_scratch_failure(status, store);
 }
+inline void ExitScratchTeardownFailure::check() const {
+    if (!pending()) return;
+    pineforge::detail::rethrow_carried_scratch_failure(failure_ ? &*failure_ : nullptr);
+    exit_scratch_failure(status_);
+}
+inline void exit_scratch_check_teardown(const ExitScratchContext& context) {
+    if (context.versions) context.versions->check_teardown_failure();
+    context.teardown_failure.check();
+}
 inline ExitScratchVersions& exit_scratch_versions(ExitScratchContext& context) {
+    exit_scratch_check_teardown(context);
     if (!context.versions) exit_scratch_failure(ScratchStatus::programming_error);
     return *context.versions;
 }
 
 template<class Visit> void exit_scratch_lots(ExitScratchContext& scratch,
         const NativeStrategyHost& host, double mark, Visit visit) {
+    exit_scratch_check_teardown(scratch);
     if (!scratch.lots) exit_scratch_failure(ScratchStatus::programming_error);
     const auto status = scratch.lots(host, mark, &visit,
         [](void* context, const NativeOpenLot& lot) {
@@ -116,6 +155,7 @@ template<class Visit> void exit_scratch_lots(ExitScratchContext& scratch,
 }
 template<class Visit> void exit_scratch_working(ExitScratchContext& scratch,
         const NativeStrategyHost& host, Visit visit) {
+    exit_scratch_check_teardown(scratch);
     if (!scratch.working) exit_scratch_failure(ScratchStatus::programming_error);
     const auto status = scratch.working(host, &visit,
         [](void* context, const NativeWorkingRequest& request) {
@@ -298,6 +338,7 @@ inline ScratchKeyOrder exit_scratch_key_order(ExitScratchOrderStats* stats = nul
 
 inline ExitScratchKeyWords exit_scratch_words(ExitScratchContext& context,
                                              ScratchHandle handle) {
+    exit_scratch_check_teardown(context);
     ExitScratchKeyWords words{};
     exit_scratch_check(context.store.read(handle, ScratchField::key, 0,
         {reinterpret_cast<std::byte*>(words.data()), sizeof(words)}), context.store);
@@ -305,6 +346,7 @@ inline ExitScratchKeyWords exit_scratch_words(ExitScratchContext& context,
 }
 inline ScratchHandle exit_scratch_seek(ExitScratchContext& context,
                                       const ScratchByteSource& key) {
+    exit_scratch_check_teardown(context);
     ScratchHandle handle = 0;
     const auto status = context.store.lower_bound(key, handle);
     if (status == ScratchStatus::end) return 0;
@@ -312,6 +354,7 @@ inline ScratchHandle exit_scratch_seek(ExitScratchContext& context,
     return handle;
 }
 template<class Edit> void exit_scratch_edit(ExitScratchContext& context, Edit operation) {
+    exit_scratch_check_teardown(context);
     exit_scratch_check(context.store.begin(), context.store);
     auto status = operation();
     if (status == ScratchStatus::ok)
@@ -329,9 +372,63 @@ template<class Edit> void exit_scratch_edit(ExitScratchContext& context, Edit op
     }
 }
 
+// Teardown uses only status-returning store operations. Snapshot the original
+// typed failure before rollback can replace the backing's borrowed diagnostic.
+// Reads include pending erases, so each lookup finds the next live scope row
+// without a resident handle list or a cursor invalidated by erase.
+inline void exit_scratch_erase_scope_noexcept(CommandScratchStore& store,
+        std::uint64_t scope, std::uint64_t first_kind, std::uint64_t last_kind,
+        ExitScratchTeardownFailure& failure) noexcept {
+    if (failure.pending()) return;
+    const ExitScratchKey key(scope, first_kind);
+    const auto next = [&](ScratchHandle& handle) noexcept {
+        auto status = store.lower_bound(key, handle);
+        if (status != ScratchStatus::ok) return status;
+        ExitScratchKeyWords words{};
+        status = store.read(handle, ScratchField::key, 0,
+            {reinterpret_cast<std::byte*>(words.data()), sizeof(words)});
+        if (status != ScratchStatus::ok) return status;
+        return words[0] != scope || words[1] > last_kind
+            ? ScratchStatus::end : ScratchStatus::ok;
+    };
+    for (;;) {
+        ScratchHandle handle = 0;
+        auto status = next(handle);
+        if (status == ScratchStatus::end) return;
+        if (status != ScratchStatus::ok) {
+            failure.remember(status, store);
+            return;
+        }
+        status = store.begin();
+        if (status != ScratchStatus::ok) {
+            failure.remember(status, store);
+            return;
+        }
+        for (std::size_t erased = 0; erased < kExitScopeEraseBatch; ++erased) {
+            status = store.erase(handle);
+            if (status != ScratchStatus::ok || erased + 1 == kExitScopeEraseBatch) break;
+            status = next(handle);
+            if (status == ScratchStatus::end) {
+                status = ScratchStatus::ok;
+                break;
+            }
+            if (status != ScratchStatus::ok) break;
+        }
+        if (status == ScratchStatus::ok)
+            status = store.commit(ScratchDurability::buffered);
+        if (status != ScratchStatus::ok) {
+            failure.remember(status, store);
+            const auto rollback_status = store.rollback();
+            failure.remember(rollback_status, store);
+            return;
+        }
+    }
+}
+
 class ExitScratchScope {
 public:
     explicit ExitScratchScope(ExitScratchContext& context) : context_(&context) {
+        exit_scratch_check_teardown(context);
         if (context.next_scope == std::numeric_limits<std::uint64_t>::max())
             exit_scratch_failure(ScratchStatus::programming_error);
         scope_ = ++context.next_scope;
@@ -340,20 +437,27 @@ public:
     ExitScratchScope& operator=(const ExitScratchScope&) = delete;
     ExitScratchScope(ExitScratchScope&& other) noexcept
         : context_(std::exchange(other.context_, nullptr)), scope_(other.scope_) {}
-    ~ExitScratchScope() {
+    ~ExitScratchScope() noexcept(false) {
         if (!context_) return;
-        if (context_->versions) context_->versions->release_scope(scope_);
-        clear();
+        if (!context_->teardown_failure.pending()
+                && !(context_->versions && context_->versions->teardown_failed())) {
+            if (context_->versions) context_->versions->release_scope(scope_);
+            if (!(context_->versions && context_->versions->teardown_failed()))
+                exit_scratch_erase_scope_noexcept(context_->store, scope_, 0,
+                    std::numeric_limits<std::uint64_t>::max(), context_->teardown_failure);
+        }
+        // Normal scope exit is a throwing boundary, even for the final scope
+        // in a callback. During unwinding preserve the active exception and
+        // retain the teardown fault for the next scratch/provider boundary.
+        if (std::uncaught_exceptions() == 0) exit_scratch_check_teardown(*context_);
     }
     std::uint64_t scope() const noexcept { return scope_; }
     ExitScratchContext& context() const noexcept { return *context_; }
     void clear() {
-        const ExitScratchKey key(scope_);
-        for (;;) {
-            const auto handle = exit_scratch_seek(*context_, key);
-            if (!handle || exit_scratch_words(*context_, handle)[0] != scope_) break;
-            exit_scratch_edit(*context_, [&] { return context_->store.erase(handle); });
-        }
+        exit_scratch_check_teardown(*context_);
+        exit_scratch_erase_scope_noexcept(context_->store, scope_, 0,
+            std::numeric_limits<std::uint64_t>::max(), context_->teardown_failure);
+        exit_scratch_check_teardown(*context_);
     }
 private:
     ExitScratchContext* context_;

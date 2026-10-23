@@ -33,6 +33,30 @@ TARGET_COMMANDS = frozenset({
     "target_link_libraries", "target_link_options",
     "target_include_directories", "target_sources",
 })
+# This exact terminal validation is the sole unfenced tail exception.
+# Keep standalone checker controls usable without importing the CI driver.
+# test_s4e_ci_guard_gaps compares it with ci_preflight's pinned block.
+FINAL_FAST_VALIDATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
+        message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
+    endif()
+    if(TEST ${_pf_fast_test})
+        get_test_property(${_pf_fast_test} DISABLED _pf_fast_disabled)
+        get_test_property(${_pf_fast_test} SKIP_RETURN_CODE _pf_fast_skip_code)
+        get_test_property(${_pf_fast_test} SKIP_REGULAR_EXPRESSION _pf_fast_skip_regex)
+        get_test_property(${_pf_fast_test} LABELS _pf_fast_labels)
+        if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"
+                OR NOT _pf_fast_skip_regex STREQUAL "NOTFOUND"
+                OR "slow" IN_LIST _pf_fast_labels OR "private_fixtures" IN_LIST _pf_fast_labels)
+            message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
+        endif()
+        set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
+endif()
+'''
 
 
 class CheckFailure(Exception):
@@ -256,7 +280,13 @@ def _is_script_add_test(words: list[str]) -> bool:
             ("CMAKE_COMMAND" in command and " -P " in f" {command} "))
 
 
-def _check_lane(path: Path) -> None:
+def _check_skip_values(path: Path, statement: Statement, pairs: list[str]) -> None:
+    for key, value in zip(pairs[::2], pairs[1::2]):
+        if key.upper() == "SKIP_RETURN_CODE" and value != "77":
+            raise CheckFailure(f"{path}:{statement.line}: SKIP_RETURN_CODE must be 77")
+
+
+def _check_lane(path: Path, owners: dict[str, dict[str, set[str]]]) -> None:
     try:
         text = path.read_text()
     except OSError as error:
@@ -306,6 +336,9 @@ def _check_lane(path: Path) -> None:
                 raise CheckFailure(f"{path}:{statement.line}: set_tests_properties() needs at least one key/value pair")
             if len(pairs) % 2:
                 raise CheckFailure(f"{path}:{statement.line}: set_tests_properties() needs complete key/value pairs")
+            for value in words[:properties]:
+                _owned(statement, path.stem, "test", value, owners, path=path)
+            _check_skip_values(path, statement, pairs)
             for key in pairs[::2]:
                 canonical = key.upper()
                 if canonical in REFUSED_TEST_PROPERTIES:
@@ -473,10 +506,12 @@ def _ownership(prefix: list[Statement], fences: list[Fence]) -> dict[str, dict[s
 
 
 def _owned(statement: Statement, lane: str, kind: str, value: str,
-           owners: dict[str, dict[str, set[str]]]) -> None:
+           owners: dict[str, dict[str, set[str]]], *, path: Path | None = None) -> None:
     if not LITERAL_NAME_RE.fullmatch(value) or owners[kind].get(value) != {lane}:
+        owner = f"lane file {lane}" if path is not None else f"fence {lane}"
         raise CheckFailure(
-            f"{CMAKE}:{statement.line}: {kind} {value!r} is not owned by fence {lane}")
+            f"{path if path is not None else CMAKE}:{statement.line}: "
+            f"{kind} {value!r} is not owned by {owner}")
 
 
 def _check_reads(statement: Statement, lane: str, words: list[str],
@@ -648,6 +683,8 @@ def _check_fence(fence: Fence, owners: dict[str, dict[str, set[str]]]) -> None:
             kind = "target" if name == "set_target_properties" else "test"
             for value in words[:properties]:
                 _owned(statement, fence.lane, kind, value, owners)
+            if kind == "test":
+                _check_skip_values(CMAKE, statement, pairs)
             reads = pairs[1::2]
         elif name == "add_dependencies":
             if len(words) < 2:
@@ -676,30 +713,43 @@ def _check_fence(fence: Fence, owners: dict[str, dict[str, set[str]]]) -> None:
         raise CheckFailure(f"{CMAKE}:{fence.line}: missing endif() inside fence {fence.lane}")
 
 
-def _check_cmake_tail() -> None:
+def _without_final_fast_validation(text: str) -> str:
+    start = text.rfind("foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)")
+    if start < 0:
+        return text
+    def code(value: str) -> list[str]:
+        return [line.strip() for line in _without_comments(
+            value, bracket_comments=True).splitlines() if line.strip()]
+    if code(text[start:]) == code(FINAL_FAST_VALIDATION):
+        return text[:start]
+    return text
+
+
+def _check_cmake_tail() -> dict[str, dict[str, set[str]]]:
     try:
         text = CMAKE.read_text()
     except OSError as error:
         raise CheckFailure(f"{CMAKE}: cannot read: {error}") from error
+    text = _without_final_fast_validation(text)
     markers = _fence_markers(text)
     prefix = _statements(CMAKE, text[:markers[0].start] if markers else text)
     _check_include_loop(prefix, bool(markers))
-    if markers:
-        fences = _fences(text, markers)
-        owners = _ownership(prefix[:-5], fences)
-        for fence in fences:
-            _check_fence(fence, owners)
+    fences = _fences(text, markers) if markers else []
+    owners = _ownership(prefix[:-5], fences)
+    for fence in fences:
+        _check_fence(fence, owners)
+    return owners
 
 
 def main() -> int:
     try:
-        _check_cmake_tail()
+        owners = _check_cmake_tail()
         if not README.is_file():
             raise CheckFailure(f"{README}: README.md is missing")
         if not LANE_DIR.is_dir():
             raise CheckFailure(f"{LANE_DIR}: lane directory is missing")
         for path in sorted(LANE_DIR.glob("*.cmake")):
-            _check_lane(path)
+            _check_lane(path, owners)
     except CheckFailure as error:
         print(f"check_cr150_cmake_d: {error}", file=sys.stderr)
         return 1

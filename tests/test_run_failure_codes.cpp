@@ -1850,8 +1850,8 @@ void registry_rows() {
     CHECK(codes != nullptr && codes->kind == Json::Kind::object);
     if (codes == nullptr) return;
 
-    // The enum is the catalog in order: code i is the catalog's i-th name, and
-    // every name round-trips through exactly one code.
+    // The catalog is alphabetical; enum values preserve the released numeric
+    // ABI. Every catalog name must round-trip through exactly one stable code.
     CHECK_EQ("code count", std::to_string(pineforge::kRunFailureCodeCount),
              std::to_string(codes->object.size() + 1));
     CHECK_EQ("none has no name", code_name(RunFailureCode::none), "");
@@ -1864,13 +1864,12 @@ void registry_rows() {
         CHECK_EQ("code name unique: " + code_name(code), unique ? "unique" : "repeated",
                  "unique");
     }
-    std::size_t index = 1;
     for (const auto& [name, entry] : codes->object) {
-        const auto code = static_cast<RunFailureCode>(index++);
-        CHECK_EQ("catalog order", code_name(code), name);
         const auto found = by_name.find(name);
         CHECK_EQ("name round trip: " + name,
                  found == by_name.end() ? "" : code_name(found->second), name);
+        const auto code = found == by_name.end() ? RunFailureCode::none : found->second;
+        CHECK_EQ("catalog name", code_name(code), name);
         const Json* cls = entry.find("class");
         const Json* retryable = entry.find("retryable");
         CHECK_EQ("class of " + name, class_name(pineforge::run_failure_code_class(code)),
