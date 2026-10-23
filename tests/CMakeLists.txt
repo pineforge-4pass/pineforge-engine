@@ -7585,3 +7585,13 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # preadv2 requires glibc 2.26+; an unavailable symbol must fail linking.
 endif()
 # --- CR-150 core-cr150-cr257 end ---
+
+# --- CR-150 core-cr150-cr289 begin ---
+# CR-289: ctypes needs a test-only bridge to the hidden C++ writer; the module
+# path reaches the pytest row through $<TARGET_FILE:...> in the lane file.
+if(UNIX)
+    add_library(report_nonfinite_equity_fd MODULE test_report_nonfinite_equity_fd.cpp)
+    target_link_libraries(report_nonfinite_equity_fd PRIVATE pineforge)
+    target_compile_options(report_nonfinite_equity_fd PRIVATE -ffp-contract=off -UNDEBUG)
+endif()
+# --- CR-150 core-cr150-cr289 end ---
