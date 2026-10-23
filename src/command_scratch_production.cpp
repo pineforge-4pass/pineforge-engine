@@ -108,7 +108,7 @@ std::uint64_t environment_byte_cap() {
 std::uint64_t command_scratch_arena_capacity_bytes(std::uint64_t arena_bytes) noexcept {
     const auto bytes = scale_bytes(arena_bytes, kCommandScratchArenaShare.num,
         kCommandScratchArenaShare.den, std::numeric_limits<std::uint64_t>::max(), false);
-    return bytes - bytes % ScratchArena::kChunkBytes;
+    return std::max(ScratchArena::kChunkBytes, bytes - bytes % ScratchArena::kChunkBytes);
 }
 
 std::uint64_t command_scratch_arena_needed_bytes(std::uint64_t store_extent) noexcept {

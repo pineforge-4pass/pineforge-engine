@@ -24,6 +24,8 @@ inline void require(bool condition, const char* message) {
 }
 
 inline constexpr std::size_t kPageBytes = 512;
+// Fixed small-arena witnesses must stay below the share's first full chunk.
+inline constexpr std::uint64_t kSmallArenaBytes = 4 * ScratchArena::kChunkBytes;
 
 inline ScratchKeyOrder key_order() noexcept {
     return {0x4352313530415245ULL, nullptr,

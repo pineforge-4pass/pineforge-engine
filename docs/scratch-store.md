@@ -174,12 +174,13 @@ The production command backing uses an explicitly attached `ScratchArena`
 when present and otherwise retains its unlinked disk-file implementation.
 Command-store bytes scale with the strategy's LIVE commands/exits/lots:
 pending orders, open lots and dependency fan-out, not window length or trade
-count. Each store may use at most the exact ratio `kCommandScratchArenaShare`
-(f, provisionally 1/8 pending M1 measurement) of the attached arena. At open,
-K = floor_to_chunk(f × `ScratchArena::stats().bytes_supplied`), using the
-arena's 1 MiB chunks. The complete K/chunk directory is reserved once at open;
-writes do not allocate a directory, including when the share rounds to zero.
-Crossing the share is typed `arena_exhausted` before claiming any chunks,
+count. Each store's capacity uses the exact ratio `kCommandScratchArenaShare`
+(f, provisionally 1/16 from M1) of the attached arena, with a one-chunk floor.
+At open, K = max(chunk, floor_to_chunk(f × `ScratchArena::stats().bytes_supplied`)),
+using the arena's 1 MiB chunks. Each store has at least one chunk of capacity.
+The complete K/chunk directory is reserved once at open; writes do not allocate
+a directory.
+Crossing K is typed `arena_exhausted` before claiming any chunks,
 at every arena size including the default and largest hosting rung.
 The run byte budget is reserved before growth and released on
 failed growth or destruction. Arena mode supports `buffered` sync; `data` and

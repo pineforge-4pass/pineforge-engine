@@ -53,9 +53,21 @@ def check(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def command_share_capacity(supplied: int, numerator: int, denominator: int) -> int:
+    # Independent expectation: share constants and chunk geometry only.
+    return max(CHUNK_BYTES, supplied * numerator // denominator // CHUNK_BYTES * CHUNK_BYTES)
+
+
 class FormulaTests(unittest.TestCase):
     def setUp(self):
         self.vectors = json.loads(VECTORS.read_text(encoding="utf-8"))["vectors"]
+
+    def test_command_share_one_chunk_floor(self):
+        for arena_chunks, store_chunks in ((4, 1), (16, 1), (17, 1), (32, 2),
+                                          (1024, 64), (16_384, 1024)):
+            with self.subTest(arena_chunks=arena_chunks):
+                self.assertEqual(command_share_capacity(arena_chunks * CHUNK_BYTES, 1, 16),
+                                 store_chunks * CHUNK_BYTES)
 
     def test_hand_vectors_and_exact_a5_wider_shape(self):
         for vector in self.vectors:
@@ -537,8 +549,7 @@ def measured_class(runner, probe: Path, module: Path, arena_directory: Path,
                     stats_supplied = int(self.lib.arena_bound_test_command_before_supplied())
                     numerator = int(self.lib.arena_bound_test_command_share_numerator())
                     denominator = int(self.lib.arena_bound_test_command_share_denominator())
-                    capacity = (stats_supplied * numerator // denominator
-                                // CHUNK_BYTES * CHUNK_BYTES)
+                    capacity = command_share_capacity(stats_supplied, numerator, denominator)
                     check(stats_supplied == supplied,
                           "attached arena stats differ from the host-supplied arena size")
                     check(before_total - before_used >= report_first_bytes,
@@ -710,7 +721,7 @@ def fixture_facts(which: int, bars: int) -> dict:
 
 def command_share_runs(runner, probe: Path, shared: Path, arena_directory: Path,
                        measurements: list, bars, count: int) -> None:
-    """Same input at 1x (typed failure), 2x, and an independent large arena."""
+    """Same input at two smaller placements and an independent default arena."""
     params = {"case": 1}
     kwargs = {"preloaded_bars": (bars, count), "input_tf": "1", "script_tf": "1"}
     # No sidecar: this really exercises the uncertified/default path. It is a
@@ -733,10 +744,11 @@ def command_share_runs(runner, probe: Path, shared: Path, arena_directory: Path,
               "uncertified run did not receive the stated hosting default")
         numerator, denominator = (reference_row["shareNumerator"],
                                   reference_row["shareDenominator"])
-        expected_capacity = (reference_row["supplied"] * numerator // denominator
-                             // CHUNK_BYTES * CHUNK_BYTES)
-        check(reference_row["commandCapacity"] == expected_capacity,
-              "default arena's opened command share is not derived from its own size")
+        expected_capacity = command_share_capacity(reference_row["supplied"], numerator, denominator)
+        check((numerator, denominator) == (1, 16)
+              and expected_capacity == 64 * CHUNK_BYTES
+              and reference_row["commandCapacity"] == expected_capacity,
+              "independent 1/16 arithmetic must give the 1 GiB default a 64 MiB command capacity")
         extent = reference_row["commandPeakExtent"]
         check(extent > 0 and reference.sink.counts.get("T", 0) > 0,
               "independent reference executed neither command pages nor full trade rows")
@@ -745,22 +757,39 @@ def command_share_runs(runner, probe: Path, shared: Path, arena_directory: Path,
 
     store_need = ((extent + CHUNK_BYTES - 1) // CHUNK_BYTES * CHUNK_BYTES)
     arena_need = (store_need * denominator + numerator - 1) // numerator
-    half_need = (max(arena_need, reference_row["actual"]) + 1) // 2
-    one_x = (half_need + CHUNK_BYTES - 1) // CHUNK_BYTES * CHUNK_BYTES
-    one_capacity = one_x * numerator // denominator // CHUNK_BYTES * CHUNK_BYTES
-    two_capacity = 2 * one_x * numerator // denominator // CHUNK_BYTES * CHUNK_BYTES
-    check(one_capacity < store_need <= two_capacity,
-          "fixture does not isolate share exhaustion between 1x and 2x")
+    floor_case = store_need == CHUNK_BYTES
+    if floor_case:
+        # One chunk cannot cross the floored share. Replay successfully with
+        # room for the complete engine's other physical users; the C++ floor
+        # witnesses separately fix their arena at exactly four chunks.
+        one_need = max(4 * CHUNK_BYTES, reference_row["actual"])
+    else:
+        one_need = (max(arena_need, reference_row["actual"]) + 1) // 2
+    one_x = (one_need + CHUNK_BYTES - 1) // CHUNK_BYTES * CHUNK_BYTES
+    one_capacity = command_share_capacity(one_x, numerator, denominator)
+    two_capacity = command_share_capacity(2 * one_x, numerator, denominator)
+    check((store_need <= one_capacity if floor_case else one_capacity < store_need <= two_capacity),
+          "fixture must fit the floor or isolate share exhaustion between 1x and 2x")
     check(2 * one_x < reference_row["supplied"],
           "independent reference arena must be larger than the 2x arena")
 
-    negative_class = measured_class(
+    first_class = measured_class(
         runner, probe, shared, arena_directory, measurements,
-        command_first=True, supplied_bytes=one_x)
+        command_first=not floor_case, observe_commands=floor_case, supplied_bytes=one_x)
     with mock.patch.dict(os.environ, {runner.REPORT_SINK_ENV: "1"}):
-        negative_class(shared).run(probe / "unused.csv", params=params, **kwargs)
-    check(measurements[-1].get("commandFirst") is True,
-          "1x run did not produce the typed command-share witness")
+        first = first_class(shared).run(probe / "unused.csv", params=params, **kwargs)
+    if floor_case:
+        try:
+            check(measurements[-1]["commandCapacity"] == one_capacity
+                  and measurements[-1]["commandPeakExtent"] == extent,
+                  "1x floor replay changed the input's command-store extent")
+            check(Path(first.sink.path).read_bytes() == reference_bytes,
+                  "1x floor replay's full report differs from the independent default-arena report")
+        finally:
+            first.close()
+    else:
+        check(measurements[-1].get("commandFirst") is True,
+              "1x run did not produce the typed command-share witness")
 
     control_class = measured_class(
         runner, probe, shared, arena_directory, measurements,

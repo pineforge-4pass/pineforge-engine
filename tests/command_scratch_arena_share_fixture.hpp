@@ -26,7 +26,7 @@ inline std::uint64_t fixture_product(std::uint64_t a, std::uint64_t b) {
 inline std::uint64_t share_capacity(std::uint64_t supplied) {
     const auto bytes = fixture_product(supplied, kCommandScratchArenaShare.num)
         / kCommandScratchArenaShare.den;
-    return bytes - bytes % ScratchArena::kChunkBytes;
+    return std::max(ScratchArena::kChunkBytes, bytes - bytes % ScratchArena::kChunkBytes);
 }
 
 inline std::uint64_t required_arena(std::uint64_t extent) {

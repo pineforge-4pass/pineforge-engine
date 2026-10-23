@@ -9,16 +9,18 @@
 
 namespace pineforge::detail {
 
-// PROVISIONAL share pending M1 measurement; never a fixed byte allowance.
+// Provisional 1/16 share from M1; never a fixed byte allowance.
 inline constexpr std::int64_t kCommandScratchArenaShareNumerator = 1;
-inline constexpr std::int64_t kCommandScratchArenaShareDenominator = 8;
+inline constexpr std::int64_t kCommandScratchArenaShareDenominator = 16;
 inline constexpr std::ratio<kCommandScratchArenaShareNumerator,
                             kCommandScratchArenaShareDenominator> kCommandScratchArenaShare{};
 static_assert(kCommandScratchArenaShare.num > 0
               && kCommandScratchArenaShare.num <= kCommandScratchArenaShare.den,
               "command arena share must be in (0, 1]");
 
-// floor_to_chunk(f * supplied bytes), evaluated at backing construction.
+// max(C, floor_to_chunk(f * supplied bytes)), C = ScratchArena::kChunkBytes,
+// evaluated at backing construction. ScratchArena rejects sub-chunk or
+// unrepresentable backing sizes with typed arena_backing before stores open.
 std::uint64_t command_scratch_arena_capacity_bytes(std::uint64_t arena_bytes) noexcept;
 // ceil(chunkCeil(required store extent) / f). Exact integer arithmetic;
 // results outside the signed failure-argument transport saturate to INT64_MAX.
@@ -49,13 +51,15 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // Fresh, exclusive, initially empty backing. With an explicitly attached arena,
 // command-store bytes scale with LIVE commands/exits/lots (pending orders,
 // open lots and dependency fan-out), not window length or trade count. Each
-// store may use at most kCommandScratchArenaShare of the attached arena:
-// K = floor_to_chunk(f * stats().bytes_supplied), fixed at open. Reserve its
-// entire K/chunk directory once at construction. No private file or sizing
-// syscall is used; the attachment must outlive the backing. Buffered sync is
+// store has K = max(C, floor_to_chunk(f * stats().bytes_supplied)), fixed at
+// open, where f = kCommandScratchArenaShare and C is one arena chunk. The
+// three stores' one-chunk floors account for +3C in the host's bound
+// A = chunkCeil(ceil(B / (1 - 3f))) + 3C. Reserve the entire K/chunk directory
+// once at construction. No private file or sizing syscall is used; the
+// attachment must outlive the backing. Buffered sync is
 // supported; data/full return programming_error. Arena faults return io_error
 // and carry the original ReportScratchIoError for the owner to rethrow.
-// Crossing the share is typed report_sink_failed, reason arena_exhausted;
+// Crossing K is typed report_sink_failed, reason arena_exhausted;
 // the hosting layer re-places the run on a larger arena. Its needed byte
 // argument is ceil(chunkCeil(required store extent) / f), not a shortfall.
 // The same policy applies at every arena size, including the default.

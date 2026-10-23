@@ -45,6 +45,24 @@ void exhaustion_args(const ReportScratchIoError& error, const ScratchArenaStats&
     integer_arg(error, "needed_bytes_lower_bound", needed);
 }
 
+void capacity_floor_boundaries() {
+    require(kCommandScratchArenaShare.num == 1 && kCommandScratchArenaShare.den == 16,
+            "the provisional command share is 1/16");
+    struct Boundary { std::uint64_t arena_chunks, store_chunks; };
+    for (const auto boundary : std::array<Boundary, 4>{{{4, 1}, {16, 1}, {17, 1}, {32, 2}}}) {
+        const auto supplied = fixture_product(boundary.arena_chunks, ScratchArena::kChunkBytes);
+        const auto expected = fixture_product(boundary.store_chunks, ScratchArena::kChunkBytes);
+        require(share_capacity(supplied) == expected
+                && command_scratch_arena_capacity_bytes(supplied) == expected,
+                "independent arithmetic pins the floor and exact share boundaries");
+        ArenaAttachment attachment(supplied);
+        auto backing = make_command_scratch_backing(kPageBytes);
+        require(backing->arena_capacity_bytes() == expected
+                && ScratchArena::attached()->stats().bytes_used == 0,
+                "open fixes the boundary capacity without claiming a chunk");
+    }
+}
+
 void carried_failure_and_budget_rollback() {
     ArenaAttachment attachment(arena_for_store_chunks(3));
     auto* arena = ScratchArena::attached();
@@ -103,10 +121,11 @@ void carried_failure_and_budget_rollback() {
     require(arena->stats().bytes_used == 0, "carried-failure regions are released");
 }
 
-void share_refuses_before_claim_and_releases_budget(std::size_t page_bytes) {
-    // A fractional tail checks the exact supplied-size failure counter.
-    // Independently derive K from that same stats field, including its tail.
-    ArenaAttachment attachment(arena_for_store_chunks(2) + ScratchArena::kChunkBytes / 3);
+void share_refuses_before_claim_and_releases_budget(std::size_t page_bytes,
+                                                   std::uint64_t arena_bytes) {
+    // Derive K independently, for both the four-chunk floor and a share with
+    // a fractional supplied-size tail.
+    ArenaAttachment attachment(arena_bytes);
     auto* arena = ScratchArena::attached();
     const auto capacity = share_capacity(arena->stats().bytes_supplied);
     require(command_scratch_arena_capacity_bytes(arena->stats().bytes_supplied) == capacity,
@@ -119,8 +138,9 @@ void share_refuses_before_claim_and_releases_budget(std::size_t page_bytes) {
         const auto pages = capacity / page_bytes;
         require(pages > 0 && capacity % page_bytes == 0,
                 "derived share is positive and page aligned");
-        require(a->write_page(pages - 1, {image.data(), image.size()}) == ScratchStatus::ok,
-                "the exact K boundary is writable");
+        for (ScratchPageId page = 0; page < pages; ++page)
+            require(a->write_page(page, {image.data(), image.size()}) == ScratchStatus::ok,
+                    "every page through the exact K boundary is writable");
         const auto before = arena->stats();
         require(before.bytes_used == capacity,
                 "the exact K extent claims K bytes");
@@ -173,7 +193,7 @@ void share_refuses_before_claim_and_releases_budget(std::size_t page_bytes) {
 }
 
 void real_store_crosses_share_and_replacement_fits() {
-    const auto initial = arena_for_store_chunks(1);
+    const auto initial = kSmallArenaBytes;
     std::uint64_t accepted = 0, replacement = 0;
     std::array<std::byte, 4 * kPageBytes> image{};
     image.fill(std::byte{0x39});
@@ -181,6 +201,11 @@ void real_store_crosses_share_and_replacement_fits() {
         ArenaAttachment attachment(initial);
         auto* arena = ScratchArena::attached();
         const auto capacity = share_capacity(arena->stats().bytes_supplied);
+        require(initial == 4 * ScratchArena::kChunkBytes
+                && fixture_product(initial, kCommandScratchArenaShare.num)
+                    < fixture_product(ScratchArena::kChunkBytes, kCommandScratchArenaShare.den)
+                && capacity == ScratchArena::kChunkBytes,
+                "real-store replay starts below the share's first chunk and uses the floor");
         FailedWrites failures;
         ObserverRegistration observation(failures);
         auto backing = make_command_scratch_backing(kPageBytes);
@@ -206,6 +231,8 @@ void real_store_crosses_share_and_replacement_fits() {
                 && failed.high_water == failures.before.high_water && failed.chunks_free > 0,
                 "share refusal changes no claim and precedes physical arena exhaustion");
         const auto needed = required_arena(failures.requested_extent);
+        require(needed == 32 * ScratchArena::kChunkBytes,
+                "the first extent past the one-chunk floor needs a 32 MiB arena");
         exhaustion_args(*store.carried_failure(), failed, needed);
         // Use the REPORTED integer, after checking it independently, to form
         // precisely COMPUTE's next arena. This is a replay, not an inequality.
@@ -215,6 +242,9 @@ void real_store_crosses_share_and_replacement_fits() {
         require(at != std::string::npos, "placement reads the reported needed field");
         const auto reported = std::stoull(args.substr(at + field.size()));
         replacement = compute_placement(initial, failed.bytes_used, reported);
+        require(replacement == 33 * ScratchArena::kChunkBytes
+                && share_capacity(replacement) >= chunk_ceil(failures.requested_extent),
+                "COMPUTE chooses max(8, 1 + 32) whole chunks and the refused extent fits");
     }
     {
         ArenaAttachment attachment(replacement);
@@ -311,7 +341,11 @@ void reported_placement_and_shortfall_negative_witness() {
     }
 }
 
-void zero_share_and_saturating_arithmetic() {
+void one_chunk_floor_and_saturating_arithmetic() {
+    for (const auto supplied : {std::uint64_t{0}, ScratchArena::kChunkBytes - 1,
+                                std::numeric_limits<std::uint64_t>::max()})
+        require(command_scratch_arena_capacity_bytes(supplied) == share_capacity(supplied),
+                "capacity arithmetic retains a representable floor without wrapping");
     for (const auto extent : {std::uint64_t{1}, ScratchArena::kChunkBytes - 1,
                               ScratchArena::kChunkBytes, ScratchArena::kChunkBytes + 1,
                               4 * ScratchArena::kChunkBytes})
@@ -323,17 +357,23 @@ void zero_share_and_saturating_arithmetic() {
             "overflow and out-of-transport requirements saturate to INT64_MAX");
     ArenaAttachment attachment(ScratchArena::kChunkBytes);
     auto* arena = ScratchArena::attached();
-    require(share_capacity(arena->stats().bytes_supplied) == 0,
-            "one arena chunk gives a strictly fractional command share");
+    require(share_capacity(arena->stats().bytes_supplied) == ScratchArena::kChunkBytes,
+            "one arena chunk gives a one-chunk command floor");
     auto backing = make_command_scratch_backing(kPageBytes);
     std::array<std::byte, kPageBytes> image{};
+    const auto pages = ScratchArena::kChunkBytes / kPageBytes;
+    require(backing->write_page(pages - 1, {image.data(), image.size()}) == ScratchStatus::ok,
+            "a one-chunk extent fits the smallest valid arena");
     const auto before = arena->stats();
-    require(backing->write_page(0, {image.data(), image.size()}) == ScratchStatus::io_error
-            && backing->carried_failure(), "a zero-share region refuses its first page with a typed error");
+    require(before.bytes_used == ScratchArena::kChunkBytes && before.chunks_free == 0,
+            "the floor claims the smallest valid arena's only chunk");
+    require(backing->write_page(pages, {image.data(), image.size()}) == ScratchStatus::io_error
+            && backing->carried_failure(), "the first page past the floor has typed exhaustion");
     const auto failed = arena->stats();
     require(failed.bytes_used == before.bytes_used && failed.high_water == before.high_water,
-            "zero-share refusal claims nothing");
-    exhaustion_args(*backing->carried_failure(), failed, required_arena(image.size()));
+            "floor crossing claims nothing further");
+    exhaustion_args(*backing->carried_failure(), failed,
+                    required_arena(ScratchArena::kChunkBytes + image.size()));
 
     // This page extent is representable in off_t, but its chunk ceiling is
     // beyond INT64_MAX. Dividing by f <= 1 cannot reduce that requirement, so
@@ -343,8 +383,8 @@ void zero_share_and_saturating_arithmetic() {
     require(backing->write_page(last_page, {image.data(), image.size()}) == ScratchStatus::io_error
             && backing->carried_failure(), "a representable huge write still has typed exhaustion");
     const auto huge_failed = arena->stats();
-    require(huge_failed.bytes_used == failed.bytes_used && backing->page_count() == 0,
-            "saturated-demand refusal claims neither chunks nor logical pages");
+    require(huge_failed.bytes_used == failed.bytes_used && backing->page_count() == pages,
+            "saturated-demand refusal preserves claimed chunks and logical pages");
     exhaustion_args(*backing->carried_failure(), huge_failed, maximum);
 }
 
@@ -356,6 +396,9 @@ void uncertified_default_sized_arena(std::size_t os_page) {
     auto* arena = ScratchArena::attached();
     const auto supplied = arena->stats();
     const auto capacity = share_capacity(supplied.bytes_supplied);
+    require(supplied.bytes_supplied == 1024 * ScratchArena::kChunkBytes
+            && capacity == 64 * ScratchArena::kChunkBytes,
+            "independent 1/16 arithmetic gives the 1 GiB default a 64 MiB command capacity");
     auto a = make_command_scratch_backing(kPageBytes);
     auto b = make_command_scratch_backing(kPageBytes);
     auto c = make_command_scratch_backing(os_page);
@@ -385,6 +428,76 @@ void uncertified_default_sized_arena(std::size_t os_page) {
     require(a->page_count() * kPageBytes <= capacity && b->page_count() * kPageBytes <= capacity
             && c->page_count() * os_page <= capacity,
             "small run stays inside each derived share");
+}
+
+void three_floored_stores_leave_only_the_remainder(std::size_t os_page) {
+    ArenaAttachment attachment(kSmallArenaBytes);
+    auto* arena = ScratchArena::attached();
+    const auto chunk = ScratchArena::kChunkBytes;
+    require(arena->stats().bytes_supplied == 4 * chunk
+            && share_capacity(arena->stats().bytes_supplied) == chunk,
+            "three-store witness uses a four-chunk arena and one-chunk independent quotas");
+    ScratchFile filler;
+    {
+        auto a = make_command_scratch_backing(kPageBytes);
+        auto b = make_command_scratch_backing(kPageBytes);
+        auto c = make_command_scratch_backing(os_page);
+        CommandScratchStore first(config(), a.get()), second(config(), b.get());
+        auto source_config = config();
+        source_config.page_size = os_page;
+        CommandScratchStore source(source_config, c.get());
+        const std::array<CommandScratchStore*, 3> stores{{&first, &second, &source}};
+        const std::array<ScratchBacking*, 3> backings{{a.get(), b.get(), c.get()}};
+        std::array<ScratchHandle, 3> handles{};
+        handles.fill(scratch_no_handle);
+        for (std::size_t index = 0; index < stores.size(); ++index) {
+            auto* store = stores[index];
+            std::array<std::byte, 4 * kPageBytes> image{};
+            image.fill(static_cast<std::byte>(index + 1));
+            require(backings[index]->arena_capacity_bytes() == chunk
+                    && store->status() == ScratchStatus::ok && store->begin() == ScratchStatus::ok,
+                    "each simultaneous real store opens with a one-chunk capacity");
+            require(put(*store, index, image, handles[index]) == ScratchStatus::ok
+                    && store->commit(ScratchDurability::buffered) == ScratchStatus::ok,
+                    "each of three real command stores commits within its one-chunk floor");
+        }
+        require(arena->stats().bytes_used == 3 * chunk && arena->stats().chunks_free == 1,
+                "three command regions claim exactly three of the four chunks");
+        filler.open("command-floor-remainder");
+        filler.ensure_size(chunk);
+        const auto full = arena->stats();
+        require(full.bytes_used == 4 * chunk && full.chunks_free == 0,
+                "the fourth consumer claims only the one-chunk remainder");
+        bool caught = false;
+        try {
+            filler.ensure_size(chunk + 1);
+        } catch (const ReportScratchIoError& error) {
+            caught = true;
+            require(error.run_failure_code() == RunFailureCode::report_sink_failed
+                    && error.run_failure().args
+                    && error.run_failure().args->find("\"reason\":\"arena_exhausted\"") != std::string::npos,
+                    "the filler has typed exhaustion beyond the remainder");
+            integer_arg(error, "arena_bytes", full.bytes_supplied);
+            integer_arg(error, "claimed_bytes", full.bytes_used);
+            integer_arg(error, "high_water_bytes", full.high_water);
+            integer_arg(error, "needed_bytes_lower_bound", chunk);
+        }
+        require(caught && arena->stats().bytes_used == full.bytes_used
+                && arena->stats().high_water == full.high_water,
+                "the filler cannot consume a command store's claimed floor");
+        for (std::size_t index = 0; index < stores.size(); ++index) {
+            std::array<std::byte, 4 * kPageBytes> read{};
+            require(stores[index]->read(handles[index], ScratchField::value, 0,
+                                        {read.data(), read.size()}) == ScratchStatus::ok
+                    && std::all_of(read.begin(), read.end(), [index](std::byte value) {
+                        return value == static_cast<std::byte>(index + 1);
+                    }),
+                    "the three real stores retain their distinct data beside the filler");
+        }
+    }
+    require(arena->stats().bytes_used == chunk, "only the filler remains after the three stores close");
+    filler.clear();
+    require(arena->stats().bytes_used == 0, "all four consumers release their chunks");
 }
 
 void store_retains_typed_failure_across_rollback() {
@@ -630,16 +743,21 @@ void attached_arena_with_zero_fsize(std::size_t page_bytes) {
 
 int main() {
     try {
+        capacity_floor_boundaries();
         carried_failure_and_budget_rollback();
         const long os_page = ::sysconf(_SC_PAGESIZE);
         require(os_page > 0 && ScratchArena::kChunkBytes % os_page == 0,
                 "OS page size divides an arena chunk");
-        share_refuses_before_claim_and_releases_budget(kPageBytes);
-        share_refuses_before_claim_and_releases_budget(static_cast<std::size_t>(os_page));
+        for (const auto bytes : {kSmallArenaBytes,
+                                arena_for_store_chunks(2) + ScratchArena::kChunkBytes / 3}) {
+            share_refuses_before_claim_and_releases_budget(kPageBytes, bytes);
+            share_refuses_before_claim_and_releases_budget(static_cast<std::size_t>(os_page), bytes);
+        }
         real_store_crosses_share_and_replacement_fits();
         reported_placement_and_shortfall_negative_witness();
-        zero_share_and_saturating_arithmetic();
+        one_chunk_floor_and_saturating_arithmetic();
         uncertified_default_sized_arena(static_cast<std::size_t>(os_page));
+        three_floored_stores_leave_only_the_remainder(static_cast<std::size_t>(os_page));
         store_retains_typed_failure_across_rollback();
         directory_is_reserved_once_before_any_write(kPageBytes);
         directory_is_reserved_once_before_any_write(static_cast<std::size_t>(os_page));

@@ -5,11 +5,38 @@
 namespace {
 using namespace command_arena_test;
 
+void small_arena_claims_one_chunk() {
+    ArenaAttachment attachment(kSmallArenaBytes);
+    auto* arena = ScratchArena::attached();
+    {
+        auto backing = make_command_scratch_backing(kPageBytes);
+        std::array<std::byte, kPageBytes> image{}, read{};
+        image.fill(std::byte{0x47});
+        const auto pages = ScratchArena::kChunkBytes / kPageBytes;
+        require(backing->write_page(0, {image.data(), image.size()}) == ScratchStatus::ok
+                && backing->write_page(pages - 1, {image.data(), image.size()}) == ScratchStatus::ok,
+                "a fixed four-chunk arena accepts the first and last page of one command chunk");
+        const auto claimed = arena->stats();
+        require(claimed.bytes_supplied == kSmallArenaBytes
+                && claimed.bytes_used == ScratchArena::kChunkBytes && claimed.chunks_free == 3,
+                "small command writes claim their one chunk from the attached arena");
+        require(backing->write_page(pages, {image.data(), image.size()}) == ScratchStatus::io_error
+                && backing->page_count() == pages
+                && arena->stats().bytes_used == claimed.bytes_used
+                && arena->stats().high_water == claimed.high_water,
+                "the first page beyond the small store's chunk refuses before claiming more");
+        require(backing->read_page(0, {read.data(), read.size()}) == ScratchStatus::ok && read == image,
+                "the small-arena refusal preserves the first page");
+    }
+    require(arena->stats().bytes_used == 0, "the small-arena command region is released");
+}
+
 std::uint64_t arena_for_physical_exhaustion_control() {
     // Only frozen APIs: size the fixture for three chunks of real backing
-    // traffic, without guessing the new share or importing its constant.
+    // traffic, without guessing the share or importing its constant. This
+    // adaptive control is separate from the fixed four-chunk floor witness.
     const auto control_extent = 3 * ScratchArena::kChunkBytes;
-    auto arena_bytes = 4 * ScratchArena::kChunkBytes;
+    auto arena_bytes = kSmallArenaBytes;
     for (unsigned attempt = 0; attempt < 30; ++attempt) {
         ArenaAttachment attachment(arena_bytes);
         auto backing = make_command_scratch_backing(kPageBytes);
@@ -112,6 +139,7 @@ void exhausted_store_and_released_filler_control() {
 
 int main() {
     try {
+        small_arena_claims_one_chunk();
         exhausted_store_and_released_filler_control();
         return 0;
     } catch (const std::exception& error) {

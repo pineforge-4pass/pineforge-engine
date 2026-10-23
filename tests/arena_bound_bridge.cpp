@@ -108,7 +108,7 @@ int arena_bound_test_watch_commands(std::uint64_t report_first_bytes) noexcept {
             command_before.bytes_total - command_before.bytes_used >= report_first_bytes,
             "report users have their independently counted first-write allowance");
         // Inspect a real factory-selected region, without claiming a page.
-        // Its bound must be the same for every store, regardless of page size.
+        // Its floored bound must be the same for every store, regardless of page size.
         {
             auto backing = make_command_scratch_backing(command_arena_test::kPageBytes);
             command_arena_test::require(backing->arena_capacity_bytes().has_value(),
@@ -116,8 +116,9 @@ int arena_bound_test_watch_commands(std::uint64_t report_first_bytes) noexcept {
             command_capacity = *backing->arena_capacity_bytes();
             command_arena_test::require(
                 command_capacity == command_arena_test::share_capacity(command_before.bytes_supplied)
+                && command_capacity >= ScratchArena::kChunkBytes
                 && arena->stats().bytes_used == command_before.bytes_used,
-                "open fixes the stats-derived share without claiming chunks");
+                "open fixes the stats-derived share with a one-chunk floor without claiming chunks");
         }
         command_failures = command_needed = command_failed_extent = command_peak_extent = 0;
         command_failed = command_failed_before = {};
