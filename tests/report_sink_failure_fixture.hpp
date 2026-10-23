@@ -38,9 +38,15 @@ struct Fd {
 };
 
 struct Directory {
-    std::string path = "/tmp/pineforge-w1-reasons-XXXXXX";
+    std::string path;
     std::vector<std::string> files;
-    Directory() { require(::mkdtemp(path.data()) != nullptr, "create failure fixture directory"); }
+    Directory() {
+        // Honour TMPDIR (fallback /tmp) like the sibling fixtures, so a host's
+        // disk-backed TMPDIR applies to the sink-file requirement.
+        const char* tmp = std::getenv("TMPDIR");
+        path = std::string(tmp && *tmp ? tmp : "/tmp") + "/pineforge-w1-reasons-XXXXXX";
+        require(::mkdtemp(path.data()) != nullptr, "create failure fixture directory");
+    }
     ~Directory() {
         for (const auto& file : files) ::unlink(file.c_str());
         ::rmdir(path.c_str());
