@@ -673,7 +673,24 @@
 // every old row.
 //   ConfigFlags103: digest 0x8d55c22cdbe324aaull -> 0x0d75274f1b2bf4edull
 //   Storm02: digest 0x3aa47b814572802aull -> 0x34262d89d687ddc4ull
-// expectation corrected (WIN-CX exit-scratch re-pin, 4 of 156 rows), because the exit-scratch folds (3c6f46d159, 4b5ef3dd28) and the removal of the scope-allocation counter fold (82ab96884e, LAB-QUIETFIX) move the broker-state hash; the folds, trades and rows counts did not move; actual values taken from the normal build's mismatch output of test_publication_witness on 14da9f0d82, private mode (harvest switch PINEFORGE_D2D_PUBLICATION_HARVEST); harvest source .lane-out/publication-actuals.txt (private-mode harvest job rj-20261023t172021-89d561, proof-harvest/ctest-only.log):
+// Measurement behind the two correction blocks that follow (WIN-CX, 2026-10-24, private mode on NTU2 unless noted; a measurement copy of this TU
+// that prints the digest WITHOUT the three hash inputs -- the host-extension fold, the recorded broker-state hash rows, the final hash -- and every
+// closed trade as %.17g text, run on one tree per step, all 156 runs each; the copy is not committed). Base: main 59082e696f (absent mode, job
+// rj-20261023t213227-390e03): the previous pins match 156 of 156 there. From that base to the picks head fd079e8554 (job rj-20261023t212912-cac387)
+// the digest without the three hash inputs, every count and the %.17g trade text are byte-identical in all 156 runs: only the three hash inputs
+// moved. Digest moves by step (full digest differs in N of 156 runs; without-hash-inputs, counts, trade text differ in 0 at every step):
+//   59082e696f -> b4a3f76738 (the line's own hash-recipe commits up to the parent of 1b89731330, one block: the exit-scratch folds 3c6f46d159 and
+//     4b5ef3dd28 sit inside it and do not build on their own, so the range is not split further): 156
+//     (jobs rj-20261023t213227-390e03, rj-20261023t212840-a6389f)
+//   b4a3f76738 -> 1b89731330 (LAB-QUIETFIX, the scope-allocation counter fold leaves the broker-state hash): 156 (rj-20261023t212847-473920)
+//   1b89731330 -> 1d72b3a61f (rest of the line incl. the merge of main 717c75d209 and the 14da9f0d82 re-pin): 0 (rj-20261023t212853-098ad9)
+//   1d72b3a61f -> + af140b5d91 (CR-277: close()/close_all() store the pending entry's real source id as the replacement key, folded into the
+//     hash): 7 runs: Config10, Config10M, Config16, Config16M, Storm12, Storm12M, Storm15M (rj-20261023t212858-1893bc)
+//   + c9694ac31f (CR-289, report sink writer E-row finite check, not in the hash): 0 (rj-20261023t212906-ede748)
+//   + the remaining picks to fd079e8554 (tests, docs, ci, sink rows, CR-277 re-pin): 0 (rj-20261023t212912-cac387)
+//   + fix-a1 9c3bf110cb/c033ae3075 (sealed-base exit phase index) at c18eeb4760: 0 (rj-20261023t222324-88e0fe)
+// The rows of the table below equal that harvest at fd079e8554 digest for digest and count for count.
+// expectation corrected (WIN-CX exit-scratch re-pin, 4 of 156 rows), because the exit-scratch folds (3c6f46d159, 4b5ef3dd28) and the removal of the scope-allocation counter fold (1b89731330, LAB-QUIETFIX) move the broker-state hash; the folds, trades and rows counts did not move; actual values taken from the normal build's mismatch output of test_publication_witness on 14da9f0d82, private mode (harvest switch PINEFORGE_D2D_PUBLICATION_HARVEST); harvest source .lane-out/publication-actuals.txt (private-mode harvest job rj-20261023t172021-89d561, proof-harvest/ctest-only.log):
 //   Config01: digest 0xe752de2dd7010863ull -> 0xa6f712d00de968fdull
 //   ConfigFlags101: digest 0x19179db1a0eaed4dull -> 0x1ba869cc0d36c0f9ull
 //   Config01M: digest 0x3fac346cf0dfd611ull -> 0x6ba06c205fe23d3eull
