@@ -578,9 +578,16 @@ template<> struct ExitScratchValue<native_order::RequestHandle> {
     }
 };
 
-// No store visitor is active while a caller cancels, replaces, executes or
-// creates another scope. Each edit commits separately, so nested Applied
-// callbacks require neither nested transactions nor owning snapshots.
+// A-13: ExitScratchIndex::walk calls user code between store operations, then
+// resumes via store.next(handle, handle), re-seeking by the current handle's key.
+// A callback may cancel, replace, execute or write/create another scope only
+// through this protocol: keep the current index handle/key live and unchanged,
+// retain no cache/page cursor across the callback, and commit each edit before
+// re-entry. Nested Applied callbacks need no nested transaction or owning snapshot.
+// pine_adapter.cpp relies on this in PineExecutionAdapter::order_per_entry_point_ties
+// (host.replace inside by_priority.ordered) and PineExecutionAdapter::on_applied
+// (behind.push_back inside armed.ordered / members.each). A retained store visitor
+// or cursor cannot replace these handle-based walks.
 template<class T> class ExitScratchRows {
 public:
     explicit ExitScratchRows(const PineExecutionAdapter& owner)

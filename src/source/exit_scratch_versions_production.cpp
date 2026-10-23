@@ -1,5 +1,6 @@
 #include "exit_scratch_versions_production.hpp"
 
+#include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/source/pine_adapter.hpp>
 
 #include <array>
@@ -22,6 +23,9 @@ namespace {
 // lengths/tags. Output borrows the caller only during put; input constructs the
 // returned value using a fixed byte window. Neither is retained by the provider.
 constexpr std::uint64_t payload_schema = 1;
+// A-6: schema 2 appends external membership to BindOpenings. Emit it only
+// when that member is present; all existing schema-1 bytes stay unchanged.
+constexpr std::uint64_t external_openings_schema = 2;
 enum : std::uint64_t {
     sequence_kind = 2, placement_kind = 3, request_kind = 4, pending_kind = 5
 };
@@ -116,6 +120,7 @@ public:
         }
     }
 
+    std::uint64_t schema = payload_schema;
     std::uint64_t size = 0;
     ScratchStatus status = ScratchStatus::ok;
 private:
@@ -180,6 +185,7 @@ public:
             }
         }
     }
+    std::uint64_t schema = payload_schema;
 private:
     const CommandScratchStore& store_;
     ScratchHandle handle_;
@@ -187,6 +193,43 @@ private:
     std::uint64_t offset_ = 0;
     std::array<std::byte, 512> buffer_{};
     std::size_t begin_ = 0, end_ = 0;
+};
+
+// Returned membership must outlive both the version scope and its store.
+// Like native frozen openings, keep one run identity and external LE64 words,
+// with fixed resident state and no retained caller/readback/store reference.
+class PayloadOpenings final : public native_order::OpeningReadback {
+public:
+    PayloadOpenings(native_order::RunIdentity run, std::uint64_t count)
+        : run_(std::move(run)), count_(count) {
+        if (count_) file_.open("pineforge-openings");
+    }
+    std::uint64_t count() const noexcept override { return count_; }
+    void put(std::uint64_t index, std::uint64_t incarnation) {
+        std::array<unsigned char, 8> bytes{};
+        for (unsigned i = 0; i != bytes.size(); ++i)
+            bytes[i] = static_cast<unsigned char>(incarnation >> (i * 8));
+        file_.write(index * 8, bytes.data(), bytes.size());
+    }
+    ScratchStatus opening_at(std::uint64_t index,
+                             native_order::RequestHandle& out) const noexcept override {
+        if (index >= count_) return ScratchStatus::not_found;
+        std::array<unsigned char, 8> bytes{};
+        try {
+            file_.read(index * 8, bytes.data(), bytes.size());
+        } catch (...) {
+            return ScratchStatus::io_error;
+        }
+        std::uint64_t incarnation = 0;
+        for (unsigned i = 0; i != bytes.size(); ++i)
+            incarnation |= static_cast<std::uint64_t>(bytes[i]) << (i * 8);
+        out = {run_, incarnation};
+        return ScratchStatus::ok;
+    }
+private:
+    native_order::RunIdentity run_;
+    std::uint64_t count_;
+    pineforge::detail::ScratchFile file_;
 };
 
 template<std::size_t I = 0, class Archive, class Variant>
@@ -219,6 +262,42 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
             if (present) a(v.emplace());
             else v.reset();
         } else if (present) a(*v);
+    } else if constexpr (std::is_same_v<V,
+                         std::shared_ptr<const native_order::OpeningReadback>>) {
+        bool present = static_cast<bool>(v);
+        a(present);
+        if constexpr (Archive::reading) {
+            if (!present) { v.reset(); return; }
+            std::uint64_t count = 0;
+            native_order::RunIdentity run;
+            a(count, run);
+            if (count > a.remaining() / 8) a.invalid();
+            auto value = std::make_shared<PayloadOpenings>(std::move(run), count);
+            for (std::uint64_t i = 0; i != count; ++i) {
+                std::uint64_t incarnation = 0;
+                a(incarnation);
+                value->put(i, incarnation);
+            }
+            v = std::move(value);
+        } else if (present) {
+            if (a.status != ScratchStatus::ok) return;
+            const auto count = v->count();
+            native_order::RequestHandle first;
+            if (count) {
+                a.status = v->opening_at(0, first);
+                if (a.status != ScratchStatus::ok) return;
+            }
+            a(count, first.run);
+            for (std::uint64_t i = 0; i != count && a.status == ScratchStatus::ok; ++i) {
+                native_order::RequestHandle handle = first;
+                if (i) a.status = v->opening_at(i, handle);
+                if (a.status != ScratchStatus::ok) return;
+                // BindOpenings requires same-run membership. Never discard a
+                // different identity when storing the shared run only once.
+                if (handle.run != first.run) { a.invalid(); return; }
+                a(handle.incarnation);
+            }
+        }
     } else if constexpr (IsShared<V>::value) {
         bool present = static_cast<bool>(v);
         a(present);
@@ -297,6 +376,7 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
         a(v.opening, v.cycle);
     } else if constexpr (std::is_same_v<V, native_order::BindOpenings>) {
         a(v.openings, v.cycle);
+        if (a.schema == external_openings_schema) a(v.external_openings);
     } else if constexpr (std::is_same_v<V, native_order::BindCohort>) {
         a(v.cohort.value);
     } else if constexpr (std::is_same_v<V, native_order::Member>) {
@@ -484,6 +564,7 @@ template<class Archive, class T> void payload_fields(Archive& a, T& v) {
 template<class... T> class PayloadSource final : public ScratchByteSource {
 public:
     explicit PayloadSource(const T&... values) : values_(values...) {
+        (select_schema(values), ...);
         PayloadOutput output;
         emit(output);
         exit_scratch_check(output.status);
@@ -499,11 +580,19 @@ public:
         return output.status;
     }
 private:
+    template<class Value> void select_schema(const Value& value) noexcept {
+        if constexpr (std::is_same_v<Value, native_order::Request>) {
+            const auto* owner = std::get_if<native_order::BindOpenings>(&value.owner);
+            if (owner && owner->external_openings) schema_ = external_openings_schema;
+        }
+    }
     void emit(PayloadOutput& output) const noexcept {
-        output(payload_schema);
+        output.schema = schema_;
+        output(schema_);
         std::apply([&](const auto&... value) { output(value...); }, values_);
     }
     std::tuple<const T&...> values_;
+    std::uint64_t schema_ = payload_schema;
     std::uint64_t size_ = 0;
 };
 
@@ -520,9 +609,10 @@ template<class... T> void read_payload(const CommandScratchStore& store, Scratch
         || (kind == sequence_kind ? words[2] != 0 : words[2] == 0))
         exit_scratch_failure(ScratchStatus::programming_error);
     PayloadInput input(store, version, info.value_bytes);
-    std::uint64_t schema = 0;
-    input(schema);
-    if (schema != payload_schema) input.invalid();
+    input(input.schema);
+    if (input.schema != payload_schema
+        && (input.schema != external_openings_schema
+            || (kind != request_kind && kind != pending_kind))) input.invalid();
     input(values...);
     if (input.remaining()) input.invalid();
 }
