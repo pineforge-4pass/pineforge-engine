@@ -69,20 +69,32 @@ failures can still stop the run before the cap.
 
 One compact JSON line goes to stdout in file mode, or exclusively to M
 when supplied (required with --out -).
-Keys, in order: complete, count_e, count_t, count_o, count_v, count_k,
-count_x, count_h, sink_bytes, sha256, finalizer_version. Counts are the
-strict reader's recomputed counts (absent types are zero). sink_bytes
+The receipt shapes in finalizer version 1.1.0 have these keys in order:
+Keys (success): complete, count_e, count_t, count_o, count_v, count_k,
+count_x, count_h, sink_bytes, sha256, finalizer_version.
+Keys (ordinary failure): complete, count_e, count_t, count_o, count_v, count_k,
+count_x, count_h, sink_bytes, sha256, finalizer_version.
+Keys (exit-8 exhaustion): complete, count_e, count_t, count_o, count_v, count_k,
+count_x, count_h, reason, sink_bytes, cap_bytes, sha256, finalizer_version.
+Keys (typed refusal with M=2): complete, count_e, count_t, count_o, count_v,
+count_k, count_x, count_h, sink_bytes, sha256, finalizer_version,
+tool, event, exit_code, detail, code, args.
+Counts are the strict reader's recomputed counts (absent types are zero). sink_bytes
 includes the header, trailer and LFs; sha256 is the strict reader's logical
 digest of all bytes BEFORE the trailer, including the header and LFs.
 Failure receipts have complete=false and sha256="", with the byte count
 actually read and any counts folded by the reader before refusal. Usage
-errors have no receipt. ONLY the exit-8 receipt adds reason="sink_exhausted"
-after the counts and cap_bytes=B immediately after sink_bytes=B+1; every
-other receipt keeps the keys, order and encoding above. The wrapper maps
+errors have no receipt. The exit-8 receipt sets reason="sink_exhausted",
+sink_bytes=B+1 and cap_bytes=B. The wrapper maps
 exit 8 plus this receipt to report_sink_failed, reason=sink_exhausted,
 class engine_fault: refunded; COMPUTE re-places with 2x U.
-Diagnostics go only to stderr, except when M=2
-reserves stderr exclusively for the receipt. A receipt write failure also
+Typed exit-3 refusals append tool, event, exit_code, detail, code and args
+only when M=2 reserves stderr exclusively for the receipt and cleanup has
+not replaced the typed exit status. With M other than 2, the receipt uses
+the ordinary failure shape and stderr carries one compact JSON diagnostic
+with those six keys in that order. Other handled failures use the text
+line "pineforge-sink-finalize: <text>" on stderr when M is not 2.
+With M=2 no separate diagnostic is written. A receipt write failure also
 removes PATH and returns 5; the receiver must require exit 0.
 
 Exit codes:
@@ -129,7 +141,7 @@ if sys.flags.isolated:
 from pf_sink import MAX_LINE_BYTES, SinkFormatError, SinkReader
 
 
-FINALIZER_VERSION = "1.0.0"
+FINALIZER_VERSION = "1.1.0"
 CHUNK_BYTES = 64 * 1024
 _TAGS = "ETOVKXH"
 

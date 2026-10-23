@@ -395,8 +395,17 @@ be finite or the run fails with `report_result_invalid`, `field` naming the
 corresponding `trades.<leaf>`, `summary.<leaf>`, `equity_curve.equity` or
 `equity_curve.open_profit` and `reason` equal to `nonfinite`.
 For path and fd report sinks, an `E` record with nonfinite `equity` or
-`open_profit` is refused with the same `equity_curve.<field>` and `nonfinite`
-failure before the record is written; neither value is written as `null`.
+`open_profit` is refused before the record is written. For a curve with one
+nonfinite value, every route names that value's `equity_curve.<field>`.
+For a curve with two defects, the array and metric routes name a nonfinite
+final `open_profit` first, even before an earlier bad `equity`; a sink route
+fails at the earliest released point and checks `equity` before `open_profit`
+within that point, so it may name `equity_curve.equity` instead.
+The code remains `report_result_invalid` and the reason remains `nonfinite`
+on every route. The v1 E descriptor keeps the nullable `f64?` for byte
+compatibility, while the writer never emits `null` for E; the converter
+and finalizer refuse a null E with exit 3 `report_result_invalid`.
+
 In ordinary mode without `--run-phase-fd`, a non-finite double elsewhere in the
 report document fails with `report_result_invalid`, `field` equal to
 `report.document` and `reason` equal to `nonfinite`.
