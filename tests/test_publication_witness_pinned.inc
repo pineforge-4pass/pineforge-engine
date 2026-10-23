@@ -673,11 +673,16 @@
 // every old row.
 //   ConfigFlags103: digest 0x8d55c22cdbe324aaull -> 0x0d75274f1b2bf4edull
 //   Storm02: digest 0x3aa47b814572802aull -> 0x34262d89d687ddc4ull
+// expectation corrected (WIN-CX exit-scratch re-pin, 4 of 156 rows), because the exit-scratch folds (3c6f46d159, 4b5ef3dd28) and the removal of the scope-allocation counter fold (82ab96884e, LAB-QUIETFIX) move the broker-state hash; the trades, at_bar and folded values did not move; harvested with PINEFORGE_P4_HARVEST on 14da9f0d82; the source folds, closed trades and recorded rows did not move; harvest source .lane-out/publication-actuals.txt (private-mode harvest job rj-20261023t172021-89d561, proof-harvest/ctest-only.log):
+//   Config01: digest 0xe752de2dd7010863ull -> 0xa6f712d00de968fdull
+//   ConfigFlags101: digest 0x19179db1a0eaed4dull -> 0x1ba869cc0d36c0f9ull
+//   Config01M: digest 0x3fac346cf0dfd611ull -> 0x6ba06c205fe23d3eull
+//   ConfigFlags101M: digest 0x828c1a8486de7dbcull -> 0xce3849680ad3a7b3ull
 constexpr Pinned kPinned[] = {
-    {"Config01", 0xe752de2dd7010863ull, 144, 44, 144},
-    {"ConfigFlags101", 0x19179db1a0eaed4dull, 145, 45, 144},
-    {"Config01M", 0x3fac346cf0dfd611ull, 144, 42, 144},
-    {"ConfigFlags101M", 0x828c1a8486de7dbcull, 145, 45, 144},
+    {"Config01", 0xa6f712d00de968fdull, 144, 44, 144},
+    {"ConfigFlags101", 0x1ba869cc0d36c0f9ull, 145, 45, 144},
+    {"Config01M", 0x6ba06c205fe23d3eull, 144, 42, 144},
+    {"ConfigFlags101M", 0xce3849680ad3a7b3ull, 145, 45, 144},
     {"Config02", 0xa7c6dc31b184c062ull, 48, 10, 48},
     {"ConfigFlags102", 0x77c5d6a390151224ull, 144, 49, 144},
     {"Config02M", 0xe56da321d367a98cull, 48, 10, 48},
