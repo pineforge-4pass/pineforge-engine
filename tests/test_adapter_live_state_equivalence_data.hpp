@@ -414,6 +414,19 @@
 // in each label (the same harvest against main 7a1f01c0 reproduces every old value):
 //   brackets seed 314188: 5626204446991468979 -> 13444318351679181243
 //   chains seed 314189: 18266502754563434276 -> 300926759266208037
+// expectation corrected (CR-277, 1 of 108 configurations), because PineExecutionAdapter::close("") and close_all() now
+// store the pending entry's real source id as its replacement key (they stored the empty string of a moved-from
+// SourceId). When the full close fills, the entry transferred behind it is released with that key: before, it was
+// released under key 0, so it was never registered under its id and a later same-id command could not see it
+// (submit_or_replace, pine_adapter.cpp 4939 and 5300-5306); now it is. This configuration calls close_all() after
+// its entries and never re-issues an id behind it, so the same-callback re-issue lookup of place_entry cannot fire
+// here: the key at release is the only effect. The transcript folds events, pending-order rows, working requests,
+// position, equity and counts, no hash. The measured difference of reversals seed 837832 is one closed trade fewer
+// (90 -> 89) with commands (401) and rows placed (369) unchanged; which trade it is has not been identified. Harvested
+// by the generator (tree = the 1.7.0 picks head 57e662382d, job rj-20261023t194305-8550f4, lab-only); the same
+// configuration still passes with the old value when the two captures are reverted (job rj-20261023t182901-ced80d,
+// on the pre-picks tree):
+//   reversals seed 837832: 11651815776502670583 -> 7945713857493298121
 constexpr std::uint64_t kTranscriptDigests[] = {
     5812684589312154871ull,  // reversals seed 104729, 124 trades, 397 commands, 444 rows placed
     4683315889309806675ull,  // reversals seed 209458, 124 trades, 379 commands, 418 rows placed
@@ -422,7 +435,7 @@ constexpr std::uint64_t kTranscriptDigests[] = {
     16125481158763653444ull,  // reversals seed 523645, 104 trades, 417 commands, 380 rows placed
     6599795193700557484ull,  // reversals seed 628374, 132 trades, 411 commands, 403 rows placed
     4925702266421634684ull,  // reversals seed 733103, 138 trades, 387 commands, 412 rows placed
-    11651815776502670583ull,  // reversals seed 837832, 90 trades, 401 commands, 369 rows placed
+    7945713857493298121ull,  // reversals seed 837832, 89 trades, 401 commands, 369 rows placed
     385235826901295142ull,  // reversals seed 942561, 98 trades, 408 commands, 367 rows placed
     2560334546094961294ull,  // reversals seed 1047290, 137 trades, 390 commands, 399 rows placed
     10245107961889113516ull,  // reversals seed 1152019, 141 trades, 392 commands, 444 rows placed

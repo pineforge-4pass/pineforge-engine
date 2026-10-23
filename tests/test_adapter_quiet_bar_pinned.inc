@@ -2306,6 +2306,15 @@
 // of the 138 recording-on runs, final hash 276); trades digest and the three counts moved 0. Cause: QUIETFIX
 // commit 82ab96884e removes a scope-allocation counter, not state; retained records, store digest and run identity
 // stay folded; design, not a bug. The generator owns the rows; never edit a row by hand.
+// expectation corrected (CR-277, 4 of 276 rows), because PineExecutionAdapter::close("") and close_all() now store the
+// pending entry's real source id as its replacement key (they stored the empty string of a moved-from SourceId), and
+// pine_state_hash.cpp:421 folds every pending_entries_ key into the broker-state hash; harvested by the generator
+// (both harvest switches on, tree = the 1.7.0 picks head 57e662382d, job rj-20261023t194305-8550f4, lab-only). Only
+// the recorded-row digest of the four recording-on runs moves; boundary, trades, final hash and the three counts move 0:
+//   Random04/0/1: rows 0xf480f8181bae5e22ull -> 0x12f4bc1dbf5462a9ull
+//   Random04/1/1: rows 0x0bfef7bf4399c9efull -> 0x44d6c1b4d3679459ull
+//   Random47/0/1: rows 0xa5a52271fecdd848ull -> 0xaea6d134627770e5ull
+//   Random47/1/1: rows 0x444d0421e13052bcull -> 0x257dccd41929d526ull
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0x5854542c111b5b15ull, 0x5f6fcf01d416e3eeull, 0x47fe0d7eaf8e51e3ull, 0x272bf9cb4096fadeull, 40, 40, 0},
     {"Quiet", 0, 0, 0x5854542c111b5b15ull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0x272bf9cb4096fadeull, 40, 0, 0},
@@ -2403,9 +2412,9 @@ constexpr Pinned kPinned[] = {
     {"Random03", 0, 0, 0x3638a4b322a9ba48ull, 0x14650fb0739d0383ull, 0x6ed2b968ae7e07fcull, 0xbb1001fea5e75ed6ull, 44, 0, 12},
     {"Random03", 1, 1, 0x68df08cead28b011ull, 0x4e30c27aeaa4a992ull, 0x80ca2343fcd2c1d0ull, 0x3a2751fcd011a976ull, 44, 44, 12},
     {"Random03", 1, 0, 0x68df08cead28b011ull, 0x14650fb0739d0383ull, 0x80ca2343fcd2c1d0ull, 0x3a2751fcd011a976ull, 44, 0, 12},
-    {"Random04", 0, 1, 0x4b0eae083c73b330ull, 0xf480f8181bae5e22ull, 0xcc6cf8406a1f71a0ull, 0x77d3e93fa8139c12ull, 44, 44, 15},
+    {"Random04", 0, 1, 0x4b0eae083c73b330ull, 0x12f4bc1dbf5462a9ull, 0xcc6cf8406a1f71a0ull, 0x77d3e93fa8139c12ull, 44, 44, 15},
     {"Random04", 0, 0, 0x4b0eae083c73b330ull, 0x14650fb0739d0383ull, 0xcc6cf8406a1f71a0ull, 0x77d3e93fa8139c12ull, 44, 0, 15},
-    {"Random04", 1, 1, 0xf6e8f22730aa8049ull, 0x0bfef7bf4399c9efull, 0x3659e955e5220f85ull, 0xc3818a2c2367e989ull, 44, 44, 15},
+    {"Random04", 1, 1, 0xf6e8f22730aa8049ull, 0x44d6c1b4d3679459ull, 0x3659e955e5220f85ull, 0xc3818a2c2367e989ull, 44, 44, 15},
     {"Random04", 1, 0, 0xf6e8f22730aa8049ull, 0x14650fb0739d0383ull, 0x3659e955e5220f85ull, 0xc3818a2c2367e989ull, 44, 0, 15},
     {"Random05", 0, 1, 0x70d478e630587247ull, 0x51841cba053fd325ull, 0xf91857e72781f5aeull, 0x91acb788312d6300ull, 58, 53, 3},
     {"Random05", 0, 0, 0x70d478e630587247ull, 0x14650fb0739d0383ull, 0xf91857e72781f5aeull, 0x91acb788312d6300ull, 58, 0, 3},
@@ -2575,9 +2584,9 @@ constexpr Pinned kPinned[] = {
     {"Random46", 0, 0, 0xdb18a3216f0fed28ull, 0x14650fb0739d0383ull, 0xfaba8060a07d20fdull, 0xc91b0d5649b74023ull, 52, 0, 1},
     {"Random46", 1, 1, 0x2bc0a6a2a2c9ba2aull, 0x6d2c649e9cdcd234ull, 0xfaba8060a07d20fdull, 0x966d6c84c7d1d1faull, 52, 52, 1},
     {"Random46", 1, 0, 0x2bc0a6a2a2c9ba2aull, 0x14650fb0739d0383ull, 0xfaba8060a07d20fdull, 0x966d6c84c7d1d1faull, 52, 0, 1},
-    {"Random47", 0, 1, 0x46dcbf870f0188a6ull, 0xa5a52271fecdd848ull, 0x522497c980811fd9ull, 0x3952af9cfc21e320ull, 57, 57, 13},
+    {"Random47", 0, 1, 0x46dcbf870f0188a6ull, 0xaea6d134627770e5ull, 0x522497c980811fd9ull, 0x3952af9cfc21e320ull, 57, 57, 13},
     {"Random47", 0, 0, 0x46dcbf870f0188a6ull, 0x14650fb0739d0383ull, 0x522497c980811fd9ull, 0x3952af9cfc21e320ull, 57, 0, 13},
-    {"Random47", 1, 1, 0xe3a3f66602e1488aull, 0x444d0421e13052bcull, 0xd71728e8746a5845ull, 0x2cdf147863462f38ull, 57, 57, 13},
+    {"Random47", 1, 1, 0xe3a3f66602e1488aull, 0x257dccd41929d526ull, 0xd71728e8746a5845ull, 0x2cdf147863462f38ull, 57, 57, 13},
     {"Random47", 1, 0, 0xe3a3f66602e1488aull, 0x14650fb0739d0383ull, 0xd71728e8746a5845ull, 0x2cdf147863462f38ull, 57, 0, 13},
     {"Random48", 0, 1, 0x6d23c061b62b0587ull, 0x1313d5ec660ee864ull, 0x935393ec134d3933ull, 0x320a1fa19a2de89bull, 48, 48, 7},
     {"Random48", 0, 0, 0x6d23c061b62b0587ull, 0x14650fb0739d0383ull, 0x935393ec134d3933ull, 0x320a1fa19a2de89bull, 48, 0, 7},
