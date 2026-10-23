@@ -27233,13 +27233,17 @@ int PineExecutionAdapter::projected_pending_size() const noexcept {
         native_order::RequestHandle handle;
         if (!projected_raw_pending_at(index, candidate, handle) || !candidate) continue;
         bool duplicate = false;
-        for (int prior = 0; prior < index; ++prior) {
-            const PlacementSnapshot* earlier = nullptr;
-            native_order::RequestHandle earlier_handle;
-            if (projected_raw_pending_at(prior, earlier, earlier_handle) && earlier
-                && same_projected_order(*candidate, *earlier)) {
-                duplicate = true;
-                break;
+        if (candidate->family == PineOrderFamily::ExitLimit
+            || candidate->family == PineOrderFamily::ExitStop
+            || candidate->family == PineOrderFamily::ExitTrail) {
+            for (int prior = 0; prior < index; ++prior) {
+                const PlacementSnapshot* earlier = nullptr;
+                native_order::RequestHandle earlier_handle;
+                if (projected_raw_pending_at(prior, earlier, earlier_handle) && earlier
+                    && same_projected_order(*candidate, *earlier)) {
+                    duplicate = true;
+                    break;
+                }
             }
         }
         if (!duplicate && count != std::numeric_limits<int>::max()) ++count;
@@ -27260,13 +27264,17 @@ bool PineExecutionAdapter::projected_pending_at(
         native_order::RequestHandle candidate_handle;
         if (!projected_raw_pending_at(raw, candidate, candidate_handle) || !candidate) continue;
         bool duplicate = false;
-        for (int prior = 0; prior < raw; ++prior) {
-            const PlacementSnapshot* earlier = nullptr;
-            native_order::RequestHandle earlier_handle;
-            if (projected_raw_pending_at(prior, earlier, earlier_handle) && earlier
-                && same_projected_order(*candidate, *earlier)) {
-                duplicate = true;
-                break;
+        if (candidate->family == PineOrderFamily::ExitLimit
+            || candidate->family == PineOrderFamily::ExitStop
+            || candidate->family == PineOrderFamily::ExitTrail) {
+            for (int prior = 0; prior < raw; ++prior) {
+                const PlacementSnapshot* earlier = nullptr;
+                native_order::RequestHandle earlier_handle;
+                if (projected_raw_pending_at(prior, earlier, earlier_handle) && earlier
+                    && same_projected_order(*candidate, *earlier)) {
+                    duplicate = true;
+                    break;
+                }
             }
         }
         if (duplicate) continue;
@@ -27437,23 +27445,27 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
     double trail_price = snapshot.exit_levels.trail_price;
     double profit_ticks = snapshot.exit_levels.profit_ticks;
     double loss_ticks = snapshot.exit_levels.loss_ticks;
-    for (int raw = 0; raw < owner_->projected_raw_pending_size(); ++raw) {
-        const PlacementSnapshot* sibling = nullptr;
-        native_order::RequestHandle sibling_handle;
-        if (!owner_->projected_raw_pending_at(raw, sibling, sibling_handle)
-            || !sibling || !PineExecutionAdapter::same_projected_order(snapshot, *sibling)) {
-            continue;
+    if (snapshot.family == PineOrderFamily::ExitLimit
+        || snapshot.family == PineOrderFamily::ExitStop
+        || snapshot.family == PineOrderFamily::ExitTrail) {
+        for (int raw = 0; raw < owner_->projected_raw_pending_size(); ++raw) {
+            const PlacementSnapshot* sibling = nullptr;
+            native_order::RequestHandle sibling_handle;
+            if (!owner_->projected_raw_pending_at(raw, sibling, sibling_handle)
+                || !sibling || !PineExecutionAdapter::same_projected_order(snapshot, *sibling)) {
+                continue;
+            }
+            if (!std::isnan(sibling->exit_levels.stop)) *stop = sibling->exit_levels.stop;
+            if (!std::isnan(sibling->exit_levels.limit)) *limit = sibling->exit_levels.limit;
+            if (!std::isnan(sibling->exit_levels.trail_points))
+                trail_points = sibling->exit_levels.trail_points;
+            if (!std::isnan(sibling->exit_levels.trail_price))
+                trail_price = sibling->exit_levels.trail_price;
+            if (!std::isnan(sibling->exit_levels.profit_ticks))
+                profit_ticks = sibling->exit_levels.profit_ticks;
+            if (!std::isnan(sibling->exit_levels.loss_ticks))
+                loss_ticks = sibling->exit_levels.loss_ticks;
         }
-        if (!std::isnan(sibling->exit_levels.stop)) *stop = sibling->exit_levels.stop;
-        if (!std::isnan(sibling->exit_levels.limit)) *limit = sibling->exit_levels.limit;
-        if (!std::isnan(sibling->exit_levels.trail_points))
-            trail_points = sibling->exit_levels.trail_points;
-        if (!std::isnan(sibling->exit_levels.trail_price))
-            trail_price = sibling->exit_levels.trail_price;
-        if (!std::isnan(sibling->exit_levels.profit_ticks))
-            profit_ticks = sibling->exit_levels.profit_ticks;
-        if (!std::isnan(sibling->exit_levels.loss_ticks))
-            loss_ticks = sibling->exit_levels.loss_ticks;
     }
     // The legacy C observer reports the executable levels, not merely the
     // raw tick offsets retained at the command.  Keep the source tick
@@ -27520,27 +27532,31 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
     out->trail_offset = snapshot.exit_levels.trail_offset;
     out->profit_ticks = snapshot.exit_levels.profit_ticks;
     out->loss_ticks = snapshot.exit_levels.loss_ticks;
-    for (int raw = 0; raw < owner_->projected_raw_pending_size(); ++raw) {
-        const PlacementSnapshot* sibling = nullptr;
-        native_order::RequestHandle sibling_handle;
-        if (!owner_->projected_raw_pending_at(raw, sibling, sibling_handle)
-            || !sibling || !PineExecutionAdapter::same_projected_order(snapshot, *sibling)) {
-            continue;
+    if (snapshot.family == PineOrderFamily::ExitLimit
+        || snapshot.family == PineOrderFamily::ExitStop
+        || snapshot.family == PineOrderFamily::ExitTrail) {
+        for (int raw = 0; raw < owner_->projected_raw_pending_size(); ++raw) {
+            const PlacementSnapshot* sibling = nullptr;
+            native_order::RequestHandle sibling_handle;
+            if (!owner_->projected_raw_pending_at(raw, sibling, sibling_handle)
+                || !sibling || !PineExecutionAdapter::same_projected_order(snapshot, *sibling)) {
+                continue;
+            }
+            if (!std::isnan(sibling->exit_levels.limit))
+                out->limit_price = sibling->exit_levels.limit;
+            if (!std::isnan(sibling->exit_levels.stop))
+                out->stop_price = sibling->exit_levels.stop;
+            if (!std::isnan(sibling->exit_levels.trail_points))
+                out->trail_points = sibling->exit_levels.trail_points;
+            if (!std::isnan(sibling->exit_levels.trail_price))
+                out->trail_price = sibling->exit_levels.trail_price;
+            if (!std::isnan(sibling->exit_levels.trail_offset))
+                out->trail_offset = sibling->exit_levels.trail_offset;
+            if (!std::isnan(sibling->exit_levels.profit_ticks))
+                out->profit_ticks = sibling->exit_levels.profit_ticks;
+            if (!std::isnan(sibling->exit_levels.loss_ticks))
+                out->loss_ticks = sibling->exit_levels.loss_ticks;
         }
-        if (!std::isnan(sibling->exit_levels.limit))
-            out->limit_price = sibling->exit_levels.limit;
-        if (!std::isnan(sibling->exit_levels.stop))
-            out->stop_price = sibling->exit_levels.stop;
-        if (!std::isnan(sibling->exit_levels.trail_points))
-            out->trail_points = sibling->exit_levels.trail_points;
-        if (!std::isnan(sibling->exit_levels.trail_price))
-            out->trail_price = sibling->exit_levels.trail_price;
-        if (!std::isnan(sibling->exit_levels.trail_offset))
-            out->trail_offset = sibling->exit_levels.trail_offset;
-        if (!std::isnan(sibling->exit_levels.profit_ticks))
-            out->profit_ticks = sibling->exit_levels.profit_ticks;
-        if (!std::isnan(sibling->exit_levels.loss_ticks))
-            out->loss_ticks = sibling->exit_levels.loss_ticks;
     }
     out->qty = snapshot.family == PineOrderFamily::Close
         ? snapshot.requested_qty
