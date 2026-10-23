@@ -162,26 +162,33 @@ execution and no TMPDIR fallback. `--spill-dir` is refused in this profile;
 `--report-sink-fd 5` is refused in every profile because 5 is the engine's
 fixed arena slot. The wrapper must charge the arena as well as the table slab.
 
-A jailed arena must be a sealed memfd with at least
-`F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`, and the jailed admission
-(`strategy_require_report_scratch_arena_v1`) enforces that itself on Linux:
-the host does not have to set any variable for it. Ordinary files,
-sealing-disabled memfds and unsupported seals queries are refused before
-store opening or execution with typed `ReportScratchIoError`
-(`report_sink_failed` / `arena_backing`, `EINVAL`), the same envelope as a
-missing arena: exit status 1, `code` `report_sink_failed`, `args`
-`{"reason":"arena_backing"}`, top-level `reason` `arena_backing`. The
+On Linux, a jailed arena must be a sealed memfd whose seal mask contains
+`F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`. `F_SEAL_EXEC` and other
+non-write seals may be added, for example by `MFD_NOEXEC_SEAL`. A mask
+containing `F_SEAL_WRITE` or `F_SEAL_FUTURE_WRITE` is refused at attachment
+because it prevents writable shared mappings. The jailed admission
+(`strategy_require_report_scratch_arena_v1`) enforces the sealed-memfd
+requirement regardless of `PF_SCRATCH_ARENA_JAILED`; write seals are refused
+in every attachment profile, including direct attachment. Ordinary files,
+sealing-disabled memfds and unsupported seals queries are also refused by
+the Linux admission before store opening or execution with typed
+`ReportScratchIoError` (`report_sink_failed` / `arena_backing`, `EINVAL`),
+the same envelope as a missing arena: exit status 1, `code`
+`report_sink_failed`, `args` `{"reason":"arena_backing"}`, top-level `reason`
+`arena_backing`. These admission refusals mean the run never started. The
 admission judges the backend the attachment retained, so an arena attached
-earlier is not re-judged by a rebound fd 5. Where sealed memfds do not exist
-(not Linux) the admission accepts the arena the host supplies.
+earlier is not re-judged by a rebound fd 5. Off Linux, admission accepts any
+attached arena.
 
 `PF_SCRATCH_ARENA_JAILED=1` is an additional, optional way to demand the same
 seals already at attach time, for hosts that attach before they call the
 admission. With `PF_SCRATCH_ARENA_FD` set, only exactly `"1"` enables it;
-unset or exactly `"0"` preserves the unjailed backing rules, and every other
-value (including an empty string) is refused as a malformed profile. With no
-`PF_SCRATCH_ARENA_FD`, attachment remains a no-op (the admission then refuses
-for lack of an arena); direct `attach(fd, bytes)` keeps its unjailed meaning.
+unset or exactly `"0"` permits ordinary-file attachment, but does not relax
+the Linux admission's sealed-memfd requirement or permit write-sealed memfds.
+Every other value (including an empty string) is refused as a malformed
+profile. With no `PF_SCRATCH_ARENA_FD`, attachment remains a no-op (the
+admission then refuses for lack of an arena); direct `attach(fd, bytes)` also
+permits ordinary files, with the same write-seal refusal on Linux.
 
 The setter is an optional ctypes binding for old libraries in the unjailed
 profile. In the jailed profile, an absent setter refuses before execution as
