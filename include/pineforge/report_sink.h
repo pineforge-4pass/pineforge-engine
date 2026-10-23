@@ -184,7 +184,7 @@ PF_API uint32_t pf_report_sink_version(void);
  *  Completed fd generations allow NULL through either setter to detach the
  *  next-run sink while preserving their receipt, summary and borrowed fd.
  *  The sink composes with the execution observer and selected window.
- *  Write errors fail the run with the sink I/O code planned for
+ *  Write errors fail the run with report_sink_failed, cataloged in
  *  docker/run_failure_codes.json (DESIGN 3.7:881-888; 6:1330-1332).
  *
  *  With a sink, pf_report_t contains summary scalars, total_trades and

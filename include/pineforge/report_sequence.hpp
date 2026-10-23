@@ -14,9 +14,12 @@
 // behaviour. ReportMode::SummaryOnly is the placeholder the lane brief names
 // (the final summary/full flag is owned by lane o1w-contract); in it,
 // set_optional_report_mode returns 0, the ReportC optional arrays stay null,
-// the output readers answer empty, and optional_sequence_summary() returns the
-// fixed witness. A report sink, when installed, still streams the complete
-// sequence externally in either mode.
+// and optional_sequence_summary() returns the fixed witness. Without a sink,
+// enabled output recording retains the current row: output_bars_len() is 1
+// once a row exists, and output_bar_times_copy()/output_series_copy() expose
+// that row at local row 0, independently of its global bar index. Event
+// readers answer empty. A report sink, when installed, still streams the
+// complete sequence externally in either mode.
 #define PINEFORGE_HAS_OPTIONAL_REPORT_SEQUENCES_V1 1
 
 namespace pineforge {
