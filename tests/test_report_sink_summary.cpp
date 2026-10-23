@@ -487,6 +487,42 @@ void presented_case(Directory& directory, const std::vector<double>& pnls, int i
     install_fd(fd, pipe.fd());
     Options options;
     options.selected = options.observed = capture;
+    if (invalid) {
+        // Canonical nonfinite rows fail before a summary can be published.
+        const std::array<const char*, 8> fields{{"entry_price", "exit_price", "qty", "pnl",
+            "pnl_pct", "max_runup", "max_drawdown", "commission"}};
+        const std::string expected_args = std::string("{\"field\":\"trades.")
+            + fields.at(static_cast<std::size_t>(invalid - 5)) + "\",\"reason\":\"nonfinite\"}";
+        for (auto* host : {&baseline, &path, &fd}) {
+            configure_capture(*host, options, static_cast<int>(bars.size()));
+            bool refused = false;
+            RunFailureValue failure{};
+            try {
+                host->execute(bars);
+                if (host->last_run_status() != 0 || !host->last_error().empty()) {
+                    refused = true;
+                    failure = run_failure_value_of(*host);
+                } else {
+                    Report report;
+                    host->fill_report(&report.value);
+                }
+            } catch (const std::exception& error) {
+                refused = true;
+                failure = classify_run_failure(error);
+            }
+            require(refused, "nonfinite presentation was accepted");
+            require(failure.code == RunFailureCode::report_result_invalid
+                    && failure.args && *failure.args == expected_args,
+                    "nonfinite presentation lost its first-field typed refusal");
+            require(run_failure_code_class(failure.code) == RunFailureClass::engine_fault
+                        && !run_failure_code_retryable(failure.code),
+                    "nonfinite presentation changed its failure class");
+            unpublished(*host);
+            require(receipt(*host).complete == 0, "nonfinite presentation completed a sink");
+        }
+        pipe.finish();
+        return;
+    }
     for (auto* host : {&baseline, &path, &fd}) {
         configure_capture(*host, options, static_cast<int>(bars.size()));
         if (!invalid) {
@@ -494,54 +530,20 @@ void presented_case(Directory& directory, const std::vector<double>& pnls, int i
             unpublished(*host);
         }
     }
-    if (invalid) {
-        const char* fields[] = {"entry_price", "exit_price", "qty", "pnl",
-                                "pnl_pct", "max_runup", "max_drawdown", "commission"};
-        require(invalid >= 5 && invalid <= 12, "invalid fixture field is out of range");
-        const auto expected_args = std::string("{\"field\":\"trades.")
-            + fields[invalid - 5] + "\",\"reason\":\"nonfinite\"}";
-        for (auto* host : {&baseline, &path, &fd}) {
-            Report rejected;
-            RunFailureValue failure;
-            try {
-                // Selected/observed runs present at terminal capture; an
-                // ordinary run presents when fill_report is requested.
-                host->execute(bars);
-                if (host->last_run_status() != 0 || !host->last_error().empty()) {
-                    failure = run_failure_value_of(*host);
-                } else {
-                    host->fill_report(&rejected.value);
-                }
-            } catch (const std::exception& error) {
-                failure = classify_run_failure(error);
-            }
-            require(failure.code == RunFailureCode::report_result_invalid,
-                    "invalid presentation did not produce its canonical-result refusal");
-            require(run_failure_code_class(failure.code) == RunFailureClass::engine_fault
-                        && !run_failure_code_retryable(failure.code),
-                    "invalid presentation changed its failure class");
-            require(failure.args && *failure.args == expected_args,
-                    "invalid presentation lost its first offending field");
-            unpublished(*host);
-            require(receipt(*host).complete == 0,
-                    "invalid presentation published a successful trailer");
-        }
-    } else {
-        Report array;
-        baseline.fill_report(&array.value);
-        const auto ref = reference(array.value);
-        if (std::all_of(pnls.begin(), pnls.end(), [](double pnl) { return pnl == 0; })) {
-            require(ref.wins == 0 && ref.losses == 0, "zero-only report counted a win/loss");
-            require(std::signbit(array.value.trades[0].pnl) == std::signbit(pnls.front()),
-                    "presentation lost the first zero's sign before folding");
-        }
-        for (auto* host : {&path, &fd}) {
-            Report actual;
-            host->fill_report(&actual.value);
-            equal(summary(*host), ref, "presented array reference");
-            equal_diagnostics(*host, array.value);
-            repeated_read(*host, ref, "presented route");
-        }
+    Report array;
+    baseline.fill_report(&array.value);
+    const auto ref = reference(array.value);
+    if (!invalid && std::all_of(pnls.begin(), pnls.end(), [](double pnl) { return pnl == 0; })) {
+        require(ref.wins == 0 && ref.losses == 0, "zero-only report counted a win/loss");
+        require(std::signbit(array.value.trades[0].pnl) == std::signbit(pnls.front()),
+                "presentation lost the first zero's sign before folding");
+    }
+    for (auto* host : {&path, &fd}) {
+        Report actual;
+        host->fill_report(&actual.value);
+        equal(summary(*host), ref, "presented array reference");
+        equal_diagnostics(*host, array.value);
+        repeated_read(*host, ref, "presented route");
     }
     pipe.finish();
 }
@@ -585,6 +587,10 @@ void lifecycle(Directory& directory) {
                 && std::memcmp(&bad, &before, sizeof bad) == 0, "bad prefix rewrote output");
     }
     install_path(host, directory.file());
+    require(strategy_set_report_sink_v1(handle(host), nullptr) == 0,
+            "unstarted path sink removal refused");
+    unpublished(host);
+    install_path(host, directory.file());
     const auto bars = tape(146);
     pf_report_sink_summary_v1 first{};
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -595,8 +601,18 @@ void lifecycle(Directory& directory) {
         if (attempt == 0) first = summary(host);
         else equal(summary(host), first, "reused handle");
     }
-    require(strategy_set_report_sink_v1(handle(host), nullptr) == 0, "sink removal refused");
-    unpublished(host);
+    // An ordinary run still owns its scratch curve; S's detach rule is fd-only.
+    const auto before = receipt(host);
+    const auto before_diagnostics = diagnostics(host);
+    require(strategy_set_report_sink_v1(handle(host), nullptr) == -3,
+            "ordinary path sink removal lost its -3 refusal");
+    repeated_read(host, first, "refused ordinary path removal");
+    const auto after = receipt(host);
+    const auto after_diagnostics = diagnostics(host);
+    require(std::memcmp(&before, &after, sizeof before) == 0,
+            "refused removal changed the completed receipt");
+    require(std::memcmp(&before_diagnostics, &after_diagnostics, sizeof before_diagnostics) == 0,
+            "refused removal changed the completed diagnostics");
 
     // Exercise failure after a real begin: no trailer means no published fold.
     PresentedFixture failed({-0.0, +0.0});
