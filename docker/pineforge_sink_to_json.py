@@ -23,6 +23,9 @@ time/series column gets its own replay: no column transpose is stored.
 An emission preflight walks every lazy array into a discard writer before
 the actual emission. Sink defects and deterministic conversion failures
 therefore precede stdout. Every replay must verify the original receipt.
+An E-row null equity/open_profit is refused with event=sink_refused,
+exit_code=3, code=report_result_invalid and
+args={field: equity_curve.<field>, reason: nonfinite}.
 
 stdout.json is read at most 2,097,153 bytes (2 MiB plus one overflow probe),
 then decoded with duplicate-key and non-JSON-number refusal. Unknown/invalid
@@ -79,7 +82,7 @@ if sys.flags.isolated:
 
 from pf_sink import I53_MAX, SinkFormatError
 from pineforge_sink_finalize import (
-    CHUNK_BYTES, _Failure, _FinalizerReader, _descriptor, _reader_code, _write_all,
+    CHUNK_BYTES, _Failure, _FinalizerReader, _check_equity, _descriptor, _reader_code, _write_all,
 )
 
 
@@ -196,6 +199,7 @@ class _Sink:
                 next_trade, next_output, constants = 1, 0, 0
                 for row in reader:
                     if row.tag == "E":
+                        _check_equity(row)
                         timestamp = row.values[0]
                         if last_time is not None and timestamp < last_time:
                             raise _Failure(3, "equity times are out of order")
@@ -860,6 +864,7 @@ def main(argv=None):
     diagnostics = _Diagnostics()
     fd, sink = None, None
     code, event, message = 0, "converter_complete", ""
+    failure_fields = {}
     try:
         fd = _open_input(args.input_path, args.in_fd)
         sink = _Sink(fd, args.max_bytes, args.run_id)
@@ -873,6 +878,7 @@ def main(argv=None):
         writer.flush()  # direct write(2): no Python stdout buffer or exit-time EPIPE
     except _Failure as error:
         code, event, message = error.code, "sink_refused", str(error)
+        failure_fields = error.diagnostic_fields()
     except OSError as error:
         code, event, message = 5, "converter_io", str(error)
     except (Exception, KeyboardInterrupt) as error:
@@ -884,11 +890,12 @@ def main(argv=None):
                 os.close(fd)
             except OSError as error:
                 code, event, message = 5, "converter_io", str(error)
+                failure_fields = {}
     verified = sink is not None and sink.verified
     try:
         diagnostics.line(event, exit_code=code, sink_verified=verified,
                          billing="refunded" if event == "engine_fault" else "normal",
-                         metadata_drops=diagnostics.drops, detail=message)
+                         metadata_drops=diagnostics.drops, detail=message, **failure_fields)
     except OSError:
         return 5
     return code
