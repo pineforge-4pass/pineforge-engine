@@ -1,4 +1,5 @@
 """Released C++ enum numbers are immutable; execute on the lab box."""
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -6,6 +7,14 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = "include/pineforge/run_failure_codes.hpp"
+RELEASED_FIXTURE = Path(__file__).with_name("run_failure_code_numbers_v1_6_3.json")
+V170_ADDITIONS = {
+    "report_mode_unsupported": 65,
+    "report_sink_failed": 66,
+    "scratch_capacity_exceeded": 67,
+    "scratch_configuration_invalid": 68,
+    "scratch_io_failed": 69,
+}
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_run_failure_codes as registry
@@ -19,14 +28,28 @@ def numbers(text):
 
 
 def released_numbers():
-    # Only this fixed, repository-owned path is followed, never an argv path.
-    print(f"release enum input: v1.6.3:{HEADER}", flush=True)
-    result = subprocess.run(
-        ["git", "-C", str(ROOT), "show", f"v1.6.3:{HEADER}"],
-        capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    released = numbers(result.stdout)
+    # Copied from the released tag, independently of the generator and HEAD.
+    # Only fixed, repository-owned paths are followed, never an argv path.
+    print(f"release enum fixture input: {RELEASED_FIXTURE}", flush=True)
+    released = json.loads(RELEASED_FIXTURE.read_text(encoding="utf-8"))
+    assert len(released) == 65
     assert released["none"] == 0 and max(released.values()) == 64
+    assert set(released.values()) == set(range(65))
+
+    # Snapshots always use the fixture; available history also checks its source.
+    try:
+        tag = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "v1.6.3"],
+            capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        tag = None
+    if tag is not None and tag.returncode == 0:
+        print(f"release enum tag input: v1.6.3:{HEADER}", flush=True)
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"v1.6.3:{HEADER}"],
+            capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+        assert released == numbers(result.stdout), "fixture differs from v1.6.3 header"
     return released
 
 
@@ -36,6 +59,7 @@ def test_run_failure_code_numbers_stable():
     assert {name: current.get(name) for name in released} == released
     assert len(set(current.values())) == len(current)
     assert all(value > 64 for name, value in current.items() if name not in released)
+    assert {name: current.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
 
 
 def test_run_failure_generator_appends_after_released_numbers():
@@ -43,6 +67,7 @@ def test_run_failure_generator_appends_after_released_numbers():
     catalogue, _ = registry.load_catalog(ROOT)
     generated = numbers(registry.render_codes_header(catalogue))
     assert {name: generated.get(name) for name in released} == released
+    assert {name: generated.get(name) for name in V170_ADDITIONS} == V170_ADDITIONS
     for path, rendered in registry.generated(catalogue).items():
         assert (ROOT / path).read_text(encoding="utf-8") == rendered, str(path)
     # A future alphabetically earlier addition cannot shift any existing code.
