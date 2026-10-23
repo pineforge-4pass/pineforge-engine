@@ -32,18 +32,34 @@ struct Io {
     Count whole_file_advice = 0;
 };
 
+enum class FileClass : std::size_t {
+    command, trade_payload, trade_index, ids, id_pairs, o1e2, other, count
+};
+inline constexpr std::size_t class_index(FileClass value) noexcept {
+    return static_cast<std::size_t>(value);
+}
+inline constexpr std::array<const char*, class_index(FileClass::count)> kClassNames{{
+    "pineforge-command", "pineforge-trade-payload", "pineforge-trade-index",
+    "pineforge-ids", "pineforge-id-pairs", "pineforge-o1e2", "other"
+}};
+inline constexpr std::size_t kFdSlots = 32; // Fixed bookkeeping, independent of N.
+
 struct AlternateReads {
     int fd = -1;
+    std::uintmax_t device = 0, inode = 0;
+    FileClass file_class = FileClass::other;
     Count read = 0, readv = 0, preadv = 0, preadv2 = 0, mmap = 0;
 };
 
 struct Counters {
     Io total;
     Io pages; // Platform-page-sized I/O on an unlinked regular descriptor.
-    // Retain calls by fd even before the first pread/pwrite identifies page_fd.
-    // Fixed bookkeeping only; exhausting these slots is an integrity failure.
-    std::array<AlternateReads, 16> alternate_reads{};
+    std::array<Io, kClassNames.size()> classes{};
+    // Retain calls by fd AND identity before pread/pwrite identifies page_fd.
+    // Reusing an fd cannot move old alternate reads into another file's class.
+    std::array<AlternateReads, kFdSlots> alternate_reads{};
     int page_fd = -1;
+    std::uintmax_t page_device = 0, page_inode = 0;
     bool multiple_page_fds = false;
     bool classification_error = false;
 };
@@ -71,6 +87,8 @@ inline Count ceil_div(Count value, Count divisor) {
 // An I/O contract failure records its measured and allowed numbers and lets
 // the remaining contracts run. Setup/result-integrity failures throw instead.
 void bound(const char* metric, Count actual, Count allowed, Context);
+void class_bound(FileClass, const char* metric, Count actual, Count allowed, Context);
+void total_info(const char* metric, Count actual, Context);
 void validate(const Counters&);
 
 class Measure {
