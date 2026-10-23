@@ -162,16 +162,26 @@ execution and no TMPDIR fallback. `--spill-dir` is refused in this profile;
 `--report-sink-fd 5` is refused in every profile because 5 is the engine's
 fixed arena slot. The wrapper must charge the arena as well as the table slab.
 
-The host sets `PF_SCRATCH_ARENA_JAILED=1` for jailed arena attachment. Only
-exactly `"1"` enables this requirement; unset or exactly `"0"` preserves
-the unjailed backing rules, and every other value (including an empty string)
-is refused as a malformed profile. A jailed arena must be a sealed memfd
-with at least `F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`; ordinary files,
+A jailed arena must be a sealed memfd with at least
+`F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`, and the jailed admission
+(`strategy_require_report_scratch_arena_v1`) enforces that itself on Linux:
+the host does not have to set any variable for it. Ordinary files,
 sealing-disabled memfds and unsupported seals queries are refused before
-arena setup, store opening or execution with typed `ReportScratchIoError`
-(`report_sink_failed` / `arena_backing`, `EINVAL`). With no
-`PF_SCRATCH_ARENA_FD`, attachment remains a no-op; direct `attach(fd, bytes)`
-keeps its unjailed meaning.
+store opening or execution with typed `ReportScratchIoError`
+(`report_sink_failed` / `arena_backing`, `EINVAL`), the same envelope as a
+missing arena: exit status 1, `code` `report_sink_failed`, `args`
+`{"reason":"arena_backing"}`, top-level `reason` `arena_backing`. The
+admission judges the backend the attachment retained, so an arena attached
+earlier is not re-judged by a rebound fd 5. Where sealed memfds do not exist
+(not Linux) the admission accepts the arena the host supplies.
+
+`PF_SCRATCH_ARENA_JAILED=1` is an additional, optional way to demand the same
+seals already at attach time, for hosts that attach before they call the
+admission. With `PF_SCRATCH_ARENA_FD` set, only exactly `"1"` enables it;
+unset or exactly `"0"` preserves the unjailed backing rules, and every other
+value (including an empty string) is refused as a malformed profile. With no
+`PF_SCRATCH_ARENA_FD`, attachment remains a no-op (the admission then refuses
+for lack of an arena); direct `attach(fd, bytes)` keeps its unjailed meaning.
 
 The setter is an optional ctypes binding for old libraries in the unjailed
 profile. In the jailed profile, an absent setter refuses before execution as
