@@ -164,9 +164,24 @@ separate scratch arena.
 
 The fd must be a FIFO's write end or an AF_UNIX `SOCK_STREAM` socket. Either
 sink setter replaces the one installed sink, and NULL through either setter
-removes it. Both return 0 on acceptance, -1 for a bad handle or descriptor
-prefix (or a negative fd), -2 during a stream and -3 during a batch run or
-report capture. Run-begin validation and write errors use the existing typed
+requests removal. Both return 0 on acceptance, -1 for a bad handle or
+descriptor prefix (or a negative fd), -2 while a stream is beginning or
+running, and -3 during a batch run or report capture.
+
+<!-- G-09: original review cites docs/pages/abi-stability.md:168. -->
+
+NULL removal through either `strategy_set_report_sink_v1` or
+`strategy_set_report_sink_fd_v1` also returns -3 while a scratch-backed equity
+curve is still owned or trade rows are sealed, even when execution is idle.
+A refused removal preserves the sink, receipt and report; it never restores
+full resident arrays from scratch or sealed rows. An idle, successfully
+completed fd generation is the exception: NULL through either setter returns 0 and
+detaches only the next-run sink configuration, preserving the completed
+receipt, summary and scratch storage for subsequent report reads.
+These rules are shared by `BacktestEngine::set_report_sink_v1` and
+`BacktestEngine::set_report_sink_fd_v1`.
+
+Run-begin validation and write errors use the existing typed
 `report_sink_failed` path. The caller keeps the fd open through execution and
 report capture, then closes it to signal EOF. The engine never duplicates or
 closes a borrowed fd, including on failure, replacement or handle destruction.

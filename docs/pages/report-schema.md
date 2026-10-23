@@ -6,7 +6,8 @@
 meaning and units, and defines the opt-in `pineforge-report/v1` envelope for
 FULL, SUMMARY_ONLY and STREAMED reports. Native C++ mode selection and
 envelope reads are implemented, subject to the eligibility and completion
-limitations below.
+limitations below. C/ctypes transport support requires a separately negotiated
+provider.
 
 @see #pf_report_t for the verbatim struct declaration.
 
@@ -26,9 +27,11 @@ The `--capabilities-json` probe's
 `capabilities.selected_window_contract_revisions` is `["1.3"]` for a
 supported runtime and `[]` otherwise. The declaration lives in that capability
 record; the selected-window wire version remains 1, the phase version 1 and the
-legacy selected fingerprint/schema version 2. Explicit report modes use the
-independent envelope version 1 and fingerprint/schema version 3 described
-below.
+legacy selected fingerprint/schema version 2. The negotiated report-envelope
+JSON contract specifies the independent envelope version 1 and
+fingerprint/schema version 3 described below.
+`docker/run_json.py --report-mode FULL` keeps the
+legacy route.
 
 ## Top-level layout
 
@@ -112,9 +115,10 @@ through an explicitly negotiated provider bridge.
 | STREAMED (`2`) | Same values/bits | None | Complete enabled sequences, in existing report order, through a bounded sink |
 
 Legacy calls, including the existing sink-v1 route, keep their current
-behavior. Explicit FULL conflicts with an installed sink; STREAMED requires
-one; SUMMARY_ONLY conflicts with sequence-sink capture. FULL is an owning-array
-compatibility action and makes no fixed-memory claim. SUMMARY_ONLY must not
+behavior. Native FULL through the versioned envelope conflicts with an
+installed sink; STREAMED requires one; SUMMARY_ONLY conflicts with
+sequence-sink capture. FULL is an owning-array compatibility action and makes
+no fixed-memory claim. SUMMARY_ONLY must not
 allocate full arrays and delete them after reporting.
 
 `set_report_mode_v1(SUMMARY_ONLY)` selects the returned report shape. By
@@ -210,27 +214,38 @@ effects during replay. Repeated report reads do not rerun execution callbacks.
 Nonreplayable hosts/presenters require an exact adapter or an explicit refusal;
 no metric may be silently omitted.
 
-Transport selection is `--report-mode FULL|SUMMARY_ONLY|STREAMED`. A missing
-provider must refuse before execution with `report_mode_unsupported`, args
+`docker/run_json.py` accepts `--report-mode FULL|SUMMARY_ONLY|STREAMED`.
+Omitting the option and passing `--report-mode FULL` both use the legacy
+run/report API. FULL adds no `report_contract` or `report_capture` to the
+document and no `report_contract`, `report_mode` or `sequence_capture` to
+`applied_runtime` or fingerprinted `provenance.runtime`. It retains the
+existing fingerprint behavior, including version/schema **2** for
+selected-window reports, rather than selecting version 3.
+
+This ctypes host has no envelope provider bridge. It refuses SUMMARY_ONLY
+and STREAMED before reading feeds, loading a library or creating a handle,
+with `report_mode_unsupported`, args
 `{"mode":"SUMMARY_ONLY","contract":"pineforge-report/v1"}` for that request,
 and diagnostic `unsupported report mode: SUMMARY_ONLY`. It must never return
 FULL, accept an empty legacy array as evidence, or ignore the requested mode.
 
-Explicit-mode JSON includes `report_contract: "pineforge-report/v1"` and
+For a transport with a negotiated envelope provider, versioned JSON must
+include `report_contract: "pineforge-report/v1"` and
 `report_capture`, containing `version`, the mode name, `complete`, and all
 seven sequence objects above. Flags become JSON booleans; `struct_size` is
 C-only. Existing metric keys, including `sharpe_tv` / `sortino_tv`, remain.
 Empty arrays in SUMMARY_ONLY always accompany this explicit capture metadata.
 STREAMED JSON may serialize complete sequences through bounded iterators.
 
-Explicit modes also add `report_contract`, `report_mode`, and
-`sequence_capture` to `applied_runtime` and fingerprinted `provenance.runtime`.
+That provider's versioned reports also add `report_contract`, `report_mode`,
+and `sequence_capture` to `applied_runtime` and fingerprinted `provenance.runtime`.
 `sequence_capture` is false for SUMMARY_ONLY and true for FULL/STREAMED.
 Both `fingerprint.version` and `fingerprint.provenance.schema_version` become
 **3**. These policy/version bytes change the canonical provenance token and
-digest; legacy fingerprint byte identity is not promised. Legacy invocations
-keep their existing envelope/fingerprint behavior. Execution identity and
-broker/source hash leaves retain their existing definitions.
+digest; legacy fingerprint byte identity is not promised. Legacy invocations,
+including `run_json.py --report-mode FULL`, keep their existing
+envelope/fingerprint behavior. Execution identity and broker/source hash
+leaves retain their existing definitions.
 
 ### Value/page/visitor readers {#report_readers_v1}
 
@@ -276,7 +291,8 @@ runtime support and add no C export, mode or envelope-version change.
 is an accepted combination on a sink-v1 library. It returns the selected
 report projected to summary JSON, with complete sequences in the named sink.
 The [selected-window named-sink contract](../design/o1-report-contract.md#o1_selected_window_named_sink_v1)
-defines the file header, record types, ownership, spill directory and failures.
+defines the file header, record types, ownership, filesystem requirements,
+spill directory and failures.
 This transport is independent of the native SUMMARY_ONLY mode.
 
 The existing pin is

@@ -1,5 +1,8 @@
 # O1 report contract, revision 1
 
+<!-- G-02: original review cites docs/pages/report-schema.md:8, :104
+and docs/design/o1-report-contract.md:14. -->
+
 Status: native C++ runtime and consumer contract for 1.7.0. Mode selection
 and envelope reads are implemented in `src/engine_report.cpp`. Exact bounded
 SUMMARY_ONLY still requires an eligible host and a provider for any required
@@ -9,8 +12,9 @@ and remote verification remain separate acceptance gates.
 ## Versions and entry points
 
 The versioned report envelope is `pineforge-report/v1`. Its C data declarations
-live in `<pineforge/report_mode.h>`; the native C++ declarations are
-`ReportMode`, `ReportEnvelopeV1`, `BacktestEngine::set_report_mode_v1` and
+live in `<pineforge/report_mode.h>`; the C++ types `ReportMode` and
+`ReportEnvelopeV1` and the native entry points
+`BacktestEngine::set_report_mode_v1` and
 `BacktestEngine::fill_report_envelope_v1` in `<pineforge/engine.hpp>`.
 The native methods implement mode admission and report assembly, subject to
 the eligibility and completion requirements below.
@@ -44,10 +48,19 @@ sink-v1 support or the presence of this header is insufficient. A provider
 bridge for that loader must be landed with its implementation and inventory
 updates, not advertised by an unimplemented runtime symbol.
 
-Transport spelling is `--report-mode FULL|SUMMARY_ONLY|STREAMED`. No option
-keeps the legacy route. An explicit request must either return the requested
-versioned envelope or fail. Missing provider support, including an old module,
-is the structured failure `report_mode_unsupported` with
+<!-- G-04: original review cites docs/pages/report-schema.md:187, :195-198
+and docs/design/o1-report-contract.md:45-46. -->
+
+Transport spelling is `--report-mode FULL|SUMMARY_ONLY|STREAMED`. In
+`docker/run_json.py`, no option and explicit `--report-mode FULL` both use the
+legacy route; FULL does not request a versioned envelope or change the legacy
+JSON/fingerprint schema. This ctypes host has no envelope provider bridge and
+refuses SUMMARY_ONLY and STREAMED before reading feeds, loading a library or
+creating a handle.
+
+A request for a versioned envelope must either return the requested envelope
+or fail. Missing provider support, including an old module, is the structured
+failure `report_mode_unsupported` with
 `{"mode":"SUMMARY_ONLY","contract":"pineforge-report/v1"}` for that request.
 The diagnostic must contain `unsupported report mode: SUMMARY_ONLY`. Refuse
 before execution; never retry with FULL, drop the option or infer support
@@ -217,6 +230,8 @@ same full arrays; it must not reconstruct an owning full document first.
 
 ## Exact second replay for SUMMARY_ONLY
 
+<!-- G-05: original review cites docs/design/o1-report-contract.md:244. -->
+
 1. Before bar zero, bind the immutable input/spec/parameters, foreign feeds
    and columns, FX, chart calendar/timezone, random/time seeds and initial
    script state to an exact replay provider. A host with uncontrolled
@@ -252,9 +267,14 @@ same full arrays; it must not reconstruct an owning full document first.
    user notification side effects while preserving the internal semantic
    transitions/hash inputs the original pass performed. It never doubles
    processed-bar counters, trades or constants in the returned summary.
-   An error or witness mismatch fails result assembly with
-   `report_result_invalid`, `field="report.replay"`, `reason="witness_mismatch"`
-   for a mismatch; it must not publish pass A as complete or reuse old data.
+   An error or witness mismatch fails result assembly; it must not publish
+   pass A as complete or reuse old data. Preserve applicable catalogued
+   failures. In `docker/run_failure_codes.json`, `report_result_invalid`
+   requires `field` and a `reason` from `nonfinite`, `invalid_unicode`,
+   `column_schema` or `type_schema` only. There is no catalogued reason for a
+   replay witness mismatch; `make_run_failure` rejects undeclared reason
+   values as `engine_invariant` with empty arguments. Keep replay mismatch
+   details in diagnostic text.
 6. Freeze the validated summary. Repeated envelope reads copy it without a
    replay or callbacks. Do not hold the non-recursive metric timezone lock
    across engine dispatch: exact chart-month calculation needs a pure
@@ -402,15 +422,22 @@ does not authorize a historical point lookup in summary mode.
 
 ## JSON envelope and fingerprint
 
-Explicit mode responses add `report_contract: "pineforge-report/v1"` and
+This section specifies a transport with a negotiated `pineforge-report/v1`
+provider. The current `docker/run_json.py` does not emit this envelope:
+explicit FULL uses its legacy route, and SUMMARY_ONLY/STREAMED are refused.
+FULL therefore adds neither the envelope keys nor the runtime policy fields
+below and retains the existing fingerprint versions, including version/schema
+2 for selected-window reports.
+
+Versioned envelope responses add `report_contract: "pineforge-report/v1"` and
 `report_capture`, the JSON rendering of metadata: `version`, mode name,
 `complete`, and the seven sequence objects with `logical_count`, boolean
 `captured` and boolean `external`. C-only `struct_size` is not serialized.
 Legacy invocations add neither key. These versions are independent of
 selected-window wire version 1, phase version 1 and outputs schema v1.
 
-For an explicit mode, write the same fixed policy object to `applied_runtime`
-and fingerprinted `provenance.runtime`:
+For a negotiated envelope mode, write the same fixed policy object to
+`applied_runtime` and fingerprinted `provenance.runtime`:
 
 ```json
 {"report_contract":"pineforge-report/v1","report_mode":"SUMMARY_ONLY","sequence_capture":false}
@@ -418,12 +445,13 @@ and fingerprinted `provenance.runtime`:
 
 `sequence_capture` is true for FULL/STREAMED and false for SUMMARY_ONLY.
 Set both `fingerprint.version` and `fingerprint.provenance.schema_version` to
-**3** for these explicit-mode reports, ordinary and selected alike. Retain the
+**3** for reports using this envelope, ordinary and selected alike. Retain the
 existing canonical JSON/hash algorithm. The added policy/version bytes change
 the fingerprint/token/digest; equality with the legacy fingerprint is not
-promised. Legacy unrequested reports retain their existing versions and
-bytes. Input/execution identity and broker/source hash leaves stay unchanged;
-the output-envelope change is not permission to change them. New durable
+promised. Legacy reports, including `run_json.py --report-mode FULL`, retain
+their existing versions and bytes. Input/execution identity and broker/source
+hash leaves stay unchanged; the output-envelope change is not permission to
+change them. New durable
 execution state introduced by implementation must be hashed or have a named,
 reviewed output-only waiver.
 
@@ -505,11 +533,26 @@ The trailer has `trailer` (`"pf-report-sink"`), `version` (`1`), `counts` and
 digest. Before preparing the JSON, the harness checks the entire file,
 `run_id`, and the engine's complete sink receipt, including trade count.
 
-The engine creates or truncates `PATH` when it writes the header
-(`O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC`); the harness passes the named path
-without first creating a temporary sink. The named file persists for the
-caller after report/state cleanup. `--run-id` is an opaque caller identifier,
-not a generated ID. `--spill-dir DIR` supplies the engine's `scratch_dir` and
+<!-- G-06: original review cites docs/design/o1-report-contract.md:496. -->
+
+`report_sink::LineWriter::write_header` opens `PATH` with
+`O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC`, then calls its state's `uncached()`
+before publishing the header. The harness passes the named path without
+first creating a temporary sink.
+
+`PATH` must resolve to a regular file on a filesystem supporting uncached I/O.
+On Linux, `uncached()` rejects tmpfs and ramfs and enables `O_DIRECT`.
+Paths on those filesystems, such as `/dev/shm` or a tmpfs-mounted `/tmp`,
+are unsupported.
+On macOS it enables `F_NOCACHE`. On other platforms it fails with `ENOTSUP`.
+FIFOs are not valid path sinks. File validation or uncached-I/O setup failure
+at run begin raises `report_sink_failed` with `reason="sink_io"`, before any
+header is published. The file may already have been created or truncated by
+the preceding open.
+
+The named file persists for the caller after report/state cleanup.
+`--run-id` is an opaque caller identifier, not a generated ID.
+`--spill-dir DIR` supplies the engine's `scratch_dir` and
 the directory for one unlinked, prepared JSON document. The harness serializes
 and flushes that document before publishing any report bytes, and publishes
 after native cleanup succeeds. It creates no per-output column temporaries
@@ -535,8 +578,9 @@ See the [JSON field types and presence table](../pages/report-schema.md#report_s
 
 ## Integration and ABI inventory
 
-This slice adds data types and C++ method declarations only: **zero** new
-`PF_API` declarations/definitions and no runtime storage/behavior.
+The envelope and reader interfaces add **zero** new `PF_API`
+declarations/definitions. The native mode setter and envelope reader are
+implemented C++ methods, as described above.
 `include/pineforge/pineforge.h` has 102 public declarations.
 `scripts/check_c_abi_runtime.py` pins 113 declarations across its four
 `RUNTIME_HEADERS` and 93 runtime implementations; `scripts/test_ci_verify.py`
