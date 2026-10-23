@@ -1353,6 +1353,35 @@ private:
     std::vector<RequestHandle> rows_;
 };
 
+// A refused request's external openings, copied out of the caller's readback
+// while the command that refuses it still runs. That readback (an
+// OpeningInputCursor, say) is call-local and never retained (native_order.hpp,
+// OpeningInputCursor), yet the journal keeps the request and reads its list
+// again whenever it pages the event, long after the call. The copy is the
+// list as the readback answered it, in its order, up to the first index it
+// could not read, and never validated (a refusal can be for those very
+// handles); the event pages and reloads as that same list (archive_refused).
+// A list the core itself froze or stored is immutable and owned by the core,
+// so it is kept as it is. Called before the command's no-throw point: the
+// copy can only fail to allocate, and then nothing has changed.
+void snapshot_refused_openings(Request& request) {
+    auto* bind = std::get_if<BindOpenings>(&request.owner);
+    if (!bind || !bind->external_openings) return;
+    const OpeningReadback& given = *bind->external_openings;
+    if (dynamic_cast<const FrozenOpenings*>(&given)
+        || dynamic_cast<const StoredOpenings*>(&given)) {
+        return;
+    }
+    std::vector<RequestHandle> rows;
+    const std::uint64_t count = given.count();
+    for (std::uint64_t index = 0; index != count; ++index) {
+        RequestHandle opening;
+        if (given.opening_at(index, opening) != ReadStatus::ok) break;
+        rows.push_back(opening);
+    }
+    bind->external_openings = std::make_shared<StoredOpenings>(std::move(rows));
+}
+
 // A request the core refused (RejectedEvent, ReplaceRejectedEvent,
 // NotWorkingEvent, InvalidHandleEvent) is journaled as it was given, before
 // any freeze: a reload reads its external openings back as stored.
@@ -1378,7 +1407,11 @@ void archive_refused(Ar& ar, T& item) {
 // the list again, so a spilled row or a paged event keeps its membership
 // rather than coming back with none; DefinitionMatchAr compares the same
 // bytes, so a resident definition is reused only when its list is this one.
-// A refused request's list was never frozen and is read back as stored.
+// A refused request's list was never frozen and is read back as stored; it
+// was copied when its event was built (snapshot_refused_openings), so what is
+// written here is never read through a caller's cursor. Each opening takes
+// 24 bytes inline: see JournalStore::kSpillPageBytes for the list length past
+// which an event cannot be paged.
 template <class Ar>
 void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& external) {
     std::uint64_t count = 0;
@@ -1679,6 +1712,17 @@ struct WorkingRequestCore::JournalStore {
     // SelectedExposure incarnations and TermsResolvedEvent/QuantityBoundEvent
     // adjustment-id vectors have no finite schema bound. A full page closes
     // before the next event; no per-event size estimate is used.
+    // The external openings of a BindOpenings/OpeningsClose are written inline
+    // too (archive_external_openings): 8 bytes of count, then 24 per opening
+    // (sizeof(RequestHandle)). So an event whose request or definition names
+    // about 1,360 or more external openings, accepted or refused, cannot be
+    // paged: the spill below refuses it with that EFBIG, typed, in the
+    // throwing phase of the command that needs the room (make_room, from
+    // reserve_plan and seal_direct), and nothing changes; the event stays
+    // resident, so every later command that must page past it is refused the
+    // same way. This bound is documented, not lifted (lane b1 round 4, N-02):
+    // an event the journal never pages is never refused, so a journal that
+    // stays within kMaxResident events behaves exactly as before.
     static constexpr std::size_t kSpillPageBytes = 32768;
     static_assert(sizeof(uint32_t) == 4 && sizeof(uint64_t) == 8,
                   "journal event tag/ordinal byte widths");
@@ -4477,6 +4521,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
     auto impl = std::make_unique<PreparedSubmit::Impl>();
     if (reason) {
         impl->result = SubmitResult{SubmitStatus::Rejected, ordinal, std::nullopt, reason};
+        snapshot_refused_openings(staged);
         plan.events.emplace_back(
                 RejectedEvent{ordinal, std::move(staged), *reason, context.surface});
         seal_plan(plan);
@@ -4526,6 +4571,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
                 ? ReplaceStatus::InvalidHandle
                 : ReplaceStatus::NotWorking;
         impl->result = ReplaceResult{status, ordinal, std::nullopt, std::nullopt};
+        snapshot_refused_openings(staged);
         if (kind == TargetKind::InvalidHandle) {
             plan.events.emplace_back(InvalidHandleEvent{ordinal, std::move(staged_target),
                                                         std::move(staged), context.surface});
@@ -4566,6 +4612,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
     }
     if (reason) {
         impl->result = ReplaceResult{ReplaceStatus::ReplaceRejected, ordinal, std::nullopt, reason};
+        snapshot_refused_openings(staged);
         ReplaceRejectedEvent rejected;
         rejected.ordinal = ordinal;
         rejected.live_definition = live_[live_index].definition;
@@ -4740,6 +4787,7 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
     if (!reason) reason = resolve_tick_spellings(staged, context);
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
     if (reason) {
+        snapshot_refused_openings(staged);
         RejectedEvent rejected{ordinal, std::move(staged), *reason, context.surface};
         seal_direct(1, false, false, false);
         const std::size_t first = history_end();
@@ -4786,7 +4834,9 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         const ReplaceStatus status = kind == TargetKind::InvalidHandle
                 ? ReplaceStatus::InvalidHandle
                 : ReplaceStatus::NotWorking;
-        // Both events are built by moves alone, so the seal may come first.
+        // The refused request's openings are copied before the seal; both
+        // events are then built by moves alone, so the seal may come first.
+        snapshot_refused_openings(staged);
         seal_direct(1, false, false, false);
         const std::size_t first = history_end();
         if (kind == TargetKind::InvalidHandle) {
@@ -4825,6 +4875,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         }
     }
     if (reason) {
+        snapshot_refused_openings(staged);
         ReplaceRejectedEvent rejected;
         rejected.ordinal = ordinal;
         rejected.live_definition = live_[live_index].definition;

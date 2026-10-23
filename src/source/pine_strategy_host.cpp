@@ -471,9 +471,14 @@ std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
     // continuation. Recording only controls whether the per-bar array is
     // retained; the continuation snapshot keeps the scalar independent of
     // that switch and of NativeCompleted teardown.
-    const std::uint64_t execution = last_script_continuation_valid_
-        ? last_script_continuation_hash_
-        : execution_consumer().continuation_hash();
+    if (last_script_continuation_valid_) {
+        return broker_state_hash_from_execution_hash(last_script_continuation_hash_);
+    }
+    const std::uint64_t execution = execution_consumer().continuation_hash();
+    // The fold cannot throw: a read of the spilled book that failed inside it
+    // was carried by the core and is thrown here, never folded as a hash it
+    // cut short.
+    as_native_consumer(execution_consumer()).request_core().rethrow_book_read_failure();
     return broker_state_hash_from_execution_hash(execution);
 }
 
@@ -860,7 +865,12 @@ std::int64_t source::PineStrategyHost::symbol_calendar_open_from(std::int64_t at
 void source::PineStrategyHost::capture_script_continuation_hash() {
     // Taken at once: since v19 the fold is the live state alone, which is what
     // a deferred view would have recorded word for word (R5 lane V19-A).
-    last_script_continuation_hash_ = execution_consumer().continuation_hash();
+    const std::uint64_t execution = execution_consumer().continuation_hash();
+    // A read of the spilled book that failed inside the noexcept fold is
+    // thrown here, before the hash it cut short is latched as valid; the
+    // latch keeps what it held.
+    as_native_consumer(execution_consumer()).request_core().rethrow_book_read_failure();
+    last_script_continuation_hash_ = execution;
     last_script_continuation_valid_ = true;
     if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
         broker_state_hashes_.back() = broker_state_hash();
@@ -3236,7 +3246,11 @@ void source::PineStrategyHost::scheduler_mark_report_point(std::int64_t script_b
 
 void source::PineStrategyHost::scheduler_record_broker_hash() {
     if (!broker_state_hash_recording_) return;
-    last_script_continuation_hash_ = execution_consumer().continuation_hash();
+    const std::uint64_t execution = execution_consumer().continuation_hash();
+    // As capture_script_continuation_hash: a carried read failure is thrown
+    // before the cut hash is latched or recorded as a row.
+    as_native_consumer(execution_consumer()).request_core().rethrow_book_read_failure();
+    last_script_continuation_hash_ = execution;
     last_script_continuation_valid_ = true;
     broker_state_hashes_.push_back(broker_state_hash());
 }

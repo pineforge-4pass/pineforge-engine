@@ -28,7 +28,14 @@
 #include <vector>
 
 namespace pineforge::detail { class ScratchSlab; }
-namespace pineforge { class NativeExecutionConsumer; }
+// The matcher (src/native_execution_consumer.hpp) is declared in the engine
+// epoch, as run_failure.hpp and execution_consumer.hpp declare epoch classes,
+// so the friends below name that one class and no other.
+namespace pineforge {
+inline namespace engine_script_run_v19 {
+class NativeExecutionConsumer;
+}
+}
 
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
@@ -2298,7 +2305,7 @@ private:
     friend class PreparedExecution;
     // The matcher reuses a row it scanned outside the heap through the place
     // its walk found the row at (book_generation, hold_scanned below).
-    friend class ::pineforge::NativeExecutionConsumer;
+    friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
 
     static void require_identity(const RunIdentity& identity);
     static void require_grid(std::optional<double> quantity_grid);
@@ -2844,7 +2851,7 @@ public:
 
     private:
         friend class LiveView;
-        friend class ::pineforge::NativeExecutionConsumer;
+        friend class ::pineforge::engine_script_run_v19::NativeExecutionConsumer;
         const_iterator(const WorkingRequestCore* core, BookCursor cursor) noexcept
             : core_(core), cursor_(cursor) {}
         // The spilled table's offset of the row the iterator stands on, 0

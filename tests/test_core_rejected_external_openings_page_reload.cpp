@@ -19,6 +19,14 @@
 // throw, as the request it recorded: the same label and the same handles in
 // the same order.
 //
+// Round 4 (verifier N-01): the list is the caller's, and the header makes it
+// call-local (OpeningInputCursor: neither the object nor its context is
+// retained). So once each refusing call has returned, the caller reuses its
+// list (here: overwrites every handle), and the journal must still read back
+// what was given at the call, resident and paged. Before the round-4 fix the
+// event kept the caller's object: the resident read answered the overwritten
+// handles, and the page was written from them.
+//
 // Previous-epoch API only, so this TU compiles against the unfixed head.
 #include <pineforge/native_order.hpp>
 
@@ -76,6 +84,7 @@ struct Refused {
     std::string label;
     std::vector<no::RequestHandle> handles;
     std::size_t at = 0;       // the RejectedEvent's journal position
+    std::shared_ptr<Listed> caller;   // the caller's own list object
 };
 
 struct Core {
@@ -100,7 +109,8 @@ struct Core {
     // refuses it and journals it as given.
     void submit_refused(Refused& refused) {
         no::Request close{no::Reduce{no::ExplicitUnits{1}}, refused.label, "external"};
-        close.owner = no::BindOpenings{{}, 7, std::make_shared<Listed>(refused.handles)};
+        refused.caller = std::make_shared<Listed>(refused.handles);
+        close.owner = no::BindOpenings{{}, 7, refused.caller};
         advance();
         const auto result = core.submit(close, 0, incarnation, ordinal);
         REQUIRE(result.status == no::SubmitStatus::Rejected);
@@ -147,6 +157,13 @@ void refused_openings_read_back_as_journaled() {
     };
     for (Refused& row : refused) c.submit_refused(row);
     // Resident, every refused event reads back as given (a precondition).
+    for (const Refused& row : refused) check_reads_back(c, row);
+
+    // Every refusing call has returned: the caller reuses its lists. The
+    // journal holds what was given at the call, not the caller's object.
+    for (Refused& row : refused) {
+        for (auto& handle : row.caller->rows) handle = no::RequestHandle{other, 99};
+    }
     for (const Refused& row : refused) check_reads_back(c, row);
 
     // More than the journal's resident bound of events after them: the

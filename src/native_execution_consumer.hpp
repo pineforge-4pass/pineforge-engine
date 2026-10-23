@@ -936,13 +936,16 @@ private:
 
     // One candidate of match_path's winner selection at its current cursor.
     // `live_index` is the request's position in the working book when the row
-    // was scanned: nothing mutates the book between a scan and the reuse of
-    // its rows, so it names the request without a handle search. A request
-    // the scan found outside the heap is named by where the scan read it
-    // instead -- its entry in the book's spilled table (`book_at`, 0 for a
-    // resident row) under the table's generation then -- since the refresh a
-    // reuse follows moves rows in the heap but leaves every table entry where
-    // it is, unless it rebuilds the table, which raises the generation.
+    // was scanned: in a book that is all resident a refresh updates its row in
+    // place, so the index names the request without a handle search. Once the
+    // book spills, the refresh a reuse follows moves rows in and out of the
+    // heap, so a request the scan found outside the heap is named by where the
+    // scan read it instead -- its entry in the book's spilled table
+    // (`book_at`, 0 for a resident row) under the table's generation then --
+    // since a refresh leaves every table entry where it is, unless it rebuilds
+    // the table, which raises the generation. A request the scan found
+    // resident is found by its handle at the reuse, by a keyed search if the
+    // refresh chain has spilled it since (match_path, scanned_request).
     enum class MatchKind : std::uint8_t {
         Evaluate = 0,
         ActivateStop = 1,

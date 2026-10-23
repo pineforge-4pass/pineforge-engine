@@ -659,11 +659,23 @@ PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on) {
  * selected-window fence refuses (strategy_state_query_status_v1 names it):
  * the C++ path throws that refusal, so it is prechecked here and never
  * unwinds through C. A caller that needs a sealed selected run's terminal
- * witness enables recording before the run and reads the last recorded row. */
+ * witness enables recording before the run and reads the last recorded row.
+ * Any other failure of the read (a spilled book that can no longer be read
+ * back) also answers 0, never a hash it cut short, and is noted beside the
+ * handle for strategy_get_last_error / _code, as the int entry points note a
+ * refusal: nothing unwinds through C. */
 PF_API uint64_t strategy_broker_state_hash(pf_strategy_t s) {
     if (!s) return 0;
     if (strategy_state_query_status_v1(s) != PF_STATE_QUERY_ALLOWED_V1) return 0;
-    return static_cast<const pineforge::BacktestEngine*>(s)->broker_state_hash();
+    try {
+        return static_cast<const pineforge::BacktestEngine*>(s)->broker_state_hash();
+    } catch (const std::exception& error) {
+        note_cabi_refusal(s, &error);
+        return 0;
+    } catch (...) {
+        note_cabi_refusal(s, nullptr);
+        return 0;
+    }
 }
 
 /* The current eligibility of both state queries on @p s (broker-state hash
@@ -828,11 +840,21 @@ PF_API void strategy_stream_order_actions_clear(pf_strategy_t s) {
 /* Returns 0 for NULL and for a read the selected-window fence refuses, the
  * same precheck as strategy_broker_state_hash: the refusal is a C++ exception
  * and never crosses this boundary. A broker-state row is not a stream-token
- * value, so a refused read of this token leaves no recorded witness. */
+ * value, so a refused read of this token leaves no recorded witness. The
+ * token folds broker_state_hash(), so a failed read of the spilled book
+ * answers 0 here too, noted as strategy_broker_state_hash notes it. */
 PF_API uint64_t strategy_stream_state_hash(pf_strategy_t s) {
     if (!s) return 0;
     if (strategy_state_query_status_v1(s) != PF_STATE_QUERY_ALLOWED_V1) return 0;
-    return static_cast<const pineforge::BacktestEngine*>(s)->stream_state_hash();
+    try {
+        return static_cast<const pineforge::BacktestEngine*>(s)->stream_state_hash();
+    } catch (const std::exception& error) {
+        note_cabi_refusal(s, &error);
+        return 0;
+    } catch (...) {
+        note_cabi_refusal(s, nullptr);
+        return 0;
+    }
 }
 
 PF_API int strategy_stream_push_tick(pf_strategy_t s,

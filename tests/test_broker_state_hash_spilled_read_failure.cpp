@@ -1,34 +1,51 @@
-// 1.7.0 review F-03 (argon cross-read of lane b1): a read of the spilled book
-// that fails inside the noexcept continuation fold under broker_state_hash()
-// ends the run with the typed scratch failure; it is never answered as a hash
-// the failed read cut short, and a run whose report the host records does not
-// complete with status 0 over it.
+// 1.7.0 review F-03 (argon cross-read of lane b1; verifier rev-read-verifyb1):
+// a read of the spilled book that fails inside the noexcept continuation fold
+// is never answered as a hash the failed read cut short, by any reader of the
+// fold: it ends the run with the typed scratch failure, or, after the run,
+// answers the typed failure of the read.
 //
 // broker_state_hash() folds the continuation hash, which walks the whole live
 // book; with no script point latched (always so under the default
-// NativeReportPolicy::HostRecorded) NativeStrategyHost's projection computes
-// it then. Round 1 made the fold carry a failed spilled read to the core
-// instead of meeting noexcept, but the projection never threw it back: the
-// caller got the truncated hash. record_script_report_point, the first
-// throwing point after every script calculation, threw a carried failure only
-// under KernelRecorded and returned before it under every other policy.
+// NativeReportPolicy::HostRecorded) the host's projection computes it then.
+// Round 1 made the fold carry a failed spilled read to the core instead of
+// meeting noexcept, but the readers never threw it back: the caller got the
+// truncated hash. record_script_report_point, the first throwing point after
+// every script calculation, threw a carried failure only under KernelRecorded
+// and returned before it under every other policy. Round 3 fixed the native
+// host's projection and that report point; the base engine's projection
+// (BacktestEngine::broker_state_hash_projection) still folded with no rethrow,
+// and the C entry points had no exception barrier, so a query after the run
+// unwound through C.
 //
 // Fault injection is test_continuation_hash_spilled_read_failure's: the
 // book's first spill opens unlinked scratch files this process holds, found
 // as the descriptors that appear across the submit that makes it, and
 // truncating them makes every later read short (EIO). The test opens no path.
 //
-// The run: bar 1 places 4,200 resting buy limits (the book spills); the last
-// bar's callback truncates the spill files and asks for broker_state_hash().
-// Default row: the call must not return, and the run must end Failed with
-// scratch_io_failed. `--swallowed` row: the host catches whatever the call
-// throws and returns normally, as a host may; the failure is still carried,
-// so the bar's report point must end the run Failed with scratch_io_failed
-// instead of letting it complete.
+// The run: bar 1 places 4,200 resting buy limits (the book spills). Rows:
+//   default            the last bar's callback truncates the spill files and
+//                      asks for broker_state_hash(): the call must not return,
+//                      and the run must end Failed with scratch_io_failed.
+//   --swallowed        the same, but the host catches whatever the call
+//                      throws and returns normally, as a host may; the failure
+//                      is still carried, so the bar's report point must end
+//                      the run Failed with scratch_io_failed.
+//   --base-projection  the callback asks the base engine's projection
+//                      (BacktestEngine::broker_state_hash_projection, the
+//                      generic fold a host reaches as its base): the same
+//                      answer as the default row.
+//   --c-entry          the run completes over a readable book; then the spill
+//                      files are truncated and the C entry points
+//                      strategy_broker_state_hash and strategy_stream_state_hash
+//                      are asked: neither may let an exception out, each
+//                      answers 0, and the handle's failure record names
+//                      scratch_io_failed.
 //
-// Source-free, and only the public NativeStrategyHost API of the previous
-// epoch, so this TU compiles against the unfixed head; there the hash is
-// answered and the run completes (both rows fail).
+// Only the public NativeStrategyHost API and the public C API of the previous
+// epoch, so this TU compiles against the unfixed head; there the default and
+// the swallowed row fail at c7e3cc256, the base-projection row answers the
+// hash, and the C entry points let the typed failure unwind out of C.
+#include <pineforge/pineforge.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
 
@@ -66,6 +83,8 @@ constexpr std::size_t kResidentRows = 4096;
 constexpr std::size_t kRows = 4200;
 constexpr int kBars = 3;
 
+enum class Mode { Hash, Swallowed, BaseProjection, CEntry };
+
 // The unlinked regular files among this process's low descriptors: the
 // scratch files (mkstemp, then unlink) the kernel holds open.
 std::vector<int> unlinked_descriptors() {
@@ -89,15 +108,22 @@ no::Request limit_buy(double price) {
 
 class FaultHost final : public NativeStrategyHost {
 public:
-    explicit FaultHost(bool swallow) : swallow_(swallow) {}
+    explicit FaultHost(Mode mode) : mode_(mode) {}
 
     std::vector<int> spill_files;     // the descriptors the book's first spill opened
     std::size_t book = 0;
     std::size_t rejected = 0;
     bool injected = false;
     bool asked = false;               // the last bar's callback reached the call
-    bool hash_answered = false;       // broker_state_hash() returned after the fault
+    bool hash_answered = false;       // the projection returned after the fault
     bool swallowed = false;           // it threw, and this host caught it
+
+    // From here on every read of the book's spill files is short.
+    void inject() {
+        for (const int fd : spill_files) {
+            if (::ftruncate(fd, 0) == 0) injected = true;
+        }
+    }
 
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         ++bar_;
@@ -119,31 +145,35 @@ public:
             book = native_working_requests().size();
             return;
         }
-        if (bar_ == kBars && !spill_files.empty()) {
-            // From here on every read of the book's spill files is short.
-            for (const int fd : spill_files) {
-                if (::ftruncate(fd, 0) == 0) injected = true;
-            }
-            asked = true;
-            // No script point is latched under HostRecorded, so the
-            // projection folds the continuation now and meets the failed
-            // read. Fixed, the failure comes back to this caller, typed.
-            if (!swallow_) {
-                (void) broker_state_hash();
-                hash_answered = true;
-                return;
-            }
-            try {
-                (void) broker_state_hash();
-                hash_answered = true;
-            } catch (...) {
-                swallowed = true;
-            }
+        // The C entry row reads after the run, over a book the run read whole.
+        if (bar_ != kBars || spill_files.empty() || mode_ == Mode::CEntry) return;
+        inject();
+        asked = true;
+        // No script point is latched under HostRecorded, so the projection
+        // folds the continuation now and meets the failed read. Fixed, the
+        // failure comes back to this caller, typed.
+        if (mode_ == Mode::Hash) {
+            (void) broker_state_hash();
+            hash_answered = true;
+            return;
+        }
+        if (mode_ == Mode::BaseProjection) {
+            // The generic projection, which a host that overrides none folds
+            // through, called on this host as its base.
+            (void) BacktestEngine::broker_state_hash_projection();
+            hash_answered = true;
+            return;
+        }
+        try {
+            (void) broker_state_hash();
+            hash_answered = true;
+        } catch (...) {
+            swallowed = true;
         }
     }
 
 private:
-    bool swallow_;
+    Mode mode_;
     int bar_ = 0;
 };
 
@@ -182,41 +212,83 @@ NativeRunSpec spec() {
     return spec;
 }
 
+void check_failure_code(const FaultHost& host) {
+    const RunFailureValue failure = run_failure_value_of(host);
+    if (failure.code != RunFailureCode::scratch_io_failed) {
+        std::fprintf(stderr, "run failure %s: %s\n", run_failure_code_name(failure.code),
+                     host.last_error().c_str());
+    }
+    CHECK(failure.code == RunFailureCode::scratch_io_failed);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool swallow = argc > 1 && std::strcmp(argv[1], "--swallowed") == 0;
+    Mode mode = Mode::Hash;
+    const char* row = "";
+    if (argc > 1 && std::strcmp(argv[1], "--swallowed") == 0) {
+        mode = Mode::Swallowed;
+        row = " --swallowed";
+    } else if (argc > 1 && std::strcmp(argv[1], "--base-projection") == 0) {
+        mode = Mode::BaseProjection;
+        row = " --base-projection";
+    } else if (argc > 1 && std::strcmp(argv[1], "--c-entry") == 0) {
+        mode = Mode::CEntry;
+        row = " --c-entry";
+    }
     try {
-        FaultHost host(swallow);
+        FaultHost host(mode);
         const auto setup = host.configure_native(spec());
         CHECK(setup.status == NativeSetupStatus::Applied);
         const std::vector<Bar> bars = tape();
         host.run(bars.data(), static_cast<int>(bars.size()));
-        // Setup: the book spilled, its first spill opened scratch files this
-        // process holds, the fault was injected into them, and the last bar's
-        // callback asked for the hash.
+        // Setup: the book spilled, and its first spill opened scratch files
+        // this process holds.
         CHECK(host.rejected == 0);
         CHECK(host.book == kRows);
         CHECK(host.book > kResidentRows);
         CHECK(!host.spill_files.empty());
-        CHECK(host.injected);
-        CHECK(host.asked);
-        // The hash cut short by the failed read is never answered.
-        CHECK(!host.hash_answered);
-        if (swallow) CHECK(host.swallowed);
-        // The run ends with the typed failure, not status 0.
-        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
-        const RunFailureValue failure = run_failure_value_of(host);
-        if (failure.code != RunFailureCode::scratch_io_failed) {
-            std::fprintf(stderr, "run failure %s: %s\n", run_failure_code_name(failure.code),
-                         host.last_error().c_str());
+        if (mode == Mode::CEntry) {
+            // The run read a healthy book to the end; the book stays live
+            // after it, until the next run begins.
+            CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+            host.inject();
+            CHECK(host.injected);
+            bool escaped = false;
+            std::uint64_t broker = 1;
+            std::uint64_t stream = 1;
+            try {
+                broker = strategy_broker_state_hash(static_cast<BacktestEngine*>(&host));
+            } catch (...) {
+                escaped = true;
+            }
+            try {
+                stream = strategy_stream_state_hash(static_cast<BacktestEngine*>(&host));
+            } catch (...) {
+                escaped = true;
+            }
+            // Nothing unwinds through C; the cut hash is not the answer; the
+            // failed read is the handle's typed failure.
+            CHECK(!escaped);
+            CHECK(broker == 0);
+            CHECK(stream == 0);
+            check_failure_code(host);
+        } else {
+            // The fault was injected and the last bar's callback asked.
+            CHECK(host.injected);
+            CHECK(host.asked);
+            // The hash cut short by the failed read is never answered.
+            CHECK(!host.hash_answered);
+            if (mode == Mode::Swallowed) CHECK(host.swallowed);
+            // The run ends with the typed failure, not status 0.
+            CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+            check_failure_code(host);
         }
-        CHECK(failure.code == RunFailureCode::scratch_io_failed);
     } catch (const std::exception& error) {
         ++failures;
         std::fprintf(stderr, "broker state hash read failure: %s\n", error.what());
     }
     std::printf("test_broker_state_hash_spilled_read_failure%s: %d checks, %d failures\n",
-                swallow ? " --swallowed" : "", checks, failures);
+                row, checks, failures);
     return failures == 0 ? 0 : 1;
 }
