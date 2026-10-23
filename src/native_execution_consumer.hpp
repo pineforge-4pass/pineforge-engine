@@ -114,6 +114,13 @@ public:
     // live store. It preserves existing post-run hash bytes without a backing.
     std::optional<CommandScratchSnapshot> released_command_scratch(
         CommandScratchBinding) const noexcept;
+    // Surface carried backing failures before callers fold a released digest.
+    void rethrow_released_command_scratch_failure(CommandScratchBinding binding) const {
+        const auto released = released_command_scratch(binding);
+        if (released && released->status == detail::ScratchStatus::io_error)
+            detail::rethrow_carried_scratch_failure(
+                released->failure ? &*released->failure : nullptr);
+    }
 
     // The digests the spec fold takes of the run spec's three bar arrays
     // (intrabar path, declared series, auxiliary feed). See spec_bar_digests_.

@@ -18,7 +18,7 @@ static_assert(kCommandScratchArenaShare.num > 0
               && kCommandScratchArenaShare.num <= kCommandScratchArenaShare.den,
               "command arena share must be in (0, 1]");
 
-// max(C, floor_to_chunk(f * supplied bytes)), C = ScratchArena::kChunkBytes,
+// f * supplied bytes rounded down to whole chunks, with a one-chunk minimum,
 // evaluated at backing construction. ScratchArena rejects sub-chunk or
 // unrepresentable backing sizes with typed arena_backing before stores open.
 std::uint64_t command_scratch_arena_capacity_bytes(std::uint64_t arena_bytes) noexcept;
@@ -51,10 +51,10 @@ ScratchStatus command_scratch_io_status(int error) noexcept;
 // Fresh, exclusive, initially empty backing. With an explicitly attached arena,
 // command-store bytes scale with LIVE commands/exits/lots (pending orders,
 // open lots and dependency fan-out), not window length or trade count. Each
-// store has K = max(C, floor_to_chunk(f * stats().bytes_supplied)), fixed at
+// store's K is f * supplied bytes rounded down to chunks, at least C, fixed at
 // open, where f = kCommandScratchArenaShare and C is one arena chunk. The
-// three stores' one-chunk floors account for +3C in the host's bound
-// A = chunkCeil(ceil(B / (1 - 3f))) + 3C. Reserve the entire K/chunk directory
+// three stores are reserved exactly in the host's bound (arena-bound.md):
+// A = (b + 3q) C, b = ceil(B / C) + 14, q = max(1, (b - 3) / 13) with integer division. Reserve the entire K/chunk directory
 // once at construction. No private file or sizing syscall is used; the
 // attachment must outlive the backing. Buffered sync is
 // supported; data/full return programming_error. Arena faults return io_error

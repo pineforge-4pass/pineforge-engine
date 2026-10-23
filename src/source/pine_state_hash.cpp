@@ -54,16 +54,12 @@ void hash_source_run_identity(BrokerStateHashSink& f,
     f.u(0);
 }
 void hash_scratch_digest(BrokerStateHashSink& f,
-                         ::pineforge::detail::ScratchStatus status, std::uint64_t digest,
-                         const ::pineforge::detail::ReportScratchIoError* failure = nullptr) {
-    if (status != ::pineforge::detail::ScratchStatus::ok) {
-        if (status == ::pineforge::detail::ScratchStatus::io_error)
-            ::pineforge::detail::rethrow_carried_scratch_failure(failure);
+                         ::pineforge::detail::ScratchStatus status, std::uint64_t digest) {
+    if (status != ::pineforge::detail::ScratchStatus::ok)
         throw coded<std::logic_error>(
             status == ::pineforge::detail::ScratchStatus::io_error
                 ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
             {}, "scratch state digest failed");
-    }
     f.u(digest);
 }
 void hash_scratch_store(BrokerStateHashSink& f,
@@ -76,7 +72,9 @@ void hash_scratch_store(BrokerStateHashSink& f,
     std::vector<std::byte> page(store->page_size());
     std::uint64_t digest = 0;
     const auto status = store->state_digest({page.data(), page.size()}, digest);
-    hash_scratch_digest(f, status, digest, store->carried_failure());
+    if (status == ::pineforge::detail::ScratchStatus::io_error)
+        ::pineforge::detail::rethrow_carried_scratch_failure(store->carried_failure());
+    hash_scratch_digest(f, status, digest);
 }
 void hash_exit_scratch(BrokerStateHashSink& f,
                        const source::detail::ExitScratchContext* scratch) {
@@ -1132,14 +1130,16 @@ void hash_selected_intents(BrokerStateHashSink& f, const source::detail::PineInt
 
 void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
+    if (!trade_scratch_)
+        NativeExecutionConsumer::bound(*this).rethrow_released_command_scratch_failure(
+            NativeExecutionConsumer::CommandScratchBinding::Trade);
     const auto released = NativeExecutionConsumer::bound(*this).released_command_scratch(
         NativeExecutionConsumer::CommandScratchBinding::Trade);
     if (!trade_scratch_ && released) {
         // Preserve the live store's exact presence/digest bytes after its
         // run-owned backing is released. This is no additional hash field.
         f.b(true);
-        hash_scratch_digest(f, released->status, released->digest,
-                            released->failure ? &*released->failure : nullptr);
+        hash_scratch_digest(f, released->status, released->digest);
     } else {
         hash_scratch_store(f, trade_scratch_);
     }
