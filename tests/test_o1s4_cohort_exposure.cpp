@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -44,6 +45,8 @@ struct CohortsTag { friend auto access(CohortsTag); };
 template struct PrivateAccess<CohortsTag, &ps::PineExecutionAdapter::cohorts_by_id_>;
 struct FromEntryTag { friend auto access(FromEntryTag); };
 template struct PrivateAccess<FromEntryTag, &ps::PineExecutionAdapter::from_entry_units>;
+struct BracketQueueTag { friend auto access(BracketQueueTag); };
+template struct PrivateAccess<BracketQueueTag, &ps::PineExecutionAdapter::pending_bracket_legs_>;
 
 void equal_bits(double actual, std::uint64_t expected, const char* context) {
     const auto word = ce::bits(actual);
@@ -101,10 +104,9 @@ struct Rig {
     }
 };
 
-no::RunIdentity run_id() { return {"o1s4-e3", 7}; }
-no::RequestHandle handle(std::uint64_t incarnation) { return {run_id(), incarnation}; }
-
 struct Host final : ps::PineStrategyHost {
+    // Keep the borrowed warmup span alive for the entire native run.
+    const Bar warmup{100.0, 101.0, 99.0, 100.0, 1.0, 1736121600000LL};
     ps::PineExecutionAdapter& adapter() { return adapter_; }
     NativeExecutionConsumer& consumer() { return as_native_consumer(execution_consumer()); }
     no::WorkingRequestCore& core() {
@@ -143,14 +145,46 @@ struct Subject {
     explicit Subject(ScratchStore& store, bool observe_each_edit = true)
         : observe_edits(observe_each_edit) {
         ce::require(store.status() == ScratchStatus::ok, "fixture store opens");
-        host.core().reset(run_id());
+        ce::require(store.page_size() == page_bytes, "fixture retains 512-byte backing pages");
+        host.set_syminfo_timezone("UTC");
+        host.set_syminfo_session("24x7");
+        host.set_syminfo_mintick(0.25);
+        // commands_allowed() admits idle Realtime commands. Begin first:
+        // prepare_native_begin/reset_for_run and begin_ready reset the adapter
+        // and request core. Bind the measured store only after those resets.
+        ce::require(host.stream_begin(&host.warmup, 1, "1", "1"),
+                    "fixture native stream begins successfully");
+        require_realtime();
         host.core().bind_scratch_store(store);
         host.adapter().bind_scratch_store(store);
+        ce::require(!store.transaction_active(), "fixture bindings leave a committed store");
     }
     ps::PineExecutionAdapter& adapter() { return host.adapter(); }
+    void require_realtime() const {
+        const auto state = host.native_state();
+        ce::require(host.last_error().empty() && host.stream_is_realtime()
+                        && state.kind == NativeLifecycleKind::Running
+                        && state.phase == NativeRunPhase::Realtime,
+                    "fixture commands and readers run in idle native Realtime");
+    }
+    no::RequestHandle handle(std::uint64_t incarnation) {
+        return {host.consumer().request_core().identity(), incarnation};
+    }
     std::pair<no::CohortHandle, const ps::OriginRoster*> edit(
             const std::string& id, CohortEdit kind, no::RequestHandle h = {}, double value = 0) {
         return adapter().fixture_cohort_state(id, static_cast<std::uint8_t>(kind), h, value);
+    }
+    no::CohortHandle require_cohort(const std::string& id) {
+        require_realtime();
+        ce::require(model.count(id) != 0, "initial fixture model names an ensured cohort");
+        const auto actual = edit(id, CohortEdit::lookup);
+        ce::require(actual.first.value != 0 && actual.second != nullptr,
+                    "initial fixture cohort exists before its exposure is checked");
+        return actual.first;
+    }
+    void check_setup(const std::string& id) {
+        (void)require_cohort(id);
+        check(id, "initial fixture exposure");
     }
     std::uint64_t expected(const std::string& id) const {
         const auto found = model.find(id);
@@ -167,6 +201,9 @@ struct Subject {
         ce::require(actual != cohorts.end(), "fixture created a real canonical cohort");
         const auto& facts = actual->second;
         const auto& m = want->second;
+        ce::require(facts.origins.members().bound() && facts.opened.bound()
+                        && facts.live_units_by_origin.bound(),
+                    "canonical cohort members use the measured scratch store");
         ce::require(facts.origins.base() == m.base && facts.origins.size() == m.origins.size(),
                     "canonical retained/lifetime positions match fixture model");
         for (std::size_t p = m.base; p < m.origins.size(); ++p) {
@@ -365,6 +402,7 @@ struct QueryGuard {
 
 QueryCost measure_exposure(Subject& s, ScratchStore& store, Rig& rig,
                            const std::string& id, std::size_t n, std::size_t phase) {
+    s.require_realtime();
     const auto expected = s.expected(id); // Oracle is outside both measured windows.
     QueryGuard guard(store, rig);
     double warm = 0.0, actual = 0.0;
@@ -388,12 +426,20 @@ QueryCost measure_exposure(Subject& s, ScratchStore& store, Rig& rig,
     return cost;
 }
 
+QueryCost measure_setup_exposure(Subject& s, ScratchStore& store, Rig& rig,
+                                 const std::string& id, std::size_t n) {
+    (void)s.require_cohort(id);
+    // The initial self-check's production read is the guarded warm call;
+    // its oracle-bit comparison must not become an unmeasured pre-query.
+    return measure_exposure(s, store, rig, id, n, 0);
+}
+
 std::vector<no::RequestHandle> populate(Subject& s, const std::string& id, std::size_t n) {
     (void)s.ensure(id);
     std::vector<no::RequestHandle> handles;
     for (std::size_t i = 0; i < n; ++i) {
         // Roster order intentionally differs from incarnation/map order.
-        const auto h = handle(1000 + n - i);
+        const auto h = s.handle(1000 + n - i);
         handles.push_back(h);
         s.append(id, h);
         s.put(id, h, 0.25 + 0.125 * static_cast<double>(i % 7));
@@ -424,7 +470,7 @@ void s4_cohort_exposure_read_bound_red() {
         ScratchStore store(rig.config(), &rig.backing);
         Subject s(store, false); // First exposure read belongs to the guarded probe.
         const auto handles = populate(s, "cohort", sizes[sample]);
-        reads[sample][0] = measure_exposure(s, store, rig, "cohort", sizes[sample], 0);
+        reads[sample][0] = measure_setup_exposure(s, store, rig, "cohort", sizes[sample]);
         const auto first = s.expected("cohort");
         s.put("cohort", handles[handles.size() / 2], 3.5);
         ce::require(s.expected("cohort") != first, "middle mutation changes the oracle answer");
@@ -458,7 +504,7 @@ void s4_cohort_exposure_seeded_bits() {
         (void)s.ensure("side");
         std::vector<no::RequestHandle> handles;
         for (std::size_t i = 0; i < n; ++i) {
-            const auto h = handle(1000 + n - i);
+            const auto h = s.handle(1000 + n - i);
             handles.push_back(h);
             const double value = i < 3 ? std::array<double, 3>{{0.1, 0.2, 0.3}}[i]
                                        : rng.quantity();
@@ -473,18 +519,20 @@ void s4_cohort_exposure_seeded_bits() {
             }
         }
         ce::require(s.model.at("cohort").units.size() == n, "seeded initial U is exact");
+        s.check_setup("cohort");
         // Same incarnation in another cohort must not alias the primary value.
-        s.append("side", handle(1001));
-        s.put("side", handle(1001), 0.01);
+        s.append("side", s.handle(1001));
+        s.put("side", s.handle(1001), 0.01);
+        s.check_setup("side");
         coverage |= interleaved;
         const auto before_orphan = s.expected("cohort");
-        s.put("cohort", handle(800000), 0x1.fffffffffffffp1023);
+        s.put("cohort", s.handle(800000), 0x1.fffffffffffffp1023);
         ce::require(s.expected("cohort") == before_orphan, "orphan units cannot contribute");
         coverage |= orphan;
-        s.erase("cohort", handle(800000));
+        s.erase("cohort", s.handle(800000));
         const std::size_t steps = n <= 17 ? 32 : 8;
         for (std::size_t step = 0; step < steps; ++step) {
-            const auto h = handles.empty() ? handle(700000)
+            const auto h = handles.empty() ? s.handle(700000)
                 : handles[static_cast<std::size_t>(rng.next() % handles.size())];
             switch (step % 4) {
             case 0:
@@ -505,7 +553,7 @@ void s4_cohort_exposure_seeded_bits() {
                 coverage |= erase;
                 break;
             case 3: {
-                const auto fresh = handle(900000 + step);
+                const auto fresh = s.handle(900000 + step);
                 s.put("cohort", fresh, rng.quantity());
                 s.append("cohort", fresh);
                 handles.push_back(fresh);
@@ -514,7 +562,7 @@ void s4_cohort_exposure_seeded_bits() {
             }
             }
         }
-        const auto repeat = handles.empty() ? handle(600000) : handles.front();
+        const auto repeat = handles.empty() ? s.handle(600000) : handles.front();
         s.put("cohort", repeat, 0.1);
         s.append("cohort", repeat);
         s.append("cohort", repeat);
@@ -526,8 +574,8 @@ void s4_cohort_exposure_seeded_bits() {
         s.clear_all();
         const auto new_cohort = s.ensure("cohort");
         ce::require(new_cohort.value != old_cohort.value, "clear/reuse gets a fresh native cohort");
-        s.append("cohort", handle(999001));
-        s.put("cohort", handle(999001), 0.001);
+        s.append("cohort", s.handle(999001));
+        s.put("cohort", s.handle(999001), 0.001);
         coverage |= reuse;
         comparisons += s.comparisons;
     }
@@ -546,11 +594,12 @@ void s4_cohort_exposure_middle_delete_bits() {
         ScratchStore store(rig.config(), &rig.backing);
         Subject s(store);
         (void)s.ensure("middle");
-        const std::array<no::RequestHandle, 3> handles{{handle(30), handle(10), handle(20)}};
+        const std::array<no::RequestHandle, 3> handles{{s.handle(30), s.handle(10), s.handle(20)}};
         for (std::size_t i = 0; i < 3; ++i) {
             s.append("middle", handles[i]);
             s.put("middle", handles[i], triples[test][i]);
         }
+        s.check_setup("middle");
         observed_expected.insert(s.expected("middle"));
         s.erase("middle", handles[1]);
         if (test == 1) {
@@ -565,10 +614,10 @@ void s4_cohort_exposure_middle_delete_bits() {
         s.put("middle", handles[1], triples[test][1]);
         // Monotone appends/reverse unit installation force rebalancing in a
         // future position tree; the test does not depend on its shape APIs.
-        for (std::size_t i = 0; i < 9; ++i) s.append("middle", handle(100 + i));
+        for (std::size_t i = 0; i < 9; ++i) s.append("middle", s.handle(100 + i));
         for (std::size_t i = 9; i > 0; --i)
-            s.put("middle", handle(99 + i), i % 2 ? 0.001 : 0.125);
-        for (std::size_t i = 0; i < 9; i += 2) s.erase("middle", handle(100 + i));
+            s.put("middle", s.handle(99 + i), i % 2 ? 0.001 : 0.125);
+        for (std::size_t i = 0; i < 9; i += 2) s.erase("middle", s.handle(100 + i));
         s.put("middle", handles[1], 0.5);
         observed_expected.insert(s.expected("middle"));
     }
@@ -588,16 +637,17 @@ void s4_cohort_exposure_filters_and_regain_bits() {
         ce::from_bits(0x8000000000000000ULL), 0x1p-1074
     };
     for (std::size_t i = 0; i < values.size(); ++i) {
-        s.append("filters", handle(i + 1));
-        s.put("filters", handle(i + 1), values[i]);
+        s.append("filters", s.handle(i + 1));
+        s.put("filters", s.handle(i + 1), values[i]);
     }
+    s.check_setup("filters");
     equal_bits(s.adapter().source_unclosed_qty_for("filters"), 1, "epsilon-free minimum subnormal");
-    s.append("filters", handle(20));
-    s.put("filters", handle(20), 0x1.fffffffffffffp1023);
-    s.append("filters", handle(21));
-    s.put("filters", handle(21), 0x1.fffffffffffffp1023);
+    s.append("filters", s.handle(20));
+    s.put("filters", s.handle(20), 0x1.fffffffffffffp1023);
+    s.append("filters", s.handle(21));
+    s.put("filters", s.handle(21), 0x1.fffffffffffffp1023);
     equal_bits(s.adapter().source_unclosed_qty_for("filters"), 0, "finite-row overflow clamps +0");
-    s.erase("filters", handle(21));
+    s.erase("filters", s.handle(21));
     equal_bits(s.adapter().source_unclosed_qty_for("filters"), 0x7fefffffffffffffULL,
                "deleting overflowing row restores maximum finite exposure");
     s.clear_units("filters");
@@ -605,19 +655,19 @@ void s4_cohort_exposure_filters_and_regain_bits() {
     const auto named_zero = (std::as_const(s.adapter()).*access(FromEntryTag{}))("filters");
     ce::require(named_zero.has_value(), "empty named cohort still has an optional quantity");
     equal_bits(*named_zero, 0, "empty named optional is positive zero");
-    s.put("filters", handle(1), 0.001); // Old origin changes from filtered NaN to valid.
-    s.append("filters", handle(30));
-    s.put("filters", handle(30), 0.01);
-    s.erase("filters", handle(1));
-    s.erase("filters", handle(30));
+    s.put("filters", s.handle(1), 0.001); // Old origin changes from filtered NaN to valid.
+    s.append("filters", s.handle(30));
+    s.put("filters", s.handle(30), 0.01);
+    s.erase("filters", s.handle(1));
+    s.erase("filters", s.handle(30));
     equal_bits(s.adapter().source_unclosed_qty_for("filters"), 0, "all rows erased -> +0");
-    s.append("filters", handle(31));
-    s.put("filters", handle(31), 1.0 / 3.0);
+    s.append("filters", s.handle(31));
+    s.put("filters", s.handle(31), 1.0 / 3.0);
     // The ACTUAL empty source id is a cohort. Empty from_entry is an optional
     // whole-position selector, and must remain a different API behaviour.
     (void)s.ensure("");
-    s.append("", handle(40));
-    s.put("", handle(40), 0.25);
+    s.append("", s.handle(40));
+    s.put("", s.handle(40), 0.25);
     equal_bits(s.adapter().source_unclosed_qty_for(""), 0x3fd0000000000000ULL,
                "empty source id has exposure");
     const auto absent = (std::as_const(s.adapter()).*access(FromEntryTag{}))("");
@@ -627,8 +677,8 @@ void s4_cohort_exposure_filters_and_regain_bits() {
     equal_bits(*named, s.expected("filters"), "named optional follows the same oracle");
     s.clear_all();
     (void)s.ensure("filters");
-    s.append("filters", handle(50));
-    s.put("filters", handle(50), 0.1);
+    s.append("filters", s.handle(50));
+    s.put("filters", s.handle(50), 0.1);
 }
 
 void canonical_position_owners(Subject& s, const std::string& id) {
@@ -657,15 +707,16 @@ void s4_cohort_exposure_positions_and_ties() {
     ScratchStore store(rig.config(), &rig.backing);
     Subject s(store);
     (void)s.ensure("positions");
-    s.append("positions", handle(1)); // Two releasable historical rows.
-    s.append("positions", handle(2));
-    const auto a = handle(30), b = handle(20);
+    s.append("positions", s.handle(1)); // Two releasable historical rows.
+    s.append("positions", s.handle(2));
+    const auto a = s.handle(30), b = s.handle(20);
     s.append("positions", a);
     s.append("positions", b);
     s.append("positions", a); // Real roster [dead,dead,A,B,A], not a forged index.
     s.put("positions", a, 0.1);
     s.put("positions", b, 0.2);
-    s.put("positions", handle(5), 0x1.fffffffffffffp1023); // Orphan must remain absent.
+    s.put("positions", s.handle(5), 0x1.fffffffffffffp1023); // Orphan must remain absent.
+    s.check_setup("positions");
     equal_bits(s.adapter().source_unclosed_qty_for("positions"), 0x3fd999999999999aULL,
                "A contributes at both positions");
     canonical_position_owners(s, "positions");
@@ -716,11 +767,34 @@ no::Request pending_request(no::CohortHandle cohort) {
 }
 
 void install_pending(Subject& s, const no::Request& request, const ps::PlacementSnapshot& snapshot) {
+    s.require_realtime();
+    ce::require(snapshot.family == ps::PineOrderFamily::ExitLimit
+                    && !snapshot.opening && snapshot.deferred_cohort,
+                "pending fixture is a deferred exit limit");
     // Existing queue 0 is the actual pending-bracket owner.
     s.adapter().fixture_queue_state(0, nullptr, nullptr, {}, {});
     ce::require(s.adapter().pending_intent_view().size() == 0, "pending fixture clear is real");
     s.adapter().fixture_queue_state(0, &request, &snapshot, {}, {});
     ce::require(s.adapter().pending_intent_view().size() == 1, "pending population Q is exactly one");
+    // Check the stored fixture without an unmeasured exposure/copy_v1 call.
+    // No input is pushed after begin: the scheduler must not drain this leg.
+    const auto& queued = std::as_const(s.adapter()).*access(BracketQueueTag{});
+    ce::require(queued.bound() && queued.size() == 1,
+                "pending bracket owner is bound to the measured store with Q=1");
+    const auto& stored = queued[0];
+    ce::require(stored.snapshot.family == snapshot.family
+                    && stored.snapshot.source_id == snapshot.source_id
+                    && stored.snapshot.from_entry == snapshot.from_entry
+                    && !stored.snapshot.opening && stored.snapshot.deferred_cohort,
+                "stored pending snapshot preserves the deferred named selector");
+    if (snapshot.from_entry.empty()) {
+        ce::require(std::holds_alternative<no::Independent>(stored.request.owner),
+                    "empty-from-entry control uses whole-position ownership");
+    } else {
+        const auto* owner = std::get_if<no::BindCohort>(&stored.request.owner);
+        ce::require(owner && owner->cohort.value == s.require_cohort(snapshot.from_entry).value,
+                    "stored deferred request binds the existing named cohort");
+    }
 }
 
 void check_reservation(const pf_pending_order_v1_t& row, const std::string& id,
@@ -734,6 +808,7 @@ void check_reservation(const pf_pending_order_v1_t& row, const std::string& id,
 
 QueryCost measure_pending(Subject& s, ScratchStore& store, Rig& rig,
                           const std::string& id, std::size_t n, std::size_t phase) {
+    s.require_realtime();
     const auto expected = s.expected(id);
     const auto& view = s.adapter().pending_intent_view();
     ce::require(view.size() == 1, "measured copy has fixed Q=1");
@@ -771,7 +846,7 @@ void s4_named_pending_exposure_bound_red() {
         ScratchStore store(rig.config(), &rig.backing);
         Subject s(store, false); // No exposure pre-query in fixture setup or edits.
         const auto handles = populate(s, "cohort", sizes[sample]);
-        const auto cohort = s.edit("cohort", CohortEdit::lookup).first;
+        const auto cohort = s.require_cohort("cohort");
         const auto request = pending_request(cohort);
         const auto snapshot = deferred_exit("cohort");
         install_pending(s, request, snapshot);
@@ -790,7 +865,10 @@ void s4_named_pending_exposure_bound_red() {
         ce::require(fixed_allowance == materialization_allowance,
                     "copy materialization allowance cannot grow with U");
         const auto initial = s.expected("cohort");
-        for (std::size_t phase = 0; phase < 4; ++phase) {
+        exposure_reads[sample][0] =
+            measure_setup_exposure(s, store, rig, "cohort", sizes[sample]);
+        copy_reads[sample][0] = measure_pending(s, store, rig, "cohort", sizes[sample], 0);
+        for (std::size_t phase = 1; phase < 4; ++phase) {
             if (phase == 1) s.put("cohort", handles[handles.size() / 2], 3.5);
             if (phase == 2) s.clear_units("cohort");
             if (phase == 3) s.put("cohort", handles.back(), 0.001);
@@ -806,8 +884,8 @@ void s4_named_pending_exposure_bound_red() {
         // Empty from_entry does not reserve even when the empty-id cohort
         // itself holds units. This is a real copy_v1 control outside the bound.
         (void)s.ensure("");
-        s.append("", handle(999999));
-        s.put("", handle(999999), 0.5);
+        s.append("", s.handle(999999));
+        s.put("", s.handle(999999), 0.5);
         const auto global = deferred_exit("");
         no::Request global_request{no::Reduce{no::ExplicitUnits{1.0}}, "exit", ""};
         global_request.trigger = no::Limit{200.0};
