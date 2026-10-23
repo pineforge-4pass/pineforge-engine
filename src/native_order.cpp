@@ -2021,6 +2021,10 @@ struct WorkingRequestCore::BookSpill {
     uint64_t alive = 0;     // rows spilled and not yet back: the book's spilled count
     uint64_t gone = 0;      // dead entries in rows
     uint64_t garbage = 0;   // blob bytes no live entry reads
+    // How many times compact rebuilt the tables: a table offset taken before
+    // a rebuild names nothing after it (hold_scanned). Storage metadata, like
+    // the offsets themselves, so nothing folds it.
+    uint64_t generation = 0;
     mutable std::array<std::shared_ptr<LiveRequest>, kSide> side{};
     mutable std::size_t side_next = 0;
     // A read failure a reader that cannot throw handed over
@@ -2223,6 +2227,7 @@ struct WorkingRequestCore::BookSpill {
         blobs = std::move(fresh_blobs);
         gone = 0;
         garbage = 0;
+        ++generation;
     }
 };
 
@@ -2369,6 +2374,28 @@ std::shared_ptr<const LiveRequest> WorkingRequestCore::hold_live(
     if (const LiveRequest* resident = find_resident(handle)) return unowned_live(*resident);
     if (spilled_count() == 0) return nullptr;
     return spilled_held(handle.incarnation);
+}
+
+uint64_t WorkingRequestCore::book_generation() const noexcept {
+    return book_spill_ ? book_spill_->generation : 0;
+}
+
+// Table offsets stay put until compact rebuilds the table, and an entry keeps
+// its offset when its row comes back and is spilled again; so while the
+// generation is the walk's, the entry at `at` is the row's whenever it names
+// the request's incarnation and still holds it spilled. One entry read and one
+// row read, whatever the size of the book.
+std::shared_ptr<const LiveRequest> WorkingRequestCore::hold_scanned(
+        const RequestHandle& handle, uint64_t at, uint64_t generation) const {
+    if (at == 0 || spilled_count() == 0 || generation != book_spill_->generation
+        || !names_run(handle, identity_)) {
+        return hold_live(handle);
+    }
+    const BookSpill& spill = *book_spill_;
+    spill.check();
+    const BookSlot slot = spill.rows.get(at);
+    if (slot.state != 0 || slot.incarnation != handle.incarnation) return hold_live(handle);
+    return spill.keep(spill.read(*this, slot));
 }
 
 bool WorkingRequestCore::carry_book_read_failure(std::exception_ptr failure) const noexcept {

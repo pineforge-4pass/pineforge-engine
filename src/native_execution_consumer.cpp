@@ -7060,8 +7060,10 @@ void NativeExecutionConsumer::match_path(
     // The request a row was scanned from, held for its reader. The book does
     // not change between a scan and its winner's first use, so in a book that
     // is all resident the row's own index names it. Once part of the book is
-    // outside the heap an index walks the book from its front, so the row is
-    // looked up by its handle instead; the core's handle lookup also answers
+    // outside the heap an index walks the book from its front: a row the scan
+    // found outside the heap is read where the scan found it (book_at, see
+    // the winner's row below), and a row it found resident is looked up by
+    // its handle, in the heap; the core's handle lookup also answers
     // whenever the reuse is switched off. Held: a spilled row's copy lives as
     // long as the answer, whatever the book reads meanwhile.
     auto scanned_request = [&](const Candidate& row)
@@ -7076,11 +7078,16 @@ void NativeExecutionConsumer::match_path(
     };
     // The refreshed winner a winner-only rescan reads again (see below).
     native_order::RequestHandle rescan_handle{};
+    // A whole scan that stands in for a reuse whose kept rows name entries of
+    // a spilled table rebuilt since (see the winner below).
+    bool rescan_after_rebuild = false;
 
     while (!failed()) {
         const bool winner_only = rescan_winner_only;
         rescan_winner_only = false;
-        if (!winner_only) {
+        const bool after_rebuild = rescan_after_rebuild;
+        rescan_after_rebuild = false;
+        if (!winner_only && !after_rebuild) {
             candidate_provenance.erase(
                 std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
                     [&](const CandidateProvenance& row) {
@@ -7126,6 +7133,9 @@ void NativeExecutionConsumer::match_path(
         const bool keep_rows = winner_only
             || (match_row_reuse_ && live_requests.size() >= kKeepRowsFrom);
         if (!winner_only) rows.clear();
+        // The spilled table's generation the walk reads the book under: a row
+        // it finds outside the heap keeps its entry with it.
+        const uint64_t scan_generation = requests_.book_generation();
         for (std::size_t snapshot_index = 0; snapshot_index < snapshot_size; ++snapshot_index) {
             if (!winner_only && snapshot_index != 0) ++book_row;
             const auto* live = winner_only ? rescanned.get() : &*book_row;
@@ -7207,6 +7217,10 @@ void NativeExecutionConsumer::match_path(
             Candidate row;
             row.handle = handle;
             row.priority = live->priority();
+            if (!winner_only) {
+                row.book_at = book_row.spilled_at();
+                row.book_generation = scan_generation;
+            }
             if (needs_evaluation(*live, facts)) {
                 erase_provenance_for(handle);
                 row.t = t_min;
@@ -7308,6 +7322,19 @@ void NativeExecutionConsumer::match_path(
             if (const auto* first = rows.first()) winner = *first;
         }
         if (!winner) break;
+        // A row kept from an earlier scan names the spilled-table entry that
+        // scan read its request from, and the refresh it is reused after may
+        // have rebuilt the table (BookSpill::compact), which leaves no entry
+        // where it was. Then the whole book is scanned again instead: that
+        // scan picks the winner the reuse would have (see above) and reads
+        // every row where it now stands. Nothing has moved at this cursor
+        // since the head that scan replaces the reuse of, so its own head
+        // would drop no provenance row and is passed over, as a reuse does.
+        if (winner_only && winner->book_at != 0
+            && winner->book_generation != requests_.book_generation()) {
+            rescan_after_rebuild = true;
+            continue;
+        }
         const bool cursor_unmoved =
             native_matching::double_bits(winner->t) == native_matching::double_bits(t_cursor);
         if (continuous && winner->t > t_cursor) {
@@ -7319,10 +7346,19 @@ void NativeExecutionConsumer::match_path(
         cursor_price = winner->price;
         path_cursor = make_cursor(point, t_cursor);
         eval.cursor = path_cursor;
-        // The winner's row: the one the walk held, or for a row kept from an
-        // earlier scan, its lookup. Held until this winner is done with.
-        const std::shared_ptr<const native_order::LiveRequest> winner_row =
-                winner_held ? std::move(winner_held) : scanned_request(*winner);
+        // The winner's row: the one the walk held; for a row kept from an
+        // earlier scan, the request read at the table entry that scan found it
+        // at outside the heap -- one entry and one row, in a book of any size
+        // -- or else its lookup. Held until this winner is done with.
+        std::shared_ptr<const native_order::LiveRequest> winner_row;
+        if (winner_held) {
+            winner_row = std::move(winner_held);
+        } else if (winner->book_at != 0) {
+            winner_row = requests_.hold_scanned(winner->handle, winner->book_at,
+                                                winner->book_generation);
+        } else {
+            winner_row = scanned_request(*winner);
+        }
         const auto* live = winner_row.get();
         if (!live) continue;
         eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point)

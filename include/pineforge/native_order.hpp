@@ -28,6 +28,7 @@
 #include <vector>
 
 namespace pineforge::detail { class ScratchSlab; }
+namespace pineforge { class NativeExecutionConsumer; }
 
 namespace pineforge::native_order {
 inline namespace native_order_v7 {
@@ -1924,8 +1925,10 @@ public:
     /// How many spilled rows the book has read back to answer a lookup -- by
     /// handle (find_live, hold_live), by rank (live_at, live_back) -- and how
     /// many table steps those lookups walked, since this core was built or
-    /// reset. A walk of live() in queue order is not counted. Diagnostics
-    /// only: nothing folds them and no decision reads them.
+    /// reset. A walk of live() in queue order is not counted, nor is a read of
+    /// a row at the table entry such a walk found it at (the matcher reusing a
+    /// row it scanned): neither searches the book. Diagnostics only: nothing
+    /// folds them and no decision reads them.
     struct BookLookupReads {
         std::uint64_t rows = 0;
         std::uint64_t steps = 0;
@@ -2293,6 +2296,9 @@ private:
     friend class PreparedCancel;
     friend class PreparedMutation;
     friend class PreparedExecution;
+    // The matcher reuses a row it scanned outside the heap through the place
+    // its walk found the row at (book_generation, hold_scanned below).
+    friend class ::pineforge::NativeExecutionConsumer;
 
     static void require_identity(const RunIdentity& identity);
     static void require_grid(std::optional<double> quantity_grid);
@@ -2549,6 +2555,16 @@ private:
     const LiveRequest* spilled_row(uint64_t incarnation) const;
     std::shared_ptr<LiveRequest> spilled_held(uint64_t incarnation) const;
     const LiveRequest* find_resident(const RequestHandle& handle) const noexcept;
+    // How many times the spilled table has been rebuilt (BookSpill::compact):
+    // a table offset taken under one generation names nothing under the next.
+    uint64_t book_generation() const noexcept;
+    // hold_live for a row a walk of live() stood on outside the heap, at table
+    // offset `at` (LiveView::const_iterator::spilled_at) under `generation`:
+    // the row is read from that entry, with no search of the table, while the
+    // entry still holds the request spilled. Otherwise -- the table rebuilt
+    // since, the row back in the heap or ended -- it answers hold_live(handle).
+    std::shared_ptr<const LiveRequest> hold_scanned(const RequestHandle& handle, uint64_t at,
+                                                    uint64_t generation) const;
     void forget_repriced(uint64_t incarnation) noexcept;
     BookCursor book_begin() const;
     bool book_done(const BookCursor& cursor) const noexcept;
@@ -2828,8 +2844,12 @@ public:
 
     private:
         friend class LiveView;
+        friend class ::pineforge::NativeExecutionConsumer;
         const_iterator(const WorkingRequestCore* core, BookCursor cursor) noexcept
             : core_(core), cursor_(cursor) {}
+        // The spilled table's offset of the row the iterator stands on, 0
+        // when that row is resident (WorkingRequestCore::hold_scanned).
+        uint64_t spilled_at() const noexcept { return held_ ? cursor_.at : 0; }
         // Loads the spilled row the cursor stands on, if it does.
         void settle();
         const WorkingRequestCore* core_ = nullptr;
