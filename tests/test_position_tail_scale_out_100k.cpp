@@ -2,6 +2,7 @@
 // T/H/E/metrics differential, with real work reported from its adapter TU.
 #include <pineforge/source/pine_adapter.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
@@ -168,6 +169,36 @@ Reporter* active_reporter = nullptr;
 #undef PINEFORGE_POSITION_TAIL_WORK_REPORT
 #undef PINEFORGE_POSITION_TAIL_DIAGNOSTICS
 
+#ifdef PINEFORGE_SCRATCH_SEQUENCE_COUNTERS
+namespace {
+void print_sequence_counters() {
+    auto totals = pineforge::detail::scratch_sequence_counter_totals();
+    // Also print zero for a compiled site that this fixture did not exercise.
+    constexpr const char* tags[] = {"trade_exit_phase_", "permuted", "values", "other"};
+    for (const char* tag : tags) {
+        auto counters = pineforge::detail::scratch_sequence_tag_total(totals, tag);
+        std::sort(counters.last_switches.begin(), counters.last_switches.end(),
+            [](const auto& a, const auto& b) { return a.serial < b.serial; });
+        std::fprintf(stderr,
+            "seq-counters tag=%s flush_writes=%" PRIu64 " flush_bytes=%" PRIu64
+            " loads=%" PRIu64 " load_bytes=%" PRIu64 " page_switches=%" PRIu64
+            " last_switches=",
+            tag, counters.flush_writes, counters.flush_bytes, counters.loads,
+            counters.load_bytes, counters.page_switches);
+        bool first = true;
+        for (const auto& change : counters.last_switches) {
+            if (change.serial == 0) continue;
+            std::fprintf(stderr, "%s%zu->%zu", first ? "" : ",", change.from, change.to);
+            first = false;
+        }
+        if (first) std::fputs("none", stderr);
+        std::fputc('\n', stderr);
+        std::fflush(stderr);
+    }
+}
+} // namespace
+#endif
+
 int main(int argc, char** argv) {
     if (argc != 1) {
         std::fprintf(stderr, "usage: test_position_tail_scale_out_100k\n");
@@ -179,5 +210,8 @@ int main(int argc, char** argv) {
     const int result = r11_instrumented_scale_main();
     reporter.print(result == 0 ? "end" : "failed");
     r11_tail_work::active_reporter = nullptr;
+#ifdef PINEFORGE_SCRATCH_SEQUENCE_COUNTERS
+    print_sequence_counters();
+#endif
     return result;
 }

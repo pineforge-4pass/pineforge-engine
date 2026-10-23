@@ -7471,3 +7471,41 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         "-Wl,--wrap=posix_fadvise" "-Wl,--wrap=fdatasync")
 endif()
 # --- CR-150 core-cr150-cr257 end ---
+
+# --- CR-150 core-cr150-l18 begin ---
+if(TARGET test_position_tail_scale_out_100k)
+    target_compile_definitions(test_position_tail_scale_out_100k PRIVATE
+        PINEFORGE_SCRATCH_SEQUENCE_COUNTERS)
+    target_include_directories(test_position_tail_scale_out_100k PRIVATE
+        ${PROJECT_SOURCE_DIR}/src)
+    # The test already includes pine_adapter.cpp via the R11 scale fixture.
+    # Compile the rest of the source layer here too: the diagnostic member
+    # changes PineExecutionAdapter/PineStrategyHost layout in this executable.
+    # engine_report.cpp owns the third sequence (OwnedExcursions::values).
+    # These definitions replace those archive objects just as the included
+    # adapter does; all other kernel objects remain the ordinary library.
+    # Keep this list equal to PINEFORGE_SOURCE_LAYER_SOURCES minus pine_adapter.cpp.
+    target_sources(test_position_tail_scale_out_100k PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/compat/pine/exit_activation.cpp
+        ${PROJECT_SOURCE_DIR}/src/compat/pine/exit_lifecycle.cpp
+        ${PROJECT_SOURCE_DIR}/src/compat/pine/market_admission.cpp
+        ${PROJECT_SOURCE_DIR}/src/compat/pine/order_birth.cpp
+        ${PROJECT_SOURCE_DIR}/src/compat/pine/order_priority.cpp
+        ${PROJECT_SOURCE_DIR}/src/compat/pine/reservation_expansion.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/magnifier_intrabars.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/market_admission.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_position_tail.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_path_resolve.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_scheduler_native.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_scheduler.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_strategy_host.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_strategy_commands.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/exit_scratch_versions_production.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_value_admission.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_aux_security.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_security_eval.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_state_hash.cpp
+        ${PROJECT_SOURCE_DIR}/src/source/pine_ta_length.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_report.cpp)
+endif()
+# --- CR-150 core-cr150-l18 end ---

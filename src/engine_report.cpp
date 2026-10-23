@@ -1737,6 +1737,9 @@ void OpenReportRowSource::begin(
     std::shared_ptr<OwnedExcursions> excursions;
     if (count != 0 && owner_ != nullptr && owner_->lot_excursion_hook_) {
         excursions = std::make_shared<OwnedExcursions>();
+#ifdef PINEFORGE_SCRATCH_SEQUENCE_COUNTERS
+        excursions->values.diagnostic_tag("values");
+#endif
         excursions->values.set_directory(owner_->trades_.scratch_directory());
     }
     double marked = 0.0;

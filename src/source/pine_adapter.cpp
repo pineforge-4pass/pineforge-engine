@@ -1088,6 +1088,9 @@ void audit_placement_scan(const PlacementTable& table, unsigned line, Predicate&
 
 PineExecutionAdapter::PineExecutionAdapter(compat::pine::CapAttachment attachment)
     : cap(attachment) {
+#ifdef PINEFORGE_SCRATCH_SEQUENCE_COUNTERS
+    trade_exit_phase_.diagnostic_tag("trade_exit_phase_");
+#endif
     pending_view_.owner_ = this;
     cohorts_by_id_.set_store(::pineforge::detail::ScratchStore::cohort);
     exit_rank_keys_.set_store(::pineforge::detail::ScratchStore::exit_rank);
@@ -6664,6 +6667,9 @@ void PineExecutionAdapter::permute_exit_phase_rows(
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                        "exit-phase permutation precedes the sealed prefix");
     ::pineforge::detail::ScratchSequence<std::uint8_t> permuted;
+#ifdef PINEFORGE_SCRATCH_SEQUENCE_COUNTERS
+    permuted.diagnostic_tag("permuted");
+#endif
     if (host_)
         permuted.set_directory(detail::run_consumer(*host_).report_scratch_directory(*host_));
     for (std::size_t i = 0; i < count; ++i) {
