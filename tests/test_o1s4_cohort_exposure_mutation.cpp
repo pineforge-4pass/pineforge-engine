@@ -490,6 +490,8 @@ void s4_cohort_exposure_mutation_bound_red() {
         resident[sample] = global_allocation::live_bytes;
         const auto g = static_cast<std::uint64_t>(std::ceil(std::log2(static_cast<double>(n))));
         const auto bound = mutation_c * g * g;
+        std::uint64_t largest_reads = 0;
+        for (const auto& cost : costs[sample]) largest_reads = std::max(largest_reads, cost.reads);
         for (std::size_t op = 0; op < operation_names.size(); ++op) {
             const auto& cost = costs[sample][op];
             std::printf("cohort-mutation U=%zu op=%s reads=%llu bound=%llu ratio=%.9f "
@@ -499,6 +501,10 @@ void s4_cohort_exposure_mutation_bound_red() {
                         static_cast<double>(cost.reads) / static_cast<double>(bound),
                         cost.allocations, cost.peak_bytes, resident[sample],
                         static_cast<unsigned long long>(mutation_c));
+            if (largest_reads <= (bound - 1) / 1000)
+                std::printf("bound-is-vacuous-check U=%zu op=%s largest_reads=%llu bound=%llu\n",
+                            n, operation_names[op], static_cast<unsigned long long>(largest_reads),
+                            static_cast<unsigned long long>(bound));
         }
         std::fflush(stdout);
     }
@@ -691,79 +697,155 @@ void s4_cohort_exposure_reopen_rollback_fault() {
         reopen(store, rig, s);
     }
 
-    // Calibrate successful write count ONLY to enumerate every fault point.
-    // No measured count enters a resource bound. Every nth is exercised;
-    // a zero-write publication or zero commit writes is a failed control.
+    // Calibrate the fault-free whole edit and unchanged state, and enumerate
+    // EVERY backing write. No measured count enters a resource bound.
+    // If a read-side failure leaves commit legal, probe publication on one
+    // trial, then repeat the same fault for rollback: an ok commit has ended
+    // its transaction and cannot itself be rolled back.
     std::uint64_t total_writes = 0, publication_writes = 0;
+    std::uint64_t absent_digest = 0, applied_digest = 0;
     std::size_t publication_faults = 0, commit_faults = 0, recoveries = 0;
+    std::size_t latched_faults = 0, unlatched_faults = 0, unlatched_commits = 0;
     for (std::uint64_t nth = 0; nth <= total_writes; ++nth) {
-        Rig rig;
-        auto store = std::make_unique<ScratchStore>(rig.config(), &rig.backing);
-        Subject s(*store);
-        auto& m = s.ensure("cohort");
-        populate(s, m, 7);
-        s.exposure(m);
-        const auto before = digest(*store), hash = s.host.hash();
-        const auto fresh = s.handle(1007);
-        const auto writes = rig.charges.writes, hits = rig.backing.hits;
-        status_is(store->begin(), ScratchStatus::ok, "begin faulted fixture publication");
-        if (nth) rig.backing.arm(nth, nth % 2 == 0);
-        bool refused = false, in_commit = false;
-        try {
-            (void)s.raw(m.id, Edit::append_origin, fresh);
-            (void)s.raw(m.id, Edit::put_units, fresh, 0.75);
-            if (!nth) publication_writes = rig.charges.writes - writes;
-            in_commit = true;
-            ws::check(store->commit(ScratchDurability::buffered));
-        } catch (const ScratchIoError& error) {
-            refused = true;
-            require(classify_run_failure(error).code == RunFailureCode::scratch_io_failed,
-                    "injected backing refusal remains typed scratch I/O failure");
-        }
-        if (!nth) {
-            require(!refused, "fault-sweep calibration actually commits");
-            total_writes = rig.charges.writes - writes;
-            require(publication_writes > 0 && total_writes > publication_writes,
-                    "fault sweep has both publication writes and commit writes");
-            m.origins[m.origin_count++] = fresh; m.put(fresh, 0.75);
+        bool replay_rollback = false;
+        for (unsigned trial = 0; trial < (replay_rollback ? 2u : 1u); ++trial) {
+            Rig rig;
+            auto store = std::make_unique<ScratchStore>(rig.config(), &rig.backing);
+            Subject s(*store);
+            auto& m = s.ensure("cohort");
+            populate(s, m, 7);
             s.exposure(m);
-            std::printf("cohort-fault calibration publication_writes=%llu commit_writes=%llu\n",
-                        static_cast<unsigned long long>(publication_writes),
-                        static_cast<unsigned long long>(total_writes - publication_writes));
+            const auto before = digest(*store), hash = s.host.hash();
+            if (!nth) absent_digest = before;
+            else require(before == absent_digest, "each fault trial starts at the calibrated absent-edit digest");
+            const auto fresh = s.handle(1007);
+            const auto writes = rig.charges.writes, hits = rig.backing.hits;
+            status_is(store->begin(), ScratchStatus::ok, "begin faulted fixture publication");
+            if (nth) rig.backing.arm(nth, nth % 2 == 0);
+            bool refused = false, in_commit = false;
+            const char* operation = "append_origin";
+            try {
+                (void)s.raw(m.id, Edit::append_origin, fresh);
+                operation = "put_units";
+                (void)s.raw(m.id, Edit::put_units, fresh, 0.75);
+                if (!nth) publication_writes = rig.charges.writes - writes;
+                in_commit = true;
+                operation = "commit";
+                ws::check(store->commit(ScratchDurability::buffered));
+            } catch (const ScratchIoError& error) {
+                refused = true;
+                require(classify_run_failure(error).code == RunFailureCode::scratch_io_failed,
+                        "injected backing refusal remains typed scratch I/O failure");
+            }
+            if (!nth) {
+                require(!refused, "fault-sweep calibration actually commits");
+                total_writes = rig.charges.writes - writes;
+                require(publication_writes > 0 && total_writes > publication_writes,
+                        "fault sweep has both publication writes and commit writes");
+                applied_digest = digest(*store);
+                require(applied_digest != absent_digest, "whole-edit and absent-edit reference digests differ");
+                m.origins[m.origin_count++] = fresh; m.put(fresh, 0.75);
+                s.exposure(m);
+                std::printf("cohort-fault calibration publication_writes=%llu commit_writes=%llu "
+                            "absent_digest=%016llx applied_digest=%016llx\n",
+                            static_cast<unsigned long long>(publication_writes),
+                            static_cast<unsigned long long>(total_writes - publication_writes),
+                            static_cast<unsigned long long>(absent_digest),
+                            static_cast<unsigned long long>(applied_digest));
+                std::fflush(stdout);
+                continue;
+            }
+            require(refused && rig.backing.hits == hits + 1, "every injected nth write is reached and refused");
+            require(store->transaction_active(), "failed fixture publication leaves an active transaction");
+            rig.backing.disarm();
+            // SS:158 read embargo exposes the latch independently of commit.
+            // Handle zero is absent without I/O (Core::hget), so this probe
+            // neither evicts a dirty page nor changes the failure path.
+            ScratchRecordInfo info{};
+            const auto probe = store->point(scratch_no_handle, info);
+            require(probe == ScratchStatus::not_found || probe == ScratchStatus::programming_error,
+                    "absent-handle probe distinguishes healthy from rollback-only");
+            const bool latched = probe == ScratchStatus::programming_error;
+            if (in_commit) require(latched, "failure inside ScratchStore commit latches rollback-only");
+            if (trial == 0) {
+                const auto commit = store->commit(ScratchDurability::buffered);
+                std::printf("cohort-fault nth=%llu stage=%s op=%s tear=%u latched=%u retry_commit=%u\n",
+                            static_cast<unsigned long long>(nth), in_commit ? "commit" : "publication",
+                            operation, static_cast<unsigned>(nth % 2 == 0),
+                            static_cast<unsigned>(latched), static_cast<unsigned>(commit));
+                std::fflush(stdout);
+                if (latched) {
+                    ++latched_faults;
+                    status_is(commit, ScratchStatus::programming_error,
+                              "latched publication/commit fault cannot commit");
+                    require(store->transaction_active(), "refused commit preserves transaction for rollback");
+                } else {
+                    ++unlatched_faults;
+                    if (commit == ScratchStatus::ok) {
+                        require(!store->transaction_active(), "successful retry commit ends the transaction");
+                        std::array<std::byte, page_bytes> page{};
+                        std::uint64_t committed = 0;
+                        const auto digest_status = store->state_digest({page.data(), page.size()}, committed);
+                        if (digest_status != ScratchStatus::ok)
+                            std::fprintf(stderr, "cohort-fault nth=%llu committed_digest=unavailable status=%u "
+                                         "absent_digest=%016llx applied_digest=%016llx "
+                                         "verdict=RED ON BASE: real defect\n",
+                                         static_cast<unsigned long long>(nth), static_cast<unsigned>(digest_status),
+                                         static_cast<unsigned long long>(absent_digest),
+                                         static_cast<unsigned long long>(applied_digest));
+                        status_is(digest_status, ScratchStatus::ok, "post-fault successful commit has a readable complete digest");
+                        const bool complete = committed == applied_digest || committed == absent_digest;
+                        std::printf("cohort-fault nth=%llu committed_digest=%016llx "
+                                    "absent_digest=%016llx applied_digest=%016llx verdict=%s\n",
+                                    static_cast<unsigned long long>(nth),
+                                    static_cast<unsigned long long>(committed),
+                                    static_cast<unsigned long long>(absent_digest),
+                                    static_cast<unsigned long long>(applied_digest),
+                                    complete ? "whole-or-absent" : "RED ON BASE: real defect");
+                        std::fflush(stdout);
+                        require(complete, "post-fault successful commit must contain the whole edit or no edit, never a third state");
+                        ++unlatched_commits;
+                        replay_rollback = true;
+                        continue; // Retry the identical nth fault, then roll it back.
+                    }
+                    // A newly failed commit must leave its own rollback-only
+                    // transaction; no particular status was assumed above.
+                    require(store->transaction_active(), "failed retry commit leaves its transaction active");
+                    status_is(store->point(scratch_no_handle, info), ScratchStatus::programming_error,
+                              "failure inside retry commit latches rollback-only");
+                }
+            } else {
+                require(!latched && !in_commit, "rollback replay reproduces the unlatched publication fault");
+            }
+            status_is(store->rollback(), ScratchStatus::ok, "recover injected publication/commit fault");
+            require(digest(*store) == before, "fault rollback restores pre-failure complete store digest");
+            s.rebind(*store);
+            s.exposure(m);
+            require(s.host.hash() == hash, "fault rollback restores production host hash");
+            reopen(store, rig, s);
+            require(digest(*store) == before, "fault reopen keeps pre-failure complete store digest");
+            // Same incarnation and same textual id can be used after recovery.
+            s.append(m, fresh); s.put(m, fresh, 0.5); s.exposure(m);
+            const auto old = s.raw(m.id, Edit::lookup).first.value;
+            (void)s.raw("", Edit::clear_all);
+            m.present = false; m.origin_count = m.opened_count = m.unit_count = 0;
+            auto& reused = s.ensure("cohort");
+            require(s.raw(reused.id, Edit::lookup).first.value != old, "post-fault id reuse gets a fresh cohort");
+            s.append(reused, fresh); s.put(reused, fresh, 0.125); s.exposure(reused);
+            if (in_commit) ++commit_faults; else ++publication_faults;
+            ++recoveries;
+            std::printf("cohort-fault nth=%llu stage=%s op=%s tear=%u trial=%u digest_restored=1 hash_restored=1\n",
+                        static_cast<unsigned long long>(nth), in_commit ? "commit" : "publication",
+                        operation, static_cast<unsigned>(nth % 2 == 0), trial);
             std::fflush(stdout);
-            continue;
         }
-        require(refused && rig.backing.hits == hits + 1, "every injected nth write is reached and refused");
-        require(store->transaction_active(), "failed fixture publication remains rollback-only");
-        status_is(store->commit(ScratchDurability::buffered), ScratchStatus::programming_error,
-                  "partial source/derived state cannot commit");
-        rig.backing.disarm();
-        status_is(store->rollback(), ScratchStatus::ok, "recover injected publication/commit fault");
-        require(digest(*store) == before, "fault rollback restores pre-failure complete store digest");
-        s.rebind(*store);
-        s.exposure(m);
-        require(s.host.hash() == hash, "fault rollback restores production host hash");
-        reopen(store, rig, s);
-        require(digest(*store) == before, "fault reopen keeps pre-failure complete store digest");
-        // Same incarnation and same textual id can be used after recovery.
-        s.append(m, fresh); s.put(m, fresh, 0.5); s.exposure(m);
-        const auto old = s.raw(m.id, Edit::lookup).first.value;
-        (void)s.raw("", Edit::clear_all);
-        m.present = false; m.origin_count = m.opened_count = m.unit_count = 0;
-        auto& reused = s.ensure("cohort");
-        require(s.raw(reused.id, Edit::lookup).first.value != old, "post-fault id reuse gets a fresh cohort");
-        s.append(reused, fresh); s.put(reused, fresh, 0.125); s.exposure(reused);
-        if (in_commit) ++commit_faults; else ++publication_faults;
-        ++recoveries;
-        std::printf("cohort-fault nth=%llu stage=%s tear=%u digest_restored=1 hash_restored=1\n",
-                    static_cast<unsigned long long>(nth), in_commit ? "commit" : "publication",
-                    static_cast<unsigned>(nth % 2 == 0));
-        std::fflush(stdout);
     }
-    require(publication_faults != 0 && commit_faults != 0 && recoveries == total_writes,
+    require(publication_faults != 0 && commit_faults != 0 && recoveries == total_writes
+                && latched_faults + unlatched_faults == total_writes,
             "fault sweep covers every write with nonzero publication and commit checkpoints");
-    std::printf("cohort-fault recoveries=%zu publication_faults=%zu commit_faults=%zu\n",
-                recoveries, publication_faults, commit_faults);
+    std::printf("cohort-fault recoveries=%zu publication_faults=%zu commit_faults=%zu "
+                "latched_faults=%zu unlatched_faults=%zu unlatched_commits=%zu\n",
+                recoveries, publication_faults, commit_faults, latched_faults, unlatched_faults, unlatched_commits);
 }
 
 void s4_cohort_exposure_churn_bounded() {
