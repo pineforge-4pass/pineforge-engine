@@ -286,10 +286,15 @@ private:
     }
     // Bound traffic between whole-file discards: at most kCacheBytes of reads
     // and kCacheBytes of unsynced writes per file, independent of offset span.
-    // With RANDOM disabling read-ahead, the conservative data-page bound is
-    // 2*kCacheBytes OS pages (even one-byte accesses to distinct pages), not
-    // 128 KiB of physical cache. DONTNEED retains any still-dirty pages;
-    // the write counter bounds those until the next sync and discard.
+    // With RANDOM disabling read-ahead, the current users on 4 KiB OS pages
+    // have much smaller per-window footprints: TradeLedger's 168 B records
+    // and short strings touch at most about 391 pages; ScratchSequence's
+    // whole 64 KiB windows touch at most about 17 pages. The universal
+    // worst-case bound across the read and unsynced-write windows is
+    // 2*kCacheBytes OS pages for one-byte accesses to distinct pages:
+    // 512 MiB at 4 KiB pages, not 128 KiB of physical cache. DONTNEED retains
+    // any still-dirty pages; the write counter bounds those until the next
+    // sync and discard.
     void discard_clean_cache() const {
         if (!bounded_cache_) return;
 #if defined(__linux__)
