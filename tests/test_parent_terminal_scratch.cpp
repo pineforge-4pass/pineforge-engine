@@ -257,6 +257,12 @@ constexpr auto kResidentCauseGuardPopulation =
     kJournalMaxResident - kJournalChunk / 2 - kWideRootCount;
 constexpr auto kLastTargetedPopulation =
     std::min(kLastResidentBookPopulation, kResidentCauseGuardPopulation);
+// L6 15:08: the 4,096 B guard is pinned EXACTLY at the moved threshold. The
+// X08 rows at P = 2030 (kLastTargetedPopulation, guard kDrainBytes) and
+// P = 2031 (plateau bound) are run by the beyond-cap list in main().
+static_assert(kLastResidentBookPopulation == 4094, "book spill starts at 4095");
+static_assert(kResidentCauseGuardPopulation == 2030, "cause chunk goes cold at 2031");
+static_assert(kLastTargetedPopulation == 2030, "guard threshold is population 2030");
 constexpr std::size_t kDrainBytes = 4096;
 
 // GNU make_shared: one vptr and two uint32_t reference counts. Other standard
