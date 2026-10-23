@@ -21,6 +21,7 @@
 #include <pineforge/detail/working_row_table.hpp>
 #include <pineforge/detail/working_minima.hpp>
 #include <pineforge/source/working_snapshot_codec.hpp>
+#include <pineforge/source/pending_roster.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -1786,6 +1787,7 @@ public:
         const SourceId&, std::uint8_t, const native_order::RequestHandle&, double);
     void fixture_projection_state(std::uint8_t, const native_order::RequestHandle&,
                                   const PlacementSnapshot*);
+    const PendingRoster& fixture_pending_roster() const noexcept { return live_handles_; }
     void fixture_queue_state(std::uint8_t, const native_order::Request*,
                              const PlacementSnapshot*, const native_order::RequestHandle&,
                              const native_order::RequestHandle&);
@@ -2898,7 +2900,7 @@ private:
     std::vector<PerEntryExit> per_entry_exits_;
     ::pineforge::detail::WorkingSequence<PendingCoofRequest> pending_coof_requests_;
     ::pineforge::detail::WorkingSequence<PendingMarginRevival> pending_margin_revivals_;
-    ::pineforge::detail::WorkingSequence<native_order::RequestHandle> live_handles_;
+    PendingRoster live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     // R5 lane V19-E: the dropped-close receipts were a log no decision reads;
     // v4 keeps their count and a running digest, each folded once

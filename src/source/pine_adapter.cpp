@@ -1515,27 +1515,10 @@ void PineExecutionAdapter::update_l4c_priority() {
         point ? point->decision.coordinate.interval_index : -1};
     const auto decision = priority.select(context, candidates);
     if (!decision) return;
-    const auto rank = [&](const native_order::RequestHandle& handle) {
-        if (handle == decision->parent) return 0;
-        if (handle == decision->child) return 1;
-        return 2;
-    };
-    if (scratch_store_) {
-        for (std::size_t i = 1; i < live_handles_.size(); ++i) {
-            const auto value = static_cast<const decltype(live_handles_)&>(live_handles_)[i];
-            auto at = i;
-            while (at != 0) {
-                const auto before = static_cast<const decltype(live_handles_)&>(live_handles_)[at - 1];
-                if (rank(before) <= rank(value)) break;
-                live_handles_[at] = before; --at;
-            }
-            live_handles_[at] = value;
-        }
-        live_handles_.flush();
-    } else {
-        std::stable_sort(live_handles_.begin(), live_handles_.end(),
-                         [&](const auto& left, const auto& right) { return rank(left) < rank(right); });
-    }
+    // Stable rank(parent=0, child=1, others=2), without transient duplicate
+    // names or shifted rows. Parent wins if both identities are equal.
+    live_handles_.move_to_front(decision->child);
+    live_handles_.move_to_front(decision->parent);
 }
 
 void PineExecutionAdapter::update_l4c_lifecycle(
@@ -2117,7 +2100,7 @@ void PineExecutionAdapter::suspend_coof_declined_reversal_at_open(
         const Bar& bar, const NativeDecisionContext& context) {
     const auto physical = detail::run_position(require_host());
     if (physical.signed_units == 0.0 || !finite_positive(bar.open)) return;
-    const auto handles = live_handles_;
+    const auto handles = live_handles_.snapshot();
     for (const auto& handle : handles) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
@@ -3587,8 +3570,7 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     // default-constructing a string-bearing snapshot and move-assigning it.
     const auto inserted = placement_.try_emplace(handle.incarnation, std::move(snapshot));
     if (!inserted.second) placement_.replace(handle.incarnation, std::move(snapshot));
-    if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
-        live_handles_.push_back(handle);
+    live_handles_.append(handle);
     // A close order is a transient key of the entry-id table while it waits
     // (global_exit_child_ranks).
     const auto family_pin = placement_.pin_at(handle.incarnation);
@@ -3607,7 +3589,7 @@ void PineExecutionAdapter::bind_scratch_store(detail::ScratchStore& store) {
     if (!scratch_binding_)
         scratch_binding_ = std::make_shared<::pineforge::detail::working_store::Binding>();
     scratch_binding_->store = &store;
-    live_handles_.bind(store, 51, 1);
+    live_handles_.bind(store);
     live_by_source_key_.bind(store, 46, 1);
     cohorts_by_id_.bind_store(store);
     placement_.bind_scratch_store(store);
@@ -3679,12 +3661,10 @@ void PineExecutionAdapter::fixture_projection_state(std::uint8_t edit,
         break;
     case 3: placement_.erase(handle.incarnation); break;
     case 4:
-        if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
-            live_handles_.push_back(handle);
+        live_handles_.append(handle);
         break;
     case 5:
-        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
-                            live_handles_.end());
+        live_handles_.erase(handle);
         break;
     default: throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {}, "source projection fixture edit");
     }
@@ -3744,8 +3724,7 @@ void PineExecutionAdapter::fixture_queue_state(std::uint8_t queue,
 }
 
 void PineExecutionAdapter::retire(native_order::RequestHandle handle) {
-    live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
-                        live_handles_.end());
+    live_handles_.erase(handle);
     first_open_newborns_.erase(std::remove(first_open_newborns_.begin(),
         first_open_newborns_.end(), handle), first_open_newborns_.end());
     for (auto it = live_by_source_key_.begin(); it != live_by_source_key_.end();) {
@@ -6053,7 +6032,7 @@ void PineExecutionAdapter::schedule_preopen_margin_slice(
     // A pre-open margin submission can append to live_handles_ and insert
     // into placement_; scan value copies rather than retaining either
     // container's elements across submit_or_replace.
-    const auto live_handles = live_handles_;
+    const auto live_handles = live_handles_.snapshot();
     for (const auto& handle : live_handles) {
         std::optional<PlacementSnapshot> opening_copy;
         if (const auto found = placement_.find(handle.incarnation);
@@ -14917,7 +14896,7 @@ void PineExecutionAdapter::cancel_all() {
     // script's cancel_all() withdraws too (close_point_margin_call).
     if (const auto point = detail::callback_point(require_host()))
         close_margin_cancelled_bar_ = point->decision.script_bar_open_ms;
-    const auto handles = live_handles_;
+    const auto handles = live_handles_.snapshot();
     std::vector<std::pair<std::uint64_t, std::uint64_t>> cancelled;
     for (const auto& handle : handles) {
         const auto row = placement_.find(handle.incarnation);
@@ -25561,7 +25540,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // The generic cohort is already the quantity authority.  Rebind only
         // adapter lifecycle/reservation receipts after the opening becomes a
         // live physical fact; no request is resized or resubmitted here.
-        const auto handles = live_handles_;
+        const auto handles = live_handles_.snapshot();
         for (const auto& handle : handles) {
             const auto pending = placement_.find(handle.incarnation);
             if (pending == placement_.end()) continue;
@@ -26066,7 +26045,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             ::pineforge::detail::clear_exposure_storage(cohort.second.opened);
             ::pineforge::detail::clear_exposure_storage(cohort.second.live_units_by_origin);
         }
-        const auto handles = live_handles_;
+        const auto handles = live_handles_.snapshot();
         for (const auto& handle : handles) {
             const auto found = placement_.find(handle.incarnation);
             if (found == placement_.end()) continue;
@@ -28313,9 +28292,7 @@ void PineExecutionAdapter::order_same_point_entries() {
         const native_order::Request request = live->request;
         const auto result = host.replace(handle, request, in_place);
         if (result.status != native_order::ReplaceStatus::Replaced) return;
-        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
-                            live_handles_.end());
-        live_handles_.push_back(handle);
+        live_handles_.move_to_back(handle);
     }
 }
 

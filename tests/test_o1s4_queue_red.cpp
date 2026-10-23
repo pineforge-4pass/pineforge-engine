@@ -1213,6 +1213,323 @@ std::array<no::RequestHandle, 2> populate_pending_read_bound(
     return {{handles.front(), ordinary}};
 }
 
+void s4_roster_scan_read_bound_red() {
+    constexpr std::array<std::size_t, 2> populations{{17, 65}};
+    std::array<std::uint64_t, 2> append_reads{}, erase_reads{};
+    std::uint64_t canonical_bytes = 0;
+    for (std::size_t sample = 0; sample < populations.size(); ++sample) {
+        const auto n = populations[sample];
+        Rig rig;
+        ScratchStore store(rig.config(), &rig.backing);
+        Subject s(store);
+        std::vector<no::RequestHandle> handles;
+        ps::PlacementSnapshot snapshot;
+        snapshot.source_id = "q"; snapshot.requested_qty = 1.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto h = s.submit(limit_order(1.0, 50.0 + i % 13));
+            s.remember(h, snapshot);
+            handles.push_back(h);
+        }
+        // Warm the actual write paths, not an observer/cache of their answer.
+        // Remove the warm row so both charged operations start with N names.
+        const auto warm = s.submit(limit_order(1.0, 61.0));
+        s.remember(warm, snapshot);
+        s.retire_handle(warm);
+        s.projection(ProjectionEdit::erase, warm);
+        s.cancel(warm);
+
+        const auto append_before = store.stats().page_reads;
+        const auto extra = s.submit(limit_order(1.0, 62.0));
+        s.remember(extra, snapshot);
+        const auto append_after = store.stats().page_reads;
+        append_reads[sample] = append_after - append_before;
+
+        const auto middle = handles[n / 2];
+        const auto erase_before = store.stats().page_reads;
+        s.retire_handle(middle);
+        s.projection(ProjectionEdit::erase, middle);
+        const auto erase_after = store.stats().page_reads;
+        erase_reads[sample] = erase_after - erase_before;
+        require(s.core().find_live(extra) != nullptr,
+                "the charged append actually submits a new native handle");
+        // A byte bounds one nonempty scalar/chunk-piece decode request. This
+        // is an encoding-derived allowance, not a fitted page-read constant.
+        canonical_bytes = std::max(canonical_bytes,
+            ::pineforge::detail::working_store::Source<ps::PlacementSnapshot>(snapshot).size()
+            + ::pineforge::detail::working_store::Source<no::Request>(
+                limit_order(1.0, 62.0)).size());
+        std::printf("roster-scan-read-bound n=%zu append_reads=%llu erase_reads=%llu\n", n,
+                    static_cast<unsigned long long>(append_reads[sample]),
+                    static_cast<unsigned long long>(erase_reads[sample]));
+        std::fflush(stdout);
+    }
+    // Reuse s4_pending_size_read_bound_red's geometry: 512-byte pages, two
+    // slots, d,h<=3, ordered capacities 58/29 and radix capacities 14/60.
+    // L=2*d+2+[5*(d-1)+7]*(h+2)+2*h+1=100 bounds one 32-byte key find.
+    // C(S)=2*h+2*ceil(S/56)+4 bounds a direct fixed-record load; reserve S=128.
+    // An AVL of height 9 needs at least 88 names (the 1,2,4,7,... recurrence),
+    // so the largest charged roster (66 names) has height <=8. Budget
+    // A(H)=40*H+16 direct loads and W(H)=12*H+16 publications: per ancestor,
+    // two child loads, two balance loads, up to two rotations (eight loads /
+    // four writes each), parent repair and endpoint/identity/root work.
+    // Payload pieces cost <=L+h+9. Allow 16 such indexed passes per encoded
+    // byte for canonical decode/write/retirement; for each structural write
+    // allow 16 passes for descent, key/value cells, radix and undo/split work.
+    // For N=17 ->65, allow 64 extra indexed paths (two additional counted
+    // ancestors, their rotations/publications, and canonical path splitting).
+    // No population or measured delta occurs in either allowance.
+    //
+    // Old remember visits every prior name; old retire visits every name and
+    // rewrites the suffix. A decoded handle needs four payload finds, besides
+    // its root. Each find compares an ordered page, >=2 radix pages and a key
+    // page through two slots, repeatedly for the binary-search comparisons.
+    // The 48 additional decoded/dirty-compared rows therefore have a linear
+    // read term; unlike the indexed paths it is not a height-change allowance.
+    constexpr std::uint64_t d = 3, h = 3;
+    constexpr std::uint64_t lookup =
+        2 * d + 2 + (5 * (d - 1) + 7) * (h + 2) + 2 * h + 1;
+    constexpr std::uint64_t slack = 64 * lookup;
+    constexpr std::uint64_t height = 8;
+    constexpr std::uint64_t direct = 2 * h + 2 * ((128 + 55) / 56) + 4;
+    const auto absolute = 16 * canonical_bytes * (lookup + h + 9)
+        + (40 * height + 16) * direct
+        + (12 * height + 16) * 16 * (lookup + h + 9);
+    for (const auto& reads : {append_reads, erase_reads}) {
+        require(reads[1] <= reads[0] + slack,
+                "one roster mutation has no live-population scan read term");
+        require(reads[0] <= absolute && reads[1] <= absolute,
+                "one roster mutation stays under the geometry-derived ceiling");
+    }
+}
+
+void check_live_roster_exact(const ps::PendingRoster& actual,
+        const std::vector<no::RequestHandle>& expected,
+        const std::vector<no::RequestHandle>& universe) {
+    require(actual.size() == expected.size(), "roster cardinality equals the vector model");
+    std::size_t rank = 0;
+    std::optional<ps::PendingRoster::Order> previous;
+    for (const auto& h : actual) {
+        require(rank < expected.size() && same_handle(h, expected[rank]),
+                "const roster iteration preserves every full handle in order");
+        const auto occurrence = actual.occurrence(h);
+        require(occurrence.has_value() && same_handle(occurrence->handle, h),
+                "full-handle membership resolves the iterated occurrence");
+        require(!previous || *previous < occurrence->order,
+                "stable occurrence labels express the same logical order");
+        previous = occurrence->order;
+        require(same_handle(actual[rank], expected[rank])
+                    && same_handle(actual.observe_at(rank), expected[rank]),
+                "counted rank and read-only observation agree with vector order");
+        ++rank;
+    }
+    require(rank == expected.size(), "roster iteration omits no model row");
+    rank = expected.size();
+    for (auto at = actual.rbegin(); at != actual.rend(); ++at) {
+        require(rank != 0 && same_handle(*at, expected[--rank]),
+                "reverse const iteration preserves the reverse vector order");
+    }
+    require(rank == 0, "reverse iteration omits no model row");
+    for (const auto& h : universe) {
+        const bool present = has_handle(expected, h);
+        require(actual.contains(h) == present && actual.occurrence(h).has_value() == present,
+                "membership includes actual run and all session-key bytes");
+        std::vector<no::RequestHandle> aliases;
+        actual.visit_incarnation(h.incarnation, [&](const ps::PendingRoster::Occurrence& row) {
+            require(row.handle.incarnation == h.incarnation
+                        && has_handle(expected, row.handle) && !has_handle(aliases, row.handle),
+                    "incarnation relation includes only distinct current full handles");
+            aliases.push_back(row.handle);
+            return true;
+        });
+        std::size_t wanted = 0;
+        for (const auto& row : expected) {
+            if (row.incarnation != h.incarnation) continue;
+            ++wanted;
+            require(has_handle(aliases, row), "incarnation relation keeps every alias, including holes");
+        }
+        require(aliases.size() == wanted, "incarnation relation has exact alias cardinality");
+    }
+}
+
+void s4_roster_index_exact_red() {
+    using Roster = ps::PendingRoster;
+    static_assert(std::is_same_v<decltype(*std::declval<Roster&>().begin()),
+                                 const no::RequestHandle&>,
+                  "even a nonconst owner exposes only const roster iteration");
+    Rig rig;
+    auto store_owner = std::make_unique<ScratchStore>(rig.config(), &rig.backing);
+    auto& store = *store_owner;
+    Subject s(store);
+    std::vector<no::RequestHandle> model, universe, issued;
+    ps::PlacementSnapshot snapshot;
+    snapshot.source_id = "q"; snapshot.requested_qty = 1.0;
+    const auto check = [&] {
+        check_live_roster_exact(s.adapter().fixture_pending_roster(), model, universe);
+    };
+    const auto model_append = [&](no::RequestHandle h) {
+        if (!has_handle(model, h)) model.push_back(h);
+    };
+    const auto model_erase = [&](no::RequestHandle h) {
+        if (has_handle(model, h)) remove_one(model, h);
+    };
+    check();
+    for (unsigned i = 0; i < 17; ++i) {
+        const auto h = s.submit(limit_order(1.0, 50.0 + i % 13));
+        universe.push_back(h); issued.push_back(h);
+        check(); // Native publication alone does not name a source occurrence.
+        s.remember(h, snapshot); model_append(h); check();
+    }
+
+    const auto kept = issued[5];
+    require(same_handle(s.replace(kept, limit_order(3.0, 61.0), true), kept),
+            "real kept-handle replacement retains full identity");
+    check();
+    snapshot.requested_qty = 3.0;
+    s.projection(ProjectionEdit::put, kept, &snapshot); check();
+    const auto kept_id = s.adapter().fixture_pending_roster().occurrence(kept)->id;
+    s.remember(kept, snapshot); model_append(kept); check();
+    require(s.adapter().fixture_pending_roster().occurrence(kept)->id == kept_id,
+            "duplicate remember neither moves nor recreates an occurrence");
+
+    const auto predecessor = issued[8];
+    const auto successor = s.replace(predecessor, limit_order(4.0, 62.0), false);
+    require(!same_handle(predecessor, successor), "real ordinary replace issues a successor");
+    universe.push_back(successor); check();
+    s.retire_handle(predecessor); model_erase(predecessor); check();
+    s.projection(ProjectionEdit::erase, predecessor); check();
+    snapshot.requested_qty = 4.0;
+    s.remember(successor, snapshot); model_append(successor); check();
+
+    const auto hole = issued[3];
+    s.projection(ProjectionEdit::erase, hole); check();
+    s.projection(ProjectionEdit::name, hole); model_append(hole); check();
+    s.projection(ProjectionEdit::put, hole, &snapshot); check();
+    const no::RequestHandle absent{{"absent-roster", 99}, 999999};
+    universe.push_back(absent);
+    s.retire_handle(absent); model_erase(absent); check();
+
+    // Both a different run and a different session with identical incarnation
+    // are distinct aliases. Embedded NULs and a >page session exercise full
+    // bytes; no truncated string or incarnation hash may decide membership.
+    const auto original = issued[2];
+    auto run_alias = original;
+    ++run_alias.run.run_number;
+    auto session_alias = original;
+    std::string session(521, 'x');
+    session[13] = '\0';
+    session_alias.run.session_key = session;
+    auto tail_alias = original;
+    session.back() = 'y';
+    tail_alias.run.session_key = session;
+    universe.push_back(run_alias); universe.push_back(session_alias); universe.push_back(tail_alias);
+    s.remember(run_alias, snapshot); model_append(run_alias); check();
+    s.projection(ProjectionEdit::name, session_alias); model_append(session_alias); check();
+    s.projection(ProjectionEdit::name, tail_alias); model_append(tail_alias); check();
+    s.retire_handle(original); model_erase(original); check();
+    s.projection(ProjectionEdit::erase, original); check(); // Aliases are still named holes.
+    s.projection(ProjectionEdit::put, run_alias, &snapshot); check();
+    s.projection(ProjectionEdit::unname, run_alias); model_erase(run_alias); check();
+    s.retire_handle(session_alias); model_erase(session_alias); check();
+    s.retire_handle(session_alias); check(); // Already absent.
+    s.retire_handle(tail_alias); model_erase(tail_alias); check();
+
+    const auto first = model.front();
+    s.retire_handle(first); model_erase(first); check();
+    s.projection(ProjectionEdit::erase, first); check();
+    const auto last = model.back();
+    s.retire_handle(last); model_erase(last); check();
+    s.projection(ProjectionEdit::erase, last); check();
+
+    const auto digest = source_hash(s);
+    std::array<std::byte, page_bytes> page{};
+    std::uint64_t stored = 0, rebound = 0;
+    status_is(store.ordered_digest({page.data(), page.size()}, stored), ScratchStatus::ok,
+              "committed roster digest before rebind");
+    s.rebind(store);
+    check();
+    require(source_hash(s) == digest, "normal rebind preserves both source roster hash folds");
+    status_is(store.ordered_digest({page.data(), page.size()}, rebound), ScratchStatus::ok,
+              "committed roster digest after rebind");
+    require(rebound == stored, "normal rebind does not rewrite or rebuild derived roster records");
+
+    // Exercise the two operations used by the real reorder sites, with the
+    // same kernel-issued handles and an independent plain vector. An observer
+    // witnesses one joined publication per move and stable occurrence ids.
+    Roster moves;
+    moves.bind(store, 2);
+    struct Events { ScratchStore* store; std::vector<Roster::Change> rows; } events{&store, {}};
+    moves.set_observer(&events, [](void* context, const Roster::Change& event) {
+        auto& out = *static_cast<Events*>(context);
+        require(out.store->transaction_active(), "B receives roster events inside the source transaction");
+        out.rows.push_back(event);
+    });
+    std::vector<no::RequestHandle> order;
+    for (const auto& h : issued) {
+        moves.append(h); order.push_back(h);
+        check_live_roster_exact(moves, order, universe);
+    }
+    const auto moving = issued[9];
+    const auto identity = moves.occurrence(moving)->id;
+    const auto count = events.rows.size();
+    require(moves.move_to_front(moving), "real front-move facade changes order");
+    remove_one(order, moving); order.insert(order.begin(), moving);
+    check_live_roster_exact(moves, order, universe);
+    require(events.rows.size() == count + 1 && events.rows.back().kind == Roster::ChangeKind::move
+                && events.rows.back().before.id == identity && events.rows.back().after.id == identity,
+            "one move event keeps a stable occurrence id");
+    require(moves.move_to_back(moving), "real back-move facade changes order");
+    remove_one(order, moving); order.push_back(moving);
+    check_live_roster_exact(moves, order, universe);
+    const auto noops = events.rows.size();
+    require(!moves.append(moving) && !moves.erase(absent) && !moves.move_to_back(moving)
+                && events.rows.size() == noops,
+            "idempotent mutations do not invent occurrence events");
+    const auto records = store.record_count();
+    {
+        const auto detached = moves.snapshot();
+        std::size_t i = 0;
+        for (const auto& h : detached)
+            require(i < order.size() && same_handle(h, order[i++]), "detached workset preserves order");
+        require(i == order.size(), "detached workset contains every occurrence");
+        moves.erase(order.front()); order.erase(order.begin());
+        check_live_roster_exact(moves, order, universe);
+    }
+    require(store.record_count() == records - 2,
+            "detached workset reclaims rows and its count; one erased roster row reclaims two records");
+    const auto committed = store_digest(store);
+    const auto writes = store.stats().page_writes;
+    check_live_roster_exact(moves, order, universe);
+    require(store.stats().page_writes == writes && store_digest(store) == committed,
+            "roster reads leave every store record and allocation byte unchanged");
+    status_is(store.begin(), ScratchStatus::ok, "explicit provisional roster transaction");
+    moves.erase(order[order.size() / 2]);
+    moves.append(absent);
+    moves.move_to_front(order.back());
+    status_is(store.rollback(), ScratchStatus::ok, "explicit roster rollback");
+    moves.bind(store, 2);
+    check_live_roster_exact(moves, order, universe);
+    require(store_digest(store) == committed,
+            "rollback plus rebind preserves exact index, source, and allocation bytes");
+    // A fresh two-slot cache reads the persisted owner without rebuilding.
+    store_owner.reset();
+    store_owner = std::make_unique<ScratchStore>(rig.config(ScratchOpenMode::reopen), &rig.backing);
+    auto& reopened = *store_owner;
+    status_is(reopened.status(), ScratchStatus::ok, "cold roster store reopens");
+    const auto reopen_writes = reopened.stats().page_writes;
+    moves.bind(reopened, 2);
+    events.store = &reopened;
+    s.rebind(reopened);
+    check_live_roster_exact(moves, order, universe);
+    check();
+    require(reopened.stats().page_writes == reopen_writes
+                && store_digest(reopened) == committed,
+            "cold reopen and both owner rebindings neither write nor regenerate ids");
+    moves.clear(); order.clear();
+    check_live_roster_exact(moves, order, universe);
+    moves.set_observer(nullptr, nullptr);
+    s.adapter().reset_for_run(); model.clear(); check();
+}
+
 void s4_pending_size_read_bound_red() {
     constexpr std::array<std::size_t, 2> populations{{17, 65}};
     std::array<std::uint64_t, 2> size_reads{};
@@ -2496,6 +2813,8 @@ const TestCase tests[] = {
     {"s4_one_queue_owner_kept_handle_order_red", &s4_one_queue_owner_kept_handle_order_red},
     {"s4_queue_and_membership_islands_fixed_red", &s4_queue_and_membership_islands_fixed_red},
     {"s4_islands_small_n_probe_red", &s4_islands_small_n_probe_red},
+    {"s4_roster_scan_read_bound_red", &s4_roster_scan_read_bound_red},
+    {"s4_roster_index_exact_red", &s4_roster_index_exact_red},
     {"s4_pending_size_read_bound_red", &s4_pending_size_read_bound_red},
     {"s4_pending_copy_read_bound_red", &s4_pending_copy_read_bound_red},
     {"s4_terminal_mark_descriptor_stays_fixed_red", &s4_terminal_mark_descriptor_stays_fixed_red},
