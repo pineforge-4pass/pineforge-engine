@@ -1,6 +1,9 @@
 // Keep the R11 N^2 control, linear-work assertions and complete L18 100k
 // T/H/E/metrics differential, with real work reported from its adapter TU.
 #include <pineforge/source/pine_adapter.hpp>
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+#include <pineforge/detail/scratch_file_counters.hpp>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -8,6 +11,13 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+namespace {
+void print_scratch_file_counters(const char* phase, std::uint64_t run,
+                                 std::uint64_t query, std::uint64_t run_query);
+}
+#endif
 
 namespace r11_tail_work {
 using Adapter = pineforge::source::PineExecutionAdapter;
@@ -119,6 +129,9 @@ struct Reporter {
                          reason_name(static_cast<Guard>(i)), totals.guard_reasons[i]);
         std::fputc('\n', stderr);
         std::fflush(stderr);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        print_scratch_file_counters(phase, run, totals.queries, run_query);
+#endif
     }
 
     void observe(const Work& work, const void* adapter, bool fast) {
@@ -195,6 +208,50 @@ void print_sequence_counters() {
         std::fputc('\n', stderr);
         std::fflush(stderr);
     }
+}
+} // namespace
+#endif
+
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+namespace {
+void print_scratch_file_counters(const char* phase, std::uint64_t run,
+                                 std::uint64_t query, std::uint64_t run_query) {
+    auto rows = pineforge::detail::scratch_file_counter_rows();
+    std::sort(rows.begin(), rows.end(), [](const auto* a, const auto* b) {
+        if (!a || !b) return a && !b;
+        const int prefix = std::strcmp(a->prefix, b->prefix);
+        return prefix < 0 || (prefix == 0 && std::strcmp(a->tag, b->tag) < 0);
+    });
+    for (const auto* row : rows) {
+        if (!row) break;
+#define PF_SF_VALUE(field) row->counters.field.load(std::memory_order_relaxed)
+        std::fprintf(stderr,
+            "SFCOUNT phase=%s run=%" PRIu64 " query=%" PRIu64 " run_query=%" PRIu64
+            " prefix=%s tag=%s"
+            " write_calls=%" PRIu64 " write_bytes=%" PRIu64
+            " read_calls=%" PRIu64 " read_bytes=%" PRIu64
+            " fdatasync_calls=%" PRIu64 " fsync_calls=%" PRIu64
+            " fadvise_calls=%" PRIu64 " ftruncate_calls=%" PRIu64 " fallocate_calls=%" PRIu64
+            " opens=%" PRIu64 " max_extent=%" PRIu64
+            " arena_regions=%" PRIu64 " mmap_calls=%" PRIu64 " mmap_bytes=%" PRIu64
+            " chunks_claimed=%" PRIu64
+            " mapped_copy_calls=%" PRIu64 " mapped_copy_bytes=%" PRIu64
+            " mapped_zero_calls=%" PRIu64 " mapped_zero_bytes=%" PRIu64
+            " overflow_registrations=%" PRIu64 "\n",
+            phase, run, query, run_query, row->prefix, row->tag,
+            PF_SF_VALUE(write_calls), PF_SF_VALUE(write_bytes),
+            PF_SF_VALUE(read_calls), PF_SF_VALUE(read_bytes),
+            PF_SF_VALUE(fdatasync_calls), PF_SF_VALUE(fsync_calls),
+            PF_SF_VALUE(fadvise_calls), PF_SF_VALUE(ftruncate_calls), PF_SF_VALUE(fallocate_calls),
+            PF_SF_VALUE(opens), PF_SF_VALUE(max_extent),
+            PF_SF_VALUE(arena_regions), PF_SF_VALUE(mmap_calls), PF_SF_VALUE(mmap_bytes),
+            PF_SF_VALUE(chunks_claimed),
+            PF_SF_VALUE(mapped_copy_calls), PF_SF_VALUE(mapped_copy_bytes),
+            PF_SF_VALUE(mapped_zero_calls), PF_SF_VALUE(mapped_zero_bytes),
+            PF_SF_VALUE(overflow_registrations));
+#undef PF_SF_VALUE
+    }
+    std::fflush(stderr);
 }
 } // namespace
 #endif

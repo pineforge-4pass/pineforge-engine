@@ -2,6 +2,9 @@
 #include "command_scratch_cache.hpp"
 
 #include <pineforge/run_failure.hpp>
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+#include <pineforge/detail/scratch_file_counters.hpp>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -78,13 +81,24 @@ ScratchStatus io_status(int error) noexcept {
 
 class CommandScratchFile final : public ScratchBacking {
 public:
-    CommandScratchFile(std::size_t size, ScratchIoObserver observer, CommandScratchByteCap budget)
+    CommandScratchFile(std::size_t size, ScratchIoObserver observer, CommandScratchByteCap budget
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                       , const char* caller_tag
+#endif
+                       )
         : ScratchBacking(ScratchBackingKind::disk, size, observer), budget_(std::move(budget)) {
         const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_DIR");
         std::string path = selected && *selected ? selected : "/tmp";
         if (path.back() != '/') path += '/';
         path += "pineforge-command-XXXXXX";
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        caller_tag_ = caller_tag;
+        counters_ = &scratch_file_counters("pineforge-command", caller_tag_);
+#endif
         const int opened = ::mkstemp(path.data());
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        if (opened >= 0) counters_->opens.fetch_add(1, std::memory_order_relaxed);
+#endif
         if (opened < 0)
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
                 std::system_error(errno, std::generic_category(), "command scratch create"));
@@ -133,6 +147,9 @@ protected:
             do {
                 count = ::pread(fd_, destination.data + transferred, chunk,
                                 offset + static_cast<off_t>(transferred));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                counters_->read(static_cast<std::uint64_t>(offset) + transferred, count);
+#endif
             } while (count < 0 && errno == EINTR);
             if (count < 0) return io_status(errno);
             if (static_cast<std::size_t>(count) != chunk) return ScratchStatus::io_error;
@@ -150,6 +167,9 @@ protected:
             if (budget_ && !budget_->reserve(growth)) return ScratchStatus::io_error;
             int result;
             do {
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                counters_->ftruncate_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
                 result = ::ftruncate(fd_, end);
             } while (result < 0 && errno == EINTR);
             if (result < 0) {
@@ -160,6 +180,9 @@ protected:
             // ftruncate exposes zero-filled holes. Keep the real new extent
             // even if the following positional write fails or is short.
             extent_ = id + 1;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            counters_->extent(static_cast<std::uint64_t>(end));
+#endif
         }
         std::size_t transferred = 0;
         while (transferred < source.size) {
@@ -169,6 +192,9 @@ protected:
             do {
                 count = ::pwrite(fd_, source.data + transferred, chunk,
                                  offset + static_cast<off_t>(transferred));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                counters_->wrote(static_cast<std::uint64_t>(offset) + transferred, count);
+#endif
             } while (count < 0 && errno == EINTR);
             if (count < 0) return io_status(errno);
             if (static_cast<std::size_t>(count) != chunk) return ScratchStatus::io_error;
@@ -181,6 +207,11 @@ protected:
         if (durability == ScratchDurability::buffered) return ScratchStatus::ok;
         int result;
         do {
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            auto& calls = durability == ScratchDurability::data
+                ? counters_->fdatasync_calls : counters_->fsync_calls;
+            calls.fetch_add(1, std::memory_order_relaxed);
+#endif
             result = durability == ScratchDurability::data ? ::fdatasync(fd_) : ::fsync(fd_);
         } while (result < 0 && errno == EINTR);
         return result == 0 ? ScratchStatus::ok : io_status(errno);
@@ -199,6 +230,10 @@ private:
     int fd_ = -1;
     std::uint64_t extent_ = 0;
     CommandScratchByteCap budget_;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    const char* caller_tag_ = nullptr;
+    ScratchFileCounters* counters_ = nullptr;
+#endif
 };
 
 } // namespace
@@ -219,8 +254,19 @@ CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registr
     return registration;
 }
 
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size) {
+    return make_command_scratch_backing(page_size, "make_command_scratch_backing");
+}
+#endif
+
+std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    , const char* caller_tag
+#endif
+    ) {
     if (page_size == 0)
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "command scratch page size is zero");
@@ -238,7 +284,11 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
         }
     }
     return std::make_unique<CachedScratchBacking>(
-        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}, std::move(budget)),
+        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}, std::move(budget)
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                                            , caller_tag
+#endif
+                                            ),
         command_scratch_observer);
 }
 

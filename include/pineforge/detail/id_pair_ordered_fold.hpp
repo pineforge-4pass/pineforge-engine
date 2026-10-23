@@ -64,6 +64,11 @@ class IdPairFoldFile {
         (kMaximumRows + kRowsPerSegment - 1) / kRowsPerSegment);
     std::array<IdPairScratchFile, kSegments> files_;
 public:
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    void diagnostic_tag(const char* tag) noexcept {
+        for (auto& file : files_) file.diagnostic_tag(tag);
+    }
+#endif
     bool opened() const noexcept {
         for (const auto& file : files_) if (file.opened()) return true;
         return false;
@@ -114,7 +119,15 @@ public:
         return {at, mask}; // callers establish a != b
     }
 
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    IdPairOrderedFold() {
+        leaves_.diagnostic_tag("consumed_partial_exit_cycles_.fold.leaves");
+        branches_.diagnostic_tag("consumed_partial_exit_cycles_.fold.branches");
+        undo_.diagnostic_tag("consumed_partial_exit_cycles_.fold.undo");
+    }
+#else
     IdPairOrderedFold() = default;
+#endif
     IdPairOrderedFold(const IdPairOrderedFold&) = delete;
     IdPairOrderedFold& operator=(const IdPairOrderedFold&) = delete;
     IdPairOrderedFold(IdPairOrderedFold&& other) noexcept { swap(other); }

@@ -64,10 +64,16 @@ void read_exact(int descriptor, std::int64_t offset, void* bytes, std::size_t le
     check_buffer(bytes, length);
     auto* destination = static_cast<unsigned char*>(bytes);
     std::size_t received = 0;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    auto& counters = detail::scratch_file_counters("borrowed-fd", "report_scratch::read_exact");
+#endif
     while (received < length) {
         const std::size_t chunk = std::min(length - received, kScratchWindowBytes);
         const ssize_t count = ::pread(descriptor, destination + received, chunk,
             static_cast<off_t>(offset + static_cast<std::int64_t>(received)));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters.read(static_cast<std::uint64_t>(offset) + received, count);
+#endif
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) fail_io(count < 0 ? errno : EIO, "report scratch read");
         received += static_cast<std::size_t>(count);

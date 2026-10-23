@@ -377,6 +377,10 @@ struct TradeLedger::State {
     mutable std::map<size_type, Trade> materialized;
 
     State() {
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        index.diagnostic_tag("TradeLedger::index");
+        payload.diagnostic_tag("TradeLedger::payload");
+#endif
         index.bound_cache();
         payload.bound_cache();
     }

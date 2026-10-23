@@ -1259,7 +1259,11 @@ struct NativeExecutionConsumer::RunCommandScratch {
     // placement do not enter state_digest; all command scopes roll back.
     static constexpr std::size_t page_size = 512;
     std::unique_ptr<detail::ScratchBacking> backing =
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        detail::make_command_scratch_backing(page_size, "NativeExecutionConsumer::RunCommandScratch");
+#else
         detail::make_command_scratch_backing(page_size);
+#endif
     std::unique_ptr<detail::CommandScratchStore> store;
     detail::CommandScratchStore** borrower = nullptr;
     std::array<std::byte, page_size> digest_page{};

@@ -128,11 +128,19 @@ class ScratchSequence {
     static_assert(sizeof(T) <= 64 * 1024);
     static constexpr std::size_t kValues = 64 * 1024 / sizeof(T);
 public:
-    ScratchSequence() { file_.bound_cache(); }
+    ScratchSequence() {
+        file_.bound_cache();
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        file_.diagnostic_tag("other");
+#endif
+    }
 #ifdef PINEFORGE_SCRATCH_SEQUENCE_COUNTERS
     // Tags must outlive the diagnostic registry (the call sites use literals).
     void diagnostic_tag(const char* tag) noexcept {
         diagnostic_.tag = tag ? tag : "other";
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        file_.diagnostic_tag(diagnostic_.tag);
+#endif
     }
 #endif
     class const_iterator {
@@ -211,6 +219,9 @@ public:
     template<class Compare>
     void stable_sort(Compare before) {
         ScratchSequence scratch;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        scratch.file_.diagnostic_tag("ScratchSequence::stable_sort");
+#endif
         scratch.set_directory(directory_);
         for (std::size_t width = 1; width < size();) {
             scratch.clear();

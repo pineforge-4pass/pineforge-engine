@@ -415,7 +415,11 @@ private:
     // Historical margin ids must stay queryable even after their last live
     // origin drains. Only fixed tree metadata lives in RAM; values/ids are
     // in the existing external table, without a resident directory/cache.
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    ::pineforge::detail::DiskIdTable<Margins> margins_{"PositionTailSummary::margins_"};
+#else
     ::pineforge::detail::DiskIdTable<Margins> margins_;
+#endif
     Margins all_margins_{};
     std::uint64_t high_closed_origin_ = 0;
     std::size_t observed_end_ = 0;

@@ -50,8 +50,14 @@ void read_scratch_curve_region(const void* context, std::int64_t index,
     off_t offset = static_cast<off_t>(region.byte_offset + index * point_bytes);
     auto* bytes = reinterpret_cast<unsigned char*>(output);
     std::size_t remaining = static_cast<std::size_t>(count) * sizeof(*output);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    auto& counters = detail::scratch_file_counters("borrowed-fd", "metrics::SpillCurve");
+#endif
     while (remaining != 0) {
         const ssize_t got = ::pread(region.descriptor, bytes, remaining, offset);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters.read(static_cast<std::uint64_t>(offset), got);
+#endif
         if (got < 0) {
             const int error = errno;
             if (error == EINTR) continue;

@@ -650,7 +650,13 @@ public:
     using iterator = Iterator<false>;
     using const_iterator = Iterator<true>;
 
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    PlacementTable() {
+        erased_minima_.diagnostic_tags("erased_minima_.data", "erased_minima_.index");
+    }
+#else
     PlacementTable() = default;
+#endif
     PlacementTable(const PlacementTable&) = delete;
     PlacementTable& operator=(const PlacementTable&) = delete;
     PlacementTable(PlacementTable&&) noexcept = default;

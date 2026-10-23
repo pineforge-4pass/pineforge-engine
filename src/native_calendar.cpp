@@ -1,4 +1,7 @@
 #include <pineforge/native_calendar.hpp>
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+#include <pineforge/detail/scratch_file_counters.hpp>
+#endif
 
 #include "native_calendar_memo.hpp"
 #include "timezone.hpp"
@@ -865,10 +868,17 @@ void tz_fnv_u64(std::uint64_t& h, std::uint64_t v) { tz_fnv_bytes(h, &v, sizeof 
 bool tz_read_resource(const std::string& path, std::string& bytes) {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    auto& counters = detail::scratch_file_counters("timezone-resource", "tz_read_resource");
+    counters.opens.fetch_add(1, std::memory_order_relaxed);
+#endif
     char buffer[4096];
     bool failed = false;
     for (;;) {
         const ssize_t n = ::read(fd, buffer, sizeof buffer);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters.read(static_cast<std::uint64_t>(bytes.size()), n);
+#endif
         if (n == 0) break;
         if (n < 0) {
             if (errno == EINTR) continue;
@@ -915,8 +925,15 @@ std::optional<std::string> tz_file_actual_path(std::string_view name) {
     if (res != dir && res.rfind(dir + "/", 0) != 0) return std::nullopt;
     const int fd = ::open(res.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return std::nullopt;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    auto& counters = detail::scratch_file_counters("timezone-resource", "tz_file_actual_path");
+    counters.opens.fetch_add(1, std::memory_order_relaxed);
+#endif
     char mag[4] = {};
     const ssize_t n = ::read(fd, mag, 4);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    counters.read(0, n);
+#endif
     ::close(fd);
     if (n != 4 || std::memcmp(mag, "TZif", 4) != 0) return std::nullopt;
     return res;

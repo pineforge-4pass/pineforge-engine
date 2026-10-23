@@ -32,6 +32,9 @@ class DiskIdTable {
 public:
     using Offset = std::uint64_t;
     DiskIdTable() = default;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    explicit DiskIdTable(const char* tag) { file_.diagnostic_tag(tag); }
+#endif
     DiskIdTable(const DiskIdTable&) = delete;
     DiskIdTable& operator=(const DiskIdTable&) = delete;
     DiskIdTable(DiskIdTable&& other) noexcept { *this = std::move(other); }

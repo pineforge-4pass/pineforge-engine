@@ -7475,16 +7475,14 @@ endif()
 # --- CR-150 core-cr150-l18 begin ---
 if(TARGET test_position_tail_scale_out_100k)
     target_compile_definitions(test_position_tail_scale_out_100k PRIVATE
-        PINEFORGE_SCRATCH_SEQUENCE_COUNTERS)
+        PINEFORGE_SCRATCH_SEQUENCE_COUNTERS PINEFORGE_SCRATCH_FILE_COUNTERS)
     target_include_directories(test_position_tail_scale_out_100k PRIVATE
         ${PROJECT_SOURCE_DIR}/src)
     # The test already includes pine_adapter.cpp via the R11 scale fixture.
-    # Compile the rest of the source layer here too: the diagnostic member
-    # changes PineExecutionAdapter/PineStrategyHost layout in this executable.
-    # engine_report.cpp owns the third sequence (OwnedExcursions::values).
-    # These definitions replace those archive objects just as the included
-    # adapter does; all other kernel objects remain the ordinary library.
-    # Keep this list equal to PINEFORGE_SOURCE_LAYER_SOURCES minus pine_adapter.cpp.
+    # Compile the remaining source layer here: diagnostic members change its
+    # owners' layouts. Keep this list equal to PINEFORGE_SOURCE_LAYER_SOURCES
+    # minus the included pine_adapter.cpp, plus the existing engine_report.cpp
+    # copy that owns the third sequence (OwnedExcursions::values).
     target_sources(test_position_tail_scale_out_100k PRIVATE
         ${PROJECT_SOURCE_DIR}/src/compat/pine/exit_activation.cpp
         ${PROJECT_SOURCE_DIR}/src/compat/pine/exit_lifecycle.cpp
@@ -7507,5 +7505,81 @@ if(TARGET test_position_tail_scale_out_100k)
         ${PROJECT_SOURCE_DIR}/src/source/pine_state_hash.cpp
         ${PROJECT_SOURCE_DIR}/src/source/pine_ta_length.cpp
         ${PROJECT_SOURCE_DIR}/src/engine_report.cpp)
+    # ScratchFile/IdPairScratchFile also affect kernel owners and inline
+    # methods. Recompile the remaining kernel with both diagnostics, preserving
+    # the library's flags (in particular Release NDEBUG, rather than this
+    # test's -UNDEBUG). Production archives and other tests retain their
+    # existing compilation. This helper registers no new test.
+    add_library(position_tail_scratch_counter_kernel OBJECT EXCLUDE_FROM_ALL)
+    target_compile_definitions(position_tail_scratch_counter_kernel PRIVATE
+        PINEFORGE_SCRATCH_SEQUENCE_COUNTERS PINEFORGE_SCRATCH_FILE_COUNTERS)
+    target_link_libraries(position_tail_scratch_counter_kernel PRIVATE pineforge)
+    # Mirror pineforge's private options from the top-level CMakeLists.txt;
+    # the lane guard permits no TARGET_PROPERTY reads of another target.
+    target_compile_options(position_tail_scratch_counter_kernel PRIVATE
+        $<$<NOT:$<CONFIG:Debug>>:-O2>
+        -fPIC -fvisibility=hidden -fvisibility-inlines-hidden
+        -Wall -Wextra -Wpedantic -Wno-unused-parameter
+        -ffp-contract=off
+        $<$<NOT:$<CONFIG:Debug>>:-falign-functions=64>)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(position_tail_scratch_counter_kernel PRIVATE ${_pf_cov_flags})
+    endif()
+    if(PINEFORGE_STRICT_WARNINGS)
+        target_compile_options(position_tail_scratch_counter_kernel PRIVATE
+            -Wconversion -Wsign-conversion)
+    endif()
+    target_include_directories(position_tail_scratch_counter_kernel PRIVATE
+        ${PROJECT_SOURCE_DIR}/src)
+    # Keep equal to PINEFORGE_KERNEL_SOURCES minus engine_report.cpp above.
+    target_sources(position_tail_scratch_counter_kernel PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/c_abi.cpp
+        ${PROJECT_SOURCE_DIR}/src/run_failure.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_c_host.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_aux_security.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_lower_tf.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_metrics.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_orders.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_execution.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_path_resolve.cpp
+        ${PROJECT_SOURCE_DIR}/src/reservation_expansion.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_run.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_security.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_state_hash.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_stream.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_trade_accessors.cpp
+        ${PROJECT_SOURCE_DIR}/src/pending_order_mirror.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_order.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine_consumer.cpp
+        ${PROJECT_SOURCE_DIR}/src/market_driver.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_execution_consumer.cpp
+        ${PROJECT_SOURCE_DIR}/src/command_scratch_production.cpp
+        ${PROJECT_SOURCE_DIR}/src/command_scratch_cache.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_calc_plan.cpp
+        ${PROJECT_SOURCE_DIR}/src/magnifier.cpp
+        ${PROJECT_SOURCE_DIR}/src/math.cpp
+        ${PROJECT_SOURCE_DIR}/src/matrix.cpp
+        ${PROJECT_SOURCE_DIR}/src/session_time.cpp
+        ${PROJECT_SOURCE_DIR}/src/str_utils.cpp
+        ${PROJECT_SOURCE_DIR}/src/ta_extremes_volume.cpp
+        ${PROJECT_SOURCE_DIR}/src/ta_misc.cpp
+        ${PROJECT_SOURCE_DIR}/src/ta_moving_averages.cpp
+        ${PROJECT_SOURCE_DIR}/src/ta_oscillators.cpp
+        ${PROJECT_SOURCE_DIR}/src/ta_volatility_trend.cpp
+        ${PROJECT_SOURCE_DIR}/src/timeframe.cpp
+        ${PROJECT_SOURCE_DIR}/src/timezone.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_calendar.cpp
+        ${PROJECT_SOURCE_DIR}/src/report_sink_writer.cpp
+        ${PROJECT_SOURCE_DIR}/src/sha256.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_run_spec.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_fx_curve.cpp
+        ${PROJECT_SOURCE_DIR}/src/native_bar_views.cpp
+        ${PROJECT_SOURCE_DIR}/src/selected_report_view.cpp
+        ${PROJECT_SOURCE_DIR}/src/selected_window_plan.cpp
+        ${PROJECT_SOURCE_DIR}/src/metrics_spill_curve.cpp
+        ${PROJECT_SOURCE_DIR}/src/report_scratch.cpp
+        ${PROJECT_SOURCE_DIR}/src/scratch_arena.cpp)
+    target_sources(test_position_tail_scale_out_100k PRIVATE
+        $<TARGET_OBJECTS:position_tail_scratch_counter_kernel>)
 endif()
 # --- CR-150 core-cr150-l18 end ---

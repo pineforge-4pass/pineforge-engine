@@ -1091,6 +1091,10 @@ PineExecutionAdapter::PineExecutionAdapter(compat::pine::CapAttachment attachmen
 #ifdef PINEFORGE_SCRATCH_SEQUENCE_COUNTERS
     trade_exit_phase_.diagnostic_tag("trade_exit_phase_");
 #endif
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    consumed_partial_exit_cycles_.diagnostic_tags(
+        "consumed_partial_exit_cycles_.data", "consumed_partial_exit_cycles_.index");
+#endif
     pending_view_.owner_ = this;
     cohorts_by_id_.set_store(::pineforge::detail::ScratchStore::cohort);
     exit_rank_keys_.set_store(::pineforge::detail::ScratchStore::exit_rank);
@@ -1109,7 +1113,11 @@ struct CommandScratchRun {
     // Fixed geometry, independent of bars, handles and text widths.
     static constexpr std::size_t page_size = 512;
     std::unique_ptr<pineforge::detail::ScratchBacking> backing =
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        make_command_scratch_backing(page_size, "source::CommandScratchRun");
+#else
         make_command_scratch_backing(page_size);
+#endif
     CommandScratchStore store;
 
     explicit CommandScratchRun(ScratchKeyOrder order)

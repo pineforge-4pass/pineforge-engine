@@ -3,6 +3,9 @@
 #endif
 
 #include <pineforge/detail/scratch_arena.hpp>
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+#include <pineforge/detail/scratch_file_counters.hpp>
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -205,9 +208,16 @@ struct ScratchArena::Impl {
         // RLIMIT_FSIZE=0. Refuse before mapping beyond its new EOF. This cannot
         // protect a cached window or close a concurrent fstat-to-access race.
         validate_backing_size(fd.value, supplied_bytes, EIO, "scratch arena map size");
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        auto& diagnostic = scratch_arena_file_counters();
+        diagnostic.mmap_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
         void* address = ::mmap(nullptr, length, PROT_READ | PROT_WRITE,
                                MAP_SHARED, fd.value, static_cast<off_t>(offset));
         if (address == MAP_FAILED) arena_error(errno, "scratch arena map");
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        diagnostic.mmap_bytes.fetch_add(length, std::memory_order_relaxed);
+#endif
         *at = Window{address, offset, length};
         counters.windows_mapped_bytes += length;
         std::rotate(windows.begin(), at, std::next(at));
@@ -249,6 +259,9 @@ struct ScratchArena::Impl {
         --counters.chunks_free;
         counters.bytes_used += kChunkBytes;
         counters.high_water = std::max(counters.high_water, counters.bytes_used);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        scratch_arena_file_counters().chunks_claimed.fetch_add(1, std::memory_order_relaxed);
+#endif
         return static_cast<std::uint32_t>(search_word * 64 + bit);
     }
 
@@ -261,6 +274,9 @@ struct ScratchArena::Impl {
 #if defined(__linux__)
         // Optional reclamation only. Reuse always zeroes through mappings,
         // so failure/unsupported punching can never disclose an old store.
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        scratch_arena_file_counters().fallocate_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
         (void)::fallocate(fd.value, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                           static_cast<off_t>(offset), static_cast<off_t>(kChunkBytes));
 #endif
@@ -279,6 +295,11 @@ struct ScratchArena::Impl {
             const auto inside = static_cast<std::size_t>(at - window.offset);
             const auto length = window.length - inside;
             std::memset(static_cast<unsigned char*>(window.address) + inside, 0, length);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            auto& diagnostic = scratch_arena_file_counters();
+            diagnostic.mapped_zero_calls.fetch_add(1, std::memory_order_relaxed);
+            diagnostic.mapped_zero_bytes.fetch_add(length, std::memory_order_relaxed);
+#endif
             at += length;
         }
     }
@@ -323,6 +344,9 @@ struct ScratchArena::Impl {
             throw;
         }
         region.size = bytes;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        scratch_arena_file_counters().extent(bytes);
+#endif
     }
 };
 
@@ -421,6 +445,11 @@ void ScratchArena::truncate(Region& region, std::uint64_t bytes) {
                 window.length - inside, physical + kChunkBytes - at);
             std::memset(static_cast<unsigned char*>(window.address) + inside, 0,
                         static_cast<std::size_t>(count));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            auto& diagnostic = scratch_arena_file_counters();
+            diagnostic.mapped_zero_calls.fetch_add(1, std::memory_order_relaxed);
+            diagnostic.mapped_zero_bytes.fetch_add(count, std::memory_order_relaxed);
+#endif
             at += count;
         }
     }
@@ -449,6 +478,11 @@ void ScratchArena::write(Region& region, std::uint64_t offset,
         const auto inside = static_cast<std::size_t>(physical - window.offset);
         const auto count = std::min(length - written, window.length - inside);
         std::memcpy(static_cast<unsigned char*>(window.address) + inside, source + written, count);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        auto& diagnostic = scratch_arena_file_counters();
+        diagnostic.mapped_copy_calls.fetch_add(1, std::memory_order_relaxed);
+        diagnostic.mapped_copy_bytes.fetch_add(count, std::memory_order_relaxed);
+#endif
         written += count;
     }
 }
@@ -471,6 +505,9 @@ void ScratchArena::read(const Region& region, std::uint64_t offset,
             static_cast<std::size_t>(kChunkBytes - in_chunk));
         const ssize_t result = ::pread(impl_->fd.value, destination + received, count,
                                        static_cast<off_t>(physical));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        scratch_arena_file_counters().read(logical, result);
+#endif
         if (result < 0 && errno == EINTR) continue;
         if (result < 0) arena_error(errno, "scratch read");
         if (static_cast<std::size_t>(result) != count) {

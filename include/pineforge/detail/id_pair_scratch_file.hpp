@@ -1,6 +1,9 @@
 #pragma once
 
 #include <pineforge/run_failure.hpp>
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+#include <pineforge/detail/scratch_file_counters.hpp>
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -38,16 +41,29 @@ public:
     FixtureIO* fixture_io() const noexcept { return fixture_io_; }
 
     IdPairScratchFile() = default;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    void diagnostic_tag(const char* tag) noexcept { caller_tag_ = tag; }
+    const char* diagnostic_tag() const noexcept { return caller_tag_; }
+#endif
     IdPairScratchFile(const IdPairScratchFile&) = delete;
     IdPairScratchFile& operator=(const IdPairScratchFile&) = delete;
     IdPairScratchFile(IdPairScratchFile&& other) noexcept
         : fd_(std::exchange(other.fd_, -1)),
-          fixture_io_(std::exchange(other.fixture_io_, nullptr)) {}
+          fixture_io_(std::exchange(other.fixture_io_, nullptr)) {
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        caller_tag_ = other.caller_tag_;
+        counters_ = std::exchange(other.counters_, nullptr);
+#endif
+    }
     IdPairScratchFile& operator=(IdPairScratchFile&& other) noexcept {
         if (this != &other) {
             reset();
             fd_ = std::exchange(other.fd_, -1);
             fixture_io_ = std::exchange(other.fixture_io_, nullptr);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            caller_tag_ = other.caller_tag_;
+            counters_ = std::exchange(other.counters_, nullptr);
+#endif
         }
         return *this;
     }
@@ -60,12 +76,18 @@ public:
     }
     void open(const std::string& directory) {
         if (opened()) return;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters_ = &scratch_file_counters("pineforge-id-pairs", caller_tag_);
+#endif
         const char* temporary = std::getenv("TMPDIR");
         std::string name = directory.empty()
             ? (temporary && *temporary ? temporary : "/tmp") : directory;
         if (name.back() != '/') name += '/';
         name += "pineforge-id-pairs-XXXXXX";
         const int opened = ::mkstemp(name.data());
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        if (opened >= 0) counters_->opens.fetch_add(1, std::memory_order_relaxed);
+#endif
         if (opened < 0) throw IdPairStoreError(errno, "id table create");
         if (::unlink(name.c_str()) != 0) {
             const int error = errno;
@@ -83,18 +105,30 @@ public:
         check_range(0, bytes);
         int result;
         do {
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            io_counters().ftruncate_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
             result = ::ftruncate(fd_, static_cast<off_t>(bytes));
         } while (result != 0 && errno == EINTR);
         if (result != 0) throw IdPairStoreError(errno, "id table resize");
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        io_counters().extent(bytes);
+#endif
     }
     void read(std::uint64_t offset, void* destination, std::size_t length) const {
         check_range(offset, length);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        (void)io_counters();
+#endif
         auto* bytes = static_cast<unsigned char*>(destination);
         std::size_t received = 0;
         while (received < length) {
             if (fixture_io_) ++fixture_io_->reads;
             const ssize_t count = ::pread(fd_, bytes + received, length - received,
                 static_cast<off_t>(offset + received));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            counters_->read(offset + received, count);
+#endif
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0)
                 throw IdPairStoreError(count < 0 ? errno : EIO, "id table read");
@@ -104,6 +138,9 @@ public:
     }
     void write(std::uint64_t offset, const void* source, std::size_t length) {
         check_range(offset, length);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        (void)io_counters();
+#endif
         const auto* bytes = static_cast<const unsigned char*>(source);
         std::size_t written = 0;
         while (written < length) {
@@ -112,12 +149,18 @@ public:
                 if (prefix != 0) {
                     const auto count = ::pwrite(fd_, bytes + written, prefix,
                         static_cast<off_t>(offset + written));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                    counters_->wrote(offset + written, count);
+#endif
                     if (count > 0) fixture_io_->write_bytes += static_cast<std::uint64_t>(count);
                 }
                 throw IdPairStoreError(EIO, "id table fixture short write");
             }
             const ssize_t count = ::pwrite(fd_, bytes + written, length - written,
                 static_cast<off_t>(offset + written));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            counters_->wrote(offset + written, count);
+#endif
             if (count < 0 && errno == EINTR) continue;
             if (count <= 0)
                 throw IdPairStoreError(count < 0 ? errno : EIO, "id table write");
@@ -134,6 +177,14 @@ private:
     }
     int fd_ = -1;
     FixtureIO* fixture_io_ = nullptr;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    ScratchFileCounters& io_counters() const noexcept {
+        if (!counters_) counters_ = &scratch_file_counters("pineforge-id-pairs", caller_tag_);
+        return *counters_;
+    }
+    const char* caller_tag_ = "IdPairScratchFile";
+    mutable ScratchFileCounters* counters_ = nullptr;
+#endif
 };
 
 } // namespace pineforge::detail

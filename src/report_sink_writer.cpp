@@ -2,6 +2,9 @@
 #include "sha256.hpp"
 
 #include <pineforge/version.h>
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+#include <pineforge/detail/scratch_file_counters.hpp>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -307,6 +310,9 @@ struct LineWriter::State {
     char* buffer;
     std::size_t used = 0;
     off_t offset = 0;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    detail::ScratchFileCounters* counters = nullptr;
+#endif
     bool has_equity_time = false;
     std::int64_t equity_time = 0;
 
@@ -331,6 +337,9 @@ struct LineWriter::State {
             invalid("invalid report sink fd descriptor");
         descriptor = sink.fd;
         borrowed = true;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters = &detail::scratch_file_counters("report-sink", "LineWriter::fd");
+#endif
         run_id = sink.run_id ? sink.run_id : "";
         const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
         buffer = reinterpret_cast<char*>((address + io_alignment - 1) & ~(io_alignment - 1));
@@ -411,6 +420,11 @@ struct LineWriter::State {
                     ? ::send(descriptor, buffer + written, extent - written, MSG_NOSIGNAL)
                     : ::write(descriptor, buffer + written, extent - written))
                 : ::pwrite(descriptor, buffer + written, extent - written, offset + written);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            // Include send() on the borrowed socket path as a transfer call.
+            if (borrowed) counters->wrote(count); // Streams have no file extent.
+            else counters->wrote(static_cast<std::uint64_t>(offset) + written, count);
+#endif
             if (count < 0) {
                 const int number = errno;
                 if (number == EINTR) continue;
@@ -427,14 +441,30 @@ struct LineWriter::State {
             used = 0;
             return;
         }
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters->ftruncate_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
         if (::ftruncate(descriptor, offset + used) != 0) io_error("truncate failed", errno);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters->extent(static_cast<std::uint64_t>(offset) + used);
+#endif
         // Direct I/O bypasses data cache. Synchronize every fixed in-flight
         // window before reuse. No buffered fallback or advisory eviction.
         int status;
 #if defined(__linux__)
-        do { status = ::fdatasync(descriptor); } while (status < 0 && errno == EINTR);
+        do {
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            counters->fdatasync_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
+            status = ::fdatasync(descriptor);
+        } while (status < 0 && errno == EINTR);
 #else
-        do { status = ::fsync(descriptor); } while (status < 0 && errno == EINTR);
+        do {
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            counters->fsync_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
+            status = ::fsync(descriptor);
+        } while (status < 0 && errno == EINTR);
 #endif
         if (status < 0) io_error("synchronize failed", errno);
         if (used == io_window) { offset += used; used = 0; }
@@ -487,6 +517,10 @@ void LineWriter::write_header(const RecordSet& records) {
             while (descriptor < 0 && errno == EINTR);
             if (descriptor < 0) state.io_error("open failed", errno);
             state.descriptor = descriptor;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+            state.counters = &detail::scratch_file_counters("report-sink", "LineWriter::path");
+            state.counters->opens.fetch_add(1, std::memory_order_relaxed);
+#endif
             state.uncached();
         }
         state.records = records;

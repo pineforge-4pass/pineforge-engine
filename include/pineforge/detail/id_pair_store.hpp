@@ -172,6 +172,12 @@ public:
     };
 
     IdPairStore() = default;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    void diagnostic_tags(const char* data, const char* index) noexcept {
+        data_.diagnostic_tag(data);
+        index_.diagnostic_tag(index);
+    }
+#endif
     IdPairStore(const IdPairStore&) = delete;
     IdPairStore& operator=(const IdPairStore&) = delete;
     IdPairStore(IdPairStore&& other) noexcept { swap(other); }
@@ -571,6 +577,9 @@ private:
         if (slots_ > maximum / 2) throw IdPairStoreError(EFBIG, "id table index exhausted");
         const auto next_slots = slots_ == 0 ? kInitialSlots : slots_ * 2;
         IdPairScratchFile next;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        next.diagnostic_tag(index_.diagnostic_tag());
+#endif
         next.fixture_count_io(index_.fixture_io());
         next.open(directory_);
         next.resize(next_slots * sizeof(Slot)); // fresh sparse bytes read as zero

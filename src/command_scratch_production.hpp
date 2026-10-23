@@ -48,5 +48,10 @@ CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registr
 // OS setup failures throw std::system_error.
 std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
     std::size_t page_size);
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+// Diagnostic overload only; callers supply literal, process-lived identities.
+std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
+    std::size_t page_size, const char* caller_tag);
+#endif
 
 } // namespace pineforge::detail

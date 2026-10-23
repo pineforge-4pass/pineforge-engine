@@ -1,5 +1,8 @@
 #include <pineforge/native_order.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+#include <pineforge/detail/scratch_file_counters.hpp>
+#endif
 #include <cassert>
 #include <cerrno>
 #include <cstdlib>
@@ -5889,6 +5892,9 @@ struct WorkingRequestCore::SuccessorRootIndex {
     std::shared_ptr<detail::ScratchSlab> slab;
     // Transient input for one bounded-memory preparation, never a root count.
     bool next_adds_root = true;
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+    detail::ScratchFileCounters* counters = nullptr;
+#endif
 
     SuccessorRootIndex() = default;
     explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner) noexcept
@@ -5912,7 +5918,13 @@ struct WorkingRequestCore::SuccessorRootIndex {
                 ? (temporary && *temporary ? temporary : "/tmp") : directory;
         if (name.back() != '/') name += '/';
         name += "pineforge-roots-XXXXXX";
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        counters = &detail::scratch_file_counters("pineforge-roots", "successor_roots");
+#endif
         const int opened = ::mkstemp(name.data());
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+        if (opened >= 0) counters->opens.fetch_add(1, std::memory_order_relaxed);
+#endif
         if (opened < 0) {
             throw detail::AuxiliaryScratchIoError(errno, "native successor roots create");
         }
@@ -5966,6 +5978,9 @@ struct WorkingRequestCore::SuccessorRootIndex {
             while (written < length) {
                 const ssize_t count = ::pwrite(fd, bytes + written, length - written,
                                                offset + static_cast<off_t>(written));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                counters->wrote(static_cast<std::uint64_t>(offset) + written, count);
+#endif
                 if (count < 0 && errno == EINTR) continue;
                 if (count <= 0) {
                     const int error = count < 0 ? errno : EIO;
@@ -6000,6 +6015,9 @@ struct WorkingRequestCore::SuccessorRootIndex {
             while (received < sizeof(Row)) {
                 const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
                                               offset + static_cast<off_t>(received));
+#ifdef PINEFORGE_SCRATCH_FILE_COUNTERS
+                counters->read(static_cast<std::uint64_t>(offset) + received, count);
+#endif
                 if (count < 0 && errno == EINTR) continue;
                 if (count <= 0) {
                     const int error = count < 0 ? errno : EIO;
