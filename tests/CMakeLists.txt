@@ -7125,26 +7125,6 @@ set(PINEFORGE_PR_FAST_TESTS
     test_native_bare_host_contracts
     test_native_kernel_edge
 )
-foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
-    if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
-        message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
-    endif()
-    if(TEST ${_pf_fast_test})
-        get_test_property(${_pf_fast_test} DISABLED _pf_fast_disabled)
-        get_test_property(${_pf_fast_test} SKIP_RETURN_CODE _pf_fast_skip_code)
-        get_test_property(${_pf_fast_test} SKIP_REGULAR_EXPRESSION _pf_fast_skip_regex)
-        get_test_property(${_pf_fast_test} LABELS _pf_fast_labels)
-        if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"
-                OR NOT _pf_fast_skip_regex STREQUAL "NOTFOUND"
-                OR "slow" IN_LIST _pf_fast_labels OR "private_fixtures" IN_LIST _pf_fast_labels)
-            message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
-        endif()
-        set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
-    endif()
-endforeach()
-if(PINEFORGE_BUILD_SOURCE_LAYER)
-    add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
-endif()
 
 # CR-150 P00: append after the pre-existing line-pinned registrations.
 # Keep the unit-test inventory in sync; its main registration loop is above.
@@ -7595,3 +7575,23 @@ if(UNIX)
     target_compile_options(report_nonfinite_equity_fd PRIVATE -ffp-contract=off -UNDEBUG)
 endif()
 # --- CR-150 core-cr150-cr289 end ---
+foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
+        message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
+    endif()
+    if(TEST ${_pf_fast_test})
+        get_test_property(${_pf_fast_test} DISABLED _pf_fast_disabled)
+        get_test_property(${_pf_fast_test} SKIP_RETURN_CODE _pf_fast_skip_code)
+        get_test_property(${_pf_fast_test} SKIP_REGULAR_EXPRESSION _pf_fast_skip_regex)
+        get_test_property(${_pf_fast_test} LABELS _pf_fast_labels)
+        if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"
+                OR NOT _pf_fast_skip_regex STREQUAL "NOTFOUND"
+                OR "slow" IN_LIST _pf_fast_labels OR "private_fixtures" IN_LIST _pf_fast_labels)
+            message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
+        endif()
+        set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
+endif()

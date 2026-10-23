@@ -16,6 +16,9 @@ import sys
 import tempfile
 import unittest
 
+import check_cr150_cmake_d
+import ci_preflight
+
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = Path(os.environ.get(
@@ -338,6 +341,44 @@ class FenceControls(CMakeControls):
             with self.subTest(tail=tail):
                 self.assert_tail_refused(
                     tail, 'unfenced statement after the CR-150 include block')
+
+    def test_canonical_fast_registration_after_final_fence_is_accepted(self) -> None:
+        registration = ci_preflight.FAST_TEST_REGISTRATION
+        for suffix in (
+                registration,
+                '# The fast-row registration stays last.\n' + registration +
+                '# Only a trailing comment.\n',
+                registration.replace('    ', '\t')):
+            with self.subTest(suffix=suffix):
+                self.assert_tail_passes(self.fence('') + suffix)
+
+    def test_statement_after_fast_registration_is_refused(self) -> None:
+        tail = self.fence('') + ci_preflight.FAST_TEST_REGISTRATION
+        self.assert_tail_passes(tail)
+        self.assert_tail_refused(
+            tail + 'set_tests_properties(test_ta PROPERTIES LABELS "cr999")\n',
+            'unfenced statement after the CR-150 include block')
+
+    def test_statement_before_fast_registration_is_refused(self) -> None:
+        self.assert_tail_passes(self.fence('') + ci_preflight.FAST_TEST_REGISTRATION)
+        self.assert_tail_refused(
+            self.fence('') +
+            'set_tests_properties(test_ta PROPERTIES SKIP_RETURN_CODE 77)\n' +
+            ci_preflight.FAST_TEST_REGISTRATION,
+            'unfenced statement after the CR-150 include block')
+
+    def test_changed_fast_registration_is_refused(self) -> None:
+        registration = ci_preflight.FAST_TEST_REGISTRATION
+        self.assert_tail_passes(self.fence('') + registration)
+        changed = registration.replace('LABELS fast)', 'LABELS tast)', 1)
+        self.assertNotEqual(registration, changed)
+        self.assert_tail_refused(
+            self.fence('') + changed,
+            'unfenced statement after the CR-150 include block')
+
+    def test_fast_registration_constant_matches_preflight(self) -> None:
+        self.assertEqual(ci_preflight.FAST_TEST_REGISTRATION,
+                         check_cr150_cmake_d.FAST_TEST_REGISTRATION)
 
     def test_variable_and_generator_expression_write_names_are_refused(self) -> None:
         for target in ('${destination}', '"${destination}"', '$<TARGET_FILE:test_other>',
