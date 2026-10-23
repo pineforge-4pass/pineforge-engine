@@ -147,6 +147,28 @@ instead ([Run-failure codes](pages/run-failure-codes.md)).
 
 ## Current remote CTest contract: `ctest-shard-union/v1`
 
+**L6 ruling, 2026-10-24 01:48:** the `debug` profile now excludes CTest label
+`slow` by default, both with and without `--ctest-shard`. The 1.7.0 Debug gate
+does not run these rows; Release and the sanitizer profile must still run
+every registered `slow` row on the final tree. Release, sanitizers, kernel,
+native and the runner-only profiles retain their existing default of no
+label exclusion. An explicit `--exclude-label X` still overrides the default
+where valid; runner-only profiles still reject it. This ruling supersedes
+older full-Debug-population and null-exclusion descriptions below.
+
+The declared-exclusion addendum permits only Debug's `slow` exclusion for
+`N > 1`; other multi-shard label exclusions remain refused. Each sharded
+summary reports the actual `excludeLabel` and adds `ctestExcludedNames`, a
+sorted list discovered with `ctest -N -L <label>` (`[]` with no exclusion).
+`ctestRegisteredNames`, its count and its SHA-256 still cover **all**
+registered names. `ctestUnshardedSelectedNames` is the registry minus the
+excluded names; only that selected set is partitioned, and the shard row
+lists must cover it exactly once without any excluded row. Registration
+floors use the full registry; a non-null execution floor applies to the
+selected rows across the union. Debug's default execution floor remains
+null. Without `--ctest-shard`, the summary gains no registry-name or exclusion-name
+fields; the Debug exclusion default is the only execution-path change.
+
 For `release`, `debug`, `sanitizers` and `kernel`, `--ctest-shard I/N`
 selects a deterministic slice with integer indices `1 <= I <= N <= 8`.
 Run the same command on N independent VMs/checkouts of the same tree,

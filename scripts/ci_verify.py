@@ -1109,6 +1109,13 @@ def validate_ctest_shard_union(
     if not names_valid(registry):
         raise ValueError('invalid CTest registry names')
     digest = ctest_registry_sha256(registry)
+    exclude_label = 'slow' if profile == 'debug' else None
+    excluded = first.get('ctestExcludedNames')
+    if (not names_valid(excluded) or excluded != sorted(set(excluded))
+            or not set(excluded) <= set(registry)
+            or (exclude_label is None and excluded)):
+        raise ValueError('invalid CTest excluded names')
+    expected_selection = sorted(set(registry) - set(excluded))
     overlay = first['ctestPrivateFixturesOverlay']
     if type(overlay) is not bool:
         raise ValueError('fixture mode must be a boolean')
@@ -1166,7 +1173,8 @@ def validate_ctest_shard_union(
                 or summary['exitCode'] != 0 or summary.get('failures') != []
                 or summary['profile'] != profile
                 or type(summary['minTests']) is not type(floor) or summary['minTests'] != floor
-                or summary['excludeLabel'] is not None
+                or summary['excludeLabel'] != exclude_label
+                or summary.get('ctestExcludedNames') != excluded
                 or summary['requireWebsocket'] != first['requireWebsocket']
                 or type(summary['ctestPrivateFixturesOverlay']) is not bool
                 or summary['ctestPrivateFixturesOverlay'] != overlay
@@ -1177,9 +1185,9 @@ def validate_ctest_shard_union(
                 or summary['ctestRegistered'] != len(registry)):
             raise ValueError('failed shard or mismatched CTest registry hash/configuration')
         selection = summary['ctestUnshardedSelectedNames']
-        if (not names_valid(selection) or sorted(selection) != sorted(registry)
+        if (not names_valid(selection) or selection != expected_selection
                 or type(summary['ctestUnshardedSelected']) is not int
-                or summary['ctestUnshardedSelected'] != len(registry)):
+                or summary['ctestUnshardedSelected'] != len(expected_selection)):
             raise ValueError('changed unsharded selection')
         lists = [summary[key] for key in
                  ('ctestRan', 'ctestSkipped', 'ctestNotRun', 'ctestDisabled')]
@@ -1188,7 +1196,7 @@ def validate_ctest_shard_union(
         names = [name for category in lists for name in category]
         if not names or len(names) != len(set(names)) or union.intersection(names):
             raise ValueError('empty shard or duplicated CTest row')
-        if (not set(names) <= set(registry)
+        if (not set(names) <= set(expected_selection)
                 or any(type(summary[key]) is not int
                        for key in ('ctestSelected', 'ctestRows', 'ctestTotal'))
                 or summary['ctestSelected'] != len(names)
@@ -1217,7 +1225,7 @@ def validate_ctest_shard_union(
                     raise ValueError('deferred stage has no successful shard 1 proof')
             elif not (passed(stage) or absent_skip(summary, stage)):
                 raise ValueError('stage did not pass: ' + stage['name'])
-    if union != set(registry):
+    if union != set(expected_selection):
         raise ValueError('CTest shard union lost or added a row')
     if floor is not None and counted < floor:
         raise ValueError('CTest union ran fewer rows than the unchanged global floor')
@@ -1234,12 +1242,13 @@ class Profile:
     # Minimum CTest rows the profile must run; None leaves the count ungated.
     min_tests: int | None = None
     thread_sanitizers: bool = False
+    exclude_label: str | None = None
 
 
 PROFILE = {
     'release': Profile('release', 'Release', False, False, True, True,
                        profile_full_floor('release')),
-    'debug': Profile('debug', 'Debug', False, False, True, True),
+    'debug': Profile('debug', 'Debug', False, False, True, True, exclude_label='slow'),
     'sanitizers': Profile('sanitizers', 'Debug', True, False, True, True),
     'native': Profile('native', 'Release', False, True, False, True),
     'live-sanitizers': Profile('live-sanitizers', 'Debug', True, True, False, True,
@@ -1506,7 +1515,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                              'refuse skip (77); automatic in runner sanitizer profiles while transport.cpp exists')
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
-                             'CTest discovery with and without -LE')
+                             'CTest discovery with and without -LE; default: slow '
+                             'for debug only, no exclusion for other profiles')
     parser.add_argument('--ctest-shard', type=parse_ctest_shard, default=None, metavar='I/N',
                         help='run deterministic CTest shard I of N (1 <= I <= N <= 8); '
                              'all shards are required for a full verification')
@@ -1540,6 +1550,8 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         if not label or any(not (char.isalnum() or char in '_.-') for char in label):
             raise ConfigError('--exclude-label must be a simple CTest label')
         args.exclude_label = label
+    exclude_label = (args.exclude_label if args.exclude_label is not None else
+                     PROFILE[args.profile].exclude_label)
     if args.curl_dir is not None and not args.curl_dir.is_dir():
         raise ConfigError(f'--curl-dir is not a directory: {args.curl_dir}')
     if args.min_tests is not None and args.min_tests < 1:
@@ -1547,9 +1559,9 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
     if args.ctest_shard is not None and args.ctest_shard.count > 1:
         if args.profile not in CTEST_SHARD_PROFILES:
             raise ConfigError('--ctest-shard with N > 1 requires release, debug, sanitizers or kernel')
-        if args.exclude_label is not None:
-            raise ConfigError('--ctest-shard with N > 1 requires the full registry; '
-                              '--exclude-label is invalid')
+        if exclude_label is not None and (args.profile != 'debug' or exclude_label != 'slow'):
+            raise ConfigError('--ctest-shard with N > 1 only permits the declared '
+                              'debug exclusion of label slow')
         minimum = profile_min_tests(PROFILE[args.profile], source)
         if minimum is not None and args.min_tests is not None and args.min_tests < minimum:
             raise ConfigError('--ctest-shard must not lower the undivided profile floor '
@@ -1580,7 +1592,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
                                (args.profile in LIVE_ONLY_PROFILES and
                                 (source / 'runner' / 'transport.cpp').is_file())),
         runner=default_runner,
-        exclude_label=args.exclude_label,
+        exclude_label=exclude_label,
         min_tests=(args.min_tests if args.min_tests is not None else
                    profile_min_tests(PROFILE[args.profile], source)),
         min_tests_explicit=args.min_tests is not None,
@@ -1940,6 +1952,7 @@ class Driver:
                 'ctestShard': {'index': cfg.ctest_shard.index, 'count': cfg.ctest_shard.count},
                 'ctestRegisteredNames': None,
                 'ctestRegistrySha256': None,
+                'ctestExcludedNames': [],
                 'ctestUnshardedSelected': None,
                 'ctestUnshardedSelectedNames': None,
                 'ctestPrivateFixturesOverlay': private_fixtures_overlay(),
@@ -1975,9 +1988,22 @@ class Driver:
             if not set(selection) <= set(registry):
                 raise ValueError('label-selected CTest names are outside the registry')
             shard = self.cfg.ctest_shard
-            if shard.count > 1 and (self.cfg.exclude_label is not None
-                                    or set(selection) != set(registry)):
-                raise ValueError('ctest-shard-union/v1 requires the full unsharded registry')
+            if (shard.count > 1 and self.cfg.exclude_label is not None
+                    and (self.cfg.profile.name != 'debug' or self.cfg.exclude_label != 'slow')):
+                raise ValueError('ctest-shard-union/v1 only permits the declared debug exclusion')
+            excluded = ()
+            if self.cfg.exclude_label:
+                labelled = self.invoke(
+                    'ctest-list-excluded',
+                    ['ctest', '--test-dir', str(test_dir), '-N', '-L', self.cfg.exclude_label],
+                    stream_output=False)
+                if labelled.returncode:
+                    raise ValueError('CTest excluded-label discovery command failed')
+                excluded = ctest_registry(labelled.stdout + labelled.stderr)
+            self.summary['ctestExcludedNames'] = sorted(excluded)
+            if (not set(excluded) <= set(registry)
+                    or set(selection) != set(registry) - set(excluded)):
+                raise ValueError('CTest selection must equal the registry minus labelled exclusions')
             partitions = ctest_partitions(selection, shard.count)
             selected = partitions[shard.index - 1]
             self.summary.update({
@@ -2016,7 +2042,7 @@ class Driver:
         if shard.count == 1:
             self.enforce_test_floor(ran, registered=len(registry), selected=len(selection),
                                     registered_names=frozenset(registry))
-            if self.cfg.min_tests is None and not self.cfg.exclude_label:
+            if self.cfg.min_tests is None:
                 self.pass_stage('ctest-floor', 'no execution floor configured; '
                                 'the complete 1/1 name set was accounted')
         else:
@@ -2048,8 +2074,18 @@ class Driver:
             pinned = self.pinned_private_fixture_rows(stage)
             if pinned is None:
                 return
-        if self.cfg.exclude_label is not None or set(selection) != set(registry):
-            self.fail_stage(stage, 'ctest-shard-union/v1 requires the full unsharded registry')
+        if set(selection) != set(registry) - set(self.summary['ctestExcludedNames']):
+            self.fail_stage(stage, 'CTest selection must equal the registry minus labelled exclusions')
+        if self.cfg.exclude_label:
+            minimum = max(EXCLUDED_REGISTERED_MIN.get(self.cfg.profile.name, 0),
+                          self.cfg.min_tests or 0)
+            if len(registry) < minimum:
+                self.fail_stage(stage, f'CTest registered {len(registry)} rows, below the '
+                                f'PR registration floor of {minimum}')
+            if not 0 < len(selection) < len(registry):
+                self.fail_stage(stage, f'CTest registered {len(registry)} rows and selected '
+                                f'{len(selection)}; expected a nonempty '
+                                f'{self.cfg.exclude_label} exclusion')
         if self.cfg.min_tests is not None:
             capacity = len(registry) - len(set(registry) & pinned)
             if capacity < self.cfg.min_tests:
