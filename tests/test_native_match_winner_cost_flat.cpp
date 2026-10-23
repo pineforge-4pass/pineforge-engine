@@ -75,6 +75,11 @@ public:
 
     Cost cost;
 
+    // execution_consumer() is protected on the engine: read it from inside the host.
+    auto lookup_reads() {
+        return as_native_consumer(execution_consumer()).request_core().book_lookup_reads();
+    }
+
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         if (++bar_ != 1) return;
         for (std::size_t i = 0; i != resting_; ++i) {
@@ -144,8 +149,7 @@ Cost run(std::size_t resting) {
     host.run(bars.data(), static_cast<int>(bars.size()));
     host.cost.completed = host.native_state().kind == NativeLifecycleKind::Completed;
     host.cost.error = host.last_error();
-    const auto reads =
-            as_native_consumer(host.execution_consumer()).request_core().book_lookup_reads();
+    const auto reads = host.lookup_reads();
     host.cost.steps = reads.steps;
     host.cost.rows = reads.rows;
     return host.cost;
