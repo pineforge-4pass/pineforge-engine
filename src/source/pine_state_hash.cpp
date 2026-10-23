@@ -72,6 +72,8 @@ void hash_scratch_store(BrokerStateHashSink& f,
     std::vector<std::byte> page(store->page_size());
     std::uint64_t digest = 0;
     const auto status = store->state_digest({page.data(), page.size()}, digest);
+    if (status == ::pineforge::detail::ScratchStatus::io_error)
+        ::pineforge::detail::rethrow_carried_scratch_failure(store->carried_failure());
     hash_scratch_digest(f, status, digest);
 }
 void hash_exit_scratch(BrokerStateHashSink& f,
@@ -1128,6 +1130,9 @@ void hash_selected_intents(BrokerStateHashSink& f, const source::detail::PineInt
 
 void source::PineStrategyHost::hash_host_extension(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
+    if (!trade_scratch_)
+        NativeExecutionConsumer::bound(*this).rethrow_released_command_scratch_failure(
+            NativeExecutionConsumer::CommandScratchBinding::Trade);
     const auto released = NativeExecutionConsumer::bound(*this).released_command_scratch(
         NativeExecutionConsumer::CommandScratchBinding::Trade);
     if (!trade_scratch_ && released) {

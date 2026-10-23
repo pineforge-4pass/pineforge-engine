@@ -13,11 +13,13 @@
 // table from handle to blob locations; blobs as chains of 64-byte cells or of
 // whole pages; free lists for pages and cells. All growth is in the backing.
 #include <pineforge/detail/scratch_store.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <optional>
 
 namespace pineforge::detail {
 namespace scratch_impl {
@@ -223,22 +225,31 @@ public:
 
     // ---- backing traffic ----------------------------------------------------
 
+    void note_backing_failure(Status status) noexcept {
+        if (status != Status::io_error) return;
+        backing_io_failed_ = true;
+        // Diagnostic transport, not durable logical state. Successful cleanup
+        // I/O must not erase the exception for the status an owner will raise.
+        // A later status-only I/O failure replaces it; a fresh begin resets it.
+        carried_failure_.reset();
+        if (const auto* failure = backing_->carried_failure()) carried_failure_ = *failure;
+    }
     Status bread(std::uint64_t id, Byte* destination) noexcept {
         ++reads_;
         const Status st = backing_->read_page(id, ScratchBuffer{reinterpret_cast<std::byte*>(destination), page_});
-        if (st == Status::io_error) backing_io_failed_ = true;
+        note_backing_failure(st);
         return st;
     }
     Status bwrite(std::uint64_t id, const Byte* source) noexcept {
         ++writes_;
         const Status st = backing_->write_page(id, ScratchBytes{reinterpret_cast<const std::byte*>(source), page_});
-        if (st == Status::io_error) backing_io_failed_ = true;
+        note_backing_failure(st);
         return st;
     }
     Status bsync(ScratchDurability durability) noexcept {
         ++syncs_;
         const Status st = backing_->sync(durability);
-        if (st == Status::io_error) backing_io_failed_ = true;
+        note_backing_failure(st);
         return st;
     }
     static Status structural(Status status) noexcept {
@@ -1170,6 +1181,7 @@ public:
 
     Status begin() noexcept {
         if (open_status_ != Status::ok || active_ || busy_ != 0) return Status::programming_error;
+        carried_failure_.reset();
         snap_ = cur_;
         txn_ = cur_.seq + 1;
         hw0_ = cur_.hw;
@@ -1687,6 +1699,7 @@ public:
 
     Status open_status_ = Status::ok;
     ScratchBacking* backing_ = nullptr;
+    std::optional<ReportScratchIoError> carried_failure_;
     ScratchKeyOrder order_{};
     std::size_t total_ = 0;
     std::size_t page_ = 0;
@@ -1753,6 +1766,9 @@ inline CommandScratchStore::~CommandScratchStore() noexcept {
 
 inline ScratchStatus CommandScratchStore::status() const noexcept {
     return state_ == nullptr ? ScratchStatus::programming_error : state_->open_status_;
+}
+inline const ReportScratchIoError* CommandScratchStore::carried_failure() const noexcept {
+    return state_ && state_->carried_failure_ ? &*state_->carried_failure_ : nullptr;
 }
 inline std::size_t CommandScratchStore::page_size() const noexcept { return state_ == nullptr ? 0 : state_->page_; }
 inline std::uint64_t CommandScratchStore::record_count() const noexcept {

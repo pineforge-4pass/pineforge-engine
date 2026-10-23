@@ -61,20 +61,20 @@ void BacktestEngine::trace(const std::string& name, double value) {
 // the rows alone cannot say which call they answer. Every batch reader shares
 // this one gate: strategy_native_run_v1, the native module wrappers and the
 // generated run_backtest / run_backtest_full, which call run() and then this.
-// A call that began owns its rows whatever became of it (a Completed report and
-// a started-then-failed run's partial rows publish unchanged); a call that did
-// not, or one refused over a live attempt (a batch call while a stream is live),
-// owns none: `*out` is overwritten with the empty report (every array NULL,
-// every count zero) and never freed, since what it held is not this call's to
-// release. strategy_stream_fill_report, the explicit snapshot, runs this same
-// function asking for the rows' own owner (NativeExecutionConsumer::
-// fill_snapshot_report), so a live stream's rows survive such a refusal.
+// Begun runs publish completed or partial rows unless report_sink_failed is latched,
+// even at finish after run success: every later read gives empty ReportC (all arrays NULL,
+// all counts zero), avoiding retries outside run()'s catch; status, code, arguments and
+// message stay in the run-failure latch. Refused calls overwrite unowned storage without freeing.
+// Recursive capture/observer reads are refused first; their terminal helper
+// consumes the reentry latch. strategy_stream_fill_report uses this same
+// gate via fill_snapshot_report but asks for rows_current_ instead of
+// batch_current_, preserving a live stream's rows after a refused batch.
 void BacktestEngine::fill_report(ReportC* out) const try {
     const ReportSinkCallScope sink_call(*this);
-    // A recursive capture/observer read is refused before any row gate;
-    // the terminal helper consumes its reentry latch.
     if (NativeExecutionConsumer::refuse_report_in_dispatch(*this, out)) return;
-    if (!NativeExecutionConsumer::rows_are_current(*this)) {
+    if (!NativeExecutionConsumer::rows_are_current(*this)
+        || (last_run_status_ != 0
+            && run_failure_value_of(*this).code == RunFailureCode::report_sink_failed)) {
         *out = ReportC{};
         return;
     }

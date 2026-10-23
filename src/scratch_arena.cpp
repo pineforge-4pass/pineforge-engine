@@ -48,6 +48,7 @@ const char* store_name(ScratchStore store) noexcept {
     case ScratchStore::partial_cycles: return "partial_cycles";
     case ScratchStore::partial_cycles_idx: return "partial_cycles_idx";
     case ScratchStore::successor_roots: return "successor_roots";
+    case ScratchStore::command: return "command";
     }
     return "unknown";
 }
@@ -214,26 +215,29 @@ struct ScratchArena::Impl {
         return windows.front();
     }
 
-    [[noreturn]] void exhausted(ScratchStore store, std::uint64_t needed_chunks) const {
+    [[noreturn]] void exhausted_bytes(ScratchStore store, std::uint64_t needed_bytes) const {
         // Called only with mutex held. The snapshot survives unwinding,
         // region release and detach; consumers need no English matching.
         // bytes_used counts all stores' currently claimed chunks, not the
-        // historical peak. Demand is this grow's additional whole chunks,
-        // before any claims, without subtracting the arena's free chunks.
+        // historical peak. The caller supplies demand before any claims.
         constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
         const auto size_arg = [maximum](std::uint64_t bytes) {
             return static_cast<std::int64_t>(std::min(bytes, maximum));
         };
-        needed_chunks = std::max<std::uint64_t>(needed_chunks, 1);
-        // Saturate BEFORE multiplication: ceil(off_t::max / chunk) * chunk
-        // is 2^63, outside the signed failure-argument transport.
-        const auto needed_bytes = needed_chunks > maximum / kChunkBytes
-            ? maximum : needed_chunks * kChunkBytes;
         throw ReportScratchIoError(EFBIG, "scratch arena exhausted",
             {{"reason", "arena_exhausted"}, {"high_water_bytes", size_arg(counters.high_water)},
-             {"arena_bytes", size_arg(supplied_bytes)}, {"claimed_bytes", size_arg(counters.bytes_used)},
+             {"arena_bytes", size_arg(counters.bytes_supplied)}, {"claimed_bytes", size_arg(counters.bytes_used)},
              {"needed_bytes_lower_bound", size_arg(needed_bytes)},
              {"store", store_name(store)}});
+    }
+
+    [[noreturn]] void exhausted(ScratchStore store, std::uint64_t needed_chunks) const {
+        constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        needed_chunks = std::max<std::uint64_t>(needed_chunks, 1);
+        // Preserve report users' additional-chunk demand and signed transport
+        // saturation. Both paths use the identical locked snapshot/arguments.
+        exhausted_bytes(store, needed_chunks > maximum / kChunkBytes
+            ? maximum : needed_chunks * kChunkBytes);
     }
 
     std::uint32_t claim_chunk(ScratchStore store, std::uint64_t needed_chunks) {
@@ -283,16 +287,28 @@ struct ScratchArena::Impl {
         }
     }
 
-    void grow(Region& region, std::uint64_t bytes) {
+    void grow(Region& region, std::uint64_t bytes,
+              std::uint64_t needed_bytes_lower_bound = 0) {
         if (bytes <= region.size) return;
         const auto target = bytes / kChunkBytes + (bytes % kChunkBytes != 0 ? 1 : 0);
         const auto old_count = region.chunks.size();
-        if (target > counters.chunks_total
-            || target - old_count > counters.chunks_free)
+        // A share crossing is arena exhaustion even while other regions have
+        // free chunks. Refuse before claims or directory changes, at every size.
+        if ((region.max_bytes && bytes > *region.max_bytes)
+            || target > counters.chunks_total
+            || target - old_count > counters.chunks_free) {
+            if (needed_bytes_lower_bound != 0)
+                exhausted_bytes(region.store, needed_bytes_lower_bound);
             exhausted(region.store, target - old_count);
+        }
         if (target > region.chunks.max_size())
             arena_error(EFBIG, "scratch arena chunk table size");
-        if (target > region.chunks.capacity()) {
+        if (region.max_bytes) {
+            // open_region reserved the ENTIRE bounded directory. No reserve,
+            // resize or reallocation is permitted on this region's I/O path.
+            if (target > region.chunks.capacity())
+                arena_error(EIO, "scratch arena bounded directory");
+        } else if (target > region.chunks.capacity()) {
             // Amortized table growth: at most two entries of capacity per
             // live chunk. No window/LRU/bitmap allocation on the I/O path.
             const auto capacity = static_cast<std::uint64_t>(region.chunks.capacity());
@@ -381,10 +397,24 @@ ScratchArenaStats ScratchArena::stats() const {
     return impl_->counters;
 }
 
-void ScratchArena::open_region(Region& region) {
+void ScratchArena::open_region(Region& region, std::optional<std::uint64_t> max_bytes) {
     const std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!region.chunks.empty() || region.size != 0)
         throw std::logic_error("scratch arena region already populated");
+    if (max_bytes) {
+        const auto count = *max_bytes / kChunkBytes + (*max_bytes % kChunkBytes != 0 ? 1 : 0);
+        if (*max_bytes > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max())
+            || count > region.chunks.max_size()
+            || count > std::numeric_limits<std::uint32_t>::max())
+            arena_error(EFBIG, "scratch arena bounded directory size");
+        try { region.chunks.reserve(static_cast<std::size_t>(count)); }
+        catch (const std::bad_alloc&) {
+            arena_error(ENOMEM, "scratch arena bounded directory");
+        } catch (const std::length_error&) {
+            arena_error(EFBIG, "scratch arena bounded directory size");
+        }
+    }
+    region.max_bytes = max_bytes;
     ++impl_->open_regions;
 }
 
@@ -393,12 +423,14 @@ void ScratchArena::release_region(Region& region) noexcept {
     for (const auto chunk : region.chunks) impl_->release_chunk(chunk);
     std::vector<std::uint32_t>{}.swap(region.chunks);
     region.size = 0;
+    region.max_bytes.reset();
     --impl_->open_regions;
 }
 
-void ScratchArena::ensure_size(Region& region, std::uint64_t bytes) {
+void ScratchArena::ensure_size(Region& region, std::uint64_t bytes,
+                               std::uint64_t needed_bytes_lower_bound) {
     const std::lock_guard<std::mutex> lock(impl_->mutex);
-    impl_->grow(region, bytes);
+    impl_->grow(region, bytes, needed_bytes_lower_bound);
 }
 
 void ScratchArena::truncate(Region& region, std::uint64_t bytes) {
@@ -428,7 +460,8 @@ void ScratchArena::truncate(Region& region, std::uint64_t bytes) {
         impl_->release_chunk(region.chunks.back());
         region.chunks.pop_back();
     }
-    if (bytes == 0) std::vector<std::uint32_t>{}.swap(region.chunks);
+    if (bytes == 0 && !region.max_bytes)
+        std::vector<std::uint32_t>{}.swap(region.chunks);
     region.size = bytes;
 }
 

@@ -2,6 +2,7 @@
 // or local factory definition. Fail-before and execution belong to the remote
 // lab; this edit-only lane has not compiled or run this translation unit.
 #include "../src/source/pine_command_scratch_production.hpp"
+#include "../src/command_scratch_cache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -823,34 +824,59 @@ void short_reads_and_syscall_errors(std::size_t page) {
     auto backing = make_command_scratch_backing(page);
     const int fd = created_descriptor(before);
     const auto image = pattern(page, 8);
+    const auto conflicting_image = pattern(page, 18);
+    require(page >= 512 && page <= CachedScratchBacking::kCacheBytes,
+            "fault fixture must exercise a cached page geometry");
+    const ScratchPageId conflicting_page = CachedScratchBacking::kCacheBytes / page;
     std::vector<std::byte> out(page);
     require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok, "seed fault test");
     require_charge(charges, 0, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
+    // id == slot count maps to page zero's slot, including non-power-of-two
+    // geometries. A real conflicting write makes each faulted read a miss.
+    require_status(backing->write_page(conflicting_page, bytes(conflicting_image)),
+                   ScratchStatus::ok, "evict page zero before short read");
+    require_charge(charges, 1, ScratchIoOperation::write_page, conflicting_page, page, ScratchStatus::ok);
     require(::ftruncate(fd, static_cast<off_t>(page - 1)) == 0, "force a short OS read");
     require_status(backing->read_page(0, buffer(out)), ScratchStatus::io_error, "short read is an I/O error");
-    require_charge(charges, 1, ScratchIoOperation::read_page, 0, page, ScratchStatus::io_error);
+    require_charge(charges, 2, ScratchIoOperation::read_page, 0, page, ScratchStatus::io_error);
+    require_status(backing->write_page(conflicting_page, bytes(conflicting_image)),
+                   ScratchStatus::ok, "keep page zero evicted before EOF");
+    require_charge(charges, 3, ScratchIoOperation::write_page, conflicting_page, page, ScratchStatus::ok);
     require(::ftruncate(fd, 0) == 0, "force EOF inside advertised extent");
     require_status(backing->read_page(0, buffer(out)), ScratchStatus::io_error, "early EOF is an I/O error");
-    require_charge(charges, 2, ScratchIoOperation::read_page, 0, page, ScratchStatus::io_error);
+    require_charge(charges, 4, ScratchIoOperation::read_page, 0, page, ScratchStatus::io_error);
     require_status(backing->write_page(0, bytes(image)), ScratchStatus::ok, "restore page after fault");
-    require_charge(charges, 3, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
+    require_charge(charges, 5, ScratchIoOperation::write_page, 0, page, ScratchStatus::ok);
+    require_status(backing->write_page(conflicting_page, bytes(conflicting_image)),
+                   ScratchStatus::ok, "evict page zero before descriptor fault");
+    require_charge(charges, 6, ScratchIoOperation::write_page, conflicting_page, page, ScratchStatus::ok);
+    require_extent(*backing, fd, conflicting_page + 1);
 
     // No descriptor-creating calls occur between this fault and reset(), so the
     // destructor cannot close a reused descriptor when it sees EBADF.
     require(::close(fd) == 0, "force invalid-descriptor syscall failures");
     require_status(backing->sync(ScratchDurability::buffered), ScratchStatus::ok, "buffered is a no-op");
-    require_charge(charges, 4, ScratchIoOperation::sync, scratch_no_page, 0, ScratchStatus::ok);
+    require_charge(charges, 7, ScratchIoOperation::sync, scratch_no_page, 0, ScratchStatus::ok);
     require_status(backing->sync(ScratchDurability::data), ScratchStatus::io_error, "fdatasync error surfaces");
-    require_charge(charges, 5, ScratchIoOperation::sync, scratch_no_page, 0, ScratchStatus::io_error);
+    require_charge(charges, 8, ScratchIoOperation::sync, scratch_no_page, 0, ScratchStatus::io_error);
     require_status(backing->sync(ScratchDurability::full), ScratchStatus::io_error, "fsync error surfaces");
-    require_charge(charges, 6, ScratchIoOperation::sync, scratch_no_page, 0, ScratchStatus::io_error);
+    require_charge(charges, 9, ScratchIoOperation::sync, scratch_no_page, 0, ScratchStatus::io_error);
+    // Successful page bytes remain cached after an OS fault; only a miss
+    // must reach the failed descriptor. Assert this for every tested geometry.
+    std::fill(out.begin(), out.end(), std::byte{0x5a});
+    require_status(backing->read_page(conflicting_page, buffer(out)), ScratchStatus::ok,
+                   "cached page survives the closed descriptor");
+    require_charge(charges, 10, ScratchIoOperation::read_page, conflicting_page, page, ScratchStatus::ok);
+    require(out == conflicting_image, "cache hit after OS fault retains the complete successful write");
     require_status(backing->read_page(0, buffer(out)), ScratchStatus::io_error, "pread error surfaces");
-    require_charge(charges, 7, ScratchIoOperation::read_page, 0, page, ScratchStatus::io_error);
+    require_charge(charges, 11, ScratchIoOperation::read_page, 0, page, ScratchStatus::io_error);
     require_status(backing->write_page(0, bytes(image)), ScratchStatus::io_error, "pwrite error surfaces");
-    require_charge(charges, 8, ScratchIoOperation::write_page, 0, page, ScratchStatus::io_error);
-    require_status(backing->write_page(7, bytes(image)), ScratchStatus::io_error, "ftruncate error surfaces");
-    require_charge(charges, 9, ScratchIoOperation::write_page, 7, page, ScratchStatus::io_error);
-    require(backing->page_count() == 1, "failed extension cannot invent pages");
+    require_charge(charges, 12, ScratchIoOperation::write_page, 0, page, ScratchStatus::io_error);
+    require_status(backing->write_page(conflicting_page + 1, bytes(image)), ScratchStatus::io_error,
+                   "ftruncate error surfaces");
+    require_charge(charges, 13, ScratchIoOperation::write_page, conflicting_page + 1, page,
+                   ScratchStatus::io_error);
+    require(backing->page_count() == conflicting_page + 1, "failed extension cannot invent pages");
     backing.reset();
 }
 

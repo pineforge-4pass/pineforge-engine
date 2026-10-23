@@ -1,5 +1,7 @@
 #include "command_scratch_production.hpp"
+#include "command_scratch_cache.hpp"
 
+#include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/run_failure.hpp>
 
 #include <algorithm>
@@ -9,6 +11,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -41,6 +44,39 @@ struct CommandScratchByteBudget {
 
 namespace {
 
+// floor(value * multiplier / divisor), optionally rounded up, saturated only
+// when the RESULT exceeds limit. Split the whole term first; long division
+// of the remainder avoids overflowing an intermediate product in C++17.
+std::uint64_t scale_bytes(std::uint64_t value, std::uint64_t multiplier,
+                          std::uint64_t divisor, std::uint64_t limit, bool ceil) noexcept {
+    const auto whole = value / divisor;
+    const auto remainder = value % divisor;
+    if (whole > limit / multiplier) return limit;
+    const auto base = whole * multiplier;
+    if (remainder == 0) return base;
+    std::uint64_t fraction = 0, rest = 0;
+    for (unsigned bit = 64; bit-- != 0;) {
+        fraction *= 2;
+        if (rest >= divisor - rest) {
+            rest -= divisor - rest;
+            ++fraction;
+        } else {
+            rest += rest;
+        }
+        if ((multiplier >> bit) & 1) {
+            if (rest >= divisor - remainder) {
+                rest -= divisor - remainder;
+                ++fraction;
+            } else {
+                rest += remainder;
+            }
+        }
+    }
+    if (fraction > limit - base) return limit;
+    const auto result = base + fraction;
+    return ceil && rest != 0 && result < limit ? result + 1 : result;
+}
+
 thread_local ScratchIoObserver command_scratch_observer{};
 thread_local CommandScratchByteCap command_scratch_byte_cap;
 thread_local std::weak_ptr<CommandScratchByteBudget> command_scratch_environment_budget;
@@ -70,6 +106,21 @@ std::uint64_t environment_byte_cap() {
 
 } // namespace
 
+std::uint64_t command_scratch_arena_capacity_bytes(std::uint64_t arena_bytes) noexcept {
+    const auto bytes = scale_bytes(arena_bytes, kCommandScratchArenaShare.num,
+        kCommandScratchArenaShare.den, std::numeric_limits<std::uint64_t>::max(), false);
+    return std::max(ScratchArena::kChunkBytes, bytes - bytes % ScratchArena::kChunkBytes);
+}
+
+std::uint64_t command_scratch_arena_needed_bytes(std::uint64_t store_extent) noexcept {
+    constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    const auto chunks = store_extent / ScratchArena::kChunkBytes
+        + (store_extent % ScratchArena::kChunkBytes != 0 ? 1 : 0);
+    if (chunks > maximum / ScratchArena::kChunkBytes) return maximum;
+    return scale_bytes(chunks * ScratchArena::kChunkBytes, kCommandScratchArenaShare.den,
+                       kCommandScratchArenaShare.num, maximum, true);
+}
+
 ScratchStatus command_scratch_io_status(int /*error*/) noexcept {
     // Backing I/O faults, including ENOSPC, EDQUOT, EFBIG and EIO, are
     // io_error. programming_error is reserved for caller contract violations.
@@ -77,6 +128,93 @@ ScratchStatus command_scratch_io_status(int /*error*/) noexcept {
 }
 
 namespace {
+
+// An attachment is the host's explicit medium selection. Arithmetic page
+// offsets address one bounded region; no page-sized userspace directory and
+// no private fd can appear after construction.
+class CommandScratchArena final : public ScratchBacking {
+public:
+    CommandScratchArena(std::size_t size, ScratchIoObserver observer,
+                        CommandScratchByteCap budget, const ScratchArenaStats& stats)
+        : ScratchBacking(stats.backend == ScratchArenaBackend::sealed_memfd
+              ? ScratchBackingKind::memfd : ScratchBackingKind::disk, size, observer),
+          capacity_(command_scratch_arena_capacity_bytes(stats.bytes_supplied)),
+          budget_(std::move(budget)) {
+        file_.set_store(ScratchStore::command);
+        file_.open_bounded("pineforge-command", capacity_);
+    }
+    ~CommandScratchArena() noexcept override {
+        if (budget_) budget_->release(extent_ * static_cast<std::uint64_t>(page_size()));
+    }
+    std::uint64_t page_count() const noexcept override { return extent_; }
+    std::optional<std::uint64_t> arena_capacity_bytes() const noexcept override { return capacity_; }
+    const ReportScratchIoError* carried_failure() const noexcept override {
+        return failure_ ? &*failure_ : nullptr;
+    }
+
+protected:
+    ScratchStatus do_read_page(ScratchPageId id, ScratchBuffer destination) const noexcept override {
+        failure_.reset();
+        if (id >= extent_) return ScratchStatus::not_found;
+        return perform([&] {
+            file_.read(id * page_size(), destination.data, destination.size);
+        });
+    }
+    ScratchStatus do_write_page(ScratchPageId id, ScratchBytes source) noexcept override {
+        failure_.reset();
+        const auto size = static_cast<std::uint64_t>(page_size());
+        const auto limit = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+        if (id >= limit / size) return ScratchStatus::programming_error;
+        const auto end = (id + 1) * size;
+        if (id >= extent_) {
+            const auto growth = end - extent_ * size;
+            // Byte admission precedes ensure_size/claim, just as in disk mode.
+            const auto grow = [&] {
+                file_.ensure_size(end, command_scratch_arena_needed_bytes(end));
+            };
+            if (budget_ && !budget_->reserve(growth)) {
+                // A simultaneous share crossing must still carry the arena's
+                // typed verdict. This bounded call cannot claim any chunks.
+                return end > capacity_ ? perform(grow) : ScratchStatus::io_error;
+            }
+            const auto status = perform(grow);
+            if (status != ScratchStatus::ok) {
+                if (budget_) budget_->release(growth);
+                return status;
+            }
+            // A following mapping/copy failure may still leave real extent.
+            extent_ = id + 1;
+        }
+        return perform([&] { file_.write(id * size, source.data, source.size); });
+    }
+    ScratchStatus do_sync(ScratchDurability durability) noexcept override {
+        failure_.reset();
+        return durability == ScratchDurability::buffered
+            ? ScratchStatus::ok : ScratchStatus::programming_error;
+    }
+
+private:
+    template<class Operation> ScratchStatus perform(Operation operation) const noexcept {
+        try {
+            operation();
+            return ScratchStatus::ok;
+        } catch (const ReportScratchIoError& error) {
+            // Copy the validated failure object, not its English or decoded
+            // JSON. Both the status and the original arena verdict survive.
+            failure_ = error;
+            return ScratchStatus::io_error;
+        } catch (...) {
+            // All backing faults obey the L6 io_error ruling. Caller contract
+            // violations are checked before reaching ScratchFile.
+            return ScratchStatus::io_error;
+        }
+    }
+    ScratchFile file_{ScratchFile::IoRaiser::report_sink};
+    mutable std::optional<ReportScratchIoError> failure_;
+    std::uint64_t extent_ = 0;
+    const std::uint64_t capacity_;
+    CommandScratchByteCap budget_;
+};
 
 class CommandScratchFile final : public ScratchBacking {
 public:
@@ -239,7 +377,16 @@ std::unique_ptr<pineforge::detail::ScratchBacking> make_command_scratch_backing(
             command_scratch_environment_budget = budget;
         }
     }
-    return std::make_unique<CommandScratchFile>(page_size, command_scratch_observer, std::move(budget));
+    // The cache decorator owns the logical I/O observer (it charges hits too):
+    // the inner backing, file or arena, is constructed with NO observer.
+    if (const auto* arena = ScratchArena::attached())
+        return std::make_unique<CachedScratchBacking>(
+            std::make_unique<CommandScratchArena>(
+                page_size, ScratchIoObserver{}, std::move(budget), arena->stats()),
+            command_scratch_observer);
+    return std::make_unique<CachedScratchBacking>(
+        std::make_unique<CommandScratchFile>(page_size, ScratchIoObserver{}, std::move(budget)),
+        command_scratch_observer);
 }
 
 } // namespace pineforge::detail

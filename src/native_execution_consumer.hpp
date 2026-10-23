@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/detail/scratch_store.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 #include <pineforge/run_failure.hpp>
@@ -106,11 +107,20 @@ public:
     struct CommandScratchSnapshot {
         detail::ScratchStatus status = detail::ScratchStatus::ok;
         std::uint64_t digest = 0;
+        // Failure transport only, not logical durable store state/hash input.
+        std::optional<detail::ReportScratchIoError> failure;
     };
     // After release, this is the exact state_digest previously read from the
     // live store. It preserves existing post-run hash bytes without a backing.
     std::optional<CommandScratchSnapshot> released_command_scratch(
         CommandScratchBinding) const noexcept;
+    // Surface carried backing failures before callers fold a released digest.
+    void rethrow_released_command_scratch_failure(CommandScratchBinding binding) const {
+        const auto released = released_command_scratch(binding);
+        if (released && released->status == detail::ScratchStatus::io_error)
+            detail::rethrow_carried_scratch_failure(
+                released->failure ? &*released->failure : nullptr);
+    }
 
     // The digests the spec fold takes of the run spec's three bar arrays
     // (intrabar path, declared series, auxiliary feed). See spec_bar_digests_.
@@ -320,13 +330,13 @@ public:
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
-    // Whether the rows `engine` retains answer the latest run or stream_begin
-    // call it was given (the ledger below): false after a call that never
-    // reached begin_ready's reset_run_state() or was refused over a live
-    // attempt; true after one that began (a started-then-failed run owns its
-    // partial rows) and with no consumer bound. BacktestEngine::fill_report
-    // gates on it; fill_snapshot_report (the C stream seam) reads the rows of
-    // the latest attempt that reset them, through the same fill_report.
+    // Whether retained rows answer the latest run/stream_begin call (ledger below):
+    // false after a call that never reached begin_ready's reset_run_state() or was
+    // refused over a live attempt; true after begin or with no consumer bound.
+    // fill_report publishes partial rows on failure except for report_sink_failed:
+    // every later read is empty ReportC, even after finish-time sink failure following run success;
+    // status, code, arguments and message stay in the run-failure latch. The C stream seam
+    // fill_snapshot_report reads the latest reset attempt's rows through the same gate.
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;

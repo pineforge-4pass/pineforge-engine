@@ -18,6 +18,7 @@ class ScratchByteSource {
 public:
     virtual ~ScratchByteSource() noexcept = default;
     virtual std::uint64_t size() const noexcept = 0;
+    virtual const ReportScratchIoError* carried_failure() const noexcept { return nullptr; }
     virtual ScratchStatus read(std::uint64_t offset, ScratchBuffer destination) const noexcept = 0;
 };
 
@@ -78,6 +79,9 @@ public:
     virtual ~ScratchReadback() noexcept = default;
     virtual std::size_t page_size() const noexcept = 0;
     virtual std::uint64_t record_count() const noexcept = 0;
+    // Borrow the backing's original exception before any cleanup/read can
+    // replace it. A readback without an arena backing has no carried failure.
+    virtual const ReportScratchIoError* carried_failure() const noexcept { return nullptr; }
 
     // Invalid/erased/rolled-back handle => not_found; info is unchanged. read
     // obeys the ScratchByteSource range rules for offset and destination

@@ -1270,17 +1270,22 @@ struct NativeExecutionConsumer::RunCommandScratch {
               detail::ScratchStoreConfig{2, page_size, 1, 1, order,
                                         detail::ScratchOpenMode::create_empty},
               backing.get())) {
-        if (store->status() != detail::ScratchStatus::ok)
+        if (store->status() != detail::ScratchStatus::ok) {
+            if (store->status() == detail::ScratchStatus::io_error)
+                detail::rethrow_carried_scratch_failure(backing->carried_failure());
             throw coded<std::logic_error>(
                 store->status() == detail::ScratchStatus::io_error
                     ? RunFailureCode::scratch_io_failed : RunFailureCode::engine_invariant,
                 {}, "run command scratch store failed to open");
+        }
     }
 
     void release() noexcept {
         if (!store) return;
         snapshot.status = store->state_digest(
             {digest_page.data(), digest_page.size()}, snapshot.digest);
+        if (snapshot.status == detail::ScratchStatus::io_error)
+            if (const auto* failure = store->carried_failure()) snapshot.failure = *failure;
         if (borrower && *borrower == store.get()) *borrower = nullptr;
         borrower = nullptr;
         store.reset();
@@ -4892,20 +4897,23 @@ detail::ScratchStatus compare_dependency_scratch(
     return detail::ScratchStatus::ok;
 }
 
-void require_dependency_scratch(detail::ScratchStatus status) {
-    if (status != detail::ScratchStatus::ok)
+void require_dependency_scratch(detail::ScratchStatus status, const detail::ScratchReadback& store) {
+    if (status != detail::ScratchStatus::ok) {
+        if (status == detail::ScratchStatus::io_error)
+            detail::rethrow_carried_scratch_failure(store.carried_failure());
         throw std::logic_error("dependency scratch contract operation failed");
+    }
 }
 
 class DependencyScratchTransaction {
 public:
     explicit DependencyScratchTransaction(detail::CommandScratchStore& store) : store_(store) {
-        require_dependency_scratch(store_.begin());
+        require_dependency_scratch(store_.begin(), store_);
     }
     ~DependencyScratchTransaction() {
         if (store_.transaction_active()) (void)store_.rollback();
     }
-    void finish() { require_dependency_scratch(store_.rollback()); }
+    void finish() { require_dependency_scratch(store_.rollback(), store_); }
 private:
     detail::CommandScratchStore& store_;
 };
@@ -4916,7 +4924,7 @@ detail::ScratchKeyOrder NativeExecutionConsumer::dependency_scratch_order() noex
 }
 
 void NativeExecutionConsumer::set_dependency_scratch(detail::CommandScratchStore& store) {
-    require_dependency_scratch(store.status());
+    require_dependency_scratch(store.status(), store);
     if (store.transaction_active() || store.record_count() != 0
         || (dependency_scratch_ && dependency_scratch_->transaction_active()))
         throw std::logic_error("dependency scratch must be exclusively owned and empty");
@@ -4938,12 +4946,12 @@ void NativeExecutionConsumer::drain_dependency_queue(
         const auto put = [&](const DependencyScratchKey& key, detail::ScratchBytes value) {
             detail::ScratchSpanSource k(dependency_bytes(key.data(), sizeof key)), v(value);
             detail::ScratchHandle handle = detail::scratch_no_handle;
-            require_dependency_scratch(scratch.put(k, v, handle));
+            require_dependency_scratch(scratch.put(k, v, handle), scratch);
         };
         const auto key_at = [&](detail::ScratchHandle handle) {
             DependencyScratchKey key{};
             require_dependency_scratch(scratch.read(handle, detail::ScratchField::key, 0,
-                dependency_buffer(key.data(), sizeof key)));
+                dependency_buffer(key.data(), sizeof key)), scratch);
             return key;
         };
         const auto seek = [&](const DependencyScratchKey& key,
@@ -4956,7 +4964,7 @@ void NativeExecutionConsumer::drain_dependency_queue(
             ++census.lookups;
             census.max_lookup_reads = std::max(census.max_lookup_reads,
                                                scratch.stats().page_reads - before);
-            if (status != detail::ScratchStatus::end) require_dependency_scratch(status);
+            if (status != detail::ScratchStatus::end) require_dependency_scratch(status, scratch);
             return result;
         };
         // Parent-terminal settlement only erases live rows, without callbacks.
@@ -5005,12 +5013,12 @@ void NativeExecutionConsumer::drain_dependency_queue(
             const auto key = key_at(handle);
             std::array<std::uint64_t, 2> item{};
             require_dependency_scratch(scratch.read(handle, detail::ScratchField::value, 0,
-                dependency_buffer(item.data(), sizeof item)));
+                dependency_buffer(item.data(), sizeof item)), scratch);
             ++census.popped_rows;
             auto cause = seeds[static_cast<std::size_t>(item[0])].first;
             cause.ordinal = key[1];
             const native_order::RequestHandle child{requests_.identity(), item[1]};
-            require_dependency_scratch(scratch.erase(handle));
+            require_dependency_scratch(scratch.erase(handle), scratch);
             CoreStep step = direct_mutation_
                 ? core_step(requests_.apply_parent_terminal(cause, child, next_timeline_ordinal_))
                 : core_step(requests_.prepare_parent_terminal(cause, child, next_timeline_ordinal_));
@@ -12575,18 +12583,18 @@ std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
     return broker_state_hash_from_execution_hash(execution);
 }
 
-// The report gate (BacktestEngine::fill_report), answering for the latest
-// public run / stream_begin CALL. An AttemptScope is opened first by every such
-// call. A call entered while nothing is live is an attempt: it disowns the
-// retained rows until begin_ready's reset hands them back, so a refusal before
-// the reset (not Ready, bad bars or option, calendar refusal) reports empty and
-// a started-then-failed run keeps its partial rows. A call entered over a live
-// attempt (a stream between its pushes, a callback or an input in flight) is
-// refused by admission: it owns no rows and leaves rows_current_ alone, but its
-// exit clears batch_current_, so the report that call's wrapper reads right
-// after it is empty; a call nested inside another attempt call closes before the
-// outer one, whose exit sets batch_current_ from its own outcome. Bools only:
-// nothing counts, so nothing wraps; nothing here is hashed or read by a run.
+// The report gate (BacktestEngine::fill_report) answers the latest public run /
+// stream_begin CALL. Every such call opens an AttemptScope first. With nothing
+// live, it disowns retained rows until begin_ready's reset hands them back; a
+// refusal before reset (not Ready, bad bars/option, calendar) reports empty.
+// A begun failed run publishes partial rows except for report_sink_failed: later
+// reads give empty ReportC, also after finish-time sink failure following run success;
+// status, code, arguments and message stay in the run-failure latch. A call entered over
+// a live attempt (stream between pushes, callback, input in flight) is refused; it owns
+// no rows and leaves rows_current_ alone. Its exit clears batch_current_, so its wrapper
+// reads empty. A nested call closes before the outer call, whose exit sets batch_current_
+// from its own outcome. Bools only: nothing counts, so nothing wraps; nothing here is
+// hashed or read by a run.
 bool NativeExecutionConsumer::rows_are_current(const BacktestEngine& engine) noexcept {
     const auto* consumer = static_cast<const NativeExecutionConsumer*>(
         engine.execution_consumer_slot_.ptr.get());

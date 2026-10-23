@@ -570,7 +570,8 @@ private:
             / sizeof(Slot);
         if (slots_ > maximum / 2) throw IdPairStoreError(EFBIG, "id table index exhausted");
         const auto next_slots = slots_ == 0 ? kInitialSlots : slots_ * 2;
-        IdPairScratchFile next;
+        IdPairScratchFile next(MaintainSortedFold
+            ? ScratchStore::partial_cycles_idx : ScratchStore::erased_minima_idx);
         next.fixture_count_io(index_.fixture_io());
         next.open(directory_);
         next.resize(next_slots * sizeof(Slot)); // fresh sparse bytes read as zero
@@ -807,8 +808,10 @@ private:
         fold_.pending = true; fold_.slot_pending = slot.offset_plus_one != 0;
     }
 
-    IdPairScratchFile data_;
-    IdPairScratchFile index_;
+    IdPairScratchFile data_{MaintainSortedFold
+        ? ScratchStore::partial_cycles : ScratchStore::erased_minima};
+    IdPairScratchFile index_{MaintainSortedFold
+        ? ScratchStore::partial_cycles_idx : ScratchStore::erased_minima_idx};
     std::string directory_;
     std::uint64_t data_bytes_ = 0;
     std::uint64_t slots_ = 0;

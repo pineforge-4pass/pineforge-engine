@@ -29,48 +29,49 @@ namespace {
 using ReadStatus = detail::ScratchStatus;
 
 struct OpeningFile {
-    int fd = -1;
+    detail::ScratchFile storage;
     OpeningFile() = default;
     OpeningFile(const OpeningFile&) = delete;
     OpeningFile& operator=(const OpeningFile&) = delete;
-    ~OpeningFile() { if (fd >= 0) ::close(fd); }
-    ReadStatus open() noexcept {
-        char path[] = "/tmp/pineforge-openings-XXXXXX";
-        fd = ::mkstemp(path);
-        if (fd < 0) return ReadStatus::io_error;
-        if (::unlink(path) || ::fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
-            ::close(fd);
-            fd = -1;
+    ReadStatus open(const std::string& directory) noexcept {
+        try {
+            storage.set_directory(directory);
+            storage.open("pineforge-openings");
+            return ReadStatus::ok;
+        } catch (...) {
             return ReadStatus::io_error;
         }
-        return ReadStatus::ok;
     }
 };
 
-ReadStatus opening_word(int fd, std::uint64_t index, std::uint64_t& value,
-                        bool write) noexcept {
+ReadStatus write_opening_word(detail::ScratchFile& file, std::uint64_t index,
+                             std::uint64_t value) noexcept {
     if (index > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
         return ReadStatus::programming_error;
     std::array<unsigned char, 8> bytes{};
-    if (write) {
-        for (unsigned i = 0; i != 8; ++i)
-            bytes[i] = static_cast<unsigned char>(value >> (i * 8));
+    for (unsigned i = 0; i != 8; ++i)
+        bytes[i] = static_cast<unsigned char>(value >> (i * 8));
+    try {
+        file.write(index * 8, bytes.data(), bytes.size());
+    } catch (...) {
+        return ReadStatus::io_error;
     }
-    std::size_t done = 0;
-    while (done != bytes.size()) {
-        const auto offset = static_cast<off_t>(index * 8 + done);
-        const auto n = write
-            ? ::pwrite(fd, bytes.data() + done, bytes.size() - done, offset)
-            : ::pread(fd, bytes.data() + done, bytes.size() - done, offset);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) return ReadStatus::io_error;
-        done += static_cast<std::size_t>(n);
+    return ReadStatus::ok;
+}
+
+ReadStatus read_opening_word(const detail::ScratchFile& file, std::uint64_t index,
+                            std::uint64_t& value) noexcept {
+    if (index > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
+        return ReadStatus::programming_error;
+    std::array<unsigned char, 8> bytes{};
+    try {
+        file.read(index * 8, bytes.data(), bytes.size());
+    } catch (...) {
+        return ReadStatus::io_error;
     }
-    if (!write) {
-        value = 0;
-        for (unsigned i = 0; i != 8; ++i)
-            value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8);
-    }
+    value = 0;
+    for (unsigned i = 0; i != 8; ++i)
+        value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8);
     return ReadStatus::ok;
 }
 
@@ -82,7 +83,7 @@ public:
     ReadStatus opening_at(std::uint64_t index, RequestHandle& out) const noexcept override {
         if (index >= count_) return ReadStatus::not_found;
         std::uint64_t incarnation = 0;
-        const auto status = opening_word(file.fd, index, incarnation, false);
+        const auto status = read_opening_word(file.storage, index, incarnation);
         if (status == ReadStatus::ok) out = RequestHandle{run_, incarnation};
         return status;
     }
@@ -107,24 +108,25 @@ ReadStatus OpeningInputCursor::opening_at(
     }
 }
 
-ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
-                           std::shared_ptr<const OpeningReadback>& out) {
+static ReadStatus freeze_openings_in_directory(
+        const RunIdentity& run, const OpeningReadback& input,
+        std::shared_ptr<const OpeningReadback>& out, const std::string& directory) {
     if (input.count() == 0
         || input.count() > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
         return ReadStatus::programming_error;
     // The owner is fixed size; only the anonymous file grows with membership.
     auto frozen = std::make_shared<FrozenOpenings>(run, input.count());
-    auto status = frozen->file.open();
+    auto status = frozen->file.open(directory);
     if (status != ReadStatus::ok) return status;
     OpeningFile work;
-    status = work.open();
+    status = work.open(directory);
     if (status != ReadStatus::ok) return status;
     for (std::uint64_t i = 0; i != input.count(); ++i) {
         RequestHandle handle;
         status = input.opening_at(i, handle);
         if (status != ReadStatus::ok) return status;
         if (!handle.incarnation || handle.run != run) return ReadStatus::programming_error;
-        status = opening_word(frozen->file.fd, i, handle.incarnation, true);
+        status = write_opening_word(frozen->file.storage, i, handle.incarnation);
         if (status != ReadStatus::ok) return status;
     }
     // Bottom-up external merge sort. Two words of merge state, no population
@@ -139,35 +141,42 @@ ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
             for (auto dest = start; dest != end; ++dest) {
                 std::uint64_t a = 0, b = 0;
                 if (left < middle) {
-                    status = opening_word(frozen->file.fd, left, a, false);
+                    status = read_opening_word(frozen->file.storage, left, a);
                     if (status != ReadStatus::ok) return status;
                 }
                 if (right < end) {
-                    status = opening_word(frozen->file.fd, right, b, false);
+                    status = read_opening_word(frozen->file.storage, right, b);
                     if (status != ReadStatus::ok) return status;
                 }
                 const bool take_left = right == end || (left < middle && a <= b);
                 auto value = take_left ? a : b;
                 if (take_left) ++left;
                 else ++right;
-                status = opening_word(work.fd, dest, value, true);
+                status = write_opening_word(work.storage, dest, value);
                 if (status != ReadStatus::ok) return status;
             }
             start = end;
         }
-        std::swap(work.fd, frozen->file.fd);
+        std::swap(work.storage, frozen->file.storage);
         width = width > count / 2 ? count : width * 2;
     }
     std::uint64_t previous = 0;
     for (std::uint64_t i = 0; i != count; ++i) {
         std::uint64_t value = 0;
-        status = opening_word(frozen->file.fd, i, value, false);
+        status = read_opening_word(frozen->file.storage, i, value);
         if (status != ReadStatus::ok) return status;
         if (i && value == previous) return ReadStatus::programming_error;
         previous = value;
     }
     out = std::move(frozen);
     return ReadStatus::ok;
+}
+
+ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
+                           std::shared_ptr<const OpeningReadback>& out) {
+    // Standalone readbacks use ScratchFile's TMPDIR policy. Core-owned
+    // freezes below also honor the core's explicitly configured directory.
+    return freeze_openings_in_directory(run, input, out, {});
 }
 
 std::uint64_t opening_count(const std::vector<RequestHandle>& owned,
@@ -444,12 +453,13 @@ bool handle_less(const RequestHandle& a, const RequestHandle& b) noexcept {
     return a.incarnation < b.incarnation;
 }
 
-void canonicalize_owner(Request& request, const RunIdentity& run) {
+void canonicalize_owner(Request& request, const RunIdentity& run, const std::string& directory) {
     if (auto* bind = std::get_if<BindOpenings>(&request.owner)) {
         if (bind->external_openings) {
             if (!dynamic_cast<const FrozenOpenings*>(bind->external_openings.get())) {
                 std::shared_ptr<const OpeningReadback> frozen;
-                const auto status = freeze_openings(run, *bind->external_openings, frozen);
+                const auto status = freeze_openings_in_directory(
+                    run, *bind->external_openings, frozen, directory);
                 if (status != ReadStatus::ok)
                     throw detail::ScratchIoError(EIO, "native opening freeze");
                 bind->external_openings = std::move(frozen);
@@ -1422,6 +1432,31 @@ template <class Ar> void archive_io(Ar& ar, MarginCallEvent& item) {
     ar(item.position_after);
 }
 
+// Compare the definition prefix of a just-decoded book record by walking the
+// very same field lists as SaveAr/LoadAr. No output buffer or hash is involved:
+// strings, vector lengths, tags, optional flags and every leaf must match.
+// Raw leaves include padding, so a padding difference conservatively misses.
+struct DefinitionMatchAr {
+    static constexpr bool saving = true;
+    const unsigned char* at;
+    std::size_t left;
+    bool matched = true;
+
+    void raw(const void* value, std::size_t length) noexcept {
+        if (!matched) return;
+        if (length > left || (length != 0 && std::memcmp(at, value, length) != 0)) {
+            matched = false;
+            return;
+        }
+        at += length;
+        left -= length;
+    }
+    template <class T>
+    void operator()(const T& item) {
+        if (matched) archive_value(*this, const_cast<T&>(item));
+    }
+};
+
 // One page of spilled journal events: the absolute positions and ordinals it
 // covers (both ascend from page to page) and where its serialized events are.
 struct JournalPage {
@@ -1501,6 +1536,8 @@ struct WorkingRequestCore::JournalStore {
     mutable std::size_t codec_next = 0;
 
     void bind(detail::CommandScratchStore& store) {
+        if (store.status() == ReadStatus::io_error)
+            detail::rethrow_carried_scratch_failure(store.carried_failure());
         if (codec || end != 0 || store.status() != ReadStatus::ok || store.record_count() != 0
             || store.transaction_active())
             throw std::invalid_argument("journal codec requires an empty committed store");
@@ -1509,8 +1546,10 @@ struct WorkingRequestCore::JournalStore {
     }
     void check(ReadStatus status) const {
         if (status == ReadStatus::ok) return;
-        if (status == ReadStatus::io_error)
+        if (status == ReadStatus::io_error) {
+            if (codec) detail::rethrow_carried_scratch_failure(codec->carried_failure());
             throw detail::ScratchIoError(EIO, "native journal codec I/O");
+        }
         throw std::logic_error("native journal codec invalid storage");
     }
     const CommandEvent& codec_at(uint64_t position) const {
@@ -1527,14 +1566,13 @@ struct WorkingRequestCore::JournalStore {
         return *codec_values[slot];
     }
     // A page holds a contiguous prefix of one chunk, bounded by bytes as well
-    // as kChunk events. The resident part may hold up to
-    // kMaxResident events -- far past what a run that retires its journal ever
-    // keeps, so a windowed run never writes a page -- and a journal pinned or
-    // retained past it spills its oldest chunks to pages. A spill never takes
+    // as kChunk events. The resident part may hold up to kMaxResident events;
+    // a window that grows past it, including within one bar before retirement,
+    // spills its oldest chunks to pages. A spill never takes
     // the resident part below kKeepResident events, so the newest events stay
     // in memory.
     static constexpr std::size_t kChunk = 32;
-    static constexpr std::size_t kMaxResident = 16384;
+    static constexpr std::size_t kMaxResident = 2048;
     static constexpr std::size_t kKeepResident = 128;
     // Page layout: concatenated events, each starting with a uint32_t
     // alternative and a uint64_t ordinal, followed by its fields. This 32,768 B
@@ -1967,13 +2005,43 @@ struct WorkingRequestCore::BookSpill {
             else garbage += old.length;
         }
     }
-    LiveRequest read(const BookSlot& slot) const {
+    LiveRequest read(const WorkingRequestCore& core, const BookSlot& slot) const {
         std::vector<unsigned char> bytes(static_cast<std::size_t>(slot.length));
         blobs.read(slot.offset, bytes.data(), bytes.size());
         ByteReader in(bytes.data(), bytes.size());
         LoadAr ar{in};
         LiveRequest row;
         ar(row);
+        if (!row.definition || !core.journal_ || core.journal_->codec) return row;
+        const JournalStore& journal = *core.journal_;
+        // Restrict the existing ordinal bisection to resident events: no cold
+        // journal reads or new index. One O(log kMaxResident) lookup per book
+        // decode, then O(definition bytes) equality, never a per-child scan.
+        const auto position = journal.find_ordinal(row.birth().acceptance_ordinal, journal.first);
+        if (!position) return row;
+        const CommandEvent& event = journal.resident_at(*position);
+        const DefinitionRef* resident = nullptr;
+        if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
+            resident = &accepted->definition;
+        } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
+            // A kept-handle re-price has the same handle but a new birth and
+            // priority: only the successor can describe this book version.
+            resident = &replaced->successor_definition;
+        }
+        if (!resident || !*resident || (*resident)->handle != row.handle()
+            || (*resident)->birth != row.birth()
+            || (*resident)->priority != row.definition->priority) return row;
+        // This legacy book format does not serialize external_openings.
+        // Reusing one would add content absent from the decoded definition.
+        if (const auto* openings = std::get_if<BindOpenings>(&(*resident)->request.owner)) {
+            if (openings->external_openings) return row;
+        }
+        // LiveRequest's first field is its definition. Compare that entire
+        // serialized prefix, including request, predecessor, origin, root and
+        // kept_binding; the decoded owner survives every mismatch unchanged.
+        DefinitionMatchAr match{bytes.data(), bytes.size()};
+        match(*resident);
+        if (match.matched) row.definition = *resident;
         return row;
     }
     // Replaces the serialized row of the live entry at `at`, keeping its
@@ -2177,7 +2245,7 @@ bool WorkingRequestCore::promote_book_row(uint64_t incarnation, std::size_t* ind
             throw std::logic_error("native live book lost a spilled row");
         }
     }
-    LiveRequest row = spill.read(slot);
+    LiveRequest row = spill.read(*this, slot);
     reserve_n(live_, 1);
     if (priority != incarnation) reserve_n(repriced_, 1);
     spill.retire_row(at, slot);
@@ -2200,7 +2268,7 @@ const LiveRequest* WorkingRequestCore::spilled_row(uint64_t incarnation) const {
     BookSlot slot;
     uint64_t at = 0;
     if (!spill.find(priority, &slot, &at) || slot.incarnation != incarnation) return nullptr;
-    return spill.stash(spill.read(slot));
+    return spill.stash(spill.read(*this, slot));
 }
 
 WorkingRequestCore::BookCursor WorkingRequestCore::book_begin() const {
@@ -2241,7 +2309,7 @@ void WorkingRequestCore::visit_book(Visit&& visit) const {
     BookCursor cursor = book_begin();
     while (!book_done(cursor)) {
         if (book_next_spilled(cursor)) {
-            const LiveRequest row = book_spill_->read(book_spill_->rows.get(cursor.at));
+            const LiveRequest row = book_spill_->read(*this, book_spill_->rows.get(cursor.at));
             if (!visit(row)) return;
         } else if (!visit(live_[cursor.r])) {
             return;
@@ -2256,7 +2324,7 @@ const LiveRequest& WorkingRequestCore::live_at(std::size_t rank) const {
     BookCursor cursor = book_begin();
     for (std::size_t skipped = 0; skipped != rank; ++skipped) book_step(cursor);
     if (book_next_spilled(cursor)) {
-        return *book_spill_->stash(book_spill_->read(book_spill_->rows.get(cursor.at)));
+        return *book_spill_->stash(book_spill_->read(*this, book_spill_->rows.get(cursor.at)));
     }
     return live_[cursor.r];
 }
@@ -2271,7 +2339,7 @@ const LiveRequest& WorkingRequestCore::live_back() const {
         last = at;
     }
     if (live_.empty() || live_.back().priority() < book_spill_->priority_at(last)) {
-        return *book_spill_->stash(book_spill_->read(book_spill_->rows.get(last)));
+        return *book_spill_->stash(book_spill_->read(*this, book_spill_->rows.get(last)));
     }
     return live_.back();
 }
@@ -2287,7 +2355,7 @@ void WorkingRequestCore::LiveView::const_iterator::settle() {
         // Through the ring, so a reference the view handed out stays valid
         // for the next few spilled rows it reads, as the header promises.
         held_ = core_->book_spill_->keep(core_->book_spill_->read(
-                core_->book_spill_->rows.get(cursor_.at)));
+                *core_, core_->book_spill_->rows.get(cursor_.at)));
     }
 }
 
@@ -4198,7 +4266,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
         impl->result.event_ordinal = ordinal;
         return PreparedSubmit(std::move(impl));
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -4291,7 +4359,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         impl->plan = std::move(plan);
         return PreparedReplace(std::move(impl));
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     // A replace that keeps the handle or carries a binding (R5 lane V19-D)
@@ -4462,7 +4530,7 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
                 SubmitResult{SubmitStatus::Rejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -4552,7 +4620,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
                 ReplaceResult{ReplaceStatus::ReplaceRejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     if constexpr (Kept) {
         // A replace that keeps the handle or carries a binding (R5 lane
@@ -4818,7 +4886,7 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
     BookSpill& spill = *book_spill_;
     for (uint64_t at = spill.first_alive(); at != 0; at = spill.next_alive(at)) {
         const BookSlot slot = spill.rows.get(at);
-        LiveRequest row = spill.read(slot);
+        LiveRequest row = spill.read(*this, slot);
         if (refresh(row)) spill.rewrite(at, slot, row);
     }
     // A refresh every point may append new bytes for a row whose allowance
@@ -7923,55 +7991,38 @@ struct WorkingRequestCore::SuccessorRootIndex {
 
     // These are storage metadata, not additional broker state: the prefix
     // and tail partition the root sequence already in chain_roots_. The slab,
-    // descriptor, directory and partition boundary do not enter its digest.
+    // backing, directory and partition boundary do not enter its digest.
     std::array<Row, kTailRows> tail{};
     std::size_t tail_size = 0;
     uint64_t disk_rows = 0;
-    int fd = -1;
+    detail::ScratchFile file{detail::ScratchFile::IoRaiser::auxiliary};
     std::string directory;
     std::shared_ptr<detail::ScratchSlab> slab;
     // Transient input for one bounded-memory preparation, never a root count.
     bool next_adds_root = true;
 
-    SuccessorRootIndex() = default;
+    SuccessorRootIndex() { file.set_store(detail::ScratchStore::successor_roots); }
     explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner) noexcept
-        : slab(owner) {}
+        : SuccessorRootIndex() { slab = owner; }
     SuccessorRootIndex(const SuccessorRootIndex&) = delete;
     SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
-    ~SuccessorRootIndex() { if (fd >= 0) ::close(fd); }
 
     void set_directory(const std::string& value) {
-        if (fd >= 0 && directory != value) {
+        if (file.opened() && directory != value) {
             throw std::logic_error("native successor roots directory changed after spill");
         }
+        file.set_directory(value);
         directory = value;
     }
 
     void open_file() {
         assert(!slab);
-        if (fd >= 0) return;
-        const char* temporary = std::getenv("TMPDIR");
-        std::string name = directory.empty()
-                ? (temporary && *temporary ? temporary : "/tmp") : directory;
-        if (name.back() != '/') name += '/';
-        name += "pineforge-roots-XXXXXX";
-        const int opened = ::mkstemp(name.data());
-        if (opened < 0) {
-            throw detail::AuxiliaryScratchIoError(errno, "native successor roots create");
+        try {
+            file.open("pineforge-roots");
+        } catch (const detail::AuxiliaryScratchIoError& error) {
+            // Preserve the roots diagnostic without catching arena resource failures.
+            throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots create");
         }
-        // Unlink before publishing the descriptor: an opened scratch file
-        // has no directory entry. mkstemp creates it with mode 0600.
-        if (::unlink(name.c_str()) != 0) {
-            const int error = errno;
-            ::close(opened);
-            throw detail::AuxiliaryScratchIoError(error, "native successor roots unlink");
-        }
-        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
-            const int error = errno;
-            ::close(opened);
-            throw detail::AuxiliaryScratchIoError(error, "native successor roots cloexec");
-        }
-        fd = opened;
     }
 
     void prepare_append() {
@@ -8003,18 +8054,10 @@ struct WorkingRequestCore::SuccessorRootIndex {
                         "native successor roots file offset exhausted");
             }
             open_file();
-            const off_t offset = static_cast<off_t>(disk_rows * sizeof(Row));
-            const auto* bytes = reinterpret_cast<const unsigned char*>(tail.data());
-            std::size_t written = 0;
-            while (written < length) {
-                const ssize_t count = ::pwrite(fd, bytes + written, length - written,
-                                               offset + static_cast<off_t>(written));
-                if (count < 0 && errno == EINTR) continue;
-                if (count <= 0) {
-                    const int error = count < 0 ? errno : EIO;
-                    throw detail::AuxiliaryScratchIoError(error, "native successor roots write");
-                }
-                written += static_cast<std::size_t>(count);
+            try {
+                file.write(disk_rows * sizeof(Row), tail.data(), length);
+            } catch (const detail::AuxiliaryScratchIoError& error) {
+                throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots write");
             }
         }
         // Publish only a complete batch. A short/error write leaves the
@@ -8031,24 +8074,16 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     Row read(uint64_t index) const {
-        assert((slab || fd >= 0) && index < disk_rows);
+        assert((slab || file.opened()) && index < disk_rows);
         Row row;
         if (slab) {
             slab->read_at(detail::ScratchResource::successor_roots,
                           index * sizeof(Row), &row, sizeof(Row));
         } else {
-            auto* bytes = reinterpret_cast<unsigned char*>(&row);
-            const off_t offset = static_cast<off_t>(index * sizeof(Row));
-            std::size_t received = 0;
-            while (received < sizeof(Row)) {
-                const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
-                                              offset + static_cast<off_t>(received));
-                if (count < 0 && errno == EINTR) continue;
-                if (count <= 0) {
-                    const int error = count < 0 ? errno : EIO;
-                    throw detail::AuxiliaryScratchIoError(error, "native successor roots read");
-                }
-                received += static_cast<std::size_t>(count);
+            try {
+                file.read(index * sizeof(Row), &row, sizeof(Row));
+            } catch (const detail::AuxiliaryScratchIoError& error) {
+                throw detail::AuxiliaryScratchIoError(error.code().value(), "native successor roots read");
             }
         }
         if (row.root == 0 || row.root >= row.successor) {

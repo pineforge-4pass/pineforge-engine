@@ -115,6 +115,21 @@ OHLCV, strategy heap and reports are additional. Page padding is not extra
 admitted capacity. Concurrent HPO trials charge the sum of their slabs;
 retiring readers can keep a preceding slab alive too.
 
+## Native request journal residency
+
+The native core's unbound request journal has a resident cap of 2,048 events,
+in 32-event chunks, and keeps its 128-event floor. It spills older events even
+within one bar when that bar exceeds the cap before retirement. Page size
+is still 32,768 bytes and the decoded cache still has four slots.
+The bound `CommandScratchStore` codec instead uses its configured workspace.
+
+For the short waiting-child parent-terminal fixture, the book's 4,096-row
+cap and the journal's 2,048-event cap give a per-engine definition plateau
+of 1,890,980 bytes (about 1.9 MB) on GNU 13.4 x86-64, independent of symbols,
+window and trades. The derivation and exclusions are in
+[the scratch-store contract](../scratch-store.md#resident-bound-of-the-parent-terminal-drain-native-order).
+This budget is separate from the historical-table slab arithmetic above.
+
 ## Python host and HPO
 
 Select `--profile jailed` in `docker/run_json.py`, or set

@@ -66,8 +66,9 @@ or its reason, even when private RSS/AS is unknown.
 The arena retains A5's `arenaBytes` and `inputs` names inside `terms.arena`;
 `bytes` is an equal alias to accommodate the wider interface's spelling.
 Each derivation names the formula and the pre-start evidence supplied with
-its facts. `per_user_bytes(result["terms"]["arena"]["inputs"])` exposes the
-eleven logical contributions without adding a second sizing result.
+its facts. `per_user_bytes(result["terms"]["arena"]["inputs"])` exposes ten
+storage contributions and the explicit stock-source `openings=0` exclusion
+(eleven entries), without adding a second sizing result.
 
 The flag means **no certified finite value available for this term**. Reasons
 distinguish `UNBOUNDED` (a proved unbounded emitting computation),
@@ -335,16 +336,16 @@ indexPeak(k) = 24 * slots(k)                       # k > 32
 | Physical user | Logical peak bytes | Code evidence |
 | --- | --- | --- |
 | Equity writer / selected hold-back / SpillCurve | 24*E | `pf_equity_point_t` size assertion `include/pineforge/metrics_stream.hpp:16`; `src/report_scratch.cpp:232` |
-| Position tail | (30+L)*T | L18 sibling footer evidence described below; absent from this base |
+| Position tail | (30+L)*T | `src/source/pine_position_tail.hpp:20`; footer packing at `src/source/pine_position_tail.cpp:94` |
 | Cohort AVL and five-word summary | (96+L)*D + 1[D>0] | `include/pineforge/detail/disk_id_table.hpp:109`; `include/pineforge/source/pine_adapter.hpp:2598` |
 | Entry-rank AVL | (60+L)*J + 1[J>0] | `src/source/pine_adapter.cpp:6377`; `include/pineforge/detail/disk_id_table.hpp:109` |
-| Sequence minima data | (40+L)*D + (40+2*L)*Q | `include/pineforge/detail/id_pair_store.hpp:140` |
-| Sequence minima index | indexPeak(D+Q) | `include/pineforge/detail/id_pair_store.hpp:403` |
-| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` `include/pineforge/source/pine_adapter.hpp:933`; `remember_erased` `src/source/pine_adapter.cpp:854` |
-| Erased minima index | indexPeak(D+Q) | `include/pineforge/detail/id_pair_store.hpp:403` |
-| Consumed partial-cycle data | (41+2*L)*Q | `consumed_partial_exit_cycles_` `include/pineforge/source/pine_adapter.hpp:2638`; `src/source/pine_adapter.cpp:24901` |
-| Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:403` |
-| Successor-root rows | 16*R | `src/native_order.cpp:5913`; `src/native_order.cpp:5964` |
+| Erased minima data | (40+L)*D + (40+2*L)*Q | `erased_minima_` at `include/pineforge/source/pine_adapter.hpp:945`; 40-byte header at `include/pineforge/detail/id_pair_store.hpp:73` |
+| Erased minima index | indexPeak(D+Q) | 16-byte slot at `include/pineforge/detail/id_pair_store.hpp:73`; replacement at `:573` |
+| Consumed partial-cycle data | (41+2*L)*Q | `include/pineforge/source/pine_adapter.hpp:2727`; joined key at `src/source/pine_adapter.cpp:25357` |
+| Consumed partial-cycle index | indexPeak(Q) | `include/pineforge/detail/id_pair_store.hpp:573` |
+| Ordered consumed-cycle fold | 136*leaves + 2088*branches + 2096*savedPath | `include/pineforge/detail/id_pair_ordered_fold.hpp:161`, `:165`, `:172`, size assertion at `:183` |
+| Successor-root rows | 16*R | `src/native_order.cpp:7926`, row assertion at `:7931`, 64-row tail at `:7932` |
+| Frozen external openings | **0 in this certified profile** | Stock source builds owned vectors at `src/source/pine_adapter.cpp:6983`, `:6990`, `:9669`; generic external owners are excluded below |
 
 The AVL node is seven uint64 words = 56 bytes, then its value and exact key
 bytes. CohortFacts::Record is handle, cycle, origin_count, origin_digest and
@@ -353,23 +354,26 @@ size>26 cutoff retains at most 27 keys. An initially empty AVL begins at
 offset one, hence each of the two prefixes.
 
 An IdPairStore record is five eight-byte words = 40 bytes; its slot has two
-uint64 fields = 16 bytes. Sequence and erased stores each have separate
-single and pair domains. Erase clears a live flag, not the distinct-ever
+uint64 fields = 16 bytes. The erased store has separate single and pair
+domains. Erase clears a live flag, not the distinct-ever
 `used_` count; reappearance reuses the data record. At a largest rehash the
 old half-size index and new index coexist: 16*(slots+slots/2)=24*slots.
 The first 64-slot index has no old index, so its peak is 1024 bytes.
 The consumed-cycle single key is source_id + separator byte + from_entry,
 thus 40+2*L+1, not 40+L.
 
-The L18 sibling's `src/source/pine_position_tail.hpp`, line 20, specifies a
-30-byte footer. Its `src/source/pine_position_tail.cpp`, line 96, packs
+There is no sequence-minima store in this tree. `ScratchManifest` reserves
+`K_q/B_q` as zero (`include/pineforge/detail/scratch_tables.hpp:16`), and
+`compute_layout` rejects a nonzero q (`include/pineforge/detail/scratch_slab.hpp:78`).
+The former `sequenceData` and `sequenceIndex` allowances are removed.
+
+`src/source/pine_position_tail.hpp:20` specifies a 30-byte footer.
+`src/source/pine_position_tail.cpp:96` packs
 exit_time (8), qty (8), entry_incarnation (8), side (1), margin flag (1)
-and ID length (4), after the ID bytes. This is not sizeof(Row). The exact
-external file:line evidence is recorded in the lane report; these sources
-must be merged and their local anchors refreshed before claiming coverage.
+and ID length (4), after the ID bytes. This is not sizeof(Row).
 
 Successor rows are two uint64 values. The WorkingRequestCore method `index_committed`
-defined at `src/native_order.cpp:1155` omits kept-handle replacements and appends a
+defined at `src/native_order.cpp:2933` omits kept-handle replacements and appends a
 root only when a newly issued definition has one. The 64-row RAM tail makes
 charging every issued row conservative. Partial closes create one trade
 row per affected lot: `src/engine_execution.cpp:1241`. Bracket definitions
@@ -377,29 +381,171 @@ have limit, stop and trailing families; per-entry expansion is visible at
 `src/source/pine_adapter.cpp:23436`. A closed-trade count cannot bound
 unfilled placement history or the replacement-root history.
 
-Summing all eleven peaks gives:
+The ordered fold retains distinct-ever keys, including erased keys.
+A binary split reuses its old leaf and appends at most one leaf and one
+branch (`include/pineforge/detail/id_pair_ordered_fold.hpp:284`, `:325`).
+Thus `leaves <= Q`, `branches <= max(Q-1,0)`. Updates, erase and resurrection
+do not allocate a new key. Staged appends before publication obey the same
+bounds when Q includes the prospective distinct key; retry overwrites those
+unpublished rows. The 16-key leaf bucket needs no resident fold map. Each
+branch holds a 2056-byte map plus 32 bytes of pivot/children = 2088 bytes.
+The before-image journal holds an 8-byte reference and a complete branch
+image = 2096 bytes, and is reused after each mutation.
+
+Pivots strictly increase through 9-bit symbols, including the terminating
+symbol (`include/pineforge/detail/id_pair_ordered_fold.hpp:101`). For a
+joined key of at most `maxKeyLength=2L+1` bytes the path has at most
+`9*(maxKeyLength+1)=9*(2L+2)` branches. The journal also saves the final
+leaf (`:247` through `:255`), so use:
+
+```text
+savedPath = 0                                      # Q = 0
+savedPath = 1 + min(Q-1, 9*(2L+2))                 # Q > 0
+orderedFold = 136*Q + 2088*max(Q-1,0) + 2096*savedPath
+```
+
+Each fold file is independently segmented, with lazy opens. For record
+size s in {136,2088,2096} and a physical row high-water mark n:
+
+```text
+rowsPerSegment(s) = floor(OFF_MAX / s)
+openedSegments(s,n) = ceil(n / rowsPerSegment(s))  # zero for n = 0
+```
+
+This follows `IdPairFoldFile` at
+`include/pineforge/detail/id_pair_ordered_fold.hpp:60` through `:89`.
+Use Q, max(Q-1,0), and savedPath as conservative high-water marks.
+On signed 64-bit off_t the arrays have 3 leaf, 33 branch and 33 undo
+slots; slots are not opened files. The 4095-byte fixture opens 3/64/64
+segments for 64 records at those respective sizes. All segments now
+delegate through `IdPairScratchFile` to `ScratchFile`.
+
+External opening freezes have a separate lifetime envelope. Each retained
+frozen owner holds exactly `8*N` bytes; an active merge sort for N>=2 uses
+`16*N` bytes across retained/work regions (`src/native_order.cpp:47`,
+`:111`, `:133`). N=1 retains 8 bytes and opens a zero-length work region.
+For simultaneous retained owners N_i and an active freeze of size N, the
+generic logical peak is `8*sum(N_i) + (16*N if N>=2 else 8*N)`.
+The sum excludes the active owner, counted by the latter term.
+Separate region rounding must also include every retained owner and the
+work region, even though ownership is shared between a request definition
+and its authority. Duplicate input and failed reads publish no new owner.
+
+The certified **stock-source EngineRecorded** profile excludes external
+`OpeningReadback` owners: the source paths cited in the table build vectors;
+`src/source/exit_scratch_versions_production.cpp:605` and the C-ABI
+translator at `src/native_c_host.cpp:2330` also build owned vectors.
+Consequently `per_user_bytes` explicitly emits `openings=0`, with that
+reason in the implementation. This zero does not certify a generic C++
+host supplying `BindOpenings.external_openings`; such a host needs the
+membership/lifetime facts above before using this bound.
+Both descriptors of a generic freeze now use `ScratchFile`: a configured
+core directory is honored, standalone freezes use TMPDIR then the common
+fallback, and an attached arena creates no private file (CR-260).
+
+Summing these ten storage contributions and the explicit openings zero gives:
 
 ```text
 B = 24*E + (30+L)*T + (96+L)*D + 1[D>0]
     + (60+L)*J + 1[J>0]
-    + 2*((40+L)*D + (40+2*L)*Q + indexPeak(D+Q))
-    + (41+2*L)*Q + indexPeak(Q) + 16*R
+    + (40+L)*D + (40+2*L)*Q + indexPeak(D+Q)
+    + (41+2*L)*Q + indexPeak(Q) + orderedFold + 16*R + 0
 
-arenaBytes = chunkCeil(B) + 14*C
+Bcert = chunkCeil(B) + 14*C
+b = Bcert / C = B//C + 1[B%C != 0] + 14
+q = max(1, (b - 3)//13)                 # b >= 14; f = 1/16
+arenaBytes = (b + 3*q)*C
 ```
 
-There are eleven persistent regions and up to three extra replacement
-indexes. Each independently rounded region wastes less than C. Summing
-independent peaks and adding fourteen complete chunks is conservative even
-when their real peak times differ. This covers chunk fragmentation, not
-unlisted stores or a missing population proof.
+`ROUNDING_REGIONS=14` remains the non-command rounding allowance. For these
+named non-command users with one segment per fold component there are
+twelve persistent physical regions
+and at most two replacement indexes. In a representable 64-bit arena each
+fold component's bytes are below OFF_MAX, so it uses one segment; the
+general segment rule still governs reduced-offset fixtures and any future
+larger platform. Fourteen is not a universal file-count ceiling or a proof
+covering unlisted arena users.
 
-At L=64 the position term is **94*T**; each placement data term is
+The three command stores (`RunCommandScratch`, `source::CommandScratchRun`,
+and `SourceExitScratchRun`) share that same arena. Each opens a bounded
+region of capacity `K = max(C, floor_to_chunk(f*A))`, fixed at open, where
+`A=arenaBytes`, C=1,048,576 bytes and
+`f=kCommandScratchArenaShare=1/16`. The share constants and capacity
+calculation are in `src/command_scratch_production.hpp` and
+`src/command_scratch_production.cpp`; the backing reserves its complete
+K/C directory at open. Consequently sizing must budget three full K-byte
+carve-outs as well as Bcert. Counting only Bcert leaves too little for
+the non-command users when those stores consume their reserved shares.
+The contract is **A - 3*K >= Bcert**, with A the smallest chunk multiple
+that satisfies it. Command extents beyond K retain their existing typed
+exhaustion/re-placement policy; this calculation does not prove an
+arbitrary live command population fits its per-store share.
+
+To derive the exact minimum, write `n=A/C`. Then
+`K/C=max(1,n//16)` and the required inequality is
+`n - 3*max(1,n//16) >= b`.
+For n<16 the floor-to-chunk share is zero, but K=C, so the minimum is
+n=b+3 for b<=12. The boundary b=13 gives n=16, K=C and exactly 13 chunks
+left. The same one-chunk capacity persists through n=31, so n=b+3
+remains minimal through b=28. Certified inputs have b>=14; the smaller
+values describe the floor boundary, not a reduction of the fourteen regions.
+
+For a share block q>=1, write n=16q+r, 0<=r<=15. It leaves 13q+r
+non-command chunks, whose maximum in that block is 13q+15. The first
+block that can reach b therefore has
+`q=max(1,ceil((b-15)/13))=max(1,(b-3)//13)`.
+For b>=29 this gives b=13q+s with 3<=s<=15, hence n=b+3q=16q+s
+is in that block and leaves exactly b chunks. Every earlier block has
+maximum <=13(q-1)+15=13q+2<b, and every earlier n in the selected
+block leaves less than b. Together with the floor case this proves both
+sufficiency and global minimality for every nonnegative b (guard b<3
+before unsigned subtraction in the general helper).
+Both b and q(b) are nondecreasing, so A=C*(b+3q(b)) is nondecreasing
+in B. Available capacity itself drops by two chunks at each multiple of
+16 from 32 onward (it rises by one at 16); checking only the immediately preceding size is insufficient.
+
+The certificate holds for a host that supplies exactly arenaBytes. Supplying
+more is not always safe at a 16-chunk boundary: at b=28 the minimum is 31
+chunks, while 32 chunks leave only 26 non-command chunks. A host that
+supplies n' chunks other than arenaBytes/C must recheck
+n' - 3*max(1, floor(n'/16)) >= b.
+
+For example b=28 gives n=31; b=29 gives n=35. Sizes 32, 33 and 34
+leave only 26, 27 and 28 chunks. The next transition is b=41 -> n=47
+and b=42 -> n=51. For raw logical bytes B=C-1,C,C+1, b=15,15,16
+and n=18,18,19. For B=14C-1,14C,14C+1, b=28,28,29 and
+n=31,31,35; for B=27C-1,27C,27C+1, b=41,41,42 and n=47,47,51.
+
+The proposed `chunkCeil(ceil(B/(1-3f)))+3C` is not this minimum.
+Applied to raw B=1222 it gives 4C, leaving only C against Bcert=15C.
+Even if B there means Bcert, Bcert=15C gives (ceil(240/13)+3)C=22C,
+whereas 18C suffices. The exact expression retains all fourteen rounding
+regions before solving the discrete share inequality and avoids multiplying
+the byte total by 16.
+
+At L=64 the position term is **94*T**; erased placement data is
 **104*D+168*Q**; consumed-cycle data is **169*Q**; the root term is
-**16*R**. The contract's eleven coefficients agree with the inspected code
-and L19l-A/C reports. No numeric correction to those coefficients was
-needed. “72..104 bytes/key” in the L19l-C steady-state explanation does
+**16*R**, and `savedPath <= 1171`. “72..104 bytes/key” in the L19l-C explanation does
 not include the rehash overlap and must not replace indexPeak in sizing.
+
+The updated hand vectors subtract the stale pair-data/index peak once and
+add orderedFold. No measured value or calculator output is used as an oracle:
+
+| Vector | Former B | Removed data+index | Added fold | Current B | Former arenaBytes -> combined arenaBytes | Share arithmetic (chunks) |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| Empty | 2286 | 1064 | 0 | 1222 | 15728640 -> 18874368 | b=1+14=15; q=max(1,12//13)=1; n=15+3=18 |
+| Small | 817754 | 185152 | 2157912 | 2790514 | 17825792 -> 20971520 | b=3+14=17; q=max(1,14//13)=1; n=17+3=20 |
+| Large | 832632494 | 159131648 | 892052328 | 1565553174 | 1581252608 -> 1943011328 | b=1494+14=1508; q=1505//13=115; n=1508+345=1853 |
+| Rehash at 33 | 14696 | 4426 | 2232 | 12502 | 15728640 -> 18874368 | b=1+14=15; q=1; n=15+3=18 |
+| Unicode / all-terms | 4238 | 1284 | 15192 | 18146 | 15728640 -> 18874368 | b=1+14=15; q=1; n=15+3=18 |
+| Million-point | 25168110 | 1064 | 0 | 25167046 | 40894464 -> 47185920 | b=25+14=39; q=36//13=2; n=39+6=45 |
+
+Every combined byte value is n*1,048,576. The Large vector has
+K=115C=120,586,240 bytes, so 1,943,011,328 - 3*120,586,240 =
+1,581,252,608 = Bcert. The million-point vector has K=2C=2,097,152,
+so 47,185,920 - 3*2,097,152 = 40,894,464 = Bcert. The remaining
+vectors have K=C; subtracting 3C=3,145,728 recovers their former
+non-command certificates exactly.
 
 These formulas apply to the EngineRecorded streamed invocation. The
 selected recorder appends its anchor and selected observations in one
@@ -512,7 +658,7 @@ The two full line allowances cover header descriptors/run_id/version and
 the trailer counts/digest. T includes eight floats, six signed integers,
 an incarnation, a side, a bool and three strings. Charging the actual ID
 component L twice and the independent comment maximum accounts for its
-string fields. Output/spool storage is separate from the eleven scratch
+string fields. Output/spool storage is separate from these scratch
 regions.
 
 ## Child private RSS and address space
@@ -524,6 +670,26 @@ The term is unbounded if either value is unknown or either certification
 flag is false. This flag is informational: it does not affect the top-level
 verdict, its reason or `unboundedTerms`. Private growth is capped by the
 child's `RLIMIT_AS` and a breach is the strategy's typed `memory_limit`.
+
+The native request `JournalStore` has a resident cap of 2,048 committed
+events in 32-event chunks, with a keep-resident floor of 128, a 32,768-byte
+spill page and four decoded cache slots. A bar that exceeds the cap spills
+before retirement. For the short waiting-child parent-terminal fixture,
+the book's 4,096-row cap and this journal cap give the per-engine definition
+plateau `456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524 = 1890980` bytes
+on GNU 13.4 x86-64, independent of symbols, window and trades.
+The [scratch-store derivation](../scratch-store.md#resident-bound-of-the-parent-terminal-drain-native-order)
+separates the growth-time 6,936-byte fixed term from the plateau's writer
+overlap and lists the excluded event slots, buffers and arbitrary payloads.
+
+`scripts/arena_bound.py` has no `kMaxResident` input or native journal-page
+term. The resident-cap change therefore changes neither its per-user storage
+terms nor its command-store shares, closed form or hand vectors.
+The unbound journal's `ExtFile` uses `ScratchFile`, which can claim arena
+regions; spilling earlier is not itself a certificate for that backing's
+complete lifetime extent. The bound codec uses the existing command-store
+share. This resident definition budget supplies no new private RSS/AS
+certification.
 
 CORE-TOP's A5-WIDER brief reports a **44.4–46.2 MB pre-flat-port resident
 constant**, referring to Q2 at 15:43. That is a historical measurement,
@@ -560,15 +726,21 @@ actually been supplied. They do not assert these caps for arbitrary Pine.
 | Position tail | 37,600,000 | 47,000 |
 | Cohorts | 64,000,001 | 80,001 |
 | Rank | 3,349 | 3,349 |
-| Each of two placement data files | 108,800,000 | 136,000 |
-| Each of two placement index peaks | 50,331,648 | 49,152 |
+| Erased placement data | 108,800,000 | 136,000 |
+| Erased placement index peak | 50,331,648 | 49,152 |
 | Consumed data | 67,600,000 | 84,500 |
 | Consumed index peak | 25,165,824 | 24,576 |
+| Ordered fold | 892,052,328 | 2,157,912 |
 | Roots | 128,000,000 | 160,000 |
-| B | 832,632,494 | 817,754 |
-| chunkCeil(B) | 833,617,920 | 1,048,576 |
+| External openings (excluded stock-source profile) | 0 | 0 |
+| B | 1,565,553,174 | 2,790,514 |
+| chunkCeil(B) | 1,566,572,544 | 3,145,728 |
 | Fourteen-chunk slack | 14,680,064 | 14,680,064 |
-| **arenaBytes** | **848,297,984 (809 MiB)** | **15,728,640 (15 MiB)** |
+| Bcert | 1,581,252,608 (1508 MiB) | 17,825,792 (17 MiB) |
+| q=max(1,(b-3)//13) | 1505//13=115 | max(1,14//13)=1 |
+| K=q*C per command store | 120,586,240 | 1,048,576 |
+| Three command carve-outs | 361,758,720 | 3,145,728 |
+| **arenaBytes=(b+3q)*C** | **1,943,011,328 (1853 MiB)** | **20,971,520 (20 MiB)** |
 
 One primary 48-byte feed contributes raw 384,000,000 / 480,000 bytes.
 With 4096-byte pages its fully resident/AS charge is 384,000,000 /
@@ -585,20 +757,24 @@ The eight JSON vectors were calculated by hand:
 
 | Vector | Hand calculation / distinguishing boundary |
 | --- | --- |
-| Empty run | D=1 for empty component; B=97+61+40+40+1024+1024=2286; arena=15 MiB. |
-| Small / LARGE | Eleven contributions in the table above, including both two-file rows. |
-| Rehash at 33 | D=32,Q=1,L=1,E=1; both 128-slot rehash peaks are 3072; B=14696; arena=15 MiB. |
-| Unicode | D=2,Q=4,L=2,T=2,R=2,E=2; B=48+64+197+125+520+2048+180+1024+32=4238. |
-| Million points | B=24*1048576+2286=25168110; ceil=25 MiB; arena=39 MiB=40894464. Half supplies 19 complete chunks, below the actual 24 MiB curve. |
-| All terms | Same Unicode arena. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
+| Empty run | D=1 for empty component; B=97+61+40+1024=1222; b=1+14=15; q=1; A=(15+3)*1048576=18874368 (18 MiB). |
+| Small | B=48024+47000+80001+3349+136000+49152+84500+24576+2157912+160000=2790514; b=3+14=17; q=1; A=20*1048576=20971520. |
+| LARGE | B=192000024+37600000+64000001+3349+108800000+50331648+67600000+25165824+892052328+128000000=1565553174; B=1493*C+29206, so b=1494+14=1508; q=1505//13=115; A=1853*1048576=1943011328. |
+| Rehash at 33 | D=32,Q=1,L=1,E=1; B=24+3105+1648+1354+3072+43+1024+2232=12502; b=1+14=15; q=1; A=18*1048576=18874368. |
+| Unicode | D=2,Q=4,L=2,T=2,R=2,E=2; B=48+64+197+125+260+1024+180+1024+15192+32=18146; b=1+14=15; q=1; A=18*1048576=18874368. |
+| Million points | B=24*1048576+1222=25167046; ceil=25 MiB; b=25+14=39; q=36//13=2; A=(39+6)*1048576=47185920 (45 MiB). K=2 MiB leaves Bcert=39 MiB. Half=23592960 rounds down to 22 complete chunks=23068672, below the actual 24 MiB curve=25165824 even before any command reservation. |
+| All terms | B=18146, b=15, q=1; A=18*1048576=18874368 as for Unicode. Primary one-page RSS/two-page AS; extra bar+two column+close buffers consume four pages with RSS copies=2: RSS=36864, AS=24576. Counts T/E/O/V/K/X/H=3/2/2/5/1/3/2; line maxima 717/154/190/263/71/140/25. U=2097152+2151+308+380+1315+71+420+50=2101847. Private RSS/AS are null and its own flag is true; top-level unbounded=false, unboundedTerms=[], reason="". |
 | Unbounded emitting loop | Null arena inputs except E=2; no finite guessed size. unboundedTerms=[arena,ohlcv,finalizerStream]; childPrivate remains informational. Default attempt-0 arena and escalation apply. |
 
-All eight vectors were recomputed by hand for the three-term verdict.
-The first six retain their arena/logical byte values and have
+All eight vectors use the three-term verdict; CR150-CX's combined-arena
+arithmetic leaves the current logical B contributions unchanged. The first six have
 `unboundedTerms=["ohlcv","finalizerStream"]`; their absent private proof
 continues to set only its own flag. In the all-terms vector, removing the
 old toy private proof isolates unknown childPrivate: the former four-term
 rule would flag that input, while the three-term verdict is bounded.
+Unavailable arena results retain their previous null values, reasons,
+inputs and legacy derivation metadata; the share derivation describes
+certified results only.
 
 ### TypeScript arithmetic
 
@@ -611,24 +787,103 @@ min(D*D,K) without requiring a representable D*D when K is the tighter
 uint64 value. Deduplicate literal strings by value and count their UTF-8
 bytes, not UTF-16 code units.
 
+For the current three stores and f=1/16, the checked BigInt expressions
+are the same as the Python implementation. B is the unchanged sum of
+non-command logical contributions:
+
+```typescript
+const C = 1048576n;
+const MAX_U64 = (1n << 64n) - 1n;
+const MAX_ARENA_BYTES = ((1n << 32n) - 1n) * C;
+class BoundOverflow extends RangeError {}
+
+function u64(value: bigint): bigint {
+  if (value < 0n || value > MAX_U64) throw new BoundOverflow("outside uint64");
+  return value;
+}
+function add(...values: bigint[]): bigint {
+  let result = 0n;
+  for (const value of values) {
+    u64(value);
+    if (value > MAX_U64 - result) throw new BoundOverflow("addition exceeds uint64");
+    result += value;
+  }
+  return result;
+}
+function mul(left: bigint, right: bigint): bigint {
+  u64(left);
+  u64(right);
+  if (right !== 0n && left > MAX_U64 / right)
+    throw new BoundOverflow("multiplication exceeds uint64");
+  return left * right;
+}
+function combinedArenaChunks(b: bigint): bigint {
+  u64(b);
+  const share = b >= 3n ? (b - 3n) / (16n - 3n) : 0n;
+  const q = share > 1n ? share : 1n;
+  return add(b, mul(3n, q));
+}
+function arenaBytes(B: bigint): bigint {
+  u64(B);
+  const b = add(B / C, B % C === 0n ? 0n : 1n, 14n);
+  const A = mul(combinedArenaChunks(b), C);
+  if (A > MAX_ARENA_BYTES)
+    throw new BoundOverflow("finite bound exceeds ScratchArena uint32 chunk table");
+  return A;
+}
+```
+
+The enclosing facts evaluator maps BoundOverflow to the existing null arena,
+unbounded=true and PLATFORM_RANGE reason. No share calculation runs for
+unbounded or uncertified inputs. Division/remainder avoids an overflowing
+B+C-1; guarded subtraction avoids unsigned underflow; checked addition and
+multiplication cover b, 3q, n and the final byte conversion. In particular
+the platform comparison is on final A, after all three shares.
+
 ScratchArena's current representation limit is
 (2^32-1)*1048576 = 4503599626321920 bytes, from its uint32 chunk-table
-check at `src/scratch_arena.cpp:131`. This is not a supported allocation
+check at `src/scratch_arena.cpp:144`. This is not a supported allocation
 promise or a size for an unknown strategy. A bound outside it returns
 null with PLATFORM_RANGE. It must not be clamped to the cap.
+At that cap M=2^32-1=16*268435455+15 chunks, K/C=268435455,
+so the largest non-command b is M-3*268435455=3489660930.
+For b=3489660930 the minimum is M exactly. For b=3489660931,
+q=268435456 and n=4294967299=M+4; it must return PLATFORM_RANGE
+although b alone still fits the chunk table.
 
 ## Lab verification and remaining integration
 
 The lab harness links the bridge and generated code into the same module
 as the static engine, then explicitly attaches a preallocated regular-file
 arena. It reads the existing high_water/bytes_used stats after each run.
-No production header declaration is changed.
+The bridge adds no runtime PF_API export.
 
 Linux linker wrappers reject write/pwrite/ftruncate on unlinked regular
-scratch files, while allowing the named report sink. A raw-fd scratch
+scratch files and refuse creation through mkstemp/mkostemp/open/openat,
+including O_TMPFILE and zero-length files, while allowing the named report
+sink's pre-existing regular file to reopen. A three-attempt self-probe
+verifies and counts the linked mkstemp/open/openat references before each
+run; only those deliberate attempts are discounted. Both legacy creation
+and growth counters must remain zero during the real run. A raw-fd scratch
 consumer therefore fails instead of producing an artificially low
-high-water measurement. The current base still has those owning-port
-dependencies. It must not be reported as corpus proof until they land.
+high-water measurement.
+
+The `test_privmoves_compare_{tables,fold,roots,openings}` rows compare real
+file/arena/slab contents with map/vector oracles and seven incoming-seed
+digests. The four corresponding `test_privmoves_jail_*` rows fork/exec
+themselves with a pre-sized regular or sealed arena, effective non-writable
+directories, ignored SIGXFSZ and soft/hard RLIMIT_FSIZE=0. Complete binary
+transcripts return over a pipe to the ordinary parent oracle. The fold
+witness also exercises all three record sizes at the 4095-byte segment
+ceiling and repeated partial-write journal recovery. The directory row
+records creation paths as well as listing /tmp before/after; immediate
+unlink cannot hide the CR-260 regression.
+
+These changes are static read only on the Mac. The supervisor must execute
+set A on the old implementation (compare matches; jail/directory fail for
+their named reasons), then the complete tree on NTU/NTU2. The combined
+command-share formula and integration require supervisor lab verification
+before claiming corpus proof.
 
 Fixtures submit order bursts/brackets, hit the entry pyramid limit, vary
 computed IDs, use 4096-byte prefixes, partially close entries, issue
@@ -636,6 +891,28 @@ computed IDs, use 4096-byte prefixes, partially close entries, issue
 The million-point control must materialize at least 23 MiB of curve and
 fail with typed report_sink_failed/scratch arena exhausted at bound/2.
 The source-only infinite/unknown-loop fixtures never execute.
+
+The runtime fixture plans also have independent hand expectations in
+`tests/test_arena_bound.py`. Each row leaves its entire former non-command
+certificate after three command shares:
+
+| Probe | Logical B | ceil(B/C)+14 = b | q | Former arenaBytes -> combined arenaBytes |
+| --- | ---: | ---: | ---: | --- |
+| orders-every-bar | 1898366958 | 1811+14=1825 | 1822//13=140 | 1913651200 -> 2354053120 = (1825+420)*C |
+| many-computed-ids | 1111429870 | 1060+14=1074 | 1071//13=82 | 1126170624 -> 1384120320 = (1074+246)*C |
+| long-id-components | 202251294 | 193+14=207 | 204//13=15 | 217055232 -> 264241152 = (207+45)*C |
+| partial-exit-ladders | 967682798 | 923+14=937 | 934//13=71 | 982515712 -> 1205862400 = (937+213)*C |
+| pyramiding-at-limit | 1898366958 | 1811+14=1825 | 1822//13=140 | 1913651200 -> 2354053120 = (1825+420)*C |
+| successor-replacements | 4207814 | 5+14=19 | max(1,16//13)=1 | 19922944 -> 23068672 = (19+3)*C |
+| selected-window | 631186438 | 602+14=616 | 613//13=47 | 645922816 -> 793772032 = (616+141)*C |
+| large-curve | 25167046 | 25+14=39 | 36//13=2 | 40894464 -> 47185920 = (39+6)*C |
+
+For every row K=q*C and A-3K=b*C>=B. This includes the entire existing
+fourteen-region allowance, so carving out the command shares cannot
+invalidate the non-command proof at supplied=certified. The large-curve
+half-size witness remains below its real curve alone, as worked above.
+These are static calculations; runtime success and typed failure still
+require the supervisor's lab job.
 
 The generated-code fixture's w is 1, 4 or 8 from the selected static
 schedule, and it never enables COOF. Its bounded input has prices 99..102,
@@ -670,8 +947,8 @@ compare with actual usage. It is a certification failure, not a production
 admission or sizing decision. Production still uses the default attempt-0
 arena and escalation ladder without a bound. Every measured run prints actual,
 bound and actual/bound; the minimum ratio identifies worst conservatism.
-No measured worst ratios exist yet. A 15 MiB allowance for a one-chunk
-curve can be 15x over actual; the fixture's deliberately loose fill/lot
+No measured worst ratios exist yet. An 18 MiB allowance for a one-chunk
+curve can be 18x over actual; the fixture's deliberately loose fill/lot
 product can be thousands of times over actual. There is no finite universal
 worst ratio: an inactive strategy may use zero arena.
 

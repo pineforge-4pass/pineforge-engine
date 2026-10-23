@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <system_error>
 #include <vector>
 
@@ -19,6 +20,12 @@ public:
         : std::system_error(error, std::generic_category(), operation),
           RunFailureInfo(RunFailureCode::report_sink_failed, args) {}
 };
+
+// Re-emit the original typed object, retaining errno, English and the validated
+// argument object. Status-only backings pass nullptr and keep their old raiser.
+inline void rethrow_carried_scratch_failure(const ReportScratchIoError* failure) {
+    if (failure) throw *failure;
+}
 
 // Closed report_sink_failed.store vocabulary; never derive it from a path
 // or an open() prefix. The port owners label each physical ScratchFile.
@@ -35,6 +42,7 @@ enum class ScratchStore : std::uint8_t {
     partial_cycles,
     partial_cycles_idx,
     successor_roots,
+    command,
 };
 
 enum class ScratchArenaBackend : std::uint8_t {
@@ -87,7 +95,8 @@ class ScratchFile;
 // decides which operation reaches it; no per-thread failing-index guarantee.
 // Exhaustion snapshots high_water_bytes, arena_bytes, claimed_bytes (all
 // currently owned chunks) and needed_bytes_lower_bound (the requesting
-// region's additional whole chunks), plus its store, under that same lock.
+// region's additional whole chunks, or a bounded caller's supplied arena-size
+// requirement), plus its store, under that same lock.
 // Other failure reasons carry no byte counts or store identity.
 class ScratchArena final {
 public:
@@ -119,14 +128,18 @@ private:
         // Four bytes per claimed 1 MiB chunk, in logical-file order.
         std::vector<std::uint32_t> chunks;
         std::uint64_t size = 0;
+        // No value is the original unbounded report-region policy. A bounded
+        // region (including a zero-byte share) reserves its directory at open.
+        std::optional<std::uint64_t> max_bytes;
         ScratchStore store = ScratchStore::unknown;
     };
     struct Impl;
     ScratchArena(int fd, std::uint64_t bytes);
-    void open_region(Region& region);
+    void open_region(Region& region, std::optional<std::uint64_t> max_bytes = std::nullopt);
     void release_region(Region& region) noexcept;
     void truncate(Region& region, std::uint64_t bytes);
-    void ensure_size(Region& region, std::uint64_t bytes);
+    void ensure_size(Region& region, std::uint64_t bytes,
+                     std::uint64_t needed_bytes_lower_bound = 0);
     void write(Region& region, std::uint64_t offset, const void* data, std::size_t length);
     void read(const Region& region, std::uint64_t offset, void* data, std::size_t length) const;
 

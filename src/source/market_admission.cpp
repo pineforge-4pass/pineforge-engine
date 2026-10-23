@@ -91,17 +91,19 @@ struct Journal::CodecState final : detail::ScratchReadback {
     detail::ScratchStatus failure = detail::ScratchStatus::ok;
 
     explicit CodecState(detail::CommandScratchStore& source) : store(source), page(source.page_size()) {}
-    static void check(detail::ScratchStatus status) {
+    static void check(detail::ScratchStatus status, const detail::ScratchReadback* reader) {
         if (status == detail::ScratchStatus::ok) return;
-        if (status == detail::ScratchStatus::io_error)
+        if (status == detail::ScratchStatus::io_error) {
+            if (reader) detail::rethrow_carried_scratch_failure(reader->carried_failure());
             detail::raise_scratch_io_error(EIO, "admission journal codec I/O");
+        }
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission journal codec invalid storage");
     }
     detail::ScratchBuffer buffer() const { return {page.data(),page.size()}; }
     void retire_through(std::uint64_t sequence) {
         auto status = store.begin();
-        check(status);
+        check(status, this);
         detail::ScratchHandle handle = detail::scratch_no_handle;
         while ((status = store.first(handle)) == detail::ScratchStatus::ok) {
             std::array<std::byte,8> key{};
@@ -115,10 +117,13 @@ struct Journal::CodecState final : detail::ScratchReadback {
             if (status != detail::ScratchStatus::ok) break;
         }
         if (status == detail::ScratchStatus::end) status = detail::ScratchStatus::ok;
-        check(detail::journal_codec::finish(store,status));
+        check(detail::journal_codec::finish(store,status), this);
     }
     std::size_t page_size() const noexcept override { return store.page_size(); }
     std::uint64_t record_count() const noexcept override { return count; }
+    const detail::ReportScratchIoError* carried_failure() const noexcept override {
+        return store.carried_failure();
+    }
     detail::ScratchStatus point(detail::ScratchHandle handle,
                                 detail::ScratchRecordInfo& info) const noexcept override {
         detail::ScratchRecordInfo actual;
@@ -161,6 +166,8 @@ Journal::Journal() noexcept = default;
 Journal::~Journal() = default;
 
 void bind_journal_codec(Journal& journal, detail::CommandScratchStore& store) {
+    if (store.status() == detail::ScratchStatus::io_error)
+        detail::rethrow_carried_scratch_failure(store.carried_failure());
     if (journal.next_sequence_ != 1 || journal.event_count() || journal.has_unfinished_events()
         || journal.codec_ || store.status() != detail::ScratchStatus::ok
         || store.record_count() || store.transaction_active())
@@ -233,16 +240,16 @@ const std::vector<Event>& Journal::events() const {
     auto status = codec_->store.first(handle);
     while (status == detail::ScratchStatus::ok) {
         detail::ScratchRecordInfo info;
-        CodecState::check(codec_->store.point(handle,info));
+        CodecState::check(codec_->store.point(handle,info), codec_.get());
         if (info.value_bytes) {
             detail::journal_codec::StoreSource source(codec_->store,handle,info.value_bytes);
             Event event;
-            CodecState::check(decode_journal_record(source,codec_->buffer(),event));
+            CodecState::check(decode_journal_record(source,codec_->buffer(),event), codec_.get());
             result.push_back(std::move(event));
         }
         status = codec_->store.next(handle,handle);
     }
-    if (status != detail::ScratchStatus::end) CodecState::check(status);
+    if (status != detail::ScratchStatus::end) CodecState::check(status, codec_.get());
     events_.swap(result);
     codec_->snapshot_valid = true;
     return events_;
@@ -255,7 +262,7 @@ Journal::Prefix Journal::folded_window() const {
     if (filtered_ && retired_prefix_.count == 0)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission filter cannot rewrite folded lifetime history");
-    if (codec_) CodecState::check(codec_->failure);
+    if (codec_) CodecState::check(codec_->failure, codec_.get());
     if (fold_valid_ && !filtered_ && folded_window_.count == event_count())
         return folded_window_;
     Prefix result = fold_valid_ && !filtered_ ? folded_window_ : retired_prefix_;
@@ -264,9 +271,9 @@ Journal::Prefix Journal::folded_window() const {
     auto retained_rejected_bar = retired_prefix_.last_rejected_command_bar;
     const auto append = [&](const detail::ScratchByteSource& source, detail::ScratchBuffer page) {
         JournalRecordSummary summary;
-        CodecState::check(scan_journal_record(source,page,summary));
+        CodecState::check(scan_journal_record(source,page,summary), codec_.get());
         if (summary.sequence <= result.last_sequence) return;
-        CodecState::check(fold_journal_record(source,page,result.digest));
+        CodecState::check(fold_journal_record(source,page,result.digest), codec_.get());
         if (result.count == std::numeric_limits<std::size_t>::max())
             throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
                                               "admission event count exhausted");
@@ -290,10 +297,10 @@ Journal::Prefix Journal::folded_window() const {
         auto status = codec_->store.lower_bound(frontier,handle);
         while (status == detail::ScratchStatus::ok) {
             detail::ScratchRecordInfo info;
-            CodecState::check(codec_->store.point(handle,info));
+            CodecState::check(codec_->store.point(handle,info), codec_.get());
             std::array<std::byte,8> key{};
             CodecState::check(codec_->store.read(handle,detail::ScratchField::key,0,
-                                                 {key.data(),key.size()}));
+                                                 {key.data(),key.size()}), codec_.get());
             std::uint64_t id = 0;
             for (unsigned i=0;i!=8;++i)
                 id |= std::uint64_t(std::to_integer<unsigned>(key[i])) << (8*i);
@@ -303,7 +310,7 @@ Journal::Prefix Journal::folded_window() const {
             }
             status = codec_->store.next(handle,handle);
         }
-        if (status != detail::ScratchStatus::end) CodecState::check(status);
+        if (status != detail::ScratchStatus::end) CodecState::check(status, codec_.get());
     } else {
         std::array<std::byte,512> page{};
         const auto first = std::upper_bound(events_.begin(),events_.end(),result.last_sequence,
@@ -325,7 +332,7 @@ Journal::Prefix Journal::folded_window() const {
 
 int Journal::last_rejected_command_bar() const {
     if (filtered_ && fold_valid_) return folded_window_.last_rejected_command_bar;
-    if (codec_) CodecState::check(codec_->failure);
+    if (codec_) CodecState::check(codec_->failure, codec_.get());
     if (!rejection_gate_.valid) return folded_window().last_rejected_command_bar;
     return rejection_gate_.bar;
 }
@@ -343,7 +350,7 @@ Journal::Journal(const Journal& other) {
             if (status == detail::ScratchStatus::not_found) {
                 if (id != other.codec_->abandoned) outstanding_sequences_.push_back(id);
             }
-            else CodecState::check(status);
+            else CodecState::check(status, other.codec_.get());
         }
     events_ = other.events();
     outstanding_count_ = other.outstanding_count_;
@@ -422,7 +429,7 @@ uint64_t Journal::next_sequence() {
         throw coded<std::overflow_error>(RunFailureCode::engine_invariant, {},
                                          "admission event sequence exhausted");
     }
-    if (codec_) CodecState::check(codec_->failure);
+    if (codec_) CodecState::check(codec_->failure, codec_.get());
     else outstanding_sequences_.push_back(next_sequence_);
     ++outstanding_count_;
     return next_sequence_++;
@@ -484,9 +491,9 @@ void Journal::append(Event event) {
         if (found == detail::ScratchStatus::ok)
             throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                           "admission event has no outstanding allocation");
-        if (found != detail::ScratchStatus::not_found) CodecState::check(found);
+        if (found != detail::ScratchStatus::not_found) CodecState::check(found, codec_.get());
         const auto source = encode_journal_record(event);
-        CodecState::check(append_journal_record(*this,source));
+        CodecState::check(append_journal_record(*this,source), codec_.get());
         return;
     }
     const auto pending = std::find(outstanding_sequences_.begin(), outstanding_sequences_.end(), id);
@@ -510,7 +517,7 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
     if (codec_) {
         auto& store = codec_->store;
         auto status = store.begin();
-        CodecState::check(status);
+        CodecState::check(status, codec_.get());
         auto removed = std::uint64_t{0};
         detail::ScratchHandle handle = detail::scratch_no_handle;
         status = store.first(handle);
@@ -542,7 +549,7 @@ void Journal::retain(const std::vector<uint64_t>& retained) {
             handle = next; status = following;
         }
         if (status == detail::ScratchStatus::end) status = detail::ScratchStatus::ok;
-        CodecState::check(detail::journal_codec::finish(store,status));
+        CodecState::check(detail::journal_codec::finish(store,status), codec_.get());
         if (removed) {
             codec_->count -= removed;
             codec_->snapshot_valid = false;
@@ -566,8 +573,8 @@ void Journal::reset() {
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "cannot reset admission journal with unfinished events");
     if (codec_) {
-        CodecState::check(codec_->failure);
-        CodecState::check(detail::journal_codec::clear(codec_->store));
+        CodecState::check(codec_->failure, codec_.get());
+        CodecState::check(detail::journal_codec::clear(codec_->store), codec_.get());
         codec_->count = 0; codec_->snapshot_valid = false;
         codec_->abandoned = codec_->failed_sequence = 0;
     }
@@ -747,7 +754,7 @@ void Journal::reflect(const std::string& path,const FieldVisitor& visit)const {
             const auto status = detail::journal_codec::find(codec_->store,id,info);
             if (status == detail::ScratchStatus::not_found)
                 r.field(path+".outstanding_sequences["+std::to_string(rank++)+"]","sequence",id);
-            else CodecState::check(status);
+            else CodecState::check(status, codec_.get());
         }
     } else r.array(outstanding_sequences_,path+".outstanding_sequences",[&](auto sequence,const auto& p){r.field(p,"sequence",sequence);});
     r.array(events(),path+".events",[&](const auto& event,const auto& p){r.event(event,p);});

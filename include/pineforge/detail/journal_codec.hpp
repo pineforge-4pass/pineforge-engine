@@ -190,6 +190,9 @@ public:
         observe_work(WorkOperation::payload_source);
     }
     std::uint64_t size() const noexcept override { return length_; }
+    const ReportScratchIoError* carried_failure() const noexcept override {
+        return store_.carried_failure();
+    }
     ScratchStatus read(std::uint64_t offset, ScratchBuffer out) const noexcept override {
         observe_work(WorkOperation::payload_read, out.size);
         return store_.read(handle_, ScratchField::value, offset, out);

@@ -13,6 +13,8 @@ from collections.abc import Mapping
 
 CHUNK_BYTES = 1_048_576
 ROUNDING_REGIONS = 14
+COMMAND_STORES = 3
+COMMAND_SHARE_DENOMINATOR = 16  # kCommandScratchArenaShare = 1/16.
 MAX_U64 = (1 << 64) - 1
 # ScratchArena::Impl rejects chunks > uint32_t::max(), not >= 2**32.
 # This is a representation limit, NEVER a substitute bound for an unknown run.
@@ -54,6 +56,24 @@ def _mul(left: int, right: int) -> int:
     if right != 0 and left > MAX_U64 // right:
         raise BoundOverflow("multiplication exceeds uint64")
     return left * right
+
+
+def combined_arena_chunks(non_command_chunks: int) -> int:
+    """Smallest n with n - 3*max(1, n//16) >= non_command_chunks.
+
+    In share block q>=1, n=16*q+r (0<=r<=15) leaves 13*q+r
+    non-command chunks. The first block reaching b has
+    q=max(1, ceil((b-15)/13))=max(1, floor((b-3)/13)).
+    The one-chunk floor also covers n<16. Guard subtraction for b<3;
+    arena_bound itself supplies b>=ROUNDING_REGIONS=14.
+    """
+    non_command_chunks = _integer(non_command_chunks, "non-command chunks")
+    share_chunks = (
+        max(1, (non_command_chunks - COMMAND_STORES)
+            // (COMMAND_SHARE_DENOMINATOR - COMMAND_STORES))
+        if non_command_chunks >= COMMAND_STORES else 1
+    )
+    return _add(non_command_chunks, _mul(COMMAND_STORES, share_chunks))
 
 
 def _object(value, name: str) -> Mapping:
@@ -115,11 +135,48 @@ def index_peak(keys: int) -> int:
     return _mul(24, slots(keys))
 
 
+def fold_opened_segments(rows: int, record_bytes: int,
+                        off_max: int = (1 << 63) - 1) -> int:
+    """Lazy IdPairFoldFile regions, id_pair_ordered_fold.hpp:59-89.
+
+    off_max is explicit for the existing reduced-offset fixture. Production
+    uses signed 64-bit off_t. No per-record padding is added at a boundary.
+    """
+    rows = _integer(rows, "fold rows")
+    record_bytes = _integer(record_bytes, "fold record bytes")
+    off_max = _integer(off_max, "fold OFF_MAX")
+    if record_bytes == 0 or off_max < record_bytes:
+        raise FactsError("a fold record must fit in OFF_MAX")
+    rows_per_segment = off_max // record_bytes
+    return rows // rows_per_segment + int(rows % rows_per_segment != 0)
+
+
+def ordered_fold_bytes(keys: int, component_bytes: int) -> int:
+    """Distinct-EVER joined keys, including tombstones and staged appends.
+
+    id_pair_ordered_fold.hpp:161-184 pins Leaf=136, Branch=2088 (including
+    its 2056-byte map), Snapshot=2096. Its binary splits reuse the old leaf
+    and add at most one leaf/branch per new key (:282-336). Thus leaves<=Q,
+    branches<=Q-1. Pivots strictly increase (:101-102); the joined key has
+    <=2L+1 bytes. The saved mutation path includes its final leaf (:247-258).
+    """
+    keys = _integer(keys, "fold keys")
+    component_bytes = _integer(component_bytes, "fold component bytes")
+    if keys == 0:
+        return 0
+    leaves, branches = keys, keys - 1
+    joined_length = _add(_mul(2, component_bytes), 1)
+    saved_path = _add(min(branches, _mul(9, _add(joined_length, 1))), 1)
+    return _add(_mul(136, leaves), _mul(2088, branches), _mul(2096, saved_path))
+
+
 def per_user_bytes(inputs: Mapping) -> dict[str, int]:
-    """The eleven logical peaks, before arena chunk rounding.
+    """Ten storage contributions plus the explicit stock-source openings zero.
 
     Accepts the ``inputs`` member returned by arena_bound.  Kept separate so
-    arena_bound's public result has EXACTLY the A5 fields.
+    arena_bound's public result has EXACTLY the A5 fields. There are still
+    eleven entries, but no sequence-minima store: ScratchManifest reserves
+    K_q/B_q as zero (scratch_tables.hpp:16, scratch_slab.hpp:78).
     """
     counts = {
         name: _integer(_object(inputs[name], name)["value"], name)
@@ -137,13 +194,19 @@ def per_user_bytes(inputs: Mapping) -> dict[str, int]:
         "positionTail": _mul(_add(30, length), t),
         "cohorts": _add(_mul(_add(96, length), d), int(d != 0)),
         "exitRank": _add(_mul(_add(60, length), rank), int(rank != 0)),
-        "sequenceData": pair_data,
-        "sequenceIndex": pair_index,
         "erasedData": pair_data,
         "erasedIndex": pair_index,
         "consumedData": _mul(_add(41, _mul(2, length)), q),
         "consumedIndex": index_peak(q),
+        "orderedFold": ordered_fold_bytes(q, length),
         "successorRoots": _mul(16, roots),
+        # Certified EngineRecorded stock-source profile ONLY: its owners
+        # build vectors, never external_openings (pine_adapter.cpp:6983,
+        # :6990, :9669). Generic C++ external readbacks are excluded.
+        # Each admitted external freeze would instead retain 8*N bytes;
+        # N>=2 has 16*N sort peak, plus all other simultaneously retained
+        # owners. See native_order.cpp:111-179 and arena-bound.md.
+        "openings": 0,
     }
 
 
@@ -259,7 +322,7 @@ def _arena_term(facts: Mapping) -> dict:
         # Quotient/remainder avoids overflowing total + CHUNK_BYTES - 1.
         chunks = _add(total // CHUNK_BYTES, int(total % CHUNK_BYTES != 0),
                       ROUNDING_REGIONS)
-        arena_bytes = _mul(chunks, CHUNK_BYTES)
+        arena_bytes = _mul(combined_arena_chunks(chunks), CHUNK_BYTES)
         if arena_bytes > MAX_ARENA_BYTES:
             return unavailable(
                 "PLATFORM_RANGE: finite bound exceeds ScratchArena's uint32 chunk "
@@ -446,6 +509,17 @@ def arena_bound(facts: Mapping) -> dict:
         "formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576",
         "sources": ["docs/design/arena-bound.md storage derivation"],
     }
+    if not arena["unbounded"]:
+        arena["derivation"] = {
+            "formula": ("b = ceil(sum(perUserBytes) / 1048576) + 14; "
+                        "q = max(1, floor((b - 3) / (16 - 3))); "
+                        "arenaBytes = (b + 3 * q) * 1048576; f = 1/16"),
+            "sources": [
+                "docs/design/arena-bound.md storage derivation",
+                "src/command_scratch_production.hpp kCommandScratchArenaShare",
+                "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes",
+            ],
+        }
     terms = {"arena": arena}
     for name, calculate, record in (
             ("ohlcv", _ohlcv_term, facts.get("ohlcv")),

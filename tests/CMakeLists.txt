@@ -7496,3 +7496,55 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX AND PINEFORGE_BUILD_CORPUS_STRATEGIES)
     set_tests_properties(test_run_json_reversal_scratch PROPERTIES TIMEOUT 3600)
 endif()
 # --- CR-150 core-cr150-o1-revscratch end ---
+
+# --- CR-150 core-cr150-arena begin ---
+# Set B stays in this fence so the set A lane file can be committed by name.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_command_scratch_arena_bounded)
+    pineforge_add_unit_test(test_command_scratch_arena_bounded)
+endif()
+# --- CR-150 core-cr150-arena end ---
+
+# --- CR-150 core-cr150-privmoves begin ---
+# All rows share test_privmoves.cpp. The lane-file checker requires a source
+# named after each compiled add_test row, so aliases stay with the target.
+# TEST_SOURCES inventory lives in cr150.d/core-cr150-privmoves.cmake.
+if(UNIX)
+    add_executable(test_privmoves test_privmoves.cpp)
+    target_link_libraries(test_privmoves PRIVATE pineforge)
+    target_compile_options(test_privmoves PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_privmoves PRIVATE ${_pf_cov_test_flags})
+    endif()
+    add_test(NAME test_privmoves_compare_tables COMMAND test_privmoves compare tables)
+    add_test(NAME test_privmoves_compare_fold COMMAND test_privmoves compare fold)
+    add_test(NAME test_privmoves_compare_roots COMMAND test_privmoves compare roots)
+    add_test(NAME test_privmoves_compare_openings COMMAND test_privmoves compare openings)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(test_privmoves PRIVATE
+            "-Wl,--wrap=mkstemp" "-Wl,--wrap=open" "-Wl,--wrap=openat" "-Wl,--wrap=pread")
+        add_test(NAME test_privmoves_directory COMMAND test_privmoves directory)
+        add_test(NAME test_privmoves_jail_tables COMMAND test_privmoves jail tables)
+        add_test(NAME test_privmoves_jail_fold COMMAND test_privmoves jail fold)
+        add_test(NAME test_privmoves_jail_roots COMMAND test_privmoves jail roots)
+        add_test(NAME test_privmoves_jail_openings COMMAND test_privmoves jail openings)
+    endif()
+endif()
+# --- CR-150 core-cr150-privmoves end ---
+
+# --- CR-150 core-cr150-cr257 begin ---
+# Lane files permit registrations only; the linker flags and extra translation
+# units belong in this lane-owned fence, per check_cr150_cmake_d.py.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(test_cr257_source_exit_scratch_io PRIVATE
+        test_cr257_source_exit_scratch_io_100k.cpp
+        test_cr257_exit_scope_io.cpp
+        test_cr257_scratch_file_io.cpp)
+    target_link_options(test_cr257_source_exit_scratch_io PRIVATE
+        "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=read" "-Wl,--wrap=readv"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=preadv2" "-Wl,--wrap=mmap"
+        "-Wl,--wrap=posix_fadvise" "-Wl,--wrap=fdatasync")
+    # preadv2 requires glibc 2.26+; an unavailable symbol must fail linking.
+endif()
+# --- CR-150 core-cr150-cr257 end ---
