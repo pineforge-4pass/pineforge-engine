@@ -22,17 +22,19 @@
 //       the first mid-run flush (batch + 2 bars) and on a reused handle (a
 //       shorter tape starts a new curve).
 //   (c) sink-off behaviour is unchanged: one point per script bar labelled with
-//       its open, the whole curve published, no scratch owner or file, the same
-//       on a handle whose sink was removed before running; a replaced sink keeps
-//       the completed run's report computable;
+//       its open, the whole curve published, no report scratch owner or file.
+//       Unjailed trading retains only the ledger's exact index/payload files,
+//       also on a handle whose sink was removed before running; a replaced sink
+//       keeps the completed run's report computable;
 //       sink-on report, hash and run facts equal the sink-off ones.
 //   (d) a scratch_dir the engine cannot use fails the run with report_sink_failed,
 //       never a silent RAM fallback.
 //   (e) removal after an ordinary or observer-only run refuses with -3 and
 //       retains the scratch-backed summary. On short and 4x tapes, engine
-//       size/capacity and counted report-array peak/capacity stay at the same
-//       tape's held-tail bound, including temporary allocations during removal
-//       and repeated fills. The sink-off oracle is the growing positive control.
+//       size/capacity stays at the held-tail bound. Separate censuses check the
+//       run's fixed dependency cache plus temporary observer tail, and removal/
+//       repeated fills' one ordinary tail or zero observer arrays. Neither may
+//       retain an array. The sink-off oracle is the growing positive control.
 //
 // The scratch curve is observed through the protected accessor
 // BacktestEngine::report_sink_equity_scratch_region() (include/pineforge/engine.hpp):
@@ -55,6 +57,7 @@
 #include <pineforge/report_sink_writer.hpp>
 #include <pineforge/run_failure.hpp>
 
+#include "../src/command_scratch_cache.hpp"
 #include "../src/report_scratch.hpp"
 #include "scratch_descriptor_fixture.hpp"
 
@@ -87,8 +90,9 @@ int native_set_execution_observer_v1(BacktestEngine*, const pf_execution_observe
 
 // Count actual new[] storage, including arrays freed before fill_report
 // returns. In the flat memory cases there are no trades, outputs, security
-// diagnostics, trace or hash recording: the report/capture curve is the only
-// array. Scalar new (vectors and the fixed pread window) remains separate.
+// diagnostics, trace or hash recording. The run also allocates a fixed command
+// cache, so count run/capture separately from removal/fill and check both.
+// Scalar new (vectors and the fixed pread window) remains separate.
 // Every array allocation/deallocation form uses the matched scalar aligned
 // allocator, including sized/nothrow forms, so sanitizers see one allocator.
 namespace report_arrays {
@@ -191,6 +195,9 @@ namespace rs = pineforge::report_sink;
 constexpr std::int64_t start_ms = INT64_C(1736121600000);
 constexpr std::int64_t step_ms = 60000;
 constexpr double initial_capital = 10000.0;
+constexpr std::int64_t trade_spacing = 11;
+constexpr char open_label[] = "open";
+constexpr char close_label[] = "close";
 // One scratch batch. A tape of more than batch + 1 bars releases more than one
 // batch of points, so the engine's own writer flushes a full batch mid-run.
 constexpr std::int64_t batch = static_cast<std::int64_t>(rs::kScratchWindowPoints);
@@ -247,11 +254,11 @@ public:
         const std::int64_t k = probe_calculations++;
         probe_peak_size = std::max(probe_peak_size, equity_curve_.size());
         probe_peak_capacity = std::max(probe_peak_capacity, equity_curve_.capacity());
-        if (probe_trade && k % 11 == 0) {
-            const bool buy = (k / 11) % 2 == 0;
+        if (probe_trade && k % trade_spacing == 0) {
+            const bool buy = (k / trade_spacing) % 2 == 0;
             native_order::Request order;
             order.intent = native_order::Transact{buy ? 1.0 : -1.0};
-            order.label = buy ? "open" : "close";
+            order.label = buy ? open_label : close_label;
             submit(order);
         }
     }
@@ -393,14 +400,96 @@ struct Filled {
 };
 
 // Anonymous (unlinked) regular files this process holds: scratch files are.
-int anonymous_files() {
-    int count = 0;
+struct AnonymousFile {
+    int descriptor;
+    struct stat status;
+};
+
+std::vector<AnonymousFile> anonymous_files() {
+    std::vector<AnonymousFile> files;
     for (int descriptor = 0; descriptor < 1024; ++descriptor) {
         struct stat status{};
         if (::fstat(descriptor, &status) == 0 && S_ISREG(status.st_mode)
-            && status.st_nlink == 0) ++count;
+            && status.st_nlink == 0) files.push_back({descriptor, status});
     }
-    return count;
+    return files;
+}
+
+bool same_file(const AnonymousFile& a, const AnonymousFile& b) {
+    return a.descriptor == b.descriptor && a.status.st_dev == b.status.st_dev
+        && a.status.st_ino == b.status.st_ino;
+}
+
+// Unjailed storage is independent of the report sink (scratch-tables.md).
+// TradeLedger's I/O contract keeps an index and four-string payload in scratch
+// (trade_ledger.hpp; engine_orders.cpp State::store), including with sink OFF.
+// This fixture buys at k=2*j*trade_spacing and sells at k=(2*j+1)*trade_spacing;
+// next-bar fills close at k+1 < bars. Thus C = 1+(bars-trade_spacing-2)/(2*trade_spacing)
+// when the first close fits, otherwise zero. With C>0 exactly two files remain:
+// C*kRecordBytes index bytes and C*(sizeof(open_label)+sizeof(close_label)-2)
+// payload bytes, with empty comments and no string terminators or file headers.
+// The Dependency backing closes at the batch exit guard; no roots/replacements
+// or spilling command journal occur here. Flat/tiny runs still permit zero files.
+// Mutation: in engine_report.cpp begin_report_sink, replace the sink-disabled
+// return with: if (!sink.enabled) { (void)new report_sink::ScratchCurveWriter(sink.scratch_dir); return; }
+// This extra report file must fail the exact census, even though no owner is published.
+// Mutation: after State::store's index.write in engine_orders.cpp, add
+// index.ensure_size(record_offset(global) + 2 * sizeof(Record)); the uncounted
+// trailing record must fail the exact index extent, without changing row values.
+void check_sink_off_files(const std::vector<AnonymousFile>& before,
+                          std::int64_t bars, bool trade) {
+    const std::int64_t closed = trade && bars > trade_spacing + 1
+        ? 1 + (bars - trade_spacing - 2) / (2 * trade_spacing) : 0;
+    constexpr std::size_t payload_row_bytes = sizeof(open_label) + sizeof(close_label) - 2;
+    const auto index_bytes = closed * static_cast<std::int64_t>(pineforge::TradeLedger::kRecordBytes);
+    const auto payload_bytes = closed * static_cast<std::int64_t>(payload_row_bytes);
+    const auto after = anonymous_files();
+    std::string census = " (before=" + std::to_string(before.size())
+        + ", after=" + std::to_string(after.size())
+        + ", closed=" + std::to_string(closed)
+        + ", index_bytes=" + std::to_string(index_bytes)
+        + ", payload_bytes=" + std::to_string(payload_bytes) + ";";
+    for (const auto& file : after)
+        census += " fd=" + std::to_string(file.descriptor)
+            + " inode=" + std::to_string(file.status.st_ino)
+            + " bytes=" + std::to_string(file.status.st_size);
+    census += ')';
+    require(after.size() == before.size() + (closed > 0 ? 2U : 0U),
+            "sink-off retained files other than its derived ledger pair" + census);
+    for (const auto& prior : before)
+        require(std::any_of(after.begin(), after.end(),
+                    [&](const AnonymousFile& file) { return same_file(prior, file); }),
+                "sink-off run closed or replaced a pre-existing anonymous descriptor" + census);
+
+    int index_descriptor = -1, payload_descriptor = -1;
+    for (const auto& file : after) {
+        if (std::any_of(before.begin(), before.end(),
+                [&](const AnonymousFile& prior) { return same_file(prior, file); })) continue;
+        const int flags = ::fcntl(file.descriptor, F_GETFD);
+        require((file.status.st_mode & 0777) == 0600 && flags >= 0 && (flags & FD_CLOEXEC) != 0,
+                "sink-off ledger file is not private and close-on-exec" + census);
+        if (file.status.st_size == index_bytes && index_descriptor < 0)
+            index_descriptor = file.descriptor;
+        else if (file.status.st_size == payload_bytes && payload_descriptor < 0)
+            payload_descriptor = file.descriptor;
+        else
+            fail_test("sink-off file extent is neither the derived index nor payload" + census);
+    }
+    if (closed == 0) return;
+    require(index_descriptor >= 0 && payload_descriptor >= 0,
+            "sink-off lacks its exact ledger index/payload pair" + census);
+    const std::string expected = std::string(open_label) + close_label;
+    for (std::int64_t row = 0; row < closed; ++row) {
+        char bytes[payload_row_bytes]{};
+        ssize_t count;
+        do {
+            count = ::pread(payload_descriptor, bytes, sizeof bytes,
+                            static_cast<off_t>(row * static_cast<std::int64_t>(sizeof bytes)));
+        } while (count < 0 && errno == EINTR);
+        require(count == static_cast<ssize_t>(sizeof bytes)
+                    && std::memcmp(bytes, expected.data(), sizeof bytes) == 0,
+                "sink-off scratch payload differs from the fixture's request labels" + census);
+    }
 }
 
 bool directory_empty(const std::string& path) {
@@ -482,7 +571,8 @@ void check_sink_off_curve(const CurveProbe& host, const Filled& filled,
     const pf_report_sink_receipt_v1 none = receipt(host);
     require(none.count_e == 0 && none.complete == 0, "sink-off receipt is not empty");
     const pineforge::metrics::ScratchCurveRegion scratch = host.probe_scratch();
-    require(scratch.descriptor == -1 && scratch.point_count == 0,
+    require(scratch.descriptor == -1 && scratch.point_count == 0
+                && scratch.byte_offset == 0 && scratch.scratch == nullptr,
             "a sink-off run owns a scratch curve");
 }
 
@@ -496,13 +586,12 @@ struct Oracle {
     Oracle(std::int64_t bars, bool trade, bool present, bool observer = false) : feed(tape(bars)) {
         host.probe_trade = trade;
         host.probe_present = present;
-        const int anonymous_before = anonymous_files();
+        const auto anonymous_before = anonymous_files();
         configure(host, 1);
         if (observer) observe(host, observer_calls);
         run_tape(host, feed);
         report = std::make_unique<Filled>(host);
-        require(anonymous_files() == anonymous_before,
-                "sink-off run opened an anonymous scratch file");
+        check_sink_off_files(anonymous_before, bars, trade);
         check_sink_off_curve(host, *report, feed, trade);
     }
     const std::vector<pf_equity_point_t>& curve() const { return host.probe_curve(); }
@@ -691,7 +780,7 @@ struct RemovalPeaks {
 
 // (e) Count the owned report/capture arrays, not only the public lengths:
 // finish_report_sink frees its temporary array before the caller sees it.
-// Counts outlive their hosts, including the observer's retained capture.
+// Counts outlive their hosts; an observer retains its presented point inline.
 RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
                              std::int64_t bars, bool observer) {
     scenario = "(e) " + name;
@@ -701,6 +790,7 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
         const report_arrays::Scope count(off_arrays);
         oracle = std::make_unique<Oracle>(bars, false, true, observer);
     }
+    report_arrays::Counts run_arrays;
     report_arrays::Counts arrays;
     int observer_calls = 0;
     CurveProbe on;
@@ -711,14 +801,45 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
     const std::string path = root.out() + "/" + name + ".ndjson";
     install(on, path, root.scratch().c_str());
     {
-        const report_arrays::Scope count(arrays);
+        const report_arrays::Scope count(run_arrays);
         run_tape(on, oracle->feed);
     }
     const std::size_t held_size = on.probe_size();
     const std::size_t held_capacity = on.probe_capacity();
     const std::size_t held_bytes = held_size * sizeof(pf_equity_point_t);
-    require(held_size > 0 && held_size < oracle->curve().size(),
-            "removal fixture has no bounded held tail");
+    require(held_size == 1 && held_size < oracle->curve().size(),
+            "removal fixture does not hold the ordinary one-point tail");
+    // cr150-contracts.md, Report-sink presentation: one copied ordinary tail,
+    // and the observer keeps its presented value inline, with no owning array.
+    // This bare host opens only the Dependency command store (512-byte pages).
+    // Its CachedScratchBacking owns C = kCacheBytes; capture temporarily adds
+    // H = sizeof(one point) before the run exit guard releases the cache.
+    // Thus run peak = C + (observer ? H : 0), largest array = C, allocations =
+    // one cache + (observer ? one tail : none), and live bytes at return = 0.
+    // Keep this census separate so C cannot hide an extra array during fill.
+    // Mutation: in native_execution_consumer.cpp capture_presentation, change
+    // new pf_equity_point_t[1]{*held} to new pf_equity_point_t[2]{*held};
+    // observer run peak becomes C + 2H and must fail this equality.
+    constexpr std::size_t command_cache_bytes = pineforge::detail::CachedScratchBacking::kCacheBytes;
+    const std::size_t capture_arrays = observer ? 1 : 0;
+    require(run_arrays.peak_bytes == command_cache_bytes + capture_arrays * held_bytes
+                && run_arrays.capacity_bytes == command_cache_bytes
+                && run_arrays.allocations == 1 + capture_arrays,
+            "run census differs from one dependency cache plus the counted capture tail: peak_bytes="
+            + std::to_string(run_arrays.peak_bytes)
+            + ", capacity_bytes=" + std::to_string(run_arrays.capacity_bytes)
+            + ", allocations=" + std::to_string(run_arrays.allocations));
+    // Mutation: replace capture_presentation's ordinary-tail delete[] with
+    // (void)local.equity_curve; run return must then fail with H live bytes.
+    require(run_arrays.live_bytes == 0,
+            "run retained a command cache or capture curve array: live_bytes="
+            + std::to_string(run_arrays.live_bytes));
+    // Ordinary fill allocates H for presentation/metrics, freed by
+    // finish_report_sink; frozen observer reads copy scalars and allocate zero.
+    // Mutation: in engine_report.cpp fill_report_sink_metrics_section, change
+    // new pf_equity_point_t[1]{*held} to new pf_equity_point_t[2]{*held};
+    // ordinary fill peak/capacity become 2H and must fail sample().
+    const std::size_t report_bytes = observer ? 0 : held_bytes;
     RemovalPeaks peaks;
     peaks.engine.size = std::max(on.probe_peak_size, held_size);
     peaks.engine.capacity = std::max(on.probe_peak_capacity, held_capacity);
@@ -727,7 +848,7 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
         peaks.engine.capacity = std::max(peaks.engine.capacity, on.probe_capacity());
         require(peaks.engine.size == held_size && peaks.engine.capacity == held_capacity,
                 "sink removal or report fill rehydrated equity_curve_");
-        require(arrays.peak_bytes <= held_bytes && arrays.capacity_bytes <= held_bytes,
+        require(arrays.peak_bytes <= report_bytes && arrays.capacity_bytes <= report_bytes,
                 "sink removal or report fill allocated more than the counted report tail");
     };
     const auto refuse_removal = [&] {
@@ -765,18 +886,24 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
                     && report.script_bars_processed == want.script_bars_processed,
                 "report after refused removal differs from the sink-off oracle");
     };
+    const auto fill_and_sample = [&] {
+        const std::size_t allocations_before = arrays.allocations;
+        {
+            const report_arrays::Scope count(arrays);
+            const Filled filled(on);
+            check_report(filled.report);
+            sample();
+        }
+        require(arrays.allocations - allocations_before == (observer ? 0U : 1U),
+                "report fill did not allocate exactly its ordinary tail or reuse its observer capture");
+    };
 
     // Before the first fill too: the ordinary tail is not staged yet, whereas
-    // an observer-only run already owns its captured one-point presentation.
+    // an observer-only run already holds its captured one-point value inline.
     refuse_removal();
-    {
-        const report_arrays::Scope count(arrays);
-        const Filled first(on);
-        check_report(first.report);
-        sample();
-    }
-    require(arrays.peak_bytes == held_bytes && arrays.capacity_bytes == held_bytes,
-            "the census did not observe the report's counted held-tail allocation");
+    fill_and_sample();
+    require(arrays.peak_bytes == report_bytes && arrays.capacity_bytes == report_bytes,
+            "the census did not observe the ordinary tail or allocation-free observer read");
     const std::string bytes = read_file(path);
     const std::size_t presentations_before = on.probe_presentations;
     const int callbacks_before = observer_calls;
@@ -787,21 +914,11 @@ RemovalPeaks measure_removal(const TestRoot& root, const std::string& name,
 
     // The completed generation remains readable after another refused detach.
     refuse_removal();
-    {
-        const report_arrays::Scope count(arrays);
-        const Filled again(on);
-        check_report(again.report);
-        sample();
-    }
-    {
-        const report_arrays::Scope count(arrays);
-        const Filled again(on);
-        check_report(again.report);
-        sample();
-    }
-    require(arrays.peak_bytes == held_bytes && arrays.capacity_bytes == held_bytes,
+    fill_and_sample();
+    fill_and_sample();
+    require(arrays.peak_bytes == report_bytes && arrays.capacity_bytes == report_bytes,
             "report-array peak or capacity changed after refused removal");
-    require(arrays.live_bytes == (observer ? held_bytes : 0),
+    require(arrays.live_bytes == 0,
             "report fill retained an extra curve array: live_bytes=" + std::to_string(arrays.live_bytes)
             + ", held_bytes=" + std::to_string(held_bytes)
             + ", held_size=" + std::to_string(held_size)
@@ -877,8 +994,25 @@ void prove_curve(const TestRoot& root, const Plan& plan) {
     on->probe_present = plan.present;
     install(*on, path, root.scratch().c_str());
     sink_on_run(*on, oracle, 1, path, root.scratch(), plan.early_probe);
-    const int descriptor = scratch_fixture::descriptor(on->probe_scratch());
+    // The accessor excludes the held tail even after fill; the file now holds
+    // that tail's presented copy too (engine_report.cpp stage_report_sink_equity_tail).
+    // ScratchCurveWriter::flush writes raw points at disk_points * sizeof(point),
+    // so the complete file is plan.bars points at offset zero, with no header or
+    // rounding. For one bar the prefix is empty but the file holds one point:
+    // the metadata helper's empty-region witness would require an empty file.
+    // Match the complete region, retaining its content and handle-lifetime checks.
+    // Mutation: in report_scratch.cpp ScratchFile::write, add sizeof(pf_equity_point_t)
+    // to ensure_size's end; the extra uncounted point must fail the exact extent below.
+    auto complete = on->probe_scratch();
+    require(complete.byte_offset == 0 && complete.point_count + 1 == plan.bars,
+            "completed scratch is not the execution prefix plus one presented tail");
+    ++complete.point_count;
+    const int descriptor = scratch_fixture::descriptor(complete);
     require(descriptor >= 0, "no scratch descriptor after a completed sink-on run");
+    struct stat status{};
+    const auto complete_bytes = plan.bars * static_cast<std::int64_t>(sizeof(pf_equity_point_t));
+    require(::fstat(descriptor, &status) == 0 && status.st_size == complete_bytes,
+            "completed scratch file extent differs from the tape's point count");
     on.reset();
     errno = 0;
     require(::fcntl(descriptor, F_GETFD) == -1 && errno == EBADF,
@@ -930,10 +1064,12 @@ void reuse_cycle(const TestRoot& root) {
     install(off, off_path, root.scratch().c_str());
     require(off.set_report_sink_v1(nullptr) == 0, "sink removal before a run refused");
     scenario = "reuse: sink-off run on the same handle";
+    const auto anonymous_before = anonymous_files();
     configure(off, 3);
     run_tape(off, big.feed);
     {
         const Filled filled(off);
+        check_sink_off_files(anonymous_before, static_cast<std::int64_t>(big.feed.size()), true);
         check_sink_off_curve(off, filled, big.feed, true);
         require(off.probe_curve().size() == big.curve().size()
                     && std::memcmp(off.probe_curve().data(), big.curve().data(),
