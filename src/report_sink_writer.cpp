@@ -1,5 +1,6 @@
 #include "report_sink_writer.hpp"
 #include "report_value_invalid.hpp"
+#include "run_abort.hpp"
 #include "sha256.hpp"
 
 #include <pineforge/version.h>
@@ -295,7 +296,7 @@ std::string escaped_string(std::string_view utf8) {
 
 struct LineWriter::State {
     enum class Phase { configured, writing, complete, failed };
-    std::string path, run_id, scratch_dir;
+    std::string path, run_id;
     int descriptor = -1;
     bool borrowed = false;
     bool socket = false;
@@ -320,11 +321,6 @@ struct LineWriter::State {
             invalid("invalid report sink descriptor");
         path = sink.path;
         run_id = sink.run_id ? sink.run_id : "";
-        if (sink.scratch_dir) scratch_dir = sink.scratch_dir;
-        else {
-            const auto slash = path.find_last_of('/');
-            scratch_dir = slash == std::string::npos ? "." : slash == 0 ? "/" : path.substr(0, slash);
-        }
         const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
         buffer = reinterpret_cast<char*>((address + io_alignment - 1) & ~(io_alignment - 1));
     }
@@ -373,16 +369,57 @@ struct LineWriter::State {
             while (result < 0 && errno == EINTR);
             if (result < 0) io_error("getsockopt failed", errno);
             if (type != SOCK_STREAM) io_error("fd is not a stream socket", EINVAL);
+            // B2-09: SO_TYPE alone also admits network stream sockets.
+            sockaddr_storage address{};
+            length = sizeof address;
+            do { result = ::getsockname(descriptor, reinterpret_cast<sockaddr*>(&address), &length); }
+            while (result < 0 && errno == EINTR);
+            if (result < 0) io_error("getsockname failed", errno);
+            if (address.ss_family != AF_UNIX)
+                io_error("fd is not an AF_UNIX stream socket", EINVAL);
         }
     }
 
+    [[noreturn]] void abort_write() {
+        fail();
+        throw coded<std::runtime_error>(RunFailureCode::run_aborted, {}, "native run aborted");
+    }
+
     void wait_writable() {
-        pollfd ready{descriptor, POLLOUT, 0};
+        for (;;) {
+            pollfd ready{descriptor, POLLOUT, 0};
+            // B2-11: a signal delivered to another thread need not interrupt
+            // this poll. Give a draining peer a chance to finish the suffix,
+            // but observe the stop flag when back-pressure persists.
+            const int result = ::poll(&ready, 1, 100);
+            if (result <= 0 && run_sigterm_requested()) abort_write();
+            if (result < 0 && errno == EINTR) continue;
+            if (result < 0) io_error("poll failed", errno);
+            if (result == 0) continue;
+            if (ready.revents & POLLNVAL) io_error("poll invalid fd", EBADF);
+            if (ready.revents & (POLLERR | POLLHUP)) io_error("stream peer closed", EPIPE);
+            if (ready.revents & POLLOUT) return;
+        }
+    }
+
+    int prepare_fifo_write() {
+        if (!borrowed || socket) return -1;
+        int flags;
+        do { flags = ::fcntl(descriptor, F_GETFL); } while (flags < 0 && errno == EINTR);
+        if (flags < 0) io_error("FIFO flags query failed", errno);
+        if (flags & O_NONBLOCK) return -1;
         int result;
-        do { result = ::poll(&ready, 1, -1); } while (result < 0 && errno == EINTR);
-        if (result < 0) io_error("poll failed", errno);
-        if (ready.revents & POLLNVAL) io_error("poll invalid fd", EBADF);
-        if (ready.revents & (POLLERR | POLLHUP)) io_error("stream peer closed", EPIPE);
+        do { result = ::fcntl(descriptor, F_SETFL, flags | O_NONBLOCK); }
+        while (result < 0 && errno == EINTR);
+        if (result < 0) io_error("FIFO nonblocking setup failed", errno);
+        return flags;
+    }
+
+    void restore_fifo_write(int flags) {
+        if (flags < 0) return;
+        int result;
+        do { result = ::fcntl(descriptor, F_SETFL, flags); } while (result < 0 && errno == EINTR);
+        if (result < 0) io_error("FIFO flags restore failed", errno);
     }
 
     void uncached() {
@@ -409,24 +446,37 @@ struct LineWriter::State {
         std::memset(buffer + used, 0, aligned - used);
         std::size_t written = 0;
         const auto extent = borrowed ? used : aligned;
-        while (written < extent) {
-            const auto count = borrowed
-                ? (socket
-                    ? ::send(descriptor, buffer + written, extent - written, MSG_NOSIGNAL)
-                    : ::write(descriptor, buffer + written, extent - written))
-                : ::pwrite(descriptor, buffer + written, extent - written, offset + written);
-            if (count < 0) {
-                const int number = errno;
-                if (number == EINTR) continue;
-                if (number == EAGAIN || number == EWOULDBLOCK) {
-                    wait_writable();
-                    continue;
+        // A blocking FIFO write can be restarted by SA_RESTART before it
+        // ever reaches poll. Keep the mode change local to this flush.
+        const int fifo_flags = prepare_fifo_write();
+        try {
+            while (written < extent) {
+                const auto count = borrowed
+                    ? (socket
+                        ? ::send(descriptor, buffer + written, extent - written,
+                                 MSG_NOSIGNAL | MSG_DONTWAIT)
+                        : ::write(descriptor, buffer + written, extent - written))
+                    : ::pwrite(descriptor, buffer + written, extent - written, offset + written);
+                if (count < 0) {
+                    const int number = errno;
+                    if (number == EINTR) {
+                        if (borrowed && run_sigterm_requested()) abort_write();
+                        continue;
+                    }
+                    if (number == EAGAIN || number == EWOULDBLOCK) {
+                        wait_writable();
+                        continue;
+                    }
+                    io_error("write failed", number);
                 }
-                io_error("write failed", number);
+                if (count == 0) io_error("write made no progress", EIO);
+                written += static_cast<std::size_t>(count);
             }
-            if (count == 0) io_error("write made no progress", EIO);
-            written += static_cast<std::size_t>(count);
+        } catch (...) {
+            restore_fifo_write(fifo_flags);
+            throw;
         }
+        restore_fifo_write(fifo_flags);
         if (borrowed) {
             used = 0;
             return;
@@ -487,11 +537,17 @@ void LineWriter::write_header(const RecordSet& records) {
             state.validate_stream();
         } else {
             int descriptor;
-            do { descriptor = ::open(state.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666); }
+            // B2-08: refuse links and non-regular backing before truncation;
+            // a FIFO without a reader must not block run-begin validation.
+            do { descriptor = ::open(state.path.c_str(),
+                                     O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0666); }
             while (descriptor < 0 && errno == EINTR);
             if (descriptor < 0) state.io_error("open failed", errno);
             state.descriptor = descriptor;
             state.uncached();
+            int status;
+            do { status = ::ftruncate(descriptor, 0); } while (status < 0 && errno == EINTR);
+            if (status < 0) state.io_error("truncate failed", errno);
         }
         state.records = records;
         state.phase = State::Phase::writing;
@@ -580,6 +636,7 @@ void LineWriter::abandon() {
 Trailer LineWriter::write_trailer() {
     auto& state = *state_;
     if (state.phase == State::Phase::complete) return state.trailer;
+    off_t trailer_offset = -1;
     try {
         state.require_writing();
         state.flush();
@@ -596,11 +653,23 @@ Trailer LineWriter::write_trailer() {
             line.append('"'); line.append(tags[i]); line.append("\":"); integer(line, counts[i]);
         }
         line.append("},\"sha256\":\""); line.append(digest); line.append("\"}");
+        trailer_offset = state.offset + static_cast<off_t>(state.used);
         state.line(false); state.flush();
         std::memcpy(state.trailer.sha256_hex, digest.c_str(), digest.size() + 1);
         state.phase = State::Phase::complete;
         return state.trailer;
-    } catch (...) { state.fail(); throw; }
+    } catch (...) {
+        // B2-07: a final sync can fail after the trailer reached disk.
+        // Keep the failed receipt consistent with the readable file.
+        if (!state.borrowed && trailer_offset >= 0) {
+            int status;
+            do { status = ::ftruncate(state.descriptor, trailer_offset); }
+            while (status < 0 && errno == EINTR);
+            if (status < 0) state.io_error("trailer rollback failed", errno);
+        }
+        state.fail();
+        throw;
+    }
 }
 
 void LineWriter::write_o(std::int64_t row, std::int64_t open_ms, std::int64_t close_ms,
