@@ -101,6 +101,10 @@ overlong fragment is 3 even at EOF. Interleaved record types are legal.
 E times may repeat but may not decrease; T numbers start at 1, O rows at 0,
 both contiguous, and K occurs at most once, as in LineWriter. The strict
 reader remains the sole JSON, header, field and trailer parser.
+An E-row null equity/open_profit is refused with event=sink_refused,
+exit_code=3, code=report_result_invalid and
+args={field: equity_curve.<field>, reason: nonfinite} (in the sole receipt
+when M=2).
 """
 from __future__ import annotations
 
@@ -131,9 +135,27 @@ _TAGS = "ETOVKXH"
 
 
 class _Failure(Exception):
-    def __init__(self, code: int, message: str):
+    def __init__(self, code: int, message: str, *, failure_code: str | None = None,
+                 failure_args: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.failure_code = failure_code
+        self.failure_args = {} if failure_args is None else failure_args
+
+    def diagnostic_fields(self) -> dict:
+        if self.failure_code is None:
+            return {}
+        return {"code": self.failure_code, "args": self.failure_args}
+
+
+def _check_equity(record) -> None:
+    # SinkReader pins the E schema: time, equity, open_profit, in that order.
+    for name, value in zip(record.fields[1:], record.values[1:]):
+        if value is None:
+            field = "equity_curve." + name
+            raise _Failure(3, f"the report result {field} is not finite",
+                           failure_code="report_result_invalid",
+                           failure_args={"field": field, "reason": "nonfinite"})
 
 
 class _ReaderFailure(SinkFormatError):
@@ -284,9 +306,10 @@ def _verify(path: str | None, run_id: str | None, receipt: _Receipt, *,
             next_trade, next_output, constants = 1, 0, 0
             try:
                 for record in reader:
-                    # These are order checks on already parsed Record values,
+                    # Canonical-value and order checks on parsed Record values,
                     # matching the path writer/run_json, not a second grammar.
                     if record.tag == "E":
+                        _check_equity(record)
                         timestamp = record.values[0]
                         if last_equity_time is not None and timestamp < last_equity_time:
                             raise _Failure(3, "equity times are out of order")
@@ -360,11 +383,15 @@ def _unlink(path: str) -> None:
         pass
 
 
-def _diagnostic(message: str, receipt_fd: int) -> None:
+def _diagnostic(message: str, receipt_fd: int, *, document: dict | None = None) -> None:
     if receipt_fd == 2:
         return
     try:
-        _write_all(2, f"pineforge-sink-finalize: {message}\n".encode("utf-8", "backslashreplace"))
+        if document:
+            line = json.dumps(document, separators=(",", ":"), allow_nan=False).encode("ascii") + b"\n"
+        else:
+            line = f"pineforge-sink-finalize: {message}\n".encode("utf-8", "backslashreplace")
+        _write_all(2, line)
     except OSError:
         pass
 
@@ -386,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     spool = None
     owns_output = False
     status = 0
+    failure_diagnostic = {}
     try:
         if stdout_mode:
             with io.BufferedReader(_StreamInput(args.in_fd, receipt, args.max_bytes),
@@ -409,7 +437,13 @@ def main(argv: list[str] | None = None) -> int:
             spool = None
     except _Failure as error:
         status = error.code
-        _diagnostic(str(error), args.receipt_fd)
+        fields = error.diagnostic_fields()
+        if fields:
+            failure_diagnostic = {
+                "tool": "pineforge-sink-finalize", "event": "sink_refused",
+                "exit_code": status, "detail": str(error), **fields,
+            }
+        _diagnostic(str(error), args.receipt_fd, document=failure_diagnostic)
     except OSError as error:
         status = 5
         _diagnostic(str(error), args.receipt_fd)
@@ -444,7 +478,10 @@ def main(argv: list[str] | None = None) -> int:
         # Cleanup can replace an overflow with an I/O failure. Only the
         # final exit-8 outcome gets the exhaustion-specific receipt keys.
         receipt.cap_bytes = args.max_bytes if status == 8 else None
-        line = json.dumps(receipt.document(status == 0), separators=(",", ":"), allow_nan=False)
+        document = receipt.document(status == 0)
+        if args.receipt_fd == 2 and status == failure_diagnostic.get("exit_code"):
+            document.update(failure_diagnostic)
+        line = json.dumps(document, separators=(",", ":"), allow_nan=False)
         _write_all(args.receipt_fd, line.encode("ascii") + b"\n")
     except OSError as error:
         status = 5
