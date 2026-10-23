@@ -397,6 +397,37 @@ def refold(lines):
                                   "counts": counts, "sha256": digest.hexdigest()})
 
 
+@pytest.mark.parametrize("fields", [("equity",), ("open_profit",),
+                                   ("equity", "open_profit")],
+                         ids=["equity", "open_profit", "both"])
+def test_receipt_valid_null_equity_is_typed(tmp_path, fields):
+    # Mutation: remove _check_equity(row) in converter._Sink.records;
+    # every row here then exits 0 and emits the null-valued report.
+    sink, metadata, _ = synthetic(tmp_path)
+    lines = sink.read_bytes().splitlines(keepends=True)[:-1]
+    position = next(index for index in range(len(lines) - 1, 0, -1)
+                    if json.loads(lines[index])[0] == "E")
+    row = json.loads(lines[position])
+    for field in fields:
+        row[2 if field == "equity" else 3] = None
+    lines[position] = wire(row)
+    sink.write_bytes(refold(lines))
+    # This is a valid writer-shaped null, not the illegal NaN token below.
+    with pf_sink.SinkReader(sink) as reader:
+        points = [record for record in reader if record.tag == "E"]
+        assert reader.complete and reader.counts["E"] == len(points)
+    assert sum(value is None for point in points for value in point.values[1:]) == len(fields)
+    assert [point.values[0] for point in points] == sorted(point.values[0] for point in points)
+    result = invoke(sink, metadata)
+    assert result.returncode == 3 and result.stdout == b"", result.stderr.decode()
+    lines = diagnostics(result)
+    assert len(lines) == 1  # refusal precedes even stdout metadata loading
+    diagnostic = lines[0]
+    assert diagnostic["event"] == "sink_refused" and diagnostic["sink_verified"] is False
+    assert diagnostic["code"] == "report_result_invalid"
+    assert diagnostic["args"] == {"field": "equity_curve." + fields[0], "reason": "nonfinite"}
+
+
 @pytest.mark.parametrize("fault,code", [
     ("no-trailer", 6), ("truncated-trailer", 6), ("bad-line", 3), ("hash", 4),
     ("counts", 4), ("extra-byte", 4), ("bom", 3), ("whitespace", 3),
