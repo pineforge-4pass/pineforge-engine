@@ -582,12 +582,13 @@ SourceRun source_run(Count n) {
         require(!observer.invalid && observer.extent_pages > 0 && observer.writes > 0
                 && result.io.page_fd >= 0
                 && observer.writes == result.io.pages.pwrite.calls
-                && observer.reads == result.io.pages.pread.calls
+                // The observer is charged by the outermost backing once per LOGICAL
+                // read_page (a cache above the physical backing still charges its
+                // hits), so it equals the store's own attempted reads; the wrapped
+                // physical preads can only be fewer (a hit issues none).
+                && result.io.pages.pread.calls <= observer.reads
                 && observer.writes == after.page_writes - before.page_writes
-                // A cache ABOVE ScratchBacking can serve a logical store read
-                // without issuing a backing read/charge. Physical reads still
-                // match the wrapper exactly; store attempts may exceed them.
-                && observer.reads <= after.page_reads - before.page_reads
+                && observer.reads == after.page_reads - before.page_reads
                 && observer.syncs == after.syncs - before.syncs
                 && observer.commits == observer.store->cur_.seq - sequence_before
                 && observer.created == observer.store->cur_.next_handle - handles_before,
@@ -653,9 +654,9 @@ SourceRun scope_erase_run(Count records) {
             && observer.inserts == 0 && observer.commits > 0
             && observer.extent_pages > 0 && observer.writes > 0
             && observer.writes == result.io.pages.pwrite.calls
-            && observer.reads == result.io.pages.pread.calls
+            && result.io.pages.pread.calls <= observer.reads
             && observer.writes == after.page_writes - before.page_writes
-            && observer.reads <= after.page_reads - before.page_reads
+            && observer.reads == after.page_reads - before.page_reads
             && observer.syncs == after.syncs - before.syncs
             && observer.commits == observer.store->cur_.seq - sequence_before
             && store.record_count() == 0 && rows.empty() && !store.transaction_active(),
