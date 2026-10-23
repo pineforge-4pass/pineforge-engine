@@ -1172,6 +1172,9 @@ struct SaveAr {
 struct LoadAr {
     static constexpr bool saving = false;
     ByteReader& in;
+    // Set while a request the core refused is read (archive_refused): its
+    // external openings come back as they were journaled, never frozen.
+    bool openings_as_stored = false;
     void raw(void* data, std::size_t length) { in.raw(data, length); }
     std::size_t remaining() const noexcept { return in.remaining(); }
     template <class T>
@@ -1333,11 +1336,49 @@ void LoadAr::operator()(T& item) {
     archive_value(*this, item);
 }
 
+// The external openings of a request the core refused, read back as it
+// journaled them: in their order, whatever the handles are (a refusal can be
+// for those very handles: one named twice, a zero incarnation, another run).
+class StoredOpenings final : public OpeningReadback {
+public:
+    explicit StoredOpenings(std::vector<RequestHandle> rows) noexcept : rows_(std::move(rows)) {}
+    std::uint64_t count() const noexcept override { return rows_.size(); }
+    ReadStatus opening_at(std::uint64_t index, RequestHandle& out) const noexcept override {
+        if (index >= rows_.size()) return ReadStatus::not_found;
+        out = rows_[static_cast<std::size_t>(index)];
+        return ReadStatus::ok;
+    }
+
+private:
+    std::vector<RequestHandle> rows_;
+};
+
+// A request the core refused (RejectedEvent, ReplaceRejectedEvent,
+// NotWorkingEvent, InvalidHandleEvent) is journaled as it was given, before
+// any freeze: a reload reads its external openings back as stored.
+template <class Ar, class T>
+void archive_refused(Ar& ar, T& item) {
+    if constexpr (Ar::saving) {
+        ar(item);
+    } else {
+        const bool outer = ar.openings_as_stored;
+        ar.openings_as_stored = true;
+        try {
+            ar(item);
+        } catch (...) {
+            ar.openings_as_stored = outer;
+            throw;
+        }
+        ar.openings_as_stored = outer;
+    }
+}
+
 // The external openings of a bound close (BindOpenings, OpeningsClose): how
 // many, then each opening's handle in the readback's order. A reload freezes
 // the list again, so a spilled row or a paged event keeps its membership
 // rather than coming back with none; DefinitionMatchAr compares the same
 // bytes, so a resident definition is reused only when its list is this one.
+// A refused request's list was never frozen and is read back as stored.
 template <class Ar>
 void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& external) {
     std::uint64_t count = 0;
@@ -1364,6 +1405,10 @@ void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& e
         }
         std::vector<RequestHandle> openings(static_cast<std::size_t>(count));
         for (auto& opening : openings) ar(opening);
+        if (ar.openings_as_stored) {
+            external = std::make_shared<StoredOpenings>(std::move(openings));
+            return;
+        }
         const OpeningInputCursor input(
                 count, &openings, [](void* context, std::uint64_t index, RequestHandle& out) {
                     const auto& list = *static_cast<const std::vector<RequestHandle>*>(context);
@@ -1408,25 +1453,25 @@ template <class Ar> void archive_io(Ar& ar, AcceptedEvent& item) {
     ar(item.ordinal); ar(item.definition); ar(item.surface);
 }
 template <class Ar> void archive_io(Ar& ar, RejectedEvent& item) {
-    ar(item.ordinal); ar(item.request); ar(item.reason); ar(item.surface);
+    ar(item.ordinal); archive_refused(ar, item.request); ar(item.reason); ar(item.surface);
 }
 template <class Ar> void archive_io(Ar& ar, ReplacedEvent& item) {
     ar(item.ordinal); ar(item.predecessor_definition); ar(item.successor_definition);
     ar(item.surface);
 }
 template <class Ar> void archive_io(Ar& ar, ReplaceRejectedEvent& item) {
-    ar(item.ordinal); ar(item.live_definition); ar(item.attempted); ar(item.reason);
-    ar(item.surface);
+    ar(item.ordinal); ar(item.live_definition); archive_refused(ar, item.attempted);
+    ar(item.reason); ar(item.surface);
 }
 template <class Ar> void archive_io(Ar& ar, CancelledEvent& item) {
     ar(item.ordinal); ar(item.definition); ar(item.reason); ar(item.cause);
     ar(item.prior_authority); ar(item.unexecuted); ar(item.pending);
 }
 template <class Ar> void archive_io(Ar& ar, NotWorkingEvent& item) {
-    ar(item.ordinal); ar(item.target); ar(item.attempted); ar(item.surface);
+    ar(item.ordinal); ar(item.target); archive_refused(ar, item.attempted); ar(item.surface);
 }
 template <class Ar> void archive_io(Ar& ar, InvalidHandleEvent& item) {
-    ar(item.ordinal); ar(item.target); ar(item.attempted); ar(item.surface);
+    ar(item.ordinal); ar(item.target); archive_refused(ar, item.attempted); ar(item.surface);
 }
 template <class Ar> void archive_io(Ar& ar, NoEffectEvent& item) {
     ar(item.ordinal); ar(item.definition); ar(item.remaining); ar(item.authority);
@@ -4389,18 +4434,28 @@ void WorkingRequestCore::group_recipients(const EventId& applied,
 void WorkingRequestCore::visit_group_recipients(
         const EventId& applied, void* context, HandleVisitor visitor) const {
     if (!visitor) throw std::invalid_argument("null native handle visitor");
-    const CommandEvent* event = event_at(applied);
-    const auto* payload = event ? as_applied(*event) : nullptr;
-    if (!payload || !payload->definition) return;
-    const auto* member = std::get_if<Member>(&payload->definition->request.group);
-    if (!member) return;
-    if (member->effect == GroupEffect::Cancel && !payload->terminal) return;
-    if (member->effect == GroupEffect::Reduce && !(payload->filled_working > 0.0)) return;
+    // What the walk compares is copied first: a paged or codec event lives in
+    // a small cache that a visitor reading the journal lets go.
+    Member member;
+    RequestHandle source;
+    uint64_t source_ordinal = 0;
+    {
+        const CommandEvent* event = event_at(applied);
+        const auto* payload = event ? as_applied(*event) : nullptr;
+        if (!payload || !payload->definition) return;
+        const auto* found = std::get_if<Member>(&payload->definition->request.group);
+        if (!found) return;
+        if (found->effect == GroupEffect::Cancel && !payload->terminal) return;
+        if (found->effect == GroupEffect::Reduce && !(payload->filled_working > 0.0)) return;
+        member = *found;
+        source = payload->handle();
+        source_ordinal = payload->ordinal;
+    }
     visit_book([&](const LiveRequest& live) {
         const auto* other = std::get_if<Member>(&live.request().group);
-        if (!other || other->group != member->group || other->cohort == member->cohort) return true;
-        if (live.handle() == payload->handle()) return true;
-        if (live.birth().acceptance_ordinal >= payload->ordinal) return true;
+        if (!other || other->group != member.group || other->cohort == member.cohort) return true;
+        if (live.handle() == source) return true;
+        if (live.birth().acceptance_ordinal >= source_ordinal) return true;
         // In queue order, as the book holds them (waiting_children).
         visitor(context, live.handle());
         return true;
@@ -6305,6 +6360,15 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         uint64_t& next_timeline_ordinal,
         bool open_activation_grant) {
     require_identity(identity_);
+    // The plan form's event is final only inside install_execution, after
+    // settlement, and that install cannot throw: a journal codec's store
+    // write there would have no phase to fail in. So with a codec bound the
+    // plan form is refused (1.7.0), before anything moves -- not even a
+    // spilled target is brought back; check_execution and apply_execution,
+    // which write before they publish, serve such a core.
+    if (journal_ && journal_->codec) {
+        return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
+    }
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
         return NoChange{NoChangeReason::NotWorking};

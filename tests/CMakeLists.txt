@@ -1286,6 +1286,19 @@ list(APPEND TEST_SOURCES test_core_external_openings_survive_spill)
 # Lane b1, B1-03 (retirement half): a journal retirement whose codec erase
 # fails leaves the window and retired_through as they were. Core only.
 list(APPEND TEST_SOURCES test_core_codec_retire_failure_is_atomic)
+# Lane b1, round 3 (argon F-01..F-04, B1-03 option d): a spilled NetOfSiblings
+# close is held across its sibling walk (F-01; twin row _spilled_only, the
+# sanitizers profile's AddressSanitizer row); visit_group_recipients copies the
+# applied event before a visitor reads the paged journal (F-02); a failed
+# spilled read under broker_state_hash() and at a host-recorded report point
+# ends the run with scratch_io_failed (F-03; twin row _swallowed); a refused
+# request's external openings reload from a page as stored (F-04); with a
+# journal codec bound the plan-form execution is refused, typed (B1-03 (d)).
+list(APPEND TEST_SOURCES test_native_match_spilled_net_of_siblings_close)
+list(APPEND TEST_SOURCES test_core_visit_group_recipients_visitor_reads_paged_journal)
+list(APPEND TEST_SOURCES test_broker_state_hash_spilled_read_failure)
+list(APPEND TEST_SOURCES test_core_rejected_external_openings_page_reload)
+list(APPEND TEST_SOURCES test_core_codec_plan_execution_refused)
 # R5 PERF-K24 (K2): a retained lower feed hands each script bar its sub-bars
 # by binary search, so a lower-timeframe run stays linear in its length; the
 # values the selection feeds are pinned. Source-free, so it also runs in the
@@ -3720,6 +3733,12 @@ endforeach()
 # sanitizers profile's AddressSanitizer row for the freed-row read).
 pineforge_add_twin_test(test_native_match_spilled_book_snapshot_spilled_only
     test_native_match_spilled_book_snapshot --spilled-only)
+# Lane b1 round 3, F-01: the spilled NetOfSiblings close alone (the sanitizers
+# profile's AddressSanitizer row); F-03: a host that catches the hash's throw.
+pineforge_add_twin_test(test_native_match_spilled_net_of_siblings_close_spilled_only
+    test_native_match_spilled_net_of_siblings_close --spilled-only)
+pineforge_add_twin_test(test_broker_state_hash_spilled_read_failure_swallowed
+    test_broker_state_hash_spilled_read_failure --swallowed)
 
 # EN-134: each public C ABI fault run is also addressable for red-before and
 # mutant checks. The aggregate and these rows run in the kernel-only profile.

@@ -6039,7 +6039,13 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
     const auto P = evaluation.cursor.point.ordinal;
     const bool current = evaluation.driver_class == native_order::DriverEligibilityClass::CurrentExecution;
     try {
-        auto* live = requests_.find_live(handle);
+        // Held: a matched row may stand outside the heap (a bound close is
+        // refreshed where it stands), and the reads below walk other rows --
+        // a NetOfSiblings fraction's sibling claims read the whole book, a
+        // cohort target reads its lots' rows -- through the small ring that
+        // would let a bare copy go.
+        auto held = requests_.hold_live(handle);
+        const native_order::LiveRequest* live = held.get();
         if (!live) return std::nullopt;
         // Every resolver, inspection, admission and financial read converts at
         // the execution coordinate's FX activation instant: the rate is
@@ -7577,7 +7583,10 @@ void NativeExecutionConsumer::match_path(
 
 std::optional<NativeTrailState> NativeExecutionConsumer::trail_state(
         const BacktestEngine& engine, const native_order::RequestHandle& target) const {
-    const auto* live = requests_.find_live(target);
+    // Held: a cohort close's side (request_is_buy below) reads the rows of its
+    // lots, which can let a bare copy of a spilled row go.
+    const auto held = requests_.hold_live(target);
+    const auto* live = held.get();
     if (!live || !std::holds_alternative<native_order::Trail>(live->request().trigger)) {
         return std::nullopt;
     }
@@ -9317,7 +9326,14 @@ void NativeExecutionConsumer::record_script_report_point(
     if (!spec) return;
     if (spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks)
         engine.update_equity_extremes();
-    if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
+    if (spec->report_policy != NativeReportPolicy::KernelRecorded) {
+        // Nothing is folded here, but a read of the book that failed inside a
+        // noexcept fold the host asked for since (a hash it caught the throw
+        // of, its own continuation capture) ends the run at this point, as
+        // it does under KernelRecorded, rather than completing over it.
+        requests_.rethrow_book_read_failure();
+        return;
+    }
     engine.retire_report_sink_hashes();
     engine.record_equity_point(script_open_ms);
     engine.last_script_continuation_hash_ = continuation_hash();
@@ -12687,9 +12703,15 @@ void NativeStrategyHost::native_closed_rows_amended(std::size_t first_row) {
 // Completed after the last point, which would otherwise make the final scalar
 // a different fold than the last recorded row.
 std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
-    const std::uint64_t execution = last_script_continuation_valid_
-        ? last_script_continuation_hash_
-        : NativeExecutionConsumer::bound(*this).continuation_hash();
+    if (last_script_continuation_valid_) {
+        return broker_state_hash_from_execution_hash(last_script_continuation_hash_);
+    }
+    const NativeExecutionConsumer& consumer = NativeExecutionConsumer::bound(*this);
+    const std::uint64_t execution = consumer.continuation_hash();
+    // The fold cannot throw: a read of the book that failed inside it was
+    // carried by the core and is thrown here, never folded as a hash it cut
+    // short.
+    consumer.request_core().rethrow_book_read_failure();
     return broker_state_hash_from_execution_hash(execution);
 }
 
