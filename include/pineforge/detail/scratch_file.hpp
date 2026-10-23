@@ -28,7 +28,7 @@ using ScratchIoError = ReportScratchIoError;
 
 // Run-owned positional scratch: an anonymous, close-on-exec file for an empty
 // owner, or checked slab copies when bound. Without a slab, open() selects an
-// explicitly attached arena, or the original mkstemp/unlink/pwrite/pread backend.
+// explicitly attached arena, or the mkostemp/unlink/pwrite/pread backend.
 // Sparse growth reads as zero in both modes, including reused arena chunks;
 // reads beyond the logical end still fail with EIO. No implicit attachment
 // or RAM fallback. clear() releases the region and its mapped windows.
@@ -137,17 +137,13 @@ public:
         if (name.back() != '/') name += '/';
         name += prefix;
         name += "-XXXXXX";
-        const int opened = ::mkstemp(name.data());
+        // D-02: the fd must be non-inheritable from the creation syscall.
+        const int opened = ::mkostemp(name.data(), O_CLOEXEC);
         if (opened < 0) io_error(errno, "scratch create");
         if (::unlink(name.c_str()) != 0) {
             const int error = errno;
             ::close(opened);
             io_error(error, "scratch unlink");
-        }
-        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
-            const int error = errno;
-            ::close(opened);
-            io_error(error, "scratch cloexec");
         }
         fd_ = opened;
         if (bounded_cache_) {
