@@ -394,6 +394,9 @@ In JSON reports, each trade's `entry_price`, `exit_price`, `qty`, `pnl`,
 be finite or the run fails with `report_result_invalid`, `field` naming the
 corresponding `trades.<leaf>`, `summary.<leaf>`, `equity_curve.equity` or
 `equity_curve.open_profit` and `reason` equal to `nonfinite`.
+For path and fd report sinks, an `E` record with nonfinite `equity` or
+`open_profit` is refused with the same `equity_curve.<field>` and `nonfinite`
+failure before the record is written; neither value is written as `null`.
 In ordinary mode without `--run-phase-fd`, a non-finite double elsewhere in the
 report document fails with `report_result_invalid`, `field` equal to
 `report.document` and `reason` equal to `nonfinite`.
