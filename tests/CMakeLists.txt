@@ -7261,6 +7261,15 @@ target_compile_features(test_cohort_exposure_bits PRIVATE cxx_std_17)
 target_compile_options(test_cohort_exposure_bits PRIVATE -fno-fast-math -ffp-contract=off -UNDEBUG)
 add_test(NAME test_cohort_exposure_bits COMMAND test_cohort_exposure_bits)
 
+# EI1: pure transition tree plus the unchanged E3 oracle; no engine link.
+list(APPEND TEST_SOURCES test_cohort_exposure_arith)
+add_executable(test_cohort_exposure_arith test_cohort_exposure_arith.cpp)
+target_include_directories(test_cohort_exposure_arith PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_compile_features(test_cohort_exposure_arith PRIVATE cxx_std_17)
+target_compile_options(test_cohort_exposure_arith PRIVATE
+    -fno-fast-math -ffp-contract=off -frounding-math -UNDEBUG)
+add_test(NAME test_cohort_exposure_arith COMMAND test_cohort_exposure_arith)
+
 # LAB-O1SEAMS s4: one executable, one independently selected row per clause.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_o1s4_queue_red)

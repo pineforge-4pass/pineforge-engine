@@ -1,0 +1,28 @@
+diff --git a/include/pineforge/source/cohort_exposure_arith.hpp b/include/pineforge/source/cohort_exposure_arith.hpp
+--- a/include/pineforge/source/cohort_exposure_arith.hpp
++++ b/include/pineforge/source/cohort_exposure_arith.hpp
+@@ -259,7 +259,23 @@
+                 raw_total = encode_accumulator(accumulator.g, accumulator.k + d);
+             } else if (source.is_leaf(node)) {
+                 const auto raw = source.raw_units(node);
+-                if (eligible(raw)) raw_total = real_binary64_add(raw_total, raw);
++                if (eligible(raw)) {
++                    const auto operand = decode_accumulator(raw);
++                    if (raw_total != 0 && operand.g > accumulator.g) {
++                        const auto d_old = leaf_pair(raw_total, operand.g)[operand.k & 1];
++                        const auto k_old = operand.k + d_old;
++                        if (k_old < S) {
++                            raw_total = encode_accumulator(operand.g, k_old);
++                        } else if (operand.g == 2046) {
++                            raw_total = INF;
++                        } else {
++                            const auto k_new = (k_old >> 1) + ((k_old & 1) && (k_old & 2));
++                            raw_total = encode_accumulator(operand.g + 1, k_new);
++                        }
++                    } else {
++                        raw_total = real_binary64_add(raw_total, raw);
++                    }
++                }
+             } else {
+                 const Node left = source.left(node);
+                 const Node right = source.right(node);

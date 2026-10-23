@@ -1,0 +1,16 @@
+diff --git a/include/pineforge/source/cohort_exposure_arith.hpp b/include/pineforge/source/cohort_exposure_arith.hpp
+--- a/include/pineforge/source/cohort_exposure_arith.hpp
++++ b/include/pineforge/source/cohort_exposure_arith.hpp
+@@ -82,7 +82,10 @@
+     const auto m = M >> n;
+     const auto rem = M & ((UINT64_C(1) << n) - 1);
+     const auto half = UINT64_C(1) << (n - 1);
+-    if (rem < half) return {m, m};
+-    if (rem > half) return {m + 1, m + 1};
++    const auto floating_rem = static_cast<double>(rem);
++    const auto floating_half = static_cast<double>(half);
++    const auto epsilon = floating_half * 0x1p-50;
++    if (floating_rem < floating_half - epsilon) return {m, m};
++    if (floating_rem > floating_half + epsilon) return {m + 1, m + 1};
+     return {m + (m & 1), m + ((1 + (m & 1)) & 1)};
+ }

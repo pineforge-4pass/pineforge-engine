@@ -192,6 +192,28 @@ add_library(PineForge::pineforge ALIAS pineforge)
 # be compiled identically whichever library they end up in.
 set(PINEFORGE_LIBRARY_TARGETS pineforge pineforge_kernel)
 
+# The exposure transitions require strict binary64 RN-even. Refuse ambient
+# overrides for both archives, including custom single/multi-config flags.
+get_directory_property(_pf_exposure_flags COMPILE_OPTIONS)
+list(APPEND _pf_exposure_flags "${CMAKE_CXX_FLAGS}")
+set(_pf_exposure_configs DEBUG RELEASE RELWITHDEBINFO MINSIZEREL
+    ${CMAKE_BUILD_TYPE} ${CMAKE_CONFIGURATION_TYPES})
+foreach(_pf_exposure_config IN LISTS _pf_exposure_configs)
+    string(TOUPPER "${_pf_exposure_config}" _pf_exposure_config)
+    list(APPEND _pf_exposure_flags "${CMAKE_CXX_FLAGS_${_pf_exposure_config}}")
+endforeach()
+foreach(_pf_library IN LISTS PINEFORGE_LIBRARY_TARGETS)
+    get_target_property(_pf_exposure_target_flags ${_pf_library} COMPILE_OPTIONS)
+    if(_pf_exposure_target_flags)
+        list(APPEND _pf_exposure_flags "${_pf_exposure_target_flags}")
+    endif()
+endforeach()
+if("${_pf_exposure_flags}" MATCHES
+        "(^|[ \t\r\n;:>\"'])(-ffast-math|-Ofast|-ffp-model=fast|-mfpmath=387|-m32)($|[ \t\r\n;>\"'])")
+    message(FATAL_ERROR
+        "Engine archives require strict binary64: forbidden FP/32-bit flag ${CMAKE_MATCH_2}")
+endif()
+
 foreach(_pf_library ${PINEFORGE_LIBRARY_TARGETS})
     # Hidden visibility by default — only symbols explicitly tagged with
     # PF_API in <pineforge/pineforge.h> are exported in any .so that
