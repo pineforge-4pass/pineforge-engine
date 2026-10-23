@@ -712,7 +712,6 @@ Cost measure(const Adapter& adapter, const source::PineStrategyHost& host, std::
     CHECK(status == 0);
     CHECK(std::memcmp(&last, &expected.back().pod, sizeof last) == 0);
     result.linear_per_row_us = measure_linear_per_row(adapter, raw);
-    CHECK(result.linear_per_row_us > 0.0);
     std::printf("pending-walk-cost q=%zu pass_us=%.3f size_us=%.3f copy_last_us=%.3f "
                 "linear_per_row_us=%.6f\n",
                 q, result.pass_us, result.size_us, result.copy_last_us,
@@ -854,19 +853,22 @@ void cost_case(bool growth) {
     // sqrt((Q2/Q1)^2 * (Q2/Q1)^3) would give slightly LESS than 4x margin.
     // The geometric mean of port growth and the smaller old/mutation growth
     // gives >4x room on BOTH sides for this fixed-prefix population.
+    // Lab raw port growth was 160.5-166.1 versus bound 886.74 and model
+    // 193.3; raw old growth was 4,043 (round-0 test) and 4,218 (prior scan
+    // restored), versus model 4,068. The raw margins are at least 5.3x on
+    // the green side and 4.56x on the red side.
     // Raw fetches do not have equal cost at both sizes: a family-only read
     // strides over full PlacementSnapshot values in the queue elements.
-    // Cache/TLB and ASan-shadow cost growth systematically erodes that margin.
-    // The lab's original raw ratio was 166.1 against 886.7, with modelled port
-    // growth 193.3, so the roughly 4.59x model margin held in that run.
-    // Keep both sizes and normalise by the measured linear-walk cost per raw
-    // row over the same owners. This accounts for memory-hierarchy growth
-    // without including prior scans in the reference; their extra Q factor
-    // remains, with modelled old growth about 4068x still above the bound.
+    // Memory-hierarchy cost (cache/TLB/ASan shadow) grows with Q and affects
+    // paths differently, explaining why lab raw port growth is below its
+    // operation-count model. Linear-walk timings and the normalized ratio
+    // are diagnostic only: dividing by that growth erodes the red margin.
+    // A host whose memory hierarchy makes the 4096-row port pass >5x worse
+    // per row than the 257-row pass, or whose old growth falls below 886.74,
+    // can make the gate flap. Enforce it only in Release: Debug assertions
+    // and sanitizer instrumentation can distort these timing margins.
     // No measured timing chooses the threshold. Every sample has >=20 ms of
-    // complete passes, best of three at both sizes. Differential contention,
-    // clock/thermal frequency changes or pauses exceeding that >4x margin
-    // even in the best samples can still make this gate flap.
+    // complete passes, best of three at both sizes.
     const long double port_growth = large.cost.model.port / small.cost.model.port;
     const long double old_growth = std::min(
         large.cost.model.old / small.cost.model.old,
@@ -879,21 +881,20 @@ void cost_case(bool growth) {
     CHECK(small.cost.minimum_sample_us >= kMinimumSampleUs);
     CHECK(large.cost.minimum_sample_us >= kMinimumSampleUs);
     CHECK(small.cost.pass_us > 0.0 && large.cost.pass_us > 0.0);
-    CHECK(small.cost.linear_per_row_us > 0.0 && large.cost.linear_per_row_us > 0.0);
     const double raw_observed = large.cost.pass_us / small.cost.pass_us;
     const double linear_per_row_growth =
         large.cost.linear_per_row_us / small.cost.linear_per_row_us;
-    const double observed = raw_observed / linear_per_row_growth;
+    const double normalized_observed = raw_observed / linear_per_row_growth;
     std::printf("pending-walk-growth ratio=%.3f bound=%.3Lf "
                 "model_port=%.3Lf model_old_min=%.3Lf minimum_sample_us=%.0f "
-                "raw_ratio=%.3f linear_per_row_growth=%.3f\n",
-                observed, threshold, port_growth, old_growth, kMinimumSampleUs,
-                raw_observed, linear_per_row_growth);
+                "raw_ratio=%.3f linear_per_row_growth=%.3f normalized_ratio=%.3f\n",
+                raw_observed, threshold, port_growth, old_growth, kMinimumSampleUs,
+                raw_observed, linear_per_row_growth, normalized_observed);
     if (!gated()) {
         std::printf("  (ratio not gated: non-Release library)\n");
         return;
     }
-    CHECK(observed <= threshold);
+    CHECK(raw_observed <= threshold);
 }
 
 // Frozen 14da9f0d82 mirror field mapping. Selection and sibling inputs come
