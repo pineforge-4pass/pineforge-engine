@@ -198,9 +198,19 @@ receipt layouts, wire bytes and broker hashes.
 
 Jailed hosts additionally call `strategy_require_report_scratch_arena_v1`
 before execution. The engine validates/attaches the inherited fixed-fd-5
-arena or returns the handle's typed `report_sink_failed`/`arena_backing`.
-It never creates backing. `run_json.py` refuses sink fd 5 and jailed spill
-directories, and takes sink-fd ownership only after the fd API is admitted.
+arena. On Linux, admission requires a sealed memfd whose seal mask contains
+`F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`; `F_SEAL_EXEC` and other
+non-write seals may be added, for example by `MFD_NOEXEC_SEAL`. A mask
+containing `F_SEAL_WRITE` or `F_SEAL_FUTURE_WRITE` is refused at attachment.
+The sealed-memfd admission requirement and write-seal refusal hold regardless
+of `PF_SCRATCH_ARENA_JAILED`. Off Linux, admission accepts any attached arena.
+An invalid or missing arena returns the handle's typed
+`report_sink_failed`/`arena_backing` before execution: the run never started.
+The Python host emits exit status 1, `code` `report_sink_failed`, `args`
+`{"reason":"arena_backing"}` and top-level `reason` `arena_backing`, with no
+strategy report or trades. The engine never creates backing. `run_json.py`
+refuses sink fd 5 and jailed spill directories, and takes sink-fd ownership
+only after the fd API is admitted.
 
 `strategy_report_sink_summary_v1` is an additive query in
 `<pineforge/report_sink.h>` for both sink transports. It avoids a record

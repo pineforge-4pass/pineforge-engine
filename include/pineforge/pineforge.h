@@ -712,9 +712,19 @@ PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes,
                                        uint64_t* arena_bytes);
 
 /** Admit a jailed handle only with an attached scratch arena.
- *  Attach the environment arena if configured: PF_SCRATCH_ARENA_FD=5, positive PF_SCRATCH_ARENA_BYTES; validate backing and mapping before execution.
- *  Returns 0 accepted; -1 for a NULL handle or an unavailable/invalid arena. Arena failures set the handle's typed report_sink_failed/arena_backing failure.
- *  Never creates a backing file or falls back to TMPDIR. Existing unjailed callers do not need to call this opt-in admission.
+ *  Attach the inherited environment arena, if configured (fixed fd 5:
+ *  PF_SCRATCH_ARENA_FD=5, positive PF_SCRATCH_ARENA_BYTES);
+ *  validate its backing and mapping configuration before execution.
+ *  On Linux, require a sealed memfd whose seal mask contains
+ *  F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL. F_SEAL_EXEC and other non-write
+ *  seals may be added (e.g. MFD_NOEXEC_SEAL). F_SEAL_WRITE or
+ *  F_SEAL_FUTURE_WRITE is refused at attachment with
+ *  report_sink_failed/arena_backing. These requirements hold regardless of
+ *  PF_SCRATCH_ARENA_JAILED; off Linux, admit any attached arena.
+ *  Returns 0 accepted; -1 for a NULL handle or an unavailable/invalid arena.
+ *  Arena failures set the handle's typed report_sink_failed/arena_backing
+ *  failure. Never creates a backing file or falls back to TMPDIR.
+ *  Existing unjailed callers do not need to call this opt-in admission.
  *  The first successful attach sets SIGXFSZ to SIG_IGN process-wide; the prior disposition is not restored.
  *  Same fd/size reattaches are no-ops. Hosts relying on their SIGXFSZ handler
  *  or default termination must account for this before attaching an arena. */
