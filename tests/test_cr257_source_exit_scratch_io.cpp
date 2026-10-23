@@ -1,5 +1,5 @@
-// CR-257 T1. Edit-only RED specification; execution belongs to the lab.
-// No fault injection, replacement factory, filename matching, or canned report.
+// CR-257 T1. Edit-only I/O specification; execution belongs to the lab.
+// Forward real I/O; use filename prefixes only to attribute its measured cost.
 #if !defined(__linux__)
 #error "CR-257 syscall accounting requires the Linux linker-wrap target"
 #endif
@@ -21,6 +21,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <limits>
+#include <limits.h>
 #include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -45,6 +46,88 @@ struct LastPageIo {
 };
 LastPageIo last_page_io;
 
+struct FdIdentity {
+    int fd = -1;
+    std::uintmax_t device = 0, inode = 0;
+    FileClass file_class = FileClass::other;
+    bool anonymous_regular = false;
+    std::array<char, PATH_MAX + sizeof(" (deleted)")> name{};
+};
+std::array<FdIdentity, kFdSlots> fd_cache{};
+
+struct PreserveErrno {
+    int saved = errno;
+    ~PreserveErrno() { errno = saved; }
+};
+
+// No close wrap: fstat on EVERY wrapped I/O detects (st_dev, st_ino) changes.
+// Resolve /proc only at the first I/O of an identity in RUN or after fd reuse.
+// Fixed buffers, integer formatting and libc syscalls only: no allocation,
+// exception, workload substitution or fallback classification on an error.
+const FdIdentity* identify_fd(int fd) noexcept {
+    PreserveErrno preserve;
+    struct stat status{};
+    if (fd < 0 || ::fstat(fd, &status) != 0) {
+        counters.classification_error = true;
+        return nullptr;
+    }
+    FdIdentity* cached = nullptr;
+    FdIdentity* empty = nullptr;
+    for (auto& entry : fd_cache) {
+        if (entry.fd == fd) { cached = &entry; break; }
+        if (entry.fd < 0 && !empty) empty = &entry;
+    }
+    if (!cached) cached = empty;
+    if (!cached) {
+        counters.classification_error = true;
+        return nullptr;
+    }
+    const auto device = static_cast<std::uintmax_t>(status.st_dev);
+    const auto inode = static_cast<std::uintmax_t>(status.st_ino);
+    if (cached->fd != fd || cached->device != device || cached->inode != inode) {
+        *cached = {};
+        // Format the nonnegative fd without stdio or a temporary std::string.
+        char path[sizeof("/proc/self/fd/") + 3 * sizeof(int)] = "/proc/self/fd/";
+        char digits[3 * sizeof(int)]{};
+        std::size_t used = 0;
+        auto number = static_cast<unsigned int>(fd);
+        do {
+            digits[used++] = static_cast<char>('0' + number % 10);
+            number /= 10;
+        } while (number != 0);
+        auto* end = path + sizeof("/proc/self/fd/") - 1;
+        while (used != 0) *end++ = digits[--used];
+        *end = '\0';
+        const auto length = ::readlink(path, cached->name.data(), cached->name.size() - 1);
+        if (length < 0 || static_cast<std::size_t>(length) == cached->name.size() - 1) {
+            counters.classification_error = true; // Includes a truncated pathname.
+            return nullptr;
+        }
+        cached->name[static_cast<std::size_t>(length)] = '\0';
+        const auto* slash = std::strrchr(cached->name.data(), '/');
+        const auto* basename = slash ? slash + 1 : cached->name.data();
+        // Names are <prefix>-XXXXXX, optionally followed by " (deleted)".
+        // Neither read size nor measured counts participate in this decision.
+        for (std::size_t i = 0; i < class_index(FileClass::other); ++i) {
+            const auto prefix = std::strlen(kClassNames[i]);
+            if (std::strncmp(basename, kClassNames[i], prefix) == 0
+                && basename[prefix] == '-') {
+                cached->file_class = static_cast<FileClass>(i);
+                break;
+            }
+        }
+        cached->fd = fd;
+        cached->device = device;
+        cached->inode = inode;
+    }
+    cached->anonymous_regular = S_ISREG(status.st_mode) && status.st_nlink == 0;
+    return cached;
+}
+bool page_identity(const FdIdentity& file) noexcept {
+    return counters.page_fd == file.fd && counters.page_device == file.device
+        && counters.page_inode == file.inode;
+}
+
 void record(Calls& call, std::size_t requested, ssize_t result) noexcept {
     ++call.calls;
     call.bytes += requested;
@@ -54,32 +137,40 @@ void record(Calls& call, std::size_t requested, ssize_t result) noexcept {
         call.short_io += static_cast<std::size_t>(result) != requested;
     }
 }
-bool anonymous_page(int fd, std::size_t bytes) noexcept {
-    if (bytes != platform_page) return false;
-    struct stat status{};
-    if (::fstat(fd, &status) != 0) {
-        counters.classification_error = true;
-        return false;
-    }
-    if (!S_ISREG(status.st_mode) || status.st_nlink != 0) return false;
-    if (counters.page_fd < 0) counters.page_fd = fd;
-    else if (counters.page_fd != fd) counters.multiple_page_fds = true;
+bool anonymous_page(const FdIdentity* file, std::size_t bytes) noexcept {
+    if (bytes != platform_page || !file || !file->anonymous_regular) return false;
+    if (counters.page_fd < 0) {
+        counters.page_fd = file->fd;
+        counters.page_device = file->device;
+        counters.page_inode = file->inode;
+    } else if (!page_identity(*file)) counters.multiple_page_fds = true;
     return true;
 }
 void data_io(int fd, std::size_t bytes, off_t offset, ssize_t result, bool write) noexcept {
     if (!measuring) return;
     const int saved = errno;
     record(write ? counters.total.pwrite : counters.total.pread, bytes, result);
-    const bool page = anonymous_page(fd, bytes);
+    const auto* file = identify_fd(fd);
+    if (file) {
+        auto& io = counters.classes[class_index(file->file_class)];
+        record(write ? io.pwrite : io.pread, bytes, result);
+    }
+    const bool page = anonymous_page(file, bytes);
     if (page) record(write ? counters.pages.pwrite : counters.pages.pread, bytes, result);
     last_page_io = {page && result == static_cast<ssize_t>(bytes), write, fd, offset};
     errno = saved;
 }
 void alternate_read(int fd, Count AlternateReads::*calls) noexcept {
     if (!measuring || fd < 0) return;
+    const auto* file = identify_fd(fd);
+    if (!file) return;
     for (auto& reads : counters.alternate_reads) {
-        if (reads.fd != fd && reads.fd != -1) continue;
+        if (reads.fd != -1 && (reads.fd != fd || reads.device != file->device
+                               || reads.inode != file->inode)) continue;
         reads.fd = fd;
+        reads.device = file->device;
+        reads.inode = file->inode;
+        reads.file_class = file->file_class;
         ++(reads.*calls);
         return;
     }
@@ -93,11 +184,38 @@ void advice(Io& io, off_t bytes, int kind, int result) noexcept {
     io.random += kind == POSIX_FADV_RANDOM;
     io.whole_file_advice += bytes == 0;
 }
+void add(Calls& to, const Calls& from) noexcept {
+    to.calls += from.calls;
+    to.bytes += from.bytes;
+    to.transferred += from.transferred;
+    to.errors += from.errors;
+    to.short_io += from.short_io;
+}
+void add(Io& to, const Io& from) noexcept {
+    add(to.pread, from.pread);
+    add(to.pwrite, from.pwrite);
+    add(to.fadvise, from.fadvise);
+    add(to.fdatasync, from.fdatasync);
+    to.dontneed += from.dontneed;
+    to.random += from.random;
+    to.whole_file_advice += from.whole_file_advice;
+}
+bool same(const Calls& a, const Calls& b) noexcept {
+    return a.calls == b.calls && a.bytes == b.bytes && a.transferred == b.transferred
+        && a.errors == b.errors && a.short_io == b.short_io;
+}
+bool same(const Io& a, const Io& b) noexcept {
+    return same(a.pread, b.pread) && same(a.pwrite, b.pwrite)
+        && same(a.fadvise, b.fadvise) && same(a.fdatasync, b.fdatasync)
+        && a.dontneed == b.dontneed && a.random == b.random
+        && a.whole_file_advice == b.whole_file_advice;
+}
 } // namespace
 
 Measure::Measure() {
     require(!measuring && platform_page != 0, "CR-257 invalid/nested measurement");
     counters = {};
+    fd_cache = {};
     last_page_io = {};
     measuring = true;
 }
@@ -109,9 +227,14 @@ Counters Measure::finish() {
 }
 void validate(const Counters& io) {
     require(!io.classification_error && !io.multiple_page_fds,
-            "CR-257 page I/O classification/alternate-read accounting failed or found another backing");
+            "CR-257 fd/page classification or fixed accounting failed or found another backing");
+    Io classified;
+    for (const auto& file : io.classes) add(classified, file);
+    require(same(classified, io.total), "CR-257 per-class I/O does not sum to all RUN I/O");
     for (const auto& reads : io.alternate_reads) {
-        if (reads.fd < 0 || reads.fd != io.page_fd) continue;
+        const bool page = reads.fd == io.page_fd && reads.device == io.page_device
+            && reads.inode == io.page_inode;
+        if (reads.fd < 0 || (!page && reads.file_class != FileClass::command)) continue;
         require(reads.read == 0, "CR-257 RUN used read on the command page fd");
         require(reads.readv == 0, "CR-257 RUN used readv on the command page fd");
         require(reads.preadv == 0, "CR-257 RUN used preadv on the command page fd");
@@ -137,6 +260,21 @@ void bound(const char* metric, Count actual, Count allowed, Context context) {
         static_cast<unsigned long long>(context.records_changed),
         static_cast<unsigned long long>(context.n), ok ? "PASS" : "FAIL");
     if (!ok) ++failures;
+}
+void class_bound(FileClass file, const char* metric, Count actual, Count allowed, Context context) {
+    char label[128]{};
+    const auto length = std::snprintf(label, sizeof(label), "class.%s.%s",
+                                     kClassNames[class_index(file)], metric);
+    require(length > 0 && static_cast<std::size_t>(length) < sizeof(label),
+            "CR-257 truncated class metric");
+    bound(label, actual, allowed, context);
+}
+void total_info(const char* metric, Count actual, Context context) {
+    require(context.n != 0, "CR-257 missing informational population");
+    std::printf("X257 total (all classes, informational) %s=%llu per_bar=%.9Lf N=%llu INFO\n",
+        metric, static_cast<unsigned long long>(actual),
+        static_cast<long double>(actual) / context.n,
+        static_cast<unsigned long long>(context.n));
 }
 // Informational twin of bound(): printed, never counted as a failure. Used for the
 // WRITE-side numbers of the engine run, which belong to layer (c) (1.7.1: the
@@ -206,7 +344,11 @@ extern "C" int __wrap_posix_fadvise(int fd, off_t offset, off_t bytes, int kind)
     const auto result = __real_posix_fadvise(fd, offset, bytes, kind);
     if (cr257::measuring) {
         cr257::advice(cr257::counters.total, bytes, kind, result);
-        if (fd == cr257::counters.page_fd)
+        const auto* file = cr257::identify_fd(fd);
+        if (file)
+            cr257::advice(cr257::counters.classes[cr257::class_index(file->file_class)],
+                          bytes, kind, result);
+        if (file && cr257::page_identity(*file))
             cr257::advice(cr257::counters.pages, bytes, kind, result);
     }
     return result;
@@ -216,7 +358,13 @@ extern "C" int __wrap_fdatasync(int fd) {
     if (cr257::measuring) {
         ++cr257::counters.total.fdatasync.calls;
         cr257::counters.total.fdatasync.errors += result != 0;
-        if (fd == cr257::counters.page_fd) {
+        const auto* file = cr257::identify_fd(fd);
+        if (file) {
+            auto& io = cr257::counters.classes[cr257::class_index(file->file_class)];
+            ++io.fdatasync.calls;
+            io.fdatasync.errors += result != 0;
+        }
+        if (file && cr257::page_identity(*file)) {
             ++cr257::counters.pages.fdatasync.calls;
             cr257::counters.pages.fdatasync.errors += result != 0;
         }
@@ -746,12 +894,38 @@ SourceRun scope_erase_run(Count records) {
 void source_bounds(const SourceRun& run) {
     const auto& io = run.io.total;
     const auto& pages = run.io.pages;
+    const auto& command = run.io.classes[class_index(FileClass::command)];
+    const auto& payload = run.io.classes[class_index(FileClass::trade_payload)];
     const auto context = run.context;
+    // Independent classifiers must agree on ALL command counters, not merely
+    // on a zero read count. The generic ScratchFile test has a different name.
+    require(same(command, pages),
+            "CR-257 pineforge-command prefix and anonymous page counters disagree");
+    require(payload.pwrite.calls > 0
+            && run.io.classes[class_index(FileClass::trade_index)].pwrite.calls > 0,
+            "CR-257 trading RUN did not identify active ledger payload/index files");
+    for (std::size_t i = 0; i < kClassNames.size(); ++i) {
+        const auto& reads = run.io.classes[i].pread;
+        std::printf("X257 class=%s pread_calls=%llu pread_bytes=%llu per_bar=%.9Lf N=%llu INFO\n",
+            kClassNames[i], static_cast<unsigned long long>(reads.calls),
+            static_cast<unsigned long long>(reads.bytes),
+            static_cast<long double>(reads.calls) / context.n,
+            static_cast<unsigned long long>(context.n));
+    }
     const Count read_calls = kReadFactor * context.extent_pages;
     bound("command.page_pread_calls", pages.pread.calls, read_calls, context);
-    bound("command.total_pread_calls", io.pread.calls, read_calls, context);
+    class_bound(FileClass::command, "pread_calls", command.pread.calls, read_calls, context);
+    total_info("total_pread_calls", io.pread.calls, context);
     bound("command.page_pread_bytes", pages.pread.bytes, read_calls * platform_page, context);
-    bound("command.total_pread_bytes", io.pread.bytes, read_calls * platform_page, context);
+    class_bound(FileClass::command, "pread_bytes", command.pread.bytes,
+                read_calls * platform_page, context);
+    total_info("total_pread_bytes", io.pread.bytes, context);
+    // One position closes per cycle. RUN's event/money readers consume the
+    // newest rows; the full historical validate_trading/canonical reads happen
+    // AFTER finish(). Their strings must come from the resident payload tail,
+    // so no nonresident-row allowance or per-bar literal belongs here.
+    class_bound(FileClass::trade_payload, "pread_calls", payload.pread.calls, 0, context);
+    class_bound(FileClass::trade_payload, "pread_bytes", payload.pread.bytes, 0, context);
     const Count erase_commits = ceil_div(context.records_changed, sd::kExitScopeEraseBatch);
     const Count allowed_commits = erase_commits + run.insert_commits;
     const Count write_calls = allowed_commits * pd::kPagesPerCommit;
