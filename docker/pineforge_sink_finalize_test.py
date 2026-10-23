@@ -163,7 +163,7 @@ def trade(number=1):
 
 def sample_rows():
     return [["E", 1700000040000, 10000.0, -0.0],
-            ["E", 1700000100000, 10001.0, None],
+            ["E", 1700000100000, 10001.0, 0.0],
             trade(),
             ["O", 0, 1700000040000, 1700000100000, -0.0, 4294967295.0],
             ["O", 1, None, None, None, 1.0],
@@ -701,6 +701,42 @@ def test_record_order_is_checked_even_with_a_refolded_valid_receipt(tmp_path, ki
     result, receipt, out, spool = invoke(
         tmp_path, payload, out="-" if stdout_mode else None, receipt_pipe=stdout_mode)
     assert_failure(result, receipt, out, spool, 3)
+
+
+@pytest.mark.parametrize("fields", [("equity",), ("open_profit",),
+                                   ("equity", "open_profit")],
+                         ids=["equity", "open_profit", "both"])
+@pytest.mark.parametrize("stdout_mode", [False, True])
+@pytest.mark.parametrize("stderr_receipt", [False, True])
+def test_receipt_valid_null_equity_is_typed(tmp_path, fields, stdout_mode, stderr_receipt):
+    # Mutation: remove _check_equity(record) in finalizer._verify;
+    # both modes then exit 0 and deliver the null E row for every case here.
+    rows = sample_rows()
+    for field in fields:
+        rows[1][2 if field == "equity" else 3] = None
+    assert sum(value is None for row in rows if row[0] == "E" for value in row[2:]) == len(fields)
+    assert rows[0][1] < rows[1][1]
+    payload = fixture_stream(tmp_path, rows)
+    _, counts, _ = reference(tmp_path / "source.sink")
+    assert counts["E"] == 2  # complete grammar/count/SHA check, independent of finalizer
+    result, receipt, out, spool = invoke(
+        tmp_path, payload, out="-" if stdout_mode else None, receipt_pipe=True,
+        extra=("--receipt-fd", "2") if stderr_receipt else ())
+    assert result.returncode == 3, result.stderr.decode()
+    diagnostic = json.loads(result.stderr)
+    if stderr_receipt:
+        assert receipt is None  # the separate receipt pipe was deliberately overridden
+        receipt = diagnostic
+        assert tuple(receipt) == (*RECEIPT_KEYS, "tool", "event", "exit_code", "detail", "code", "args")
+    assert_failure(result, receipt, out, spool, 3)
+    assert diagnostic["tool"] == "pineforge-sink-finalize"
+    assert diagnostic["event"] == "sink_refused" and diagnostic["exit_code"] == 3
+    assert diagnostic["code"] == "report_result_invalid"
+    assert diagnostic["args"] == {"field": "equity_curve." + fields[0], "reason": "nonfinite"}
+    # Stdout is provisional by contract: the offending E and trailer never
+    # leave the finalizer, and the earlier prefix must be discarded on 3.
+    prefix = b"".join(payload.splitlines(keepends=True)[:2]) if stdout_mode else b""
+    assert result.stdout == prefix
 
 
 @pytest.mark.parametrize("stdout_mode", [False, True])
