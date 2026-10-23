@@ -1,5 +1,4 @@
 """S4E singleton regressions. Execute only on the lab box."""
-import ast
 import ctypes
 import json
 from pathlib import Path
@@ -12,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
 import run_json
+from run_json_codes_test import assert_run_json_codes_catalogued
 import test_run_json_sink as ordinary
 from test_run_json_sink import frozen  # noqa: F401
 
@@ -56,44 +56,26 @@ def test_default_route_on_tmpfs_tmpdir(tmp_path, monkeypatch, frozen, kind, sink
     status, stdout, stderr, library = ordinary.invoke(
         tmp_path, monkeypatch, library=library)
     assert checked, "the report must exercise the injected filesystem check"
+    if sink_api:
+        # This probe marks EVERY candidate (including /var/tmp) as memory
+        # backed. The engine sink contract requires refusal before installation.
+        assert (status, stderr) == (1, ""), stdout
+        failure = json.loads(stdout)
+        assert failure["code"] == "run_request_invalid"
+        assert "TMPDIR" in failure["error"] and "--spill-dir" in failure["error"]
+        assert "disk-backed" in failure["error"]
+        assert ("tmpfs" if kind == 0x01021994 else "ramfs") in failure["error"]
+        assert library.installed == []
+        return
     assert (status, stderr) == (0, ""), stdout
     assert stdout == expected_bytes
-    assert bool(library.installed) is sink_api
-
-    # The strict artifact policy remains available to jailed callers.
-    with tempfile.TemporaryFile(mode="w+b", buffering=0, dir=tmp_path) as file:
-        with pytest.raises(OSError, match="not tmpfs or ramfs"):
-            run_json._BoundedJSONFile(file)
-    jailed = ordinary.invoke(
-        tmp_path, monkeypatch, library=ordinary.SinkLibrary(),
-        extra=["--profile", "jailed", "--spill-dir", str(tmp_path)])
-    assert jailed[0] == 1
-    assert json.loads(jailed[1])["code"] == "run_request_invalid"
+    assert library.installed == []
+    # This legacy producer has no engine sink. Its unjailed JSON artifact can
+    # use tmpfs; jailed artifact absence is checked by the misc2 arena row.
 
 
 def test_every_run_json_code_is_catalogued():
-    tree = ast.parse((ROOT / "docker/run_json.py").read_text(encoding="utf-8"))
-    catalogue = json.loads((ROOT / "docker/run_failure_codes.json").read_text())
-    emitted = set()
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
-             and isinstance(node.func, ast.Name)
-             and node.func.id in {"RunFailure", "write_failure", "failure_line"}]
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and any(
-                isinstance(base, ast.Name) and base.id == "RunFailure" for base in node.bases):
-            calls.extend(child for child in ast.walk(node) if isinstance(child, ast.Call)
-                         and isinstance(child.func, ast.Attribute)
-                         and child.func.attr == "__init__"
-                         and isinstance(child.func.value, ast.Call)
-                         and isinstance(child.func.value.func, ast.Name)
-                         and child.func.value.func.id == "super")
-    for call in calls:
-        code = call.args[1] if len(call.args) > 1 else None
-        code = next((item.value for item in call.keywords if item.arg == "code"), code)
-        if isinstance(code, ast.Constant) and isinstance(code.value, str):
-            emitted.add(code.value)
-    assert emitted, "the source scan must reach the failure emitters"
-    assert not emitted - catalogue["codes"].keys(), sorted(emitted - catalogue["codes"].keys())
+    assert_run_json_codes_catalogued()
 
 
 @pytest.mark.parametrize("mode", ["SUMMARY_ONLY", "STREAMED"])
