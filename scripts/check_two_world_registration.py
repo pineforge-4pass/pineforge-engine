@@ -470,6 +470,12 @@ class Machine:
     def _atom(self, text: str) -> bool:
         while text.startswith('(') and text.endswith(')'):
             text = text[1:-1].strip()
+        # A parenthesised group may itself hold top-level boolean operators
+        # ('(NOT TEST a OR NOT TARGET a)'). Once its parentheses are gone the
+        # group is an ordinary sub-expression, so evaluate it with the same
+        # precedence instead of refusing it as one unmodelled atom.
+        if len(self._split(text, 'OR')) > 1 or len(self._split(text, 'AND')) > 1:
+            return self._or(text)
         tokens = split_values(text)
         if not tokens:
             raise Unreadable(f'{self.path}: empty condition')
@@ -991,6 +997,12 @@ class Machine:
                 # already (a -D cache entry wins), so a profile value stays
                 if self.value(name) is None:
                     self.vars[name] = [initial]
+                index += 1
+            elif head == 'get_test_property':
+                values = split_values(arguments(statement))
+                # Property values are unknown to this registration walk; use
+                # the same NOTFOUND binding as get_target_property below.
+                self.vars[values[-1]] = ['NOTFOUND']
                 index += 1
             elif head in ('get_target_property',):
                 values = split_values(arguments(statement))

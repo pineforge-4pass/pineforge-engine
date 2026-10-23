@@ -19,18 +19,18 @@ name: Corpus parity
 # probe over a 221861-bar feed -- took 1792 s, with 94 s more to judge the
 # result. The dominant term is single-core serial work, which a runner's extra
 # cores do not shorten, so the whole population cannot be held to the ~25 min
-# a required pull-request check is budgeted for. It therefore runs nightly and
-# on demand, plus on any pull request that touches the pin or the parity
-# tooling itself.
+# a required pull-request check is budgeted for. Full parity therefore runs
+# nightly (01:30 UTC), on `workflow_dispatch`, and on the full-event pipeline.
+# The pull-request early signal lives in corpus-parity-subset.yml.
 #
-# PR EARLY SIGNAL. The `corpus-parity-subset` job below
+# FULL-EVENT SUBSET. The `corpus-parity-subset` job below
 # re-runs the 54 probes scripts/corpus_parity_subset.txt names -- in parallel,
 # they write into disjoint directories -- and judges them against the same
 # pinned sha256 rows the nightly uses. Measured on the same laptop at JOBS=8,
 # under sibling load, when the list held its first 30 probes: derive 2 s, build the runtime + the 30 strategy .so 68 s
 # from clean, run 45 s wall for 80 s of probe CPU, judge <1 s; 94 s end to end
 # over an up-to-date build directory, under 3 min cold.
-# .github/workflows/ci.yml calls it as a reusable workflow and includes it in
+# .github/workflows/ci-post.yml calls it as a reusable workflow and includes it in
 # the advisory `build` aggregate. The maintainers' separate full parity
 # verdict posts the required pineforge/parity commit status on the PR head.
 # Nothing about the nightly job changes.
@@ -44,32 +44,20 @@ on:
   workflow_call:
     inputs:
       mode:
-        description: 'full (all 312 probes) or subset (PR early signal)'
+        description: 'full (all 312 probes) or subset (full-event early signal)'
         type: string
         default: full
-  pull_request:
-    branches: [main]
-    paths:
-      - 'corpus'
-      - '.gitmodules'
-      - 'scripts/check_corpus_parity.sh'
-      - 'scripts/corpus_parity_subset.txt'
-      - 'scripts/run_corpus.sh'
-      - 'scripts/run_strategy.py'
-      - 'scripts/verify_corpus.py'
-      - 'scripts/derive_corpus_feeds.py'
-      - '.github/workflows/corpus-parity.yml'
 
 permissions:
   contents: read
 
-# The caller owns pull-request cancellation. Keep a distinct prefix:
+# Keep a distinct prefix:
 # github.workflow in a reusable workflow names the CALLER, so an unprefixed
 # group would collide with CI's and could cancel it (native-live.yml has the
 # same note). Nightly and manual runs stay unique per run.
 concurrency:
-  group: corpus-parity-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: corpus-parity-${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -80,22 +68,84 @@ env:
   # pin is almost entirely cache hits.
   CCACHE_MAXSIZE: 2G
 
-# Both jobs run on the organization's 16-core larger runner for a push, the
-# schedule, a dispatch and a pull request from a branch of this repository;
-# every other event, a fork's pull request above all (this workflow's own or
-# CI's: in a workflow_call the github context is the caller's), runs on the
-# free standard runner. The build uses every core of the runner that took the
-# job. scripts/ci_preflight.py pins the runners and limits.
+# Both parity jobs follow canon authz on pf-gcp-post, with no hosted fallback.
+# The build uses every core of the runner.
+# scripts/ci_preflight.py pins runners and limits.
 jobs:
-  # The whole population. Nightly, on demand, and on a pull request that
-  # touches the pin or the parity tooling. Never reached by `mode: subset`.
+  authz:
+    name: authz
+    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-post"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  # The whole population. Nightly (01:30 UTC), on `workflow_dispatch`, and on
+  # the full-event pipeline. Pull requests use the subset that `ci.yml` calls.
+  # Never reached by `mode: subset` or a pull-request caller.
   corpus-parity:
-    if: inputs.mode != 'subset'
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-    # 16.3-26.2 min on the standard runner a fork's pull request still gets;
-    # 360 minutes is the platform maximum, the only hang catcher (owner rule,
+    needs: [authz]
+    if: inputs.mode != 'subset' && github.event_name != 'pull_request'
+    runs-on: ["self-hosted","pf-gcp-post"]
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+    # 16.3-26.2 min on the standard runner; 360 minutes is the platform maximum,
+    # the only hang catcher (owner rule,
     # 2026-10-12: no bound of our own may fail a run for slowness).
-    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -167,11 +217,13 @@ jobs:
   # The advisory PR subset: the 54 probes scripts/corpus_parity_subset.txt
   # names, judged against the same pinned sha256 rows. Reached through CI.
   corpus-parity-subset:
+    needs: [authz]
     if: inputs.mode == 'subset'
-    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
+    runs-on: ["self-hosted","pf-gcp-post"]
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
     # 1.8-4.7 min on the standard runner; 360 minutes is the platform
     # maximum, the only hang catcher (owner rule, 2026-10-12).
-    timeout-minutes: 360
     steps:
       # Credentials stay persisted, exactly as the nightly job above: the
       # submodule clone and `git lfs pull` below go out over https and the

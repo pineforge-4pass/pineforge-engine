@@ -1,6 +1,6 @@
 {
   "outcome": "compile_refused",
-  "code": "",
+  "code": "PF-E0036",
   "args": {},
   "min_trades": 0,
   "label": "S",

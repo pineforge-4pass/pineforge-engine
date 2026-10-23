@@ -1,0 +1,11 @@
+# Runner labels shared by the pfrel engine and codegen workflows.
+self-hosted-runner:
+  labels:
+    - self-hosted
+    - pf-ci
+    - pf-ci-release
+    - pf-gcp-pr
+    - pf-gcp-post
+    - pf-gcp-main
+    - pf-ci-x64
+    - pf-ci-x64-16

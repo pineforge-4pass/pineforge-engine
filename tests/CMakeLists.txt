@@ -3688,6 +3688,10 @@ endif()
 
 list(REMOVE_ITEM TEST_SOURCES ${_pf_private_fixture_rows})
 
+# Report arithmetic and C-host failure ownership, with source-free includes.
+list(APPEND TEST_SOURCES test_metrics_overflow)
+list(APPEND TEST_SOURCES test_native_c_host_report_failure)
+
 foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
@@ -3772,13 +3776,28 @@ endif()
 # EN-132 M: source-only ownership proof, controls, and an independent D4 route.
 add_test(NAME test_selected_window_ownership_manifest
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/scripts/check_selected_window_ownership.py)
-add_test(NAME test_selected_window_ownership_manifest_controls
-    COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py)
+# CR-196: lab release/debug/sanitizers/kernel took 57.0/65.9/85.5/56.9 s.
+# Loaded pool release/kernel/native-live took 125.7/126.8/132.3 s; debug and
+# sanitizers timed out at 180.02 s. Four shards keep the same 180 s budget.
+# The cases are unequal: the heaviest shard (3) holds 15 of the 39 checker
+# runs. ESTIMATE, not measured: 132.3 s x 15/39 = 50.9 s on the loaded pool in
+# Release; scaling by the lab sanitizers/release ratio (85.5/57.0 = 1.5) gives
+# about 76 s for sanitizers, i.e. 2.4x headroom against 180 s. The lab run of
+# the four shard rows is the measurement; each shard also fails closed when it
+# runs a number of tests different from the number it selected.
+set(_pf_ownership_control_shards)
+foreach(_pf_ownership_shard 1 2 3 4)
+    add_test(NAME test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4
+        COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
+            --shard ${_pf_ownership_shard}/4)
+    list(APPEND _pf_ownership_control_shards
+        test_selected_window_ownership_manifest_controls_shard_${_pf_ownership_shard}of4)
+endforeach()
 add_test(NAME test_selected_window_ownership_d4
     COMMAND ${Python3_EXECUTABLE} -I -B ${PROJECT_SOURCE_DIR}/tests/ownership/test_manifest_checker.py
         ManifestCheckerTests.test_d4_independent_reconstruction_matches_manifest)
 set_tests_properties(test_selected_window_ownership_manifest
-    test_selected_window_ownership_manifest_controls test_selected_window_ownership_d4
+    ${_pf_ownership_control_shards} test_selected_window_ownership_d4
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)
 
 # The C bridge test also links the shared window-plan helper, whose bridge
@@ -7079,3 +7098,40 @@ set_tests_properties(test_ci_verify PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
 set_tests_properties(test_ci_preflight PROPERTIES
     ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/tmp")
+
+# CR-233: a public, receipt-independent Release smoke. Build these executables
+# before CTest; a library-only build leaves statically linked tests stale.
+# Full profiles still build all targets and run every registered row.
+set(PINEFORGE_PR_FAST_TESTS
+    test_ringbuffer
+    test_timeframe
+    test_path_at
+    test_na_runtime
+    test_math_sum
+    test_str_utils
+    test_ta
+    test_matrix
+    test_native_run_spec
+    test_native_bare_host_contracts
+    test_native_kernel_edge
+)
+foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
+        message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
+    endif()
+    if(TEST ${_pf_fast_test})
+        get_test_property(${_pf_fast_test} DISABLED _pf_fast_disabled)
+        get_test_property(${_pf_fast_test} SKIP_RETURN_CODE _pf_fast_skip_code)
+        get_test_property(${_pf_fast_test} SKIP_REGULAR_EXPRESSION _pf_fast_skip_regex)
+        get_test_property(${_pf_fast_test} LABELS _pf_fast_labels)
+        if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"
+                OR NOT _pf_fast_skip_regex STREQUAL "NOTFOUND"
+                OR "slow" IN_LIST _pf_fast_labels OR "private_fixtures" IN_LIST _pf_fast_labels)
+            message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
+        endif()
+        set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
+endif()

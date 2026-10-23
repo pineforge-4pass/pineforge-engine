@@ -18,6 +18,7 @@ from native_live_tick_tape import (
 )
 from native_live_test_process import isolated_output
 from native_live_sanitizer import finalize_sanitizer, prepare_sanitizer, run_with_finalizer
+from native_live_receipts import receipts_by_sequence
 
 
 def synthetic_fixture():
@@ -39,29 +40,34 @@ def synthetic_fixture():
 
 
 def check_invocation_order(attempts, effects, invocations):
+    try:
+        ordered_delivery_effects(attempts, effects)
+    except RuntimeError as error:
+        raise AssertionError(f"delivery invariants failed: {error}") from error
     limits = {"attempts_before": len(attempts), "effects_before": len(effects)}
     assert invocations and all(invocations[0][key] == 0 for key in limits), (
         "initial invocation must precede every attempt/effect", invocations)
-    first_pass = []
-    for index, (invocation, following) in enumerate(zip(invocations, invocations[1:] + [limits])):
+    phases = list(zip(invocations, invocations[1:] + [limits]))
+    for index, (invocation, following) in enumerate(phases):
         assert all(0 <= invocation[key] <= following[key] <= limit
                    for key, limit in limits.items()), (
             "invalid invocation boundary", index, invocation, following, limits)
+    seen_effects = {}
+    for index, (invocation, following) in enumerate(phases):
         phase_attempts = attempts[invocation["attempts_before"]:following["attempts_before"]]
         phase_effects = effects[invocation["effects_before"]:following["effects_before"]]
-        sequences = [effect["sequence"] for effect in phase_effects]
-        assert sequences == sorted(sequences), (
-            "invocation effects are reordered", index, invocation["command"], sequences)
-        successful = {attempt["event_id"] for attempt in phase_attempts if attempt["status"] == 200}
-        assert all(effect["event_id"] in successful for effect in phase_effects), (
-            "invocation effect has no successful attempt in its phase", index, sequences, successful)
-        if invocation["command"][1] == "redeliver":
-            attempt_sequences = [json.loads(attempt["body"])["sequence"] for attempt in phase_attempts]
-            assert attempt_sequences == sorted(attempt_sequences), (
-                "redelivery invocation attempts are reordered", index, attempt_sequences)
-        else:
-            first_pass.extend(sequences)
-    assert first_pass == sorted(first_pass), ("first-pass effects are reordered", first_pass)
+        successful = {}
+        for attempt in phase_attempts:
+            if attempt["status"] == 200:
+                payload = json.loads(attempt["body"])
+                successful[payload["sequence"]] = payload
+        expected_effects = {sequence: payload for sequence, payload in successful.items()
+                            if sequence not in seen_effects}
+        indexed_effects = receipts_by_sequence(phase_effects)
+        assert indexed_effects == expected_effects, (
+            "invocation effects differ from new successful attempts in their phase",
+            index, invocation["command"], indexed_effects, expected_effects)
+        seen_effects.update(indexed_effects)
 
 
 def check_case(result, directory, reference, total_inputs):

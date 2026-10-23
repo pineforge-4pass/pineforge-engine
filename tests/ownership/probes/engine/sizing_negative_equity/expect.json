@@ -1,6 +1,6 @@
 {
   "outcome": "completed",
-  "code": "",
+  "code": null,
   "args": {},
   "min_trades": 1,
   "label": "control",

@@ -2099,7 +2099,7 @@ per script calculation — after the callback returns, and after the
 with the **script interval's open**, at the same instant as that
 calculation's extremes fold, so the curve is identical with and without an
 intrabar path and a re-walk of it reproduces the scalars above bit for bit
-(`compute_equity_stats`, `engine_metrics.cpp:203`, "MUST mirror
+(`compute_equity_stats`, `engine_metrics.cpp:222`, "MUST mirror
 update_equity_extremes"). The result is one point per script bar, a finite
 drawdown/run-up walk, and metrics computed over a real series.
 
@@ -4613,7 +4613,7 @@ own features, not only the rows that happened to be source-free.
 `python3 scripts/ci_verify.py kernel` is the profile that verifies the
 kernel-only build (Release, live runner ON, tutorial OFF, source layer OFF);
 CI runs it as the `kernel-only` job. The profile carries a **row floor**, its
-number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:789 table in
+number in the `PRIVATE_FIXTURE_PROFILE_FLOORS` ci_verify.py:802 table in
 `scripts/ci_verify.py`: the count the kernel-only CTest set is
 expected to run with the private overlay present, minus the pinned
 private-fixture rows of `tests/private_fixture_rows.txt` it registers as SKIP

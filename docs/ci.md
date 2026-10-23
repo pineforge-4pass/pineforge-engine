@@ -1,5 +1,78 @@
 # Local verification and CI
 
+CR-233 supersedes the D1/D3 pull-request split recorded later on this page.
+Those earlier PR populations and timing estimates are historical; the current
+`ci.yml` (PR) and `ci-post.yml` (push to `main`, nightly and manual) trigger map is:
+
+| Job or matrix cell | Ordinary pull request | `.github/**`-only pull request | Push to `main`, nightly schedule, manual dispatch |
+| --- | --- | --- | --- |
+| `authz`, `changes`, `build-gate` (check `build`) | Run with the existing authz and classification gates | Run; the aggregate independently reads the PR diff | Run with the same gates |
+| `preflight` | Fast documentation, source and policy stages | Workflow lint and workflow contracts only | The same fast stages |
+| `preflight-slow` | In the post workflow | In the post workflow | All remaining preflight stages |
+| `build (ubuntu-24.04, Release)` | Release smoke, CTest label `fast` | Skipped | Complete Release profile |
+| `build (ubuntu-24.04, Debug)` and both macOS `build` cells | In the post workflow | In the post workflow | Complete Debug/Release profiles; the runner OS must match the cell |
+| `sanitizers`, `kernel-only`, all three `native-live` profiles | In the post workflow | In the post workflow | Complete profiles, without label exclusions |
+| `corpus-parity-subset` | Existing advisory subset | Skipped | Existing advisory subset |
+| `corpus-parity` caller | In the post workflow | In the post workflow | Full parity |
+
+The nightly CI schedule is 01:30 UTC. The existing docs-only classification
+still skips proof jobs on a documentation-only PR or main push. Both
+preflight tiers together retain the original full stage inventory; the slow
+tier still runs on a docs-only main push. Scheduled and manual runs execute
+every profile. `build-gate` refuses failed authz first, requires fast preflight
+and classification success, and accepts classified docs-only skips, independently
+verified GitHub-only PR skips. The PR aggregate needs every PR job; the post
+aggregate needs every full-event job, including both preflight tiers and both
+parity callers. Failed, cancelled or unclassified skipped jobs fail their aggregate.
+
+A GitHub-only PR changes at least one path, with every changed path under
+`.github/`, including both sides of a rename. `scripts/ci_*.py` changes,
+alone or mixed with `.github/`, follow the ordinary PR plan. `changes` reads
+the PR files API to schedule jobs; `build-gate` repeats that read inside its
+own `Read the PR diff independently` step without checkout. Only this second
+read can excuse a GitHub-only skip. Both reads bind the PR number, head and
+base to the event, check every API page against `changed_files`, and recheck
+the live snapshot after reading. Empty, missing, malformed, truncated or
+unreadable diffs, PRs that moved since the event, and diffs beyond the API's
+3,000-file limit fail closed. The two jobs receive only read access to
+contents and pull requests; the exact inline reader is the sole new token
+exception in the workflow contract.
+
+`--tier github-only` runs `shellcheck-version`, `actionlint-runner-labels`,
+`workflow-lint`, `ci-workflow-contract`, `docs-workflow-contract` and
+`docs-workflow-contract-tests`, plus the usual actionlint version check.
+It excludes source guards and the general preflight test suite. A failed
+classification selects the ordinary fast tier and fails the aggregate.
+`docs.yml` excludes `.github/**`-only PRs from its trigger so this class
+also avoids the Doxygen build.
+
+`preflight --tier fast` excludes `verifier-tests`, `kernel-residuals-tests`,
+`unittest-shards-tests` and `run-json-harness-tests`; `preflight-slow` runs
+exactly those stages with `--tier slow`. Toolchain setup and the hash-pinned
+pytest install stay in the slow job. A plain local invocation below retains
+all stages and its existing event-aware verifier-class selection.
+
+The smoke configures Release, builds `pineforge_pr_smoke` and directly runs
+`ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error`.
+`PINEFORGE_PR_FAST_TESTS` in `tests/CMakeLists.txt` names its eleven real
+executables; configure refuses missing, disabled, skippable, private-fixture
+or `slow` rows. The target rebuilds those executables with their library.
+PRs restore the newest compatible default-branch compiler cache, and only
+successful runs on `main` save that cache namespace.
+
+FLEET-POST=A splits routing at the file boundary: PR jobs use
+`["self-hosted","pf-gcp-pr"]`, and push/schedule/manual jobs use
+`["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
+`corpus-parity-subset.yml` is reusable only from the PR pipeline;
+`corpus-parity.yml` keeps full parity and the full-event subset on the post
+fleet. The checker follows local reusable calls, so a PR caller cannot borrow
+a post workflow even behind a job condition.
+
+`docs.yml` retains the PR build name and `.github/**` exclusion.
+`docs-post.yml` builds and deploys on main pushes and manual dispatch.
+Tag pushes no longer trigger docs: the post fleet admits only engine `main`.
+Release and baseline promotion retain their separate `pf-gcp-main` policy.
+
 Start with the preflight used by GitHub Actions. Install actionlint 1.7.12,
 ShellCheck and pytest, then run:
 
@@ -15,11 +88,14 @@ Python refuse a system-wide install (PEP 668), and `.venv/` is ignored. The
 `run-json-harness-tests` stage runs every `docker/run_json_*_test.py` under it
 and fails, never skips, without it.
 
+Actionlint only accepts declared custom self-hosted runner labels; preflight
+checks the declarations in `.github/actionlint.yaml`.
+
 This checks the CI/native workflow syntax, expressions and shell commands,
 source ABI/hash/schema guards, and the verifier's failure-handling tests. A
 failure fails the advisory aggregate `build` job and retains logs in
 `build-ci-preflight/`. The compilation lanes start alongside preflight, as
-soon as the few-second `changes` job has classified the change, and a
+soon as `authz` has passed and `changes` has classified the change. A
 documentation-only change skips them
 ([Documentation-only changes](#documentation-only-changes)).
 It does not compile the engine or replace any complete verification profile.
@@ -43,8 +119,11 @@ Release and native profiles also install into a disposable prefix, remove the
 source-only header trees, and compile the native public roots and examples;
 the preflight source guard rejects those includes before a build.
 
-CI pins Ubuntu 24.04 and macOS 26, the platforms used by the preceding green
-refactor PR, and selects Python 3.12 explicitly. CMake uses the same interpreter as the
+CI retains Ubuntu 24.04 and macOS 26 cell names and selects Python 3.12 explicitly.
+Linux post cells request the post fleet and refuse an OS mismatch; the two
+macOS post cells run on the hosted `macos-26` image (LB-535's sole hosted
+exception) and refuse an OS mismatch the same way.
+CMake uses the same interpreter as the
 verification driver, so its Python checks do not switch to a different system
 Python. CTest must discover tests; an empty suite is a failure. Which runner
 runs each image, and each job's time limit, is in
@@ -52,13 +131,13 @@ runs each image, and each job's time limit, is in
 
 The two source-only benchmark CTest rows run the 25 harness unit tests and
 `benchmarks/check_provenance.py`. The latter reads historical commits (including
-`933fe583`), so every checkout in `.github/workflows/ci.yml` but the `changes`
+`933fe583`), so every checkout in the CI workflows but each `changes`
 job's fetches full Git history. A depth-1 checkout fails the provenance row
 even when the current benchmark files are correct.
 
 The run-failure source guards (`source-guard-run-failure-codes` and
 `source-guard-run-failure-diff`) read the newest release tag as well.
-`ci.yml`, `native-live.yml` and `release.yml` set
+`ci.yml`, `ci-post.yml`, `native-live.yml` and `release.yml` set
 `PINEFORGE_REQUIRE_RELEASE_TAGS=1` (any value but `0` or empty requires the
 tags), so in their jobs a checkout without that tag fails both guards. Without
 the variable -- a local clone without tags, a remote verifier's checkout --
@@ -85,8 +164,8 @@ its configuration no longer matches.
 
 Run Release, Debug and sanitizer profiles sequentially in one checkout, or use
 separate worktrees for parallel runs. Their tutorial targets write shared `.so`
-files under `tutorial/`, even with separate build directories. Hosted CI jobs
-already use separate checkouts.
+files under `tutorial/`, even with separate build directories. CI jobs already
+use separate checkouts.
 
 ```sh
 python3 scripts/ci_verify.py debug --jobs 4
@@ -134,7 +213,11 @@ Only the native cell accepts the caller's existing PR-only slow-label exclusion.
 The kernel profile also gates the CTest row count: `tests/CMakeLists.txt`
 drops every test TU whose include closure reaches `pineforge/source/` or
 `compat/pine/`, so a lane whose native witnesses shared a TU with an adapter
-twin would leave the kernel-only gate without any failure. The campaign's
+twin would leave the kernel-only gate without any failure. On a pull request
+the kernel-only leg excludes the `slow` rows, so that leg is gated by the
+registration floor and the selection identity described below, and the run
+floor binds the push and dispatch runs, which run the whole kernel set
+([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The campaign's
 per-profile row floors live in ONE table in `scripts/ci_verify.py`,
 `PRIVATE_FIXTURE_PROFILE_FLOORS`, which states for each of `release` and
 `kernel` the profile's full overlay-present population and how many pinned
@@ -183,14 +266,25 @@ and records
 that left the selection or could not start, a lost
 registration below the PR registration floor, unreadable enumeration, or
 missing label fails; with the overlay present every skip fails, as before.
-The PR registration floors after lane FIX-E1E2 are 773
-for Debug and sanitizers and 782 for native (653 and 662 at the INT24 base,
-plus wave G's six rows, wave H's twenty-four, INT26's own tape row, INT27's
-thirteen, XSYM-D's four, K-SESSION-WINDOWS' four, INT28's twenty-four,
-INT28-FIX's four, INT29's seven, W15-KERNEL-CAL's two, INT30's twenty-four,
-TAIL-I's one, XAU-CAL's four and FIX-E1E2's two). The full-run release and
-kernel floors are the table's own numbers above (603 and 306 rows absent, 910
-and 337 with the overlay present); full runs do not exclude a label.
+The PR registration floors are the keys of `EXCLUDED_REGISTERED_MIN` in
+`scripts/ci_verify.py`, one for each profile whose pull-request leg excludes
+the label; their values are in
+[PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where).
+The full-run release and kernel floors are the table's own numbers above (603
+and 306 rows absent, 910 and 337 with the overlay present). A pull request's
+release and kernel legs exclude the label and are held to the registration
+floor instead; the full runs on push and dispatch exclude no label and are
+held to these run floors.
+
+CR-196 splits the ownership manifest controls into four CTest shards,
+`test_selected_window_ownership_manifest_controls_shard_1of4` through
+`test_selected_window_ownership_manifest_controls_shard_4of4`, each with the
+existing 180-second timeout. This adds three public registered/run rows to
+every engine profile in both fixture worlds; it only raises the counts above
+the pinned minimum floors listed above. The private-fixture and receipt row
+populations stay the same. Preflight still runs the complete unsharded driver;
+see [the controls commands](../tests/ownership/README.md#manifest-checker-controls)
+for parallel CTest and individual shard invocations.
 
 Preflight also runs the detached-comment census of the kernel compile closure
 (`detached-comments`: `scripts/measure_detached_comments.py --check-ceiling`)
@@ -234,13 +328,14 @@ receipts, and saving a cache cannot turn a failed verification into success.
 The verifier accepts no row or stage deadline options (owner rule,
 2026-10-12: no time limit may fail a run for slowness). It passes
 `ctest --timeout 0` to request no default per-test deadline; an explicit
-`TIMEOUT` property on a row remains untouched. The native workflow retains
-only its 360-minute job envelopes, with no verification-step deadline.
+`TIMEOUT` property on a row remains untouched. Under owner #827 (2026-10-20),
+this repository declares no job or step time limits; GitHub's own 6 h platform
+maximum is the only bound.
 The summary records discovered and selected row counts, executed rows,
 skipped or not-run rows, and stage timings, including when a test fails.
 
 For an explicit cold proof, dispatch `native-live.yml` with `cold_cache: true`,
-or dispatch `ci.yml` with `cold_native_cache: true`. The reusable workflow also
+or dispatch `ci-post.yml` with `cold_native_cache: true`. The reusable workflow also
 accepts `cold_cache`. Both compiler and curl cache restore **and save** are
 bypassed in every native cell. Manual runs select the full main-equivalent row
 set; there is no manual slow-exclusion input. Normal runs default these controls
@@ -446,7 +541,8 @@ do not shorten.
 
 So the whole population cannot be held to the ~25 min pull-request CI target,
 and it runs nightly (01:30 UTC), on `workflow_dispatch`,
-and on pull requests that touch the corpus pin or the parity tooling. ccache
+and on the full-event pipeline; a pull request's early signal is the subset
+that `ci.yml` calls. ccache
 (2 GB, keyed per commit with a prefix restore) makes a re-run at an unchanged
 pin almost entirely cache hits; the Git-LFS chart feed (~176 MB, one
 full-history 1m CSV) is pulled once per job.
@@ -512,11 +608,11 @@ load, when the list held its first 30 probes: derive 2 s (a no-op when the feeds
 judge <1 s — **94 s** end to end over an up-to-date build directory, against
 1792 s for the run phase alone in full mode.
 
-`corpus-parity.yml` exposes it as a reusable workflow (`mode: subset`) and
-`ci.yml` calls it on every CI run that changes more than documentation and
-lists it in `build-gate`'s `needs`. A dependency skipped for anything but a
-documentation-only change fails that advisory aggregate job, so the subset
-remains unfiltered by path. The merge ruleset requires `pineforge/verify` and
+`ci.yml` calls `corpus-parity-subset.yml` for ordinary PRs and lists it in
+`build-gate`'s `needs`. Only a docs-only change or the aggregate's independent
+GitHub-only classification excuses a skip. `ci-post.yml` retains the subset
+through `corpus-parity.yml` (`mode: subset`) alongside its full-parity call.
+The merge ruleset requires `pineforge/verify` and
 `pineforge/parity`, posted by the maintainers' `lab verify` tooling after
 full verification on the PR head's exact tree.
 
@@ -540,9 +636,10 @@ The documentation guards run fail-closed. Source-only `ci_preflight` stages incl
 `doc-anchors`, `doc-lint`, `doc-reverts`, `design-inventory`, `doc-pine-coverage`,
 their self-tests, and the detached-comment ceiling. The migration worked example is an executed
 CTest row, and the Doxygen documentation build runs in CI for pull requests,
-main pushes, tags and manual dispatch (`.github/workflows/docs.yml`). A pull
-request builds and uploads the site; the Cloudflare Pages deploy step is
-guarded by `if: github.event_name != 'pull_request'`.
+main pushes and manual dispatch. `.github/workflows/docs.yml` builds and
+uploads PR documentation; `.github/workflows/docs-post.yml` builds, uploads
+and deploys on the post fleet. The PR file contains no deployment step or
+Cloudflare secret reference.
 
 `scripts/check_doc_anchors.py` checks every `file:line` citation in the pages it
 guards (`README.md`, `CONTRIBUTING.md`, `docs/README.md`, `docs/pages`,
@@ -712,14 +809,15 @@ as diagnostics.
 
 Superseded pull-request runs are canceled. Main/post-merge and manual CI runs
 use distinct concurrency groups and remain uncanceled. A PR that changes more
-than documentation runs preflight, both Release jobs, kernel-only and the
-parity subset with their full sets;
-both Debug jobs, sanitizers and native-live run the registered set excluding
-the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`. The first 27 were
+than documentation runs preflight and the parity subset with its full set;
+both Release jobs, Ubuntu Debug, kernel-only, sanitizers and the native cell
+of native-live run the registered set excluding
+the 29 CTest rows labelled `slow` in `tests/CMakeLists.txt`
+([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)). The first 27 were
 chosen from INT23/INT24 job logs: over 60 seconds in either sanitizer run or
-over 30 seconds in either Debug run. Preflight starts at once, and the proof
-jobs start alongside it as soon as the few-second `changes` job has decided
-whether the change is documentation only. The advisory `build`
+over 30 seconds in either Debug run. Preflight and the proof jobs start as soon
+as the few-second `changes` job has decided whether the change is
+documentation only and which verifier classes a pull request needs. The advisory `build`
 aggregate succeeds only if every job succeeds, or was skipped for a
 documentation-only change. INT25 re-measured the rows wave G enlarged or added (RATIO-HARDEN's timing
 legs, V19-FIX's scaling rows, and the new KERNEL-EDGE, K-ULP4, C-SURFACE-1 and
@@ -752,21 +850,119 @@ requires these two commit statuses. GitHub Actions jobs, including `build`,
 (`promote-baseline.yml`, installed from the maintainers' private campaign
 tooling) runs `main`'s own copy on the closed PR
 (`pull_request_target`) and runs no PR code. It requires both statuses to be
-successful on the verified PR head and a merge commit on `main` that carries
+successful on the verified PR head and a merge commit on the PR's base branch that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
-on `main`). It hands the campaign tool the merge commit, the PR head and that
+on the base branch). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
-for the tree; every other case exits green without promoting.
+for the tree; after the guard succeeds, ineligible baseline cases exit green
+without promoting.
+
+`promote-guard` must pass before the credential job runs.
+Every `pull_request_target` close requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
+The permission fallback admits private organization members reported as `CONTRIBUTOR`; a failed or empty author lookup refuses promotion.
+Only after those checks can an unmerged close pass without a merger lookup and skip `promote`.
+For a merged PR, the merger login must be nonempty and must be an allowlisted bot or have `admin`, `maintain` or `write` permission; a failed or empty lookup refuses promotion.
+Only `dependabot[bot]` and `pineforge-app[bot]` are allowlisted bots.
+Manual `workflow_dispatch` events pass the guard because dispatch requires write access.
+Every other event fails the guard before credentials are available.
+The trigger has no `branches:` filter and the guard does not require a `main` base ref; the existing tree check reads the PR's base ref, defaulting to `main` for dispatch.
 
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
 the broader population running.
 
+### PR tier versus MAIN/RELEASE: what is excluded where
+
+Decision D1 moves the slow work out of the pull-request tier and keeps all of
+it on push to `main`. Only the `pull_request` event changes. Push,
+`workflow_dispatch` and the maintainers' full verification keep every CTest row
+and every verifier class, so coverage is unchanged and only the time at which a
+regression is first seen moves. `release.yml` is unchanged.
+
+Decision D3 keeps Ubuntu Release/Debug and macOS Release on pull requests and
+defers macOS Debug to non-PR events. The PR's own
+`build (macos-26, Release)` must be green and still enforces the Release
+registration floor of 895 rows (L6 condition 2). An expression-driven matrix
+`exclude` removes only macOS Debug on `pull_request` and returns an empty list
+on every other event; the routing `include` entries and leg names stay the same.
+`ci.yml` currently starts on push to `main`, `pull_request` and
+`workflow_dispatch`; the matrix also keeps all four legs for `schedule` and
+`release` event contexts, without adding those triggers or changing `release.yml`.
+
+| Event | `build` matrix | Release jobs | `kernel-only` | Debug jobs, `sanitizers`, native cell | Verifier classes in `preflight` |
+|---|---|---|---|---|---|
+| pull request | Ubuntu Release/Debug and macOS Release (three legs) | exclude `slow` | exclude `slow` | Ubuntu Debug, `sanitizers` and native exclude `slow`; macOS Debug is absent | FAST always; SLOW only when a path the verifier reads changed or the diff cannot be read |
+| push to `main`, `workflow_dispatch` | Ubuntu and macOS Release/Debug (four legs) | every row | every row | every row | every class |
+| other non-PR contexts (`schedule`, `release` if triggered) | Ubuntu and macOS Release/Debug (four legs) | every row | every row | every row | every class |
+
+The label `slow` is `PINEFORGE_PR_SLOW_TESTS` in `tests/CMakeLists.txt`: 29
+rows, among them `test_ci_verify`, the serial run of
+`scripts/test_ci_verify.py`, which dominates a full Release or kernel job.
+Debug, `sanitizers` and the native cell of `native-live` already excluded it on
+a pull request; D1 adds both Release jobs and `kernel-only`. A row a profile
+does not register carries no label there, and the kernel profile registers
+fewer of the 29 than Release does. `live-sanitizers`, `live-tsan` and the
+parity subset are unchanged.
+
+The verifier's own self-test is split by TestCase class. A class is FAST only
+when its measured total in the serial run log is under 5 s and its passing
+runtime is measured (one exception, by decision: `HistoricalProviderPins` is
+skipped without the private overlay, so it has no passing runtime, and is FAST
+because it is skipped there); every other class is SLOW, and a class in neither
+list runs. On a pull request the `verifier-tests` stage of `preflight` runs the FAST
+classes always. It runs the SLOW classes only when `scripts/ci_verifier_paths.py`,
+the one place the path list lives, reports that the change touches a path the
+verifier reads (`include/pineforge`, `src/c_abi.cpp`, `tests/`, `runner/`, the
+workflows and the CI scripts among them); an unknown or unreadable diff
+runs the SLOW classes. Push to `main` and `workflow_dispatch` run every class.
+The CTest row `test_ci_verify` stays in the `slow` population: the pull-request
+legs exclude it by label and every full run executes it.
+
+A pull-request leg that excludes the label is held to a registration floor in
+place of the run floor: the registered rows must be at least the larger of
+that profile's `EXCLUDED_REGISTERED_MIN` key and its overlay-aware run floor,
+the selection must remove some rows and leave some, and, with the overlay
+absent, the rows that ran plus the pinned skips must equal the selection with
+no other skip (the `--exclude-label` branch of `enforce_test_floor` in
+`scripts/ci_verify.py`). `EXCLUDED_REGISTERED_MIN` holds 876 for `debug`, 867
+for `sanitizers` and 963 for `native`, and with D1 895 for `release` and 337
+for `kernel`. The two new keys are derived, not measured. `release` is the
+registered count in the sampled public pull-request runs (957) less the 62 rows
+by which the Debug key sits below the Debug registry in the same runs (938 less
+876); that also equals its own registry at the vintage of the other keys. The
+same offset would give 309 for `kernel`, 17 rows below the kernel registry at
+that vintage (326), so `kernel` takes `KERNEL_MIN_TESTS` (337): 34 below the 371
+registered in every sampled pull-request and push run. The lab job's `ctest -N`
+confirms both or moves them. The
+run floors in the table above (910 and 337 with the overlay present, 603 and
+306 absent) are not read on an excluded run; push, dispatch and every other
+full run still enforce them.
+
+A regression in an excluded row, or in a SLOW class that a pull request did not
+trigger, is first seen by the push-to-main run for the merge commit, and by the
+maintainers' full verification where it runs the row; the pull request does not
+see it. That delay is not zero. In the one hosted push run sampled
+(`39126947405`) the Release job took 1876 s, `kernel-only` 3022 s, Debug 3416
+s, `sanitizers` 2707 s and the native cell 3132 s; the older
+`pf-linux-x64-16` runners' medians over five runs were 1815, 1812, 1770, 2050
+and 1838 s, and a push run on the current pool has not been measured. The
+pull-request wall time under D1 is to be measured on real PR runs, typical and
+tail; it is not claimed as met against the owner's 15-minute target.
+
+**Rule for the deferred rows (L6 condition, 10-20).** Every row and class this
+section excludes from a pull request still runs on the merge commit. A red
+result on `main` in an excluded row or class (the Release and kernel-only
+`slow` rows, or a SLOW verifier class) BLOCKS the next release cut, and the
+author or the release owner fixes or reverts the change within the hour; the
+red is not carried into a release.
+D3 also defers the macOS Debug leg: a red result there on the merge commit
+blocks the next release cut under the same fix-or-revert rule.
+
 ### Documentation-only changes
 
 A pull request or a push to `main` whose change is documentation only runs
-`preflight` and the documentation build and skips every proof job: the four
-`build` legs, both macOS legs among them, `sanitizers`, `kernel-only`,
+`preflight` and the documentation build and skips every proof job: `build`
+(three legs on a pull request, four on `main`), `sanitizers`, `kernel-only`,
 `native-live` and `corpus-parity-subset`. Every other check that reads the
 pages is a `preflight` stage: `doc-anchors`, `doc-lint`, `doc-reverts`,
 `doc-pine-coverage`, `design-inventory`, `kernel-seam-rows`, the native C
@@ -798,7 +994,7 @@ including the sitemap. Both footer
 variants already include a visible link to <https://pineforge.dev> on every
 page rendered by the theme, including source listings.
 
-The first job of `ci.yml`, `changes`, decides with
+The first job of `ci.yml` is `authz`. The `changes` job needs it and decides with
 [`scripts/ci_docs_only.py`](../scripts/ci_docs_only.py). A changed path is
 documentation when it is a Markdown file (`*.md`) or lies under `docs/`,
 unless it lies under `.github/`, `benchmarks/`, `scripts/` or `tests/`, is a
@@ -826,15 +1022,27 @@ that creates the branch, is forced or carries more than one commit, a merge
 that is not the pull request head's, a commit git cannot read, an empty change,
 and a `changes` job that fails or never answers.
 
-Each proof job waits for `changes` alone, a few seconds once a standard runner
-takes it, and skips only when `changes` succeeded and answered
-documentation-only: `!cancelled() && (needs.changes.result != 'success' ||
-needs.changes.outputs.docs_only != 'true')`. `preflight` waits for nothing.
-The advisory `build` aggregate passes a proof job that succeeded, or one that
-was skipped under that same answer. A proof job skipped for any other reason
-fails it, and so does any `preflight` result but success. A skipped matrix is
-never expanded, so a documentation-only run shows one skipped `build` check
-under its unexpanded name instead of the four legs.
+Each proof job needs both `authz` and `changes`. After successful authz,
+preflight and proof jobs run alongside each other even if classification
+fails; that failure still fails the aggregate. Only a successful docs-only
+answer excuses skipped proof jobs. The job conditions use `always()` with
+an explicit authz-success guard, so cancellation is not a skip condition.
+Checkout and repository-code steps carry the same authz guard.
+
+The `build` aggregate always runs, refuses any non-success authz result in
+its first step, and requires authz, classification and preflight success.
+It accepts a skipped proof job only for a classified docs-only change;
+failure and cancellation always fail it. A skipped matrix is not expanded,
+so a documentation-only run shows one skipped `build` check under its
+unexpanded name instead of the four legs. Required-check configuration must
+retain this aggregate to enforce that exception.
+
+The aggregate reads `needs.build.result` for the selected matrix cells; D3's
+excluded cell is never created and contributes no skipped result. Every cell
+that exists must succeed: failure, cancellation or an unexpected skip still
+fails the aggregate, with no missing-leg exception on push or any other event.
+The unexpanded docs-only check represents three selected legs on a pull
+request and four on every other event.
 
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
@@ -885,73 +1093,71 @@ target needs a measured sanitizer build improvement; the current job logs do
 not separate compile from link time or report a ccache hit rate, so CI-LITE
 does not assume a build optimization without evidence.
 
+That model predates decision D1. It keeps Release and kernel at their full
+durations on a pull request, which they no longer have there: both now exclude
+the `slow` rows ([PR tier versus MAIN/RELEASE](#pr-tier-versus-mainrelease-what-is-excluded-where)).
+It also predates D3 and includes macOS Debug, which D3 defers from pull requests.
+The pull-request wall time under that policy is to be measured on real PR
+runs, and this page does not claim either target as met.
+
 ## Runners and time limits
 
-The heavy jobs -- `preflight`, the four `build` legs, `sanitizers`,
-`kernel-only`, `native-live` and both corpus-parity jobs -- run on larger
-runners for a push, a manual dispatch, the nightly schedule and a pull request
-from a branch of this repository: the organization's `pf-linux-x64-16` (Ubuntu
-24.04 x64, 16 cores, 64 GB) and GitHub's `macos-26-xlarge` (the `macos-26`
-arm64 image on an M2, 5 cores, 14 GB). A larger runner bills the organization
-even for a public repository, so a pull request from a fork runs the same jobs
-on the free standard runners, `ubuntu-24.04` (4 vCPU, 16 GB) and `macos-26`
-(M1, 3 cores, 7 GB). Every heavy job selects its runner with one test that
-names what it trusts: a push, the schedule, a manual dispatch, or a
-`pull_request` whose head is a branch of this repository. Every other event
-gets the standard runner, whether a fork can raise it (a fork's pull request,
-`pull_request_target`, a review or review comment -- anyone can post one on a
-public repository's pull request -- a comment, a `workflow_run`) or it is
-merely unlisted (`merge_group`).
+FLEET-POST=A (laneboss bulletin #1083, CR-233 ADD 2) supersedes the earlier
+non-release fleet policy. Each non-release workflow has one event class and
+one literal scheduler array, including authz, classification and aggregates:
 
-```yaml
-runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'pf-linux-x64-16' || 'ubuntu-24.04' }}
-```
+| Workflow | Events/callers | Every inline job's `runs-on` |
+| --- | --- | --- |
+| `ci.yml` | Unfiltered `pull_request` | `["self-hosted","pf-gcp-pr"]` |
+| `corpus-parity-subset.yml` | Reusable call from PR CI | `["self-hosted","pf-gcp-pr"]` |
+| `docs.yml` | `pull_request`, except `.github/**`-only diffs | `["self-hosted","pf-gcp-pr"]` |
+| `ci-post.yml` | Push to `main`, 01:30 UTC schedule, dispatch | `["self-hosted","pf-gcp-post"]`, except `build-macos` on hosted `macos-26` |
+| `corpus-parity.yml` | Schedule, dispatch, post CI callers | `["self-hosted","pf-gcp-post"]` |
+| `native-live.yml` | Dispatch and post CI callers | `["self-hosted","pf-gcp-post"]` |
+| `docs-post.yml` | Push to `main`, dispatch | `["self-hosted","pf-gcp-post"]` |
 
-The `build` matrix pairs each image with its `larger_runner` and names its legs
-explicitly, so they stay `build (<image>, <type>)`. `native-live.yml` and
-`corpus-parity.yml` apply the test themselves; in a `workflow_call` the
-`github` context is the caller's, so a fork's pull request through CI gets the
-standard runner there too. The advisory `build` aggregate runs a few seconds of
-shell and stays on the standard runner for every event. So does the `changes`
-job, a two-commit checkout and one `git diff`.
+The post fleet admits only push, schedule and dispatch on engine `main` and
+refuses all PR events. A reusable workflow inherits the caller's event.
+`workflow_event_routes` and `workflow_fleet_findings` in
+`scripts/ci_preflight.py` follow every local call to a fixed point, refuse
+mixed event classes and require literal fleet arrays on every inline job.
+The fleet is inferred from events and caller reachability, independently of
+workflow file names and job conditions. The command table pins job inventory
+and core-count usage, without assigning fleets by file name.
 
-Each `ci_verify.py` call passes `--jobs "$(getconf _NPROCESSORS_ONLN)"` and
-`check_corpus_parity.sh` gets the same count as `JOBS`, so build and CTest
-parallelism follow the runner: 16 on the larger Linux runner, 5 on the M2, 4
-and 3 on the standard runners. The larger Linux runner is configured for at
-most eight jobs at once, and one CI run starts seven there (preflight, the two
-Ubuntu `build` legs, sanitizers, kernel-only, native-live and the parity
-subset); a pull request that touches the corpus pin or the parity tooling also
-starts the whole sweep there, an eighth. A documentation-only change starts
-preflight alone there. A second run that overlaps them waits
-for a runner. Larger runners bill the organization's Actions budget: with no
-payment method or a spending limit of zero, their jobs wait for a runner that
-never comes, since GitHub does not fall back to a standard one. The test keeps
-a fork's pull request that leaves the workflows alone off the larger runners;
-one that edits them runs its own copy, which preflight reports but does not
-stop, so the repository's approval rule for workflow runs from outside
-contributors is what bounds that case.
+All four full build cells retain their check names. The two Linux cells are
+one job on the post fleet; the two macOS cells are a separate job on the
+hosted `macos-26` image, the fixed hosted exception LANEBOSS canon allows for
+engine and app. Each job refuses an OS mismatch before checkout, and the
+aggregate requires both. `HOSTED_JOB_RUNNERS` in `scripts/ci_preflight.py`
+pins that one job name and image, and the exception never applies to a
+workflow reachable from `pull_request`. The PR build remains
+`build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-`scripts/ci_preflight.py` (`ci-workflow-contract`) pins every job's runner, time
-limit and parallelism in the three workflows a CI run starts, the `build`
-strategy block included, and keeps every other workflow -- `docs.yml`,
-`promote-baseline.yml` and any new one -- on standard runners. Only
-`release.yml` is exempt, by name and while its `on:` block names only events no
-fork can raise (a push, the schedule, a dispatch; a dispatch alone today). A
-heavy job moved back to the standard runner, a test or matrix entry that lets a
-fork's pull request onto a larger runner, a call to a workflow outside
-`.github/workflows/`, a changed time limit, a `ci_verify.py` call without
-exactly one core-count `--jobs` (counted over the whole job, however its
-commands are chained, blocked or carried, with the flag and its value on one
-line), or any other `--jobs` or `JOBS` value fails preflight, and so does a jobs
-line or `runs-on` the check cannot read; `scripts/test_ci_preflight.py` holds
-the mutations. The same stage pins the documentation-only skip: `changes` and
-`preflight` wait for nothing and run on every event, the classification step
-is pinned verbatim, each proof job needs `changes` alone and carries the one
-skip condition, and the `build` aggregate reads every result and the answer. No
-job of `ci.yml`, `native-live.yml` or `corpus-parity.yml`, nor any of their
-steps, may continue on error: that would report success to the aggregate
-however it ended.
+Release and promotion are unchanged: `release`, `notify-hub`, Linux x64
+`prebuilt` and baseline `promote` use `["self-hosted","pf-gcp-main"]`.
+Release's ARM/macOS artifact cells keep their existing hosted pins, and
+promotion keeps `pull_request_target` plus manual dispatch.
+
+Every split workflow retains the canon authz step and its digest. All other
+jobs need authz; CI/native aggregates always run and refuse failed authz
+before anything else. The PR aggregate retains its independent API diff
+reader, so a preceding job cannot authorize a GitHub-only skip. Full CI keeps
+every proof dependency and both preflight tiers. Docs deployment and parity's
+HTTPS submodule clone retain their existing credential handling behind authz.
+
+Legacy `PF_CI_LABELS` metadata does not select runners. Verification and
+parity commands use `$(getconf _NPROCESSORS_ONLN)` for parallelism.
+No job or step declares `timeout-minutes`, and no proof continues on error.
+The checker retains the bans on paid larger-runner labels and
+`larger_runner` keys. GitHub's platform maximum remains the only time bound.
+
+The credential-free `promote-guard` stays hosted on `ubuntu-latest`; the credential job keeps main's isolated release runner.
+The same stage pins the complete shared `promote-guard` block byte for byte, including comments, empty permissions, payload bindings, refusal script and separator, and the merged-or-dispatch credential job's dependency on it.
+Decision tests execute the guard script extracted from the real workflow with bash and an executable `gh` stub first on PATH that returns separate author and merger permissions by username.
+Mutation tests alter the real promotion workflow to replace the script with `exit 0`, move the unmerged exit before authorization, remove author or merger lookups and other checks, disable `fail`, bypass failed author or merger lookups, add guard credentials or a checkout, or disconnect the credential job.
+The release pool is restricted to the existing pinned release and promotion jobs; reusable call edges cannot admit PR events to them.
+Retired `pf-ci-release` labels remain refused, and an unpinned `flat-peak.yml` receives no release-pool exception.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
@@ -974,33 +1180,35 @@ that rule removed: the `test_ci_verify` row's 3600 s property outlived main's
 2820 s native-live stage deadline, and main's own native-live job refused its
 row set with `TIMEOUT 3600 must be positive and less than stage deadline
 2820`. The hosted kernel-only job lost the same day's run the other way, to a
-1800 s stage bound (exit 124). Under the owner rule, no required-check stage,
-row, step, profile or matrix entry may carry a time limit of this repository's;
-the only hang catcher is the platform's own 360-minute job maximum, which
-every job below carries. The native-live aggregate job names a stop at that maximum
+1800 s stage bound (exit 124). Under owner #827 (2026-10-20), this repository
+declares no time limits: no required-check job, stage, row, step, profile or
+matrix entry may declare one, and GitHub's own 6 h platform maximum is the only
+bound. The new authz jobs also inherit it without an explicit timeout.
+The native-live aggregate job names a stop at that maximum
 `HANG (re-run)` in its log; the check still fails. Exit-code, signal,
 missing-summary and diagnostic failures still fail. Historically, `test_ci_verify` alone took up to 1288 s
 at 0d76a099 (Ubuntu Debug), most of the 30-minute stage it then had, and a
-fork's sanitizers compile took 1277-1335 s; those measurements now inform the
-job-level maximum alone.
+fork's sanitizers compile took 1277-1335 s; those measurements remain historical
+context for job duration.
 
-The table below reports each job's measured duration and the platform maximum
-that replaced its old limit, so the margin the removal buys stays visible. The
-numbers are measured durations, not a two-times multiplier.
+The table below reports each job's measured duration and GitHub's platform
+maximum, with the old declared limits retained for historical context; owner
+#827 removed every `timeout-minutes` declaration on 2026-10-20.
+The duration numbers are measurements, not declared time limits.
 The standard-runner times are the eight CI runs from
 main's 8cf3be58 (2026-09-24) to 0d76a099 (2026-09-25), pull requests included,
-and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. Until
-the larger runners' own runs accumulate, the maintainers' x86-64 verification
-hosts at 8 to 12 jobs stand in for the Linux one on parallel work, the
-standard runner's speed stands in for it on serial work, and the 3-core M1
-bounds the M2 from above.
+and the corpus-parity workflow's ten runs of 2026-09-22 to 2026-09-25. The
+maintainers' x86-64 verification-host timings at 8 to 12 jobs remain separate
+measurements; the standard-runner timings describe the former hosted policy
+and provide historical context for the former runner policy. Pool timings await
+measurements on the new runners.
 
-| Job | Limit (min) | Measured basis |
+| Job | Platform maximum (min; no declared limit) | Measured basis |
 | --- | --- | --- |
-| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12); the native-live aggregate job names a stop at the platform's 360-minute maximum `HANG (re-run)` in its log; the check still fails. |
-| `build` | 360 (was 75) | A Release leg runs its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. On the larger Linux runner a full leg is its build plus the serial `test_ci_verify` row, 976-1288 s: about 30 min. The M1's 37.0 min bounds the M2. 11.1-18.4 min on the verification hosts. |
-| `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs now land only on the larger runner; on the standard runner they took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), so about 40 min there with a faster build, and 18.2-19.0 min on the verification hosts. |
-| `kernel-only` | 360 (was 60) | Every event runs the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
+| `preflight` | 360 (was 45) | 7.3-9.8 min on the standard runner through 1a0e7ea1; cancelled at 10.3 min at 0d76a099, 593 s into `verifier-tests`, which takes about 15 min there at that tree (above), so preflight about 16 min. 4.8-8.2 min on the verification hosts. Preflight supplies no stage deadline -- the old 2400 s stage bound is gone (owner rule, 2026-10-12), and owner #827 (2026-10-20) removed every declared job timeout; the native-live aggregate job names a stop at GitHub's own 6 h platform maximum `HANG (re-run)` in its log; the check still fails. |
+| `build` | 360 (was 75) | Pull requests run Ubuntu Release/Debug and macOS Release; every non-PR event retains all four legs. A Release leg runs its full population on push and dispatch events; a pull request's Release legs, a fork's included, exclude the `slow` rows like its Ubuntu Debug leg, and that pull-request time is to be measured on real PR runs. The following measurements predate D3 and include macOS Debug on pull requests. Measured while Release ran its full population on every event, a fork's pull request included: 30.3 min Ubuntu and 32.0 min macOS on the standard runners at 0d76a099, where the full Debug legs took 43.5 and 37.0 min. Pull-request Debug sets 17.2-17.7 min. 11.1-18.4 min on the verification hosts. |
+| `sanitizers` | 360 (was 120; the verifier's CTest stage bound was 60 min full, 30 min PR) | A fork's pull-request set took 35.2 min on the standard runner, whose compile alone took 1277-1335 s (pull-request run 36139176292, and main at 0d76a099). Full runs on the standard runner took 34.0-69.4 min (at 0d76a099 30 min of build and ABI providers, then 39 min of CTest, 1768 s of it the serial `test_ci_verify` row), and 18.2-19.0 min on the verification hosts. |
+| `kernel-only` | 360 (was 60) | Push and dispatch events run the whole kernel set; a pull request's kernel-only leg excludes the `slow` rows, and that pull-request time is to be measured on real PR runs. Measured while every event ran the whole kernel set: 7.9-22.3 min on the standard runner, 6.5-9.8 min on the verification hosts. The hosted kernel-only run of 2026-10-12 lost its job to the old 1800 s stage bound (exit 124). |
 | `native-live (native)` | 360 (was 75; verification step 65) | Main runs 37398893123, 37461653250 and 37478400505 spent 35.40–40.65 min in native, including 25.32–29.53 min in full CTest. Their matching PRs took 2.39–5.67 min in native CTest with the existing slow exclusion. The longest measured `test_ci_verify` row was 1695 s there and 2178 s on a c5.4xlarge Spot host, cut off by a trial deadline. The verifier supplies no default row or stage deadline and the workflow supplies no step deadline: its old 3600 s row bound is what collided with the 2820 s stage deadline on main's push run 38217844683. These are observed GitHub and Spot timings; final-head cold proof remains required. |
 | `native-live (live-sanitizers)` | 360 (was 45; verification step 35) | The same three main runs spent 15.10–16.33 min in this profile after native. Its old per-row 900 s and stage 1200 s deadlines are gone; the verifier supplies no replacement, and the platform's job maximum catches a hang. |
 | `native-live (live-tsan)` | 360 (was 45; verification step 35) | The old shared 60-min job left only 9.20, 4.67 and 2.67 min for TSan before cancellation. Matching passing PR profiles took 10.87, 10.93 and 7.70 min. Its old 900/1200-s row/stage bounds are gone like live-sanitizers'; the verifier supplies no replacement. |
@@ -1019,3 +1227,68 @@ split. Cancelled/failed jobs did skip the old compiler post-save, which reduced
 cache freshness; the new save ordering addresses that independently. The
 historical ASan startup assertion remains a separate diagnosis, and splitting
 jobs does not establish a runtime fix or dismiss a sanitizer failure.
+
+### Release guard phases
+
+The release guard requires exactly `pineforge/verify` and `pineforge/parity`
+to be `success`; lite variants never satisfy either requirement. Phase 1 is
+the **transitional** merged-PR-head path for main commits that predate the
+main watcher. The guard reads `repos/{repo}/branches/main` (`.commit.sha`)
+and requires the release sha to equal that branch's current head. It requires
+exactly one associated merged PR targeting `main`, with `merge_commit_sha`
+equal to the release sha and a head tree matching the released tree, then
+reads that head's full contexts through the statuses API. PRs targeting other
+bases or naming a different merge commit are ignored; malformed fields refuse.
+Zero matches refuse; multiple matches refuse and name every matching PR, with
+no preference for the newest.
+
+Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
+`scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
+receipt reader, the cut-over is the watcher's **first recorded main sha**,
+fixed in that constant by a reviewed PR. The release job cannot configure it
+through an environment variable or workflow input. At that sha and every
+descendant, the guard requires a main-proof receipt for the **exact main
+sha** with both full contexts green and does not consult PR heads. Missing,
+unreadable or non-green receipts refuse, with no transitional fallback.
+Commits preceding the cut-over retain phase 1; unknown ancestry refuses.
+The reader seam defines normalized context states, not a receipt storage format.
+
+Every API call is a read using the release job's own App token. Rate limits
+and upstream 5xx responses refuse immediately, naming the failure, without
+sleeping or retrying; empty or unparseable evidence also refuses. An empty JSON
+array is a valid list response; each caller refuses if its required PR or
+context evidence is absent. An empty single-object payload still refuses.
+
+Prebuilt jobs build the commit sha emitted after the release job's atomic
+push, and assert that the release tag still resolves to that sha before
+building. A missing or malformed sha or a changed tag fails the job. Dry runs
+build `github.sha` and skip the tag assertion because no tag exists. A
+separate tag ruleset forbids updates and deletion of `v*` tags; see "Release
+tag immutability and recovery" below.
+
+#### Release tag immutability and recovery
+
+Release tags `v*` are protected by active GitHub ruleset `25591564`
+(`release tags immutable (v*)`), with `update` and `deletion` rules and no
+bypass actors. Creating a new `v*` tag is still allowed, so the workflow's
+annotated-tag push is unchanged. Moving or deleting an existing `v*` tag is
+refused for every workflow, script and token.
+
+Any recovery that requires deleting or moving a `v*` tag now requires a
+human administrator to explicitly edit ruleset `25591564`; nothing in this
+repository may assume it can re-tag. The workflow's
+["Refuse if tag already exists" step in `release.yml`](../.github/workflows/release.yml#L140)
+also refuses an existing tag before creating one.
+
+#### Allowed status creators
+
+In phase 1, the newest statuses API row for each full context must have a
+`creator.login` and `creator.type` pair in `ALLOWED_STATUS_CREATORS` in
+`scripts/ci_release_gate.py`. Missing or malformed creators and every other
+identity refuse, even when an older row from an allowed creator succeeded.
+
+| Login | Type | Confirmed producer |
+| --- | --- | --- |
+| `luisleo526` | `User` | The operator PAT that posts `pineforge/verify` / `pineforge/parity` via `lab verify record` / `lab verify parity`. |
+
+Adding a creator is a code change reviewed like any other.

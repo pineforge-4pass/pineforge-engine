@@ -7,8 +7,9 @@ Build pineforge-live with the CI-pinned curl first. Example:
 
 The observer is compiled once into each corpus strategy library. Qualification
 compares reconstructed actions to the native accessor from the same stream run,
-before comparing any runner output. All comparisons preserve physical order and
-binary64 values. State-selected splits and completion filtering are restricted
+before comparing any runner output. Engine comparisons preserve physical order
+and binary64 values; HTTP receipts are matched by submission sequence.
+State-selected splits and completion filtering are restricted
 to this contiguous 24x7 ETH tape, not shortened/session-based buckets.
 Optional tick checks use explicitly synthetic O-H-L-C prints derived from the
 shipped 1m corpus, not historical observed trades. They prove same-print replay
@@ -38,6 +39,8 @@ import subprocess
 import sys
 import threading
 import traceback
+
+from native_live_receipts import receipts_by_sequence
 
 
 PROBES = {
@@ -411,8 +414,9 @@ class Strategy:
 
 
 def ordered_delivery_effects(attempts, effects, redelivery=None):
-    sequences = [effect["sequence"] for effect in effects]
-    if sorted(sequences) != list(range(1, len(effects) + 1)):
+    indexed_effects = receipts_by_sequence(effects)
+    sequences = range(1, len(effects) + 1)
+    if set(indexed_effects) != set(sequences):
         raise RuntimeError("effect sequence gap or duplication")
     if len({effect["event_id"] for effect in effects}) != len(effects):
         raise RuntimeError("duplicate logical effect")
@@ -425,25 +429,22 @@ def ordered_delivery_effects(attempts, effects, redelivery=None):
                 or attempt["idempotency_header"] != payload.get("delivery_id", event_id)):
             raise RuntimeError("idempotency header/payload mismatch")
         if event_id not in bodies:
-            first_attempts.append(payload["sequence"])
+            first_attempts.append(payload)
             bodies[event_id] = attempt["body"]
         elif bodies[event_id] != attempt["body"]:
             raise RuntimeError("retry body changed")
-    if first_attempts != list(range(1, len(effects) + 1)):
-        raise RuntimeError("first-attempt deliveries are reordered or incomplete")
-    for effect in effects:
-        if effect != json.loads(bodies[effect["event_id"]]):
-            raise RuntimeError("effect body differs from its delivery")
+    indexed_attempts = receipts_by_sequence(first_attempts)
+    if set(indexed_attempts) != set(indexed_effects):
+        raise RuntimeError("first-attempt deliveries are incomplete or unexpected")
+    if indexed_effects != indexed_attempts:
+        raise RuntimeError("effect body differs from its delivery")
+    ordered_effects = [indexed_effects[sequence] for sequence in sequences]
     if redelivery is None:
-        if sequences != sorted(sequences):
-            raise RuntimeError("first-pass effects are reordered")
-        return effects
+        return ordered_effects
     boundary = redelivery["effects_before"]
     if not 0 <= boundary <= len(effects):
         raise RuntimeError("invalid explicit-redelivery boundary")
-    initial = sequences[:boundary]
-    if initial != sorted(initial):
-        raise RuntimeError("first-pass effects are reordered")
+    seen_effects = receipts_by_sequence(effects[:boundary])
     selected = set(redelivery["event_ids"])
     if not selected <= set(bodies):
         raise RuntimeError("explicit redelivery selected an unknown event")
@@ -458,24 +459,27 @@ def ordered_delivery_effects(attempts, effects, redelivery=None):
                 raise RuntimeError("invalid explicit-redelivery invocation boundary")
         invocation_attempts = attempts[invocation["attempts_before"]:following["attempts_before"]]
         invocation_effects = effects[invocation["effects_before"]:following["effects_before"]]
-        redelivery_sequences = [json.loads(attempt["body"])["sequence"]
-                                for attempt in invocation_attempts if attempt["event_id"] in selected]
-        if redelivery_sequences != sorted(redelivery_sequences):
-            raise RuntimeError("explicit redelivery attempts are reordered")
-        redelivery_effects = [effect["sequence"] for effect in invocation_effects
-                             if effect["event_id"] in selected]
-        if redelivery_effects != sorted(redelivery_effects):
-            raise RuntimeError("explicit redelivery effects are reordered")
-        for effect in invocation_effects:
-            if effect["event_id"] in selected and not any(
-                    attempt["event_id"] == effect["event_id"] and attempt["status"] == 200
-                    for attempt in invocation_attempts):
-                raise RuntimeError("explicit redelivery effect has no successful attempt")
-    first_pass = [effect["sequence"] for index, effect in enumerate(effects)
-                  if index < boundary or effect["event_id"] not in selected]
-    if first_pass != sorted(first_pass):
-        raise RuntimeError("non-redelivered effects are reordered")
-    return sorted(effects, key=lambda effect: effect["sequence"])
+        successful = {}
+        for attempt in invocation_attempts:
+            if attempt["status"] == 200:
+                payload = json.loads(attempt["body"])
+                successful[payload["sequence"]] = payload
+        expected_effects = {sequence: payload for sequence, payload in successful.items()
+                            if sequence not in seen_effects}
+        if receipts_by_sequence(invocation_effects) != expected_effects:
+            raise RuntimeError("explicit redelivery effects differ from new successful attempts")
+        seen_effects.update(expected_effects)
+    if seen_effects != indexed_effects:
+        raise RuntimeError("explicit redelivery effects are incomplete")
+    # The final invocation must replay the whole selection, including effects
+    # already accepted before an acknowledgement was lost and the process restarted.
+    replayed = {json.loads(attempt["body"])["sequence"] for attempt in invocation_attempts
+                if attempt["event_id"] in selected}
+    expected_replay = {sequence for sequence, payload in indexed_attempts.items()
+                       if payload["event_id"] in selected}
+    if replayed != expected_replay:
+        raise RuntimeError("explicit redelivery selection is incomplete")
+    return ordered_effects
 
 
 def require_replay_after_restart(attempts, event_id, invocation):
@@ -525,8 +529,7 @@ class MockReceiver:
                         if not rejected:
                             owner.database.execute("INSERT OR IGNORE INTO effects VALUES(NULL,?,?)", (event_id, body))
                         owner.database.commit()
-                        count = owner.database.execute("SELECT COUNT(*) FROM effects").fetchone()[0]
-                        wait_ack = not rejected and is_new and count == owner.restart_action
+                        wait_ack = not rejected and is_new and payload["sequence"] == owner.restart_action
                     if wait_ack:
                         owner.accepted.set()
                         owner.release_ack.wait(120)
@@ -550,7 +553,7 @@ class MockReceiver:
         write_json(self.routes, {"schema_version": 1, "default_target": "default",
             "targets": {"default": {"url": f"http://127.0.0.1:{self.server.server_address[1]}/actions",
                                     "secret_env": "PINEFORGE_EQUIVALENCE_HMAC"}}, "rules": [],
-            "delivery": {"max_in_flight": 1, "transport_retries": 2,
+            "delivery": {"max_in_flight": 8, "transport_retries": 2,
                          "retry_backoff_ms": [10, 20]}})
 
     def finish(self, output):
@@ -664,7 +667,7 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
         if not expected:
             raise RuntimeError("NOT EXERCISED: no live actions")
         receiver = MockReceiver(output, fail_first, crash_action)
-        result["delivery_policy"] = "single-flight, two explicit transport retries"
+        result["delivery_policy"] = "max_in_flight=8, two explicit transport retries"
         command = [str(runner), "run", "--strategy", str(strategy.path), "--warmup", str(output / "warmup.csv"),
             "--input-tf", str(timeframe), "--script-tf", str(timeframe), "--session", "24x7", "--timezone", "UTC",
             "--chart-timezone", "UTC", "--mode", "ticks" if packets is not None else "bars",
@@ -720,7 +723,8 @@ def run_case(strategy, batch, bars, rows, timeframe, split, output, runner,
             if set(rejected) != {row["event_id"] for row in effects} or any(count != 1 for count in rejected.values()):
                 raise RuntimeError("fail-first coverage missing")
         if restart:
-            require_replay_after_restart(attempts, effects[crash_action - 1]["event_id"], restart_invocation)
+            crashed_effect = receipts_by_sequence(effects)[crash_action]
+            require_replay_after_restart(attempts, crashed_effect["event_id"], restart_invocation)
         with sqlite3.connect(output / "orders.sqlite3") as ledger:
             ledger_hashes = [row[0] for row in ledger.execute("SELECT state_hash FROM inputs ORDER BY input_index")]
             pending = ledger.execute("SELECT COUNT(*) FROM events WHERE acknowledged=0").fetchone()[0]

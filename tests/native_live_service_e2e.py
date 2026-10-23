@@ -14,6 +14,8 @@ import tempfile
 import threading
 import time
 
+from native_live_receipts import receipts_by_sequence
+
 runner, library, gated_library = sys.argv[1:]
 children = []
 receipts = []
@@ -263,7 +265,7 @@ try:
         routes = root / "routes.json"
         routes.write_text(json.dumps({"schema_version": 1, "default_target": "default",
             "targets": {"default": {"url": f"http://{endpoint}/actions", "secret_env": "SERVICE_TEST_HMAC"}},
-            "rules": [], "delivery": {"max_in_flight": 2, "connect_timeout_ms": 100,
+            "rules": [], "delivery": {"max_in_flight": 8, "connect_timeout_ms": 100,
                 "total_timeout_ms": 500, "transport_retries": 0}}))
         routed = ["--webhook-routes", routes, "--allow-insecure-http"]
         environment = dict(os.environ, SERVICE_TEST_HMAC=secret)
@@ -296,7 +298,9 @@ try:
         wait_for(lambda: query(ledger, "SELECT count(*) FROM delivery_log WHERE phase='completed'") == [(4,)])
         wait_for(lambda: len(receipts) == 4)
         deployment = query(ledger, "SELECT identity FROM metadata")[0][0]
-        original = sorted(receipts)
+        receipt_sequence = lambda receipt: json.loads(receipt[1])["sequence"]
+        original = receipts_by_sequence(receipts, receipt_sequence)
+        assert set(original) == set(range(1, 5))
         wait_for(lambda: status(health)["metrics"]["targets"]["default"]["pending_count"] == 4)
         assert status(health)["metrics"]["targets"]["default"]["oldest_age_ms"] >= 0
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment,
@@ -311,7 +315,8 @@ try:
         wait_for(lambda: query(ledger, "SELECT count(*) FROM delivery_log WHERE request_id=? AND phase='completed'",
             (identifier,)) == [(4,)])
         wait_for(lambda: len(receipts) == 8)
-        assert sorted(receipts[4:]) == original
+        # Counts delimit completed phases, not the submission order within a phase.
+        assert receipts_by_sequence(receipts[4:], receipt_sequence) == original
         duplicate_request = {"schema_version": "pineforge-redelivery-request/v1", "deployment": deployment,
             "request_id": identifier, "target": "default", "from": 1, "failed_only": True}
         acknowledgement_time = acknowledgment.stat().st_mtime_ns
@@ -319,12 +324,15 @@ try:
         wait_for(lambda: acknowledgment.stat().st_mtime_ns != acknowledgement_time)
         assert query(ledger, "SELECT count(*) FROM delivery_log WHERE request_id=? AND phase='completed'",
             (identifier,)) == [(4,)]
+        from_sequence = 4
+        expected_selected = {sequence: receipt for sequence, receipt in original.items()
+            if sequence >= from_sequence}
         selected = json.loads(invoke(["redeliver", "--ledger", ledger, "--deployment", deployment,
-            "--target", "default", "--from", "4", "--control-dir", controls]))["request_id"]
+            "--target", "default", "--from", str(from_sequence), "--control-dir", controls]))["request_id"]
         wait_for(lambda: query(ledger, "SELECT count(*) FROM delivery_log WHERE request_id=? AND phase='completed'",
             (selected,)) == [(1,)])
         wait_for(lambda: len(receipts) == 9)
-        assert receipts[-1] in original
+        assert receipts_by_sequence(receipts[8:], receipt_sequence) == expected_selected
         bad_identifier = "d" * 64
         duplicate_request.update(request_id=bad_identifier, deployment="wrong", from_ignored=1)
         publish_request(controls, duplicate_request)
@@ -347,8 +355,9 @@ try:
         finish(process)
         assert len(receipts) == 9
         invoke(["redeliver", "--ledger", ledger, "--deployment", deployment, "--target", "default",
-            "--from", "4"], env=environment)
+            "--from", str(from_sequence)], env=environment)
         assert len(receipts) == 10
+        assert receipts_by_sequence(receipts[9:], receipt_sequence) == expected_selected
         print("PASS live failed/selected redelivery, stable IDs, dedup, restart, audit and offline lock", flush=True)
 
         typo = root / "missing-control"

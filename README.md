@@ -49,13 +49,27 @@ For the 1.6.1 pair, regenerate strategy C++ and relink against that pair's
 headers and archive. Published 1.3.0 download and installation examples below
 remain pinned to that earlier pair.
 
-The engine/codegen **1.6.1** image advertises selected-window
+Engine 1.6.1 (released without a hub image) declares selected-window
 contract revision `1.3-parity` through `docker/run_json.py --capabilities-json`:
 it emits the four typed codes (`strategy_value_invalid`,
 `engine_command_value_invalid`, `report_result_invalid` and
 `report_post_execution_failed`), with parity with the 1.4.0 reference on tested
 cases, and no completeness claim (the published 1.6.0 image declares `1.3`).
 `capabilities.selected_window_contract_revisions` is `["1.3-parity"]` when the
+runtime supports selected windows and `[]` otherwise.
+
+From 1.6.2 (unreleased), the engine/codegen image advertises selected-window
+contract revision `1.3` through `docker/run_json.py --capabilities-json`:
+with the section-4 producers and manifest present and value ownership
+`complete` (EN-115), it emits the four typed codes (`strategy_value_invalid`,
+`engine_command_value_invalid`, `report_result_invalid` and
+`report_post_execution_failed`). A build declaring `1.3` pairs only with a
+`complete` receipt; `1.3-parity` remains the parity build's literal, and a
+tuple holding both is invalid (the published 1.5.0 image declared
+`1.3-parity`, earlier images carried no revision member; the published 1.6.0
+image declared `1.3` without a completeness proof; and engine 1.6.1, released
+without a hub image, declares `1.3-parity`).
+`capabilities.selected_window_contract_revisions` is `["1.3"]` when the
 runtime supports selected windows and `[]` otherwise; see the
 [capability table](docker/README.md#selected-window-contract-revision) and
 [report schema](docs/pages/report-schema.md).
@@ -343,6 +357,11 @@ are described in the README of the private fixture set `coof_cascade_identity`.
 ### How a change is judged
 
 A change is judged by what it moves: the same population is graded before and after it, and two rules must both hold. On the hard surface (ETHUSDT.P at 15 minutes) **no probe may regress**: none may lose a grade, stop reporting a metric or become an engine error. Every other market and timeframe is pooled and scored over two bands, excellent and excellent+strong: +1 each time a probe enters a band, −1 each time one leaves it. A score above 0 passes, as long as no probe that leaves a band falls more than one grade. A score of exactly 0 passes only if no probe lost a grade or became an engine error and no hard-surface probe got worse on a graded metric; it is flagged *no-improve-no-regression*, or *improved* when a probe got better where the bands cannot see it (a grade rising below them or on the hard surface, or an engine error fixed). Any other 0 fails, and so does a negative score. The merge ruleset requires the maintainers' `pineforge/verify` and `pineforge/parity` commit statuses on the exact PR head; GitHub Actions CI is advisory. Baseline promotion also requires a recorded PASS and an exact-head merge.
+
+`promote-guard` runs before promotion credentials are available and rejects foreign or fork heads and disallowed authors on every PR close, including unmerged closes.
+Authors outside the association and bot allowlists must have `admin`, `maintain` or `write` permission from GitHub; failed or empty author lookups refuse promotion.
+Merged PRs also require an allowlisted bot merger or a merger with write access; manual dispatches are allowed.
+See [CI documentation](docs/ci.md) for author associations and permissions, merger permissions and unmerged-close behavior.
 
 ### What the closed test taught the engine
 
