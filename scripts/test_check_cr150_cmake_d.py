@@ -328,6 +328,20 @@ class FenceControls(CMakeControls):
             self.fence('set_property(DIRECTORY PROPERTY COMPILE_OPTIONS -UNDEBUG)\n'),
             'only set_property(TEST ...) is allowed in a fence')
 
+    def test_set_property_skip_return_code_must_be_77(self) -> None:
+        registration = (
+            'add_test(NAME test_fence_skip COMMAND ${Python3_EXECUTABLE} fixture.py)\n')
+        for key in ('SKIP_RETURN_CODE', 'skip_return_code'):
+            with self.subTest(key=key):
+                self.assert_tail_passes(self.fence(
+                    registration + f'set_property(TEST test_fence_skip PROPERTY {key} 77)\n'))
+                for value in ('0', '1', '-1', '"${skip_code}"', '', '77 1', '"77;1"'):
+                    with self.subTest(value=value):
+                        self.assert_tail_refused(self.fence(
+                            registration
+                            + f'set_property(TEST test_fence_skip PROPERTY {key} {value})\n'),
+                            'SKIP_RETURN_CODE must be 77')
+
     def test_add_test_cannot_claim_another_lanes_test(self) -> None:
         self.assert_tail_refused(self.fence(
             'add_test(NAME test_other_script COMMAND ${Python3_EXECUTABLE} stolen.py)\n'

@@ -97,7 +97,21 @@ codes it tested the text alone, so a script stopped by an empty
 
 The tables below list the catalog at this tree.
 
-The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and not part of 1.4.0; so are the 24 selected-window and report-contract rows described [after the tables](#run_failure_codes_selected_window). The other 38 codes retain their released 1.4.0 status. The `strategy_library_incompatible` row counts the two released 1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`, in addition to its six released 1.4.0 reasons.
+The catalog contains 69 named failure codes: 38 first released in 1.4.0,
+26 first released in 1.5.0, and 5 added in 1.7.0. The C++ registry also
+contains one unnamed `none` sentinel, giving 70 registry entries.
+
+The 1.7.0 additions are `report_mode_unsupported`, `report_sink_failed`,
+`scratch_capacity_exceeded`, `scratch_configuration_invalid`, and
+`scratch_io_failed`. Their classes, retryability and typed arguments are
+listed below.
+
+The 26 codes first released in 1.5.0 comprise `outputs_limit`,
+`outputs_rejected`, and the 24 selected-window and report-contract rows
+described [after the tables](#run_failure_codes_selected_window).
+The `strategy_library_incompatible` row also includes the two released
+1.5.0 outputs reasons, `outputs_api_mismatch` and `outputs_manifest_invalid`,
+in addition to its six released 1.4.0 reasons.
 
 <!-- BEGIN generated from docker/run_failure_codes.json: python3 scripts/test_gen_run_failure_catalog_diff.py --write-docs-tables -->
 

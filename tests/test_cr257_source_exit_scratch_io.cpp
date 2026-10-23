@@ -276,9 +276,9 @@ void total_info(const char* metric, Count actual, Context context) {
         static_cast<long double>(actual) / context.n,
         static_cast<unsigned long long>(context.n));
 }
-// Informational twin of bound(): printed, never counted as a failure. Used for the
-// WRITE-side numbers of the engine run, which belong to layer (c) (1.7.1: the
-// ExitScratchScope::clear erase batching); the direct scope test asserts that layer.
+// Informational twin of bound(): printed, never counted as a failure.
+// The 1.7.0 scope erase batching is enforced by bound() in both the direct
+// scope test and the engine run; info() is for optional diagnostics only.
 void info(const char* metric, Count actual, Count allowed, Context context) {
     std::printf("X257 %s total=%llu per_bar=%.9Lf allowed=%llu"
                 " extent_pages=%llu records_changed=%llu N=%llu INFO(layer c)\n",
@@ -926,14 +926,17 @@ void source_bounds(const SourceRun& run) {
     // so no nonresident-row allowance or per-bar literal belongs here.
     class_bound(FileClass::trade_payload, "pread_calls", payload.pread.calls, 0, context);
     class_bound(FileClass::trade_payload, "pread_bytes", payload.pread.bytes, 0, context);
+    // CR-265 design allowance: one commit per 64 erased rows (round up),
+    // plus the separately charged insertion commits. Each commit has the
+    // fixed command-store page budget; no measured write count sets a limit.
     const Count erase_commits = ceil_div(context.records_changed, sd::kExitScopeEraseBatch);
     const Count allowed_commits = erase_commits + run.insert_commits;
     const Count write_calls = allowed_commits * pd::kPagesPerCommit;
-    info("command.commits", run.commits, allowed_commits, context);
-    info("command.page_pwrite_calls", pages.pwrite.calls, write_calls, context);
-    info("command.total_pwrite_calls", io.pwrite.calls, write_calls, context);
-    info("command.page_pwrite_bytes", pages.pwrite.bytes, write_calls * platform_page, context);
-    info("command.total_pwrite_bytes", io.pwrite.bytes, write_calls * platform_page, context);
+    bound("command.commits", run.commits, allowed_commits, context);
+    bound("command.page_pwrite_calls", pages.pwrite.calls, write_calls, context);
+    bound("command.total_pwrite_calls", io.pwrite.calls, write_calls, context);
+    bound("command.page_pwrite_bytes", pages.pwrite.bytes, write_calls * platform_page, context);
+    bound("command.total_pwrite_bytes", io.pwrite.bytes, write_calls * platform_page, context);
     require(pages.pread.bytes <= io.pread.bytes && pages.pwrite.bytes <= io.pwrite.bytes,
             "CR-257 command page bytes exceed total RUN bytes");
     const Count scratch_read_bytes = io.pread.bytes - pages.pread.bytes;
