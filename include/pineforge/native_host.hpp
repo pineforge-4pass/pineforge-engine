@@ -343,6 +343,26 @@ struct NativeOpenLot {
     double adverse_excursion = 0.0;
 };
 
+/// Callback-local view of the same FIFO row. Text borrows the physical lot;
+/// arbitrary label/comment widths require no per-row allocation.
+struct NativeOpenLotView {
+    std::size_t ordinal = 0;
+    std::uint64_t entry_incarnation = 0;
+    std::int64_t cycle = 0;
+    native_order::Side side = native_order::Side::Long;
+    std::string_view entry_label;
+    std::string_view entry_comment;
+    std::int64_t entry_time_ms = 0;
+    int entry_bar_index = -1;
+    double entry_price = 0.0;
+    double signed_units = 0.0;
+    double entry_commission = 0.0;
+    double mark = std::numeric_limits<double>::quiet_NaN();
+    double unrealized_pnl = std::numeric_limits<double>::quiet_NaN();
+    double favorable_excursion = 0.0;
+    double adverse_excursion = 0.0;
+};
+
 /// The account row that follows an applied execution in the event history: the
 /// shared ordinal, the effective time, the marked equity, the realized balance and
 /// the signed book after it. One per applied execution, so an applied event and
@@ -1261,6 +1281,13 @@ public:
     /// without any bookkeeping to keep in step. Text that matches nothing is
     /// not a command.
     std::vector<NativeWorkingRequest> native_working_requests() const;
+    /// Allocation-free live-order reads with the owning accessor's visibility.
+    /// Callbacks may read or write their own scratch store, but issue no host
+    /// commands. False returns cancelled, even for the last row.
+    detail::ScratchStatus visit_native_working_requests(void*, bool (*)(void*, const NativeWorkingRequest&)) const;
+    void native_visit_working_requests(void*, void (*)(void*, const NativeWorkingRequest&)) const;
+    std::optional<NativeWorkingRequest> native_working_request(
+        const native_order::RequestHandle&) const;
     /// Withdraw every live request, dependants of a cancelled owner included, and
     /// answer how many left the book. One CancelledEvent per request. C spelling:
     /// strategy_native_cancel_all_v1.
@@ -1295,6 +1322,9 @@ public:
     /// time. Legal wherever physical_position() is; observation only, it
     /// moves no fill, no hash and no row.
     std::vector<NativeOpenLot> native_open_lots(double mark) const;
+    detail::ScratchStatus visit_native_open_lots(double mark, void*, bool (*)(void*, const NativeOpenLotView&)) const;
+    void native_visit_open_lots(double mark, void*, void (*)(void*, const NativeOpenLotView&)) const;
+    detail::ScratchStatus visit_native_open_lot_values(void*, bool (*)(void*, std::uint64_t, double, double)) const;
     /// The account's equity marked at this price: the realized balance plus every open
     /// lot's own fee-net term, which is exactly what native_open_lots(mark) sums. It
     /// moves nothing. C spelling: strategy_native_marked_equity_v1.

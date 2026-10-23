@@ -25,6 +25,11 @@ using CommandScratchByteCap = std::shared_ptr<CommandScratchByteBudget>;
 CommandScratchByteCap set_command_scratch_byte_cap(std::uint64_t bytes);
 CommandScratchByteCap set_command_scratch_byte_cap(CommandScratchByteCap registration) noexcept;
 
+// Internal errno classification shared by production syscalls and their tests.
+// Backing I/O faults, including exhaustion, are io_error; programming_error is
+// reserved for caller contract violations.
+ScratchStatus command_scratch_io_status(int error) noexcept;
+
 // Fresh, exclusive, initially empty disk-file backing. The directory comes from
 // PINEFORGE_COMMAND_SCRATCH_DIR, defaulting to /tmp when unset or empty. There
 // is no fallback when the selected directory fails. The unique file is unlinked

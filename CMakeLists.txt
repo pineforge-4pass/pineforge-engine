@@ -97,6 +97,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/compat/pine/reservation_expansion.cpp
     src/source/magnifier_intrabars.cpp
     src/source/market_admission.cpp
+    src/source/admission_journal_codec.cpp
     src/source/pine_adapter.cpp
     src/source/pine_position_tail.cpp
     src/source/pine_path_resolve.cpp
@@ -133,6 +134,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/engine_trade_accessors.cpp
     src/pending_order_mirror.cpp
     src/native_order.cpp
+    src/native_journal_codec.cpp
     src/engine_consumer.cpp
     src/market_driver.cpp
     src/native_execution_consumer.cpp

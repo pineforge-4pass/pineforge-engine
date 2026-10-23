@@ -115,21 +115,21 @@ public:
     // by one; committed and erased handles are never recycled. Sources are borrowed for this
     // call only, may be larger than cache and must not read this store. result
     // changes ONLY on success. Filling any resident slot spills to backing,
-    // never refuses, implicitly commits, grows RAM, or throws. ANY unserviceable
-    // put returns programming_error (including exhausted backing, backing I/O
-    // failure, input/comparison failure, a call outside a transaction or
-    // handle domain exhaustion); no run failure is prescribed. A failure inside
-    // a transaction makes it rollback-only; partial new bytes cannot damage
-    // the pre-begin state. Discard outputs from aborted puts.
+    // never refuses, implicitly commits, grows RAM, or throws. An unserviceable
+    // put returns io_error for backing I/O failure (including medium exhaustion);
+    // input/comparison failure, a call outside a transaction or handle domain
+    // exhaustion returns programming_error. No run failure is prescribed. A
+    // failure inside a transaction makes it rollback-only; partial new bytes
+    // cannot damage the pre-begin state. Discard outputs from aborted puts.
     ScratchStatus put(const ScratchByteSource& key, const ScratchByteSource& value,
                       ScratchHandle& result) noexcept;
 
     // Requires begin. An absent handle (including scratch_no_handle) => not_found
-    // with no edit and no rollback-only effect. A call outside a transaction
-    // or any other failure => programming_error, which in a transaction makes
-    // it rollback-only. The state of the transaction is judged first: outside
-    // a transaction, or in a rollback-only one, even an absent handle gets
-    // programming_error.
+    // with no edit and no rollback-only effect. Backing I/O failure => io_error;
+    // a call outside a transaction or any other failure => programming_error.
+    // A failure in a transaction makes it rollback-only. The state of the
+    // transaction is judged first: outside a transaction, or in a rollback-only
+    // one, even an absent handle gets programming_error.
     ScratchStatus erase(ScratchHandle) noexcept;
 
     // Only success publishes a committed state. buffered permits orderly

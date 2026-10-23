@@ -68,12 +68,15 @@ std::uint64_t environment_byte_cap() {
     return bytes;
 }
 
-ScratchStatus io_status(int error) noexcept {
-    // Exhausting the host's backing provision is a programming error in this
-    // contract, never a scratch-capacity run refusal.
-    return error == ENOSPC || error == EDQUOT || error == EFBIG
-        ? ScratchStatus::programming_error : ScratchStatus::io_error;
+} // namespace
+
+ScratchStatus command_scratch_io_status(int /*error*/) noexcept {
+    // Backing I/O faults, including ENOSPC, EDQUOT, EFBIG and EIO, are
+    // io_error. programming_error is reserved for caller contract violations.
+    return ScratchStatus::io_error;
 }
+
+namespace {
 
 class CommandScratchFile final : public ScratchBacking {
 public:
@@ -133,7 +136,7 @@ protected:
                 count = ::pread(fd_, destination.data + transferred, chunk,
                                 offset + static_cast<off_t>(transferred));
             } while (count < 0 && errno == EINTR);
-            if (count < 0) return io_status(errno);
+            if (count < 0) return command_scratch_io_status(errno);
             if (static_cast<std::size_t>(count) != chunk) return ScratchStatus::io_error;
             transferred += static_cast<std::size_t>(count);
         }
@@ -154,7 +157,7 @@ protected:
             if (result < 0) {
                 const int error = errno;
                 if (budget_) budget_->release(growth);
-                return io_status(error);
+                return command_scratch_io_status(error);
             }
             // ftruncate exposes zero-filled holes. Keep the real new extent
             // even if the following positional write fails or is short.
@@ -169,7 +172,7 @@ protected:
                 count = ::pwrite(fd_, source.data + transferred, chunk,
                                  offset + static_cast<off_t>(transferred));
             } while (count < 0 && errno == EINTR);
-            if (count < 0) return io_status(errno);
+            if (count < 0) return command_scratch_io_status(errno);
             if (static_cast<std::size_t>(count) != chunk) return ScratchStatus::io_error;
             transferred += static_cast<std::size_t>(count);
         }
@@ -182,7 +185,7 @@ protected:
         do {
             result = durability == ScratchDurability::data ? ::fdatasync(fd_) : ::fsync(fd_);
         } while (result < 0 && errno == EINTR);
-        return result == 0 ? ScratchStatus::ok : io_status(errno);
+        return result == 0 ? ScratchStatus::ok : command_scratch_io_status(errno);
     }
 
 private:
