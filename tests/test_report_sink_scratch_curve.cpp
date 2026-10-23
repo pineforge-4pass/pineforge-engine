@@ -68,6 +68,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <fstream>
+#include <grp.h>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -76,6 +77,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -999,19 +1001,53 @@ void scratch_failures(const TestRoot& root) {
         require(bool(file), "cannot create the regular-file fixture");
     }
     scratch_failure(root, "not-a-directory", regular);
-    // A directory this process cannot create files in (EACCES). The case needs
-    // the precondition to hold: a privileged process bypasses directory modes.
+    // H1-07: run the EACCES witness in a child. Root drops all groups and
+    // switches to the same unprivileged identity used by test_privmoves.
+    // Failure to establish the precondition is a test failure, never a skip.
     const std::string readonly = root.path + "/read-only";
     require(::mkdir(readonly.c_str(), 0500) == 0, "cannot create the read-only directory");
-    const std::string probe = readonly + "/probe";
-    const int opened = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
-    if (opened >= 0) {
-        ::close(opened);
-        ::unlink(probe.c_str());
-        std::puts("L6b-4 fix1: read-only scratch case skipped: this process bypasses directory modes");
-        return;
+    constexpr uid_t unprivileged_uid = 65534;
+    constexpr gid_t unprivileged_gid = 65534;
+    if (::geteuid() == 0) {
+        require(::chmod(root.path.c_str(), 0711) == 0,
+                "cannot make the fixture root searchable by the child");
+        require(::chown(root.out().c_str(), unprivileged_uid, unprivileged_gid) == 0,
+                "cannot give the child its writable sink directory");
+        require(::chown(readonly.c_str(), unprivileged_uid, unprivileged_gid) == 0,
+                "cannot give the child its read-only scratch directory");
     }
-    scratch_failure(root, "read-only", readonly);
+    std::fflush(nullptr);
+    const pid_t child = ::fork();
+    require(child >= 0, "cannot fork the read-only scratch witness");
+    if (child == 0) {
+        try {
+            if (::geteuid() == 0) {
+                require(::setgroups(0, nullptr) == 0, "cannot clear child supplementary groups");
+                require(::setgid(unprivileged_gid) == 0, "cannot drop child group privilege");
+                require(::setuid(unprivileged_uid) == 0, "cannot drop child user privilege");
+            }
+            require(::getuid() != 0 && ::geteuid() != 0,
+                    "read-only scratch witness still has root privilege");
+            const std::string probe = readonly + "/probe";
+            errno = 0;
+            const int opened = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+            const int error = errno;
+            if (opened >= 0) ::close(opened);
+            require(opened == -1 && error == EACCES,
+                    "read-only scratch witness must observe a real EACCES");
+            scratch_failure(root, "read-only", readonly);
+            ::_exit(0);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "H1-07 read-only scratch child: %s\n", error.what());
+            std::fflush(stderr);
+            ::_exit(1);
+        }
+    }
+    int status = 0;
+    pid_t waited;
+    do { waited = ::waitpid(child, &status, 0); } while (waited == -1 && errno == EINTR);
+    require(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+            "read-only scratch child failed or crashed; EACCES coverage is required");
 }
 
 }  // namespace

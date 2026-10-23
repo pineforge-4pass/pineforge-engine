@@ -7,8 +7,8 @@
 // (Q live limit orders, thousands of them re-priced in place) and assert it,
 // then require what the row asks for:
 //   * the book keeps a fixed resident part and holds the rest outside the
-//     heap: two books of very different Q retain the same bytes, within a
-//     slack that is a small multiple of the resident part;
+//     heap: three books beyond the resident cap retain no extra heap bytes
+//     per additional spilled row;
 //   * nothing the book answers changes. A plain vector of handles, kept in
 //     step with every command, is the old representation: the queue order
 //     (matching priority and tie order), every row's full value, the handle
@@ -605,15 +605,24 @@ int main() {
     try {
         // Warm the caches the first measured run would otherwise charge to itself.
         (void) book_bytes(64, 16);
-        // Q well past the book's resident part (a few thousand rows), a very
-        // different Q, and the same number of re-prices spread over each.
+        // H1-04: all three Q saturate kBookMax and use the same re-price
+        // count, short strings, and terminal history retirement. BookSpill's
+        // rows/links and serialized payloads are disk-backed; kSide and the
+        // resident vectors have fixed widths here. Their resident terms
+        // cancel: allowed delta = 0 heap bytes/spilled row * delta Q.
         const BookRun small = book_bytes(8192, 2048);
         const BookRun large = book_bytes(32768, 2048);
-        std::printf("E02: retained %zu -> %zu bytes for %zu -> %zu live requests\n", small.retained,
-                    large.retained, small.population, large.population);
-        CHECK(small.population == 8192 && large.population == 32768);
-        constexpr std::size_t kSlack = 2u << 20;   // 2 MiB: the resident part's width, twice over
-        CHECK(large.retained <= small.retained + kSlack);
+        const BookRun largest = book_bytes(65536, 2048);
+        std::printf("E02: retained %zu -> %zu -> %zu bytes for %zu -> %zu -> %zu live requests\n",
+                    small.retained, large.retained, largest.retained,
+                    small.population, large.population, largest.population);
+        REQUIRE(small.population == 8192 && large.population == 32768
+                && largest.population == 65536);
+        constexpr std::size_t kHeapBytesPerSpilledRow = 0;
+        CHECK(large.retained <= small.retained
+                + kHeapBytesPerSpilledRow * (large.population - small.population));
+        CHECK(largest.retained <= large.retained
+                + kHeapBytesPerSpilledRow * (largest.population - large.population));
         exercise_book(12000);
         refresh_reaches_spilled_rows();
         unwritable_spill_fails_before_commit();

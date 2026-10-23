@@ -1,19 +1,18 @@
-// LAB-O1SEAMS s3, round 1. Edit-only delivery against 87ba09a7013383847.
+// H1-11: registered LAB-O1SEAMS journal-codec regression suite.
+// Historical initial red target: 87ba09a7013383847.
 // Contract: the read-only o1s34/scratch-store.md, lines 357--767, SHA-256
 // 71adb08d2a4308f961cc8f8f24a7c91fffd38e9b487d04cef558c133cac6ce5e.
-// NOTHING HERE HAS BEEN COMPILED OR RUN.
-//
-// Lines 757--762 explicitly leave the C++ codec binding unspecified. The
-// deliberately UNDECLARED calls bind_journal_codec, encode_journal_record,
-// decode_journal_record, append_journal_record and journal_readback below name
-// those missing seams; they are requirements, not production declarations or
-// a proposed ABI. The implementing lane must settle that binding. Decode into
-// an owning event is a diagnostic oracle only, never the production reader.
+// bind_journal_codec, encode_journal_record, decode_journal_record,
+// append_journal_record and journal_readback are now declared in native_order.hpp
+// and source/market_admission.hpp. The _red names retain their historical
+// clause identities. The original first-diagnostic log is not recorded here;
+// the initial edit-only provenance is not a claim about current execution.
+// Decode into an owning event is a diagnostic oracle, never the production reader.
 //
 // Define PINEFORGE_O1S3_CLAUSE=1..11 to compile just one clause body, in the
 // order of the case table at the end. Zero selects all eleven. This lets the box
-// record the first diagnostic separately, including the two assertion reds
-// (6 and 8) that use the existing interfaces. There is no skipped-case success.
+// run each regression separately, including clauses 6 and 8 that already used
+// existing interfaces at the original red target. There is no skipped-case success.
 //
 // Oracle vectors/strings and test_memory's provisioned backing are test
 // infrastructure. They are prepared outside a measured interval and are never
@@ -1043,7 +1042,7 @@ void s3_separate_journal_owners_and_reset_red() {
     // Ownership / S3-O. Input: colliding native/admission numbers, adapter
     // reset alone, then a fresh run reusing incarnation 1. Assertion: native
     // bytes/frontiers survive adapter reset; neither old prefix nor old-run
-    // handle becomes current. Fails to compile: bind_journal_codec.
+    // handle becomes current. Exercises bind_journal_codec for both owners.
     Rig native_rig, admission_rig;
     CommandScratchStore native_store(native_rig.config(), &native_rig.backing);
     CommandScratchStore admission_store(admission_rig.config(), &admission_rig.backing);
@@ -1353,7 +1352,7 @@ void s3_native_codec_all_values_cross_page_red() {
     // >cache arrays/text, NULs, unknown reason numbers, zeros and NaN payloads.
     // Assertion: storage equals Wire and diagnostic decode equals every active
     // value in absolute order after eviction; malformed framing is corrupt.
-    // Fails to compile: encode_journal_record (also decode_journal_record).
+    // Exercises encode_journal_record and decode_journal_record.
     const no::RunIdentity run{text(2053, 23), 83};
     const auto events = native_examples(run);
     std::array<bool, 19> witnessed{};
@@ -1450,8 +1449,8 @@ void s3_admission_codec_allocations_and_order_red() {
     // reverse, one abandoned allocation, all kinds and large nested Draft/book
     // arrays. Assertion: only allocated completed values occur, in ascending
     // sequence with the legal gap, and every field/path/array matches the
-    // independent model. Fails to compile: bind_journal_codec (also the
-    // admission encode_journal_record/decode_journal_record overloads).
+    // independent model. Exercises the admission bind_journal_codec,
+    // encode_journal_record and decode_journal_record overloads.
     Rig rig;
     CommandScratchStore store(rig.config(), &rig.backing);
     ad::Journal journal;
@@ -1532,7 +1531,7 @@ void s3_native_window_dependency_frontier_red() {
     // high water, a queued applied cause, and an unresolved then resolved
     // chain, under all three policies. Assertion: Window's base is exactly
     // min(ack, queued-cause-1, chain-head-1); absolute order/totals and pinned
-    // values survive each boundary. Fails to compile: bind_journal_codec.
+    // values survive each boundary. Exercises bind_journal_codec.
     const no::RunIdentity run{"s3-native-window", 97};
     constexpr std::size_t links = 257;
     for (auto policy : {pineforge::NativeEventRetention::Full,
@@ -1640,9 +1639,9 @@ void s3_admission_window_requires_closed_prefix_red() {
     // Transactions and retain windows / S3-AW. Input: a terminal-bar command,
     // unfinished review and process-on-close sizing captures, rejection prefix
     // and tail, a live Draft, forged fold evidence and destructive retain.
-    // Assertion red on this head: retire_prefix(count, digest^1, last) accepts
-    // mismatched fold evidence instead of engine_invariant (nonempty tail).
-    // No missing codec call is needed to expose this existing-interface red.
+    // Regression: retire_prefix(count, digest^1, last) must reject mismatched
+    // fold evidence with engine_invariant while the tail is nonempty.
+    // This clause uses the interfaces present at the historical red target.
     pineforge::source::PineExecutionAdapter adapter;
     auto& journal = adapter.admission_journal;
     AdmissionFold model;
@@ -1816,11 +1815,10 @@ void s3_native_digest_survives_nonzero_base_red() {
 void s3_admission_digest_refuses_zero_refold_red() {
     // Digests / S3-AD. Input: all admission kinds, normalized zeros/NaNs,
     // rejection prefix, legal prefix retirement, perturbed cursor, then a
-    // shortened/filtered folded tail and a true reset. Assertion red on this
-    // head: the real-allocation cursor probe observes an illicit zero restart;
-    // the lifetime count also decreases. The probe sees the intermediate zero
-    // even if a later refold were to restore matching final bytes. Existing
-    // APIs, assertion red; no production hash helper is used as an oracle.
+    // shortened/filtered folded tail and a true reset. The real-allocation
+    // cursor probe must see no illicit zero restart or lifetime-count decrease.
+    // It observes an intermediate zero even if a later refold were to restore
+    // matching final bytes. No production hash helper is used as an oracle.
     for (bool use_prefix : {false, true}) {
         pineforge::source::PineExecutionAdapter adapter;
         auto& journal = adapter.admission_journal;
@@ -1964,8 +1962,8 @@ void s34_readback_never_collects_population_red() {
     // disjoint-page callbacks, retired positions, cancellation and backing read
     // faults. Assertion: ordered logical bytes and status distinctions remain
     // exact with a heap census over streaming reads; no owning collection or
-    // callback/page address survives a call. Fails to compile:
-    // bind_journal_codec (also append_journal_record and journal_readback).
+    // callback/page address survives a call. Exercises bind_journal_codec,
+    // append_journal_record and journal_readback.
     const no::RunIdentity run{"s34-readback", 107};
     std::vector<Bytes> native_values, admission_values;
     AdmissionFold admission_model;
@@ -2079,8 +2077,8 @@ void s34_backing_physical_charge_and_lifetime_red() {
     // buffered same-backing reopen, then backing-owner destruction. Assertion:
     // one real-kind charge per attempt, accurate extent separate from fixed
     // userspace, io_error on cap/fault, no adopted/global backing lifetime.
-    // Fails to compile: bind_journal_codec (also append_journal_record and
-    // journal_readback). There is no memfd/tmpfs provider in this tree.
+    // Exercises bind_journal_codec, append_journal_record and journal_readback
+    // through the explicit disk and test_memory providers used by this clause.
     const no::RunIdentity run{"s34-backing", 109};
     std::vector<Bytes> native_values, admission_values;
     constexpr std::size_t count = 65;

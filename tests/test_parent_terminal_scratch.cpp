@@ -2,9 +2,15 @@
 // base queue's order: kDrainBytes while the book and causes stay resident, the
 // per-engine cap plateau (kDrainPlateauBytes) beyond. Book reads still reuse a
 // definition when its acceptance or kept-handle replacement event is resident.
-// The production exercise also compiles on 21ba62bd; there the byte assertion
-// fails because Item rows survive in the queue. Only the store audit is gated.
+// Historical fail-before target: 21ba62bd retains Item rows in the queue,
+// violating the byte bound. H1-08: the current-header
+// suite requires the dependency scratch store audit and census.
 #include "../src/native_execution_consumer.hpp"
+#ifndef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
+#error "test_parent_terminal_scratch requires dependency scratch v1"
+#endif
+static_assert(PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1 == 1,
+              "test_parent_terminal_scratch requires dependency scratch v1");
 #include "native_order_full_fold.hpp"
 #include <pineforge/detail/scratch_arena.hpp>
 #include <pineforge/detail/scratch_file.hpp>
@@ -238,10 +244,11 @@ enum class Shape { Wide, Deep, Tree, ManySeeds };
 constexpr std::size_t kJournalMaxResident = 2048;
 constexpr std::size_t kJournalChunk = 32;
 constexpr std::size_t kJournalSpillPageBytes = 32768;
-// src/native_order.cpp:1582: std::array<Cached, 4>; :1567 has four read buffers.
+// H1-11: JournalStore::cache and JournalStore::SpillStorage::read each have
+// four slots in native_order.cpp.
 // exercise_reload_control counts the decoded storage slots through history_at.
 constexpr std::size_t kJournalCacheSlots = 4;
-// Mirrors kBookMax at src/native_order.cpp:1486 and BookSpill::kSide at :1926.
+// Mirrors native_order.cpp's kBookMax and WorkingRequestCore::BookSpill::kSide.
 constexpr std::size_t kBookMaxResident = 4096;
 constexpr std::size_t kBookSideRows = 8;
 constexpr std::size_t kWideRootCount = 2;
@@ -631,8 +638,8 @@ void exercise_reload_control(bool direct, const no::Request& request, const no::
         CHECK(core.submit(filler, 0, incarnation, ordinal).status == no::SubmitStatus::Rejected);
 
     // The next append spills [0,32); every further 32 appends spills another
-    // chunk (src/native_order.cpp:1679-1717). Do not read any spilled row until
-    // recording: all six distinct pages must be cold. Below, verify that each
+    // chunk (JournalStore::make_room / spill_front_chunk). Do not read a spilled
+    // row until recording: all six distinct pages must be cold. Verify that each
     // entire chunk moved into one contiguous decoded CommandEvent vector.
     std::array<std::size_t, page_count> page_positions{};
     for (std::size_t page = 0; page < page_count; ++page) {
@@ -697,10 +704,10 @@ void exercise_reload(bool direct) {
     const no::Request root_request{no::Transact{1.0}, "root", ""};
     const no::Request child_request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
     const no::Request filler{no::Transact{0.0}, "filler", ""};
-    // Definitions are allocated by src/native_order.cpp:1285, once per event.
+    // archive_definition allocates one RequestDefinition per decoded event.
     constexpr auto decoded_events = kJournalCacheSlots * kJournalChunk;
     constexpr auto definition_bytes = decoded_events * kDefinitionAllocationBytes;
-    // archive_string (:1205-1215) resizes fresh strings. Bound both text fields
+    // archive_string resizes fresh strings. Bound both text fields
     // by these actual case strings' largest capacities, including terminators,
     // even where short-string storage is already included in sizeof(definition).
     const auto label_capacity = std::max({root_request.label.capacity(),
@@ -713,13 +720,13 @@ void exercise_reload(bool direct) {
     // definition. Independent/WaitForApplied owners and BookTransaction/Wait
     // authority with PendingNone contain no opening handles or adjustment ids.
     // The control pages contain only Accepted/Independent events, also no ids.
-    // archive_vector (src/native_order.cpp:1235-1246) therefore resizes no ids.
+    // archive_vector therefore resizes no ids.
     constexpr std::size_t opening_ids_per_event = 0, adjustment_ids_per_event = 0;
     constexpr auto id_vector_bytes = decoded_events *
         (opening_ids_per_event * sizeof(no::RequestHandle)
          + adjustment_ids_per_event * sizeof(std::uint64_t));
-    // prepare_spill (:1595-1602) reserves all event vectors and buffers and,
-    // via ExtFile::prepare (:979-982), the first arena chunk/table entry BEFORE
+    // JournalStore::prepare_spill reserves all event vectors and buffers and,
+    // via ExtFile::prepare, the first arena chunk/table entry BEFORE
     // recording. The drain can still grow the data extent: bound one existing
     // page plus a full fixed resident cap of appends (enforced below), each
     // chunk spilling at most kSpillPageBytes for these short, full-page rows.
@@ -728,7 +735,7 @@ void exercise_reload(bool direct) {
         (1 + kJournalMaxResident / kJournalChunk) * kJournalSpillPageBytes;
     constexpr std::size_t arena_chunk_bytes = detail::ScratchArena::kChunkBytes;
     constexpr auto max_arena_chunks = (max_spill_bytes + arena_chunk_bytes - 1) / arena_chunk_bytes;
-    // src/scratch_arena.cpp:295-301 doubles the uint32_t table capacity:
+    // ScratchArena::Impl::grow doubles the uint32_t chunk-table capacity:
     // at most two growths, 1 -> 2 -> 4 (three chunks needed at this cap).
     // Sum every allocation, including replaced tables, to bound the live peak.
     constexpr auto arena_chunk_table_bytes = [] {

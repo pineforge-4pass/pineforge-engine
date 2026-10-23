@@ -1,6 +1,7 @@
 // LAB-o1bk: links the production factory from pineforge, with no fixture lease
-// or local factory definition. Fail-before and execution belong to the remote
-// lab; this edit-only lane has not compiled or run this translation unit.
+// or local factory definition. H1-11: registered production-backing regression
+// test; the initial edit-only handoff is docs/o1inv-a7-cx-handoff-LAB-o1bk.md.
+// Its missing-header/link diagnostics were predictions, not recorded results.
 #include "../src/source/pine_command_scratch_production.hpp"
 #include "../src/command_scratch_cache.hpp"
 

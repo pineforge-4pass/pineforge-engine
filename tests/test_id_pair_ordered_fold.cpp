@@ -19,6 +19,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -133,7 +134,57 @@ std::string fixed_key(std::uint64_t i) {
     return key;
 }
 
+// Input-only index budget: single-key domain byte, little-endian length,
+// then the eight fixture bytes under FNV-1a. Reproduce half-load linear
+// probing and physical-slot rehash order without querying a Store or its IO.
+// At most three reads inspect an occupied slot (slot, header, short key).
+std::array<std::uint64_t, 10000> fixed_key_index_read_bounds() {
+    std::array<std::uint64_t, 10000> hashes{}, bounds{};
+    for (std::size_t i = 0; i < hashes.size(); ++i) {
+        std::array<unsigned char, 17> encoded{};
+        encoded[1] = 8;
+        const auto key = fixed_key(i);
+        for (std::size_t j = 0; j < 8; ++j)
+            encoded[9 + j] = static_cast<unsigned char>(key[j]);
+        auto value = UINT64_C(1469598103934665603);
+        for (const auto byte : encoded) value = (value ^ byte) * UINT64_C(1099511628211);
+        hashes[i] = value;
+    }
+    std::size_t maximum_slots = 64;
+    while (maximum_slots / 2 < hashes.size()) maximum_slots *= 2;
+    std::vector<std::size_t> table(maximum_slots), next(maximum_slots);
+    const auto probe = [](const auto& slots, std::size_t width, std::uint64_t hash) {
+        auto at = static_cast<std::size_t>(hash & (width - 1));
+        std::uint64_t reads = 1;
+        while (slots[at] != 0) {
+            at = (at + 1) & (width - 1);
+            ++reads;
+        }
+        return std::make_pair(at, reads);
+    };
+    std::size_t width = 0;
+    for (std::size_t i = 0; i < hashes.size(); ++i) {
+        std::uint64_t probes = width ? probe(table, width, hashes[i]).second : 0;
+        if (width == 0 || i == width / 2) {
+            const auto grown = width ? width * 2 : 64;
+            std::fill(next.begin(), next.end(), 0);
+            for (std::size_t at = 0; at < width; ++at) {
+                if (table[at] == 0) continue;
+                const auto key = table[at] - 1;
+                next[probe(next, grown, hashes[key]).first] = key + 1;
+            }
+            table.swap(next);
+            width = grown;
+            probes += probe(table, width, hashes[i]).second;
+        }
+        bounds[i] = 3 * probes;
+        table[probe(table, width, hashes[i]).first] = i + 1;
+    }
+    return bounds;
+}
+
 void bounded_work_and_heap() {
+    const auto index_read_bounds = fixed_key_index_read_bounds();
     IO io;
     Store store;
     store.fixture_count_io(&io);
@@ -142,9 +193,44 @@ void bounded_work_and_heap() {
     const auto low = global_allocation::live_bytes;
     const auto start_reads = io.reads;
     const auto start_writes = io.writes;
+    // H1-06: charge EACH insert, not an average over the full population.
+    // An 8-byte key has at most 9*(8+1) radix branches and <=16 rows/leaf.
+    // A descent/snapshot/rebuild level costs <=4 node reads plus <=2
+    // reads/row for a sibling leaf. Splitting/comparing the changed leaf
+    // adds <=6*(16+1) reads, plus four header/difference reads. Index
+    // lookup costs come independently from the fixed inputs above.
+    // Two writes/level cover undo and rebuilt nodes; three split nodes and
+    // four table/header writes complete the fixed mutation budget.
+    constexpr std::uint64_t kRadixLevels = 9 * (8 + 1);
+    constexpr std::uint64_t kBucketRows = 16;
+    constexpr std::uint64_t kIndexBlockSlots = 128;
+    constexpr std::uint64_t kDerivedReads =
+        (kRadixLevels + 1) * (4 + 2 * kBucketRows)
+        + 6 * (kBucketRows + 1) + 4;
+    constexpr std::uint64_t kDerivedWrites = 2 * (kRadixLevels + 1) + 3 + 4;
+    static_assert(kDerivedReads < 4096 && kDerivedWrites < 512,
+                  "fixed-key per-insert budget fits the original limits");
+    std::uint64_t max_reads = 0, max_writes = 0;
     for (std::uint64_t i = 10; i < 10000; ++i) {
+        const auto before_reads = io.reads, before_writes = io.writes;
         store.insert_or_assign(fixed_key(i), -17);
         const auto reads = io.reads, writes = io.writes;
+        // IdPairStore doubles its half-full index at 32, 64, ... keys.
+        // grow_index reads old slots in blocks of 128, then reinserts i
+        // slots. Even if all hashes collide, their probe counts sum to
+        // 1+...+i, and each slot is written once. This explicit cost belongs
+        // only to that insert; ordinary inserts keep the fixed bound.
+        const bool grows = i >= 32 && (i & (i - 1)) == 0;
+        const auto rehash_reads = grows
+            ? (2 * i + kIndexBlockSlots - 1) / kIndexBlockSlots + i * (i + 1) / 2
+            : 0;
+        const auto rehash_writes = grows ? i : 0;
+        require(reads - before_reads <= kDerivedReads + index_read_bounds[i] + rehash_reads,
+                "each insert stays within radix/bucket reads plus its own rehash");
+        require(writes - before_writes <= kDerivedWrites + rehash_writes,
+                "each insert stays within radix/undo writes plus its own rehash");
+        max_reads = std::max(max_reads, reads - before_reads);
+        max_writes = std::max(max_writes, writes - before_writes);
         global_allocation::refusing = true;
         Sink sink;
         sink.h = i * UINT64_C(0xd1342543de82ef95);
@@ -155,8 +241,8 @@ void bounded_work_and_heap() {
     const auto high = global_allocation::live_bytes;
     global_allocation::recording = false;
     require(high <= low + 1024, "ordered fold heap is flat from 10 to 10000 keys");
-    // 9 bits/symbol, at most 9*(8+1) radix levels; each bucket has <=16
-    // records. Includes actual table probes, geometric rehashes and undo IO.
+    // Retain the original aggregate guard as an additional check; the
+    // per-insert checks above prevent it from concealing late linear work.
     constexpr std::uint64_t events = 9990;
     require(io.reads - start_reads < events * 4096
                 && io.writes - start_writes < events * 512,
@@ -168,10 +254,13 @@ void bounded_work_and_heap() {
     const auto disk = store.disk_bytes();
     for (std::uint64_t i = 0; i < 10000; ++i) store.insert_or_assign(fixed_key(i), -31);
     require(store.disk_bytes() == disk, "value updates reuse table, radix nodes and journal");
-    std::printf("ordered fold: heap 10=%zu 10000=%zu; disk=%llu; reads=%llu writes=%llu\n",
+    std::printf("ordered fold: heap 10=%zu 10000=%zu; disk=%llu; reads=%llu writes=%llu; "
+                "max-insert-reads=%llu max-insert-writes=%llu\n",
                 low, high, static_cast<unsigned long long>(disk),
                 static_cast<unsigned long long>(io.reads - start_reads),
-                static_cast<unsigned long long>(io.writes - start_writes));
+                static_cast<unsigned long long>(io.writes - start_writes),
+                static_cast<unsigned long long>(max_reads),
+                static_cast<unsigned long long>(max_writes));
 }
 
 void first_seen_iteration_and_extreme_values() {

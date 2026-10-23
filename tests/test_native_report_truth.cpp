@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -788,8 +789,37 @@ void broker_hash_rows_are_per_driving_mode() {
 }
 
 // ── Closed rows by index (§1.8 RP6, R5 gap lane P5) ─────────────────────
+// H1-03: accessors own their row values. Compare every Trade field rather
+// than one identity field; matching provenance does not prove matching money.
+void check_same_trade(const Trade& row, const Trade& other) {
+    CHECK(row.entry_time == other.entry_time);
+    CHECK(row.exit_time == other.exit_time);
+    CHECK(row.entry_bar_index == other.entry_bar_index);
+    CHECK(row.exit_bar_index == other.exit_bar_index);
+    CHECK(row.entry_id == other.entry_id);
+    CHECK(row.exit_id == other.exit_id);
+    CHECK(row.entry_comment == other.entry_comment);
+    CHECK(row.exit_comment == other.exit_comment);
+    CHECK(row.entry_incarnation == other.entry_incarnation);
+    CHECK(row.is_long == other.is_long);
+    CHECK(row.open_at_end == other.open_at_end);
+    CHECK(row.exit_from_bracket == other.exit_from_bracket);
+    CHECK(row.close_cause == other.close_cause);
+    const auto same_bits = [](double a, double b) {
+        return std::memcmp(&a, &b, sizeof a) == 0;
+    };
+    CHECK(same_bits(row.entry_price, other.entry_price));
+    CHECK(same_bits(row.exit_price, other.exit_price));
+    CHECK(same_bits(row.qty, other.qty));
+    CHECK(same_bits(row.pnl, other.pnl));
+    CHECK(same_bits(row.pnl_pct, other.pnl_pct));
+    CHECK(same_bits(row.commission, other.commission));
+    CHECK(same_bits(row.max_runup, other.max_runup));
+    CHECK(same_bits(row.max_drawdown, other.max_drawdown));
+}
+
 // 10. closed_trade_count() / closed_trade(i) are the closed rows this run
-//     booked, by index and by reference: the i-th row is the very object the
+//     booked, by index and by value: the i-th row matches the row the
 //     blotter holds, the one get_trade(i) reads, and the one fill_report
 //     publishes at the same index, field for field. A range-end row is report
 //     space only: report_trade_count() / get_report_trade(i) see it after the
@@ -811,9 +841,9 @@ void closed_rows_by_index() {
     const char* const exit_ids[] = {"exit-long", "exit-short"};
     for (std::size_t i = 0; i < host.closed_trade_count(); ++i) {
         const Trade& row = host.closed_trade(i);
-        CHECK(row.entry_incarnation == host.rows()[i].entry_incarnation);
-        CHECK(row.entry_incarnation == host.get_trade(static_cast<int>(i)).entry_incarnation);
-        CHECK(row.entry_incarnation == host.get_report_trade(static_cast<int>(i)).entry_incarnation);
+        check_same_trade(row, host.rows()[i]);
+        check_same_trade(row, host.get_trade(static_cast<int>(i)));
+        check_same_trade(row, host.get_report_trade(static_cast<int>(i)));
         CHECK(row.entry_id == entry_ids[i]);
         CHECK(row.exit_id == exit_ids[i]);
         CHECK(row.is_long == (i == 0));

@@ -1,7 +1,8 @@
 // LAB-O1X5: real X25 child selections, X26 paired-close selections, and X27
 // flat owner/ended-source selections, at increasing populations. The source
 // call, its selected rows and the bytes simultaneously alive are measured.
-// Compile this same TU on 21ba62bd: its vector snapshots exceed kScratchBytes.
+// Historical fail-before target: 21ba62bd's vector snapshots exceed kScratchBytes.
+// The current suite requires the exit-scratch declarations.
 //
 // No baseline run or after-run was performed on the executor Mac. The
 // supervisor must record fail-before, pass-after and the full parity result.
@@ -16,6 +17,9 @@
 #else
 #define PF_HAS_EXIT_SCRATCH 0
 #endif
+// H1-08: these are required current-header scenarios, not optional coverage.
+static_assert(PF_HAS_EXIT_SCRATCH == 1,
+              "test_adapter_exit_scratch requires pineforge/source/exit_scratch.hpp");
 
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"

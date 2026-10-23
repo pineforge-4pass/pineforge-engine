@@ -1,6 +1,7 @@
-// CR-150 bounded successor roots. Against the d91c96d47d header the expected
-// first diagnostic is no WorkingRequestCore member named bind_scratch_slab.
-// Compile/run this complete unit remotely; that red is predicted, not observed.
+// H1-11: CR-150 bounded-successor-root regression, registered by
+// core-cr150-ramroots.cmake. The historical d91c96d47d header lacked
+// WorkingRequestCore::bind_scratch_slab, which is now declared. The original
+// missing-member diagnostic was predicted; its execution log is not recorded here.
 #include "global_allocation_replacement.hpp"
 
 #include <pineforge/detail/scratch_slab.hpp>

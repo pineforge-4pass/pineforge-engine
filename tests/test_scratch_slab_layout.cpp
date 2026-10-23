@@ -1,6 +1,7 @@
-// CR-150 RAM foundation. Remote fail-before: the frozen closure has no
-// pineforge/detail/scratch_slab.hpp. Record the actual first diagnostic there;
-// no fail-before or green execution was performed by this edit-only lane.
+// H1-11: CR-150 RAM-foundation regression, registered by core-cr150-ramfound.cmake.
+// The original frozen closure lacked pineforge/detail/scratch_slab.hpp; that
+// header is now part of the implementation. The original first-diagnostic
+// log is not recorded here; the missing-header claim is historical.
 #include "global_allocation_replacement.hpp"
 #include <pineforge/detail/scratch_slab.hpp>
 

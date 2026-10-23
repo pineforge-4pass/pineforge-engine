@@ -5,7 +5,9 @@
 // binding, a real relative global exit also exercises the nonempty book.
 // Round 6 also drives a bare NativeStrategyHost through reversal and a
 // terminal dependency cascade, then reuses it. Its APIs exist on 461127bc65.
-// This edit-only lane has not compiled or executed the test.
+// H1-11: registered by core-cr150-o1-revscratch.cmake as a regression test.
+// The opening paragraph describes the historical failure, not the current
+// result. Its original first-diagnostic log is not recorded in this source.
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/native_execution_consumer.hpp"
 

@@ -23,9 +23,8 @@
 // The fixtures use the core's public API of the previous epoch only, so this
 // TU compiles against it. There they reach the populations and fail on the
 // resident-byte comparisons (the heap grows with N), not on a missing
-// declaration. Populations are sized so that N is past every resident bound of
-// the new stores: two such runs differ by far more than the slack below at the
-// base and by none of it afterwards.
+// declaration. Three populations past every resident bound of the stores
+// check that additional journal events and receipt keys retain no extra heap.
 #define PINEFORGE_TEST_ALLOCATION_BYTES
 #include "global_allocation_replacement.hpp"
 #include "native_order_full_fold.hpp"
@@ -638,17 +637,28 @@ void unwritable_page_fails_before_commit() {
     CHECK(mismatches == 0);
 }
 
-// The resident-byte comparison of two populations, both well past every
-// resident bound of the new stores.
+// H1-05: the populations have equal phase within the 32-event chunks and the
+// fixed receipt/page tails. The journal's resident chunks, four reload slots
+// and spill buffers, the receipt tail, and the two live requests cancel.
+// Journal pages and receipt keys beyond those bounds reside in files:
+// allowed delta = 0 heap bytes/event * delta window
+//               + 0 heap bytes/key * delta keys.
+// The abandoned resolution uses fixed blocks and an external id segment,
+// so its allowed transient delta is also 0 heap bytes/additional chain link.
 void check_growth(const char* what, const ChainResult& small, const ChainResult& large) {
-    constexpr std::size_t kSlack = 1u << 20;  // 1 MiB: the stores' resident tails and caches
+    constexpr std::size_t kHeapBytesPerExternalEvent = 0;
+    constexpr std::size_t kHeapBytesPerExternalKey = 0;
+    constexpr std::size_t kHeapBytesPerChainLink = 0;
     std::printf("%s: retained %zu -> %zu bytes, prepare peak %zu -> %zu bytes, window %zu -> %zu "
                 "events, keys %zu -> %zu\n", what, small.retained, large.retained,
                 small.prepare_peak, large.prepare_peak, small.window, large.window, small.keys,
                 large.keys);
-    CHECK(large.window > small.window && large.keys > small.keys);   // the populations differ
-    CHECK(large.retained <= small.retained + kSlack);                // E03 + E05
-    CHECK(large.prepare_peak <= small.prepare_peak + (64u << 10));   // E04
+    REQUIRE(large.window > small.window && large.keys > small.keys);
+    CHECK(large.retained <= small.retained
+            + kHeapBytesPerExternalEvent * (large.window - small.window)
+            + kHeapBytesPerExternalKey * (large.keys - small.keys));  // E03 + E05
+    CHECK(large.prepare_peak <= small.prepare_peak
+            + kHeapBytesPerChainLink * (large.keys - small.keys));   // E04
 }
 }  // namespace
 
@@ -666,7 +676,9 @@ int main() {
             // few events per link, so 8192 links are tens of thousands of events).
             const ChainResult small = run_chain(8192, direct);
             const ChainResult large = run_chain(24576, direct);
+            const ChainResult largest = run_chain(65536, direct);
             check_growth(direct ? "direct" : "staged", small, large);
+            check_growth(direct ? "direct-largest" : "staged-largest", large, largest);
             if (direct) {
                 const ChainResult staged_large = run_chain(24576, false);
                 // The staged and the direct forms commit the same events.
