@@ -4025,20 +4025,20 @@ whose preparation calls `configure` first, latches `Contract`, `Configure`),
 so the stream cannot be driven on after it, although its snapshot stays
 readable. A repeated `stream_begin` on a stream that is already realtime is the
 exception: it is refused (`stream is already realtime`) before the begin is
-admitted, latches nothing, and leaves the stream `Running`. A run that began
-owns its rows whatever became of it: a `Completed` report and a
-started-then-failed run's partial rows are published unchanged.
-`strategy_native_run_v1` answers `PF_NATIVE_OK` only for a run that call
-carried to `Completed` (the consumed run-number high-water moved) and
-`PF_NATIVE_E_RUN_FAILED` otherwise; the reason stays in
-`strategy_get_last_error`, `strategy_get_last_error_code` and
-`strategy_last_run_status` (1). A `Completed` handle runs again after a
-successful `strategy_configure_native_v1`. `strategy_stream_fill_report` is the
-explicit snapshot: the same function asked for the rows' own owner, so a live
-stream's rows survive a batch call refused over it, which reads empty, and the
-batch reader stays empty after the snapshot until the next run call. A run call
-made from inside a running run's callback reads empty the same way, while the
-outer run, which began, publishes its own rows when it ends.
+admitted, latches nothing, and leaves the stream `Running`. A begun run publishes its `Completed`
+report or partial rows on failure, except when `report_sink_failed` is latched: every later read
+yields the empty report (every array `NULL`, every count 0), also after a sink failure at finish time
+following an otherwise successful run. The run-failure latch retains status, code, arguments and message.
+`strategy_native_run_v1` answers `PF_NATIVE_OK` only for a run that call carried to `Completed`
+(the consumed run-number high-water moved) and `PF_NATIVE_E_RUN_FAILED` otherwise; the reason stays in
+`strategy_get_last_error`, `strategy_get_last_error_code`, `strategy_get_last_error_args` and
+`strategy_last_run_status` (1). A `Completed` handle runs again after a successful
+`strategy_configure_native_v1`. `strategy_stream_fill_report` is the explicit snapshot: the same
+function asked for the rows' own owner, subject to the same sink-failure gate. A live stream's rows
+survive a batch call refused over it, which reads empty, and the batch reader stays empty after
+the snapshot until the next run call. A run call made from inside a running run's callback reads
+empty the same way, while the outer run publishes its own rows when it ends, subject to
+the same `report_sink_failed` exception.
 
 **Commands.** `strategy_native_submit_v1`, `_replace_v1` / `_replace_ext_v1`,
 `_cancel_v1`, `_cancel_all_v1`, `_cancel_where_v1` and `_execute_current_v1`

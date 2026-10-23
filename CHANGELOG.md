@@ -7,6 +7,13 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **A latched `report_sink_failed` now yields an empty report.** After a run
+  whose failure is `report_sink_failed` (including a sink failure at finish time
+  after an otherwise successful run), every later report read returns the empty
+  report (every array NULL, every count 0) instead of retrying the failed
+  scratch storage, which used to throw out of `fill_report` and terminate
+  handler-less hosts. Status, code, arguments and message stay in the run-failure
+  latch; every other failure code still publishes its partial rows.
 - **Ownership manifest controls run in four CTest shards (CR-196).** The same
   loader-discovered cases keep every assertion and the 180-second timeout per
   row; a cheap guard checks complete, disjoint assignment for shard counts

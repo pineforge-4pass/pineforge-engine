@@ -2706,17 +2706,17 @@ PF_API void strategy_native_host_free(pf_strategy_t s);
  *  overwritten and never freed, so it is safe whether or not the caller
  *  initialised it and #strategy_native_report_free_v1 on it is a no-op; the
  *  reason is in #strategy_get_last_error, #strategy_get_last_error_code and
- *  #strategy_last_run_status (1). A run that began and then failed answers
- *  PF_NATIVE_E_RUN_FAILED too, leaves the handle Failed and keeps its partial
- *  rows in @p out, as before. A Completed handle runs again after a successful
- *  #strategy_configure_native_v1 (or #strategy_configure_native_ext_result_v1).
- *  The refusals made before the engine sees the call, PF_NATIVE_E_HANDLE and
- *  PF_NATIVE_E_ARGUMENT, leave @p out untouched. The gate is the engine's own
- *  report reader, so every other run entrypoint obeys it; a call refused over
- *  a live stream reads empty, and #strategy_stream_fill_report keeps its rows.
- *  @return PF_NATIVE_OK when this call's run reached Completed,
- *  PF_NATIVE_E_RUN_FAILED when it did not (read #strategy_native_state_v1 for a
- *  Failed code, #strategy_get_last_error for a refusal). */
+ *  #strategy_last_run_status (1). A run that began and failed also answers PF_NATIVE_E_RUN_FAILED
+ *  and leaves the handle Failed. It publishes partial rows unless `report_sink_failed` is latched:
+ *  every later read gives the empty report (every array NULL, every count 0), even when the sink
+ *  failed at finish time after run success. Status, code, arguments and message stay in the
+ *  run-failure latch. A Completed handle runs again after #strategy_configure_native_v1
+ *  (or #strategy_configure_native_ext_result_v1) succeeds. Pre-engine PF_NATIVE_E_HANDLE
+ *  and PF_NATIVE_E_ARGUMENT refusals leave @p out untouched. Every run entrypoint uses the
+ *  engine's report reader: a batch refused over a live stream reads empty, and
+ *  #strategy_stream_fill_report keeps the stream's rows, subject to the same sink-failure gate.
+ *  @return PF_NATIVE_OK when this call's run reached Completed; PF_NATIVE_E_RUN_FAILED otherwise
+ *  (read #strategy_native_state_v1 for a Failed code, #strategy_get_last_error for a refusal). */
 PF_API int strategy_native_run_v1(pf_strategy_t s, const pf_bar_t* bars, int n,
                                   pf_report_t* out);
 

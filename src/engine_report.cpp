@@ -61,10 +61,10 @@ void BacktestEngine::trace(const std::string& name, double value) {
 // the rows alone cannot say which call they answer. Every batch reader shares
 // this one gate: strategy_native_run_v1, the native module wrappers and the
 // generated run_backtest / run_backtest_full, which call run() and then this.
-// Begun runs publish completed or partial rows unless report_sink_failed was
-// latched: rebuilding failed storage would retry a flush outside run()'s catch.
-// A refused call or failed sink gets an empty ReportC, overwriting without
-// freeing storage the call does not own; the latched typed failure stays.
+// Begun runs publish completed or partial rows unless report_sink_failed is latched,
+// even at finish after run success: every later read gives empty ReportC (all arrays NULL,
+// all counts zero), avoiding retries outside run()'s catch; status, code, arguments and
+// message stay in the run-failure latch. Refused calls overwrite unowned storage without freeing.
 // Recursive capture/observer reads are refused first; their terminal helper
 // consumes the reentry latch. strategy_stream_fill_report uses this same
 // gate via fill_snapshot_report but asks for rows_current_ instead of

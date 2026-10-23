@@ -12583,18 +12583,18 @@ std::uint64_t NativeStrategyHost::broker_state_hash_projection() const {
     return broker_state_hash_from_execution_hash(execution);
 }
 
-// The report gate (BacktestEngine::fill_report), answering for the latest
-// public run / stream_begin CALL. An AttemptScope is opened first by every such
-// call. A call entered while nothing is live is an attempt: it disowns the
-// retained rows until begin_ready's reset hands them back, so a refusal before
-// the reset (not Ready, bad bars or option, calendar refusal) reports empty and
-// a started-then-failed run keeps its partial rows. A call entered over a live
-// attempt (a stream between its pushes, a callback or an input in flight) is
-// refused by admission: it owns no rows and leaves rows_current_ alone, but its
-// exit clears batch_current_, so the report that call's wrapper reads right
-// after it is empty; a call nested inside another attempt call closes before the
-// outer one, whose exit sets batch_current_ from its own outcome. Bools only:
-// nothing counts, so nothing wraps; nothing here is hashed or read by a run.
+// The report gate (BacktestEngine::fill_report) answers the latest public run /
+// stream_begin CALL. Every such call opens an AttemptScope first. With nothing
+// live, it disowns retained rows until begin_ready's reset hands them back; a
+// refusal before reset (not Ready, bad bars/option, calendar) reports empty.
+// A begun failed run publishes partial rows except for report_sink_failed: later
+// reads give empty ReportC, also after finish-time sink failure following run success;
+// status, code, arguments and message stay in the run-failure latch. A call entered over
+// a live attempt (stream between pushes, callback, input in flight) is refused; it owns
+// no rows and leaves rows_current_ alone. Its exit clears batch_current_, so its wrapper
+// reads empty. A nested call closes before the outer call, whose exit sets batch_current_
+// from its own outcome. Bools only: nothing counts, so nothing wraps; nothing here is
+// hashed or read by a run.
 bool NativeExecutionConsumer::rows_are_current(const BacktestEngine& engine) noexcept {
     const auto* consumer = static_cast<const NativeExecutionConsumer*>(
         engine.execution_consumer_slot_.ptr.get());

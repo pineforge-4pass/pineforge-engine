@@ -323,13 +323,13 @@ public:
     static const char* failure_code_of(const BacktestEngine& engine) noexcept;
     static const char* failure_args_of(const BacktestEngine& engine) noexcept;
     static RunFailureValue failure_value_of(const BacktestEngine& engine) noexcept;
-    // Whether the rows `engine` retains answer the latest run or stream_begin
-    // call it was given (the ledger below): false after a call that never
-    // reached begin_ready's reset_run_state() or was refused over a live
-    // attempt; true after one that began (a started-then-failed run owns its
-    // partial rows) and with no consumer bound. BacktestEngine::fill_report
-    // gates on it; fill_snapshot_report (the C stream seam) reads the rows of
-    // the latest attempt that reset them, through the same fill_report.
+    // Whether retained rows answer the latest run/stream_begin call (ledger below):
+    // false after a call that never reached begin_ready's reset_run_state() or was
+    // refused over a live attempt; true after begin or with no consumer bound.
+    // fill_report publishes partial rows on failure except for report_sink_failed:
+    // every later read is empty ReportC, even after finish-time sink failure following run success;
+    // status, code, arguments and message stay in the run-failure latch. The C stream seam
+    // fill_snapshot_report reads the latest reset attempt's rows through the same gate.
     static bool rows_are_current(const BacktestEngine& engine) noexcept;
     static void fill_snapshot_report(const BacktestEngine& engine, ReportC* out);
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;

@@ -84,7 +84,7 @@ void run_then_fill(const std::vector<pineforge::Bar>& bars, bool exhausted) {
                     "report read preserves the original typed run failure");
             const auto after = ScratchArena::attached()->stats();
             require(after.bytes_used == snapshot.bytes_used && after.high_water == snapshot.high_water,
-                    "report read does not retry arena growth");
+                    "report read leaves arena usage and high-water counters unchanged");
         } else {
             pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
             require(host.last_run_status() == 0 && host.last_error().empty()
