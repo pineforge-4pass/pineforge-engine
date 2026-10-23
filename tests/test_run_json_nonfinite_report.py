@@ -189,6 +189,7 @@ class ReportLib(selected.FakeLib):
 
     def __init__(self, plan, events, *, trade_field=None, bad_value=None,
                  net_profit=3.0, pnls=(10.0, -7.0), metric=None, curve_value=None,
+                 curve_field=None,
                  failure_field=None, equity_metrics=None, last_mark=None, dip=None):
         engine_failure = None
         if failure_field is not None:
@@ -204,6 +205,7 @@ class ReportLib(selected.FakeLib):
         self.pnls = pnls
         self.metric = metric
         self.curve_value = curve_value
+        self.curve_field = curve_field
         self.equity_metrics = equity_metrics
         self.last_mark = last_mark
         self.dip = dip
@@ -247,8 +249,10 @@ class ReportLib(selected.FakeLib):
             setattr(getattr(report.metrics, block), name, self.bad_value)
         if self.curve_value is not None:
             # Preserve the selected anchor; poison an ordinary curve point.
-            self._curve[-1].equity = self.curve_value
-            self._curve[-1].open_profit = self.curve_value
+            # curve_field poisons ONE field and leaves its companion finite, so
+            # the validator entry of that field alone decides the verdict.
+            for name in ("equity", "open_profit") if self.curve_field is None else (self.curve_field,):
+                setattr(self._curve[-1], name, self.curve_value)
 
 
 class Harness:
@@ -839,13 +843,18 @@ def test_cumulative_summary_overflow_cannot_hide_in_min_max(harness, mode, pnls,
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_open_profit_nonfinite_is_typed(harness, mode):
-    def poison(document):
-        document["equity_curve"][-1]["open_profit"] = float("inf")
-
-    result = harness.run(mode, inject=poison)
+@pytest.mark.parametrize("bad", BAD_VALUES)
+@pytest.mark.parametrize("field", ("equity", "open_profit"))
+def test_one_curve_field_nonfinite_is_typed(harness, mode, bad, field):
+    # The native curve is poisoned in ONE field (its companion stays finite), so
+    # only that field's entry in _validate_report_result can raise. Mutation:
+    # remove ("equity", ...) or ("open_profit", ...) from its curve loop in
+    # docker/run_json.py (the pair near :4220/:4221): that field's rows turn red.
+    # (An injection into the document after build_report_dict cannot work: the
+    # curve is a _JSONRecordArray whose items are rebuilt from native memory.)
+    result = harness.run(mode, curve_value=bad, curve_field=field)
     assert_failure(result, RESULT_INVALID,
-                   {"field": "equity_curve.open_profit", "reason": NONFINITE_REASON}, mode=mode)
+                   {"field": "equity_curve." + field, "reason": NONFINITE_REASON}, mode=mode)
 
 
 @pytest.mark.parametrize("token", ("NaN", "Infinity", "-Infinity", "1e9999"))
