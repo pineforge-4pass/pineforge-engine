@@ -1,5 +1,6 @@
-// B2-06: refusal is determined before a Pine host binds its run spec, and
-// remains atomic even when the separate equity-summary setter is configured.
+// B2-06: admission refuses an unbound Pine presenter with equity summary
+// configured. The FULL parity witness below restores that independent
+// control; test_pine_equity_summary_full_parity covers leaving it enabled.
 #include "report_terminal_quote_fix_fixture.hpp"
 
 using namespace report_modes_fix;

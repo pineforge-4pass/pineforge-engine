@@ -1878,8 +1878,12 @@ protected:
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;
     virtual void present_report(ReportC*) const {}
-    // Whole-array presenters must refuse non-FULL capture until an exact
-    // bounded-state adapter exists. Eligibility must be known before begin.
+    // Host declaration, not an override detector: true covers the engine's
+    // empty presenter and is inherited by native subclasses. Any host that
+    // overrides present_report MUST also override this hook: return false
+    // until its exact bounded-state adapter supports non-FULL capture.
+    // Eligibility must be known before begin; inheriting true does not prove
+    // an arbitrary whole-array presenter eligible.
     virtual bool report_presenter_supports_non_full() const noexcept { return true; }
     void fill_metrics_section(ReportC* out) const;
     void fill_security_diag_section(ReportC* out) const;

@@ -2316,6 +2316,10 @@ public:
     static bool selected_window_admitted(const BacktestEngine& engine,
                                          pf_selected_window_config_v1* out) noexcept;
 
+    // Pending or admitted selected/observer capture needs a sink for non-FULL
+    // reports until an exact omitted-sequence adapter exists. Reads only.
+    static bool report_capture_needs_sink(const BacktestEngine& engine) noexcept;
+
     // Frees the presentation capture (drop_presentation).
     ~NativeExecutionConsumer() override;
 

@@ -1,9 +1,10 @@
-# O1 report contract, revision 1 (round-2 reader declarations)
+# O1 report contract, revision 1
 
-Status: declarations and consumer contract for the 1.7.0 A1 lanes. This
-document does not advertise implemented SUMMARY_ONLY support. The base is
-`583c2217d2`; runtime implementation, transport negotiation and remote
-verification are separate acceptance gates.
+Status: native C++ runtime and consumer contract for 1.7.0. Mode selection
+and envelope reads are implemented in `src/engine_report.cpp`. Exact bounded
+SUMMARY_ONLY still requires an eligible host and a provider for any required
+second pass; the engine does not schedule that replay. Transport negotiation
+and remote verification remain separate acceptance gates.
 
 ## Versions and entry points
 
@@ -11,14 +12,15 @@ The versioned report envelope is `pineforge-report/v1`. Its C data declarations
 live in `<pineforge/report_mode.h>`; the native C++ declarations are
 `ReportMode`, `ReportEnvelopeV1`, `BacktestEngine::set_report_mode_v1` and
 `BacktestEngine::fill_report_envelope_v1` in `<pineforge/engine.hpp>`.
-These methods have declarations only in this slice.
+The native methods implement mode admission and report assembly, subject to
+the eligibility and completion requirements below.
 
 The single C++ reader/visitor family lives in `<pineforge/report_pages.hpp>`,
 which includes `report_mode.h`; `engine.hpp` includes both. Its namespace is
 `pineforge::report`. It adds no mode enum, envelope version, feature probe or
-C export. The completed-row provider belongs to o1w-ledger; the presented-point
-provider, held point and metric overloads belong to o1w-metrics. No backing
-store or runtime method body is supplied here.
+C export. The completed-row and presented-point provider contracts share the
+ledger and equity-metric boundaries. Reader declarations alone do not
+establish provider availability.
 
 The envelope contains `metadata` followed by `report`, the unchanged ABI-4
 `ReportC` / `pf_report_t` payload. Do not append fields to either legacy struct:

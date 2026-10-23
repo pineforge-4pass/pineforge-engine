@@ -9,6 +9,22 @@
 using namespace report_modes_fix;
 
 namespace {
+struct TmpdirScope {
+    bool had_value = false;
+    std::string previous;
+    explicit TmpdirScope(const std::string& directory) {
+        const auto* value = std::getenv("TMPDIR");
+        had_value = value != nullptr;
+        if (value) previous = value;
+        require(::setenv("TMPDIR", directory.c_str(), 1) == 0,
+                "cannot set fd scratch directory");
+    }
+    ~TmpdirScope() {
+        if (had_value) ::setenv("TMPDIR", previous.c_str(), 1);
+        else ::unsetenv("TMPDIR");
+    }
+};
+
 struct Socket {
     int descriptors[2]{-1, -1};
     Socket() {
@@ -68,8 +84,7 @@ int main() {
             require_trailer(read_sink(path));
         }
         {
-            const auto directory = scratch_directory();
-            require(::setenv("TMPDIR", directory.c_str(), 1) == 0, "cannot set fd scratch directory");
+            const TmpdirScope temporary(scratch_directory());
             Socket output;
             Host host;
             configure(host);

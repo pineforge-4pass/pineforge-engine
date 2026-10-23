@@ -5,6 +5,7 @@
 #include <pineforge/report_sink.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -45,13 +46,36 @@ inline void require_distinct_closed_prefix(const ReportC& report, int closed_cou
     }
 }
 
-// Keep generated evidence in the lane's named scratch directory. No cleanup
-// removes it: the supervisor can inspect the exact sink from a failed row.
+// Each test process owns one mkdtemp directory outside the source checkout.
+// Successful rows remove only that directory; failed rows retain evidence.
+class FixtureDirectory {
+public:
+    const std::string& path() {
+        if (path_.empty()) {
+            const auto* configured = std::getenv("TMPDIR");
+            const std::filesystem::path parent =
+                configured && *configured ? configured : "/tmp";
+            path_ = (parent / "pineforge-s4e-XXXXXX").string();
+            require(::mkdtemp(path_.data()) != nullptr, "cannot create fixture directory");
+        }
+        return path_;
+    }
+    void remove_on_success() {
+        if (path_.empty()) return;
+        std::filesystem::remove_all(path_);
+        path_.clear();
+    }
+private:
+    std::string path_;
+};
+
+inline FixtureDirectory& fixture_directory() {
+    static FixtureDirectory directory;
+    return directory;
+}
+
 inline std::string scratch_directory() {
-    const auto directory = std::filesystem::path(__FILE__).parent_path().parent_path()
-        / "scratch-s4e";
-    std::filesystem::create_directories(directory);
-    return directory.string();
+    return fixture_directory().path();
 }
 
 inline std::string sink_path(const char* label) {
@@ -321,6 +345,7 @@ template<class Test>
 int test_main(const char* name, Test test) {
     try {
         test();
+        fixture_directory().remove_on_success();
         std::printf("%s: PASS\n", name);
         return 0;
     } catch (const std::exception& error) {

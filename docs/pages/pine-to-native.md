@@ -487,7 +487,7 @@ migration decision:
    engine.hpp:1157, `current_equity` engine.hpp:1158 and the rest. They are
    reachable from inside your host exactly as they are from inside a generated
    Pine strategy, and `native_open_lots_strategy.cpp` reads every one of them.
-3. **The report, after the run** — `fill_report` engine.hpp:2097 into a
+3. **The report, after the run** — `fill_report` engine.hpp:2104 into a
    `pf_report_t` pineforge.h:436, which is what a C host reads.
 
 One rule governs the whole table, in two scopes. The equity **series** is
@@ -555,10 +555,10 @@ range-end reporting is off.
 | `strategy.avg_losing_trade_percent` | `avg_losing_trade_percent` engine.hpp:1195 | `pf_trade_stats_t` pineforge.h:269 | `native_sized_report_strategy.cpp` | |
 | `strategy.wintrades` | `count_wintrades` engine.hpp:1230 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
 | `strategy.losstrades` | `count_losstrades` engine.hpp:1231 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | |
-| `strategy.eventrades` | `eventrades` engine.hpp:2095 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | Public, not protected: a zero-profit closed row. Win + loss + even is the closed-row count, which the example asserts. |
-| `strategy.max_contracts_held_all` | `max_contracts_held_all` engine.hpp:2090 | — | `native_open_lots_strategy.cpp` | `pf_trade_stats_t` has no max-contracts-held field. A C host must derive the peak from position/open-lot observations; there is no direct C report counterpart. |
-| `strategy.max_contracts_held_long` | `max_contracts_held_long` engine.hpp:2091 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the long-side peak from position/open-lot observations. |
-| `strategy.max_contracts_held_short` | `max_contracts_held_short` engine.hpp:2092 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the short-side peak from position/open-lot observations. |
+| `strategy.eventrades` | `eventrades` engine.hpp:2102 | `pf_trade_stats_t` pineforge.h:269 | `native_open_lots_strategy.cpp` | Public, not protected: a zero-profit closed row. Win + loss + even is the closed-row count, which the example asserts. |
+| `strategy.max_contracts_held_all` | `max_contracts_held_all` engine.hpp:2097 | — | `native_open_lots_strategy.cpp` | `pf_trade_stats_t` has no max-contracts-held field. A C host must derive the peak from position/open-lot observations; there is no direct C report counterpart. |
+| `strategy.max_contracts_held_long` | `max_contracts_held_long` engine.hpp:2098 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the long-side peak from position/open-lot observations. |
+| `strategy.max_contracts_held_short` | `max_contracts_held_short` engine.hpp:2099 | — | `tests/test_native_report_truth.cpp` | No direct C report counterpart; derive the short-side peak from position/open-lot observations. |
 | `strategy.position_size` | `NativePhysicalPosition::signed_units` native_host.hpp:297 | `strategy_native_position_v1` native_c_api.h:2861 | `hello_kernel.cpp` | Signed: no separate direction field. |
 | `strategy.position_avg_price` | `NativePhysicalPosition::average_price` native_host.hpp:298 | `strategy_native_position_v1` native_c_api.h:2861 | `native_selected_strategy.cpp` | Volume-weighted over the open lots. |
 | `strategy.position_entry_name` | `native_open_lots` native_host.hpp:1324 then the last row's `entry_label` native_host.hpp:333 | `strategy_native_open_lot_get_v1` native_c_api.h:2902 | `native_open_lots_strategy.cpp` | Pine reports the newest entry's id; the native book lets you read any lot's. |
@@ -611,9 +611,9 @@ run the two excursion fields fold `mark` alone.
 
 ## Closed trades {#pine_to_native_map_closed_trades}
 
-`closed_trade_count` engine.hpp:2043 and `closed_trade` engine.hpp:2044 answer
+`closed_trade_count` engine.hpp:2050 and `closed_trade` engine.hpp:2051 answer
 the `Trade` engine.hpp:181 rows this run booked, in booking order;
-`report_trade_count` engine.hpp:2056 and `get_report_trade` engine.hpp:2060
+`report_trade_count` engine.hpp:2063 and `get_report_trade` engine.hpp:2067
 span the same rows followed by the range-end rows
 `report_open_position_at_end` native_run_spec.hpp:683 adds. In C the report's
 `pf_report_t::trades` pineforge.h:374 carries the numeric fields, and the
@@ -625,7 +625,7 @@ rows of that array.
 
 | Pine | C++ | C | Runs in | Notes |
 | --- | --- | --- | --- | --- |
-| `strategy.closedtrades` | `closed_trade_count` engine.hpp:2043 | `total_trades` pineforge.h:368 | `native_open_lots_strategy.cpp` | `closed_trade_count` counts booked closed rows. The C report's `total_trades` also includes range-end rows when `report_open_position_at_end` is enabled; filter `pf_trade_t::open_at_end == 0` to match Pine `strategy.closedtrades`. |
+| `strategy.closedtrades` | `closed_trade_count` engine.hpp:2050 | `total_trades` pineforge.h:368 | `native_open_lots_strategy.cpp` | `closed_trade_count` counts booked closed rows. The C report's `total_trades` also includes range-end rows when `report_open_position_at_end` is enabled; filter `pf_trade_t::open_at_end == 0` to match Pine `strategy.closedtrades`. |
 | `strategy.closedtrades.first_index` | none — the kernel keeps every row | — | `native_open_lots_strategy.cpp` | TradingView drops old rows past a 9000-trade cap and advances `first_index` when it does. The kernel caps nothing, so the first index is always 0 and codegen emits the literal. |
 | `strategy.closedtrades.entry_id()` | `entry_id` engine.hpp:192 | `strategy_closed_trade_entry_id` pineforge.h:1336 | `native_open_lots_strategy.cpp` | The same string the lot carried as `entry_label` native_host.hpp:333. |
 | `strategy.closedtrades.entry_comment()` | `entry_comment` engine.hpp:193 | — | `native_open_lots_strategy.cpp` | No C accessor: `strategy_closed_trade_entry_id` pineforge.h:1336 answers the id, not the comment, and `pf_trade_t` carries no strings. A C host that needs it reads the open lot's `entry_comment` (`pf_native_open_lot_v1` native_c_api.h:1773) before the close. |
@@ -647,7 +647,7 @@ rows of that array.
 | `strategy.closedtrades.max_drawdown_percent()` | derive from `max_drawdown` engine.hpp:209 | — | `native_open_lots_strategy.cpp` | |
 
 Pine has no word for *why* a row closed. The native row does:
-`closed_trade_close_cause` engine.hpp:2087 (C:
+`closed_trade_close_cause` engine.hpp:2094 (C:
 `strategy_closed_trade_close_cause` pineforge.h:1418) distinguishes a script
 close, a liquidation, a risk flatten and the range end — the kernel states the
 last three itself. The bracket-leg cause (`2`) is the kernel's too for a close
@@ -683,7 +683,7 @@ the same numerics the adapter uses, and the header pulls only `na`, `series`
 and `window_sum` ta.hpp:2-4, so it is engine-free. `pineforge::Series<T>`
 series.hpp:94 is Pine's history operator as a fixed-capacity ring you push what
 you want to keep into. Pine's `input.*` becomes ordinary constructor
-parameters: `set_input` engine.hpp:2123 exists but its getters are protected,
+parameters: `set_input` engine.hpp:2130 exists but its getters are protected,
 and a native host takes its parameters in C++.
 
 ## One strategy, three ways {#pine_to_native_three_ways}
@@ -730,7 +730,7 @@ class HelloKernel : public pineforge::NativeStrategyHost {
 
 The host is a class; the run is one `NativeRunSpec` native_run_spec.hpp:622
 naming the clock, instrument, account and fees; `configure_native`
-native_host.hpp:1216 applies it and `run` engine.hpp:1930 drives the bars.
+native_host.hpp:1216 applies it and `run` engine.hpp:1937 drives the bars.
 
 **C**, against the same kernel — `examples/native/hello_kernel_c.c:36` is this
 callback and `examples/native/hello_kernel_c.c:66` the run spec:
@@ -995,7 +995,7 @@ closes the stop at `101 - 20 × 0.25 = 96`.
    `fee_value = 0.1`, and a `NativeLossLimit` whose `percent`
    native_run_spec.hpp:261 is set, so `20.0` is twenty percent.
 5. **The equity curve is opt-in; the rest of the report is not.** `trade_count`
-   engine.hpp:2034 and `get_trade` engine.hpp:2035 are always complete, and so
+   engine.hpp:2041 and `get_trade` engine.hpp:2042 are always complete, and so
    are the equity extremes and the position-size peaks, which every report
    policy folds. Only the recorded equity **series**, and the
    `pf_equity_stats_t` figures walked out of it, arrive with
