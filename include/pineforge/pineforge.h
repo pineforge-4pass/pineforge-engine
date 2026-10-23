@@ -761,8 +761,16 @@ PF_API int pf_run_abort_restore_sigterm_v1(void);
  *                      range-end rows (`open_at_end`, ABI v3), which carry
  *                      the incarnation of the lot they mark like any other
  *                      close.
- *  @return Non-zero physical-entry identity, or 0 for an invalid index or a
- *          legacy/synthetic trade without request record provenance. */
+ *  A row in the sealed prefix of a streamable report sink still counts in
+ *  the report's global row count, but this legacy accessor has no view of it
+ *  and returns 0. Read the sink's T records for sealed rows and their entry
+ *  incarnations. A read failure or other exception caught inside this
+ *  accessor also returns 0, without setting #strategy_get_last_error.
+ *
+ *  @return Non-zero physical-entry identity, or 0 for a NULL @p s, an
+ *          out-of-range @p trade_index, a sealed prefix row, a caught read
+ *          failure or other exception, or a legacy/synthetic trade without
+ *          request record provenance. */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(
     pf_strategy_t s, int trade_index);
 
@@ -1330,8 +1338,14 @@ PF_API int64_t strategy_position_cycle_seq(pf_strategy_t s);
  *  same REPORT row space as #strategy_closed_trade_entry_incarnation
  *  (`trades_` then the range-end rows, `open_at_end`). The returned pointer
  *  is valid until the next run() (or stream call) on this handle, like
- *  #strategy_get_last_error. NULL on a NULL @p s or an out-of-range
- *  @p trade_index. This legacy borrowed-pointer API materializes each
+ *  #strategy_get_last_error. NULL on a NULL @p s, an out-of-range
+ *  @p trade_index, or a sealed prefix row of a streamable report sink.
+ *  Sealed rows still count in the report's global row count, but these
+ *  legacy accessors have no view of them. Read the sink's T records for
+ *  sealed-row strings. A read failure or other exception caught inside
+ *  these accessors also returns NULL, including failure to materialize
+ *  borrowed string storage, without setting #strategy_get_last_error.
+ *  This legacy borrowed-pointer API materializes each
  *  requested row until the next run; full-history requests use growing RAM. */
 PF_API const char* strategy_closed_trade_entry_id(pf_strategy_t s, int trade_index);
 /** See #strategy_closed_trade_entry_id for the row-space/lifetime/NULL
@@ -1364,10 +1378,10 @@ typedef enum pf_close_cause_e {
 } pf_close_cause_t;
 
 /** Task 9: why the @p trade_index-th REPORT-row closed trade exited, a
- *  #pf_close_cause_t.
+ *  #pf_close_cause_t for an available row, or -1 as described below.
  *  Values:
  *    - `0` UNKNOWN -- reserved for the documented "no cause" value on a
- *      VALID trade. Every in-range row currently falls through the
+ *      VALID, available trade. Every available row currently falls through the
  *      derivation below to at worst `1` SCRIPT, so no live derivation
  *      today actually returns `0`; it is not used for a bad index (see
  *      `-1` below, final review F7).
@@ -1406,15 +1420,19 @@ typedef enum pf_close_cause_e {
  *  for a kernel risk flatten) where the retired string derivation, which only
  *  recognised the adapter's sentinels, answered `1`, and it reads `2` for a
  *  bracket leg its owner armed, where it read `1` before R5 lane F3.
- *  `-1` when @p s is NULL, or when @p trade_index is out of range (final
- *  review F7: matches every sibling indexed live accessor's -1-on-bad-index
- *  convention -- #strategy_pending_order_fill_qty,
- *  #strategy_pending_order_level_resolved,
- *  #strategy_pending_order_effective_levels). `0` therefore never
- *  ambiguously means "bad index"; a caller can tell "row exists but reads
- *  UNKNOWN" apart from "bad index" without a separate
- *  #strategy_closed_trade_entry_incarnation `report_trade_count` bounds
- *  check first, though doing that check is still good practice. */
+ *  B1-11 / E-10: a row in the sealed prefix of a streamable report sink
+ *  still counts in the report's global row count.
+ *  This legacy accessor has no view of a sealed prefix row.
+ *  It returns `-1` for such a row, a NULL @p s, an out-of-range
+ *  @p trade_index, or a read failure or other exception caught inside this
+ *  accessor. The same cases return 0 from
+ *  #strategy_closed_trade_entry_incarnation and NULL from the id/comment
+ *  accessors (see #strategy_closed_trade_entry_id); a failure to materialize
+ *  borrowed string storage also returns NULL from those string accessors.
+ *  Caught exceptions do not set #strategy_get_last_error. The sentinel
+ *  values do not distinguish these cases.
+ *  Read the sink's T records for sealed rows, including their close cause.
+ *  `0` remains reserved for an available row with UNKNOWN cause. */
 PF_API int strategy_closed_trade_close_cause(pf_strategy_t s, int trade_index);
 /** Task 9: the script-facing signed position size (`strategy.position_size`;
  *  KI-64 freeze-aware -- while a same-bar `process_orders_on_close` close is
