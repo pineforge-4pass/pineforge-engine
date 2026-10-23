@@ -82,6 +82,63 @@ bool same_metrics(const pf_metrics_t& a, const pf_metrics_t& b) {
     return std::memcmp(&a, &b, sizeof a) == 0;
 }
 
+void reference_annualization_follows_report_schema() {
+    constexpr auto boundary =
+        static_cast<std::int64_t>(metrics::detail::kMinAnnualizationSpanMs);
+    constexpr auto year_ms = static_cast<std::int64_t>(365.25 * 86400.0 * 1000.0);
+    struct Case { std::int64_t span; double final_equity; bool proportional; };
+    const Case cases[] = {
+        {boundary / 2, 1001.0, true}, // finite compound still must use simple
+        {boundary - 1, 900.0, true},
+        {boundary - 1, 1000.0, true},
+        {boundary - 1, 10000.0, true},
+        {boundary, 1001.0, false},    // exactly one day keeps a finite compound
+        {boundary + 1, 1001.0, false},
+        {2 * boundary, 900.0, false},
+        {year_ms, 1100.0, false},
+        {boundary, 10000.0, true},    // pow overflows at/above one day
+        {boundary + 1, 10000.0, true},
+        {3 * boundary, 1e6, true},
+        {year_ms - year_ms / 100, 1e308, true}, // finite pow, percent overflows
+    };
+    const auto same_bits = [](double a, double b) {
+        return std::memcmp(&a, &b, sizeof a) == 0;
+    };
+    bool finite_subday = false, power_overflow = false;
+    bool percent_overflow = false, unchanged_compound = false;
+    for (const auto& test : cases) {
+        const pf_equity_point_t curve[] = {
+            {kT, kCapital, 0.0}, {kT + test.span / 2, 900.0, 0.0},
+            {kT + test.span, test.final_equity, 0.0},
+        };
+        const auto reference = equity_stats_reference::compute_equity_stats(
+            curve, 3, kCapital, "UTC", 100.0, 104.5, 1,
+            test.final_equity - kCapital);
+        const double years = static_cast<double>(test.span)
+                           / (365.25 * 86400.0 * 1000.0);
+        const double ratio = test.final_equity / kCapital;
+        const double power = std::pow(ratio, 1.0 / years);
+        // The frozen expression, independent of the reference's rule switch.
+        const double frozen_cagr = (power - 1.0) * 100.0;
+        const double simple = (ratio - 1.0) * (1.0 / years) * 100.0;
+        const double wanted = test.proportional ? simple : frozen_cagr;
+        CHECK(std::isfinite(wanted));
+        CHECK(reference.max_equity_drawdown == 100.0);
+        CHECK(reference.max_equity_drawdown_pct == 10.0);
+        CHECK(same_bits(reference.cagr, wanted));
+        CHECK(same_bits(reference.calmar, wanted / 10.0));
+        const bool changed = !same_bits(reference.cagr, frozen_cagr)
+            || !same_bits(reference.calmar, frozen_cagr / 10.0);
+        CHECK(!changed || test.span < boundary || !std::isfinite(frozen_cagr));
+        finite_subday |= test.span < boundary && std::isfinite(frozen_cagr);
+        unchanged_compound |= test.span >= boundary && std::isfinite(frozen_cagr);
+        power_overflow |= test.span >= boundary && !std::isfinite(power);
+        percent_overflow |= test.span >= boundary && std::isfinite(power)
+            && !std::isfinite(frozen_cagr);
+    }
+    CHECK(finite_subday && unchanged_compound && power_overflow && percent_overflow);
+}
+
 // Bit-identical points: equal length and equal bytes, and never an empty pair.
 bool same_points(const std::vector<pf_equity_point_t>& a,
                  const std::vector<pf_equity_point_t>& b) {
@@ -1964,8 +2021,9 @@ void random_captures_match_frozen_array(Directory& directory) {
             host.cut = cut;
             auto run_spec = spec(1);
             run_spec.report_policy = NativeReportPolicy::HostRecorded;
+            // Native begin applies the configured spec, including this zone.
+            run_spec.chart_timezone = zone;
             CHECK(host.configure_native(run_spec).status == NativeSetupStatus::Applied);
-            host.set_chart_timezone(zone);
             CHECK(native_set_selected_window_v1(&host, &window) == 0);
             std::string path;
             if (sink_on) {
@@ -1977,6 +2035,7 @@ void random_captures_match_frozen_array(Directory& directory) {
             }
             host.run(bars.data(), static_cast<int>(bars.size()));
             CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+            CHECK(host.chart_timezone() == zone);
             CHECK(host.next == observations.size());
             pf_selected_window_counts_v1 counts{};
             counts.struct_size = sizeof counts;
@@ -2028,6 +2087,7 @@ void random_captures_match_frozen_array(Directory& directory) {
 
 int main() {
     try {
+        reference_annualization_follows_report_schema();
         selected_array_fixtures();
         fresh_reads_use_final_scratch_values();
         invalid_selected_counts_refuse();
