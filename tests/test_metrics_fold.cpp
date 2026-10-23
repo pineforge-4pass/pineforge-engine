@@ -11,6 +11,9 @@
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/run_failure.hpp>
 
+#include "equity_stats_reference.hpp"
+
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -238,6 +241,80 @@ void compare(std::vector<pf_equity_point_t> points, const std::string& zone,
     }
 }
 
+void finalize_annualization_span_rule() {
+    constexpr std::int64_t time = 1704067200000LL;
+    constexpr std::int64_t day = 86'400'000LL; // Report schema's strict boundary.
+    constexpr double capital = 10000.0;
+    struct Case {
+        const char* name;
+        std::int64_t span;
+        double final_equity;
+        bool finite_compounded;
+        bool proportional;
+    };
+    const Case cases[] = {
+        {"seven_minutes_pow_overflow", 7 * 60'000, 10800.0, false, true},
+        {"six_hours_finite_pow", 6 * 60 * 60'000, 10050.0, true, true},
+        {"one_ms_under_day", day - 1, 10050.0, true, true},
+        {"exactly_one_day", day, 10050.0, true, false},
+        {"one_ms_over_day", day + 1, 10050.0, true, false},
+        {"one_day_pow_overflow", day, 100000.0, false, true},
+    };
+    for (const auto& test : cases) {
+        const int failures_before = failures;
+        const pf_equity_point_t curve[] = {
+            {time, capital, 0.0}, {time + 60'000, 9900.0, 0.0},
+            {time + test.span, test.final_equity, 0.0},
+        };
+        EquityMetricsFold fold;
+        for (const auto& point : curve)
+            fold.fold(point, equity_month_key(point.time_ms, "UTC"));
+        const auto first = fold.first_pass();
+        const EquityMetricInputs inputs{capital, 1.0, 1.0, test.final_equity - capital};
+        CHECK(first.point_count == 3 && first.first.equity == inputs.initial_capital);
+        CHECK(first.last.time_ms - first.first.time_ms == test.span);
+        CHECK(first.nonfinite_field == nullptr);
+
+        // Independent C9 transcription of report-schema.md:554-559, not the
+        // live array producer. Explicit row expectations also pin the rule
+        // without sharing the reference's annualization boundary constant.
+        const auto want = equity_stats_reference::compute_equity_stats(
+            curve, 3, capital, "UTC", 1.0, 1.0, 0, inputs.net_profit);
+        // Document arithmetic: 31,557,600,000 ms/year, percent = 100 * return.
+        // Compute both forms even for sub-day rows to prove discrimination.
+        const double periods = 1.0 / (static_cast<double>(test.span) / 31'557'600'000.0);
+        const double gain = test.final_equity / capital - 1.0;
+        const double simple = 100.0 * (periods * gain);
+        const double power = std::pow(test.final_equity / capital, periods);
+        const double compounded = 100.0 * (power - 1.0);
+        CHECK(std::isfinite(simple));
+        CHECK(std::isfinite(power) == test.finite_compounded);
+        CHECK(std::isfinite(compounded) == test.finite_compounded);
+        CHECK(simple != compounded);
+        const double expected_cagr = test.proportional ? simple : compounded;
+        const double drawdown_pct = (capital - curve[1].equity) / capital * 100.0;
+        const double expected_calmar = expected_cagr / drawdown_pct;
+        CHECK(drawdown_pct > 0.0);
+        CHECK(std::isfinite(want.cagr) && std::isfinite(want.calmar));
+        CHECK(std::memcmp(&want.cagr, &expected_cagr, sizeof(double)) == 0);
+        CHECK(std::memcmp(&want.calmar, &expected_calmar, sizeof(double)) == 0);
+        try {
+            // Exercise the ordinary report's finalizer directly; no second
+            // pass is needed for CAGR/Calmar. This must cover the first site
+            // even when compute_equity_stats retains its correct branch.
+            const auto got = finalize_equity_metrics(first, inputs);
+            CHECK(std::isfinite(got.cagr) && std::isfinite(got.calmar));
+            CHECK(std::memcmp(&got.cagr, &want.cagr, sizeof(double)) == 0);
+            CHECK(std::memcmp(&got.calmar, &want.calmar, sizeof(double)) == 0);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "annualization finalizer: %s\n", error.what());
+            CHECK(false);
+        }
+        if (failures != failures_before)
+            std::fprintf(stderr, "annualization control: %s\n", test.name);
+    }
+}
+
 void failure_order() {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const double inf = std::numeric_limits<double>::infinity();
@@ -385,6 +462,7 @@ void cases() {
 } // namespace
 
 int main() {
+    finalize_annualization_span_rule();
     cases();
     failure_order();
     std::printf("metrics fold: first=%zu bytes, second=%zu bytes; %d checks, %d failures\n",
