@@ -265,8 +265,11 @@ void witness(Mode mode) {
 }
 
 // Mirror the private src/native_order.cpp JournalStore constants: there is no
-// public header for them. test_journal_resident_cap independently guards the
-// resident bound with the same kCap/kChunk pins.
+// public header for them. test_journal_resident_cap pins the same kCap/kChunk
+// and fails if kMaxResident rises (its bound is kCap + kChunk, upper only).
+// If kMaxResident falls, real pages exceed this mirror's count, the cache no
+// longer holds them, and this test fails at `allocations <= budget` while the
+// printed budget still shows the mirrored page count: re-pin here.
 constexpr std::size_t kCap = 2048;
 constexpr std::size_t kChunk = 32;
 constexpr std::size_t kFullReadCacheSlots = 4;
