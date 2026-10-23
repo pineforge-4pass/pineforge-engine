@@ -932,6 +932,236 @@ class ConfigError(Exception):
     """CLI / profile validation; exit status 2."""
 
 
+CTEST_SHARED_STAGES = frozenset(name for name, _ in SOURCE_GUARD_SCRIPTS) | frozenset({
+    'source-guard-twin-parity', 'native-include-independence', 'kernel-residuals',
+    'install', 'smoke-configure', 'smoke-build', 'smoke-version', 'smoke-version-check',
+    'native-help', 'require-websocket',
+})
+
+
+@dataclass(frozen=True)
+class CTestShard:
+    index: int
+    count: int
+
+    def __post_init__(self) -> None:
+        if (type(self.index) is not int or type(self.count) is not int
+                or not 1 <= self.index <= self.count <= 8):
+            raise ConfigError('--ctest-shard requires 1 <= I <= N <= 8')
+
+
+def parse_ctest_shard(value: str) -> CTestShard:
+    if not re.fullmatch(r'[1-8]/[1-8]', value):
+        raise ConfigError('--ctest-shard must be I/N with 1 <= I <= N <= 8')
+    index, count = map(int, value.split('/'))
+    return CTestShard(index, count)
+
+
+def ctest_registry(output: bytes) -> tuple[str, ...]:
+    """Read every discovery row without collapsing duplicate names or numbers."""
+    matches = list(CTEST_LIST_NAME.finditer(output.decode('utf-8', 'replace')))
+    names = tuple(match.group('name') for match in matches)
+    numbers = [int(match.group('number')) for match in matches]
+    if (not names or ctest_list_count(output) != len(names)
+            or len(set(names)) != len(names) or len(set(numbers)) != len(numbers)):
+        raise ValueError('CTest registry is empty, truncated or contains duplicate rows')
+    return names
+
+
+def ctest_registry_sha256(names: tuple[str, ...] | list[str]) -> str:
+    """Hash UTF-8 names sorted lexically, each followed by one LF."""
+    from hashlib import sha256
+    if not names or len(set(names)) != len(names):
+        raise ValueError('CTest registry is empty or contains duplicate rows')
+    if any(not name or '\n' in name or '\r' in name for name in names):
+        raise ValueError('CTest registry names must be nonempty single lines')
+    return sha256(''.join(name + '\n' for name in sorted(names)).encode('utf-8')).hexdigest()
+
+
+def ctest_durations(source: Path) -> dict[str, int]:
+    """Committed maxima in hundredths of a second; no host timing/cache input."""
+    weights = {}
+    for line in (source / 'scripts/ci_ctest_durations.tsv').read_text().splitlines():
+        if not line or line.startswith('#'):
+            continue
+        name, seconds = line.split('\t')
+        if name in weights or not re.fullmatch(r'\d+\.\d{2}', seconds):
+            raise ValueError('duplicate or malformed CTest duration: ' + line)
+        whole, fraction = seconds.split('.')
+        weights[name] = int(whole) * 100 + int(fraction)
+        if weights[name] <= 0:
+            raise ValueError('CTest durations must be positive: ' + name)
+    if not weights:
+        raise ValueError('CTest durations table is empty')
+    return weights
+
+
+def ctest_partitions(names: tuple[str, ...] | list[str], count: int,
+                     weights: dict[str, int]) -> tuple[tuple[str, ...], ...]:
+    """Longest measured row first; tie by name, then lowest shard index.
+
+    Unmeasured rows have a scheduling weight of one second, not a measured
+    duration. Partition the complete label-selected inventory on every VM.
+    """
+    CTestShard(1, count)
+    ctest_registry_sha256(names)
+    if any(weight <= 0 for weight in weights.values()):
+        raise ValueError('CTest duration weights must be positive')
+    partitions: list[list[str]] = [[] for _ in range(count)]
+    loads = [0] * count
+    for name in sorted(names, key=lambda name: (-weights.get(name, 100), name)):
+        shard = min(range(count), key=lambda index: (loads[index], index))
+        partitions[shard].append(name)
+        loads[shard] += weights.get(name, 100)
+    if any(not part for part in partitions):
+        raise ValueError('CTest shard would select zero rows; use fewer shards')
+    return tuple(tuple(sorted(part)) for part in partitions)
+
+
+CTEST_NAMED_RESULT = re.compile(
+    r'^\s*\d+/\d+ Test\s+#\d+:\s*(?P<name>.+?)\s+\.{2,}\s*'
+    r'(?P<result>.+?)\s+\d+(?:\.\d+)? sec\s*$', re.MULTILINE)
+
+
+def ctest_shard_evidence(output: bytes, selected: tuple[str, ...]) -> dict[str, list[str]]:
+    """Prove actual result names, never infer that an unreported row ran."""
+    rows = ctest_rows(output)
+    if rows is None:
+        raise ValueError('CTest printed no closing summary')
+    summary = ctest_summary(output.decode('utf-8', 'replace'))
+    matches = list(CTEST_NAMED_RESULT.finditer(
+        output.decode('utf-8', 'replace')[:summary.start()]))
+    observed = [match.group('name') for match in matches]
+    if len(observed) != len(set(observed)):
+        raise ValueError('CTest printed a duplicated result row')
+    if set(observed) != set(selected) or not selected:
+        raise ValueError('CTest result names differ from the selected shard (lost or extra row)')
+    evidence = {'ran': [], 'skipped': [], 'notRun': [], 'disabled': []}
+    for match in matches:
+        result = match.group('result')
+        category = ('disabled' if '(Disabled)' in result else
+                    'skipped' if result.startswith('***Skipped') else
+                    'notRun' if result.startswith('***Not Run') else 'ran')
+        evidence[category].append(match.group('name'))
+    expected = {'skipped': rows.skipped, 'notRun': rows.not_run, 'disabled': rows.disabled}
+    for category, names in expected.items():
+        if (len(names) != len(set(names))
+                or sorted(names) != sorted(evidence[category])):
+            raise ValueError('CTest result/list disagreement for ' + category)
+    if rows.total != len(selected) - len(rows.disabled) or rows.ran != len(evidence['ran']):
+        raise ValueError('CTest summary does not account for every selected shard row')
+    return {category: sorted(names) for category, names in evidence.items()}
+
+
+def ctest_shared_stages(profile: str, require_websocket: bool) -> frozenset[str]:
+    """The profile-specific shard 1 proof set, mirrored in docs/ci.md."""
+    names = {name for name, _ in SOURCE_GUARD_SCRIPTS} | {
+        'install', 'smoke-configure', 'smoke-build', 'smoke-version', 'smoke-version-check',
+    }
+    if profile in TWIN_PARITY_PROFILES:
+        names.add('source-guard-twin-parity')
+    if profile in NATIVE_INCLUDE_INDEPENDENCE_PROFILES:
+        names.add('native-include-independence')
+    if profile in KERNEL_RESIDUALS_PROFILES:
+        names.add('kernel-residuals')
+    if PROFILE[profile].live_runner:
+        names.add('native-help')
+    if require_websocket:
+        names.add('require-websocket')
+    return frozenset(names)
+
+
+def validate_ctest_shard_union(summaries: list[dict]) -> None:
+    """Reference name/hash union check for the remote judge; raises on any loss."""
+    if not summaries:
+        raise ValueError('no CTest shard summaries')
+    first = summaries[0]
+    count = first['ctestShard']['count']
+    CTestShard(1, count)
+    if len(summaries) != count:
+        raise ValueError('missing or duplicated CTest shard summary')
+    registry = first['ctestRegisteredNames']
+    selected = first['ctestUnshardedSelectedNames']
+    digest = ctest_registry_sha256(registry)
+    if not selected or len(selected) != len(set(selected)) or not set(selected) <= set(registry):
+        raise ValueError('invalid unsharded CTest selection')
+    indices, union = set(), set()
+    counted = 0
+    owner = next((summary for summary in summaries
+                  if summary['ctestShard']['index'] == 1), None)
+    required_shared = ctest_shared_stages(first['profile'], first['requireWebsocket'])
+    if owner is None:
+        raise ValueError('missing shard 1 stage proofs')
+    for name in required_shared:
+        proofs = [stage for stage in owner['stages'] if stage['name'] == name]
+        if len(proofs) != 1:
+            raise ValueError('missing or duplicated shard 1 proof for ' + name)
+        proof = proofs[0]
+        allowed_skip = (not first['ctestPrivateFixturesOverlay']
+                        and name in {name for name, _ in SOURCE_GUARD_SCRIPTS}
+                        and proof['status'] == 'skipped' and proof['exitCode'] == 77)
+        if not (proof['status'] == 'passed' and proof['exitCode'] == 0) and not allowed_skip:
+            raise ValueError('no successful shard 1 proof for ' + name)
+    for summary in summaries:
+        shard = summary['ctestShard']
+        CTestShard(shard['index'], shard['count'])
+        if shard['count'] != count or shard['index'] in indices:
+            raise ValueError('mismatched or duplicated CTest shard index/count')
+        indices.add(shard['index'])
+        if (summary['status'] != 'passed' or summary['exitCode'] != 0
+                or summary['profile'] != first['profile']
+                or summary['minTests'] != first['minTests']
+                or summary['excludeLabel'] != first['excludeLabel']
+                or summary['requireWebsocket'] != first['requireWebsocket']
+                or summary['ctestPrivateFixturesOverlay'] != first['ctestPrivateFixturesOverlay']
+                or summary['ctestRegistrySha256'] != digest
+                or sorted(summary['ctestRegisteredNames']) != sorted(registry)
+                or summary['ctestRegistered'] != len(registry)
+                or summary['ctestUnshardedSelectedNames'] != selected
+                or summary['ctestUnshardedSelected'] != len(selected)):
+            raise ValueError('failed shard or mismatched CTest registry hash/configuration')
+        names = (summary['ctestRan'] + summary['ctestSkipped']
+                 + summary['ctestNotRun'] + summary['ctestDisabled'])
+        if not names or len(names) != len(set(names)) or union.intersection(names):
+            raise ValueError('empty shard or duplicated CTest row')
+        if (summary['ctestSelected'] != len(names)
+                or summary['ctestRows'] != len(summary['ctestRan'])
+                or summary['ctestTotal'] != len(names) - len(summary['ctestDisabled'])):
+            raise ValueError('CTest shard count/name disagreement')
+        if summary['ctestNotRun'] or summary['ctestDisabled']:
+            raise ValueError('CTest shard contains not-run or disabled rows')
+        union.update(names)
+        counted += summary['ctestRows']
+        if (not first['ctestPrivateFixturesOverlay']
+                and WEBSOCKET_SKIP_ROW in summary['ctestSkipped']):
+            counted += 1
+        if shard['index'] != 1:
+            for name in required_shared:
+                proofs = [stage for stage in summary['stages'] if stage['name'] == name]
+                if (len(proofs) != 1 or proofs[0]['status'] != 'deferred'
+                        or proofs[0].get('ownerShard') != 1):
+                    raise ValueError('shared stage must defer to its shard 1 proof: ' + name)
+        for stage in summary['stages']:
+            if stage['status'] == 'deferred':
+                if (stage['name'] not in required_shared or shard['index'] == 1
+                        or stage.get('ownerShard') != 1 or stage['exitCode'] is not None
+                        or owner is None
+                        or not any(proof['name'] == stage['name']
+                                   and proof['status'] in {'passed', 'skipped'}
+                                   for proof in owner['stages'])):
+                    raise ValueError('deferred stage has no successful shard 1 proof')
+    if union != set(selected):
+        raise ValueError('CTest shard union lost or added a row')
+    if not first['excludeLabel'] and union != set(registry):
+        raise ValueError('full CTest shard union differs from the registry')
+    if first['excludeLabel']:
+        minimum = max(EXCLUDED_REGISTERED_MIN.get(first['profile'], 0), first['minTests'] or 0)
+        if len(registry) < minimum or not 0 < len(selected) < len(registry):
+            raise ValueError('CTest union violates the registration floor or label exclusion')
+    elif first['minTests'] is not None and counted < first['minTests']:
+        raise ValueError('CTest union ran fewer rows than the unchanged global floor')
+
+
 @dataclass(frozen=True)
 class Profile:
     name: str
@@ -1001,6 +1231,7 @@ class VerifyConfig:
     # True when --min-tests was given: the floor's own note keys on the table
     # having lowered the profile floor, never on a value that merely matches.
     min_tests_explicit: bool = False
+    ctest_shard: CTestShard | None = None
 
 
 class Parser(argparse.ArgumentParser):
@@ -1215,6 +1446,9 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE')
+    parser.add_argument('--ctest-shard', type=parse_ctest_shard, default=None, metavar='I/N',
+                        help='run deterministic CTest shard I of N (1 <= I <= N <= 8); '
+                             'all shards are required for a full verification')
     parser.add_argument('--min-tests', type=int, default=None,
                         help='fail the ctest-floor stage unless at least N CTest rows ran '
                              '(a skipped or not-run row is listed, never counted); '
@@ -1279,6 +1513,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         min_tests=(args.min_tests if args.min_tests is not None else
                    profile_min_tests(PROFILE[args.profile], source)),
         min_tests_explicit=args.min_tests is not None,
+        ctest_shard=args.ctest_shard,
     )
 
 
@@ -1629,6 +1864,152 @@ class Driver:
             'stages': self.stages,
             'failures': self.failures,
         }
+        if cfg.ctest_shard is not None:
+            self.summary.update({
+                'ctestShard': {'index': cfg.ctest_shard.index, 'count': cfg.ctest_shard.count},
+                'ctestRegisteredNames': None,
+                'ctestRegistrySha256': None,
+                'ctestUnshardedSelected': None,
+                'ctestUnshardedSelectedNames': None,
+                'ctestPrivateFixturesOverlay': private_fixtures_overlay(),
+                'ctestRan': None,
+            })
+
+    def shared_stage(self, name: str) -> bool:
+        """Only shard 1 proves this stage; a deferral is never a passed check."""
+        if name not in CTEST_SHARED_STAGES:
+            raise ValueError('stage is not in the documented shard 1 table: ' + name)
+        shard = self.cfg.ctest_shard
+        if shard is None or shard.index == 1:
+            return True
+        log = self.logs / f'{name}.log'
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text('Deferred to shard 1; this shard did not execute the check.\n')
+        self.stages.append({
+            'name': name, 'argv': [], 'exitCode': None, 'status': 'deferred',
+            'ownerShard': 1, 'reason': 'shared stage; requires shard 1 result',
+            'log': str(log.relative_to(self.cfg.build_dir)),
+            'extraEnvKeys': [],
+        })
+        self.write_summary()
+        return False
+
+    def run_sharded_ctest(self, test_dir: Path, jobs: int, all_rows: Completed,
+                          selected_rows: Completed) -> Completed | None:
+        try:
+            if all_rows.returncode or selected_rows.returncode:
+                raise ValueError('CTest discovery command failed')
+            registry = ctest_registry(all_rows.stdout + all_rows.stderr)
+            selection = ctest_registry(selected_rows.stdout + selected_rows.stderr)
+            if not set(selection) <= set(registry):
+                raise ValueError('label-selected CTest names are outside the registry')
+            shard = self.cfg.ctest_shard
+            partitions = ctest_partitions(selection, shard.count, ctest_durations(self.cfg.source))
+            selected = partitions[shard.index - 1]
+            self.summary.update({
+                'ctestRegistered': len(registry),
+                'ctestRegisteredNames': sorted(registry),
+                'ctestRegistrySha256': ctest_registry_sha256(registry),
+                'ctestUnshardedSelected': len(selection),
+                'ctestUnshardedSelectedNames': sorted(selection),
+                'ctestSelected': len(selected),
+            })
+            # Anchors and escaping make the regex an exact name set. Ask
+            # CTest to prove that interpretation before executing anything.
+            expression = '^(' + '|'.join(re.escape(name) for name in selected) + ')$'
+            listing = ['ctest', '--test-dir', str(test_dir), '-N', '-R', expression]
+            if self.cfg.exclude_label:
+                listing += ['-LE', self.cfg.exclude_label]
+            discovered = self.invoke('ctest-list-shard', listing, stream_output=False)
+            if (discovered.returncode
+                    or set(ctest_registry(discovered.stdout + discovered.stderr)) != set(selected)):
+                raise ValueError('CTest shard filter lost or added a row')
+        except (OSError, ValueError) as error:
+            self.fail_stage('ctest-shard-discovery', str(error))
+            return None
+        command = ctest_command(self.cfg, test_dir, jobs=jobs,
+                                junit=ctest_supports_junit(self.cfg.runner))
+        # 1/1 keeps the unsharded execution command and accounting.
+        if shard.count != 1:
+            command += ['-R', expression]
+        ran = self.invoke('ctest', command, extra_env=self.sanitizer_env())
+        try:
+            evidence = ctest_shard_evidence(ran.stdout + ran.stderr, selected)
+        except ValueError as error:
+            self.fail_stage('ctest-shard-accounting', str(error))
+            return ran
+        self.summary['ctestRan'] = evidence['ran']
+        if shard.count == 1:
+            self.enforce_test_floor(ran, registered=len(registry), selected=len(selection),
+                                    registered_names=frozenset(registry))
+        else:
+            self.enforce_sharded_test_floor(ran, registry, selection, selected)
+        self.pass_stage(
+            'ctest-shard-accounting',
+            f'shard {shard.index}/{shard.count}: {len(selected)} result names exactly '
+            f'match discovery; registry {len(registry)} sha256 '
+            + self.summary['ctestRegistrySha256'])
+        return ran
+
+    def enforce_sharded_test_floor(self, ran: Completed, registry: tuple[str, ...],
+                                   selection: tuple[str, ...],
+                                   selected: tuple[str, ...]) -> None:
+        """Global floors bind the registry; every local selected row is accounted."""
+        rows = ctest_rows(ran.stdout + ran.stderr)  # already checked by name
+        self.summary.update({
+            'ctestTotal': rows.total, 'ctestRows': rows.ran,
+            'ctestSkipped': list(rows.skipped), 'ctestNotRun': list(rows.not_run),
+            'ctestDisabled': list(rows.disabled),
+        })
+        overlay = private_fixtures_overlay()
+        if overlay:
+            self.reject_private_fixture_skips(rows)
+        stage = 'ctest-exclusion' if self.cfg.exclude_label else 'ctest-floor'
+        pinned = frozenset()
+        absent = self.cfg.profile.name in PRIVATE_FIXTURE_PROFILE_FLOORS and not overlay
+        if not overlay and (self.cfg.min_tests is not None or self.cfg.exclude_label):
+            pinned = self.pinned_private_fixture_rows(stage)
+            if pinned is None:
+                return
+        if self.cfg.exclude_label:
+            minimum = max(EXCLUDED_REGISTERED_MIN.get(self.cfg.profile.name, 0),
+                          self.cfg.min_tests or 0)
+            if len(registry) < minimum:
+                self.fail_stage(stage, f'CTest registered {len(registry)} rows, below '
+                                f'the PR registration floor of {minimum}')
+            if not 0 < len(selection) < len(registry):
+                self.fail_stage(stage, 'expected a nonempty label exclusion over the registry')
+        elif self.cfg.min_tests is not None:
+            capacity = len(registry) - len(set(registry) & pinned)
+            if capacity < self.cfg.min_tests:
+                self.fail_stage(stage, f'CTest registry can run {capacity} rows, below '
+                                f'the floor of {self.cfg.min_tests} for the '
+                                f'{self.cfg.profile.name} profile')
+        if absent and not self.cfg.exclude_label:
+            did_not_skip = (set(selected) & pinned) - set(rows.skipped)
+            if did_not_skip:
+                self.fail_stage(stage, 'pinned rows that ran: ' + ', '.join(sorted(did_not_skip))
+                                + '; every selected pinned private-fixture row must skip '
+                                'without the overlay')
+        allowed = set()
+        if not overlay:
+            allowed.update(pinned)
+            if not self.cfg.exclude_label and self.cfg.min_tests is not None:
+                allowed.add(WEBSOCKET_SKIP_ROW)
+        check_skips = self.cfg.exclude_label or self.cfg.min_tests is not None
+        unpermitted = set(rows.skipped) - allowed if check_skips else set()
+        if (rows.not_run or rows.disabled or unpermitted
+                or rows.ran + len(rows.skipped) != len(selected)):
+            self.fail_stage(stage, f'CTest shard selected {len(selected)}, ran {rows.ran} '
+                            f'with {len(rows.skipped)} skips; ran + permitted skips must '
+                            f'equal the shard selection{rows.not_counted()}'
+                            + ('; unpermitted skips: ' + ', '.join(sorted(unpermitted))
+                               if unpermitted else ''))
+        if not any(failure['stage'] == stage for failure in self.failures):
+            self.pass_stage(stage, f'global registry {len(registry)}, unsharded selection '
+                            f'{len(selection)}, shard selection {len(selected)} = '
+                            f'{rows.ran} ran + {len(rows.skipped)} permitted skips; '
+                            f'global floor {self.cfg.min_tests}')
 
     def write_summary(self) -> None:
         self.summary['abi'] = {'action': self.abi_action}
@@ -1958,6 +2339,8 @@ class Driver:
     def enforce_native_include_independence(self) -> bool:
         if self.cfg.profile.name not in NATIVE_INCLUDE_INDEPENDENCE_PROFILES:
             return True
+        if not self.shared_stage('native-include-independence'):
+            return True
         with tempfile.TemporaryDirectory(prefix='pineforge-native-include-') as temporary:
             result = self.invoke(
                 'native-include-independence',
@@ -1966,6 +2349,8 @@ class Driver:
 
     def enforce_kernel_residuals(self) -> bool:
         if self.cfg.profile.name not in KERNEL_RESIDUALS_PROFILES:
+            return True
+        if not self.shared_stage('kernel-residuals'):
             return True
         result = self.invoke('kernel-residuals', kernel_residuals_command(self.cfg))
         return result.returncode == 0
@@ -1984,11 +2369,14 @@ class Driver:
         # tree, so its skip means the overlay did not reach it and is a
         # failure (R2-F3), not a smaller green run.
         for name, argv in source_guard_commands(self.cfg.source):
+            if not self.shared_stage(name):
+                continue
             result = self.invoke(name, argv,
                                  accept_skip=not private_fixtures_overlay())
             if result.returncode != 0 and self.stages[-1]['status'] != 'skipped':
                 guard_failed = True
-        if self.cfg.profile.name in TWIN_PARITY_PROFILES:
+        if (self.cfg.profile.name in TWIN_PARITY_PROFILES
+                and self.shared_stage('source-guard-twin-parity')):
             if self.invoke('source-guard-twin-parity',
                            twin_parity_command(self.cfg.source)).returncode != 0:
                 guard_failed = True
@@ -2156,6 +2544,7 @@ class Driver:
         registered = (ctest_list_count(all_rows.stdout + all_rows.stderr)
                       if all_rows.returncode == 0 else None)
         selected = registered
+        selected_rows = all_rows
         if self.cfg.exclude_label:
             selected_rows = self.invoke('ctest-list-selected',
                                         listing + ['-LE', self.cfg.exclude_label],
@@ -2167,13 +2556,18 @@ class Driver:
         if registered is None or selected is None:
             self.fail_stage('ctest-discovery', 'could not read registered/selected CTest counts')
         self.write_summary()
-        ctest = ctest_command(self.cfg, test_dir, jobs=ctest_jobs,
-                              junit=ctest_supports_junit(self.cfg.runner))
-        ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env())
-        registered_names = (ctest_list_names(all_rows.stdout + all_rows.stderr)
-                            if all_rows.returncode == 0 else None)
-        self.enforce_test_floor(ran, registered=registered, selected=selected,
-                                registered_names=registered_names)
+        if self.cfg.ctest_shard is not None:
+            ran = self.run_sharded_ctest(test_dir, ctest_jobs, all_rows, selected_rows)
+            if ran is None:
+                return self.finish('failed', 1)
+        else:
+            ctest = ctest_command(self.cfg, test_dir, jobs=ctest_jobs,
+                                  junit=ctest_supports_junit(self.cfg.runner))
+            ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env())
+            registered_names = (ctest_list_names(all_rows.stdout + all_rows.stderr)
+                                if all_rows.returncode == 0 else None)
+            self.enforce_test_floor(ran, registered=registered, selected=selected,
+                                    registered_names=registered_names)
         if self.cfg.profile.name in LIVE_ONLY_PROFILES:
             try:
                 rows = ctest_rows(ran.stdout + ran.stderr)
@@ -2208,10 +2602,17 @@ class Driver:
             except Exception as error:
                 self.fail_stage('live-test-skips', str(error))
 
-        installed = self.invoke(
-            'install',
-            ['cmake', '--install', str(self.cfg.build_dir), '--prefix', str(self.install_prefix)])
-        if installed.returncode == 0:
+        installed = None
+        if self.shared_stage('install'):
+            installed = self.invoke(
+                'install',
+                ['cmake', '--install', str(self.cfg.build_dir), '--prefix', str(self.install_prefix)])
+        else:
+            for name in ('smoke-configure', 'smoke-build', 'smoke-version', 'smoke-version-check'):
+                self.shared_stage(name)
+            if self.cfg.profile.live_runner:
+                self.shared_stage('native-help')
+        if installed is not None and installed.returncode == 0:
             self.run_smoke(cache)
             if self.cfg.profile.live_runner:
                 help_bin = self.install_prefix / 'bin' / 'pineforge-live'
@@ -2220,7 +2621,7 @@ class Driver:
                 else:
                     self.invoke('native-help', [str(help_bin), '--help'],
                                 extra_env=self.sanitizer_env())
-        if self.cfg.require_websocket:
+        if self.cfg.require_websocket and self.shared_stage('require-websocket'):
             ws = self.cfg.build_dir / 'bin' / 'test_native_live_websocket'
             if not ws.is_file():
                 self.fail_stage(

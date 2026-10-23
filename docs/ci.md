@@ -145,6 +145,161 @@ they hold the diff's `from` to the release `VERSION` names and rebuild the
 catalog that release published from the checked-in diff and its SHA-256
 instead ([Run-failure codes](pages/run-failure-codes.md)).
 
+## Sharding remote CTest verification
+
+`--ctest-shard I/N` selects one CTest slice with integer, one-based indices
+`1 <= I <= N <= 8`. Each VM must use the same engine tree, profile, options,
+private-fixture overlay mode and committed duration table, in its own checkout
+and build directory. For example, a four-VM Release verification runs the
+following command once on each VM, replacing `I` with its index:
+
+```sh
+python3 scripts/ci_verify.py release --build-dir build-ci-release --jobs 4 \
+  --ccache --ctest-shard I/4
+```
+
+The caller must collect all four results and judge their union before claiming
+the profile passed. A successful individual shard proves its local work only.
+Without the option the verifier keeps the existing commands, stage accounting
+and summary fields. `--ctest-shard 1/1` uses the existing CTest execution
+command and `enforce_test_floor` accounting, with additional discovery and
+name evidence.
+
+Every shard reads the complete `ctest -N` registry, including private-fixture
+placeholders. With `--exclude-label`, it also reads the same `ctest -N -LE`
+selection that an unsharded run uses. Duplicate names, duplicate discovery
+numbers, missing names, unreadable counts and empty selections fail. The
+label-selected names are assigned in decreasing scheduling weight, with
+lexical name order breaking equal weights. Each name goes to the shard with
+the smallest accumulated weight, with the lowest shard index breaking ties.
+`scripts/ci_ctest_durations.tsv` supplies integer hundredths of a second from
+the maximum observed duration per name in the supplied CI-SLIM pull-request
+and push timing TSVs, retaining names measured at least ten seconds. A name
+absent from the table receives a one-second scheduling weight; that is an
+estimate, not a timing measurement. An assignment leaving any shard empty
+fails and requires fewer shards.
+
+Each shard passes its exact escaped name set to CTest with an anchored `-R`
+expression, retaining `-LE` when requested. A separate `ctest -N` with those
+filters must reproduce the intended slice before execution. The verifier
+then reads actual result names from CTest output and cross-checks the closing
+counts and skipped/not-run/disabled lists. It refuses a missing, extra or
+duplicated result name even when CTest exits zero. The result set is never
+inferred by subtracting skipped names from discovery.
+
+For `N > 1`, global floors and local accounting are separate obligations:
+
+* The complete registry on every shard is held to the unchanged PR
+  `max(EXCLUDED_REGISTERED_MIN[profile], minTests)` bound on an excluded run.
+  The unsharded label selection must remove some registered names and leave
+  some, independently of the slice size.
+* On a full run, the unchanged overlay-aware run floor is checked against the
+  registry's runnable capacity. Without the overlay, capacity is the full
+  registered count minus the registered pinned private-fixture names;
+  with the overlay it is the full registered count. The
+  floor itself remains fixed at 603/306 absent or 910/337 present for
+  Release/kernel, or the explicit `--min-tests` value. It is never divided by
+  the shard count or lowered by an observed skip.
+* Each shard requires `ran + permitted skips = its own selected count`, with
+  no not-run or disabled row. In a full Release/kernel run without fixtures,
+  every selected pinned row must skip and public rows must run. The existing
+  unsupported-WebSocket allowance remains confined to full runs without the
+  overlay. An excluded run accepts only pinned private-fixture skips without
+  the overlay; the overlay-present checks still reject private-fixture
+  skips. Floorless full profiles keep their existing skip policy while
+  proving every selected name.
+* The union judge also checks the unchanged run floor against the sum of
+  actual ran counts, including only the existing full-run WebSocket
+  allowance. A row counted in the registry cannot conceal a missing local
+  result, and a pinned placeholder cannot conceal a missing public row.
+
+The following stage ownership table is exhaustive for the verifier's
+successful path; profile conditions still apply. A failure stage such as
+`configure-cache`, `ctest-discovery` or `require-websocket-skip` belongs to the
+same shard as the operation it diagnoses and always fails that shard.
+
+| Stages | Shards | Reason and profile conditions |
+| --- | --- | --- |
+| `tool-versions` | Every shard | Record each VM's tools. |
+| `corpus-submodule-init`, `corpus-submodule-status`, `corpus-submodule-pin` | Every shard | Materialize and authenticate that checkout's corpus input. |
+| `configure`, `profile-options` | Every shard | Build configuration is local to the VM. |
+| `sanitizer-public-flag`, `live-sanitizer-coverage`, `runner-thread-sanitizer-coverage` | Every shard | Audit that VM's compile commands when its profile enables the corresponding instrumentation. |
+| `examples-assert-live` | Every shard | Audit local example/module compiles in Release, kernel and live-runner profiles. |
+| `build`, `stale-binaries`, `native-binary` | Every shard | Rebuild all targets and authenticate the binaries that this shard will execute. |
+| `abi-base`, `abi-prior`, `abi-v13`, `abi-v14`, `abi-v15-frozen`, `abi-v16-frozen`, `abi-v18-frozen`, and their `*-fetch` stages (`abi-fetch` for `abi-base`) | Every shard | Prepare or reuse local receipt-backed providers for source-layer profiles; a CTest slice can contain any ABI row. Fetch stages remain conditional on a missing pinned object. |
+| `abi-providers-skipped` | Every shard | Existing explicit explanation for kernel and runner-only profiles, which register no receipt-backed ABI rows. |
+| `live-test-inventory`, `live-test-inventory-required` | Every shard | Check the complete runner inventory before selecting a live-only slice. |
+| `ctest-list-all`, `ctest-list-selected`, `ctest-list-shard`, `ctest`, `ctest-floor`, `ctest-exclusion`, `ctest-private-fixtures`, `live-test-skips`, `ctest-shard-accounting` | Every shard | Discovery and all applicable row/fixture accounting bind the registry and this shard's actual result names. The selected listing is conditional on `--exclude-label`; `ctest-list-shard` and `ctest-shard-accounting` are sharded-only stages. |
+| `source-guard-c-abi`, `source-guard-native-source`, `source-guard-broker-hash`, `source-guard-pending-mirror`, `source-guard-native-versions`, `source-guard-native-c-surface`, `source-guard-aggregate-versions`, `source-guard-adapter-spec-shadowing`, `source-guard-dangling-comment-names`, `source-guard-run-failure-codes`, `source-guard-run-failure-diff`, `source-guard-selected-window-ownership` | Shard 1 | Source-only checks read the common tree. Their existing pinned private-fixture skip contract still applies. |
+| `source-guard-twin-parity` | Shard 1 | Release and native source parity proof. |
+| `native-include-independence` | Shard 1 | Release, native and kernel installed-header/archive proof. |
+| `kernel-residuals` | Shard 1 | Kernel archive vocabulary proof. |
+| `install`, `smoke-configure`, `smoke-build`, `smoke-version`, `smoke-version-check` | Shard 1 | Build-dependent package/version proof runs once for the profile. |
+| `native-help` | Shard 1 | Installed help proof in profiles that build the live runner. |
+| `require-websocket` | Shard 1 | Direct no-skip transport proof when required by the profile or option; the registered CTest row still belongs to exactly one slice. |
+
+On shards 2 through N, a shared stage has `status: "deferred"`,
+`exitCode: null`, and `ownerShard: 1`; it is never marked passed. The union
+judge requires the corresponding successful shard 1 proof for every shared
+stage applicable to the profile. Only the existing source-guard exit-77
+contract can supply a skipped owner proof, and only without the overlay.
+ABI preparation, build validation and fixture accounting cannot be deferred.
+Preflight, documentation recipe steps, subset checks and corpus/parity steps
+outside this verifier retain their caller's scheduling. The CTest documentation
+guard rows remain in the selected inventory and are assigned like other rows.
+
+For sharded runs only, `ci-summary.json` adds the following evidence to its
+existing schema; consumers must reject missing or null evidence in a
+successful shard:
+
+| Field | Meaning |
+| --- | --- |
+| `ctestShard` | `{ "index": I, "count": N }`. |
+| `ctestRegistered`, `ctestRegisteredNames` | Full registry count and lexically sorted complete name list, identical on every shard. |
+| `ctestRegistrySha256` | Lowercase SHA-256 hex of the UTF-8 sorted registered names, with one LF after every name including the last. |
+| `ctestUnshardedSelected`, `ctestUnshardedSelectedNames` | Count and sorted names after the original label selection, before sharding. |
+| `ctestSelected` | This shard's selected count. |
+| `ctestRan` | Complete actual ran name list; `ctestRows` remains its count, including failed tests that actually ran. |
+| `ctestSkipped`, `ctestNotRun`, `ctestDisabled` | Complete actual name lists for those categories; the existing `ctestTotal` counts all non-disabled results. |
+| `ctestPrivateFixturesOverlay` | Boolean overlay mode used by the row checks. |
+
+The judge requires exactly N successful summaries with each index present
+once, the same profile/options/overlay mode, and matching registry names,
+count and recomputed hash. Category lists must be disjoint within and across
+shards and agree with their counts. The union of ran, skipped and not-run
+names must equal `ctestUnshardedSelectedNames` exactly; a disabled row fails
+the multi-shard accounting and is never credited as ran. Without a label
+exclusion that union must also equal the full registry and reproduce
+`ctestRegistrySha256`. With an exclusion it equals the common selected list,
+while the full registry independently supplies the registration floor and
+hash. Every shared stage must have one successful owner proof and only
+documented deferrals on the other shards. The engine's
+`validate_ctest_shard_union` supplies the reference name/hash/floor/ownership
+check; the remote judge must additionally bind all artifacts to the requested
+engine tree.
+
+The historical timing comparison used a name-sorted four-way stride as the
+simple baseline, since the timing TSVs do not carry CTest discovery indices.
+For each job and name, the comparison averages its observed seconds across
+both TSVs; ideal is the sum of those per-name averages divided by four.
+The weighted assignment uses the committed cross-job maxima as its weights.
+These are serial row-second balance estimates, not measurements of parallel
+CTest or VM wall time:
+
+| Job | Ideal seconds | Name-stride maximum / ideal | Weighted maximum / ideal |
+| --- | ---: | ---: | ---: |
+| Release | 864.953 | 3.3077 | 2.8701 |
+| Debug | 995.399 | 2.4750 | 1.9927 |
+| sanitizers | 1735.558 | 1.9381 | 1.1052 |
+| kernel-only | 874.555 | 3.1237 | 2.9683 |
+
+The old timing data includes the unsplittable `test_ci_verify` row, whose
+cross-job maximum is 4130.04 seconds. The D1 verifier-class work changes that
+row's scheduling, so these historical ratios do not establish the new
+critical path. The real sharded lab run must report per-shard wall times,
+validate the union and receive the required review before any speedup is
+claimed.
+
 ## Profiles
 
 | Profile | Build | Additional coverage |
