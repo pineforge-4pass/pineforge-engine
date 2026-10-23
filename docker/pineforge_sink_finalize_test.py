@@ -17,6 +17,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import subprocess
 import sys
@@ -32,6 +33,8 @@ RECEIPT_KEYS = ("complete", *(f"count_{tag.lower()}" for tag in TAGS),
 EXHAUSTED_RECEIPT_KEYS = (
     "complete", *(f"count_{tag.lower()}" for tag in TAGS),
     "reason", "sink_bytes", "cap_bytes", "sha256", "finalizer_version")
+TYPED_REFUSAL_RECEIPT_KEYS = (
+    *RECEIPT_KEYS, "tool", "event", "exit_code", "detail", "code", "args")
 RSS_FLATNESS_BYTES = 1024 * 1024
 RSS_BASELINE_HEADROOM_BYTES = 2 * 1024 * 1024
 STREAM_BYTES = 64 * 1024 * 1024
@@ -348,7 +351,7 @@ def assert_success(result, receipt, out, spool, payload):
         **{"count_" + tag.lower(): counts.get(tag, 0) for tag in TAGS},
         "sink_bytes": len(payload),
         "sha256": digest,
-        "finalizer_version": "1.0.0",
+        "finalizer_version": "1.1.0",
     })
     assert digest != hashlib.sha256(payload).hexdigest()  # trailer is excluded
     assert list(spool.iterdir()) == []
@@ -727,8 +730,9 @@ def test_receipt_valid_null_equity_is_typed(tmp_path, fields, stdout_mode, stder
     if stderr_receipt:
         assert receipt is None  # the separate receipt pipe was deliberately overridden
         receipt = diagnostic
-        assert tuple(receipt) == (*RECEIPT_KEYS, "tool", "event", "exit_code", "detail", "code", "args")
+        assert tuple(receipt) == TYPED_REFUSAL_RECEIPT_KEYS
     assert_failure(result, receipt, out, spool, 3)
+    assert receipt["finalizer_version"] == "1.1.0"
     assert diagnostic["tool"] == "pineforge-sink-finalize"
     assert diagnostic["event"] == "sink_refused" and diagnostic["exit_code"] == 3
     assert diagnostic["code"] == "report_result_invalid"
@@ -737,6 +741,20 @@ def test_receipt_valid_null_equity_is_typed(tmp_path, fields, stdout_mode, stder
     # leave the finalizer, and the earlier prefix must be discarded on 3.
     prefix = b"".join(payload.splitlines(keepends=True)[:2]) if stdout_mode else b""
     assert result.stdout == prefix
+
+
+def test_receipt_contract_text_lists_every_receipt_shape():
+    section = finalizer.__doc__.split("One compact JSON line", 1)[1].split("Exit codes:", 1)[0]
+    described = {
+        label: tuple(key.strip() for key in keys.split(","))
+        for label, keys in re.findall(r"Keys \(([^)]+)\):\s*([a-z0-9_,\s]+)\.", section)
+    }
+    assert described == {
+        "success": RECEIPT_KEYS,
+        "ordinary failure": RECEIPT_KEYS,
+        "exit-8 exhaustion": EXHAUSTED_RECEIPT_KEYS,
+        "typed refusal with M=2": TYPED_REFUSAL_RECEIPT_KEYS,
+    }
 
 
 @pytest.mark.parametrize("stdout_mode", [False, True])
@@ -827,7 +845,7 @@ def test_size_cap_receipt_and_stop_point_are_deterministic(
         "sink_bytes": cap + 1,
         "cap_bytes": cap,
         "sha256": "",
-        "finalizer_version": "1.0.0",
+        "finalizer_version": "1.1.0",
     })
     real_read, real_write = os.read, os.write
     receipts = []
@@ -907,7 +925,7 @@ def test_unreadable_input_fd_is_io_failure(tmp_path, stdout_mode):
         **{"count_" + tag.lower(): 0 for tag in TAGS},
         "sink_bytes": 0,
         "sha256": "",
-        "finalizer_version": "1.0.0",
+        "finalizer_version": "1.1.0",
     })
 
 

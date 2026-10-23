@@ -216,6 +216,76 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
 
+    def test_typed_failure_sink_requires_manifest_row(self):
+        # Mutation: remove _Failure keyword discovery in python_producers.
+        # The real raise then goes unreported when this row is absent.
+        self.copy_tree()
+        identifier = "report.docker/pineforge_sink_finalize.py._check_equity"
+        source = (self.root / "docker/pineforge_sink_finalize.py").read_text(encoding="utf-8")
+        self.assertIn('failure_code="report_result_invalid"', source)
+        self.doc["sinks"] = [row for row in self.doc["sinks"] if row["id"] != identifier]
+        self.reject("sink-set", "missing " + identifier, copied_tree=True)
+        self.doc["sinks"].append({
+            "id": identifier, "file": "docker/pineforge_sink_finalize.py",
+            "anchor": "_check_equity", "producer": "report_result_invalid", "stage": None,
+            "fields": [
+                {"field": "equity_curve.equity", "reasons": ["nonfinite"]},
+                {"field": "equity_curve.open_profit", "reasons": ["nonfinite"]},
+            ],
+        })
+        result = self.run_checker(copied_tree=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+    def test_typed_failure_field_and_reason_drift_are_rejected(self):
+        self.copy_tree()
+        path = self.root / "docker/pineforge_sink_finalize.py"
+        text = path.read_text(encoding="utf-8")
+        for before, after, detail in (
+                ('"equity_curve." + name', '"unowned_curve." + name',
+                 "report_result_invalid: unknown field unowned_curve.equity"),
+                ('"reason": "nonfinite"', '"reason": "unowned_reason"',
+                 "report_result_invalid: unknown reason unowned_reason")):
+            with self.subTest(after=after):
+                self.assertEqual(text.count(before), 1)
+                path.write_text(text.replace(before, after, 1), encoding="utf-8")
+                self.reject("vocabulary", detail, copied_tree=True)
+
+    def test_typed_failure_fields_follow_reader_descriptor(self):
+        self.copy_tree()
+        path = self.root / "docker/pf_sink.py"
+        text = path.read_text(encoding="utf-8")
+        column = '("equity", "f64?", "account_ccy")'
+        self.assertEqual(text.count(column), 1)
+        path.write_text(text.replace(column, '("unowned_equity", "f64?", "account_ccy")', 1),
+                        encoding="utf-8")
+        self.reject("vocabulary", "report_result_invalid: unknown field equity_curve.unowned_equity",
+                    copied_tree=True)
+
+    def test_typed_failure_unknown_syntax_fails_closed(self):
+        self.copy_tree()
+        path = self.root / "docker/pineforge_sink_finalize.py"
+        text = path.read_text(encoding="utf-8")
+        for before, after, detail in (
+                ('failure_code="report_result_invalid"', 'failure_code=choose_code()',
+                 "unresolved _Failure producer code"),
+                ('failure_args={"field": field, "reason": "nonfinite"}',
+                 'failure_args=choose_payload()', "unrecognized Python object producer"),
+                ('failure_args={"field": field, "reason": "nonfinite"}',
+                 'failure_args={"field": choose_field(), "reason": "nonfinite"}',
+                 "unresolved Python producer argument"),
+                ('zip(record.fields[1:], record.values[1:])',
+                 'zip(record.fields[2:], record.values[2:])',
+                 "unrecognized sink equity guard; update the independent reconstruction")):
+            with self.subTest(after=after):
+                self.assertEqual(text.count(before), 1)
+                path.write_text(text.replace(before, after, 1), encoding="utf-8")
+                result = self.run_checker(copied_tree=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, f"ownership[input]: {detail}\n")
+                self.assertEqual(result.stderr, "")
+
     def test_report_probe_pin_removed_is_rejected(self):
         self.doc["probes"] = []
         self.reject("probe-pins", "unregistered report/buy_hold_return_overflow")
