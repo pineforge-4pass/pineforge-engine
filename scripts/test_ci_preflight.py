@@ -61,6 +61,7 @@ FLEET_JOB_IDS = {
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = ('python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier '
                  + ci_preflight.PREFLIGHT_TIER)
+PROMOTION_AUTHORIZATION_STEP = 'Only our own merged pull requests and dispatches promote the baseline'
 
 
 def job_script(ci, job, step_name=None):
@@ -93,6 +94,15 @@ def ready_pr(condition):
     if not condition.startswith('${{ ') or not condition.endswith(' }}'):
         raise AssertionError(f'not a workflow condition: {condition!r}')
     return '${{ !github.event.pull_request.draft && (' + condition[4:-3] + ') }}'
+
+
+def in_step(workflow, job, name, before, after):
+    """Mutate the named real step, even when another step shares a line."""
+    step = ci_preflight._step_named(ci_preflight._steps(_jobs(workflow)[job]),
+                                    '      - name: ' + name)
+    if not step or before not in step:
+        raise AssertionError(f'{before!r} is not in step {name}')
+    return workflow.replace(step, step.replace(before, after, 1), 1)
 
 
 def routed_line(before, value):
@@ -696,13 +706,13 @@ class PreflightFailures(unittest.TestCase):
             (6, 'exclude_slow: false', 'exclude_slow: true'),
             (1, '        default: false', '        default: true'),
             (1, NATIVE_EXCLUSION, ''),
-            # Baseline promotion runs main's copy of the workflow and no PR
-            # code, and needs the newest two statuses on the PR head.
-            (2, '  pull_request_target:\n', '  pull_request:\n'),
+            # Baseline promotion starts from main's push and runs no PR code;
+            # it needs the newest two statuses on the resolved PR head.
+            (2, '  push:\n    branches: [main]\n', '  pull_request:\n'),
             (2, '  statuses: read', '  checks: read'),
             (2, '  id-token: write', '  id-token: none'),
             (2, '        with:\n          fetch-depth: 0',
-                '        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n'
+                '        with:\n          ref: ${{ needs.promote-guard.outputs.head_sha }}\n'
                 '          fetch-depth: 0'),
             (2, '/commits/$HEAD_SHA/statuses?per_page=100', '/commits/$HEAD_SHA/check-runs'),
             (2, '.["pineforge/parity"] == "success"', 'true'),
@@ -712,18 +722,19 @@ class PreflightFailures(unittest.TestCase):
             # Squash merges: the merge commit is merge_commit_sha, admitted by
             # tree equality with the verified PR head, never by its ancestry,
             # and the campaign tool gets that tree.
-            (2, 'github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit',
-                'github.event.pull_request.head.sha || github.event.inputs.merge_commit'),
-            (2, 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}',
-                'HEAD_SHA: ${{ github.event.pull_request.merge_commit_sha || github.event.inputs.merge_commit }}'),
+            (2, 'MERGE_SHA: ${{ needs.promote-guard.outputs.merge_sha }}',
+                'MERGE_SHA: ${{ needs.promote-guard.outputs.head_sha }}'),
+            (2, 'HEAD_SHA: ${{ needs.promote-guard.outputs.head_sha }}',
+                'HEAD_SHA: ${{ needs.promote-guard.outputs.merge_sha }}'),
             (2, '      head_sha:\n', '      pr_commit:\n'),
             (2, 'git merge-base --is-ancestor "$MERGE_SHA"', 'git merge-base --is-ancestor "$HEAD_SHA"'),
             (2, 'if [ "$merge_tree" != "$head_tree" ]; then', 'if false; then'),
             (2, 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")',
                 'head_tree=$(git rev-parse "$MERGE_SHA^{tree}")'),
-            (2, 'echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0', 'echo "ok=false" >> "$GITHUB_OUTPUT"'),
+            (2, 'echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0\n          fi\n          merge_tree=',
+                'echo "ok=false" >> "$GITHUB_OUTPUT"\n          fi\n          merge_tree='),
             (2, 'MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}',
-                'MERGE_TREE: ${{ github.event.pull_request.head.sha }}'),
+                'MERGE_TREE: ${{ needs.promote-guard.outputs.head_sha }}'),
             (2, '--merge-commit "$MERGE_SHA"', '--merge-commit "$HEAD_SHA"'),
             (2, ' --merge-tree "$MERGE_TREE"', ''),
             (2, '--ci-head "$HEAD_SHA"', '--ci-head "$MERGE_SHA"'),
@@ -740,20 +751,49 @@ class PreflightFailures(unittest.TestCase):
                 self.assertNotEqual(changed[index], original[index])
                 self.assertNotEqual(ci_workflow_findings(*changed), [])
 
+    def test_baseline_promotion_rejects_later_pr_head_checkout(self):
+        finding = ("baseline promotion must run main's copy and require "
+                   "the latest two head statuses")
+        self.assertNotIn(finding, ci_workflow_findings(*self.ci_sources(),
+                                                      others=self.other_sources()))
+        anchor = '      - name: Mint an org App token to read the campaign tooling\n'
+        checkout = ('      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n'
+                    "        if: steps.ci.outputs.green == 'true'\n"
+                    '        with:\n'
+                    '          ref: ${{ needs.promote-guard.outputs.head_sha }}\n')
+        findings = self.mutated_file_findings(2, 'promote', anchor, checkout + anchor)
+        self.assertIn(finding, findings)
+
+    def test_promotion_guard_rejects_added_contents_read_permission(self):
+        finding = 'baseline promotion must start with the pinned read-only promote-guard'
+        findings = self.mutated_file_findings(
+            2, 'promote-guard',
+            '    permissions:\n      pull-requests: read\n',
+            '    permissions:\n      contents: read\n      pull-requests: read\n')
+        self.assertIn(finding, findings)
+
+    def test_promotion_guard_rejects_missing_pull_requests_read_permission(self):
+        finding = 'baseline promotion must start with the pinned read-only promote-guard'
+        findings = self.mutated_file_findings(
+            2, 'promote-guard', '      pull-requests: read\n', '')
+        self.assertIn(finding, findings)
+
     def test_promotion_guard_rejects_mutations_of_the_real_workflow(self):
         original = self.ci_sources()
         self.assertEqual(ci_workflow_findings(*original), [])
         jobs = _jobs(original[2])
-        self.assertEqual(ci_preflight._job_values(jobs['promote-guard'], 'permissions'), ['{}'])
+        self.assertEqual(ci_preflight._job_values(jobs['promote-guard'], 'permissions'),
+                         ['pull-requests: read'])
         for forbidden in ('secrets.', 'checkout', 'id-token'):
             self.assertNotIn(forbidden, jobs['promote-guard'])
         self.assertEqual(ci_preflight._job_values(jobs['promote'], 'needs'), ['[promote-guard]'])
-        guard_finding = 'baseline promotion must start with the pinned credential-free promote-guard'
-        needs_finding = ('baseline promotion must need promote-guard and keep its '
-                         'merged-or-dispatch condition')
+        guard_finding = 'baseline promotion must start with the pinned read-only promote-guard'
+        needs_finding = ('baseline promotion must need promote-guard and require '
+                         'successful authorization')
         run_block = '        run: |\n' + ''.join(
             '          ' + line + '\n'
-            for line in job_script(original[2], 'promote-guard').splitlines())
+            for line in job_script(original[2], 'promote-guard',
+                                    PROMOTION_AUTHORIZATION_STEP).splitlines())
         fail = ('          fail() { echo "::error title=authz::$1"; '
                 'echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }\n')
         lookup = ('                  perm=$(gh api "repos/$REPO/collaborators/$MERGED_BY/permission" '
@@ -761,10 +801,8 @@ class PreflightFailures(unittest.TestCase):
         author_lookup = ('                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" '
                          '--jq .permission 2>/dev/null || echo none)\n')
         default = ('            *) fail "event $EVENT does not run baseline promotion '
-                   '(only pull_request_target and workflow_dispatch are allowed)" ;;\n')
-        unmerged = ('              [ "$MERGED" = "true" ] || { echo '
-                    '"promote-guard: unmerged pull request; promotion is skipped" '
-                    '>> "$GITHUB_STEP_SUMMARY"; exit 0; }\n')
+                   '(only push and workflow_dispatch are allowed)" ;;\n')
+        permissions = '    permissions:\n      pull-requests: read\n'
         mutations = [
             ('promote-guard', run_block, '        run: |\n          exit 0\n', guard_finding),
             ('promote-guard', fail, '          fail() { :; }\n', guard_finding),
@@ -783,23 +821,24 @@ class PreflightFailures(unittest.TestCase):
              author_lookup.replace('|| echo none)', '|| echo write)'), guard_finding),
             ('promote-guard', lookup, '', guard_finding),
             ('promote-guard',
-             '              [ -n "$MERGED_BY" ] || fail "pull_request_target merger is empty"\n',
+             '              [ -n "$MERGED_BY" ] || fail "push merger is empty"\n',
              '', guard_finding),
             ('promote-guard', lookup,
              lookup.replace('|| echo none)', '|| echo write)'), guard_finding),
             ('promote-guard', 'admin|maintain|write)', 'admin|maintain|write|read)', guard_finding),
             ('promote-guard',
-             'case "$perm" in admin|maintain|write) ;; *) fail "pull_request_target merger ',
-             'case "$perm" in admin|maintain|write|read) ;; *) fail "pull_request_target merger ',
+             'case "$perm" in admin|maintain|write) ;; *) fail "push merger ',
+             'case "$perm" in admin|maintain|write|read) ;; *) fail "push merger ',
              guard_finding),
             ('promote-guard', default, '', guard_finding),
             ('promote-guard', '            workflow_dispatch)\n',
              '            push|workflow_dispatch)\n', guard_finding),
-            ('promote-guard', '            pull_request_target)\n',
-             '            pull_request_target)\n' + unmerged, guard_finding),
-            ('promote-guard', '    permissions: {}\n', '', guard_finding),
-            ('promote-guard', '    permissions: {}\n',
+            ('promote-guard', '            push)\n',
+             '            push)\n              exit 0\n', guard_finding),
+            ('promote-guard', permissions, '', guard_finding),
+            ('promote-guard', permissions,
              '    permissions: {id-token: write}\n', guard_finding),
+            ('promote-guard', permissions, '    permissions: {}\n', guard_finding),
             ('promote-guard', '    steps:\n',
              '    env:\n      KEY: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}\n'
              '    steps:\n', guard_finding),
@@ -820,26 +859,36 @@ class PreflightFailures(unittest.TestCase):
              '      - name: Only our own merged pull requests and dispatches promote the baseline\n',
              '      - name: Changed promotion guard step\n', guard_finding),
             ('promote-guard', '\n\n', '\n', guard_finding),
+            ('promote-guard', '      ok: ${{ steps.authorize.outputs.ok }}\n',
+             '      ok: ${{ steps.pr.outputs.ok }}\n', guard_finding),
+            ('promote-guard', '        id: authorize\n',
+             '        id: authorize\n        continue-on-error: true\n', guard_finding),
+            ('promote-guard', "        if: steps.pr.outputs.ok == 'true'\n",
+             '', guard_finding),
             ('promote', '    needs: [promote-guard]\n', '', needs_finding),
             ('promote', '    needs: [promote-guard]\n',
              '    needs: []\n', needs_finding),
             ('promote', '    needs: [promote-guard]\n',
              '    needs: [promote-guard, another-job]\n', needs_finding),
             ('promote',
-             "    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}\n",
+             f'    if: {ci_preflight.PROMOTE_IF}\n',
              '    if: ${{ always() }}\n', needs_finding),
+            ('promote', f'    if: {ci_preflight.PROMOTE_IF}\n', '', needs_finding),
+            ('promote', f'    if: {ci_preflight.PROMOTE_IF}\n',
+             "    if: ${{ needs.promote-guard.outputs.ok == 'true' }}\n", needs_finding),
+            ('promote', f'    if: {ci_preflight.PROMOTE_IF}\n',
+             "    if: ${{ needs.promote-guard.result == 'success' }}\n", needs_finding),
         ]
-        # Each payload binding is independently required, not merely a word
+        # Each resolved API binding is independently required, not merely a word
         # elsewhere in the file. In particular HEAD_IS_FORK must not disappear.
         for key, value in (
                 ('EVENT', '${{ github.event_name }}'),
                 ('REPO', '${{ github.repository }}'),
-                ('HEAD_REPO', '${{ github.event.pull_request.head.repo.full_name }}'),
-                ('HEAD_IS_FORK', '${{ github.event.pull_request.head.repo.fork }}'),
-                ('ASSOCIATION', '${{ github.event.pull_request.author_association }}'),
-                ('PR_AUTHOR', '${{ github.event.pull_request.user.login }}'),
-                ('MERGED', '${{ github.event.pull_request.merged }}'),
-                ('MERGED_BY', '${{ github.event.pull_request.merged_by.login }}'),
+                ('HEAD_REPO', '${{ steps.pr.outputs.head_repo }}'),
+                ('HEAD_IS_FORK', '${{ steps.pr.outputs.head_is_fork }}'),
+                ('ASSOCIATION', '${{ steps.pr.outputs.association }}'),
+                ('PR_AUTHOR', '${{ steps.pr.outputs.pr_author }}'),
+                ('MERGED_BY', '${{ steps.pr.outputs.merged_by }}'),
                 ('GH_TOKEN', '${{ github.token }}   # read-only use: permission lookups for the PR author and merger'),
                 ('ALLOWED_BOTS', '"dependabot[bot] pineforge-app[bot]"')):
             mutations.append(('promote-guard', f'          {key}: {value}\n', '', guard_finding))
@@ -850,10 +899,24 @@ class PreflightFailures(unittest.TestCase):
                 self.assertNotEqual(changed[2], original[2])
                 self.assertIn(finding, ci_workflow_findings(*changed))
         for before, after in (
+                ('              [ -n "$ASSOCIATION" ] || fail "pull request author association is empty"\n', ''),
+                ('              [ -n "$PR_AUTHOR" ] || fail "pull request author is empty"\n', ''),
+                ('              [ -n "$REPO" ] || fail "repository is empty"\n', ''),
+                ('          HEAD_IS_FORK: ${{ steps.pr.outputs.head_is_fork }}\n',
+                 '          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}\n'),
+                ('            push)\n', '            pull_request_target)\n')):
+            with self.subTest(authorization=before):
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote-guard',
+                                     PROMOTION_AUTHORIZATION_STEP, before, after)
+                self.assertIn(guard_finding, ci_workflow_findings(*changed))
+        for before, after in (
                 ('jobs:\n  promote-guard:\n', 'jobs:\n  unexpected:\n    runs-on: ubuntu-latest\n  promote-guard:\n'),
                 ('  promote-guard:\n', '  promote-guard: # changed header\n'),
                 ('  promote-guard:\n', '  renamed-guard:\n'),
-                ('  promote:\n', '  promote-guard:\n')):
+                ('  promote:\n', '  promote-guard:\n'),
+                ('          echo "ok=true" >> "$GITHUB_OUTPUT"\n\n  promote:\n',
+                 '          echo "ok=true" >> "$GITHUB_OUTPUT"\n  promote:\n')):
             with self.subTest(header=after):
                 changed = original.copy()
                 self.assertIn(before, changed[2])
@@ -864,12 +927,16 @@ class PreflightFailures(unittest.TestCase):
         guard_at = original[2].index('\n  promote-guard:')
         promote_at = original[2].index('\n  promote:')
         changed = original.copy()
+        changed[2] = original[2][:guard_at] + original[2][promote_at:]
+        self.assertIn(guard_finding, ci_workflow_findings(*changed))
+        changed = original.copy()
         changed[2] = (original[2][:guard_at] + original[2][promote_at:]
                       + original[2][guard_at:promote_at])
         self.assertIn(guard_finding, ci_workflow_findings(*changed))
         for before, after in (
                 ('  workflow_dispatch:\n', '  push:\n'),
-                ('    types: [closed]\n', '    types: [opened, closed]\n')):
+                ('  push:\n    branches: [main]\n',
+                 '  pull_request_target:\n    types: [closed]\n')):
             with self.subTest(trigger=after):
                 changed = original.copy()
                 self.assertIn(before, changed[2])
@@ -887,6 +954,7 @@ class PreflightFailures(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / 'summary'
             lookup = Path(directory) / 'lookup'
+            output = Path(directory) / 'outputs'
             gh = Path(directory) / 'gh'
             # Put an executable stub first on PATH. The shell under test is
             # extracted unchanged from the workflow, with no driver prepended.
@@ -911,10 +979,11 @@ exit "$lookup_exit"
             env = {
                 'PATH': directory + os.pathsep + os.environ.get('PATH', '/usr/bin:/bin'),
                 'GITHUB_STEP_SUMMARY': str(summary), 'LOOKUP_LOG': str(lookup),
-                'EVENT': 'pull_request_target', 'REPO': 'pineforge-4pass/pineforge-engine',
+                'GITHUB_OUTPUT': str(output),
+                'EVENT': 'push', 'REPO': 'pineforge-4pass/pineforge-engine',
                 'HEAD_REPO': 'pineforge-4pass/pineforge-engine', 'HEAD_IS_FORK': 'false',
                 'ASSOCIATION': 'MEMBER', 'PR_AUTHOR': 'author',
-                'MERGED': 'true', 'MERGED_BY': 'merger',
+                'MERGED_BY': 'merger',
                 'ALLOWED_BOTS': 'dependabot[bot] pineforge-app[bot]',
                 'AUTHOR_PERMISSION': 'none', 'AUTHOR_LOOKUP_EXIT': '0',
                 'MERGER_PERMISSION': 'write', 'MERGER_LOOKUP_EXIT': '0',
@@ -922,10 +991,11 @@ exit "$lookup_exit"
             env.update(overrides)
             result = subprocess.run(
                 [bash, '--noprofile', '--norc', '-eo', 'pipefail', '-c',
-                 job_script(workflow, 'promote-guard')],
+                 job_script(workflow, 'promote-guard', PROMOTION_AUTHORIZATION_STEP)],
                 env=env, capture_output=True, text=True)
             return (result, summary.read_text() if summary.exists() else '',
-                    lookup.read_text() if lookup.exists() else '')
+                    lookup.read_text() if lookup.exists() else '',
+                    output.read_text() if output.exists() else '')
 
     def test_promotion_guard_accepts_only_authorised_merges_and_dispatches(self):
         cases = [({'ASSOCIATION': association}, ('merger',))
@@ -939,28 +1009,30 @@ exit "$lookup_exit"
                   for permission in ('admin', 'maintain', 'write')]
         cases += [({'MERGED_BY': bot, 'MERGER_LOOKUP_EXIT': '1'}, ())
                   for bot in ('dependabot[bot]', 'pineforge-app[bot]')]
-        cases.append(({'EVENT': 'workflow_dispatch', 'MERGED': '', 'HEAD_REPO': 'outside/fork',
+        cases.append(({'EVENT': 'workflow_dispatch', 'HEAD_REPO': 'outside/fork',
                        'HEAD_IS_FORK': 'true', 'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider',
                        'MERGED_BY': '', 'AUTHOR_LOOKUP_EXIT': '1',
                        'MERGER_LOOKUP_EXIT': '1'}, ()))
         for overrides, usernames in cases:
             with self.subTest(overrides=overrides):
-                result, summary, lookup = self.promotion_guard_result(**overrides)
+                result, summary, lookup, output = self.promotion_guard_result(**overrides)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('authz: allowed (', summary)
                 self.assertNotIn('REFUSED', summary)
+                self.assertEqual(output, 'ok=true\n')
                 self.assertEqual(lookup, ''.join(
                     f'api repos/pineforge-4pass/pineforge-engine/collaborators/{username}/permission '
                     '--jq .permission\n' for username in usernames))
-        # An authorised own unmerged close passes without a merger lookup;
-        # promote retains the separately pinned merged-only condition.
+        # No merger may be omitted after a push resolved one merged PR.
+        # Unmerged PRs now defer in resolution, before this authorization step.
         for author, usernames in (({}, ()), ({'ASSOCIATION': 'CONTRIBUTOR',
                                              'AUTHOR_PERMISSION': 'write'}, ('author',))):
             with self.subTest(unmerged_author=author):
-                result, summary, lookup = self.promotion_guard_result(
-                    MERGED='false', MERGED_BY='', MERGER_LOOKUP_EXIT='1', **author)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(summary, 'promote-guard: unmerged pull request; promotion is skipped\n')
+                result, summary, lookup, output = self.promotion_guard_result(
+                    MERGED_BY='', MERGER_LOOKUP_EXIT='1', **author)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(summary, 'authz: REFUSED: push merger is empty\n')
+                self.assertEqual(output, '')
                 self.assertEqual(lookup, ''.join(
                     f'api repos/pineforge-4pass/pineforge-engine/collaborators/{username}/permission '
                     '--jq .permission\n' for username in usernames))
@@ -968,15 +1040,15 @@ exit "$lookup_exit"
     def test_promotion_guard_refuses_foreign_heads_authors_mergers_and_lookup_errors(self):
         cases = [
             ({'HEAD_REPO': 'outside/fork'}, 'pull request from another repository (outside/fork)', ()),
-            ({'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'false'},
+            ({'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'ASSOCIATION': 'OWNER'},
              'pull request from another repository (outside/fork)', ()),
-            ({'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'true'},
+            ({'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'ASSOCIATION': 'COLLABORATOR'},
              'pull request from another repository (outside/fork)', ()),
             ({'HEAD_REPO': 'outside/fork', 'PR_AUTHOR': 'dependabot[bot]', 'ASSOCIATION': 'NONE'},
              'pull request from another repository (outside/fork)', ()),
             ({'HEAD_REPO': ''}, 'pull request from another repository (unknown)', ()),
             ({'HEAD_IS_FORK': 'true'}, 'pull request from a fork', ()),
-            ({'HEAD_IS_FORK': 'true', 'MERGED': 'false'}, 'pull request from a fork', ()),
+            ({'HEAD_IS_FORK': 'true', 'MERGED_BY': 'pineforge-app[bot]'}, 'pull request from a fork', ()),
             ({'HEAD_IS_FORK': ''}, 'pull request from a fork', ()),
             ({'HEAD_IS_FORK': 'true', 'PR_AUTHOR': 'pineforge-app[bot]', 'ASSOCIATION': 'NONE'},
              'pull request from a fork', ()),
@@ -988,7 +1060,7 @@ exit "$lookup_exit"
             ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider'},
              "author outsider (NONE) has permission 'none', not write, and is not an allowlisted bot",
              ('outsider',)),
-            ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider', 'MERGED': 'false'},
+            ({'ASSOCIATION': 'NONE', 'PR_AUTHOR': 'outsider', 'MERGED_BY': 'pineforge-app[bot]'},
              "author outsider (NONE) has permission 'none', not write, and is not an allowlisted bot",
              ('outsider',)),
             ({'ASSOCIATION': 'UNKNOWN', 'PR_AUTHOR': 'outsider'},
@@ -997,11 +1069,14 @@ exit "$lookup_exit"
             ({'ASSOCIATION': 'CONTRIBUTOR', 'PR_AUTHOR': 'another[bot]'},
              "author another[bot] (CONTRIBUTOR) has permission 'none', not write, and is not an allowlisted bot",
              ('another[bot]',)),
-            ({'ASSOCIATION': '', 'PR_AUTHOR': ''},
-             "author unknown (NONE) has permission 'none', not write, and is not an allowlisted bot", ('',)),
-            ({'MERGED_BY': ''}, 'pull_request_target merger is empty', ()),
+            ({'ASSOCIATION': '', 'PR_AUTHOR': ''}, 'pull request author association is empty', ()),
+            ({'ASSOCIATION': '', 'AUTHOR_PERMISSION': 'write'},
+             'pull request author association is empty', ()),
+            ({'PR_AUTHOR': ''}, 'pull request author is empty', ()),
+            ({'REPO': '', 'HEAD_REPO': ''}, 'repository is empty', ()),
+            ({'MERGED_BY': ''}, 'push merger is empty', ()),
             ({'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': 'write', 'MERGER_PERMISSION': 'read'},
-             "pull_request_target merger merger has permission 'read', not write", ('author', 'merger')),
+             "push merger merger has permission 'read', not write", ('author', 'merger')),
         ]
         cases += [({'ASSOCIATION': 'CONTRIBUTOR', 'AUTHOR_PERMISSION': permission},
                    f"author author (CONTRIBUTOR) has permission '{permission}', not write, "
@@ -1014,24 +1089,25 @@ exit "$lookup_exit"
                       "author author (CONTRIBUTOR) has permission 'write\nnone', not write, "
                       "and is not an allowlisted bot", ('author',)))
         cases += [({'MERGER_PERMISSION': permission},
-                   f"pull_request_target merger merger has permission '{permission}', not write", ('merger',))
+                   f"push merger merger has permission '{permission}', not write", ('merger',))
                   for permission in ('read', 'triage', 'none', '')]
         cases.append(({'MERGER_PERMISSION': '', 'MERGER_LOOKUP_EXIT': '1'},
-                      "pull_request_target merger merger has permission 'none', not write", ('merger',)))
+                      "push merger merger has permission 'none', not write", ('merger',)))
         # Even a failed call that printed 'write' must refuse.
         cases.append(({'MERGER_PERMISSION': 'write', 'MERGER_LOOKUP_EXIT': '1'},
-                      "pull_request_target merger merger has permission 'write\nnone', not write", ('merger',)))
+                      "push merger merger has permission 'write\nnone', not write", ('merger',)))
         cases += [({'EVENT': event},
                    f'event {event} does not run baseline promotion '
-                   '(only pull_request_target and workflow_dispatch are allowed)', ())
-                  for event in ('pull_request', 'workflow_run', 'push', 'schedule', '')]
+                   '(only push and workflow_dispatch are allowed)', ())
+                  for event in ('pull_request', 'pull_request_target', 'workflow_run', 'schedule', '')]
         for overrides, message, usernames in cases:
             with self.subTest(overrides=overrides):
-                result, summary, lookup = self.promotion_guard_result(**overrides)
+                result, summary, lookup, output = self.promotion_guard_result(**overrides)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn('::error title=authz::' + message, result.stdout)
                 self.assertIn('authz: REFUSED: ' + message, summary)
                 self.assertNotIn('authz: allowed', summary)
+                self.assertEqual(output, '')
                 self.assertEqual(lookup, ''.join(
                     f'api repos/pineforge-4pass/pineforge-engine/collaborators/{username}/permission '
                     '--jq .permission\n' for username in usernames))
@@ -1040,16 +1116,14 @@ exit "$lookup_exit"
         original = self.ci_sources()
         run_block = '        run: |\n' + ''.join(
             '          ' + line + '\n'
-            for line in job_script(original[2], 'promote-guard').splitlines())
+            for line in job_script(original[2], 'promote-guard',
+                                    PROMOTION_AUTHORIZATION_STEP).splitlines())
         fail = ('          fail() { echo "::error title=authz::$1"; '
                 'echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }\n')
-        unmerged = ('              [ "$MERGED" = "true" ] || { echo '
-                    '"promote-guard: unmerged pull request; promotion is skipped" '
-                    '>> "$GITHUB_STEP_SUMMARY"; exit 0; }\n')
         cases = (
             ('guard script replaced by exit 0', run_block,
              '        run: |\n          exit 0\n',
-             {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'false'}),
+             {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true'}),
             ('fail made a no-op', fail, '          fail() { :; }\n',
              {'HEAD_IS_FORK': 'true'}),
             ('fork check deleted',
@@ -1058,20 +1132,21 @@ exit "$lookup_exit"
             ('head repository check deleted',
              '              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"\n',
              '', {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'false'}),
-            ('unmerged exit before head and author checks', '            pull_request_target)\n',
-             '            pull_request_target)\n' + unmerged,
-             {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true', 'MERGED': 'false'}),
+            ('green exit before head and author checks', '            push)\n',
+             '            push)\n              exit 0\n',
+             {'HEAD_REPO': 'outside/fork', 'HEAD_IS_FORK': 'true'}),
         )
         for name, before, after, overrides in cases:
             with self.subTest(mutation=name):
-                baseline, _, _ = self.promotion_guard_result(**overrides)
+                baseline, _, _, _ = self.promotion_guard_result(**overrides)
                 self.assertEqual(baseline.returncode, 1, baseline.stdout + baseline.stderr)
                 changed = original.copy()
-                changed[2] = in_job(changed[2], 'promote-guard', before, after)
+                changed[2] = in_step(changed[2], 'promote-guard',
+                                     PROMOTION_AUTHORIZATION_STEP, before, after)
                 self.assertNotEqual(changed[2], original[2])
-                self.assertIn('baseline promotion must start with the pinned credential-free promote-guard',
+                self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
                               ci_workflow_findings(*changed))
-                result, _, _ = self.promotion_guard_result(
+                result, _, _, _ = self.promotion_guard_result(
                     workflow=changed[2], **overrides)
                 # Each disabled refusal must change a required exit 1 into
                 # exit 0; an unrelated shell error is not evidence.
@@ -1091,16 +1166,101 @@ exit "$lookup_exit"
         )
         for name, replacement, overrides, expected, mutated_expected in cases:
             with self.subTest(mutation=name):
-                baseline, _, _ = self.promotion_guard_result(**overrides)
+                baseline, _, _, _ = self.promotion_guard_result(**overrides)
                 self.assertEqual(baseline.returncode, expected, baseline.stdout + baseline.stderr)
                 changed = original.copy()
                 changed[2] = in_job(changed[2], 'promote-guard', author_lookup, replacement)
                 self.assertNotEqual(changed[2], original[2])
-                self.assertIn('baseline promotion must start with the pinned credential-free promote-guard',
+                self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
                               ci_workflow_findings(*changed))
-                result, _, _ = self.promotion_guard_result(workflow=changed[2], **overrides)
+                result, _, _, _ = self.promotion_guard_result(workflow=changed[2], **overrides)
                 self.assertEqual(result.returncode, mutated_expected, result.stdout + result.stderr)
                 self.assertNotEqual(result.returncode, baseline.returncode)
+
+    def test_promotion_guard_decisions_detect_merger_lookup_mutations(self):
+        original = self.ci_sources()
+        lookup = ('                  perm=$(gh api "repos/$REPO/collaborators/$MERGED_BY/permission" '
+                  '--jq .permission 2>/dev/null || echo none)\n')
+        cases = (
+            ('merger lookup deleted', '', {'MERGER_PERMISSION': 'write'}, 0, 1),
+            ('failed merger lookup passes', lookup.replace('|| echo none)', '|| echo write)'),
+             {'MERGER_PERMISSION': '', 'MERGER_LOOKUP_EXIT': '1'}, 1, 0),
+        )
+        for name, replacement, overrides, expected, mutated_expected in cases:
+            with self.subTest(mutation=name):
+                baseline, _, _, _ = self.promotion_guard_result(**overrides)
+                self.assertEqual(baseline.returncode, expected, baseline.stdout + baseline.stderr)
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote-guard',
+                                     PROMOTION_AUTHORIZATION_STEP, lookup, replacement)
+                self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
+                              ci_workflow_findings(*changed))
+                result, _, _, _ = self.promotion_guard_result(workflow=changed[2], **overrides)
+                self.assertEqual(result.returncode, mutated_expected, result.stdout + result.stderr)
+                self.assertNotEqual(result.returncode, baseline.returncode)
+
+    def test_promotion_guard_crash_cannot_report_authorization(self):
+        original = self.ci_sources()
+        changed = original.copy()
+        changed[2] = in_step(changed[2], 'promote-guard', PROMOTION_AUTHORIZATION_STEP,
+                             '          set -euo pipefail\n',
+                             '          set -euo pipefail\n          exit 37\n')
+        self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
+                      ci_workflow_findings(*changed))
+        result, summary, lookup, output = self.promotion_guard_result(workflow=changed[2])
+        self.assertEqual(result.returncode, 37, result.stdout + result.stderr)
+        self.assertNotIn('authz: allowed', summary)
+        self.assertEqual(lookup, '')
+        self.assertEqual(output, '')
+
+    def test_promotion_guard_pins_api_facts_refusals_and_job_outputs(self):
+        original = self.ci_sources()
+        guard = _jobs(original[2])['promote-guard']
+        expected_if = ("${{ needs.promote-guard.result == 'success' && "
+                       "needs.promote-guard.outputs.ok == 'true' }}")
+        self.assertEqual(ci_preflight._job_values(_jobs(original[2])['promote'], 'if'), [expected_if])
+        expected_outputs = ['ok: ${{ steps.authorize.outputs.ok }}']
+        expected_outputs += [f'{key}: ${{{{ steps.pr.outputs.{key} }}}}'
+                             for key in ('merge_sha', 'head_sha', 'pr_number', 'pr_url', 'merged_at')]
+        self.assertEqual(ci_preflight._job_values(guard, 'outputs'), [' '.join(expected_outputs)])
+        finding = 'baseline promotion must start with the pinned read-only promote-guard'
+        for before, after in (
+                ('          [ "$REF" = refs/heads/main ] || fail "baseline promotion requires refs/heads/main"\n', ''),
+                ('[[ -n "${value//[[:space:]]/}" && "$value" != *$\'\\n\'* && "$value" != *$\'\\r\'* ]]',
+                 'true'),
+                ('except (ValueError, RecursionError):', 'except ValueError:'),
+                ('or any(ord(char) < 32 for char in obj)', 'or False'),
+                ('not isinstance(obj, str) or not obj.strip()', 'False'),
+                ('if type(number) is not int or number <= 0:', 'if False:'),
+                ('if not re.fullmatch(r"[0-9a-f]{40}", sha):', 'if False:'),
+                ('["gh", "api", f"repos/{os.environ[\'REPO\']}/pulls/{number}"]',
+                 '["gh", "api", f"repos/{os.environ[\'REPO\']}/pulls/1"]'),
+                ('check=True, capture_output=True, text=True', 'check=False, capture_output=True, text=True'),
+                ('except (subprocess.CalledProcessError, OSError, ValueError, RecursionError):',
+                 'except ValueError:'),
+                ('pr.get("number") != number', 'False'),
+                ('type(pr.get("number")) is not int', 'False'),
+                ('pr.get("state") != "closed"', 'False'),
+                ('pr.get("merged") is not True', 'False'),
+                ('pr.get("merge_commit_sha") != sha', 'False'),
+                ('field(pr, "base", "ref") != "main"', 'False'),
+                ('field(pr, "head", "sha") != field(selected, "head", "sha")', 'False'),
+                ('field(pr, "merged_at") != field(selected, "merged_at")', 'False'),
+                ('if not re.fullmatch(r"[0-9a-f]{40}", head_sha):', 'if False:'),
+                ('if type(fork) is not bool:', 'if False:'),
+                ('"merged_by": field(pr, "merged_by", "login")',
+                 '"merged_by": field(pr, "user", "login")'),
+                ('              raise SystemExit(1)\n', '              raise SystemExit(0)\n')):
+            with self.subTest(api_refusal=before):
+                changed = original.copy()
+                changed[2] = in_step(changed[2], 'promote-guard', 'Resolve the merged PR', before, after)
+                self.assertIn(finding, ci_workflow_findings(*changed))
+        for key in ('merge_sha', 'head_sha', 'pr_number', 'pr_url', 'merged_at'):
+            with self.subTest(job_output=key):
+                changed = original.copy()
+                changed[2] = in_job(changed[2], 'promote-guard',
+                                    f'      {key}: ${{{{ steps.pr.outputs.{key} }}}}\n', '')
+                self.assertIn(finding, ci_workflow_findings(*changed))
 
     def test_build_matrix_keeps_one_pr_smoke_and_every_full_event_leg(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -2744,11 +2904,12 @@ finally:
                 findings = ci_workflow_findings(*original, others=dict(others, **{'release.yml': changed}))
                 self.assertIn(RELEASE_MATRIX_FINDING, findings)
 
-    def test_baseline_promotion_requires_isolation_and_its_existing_triggers(self):
+    def test_baseline_promotion_requires_isolation_and_push_dispatch_only(self):
         original, others = self.ci_sources(), self.other_sources()
         promote = original[2]
         self.assertEqual(ci_workflow_findings(*original, others=others), [])
         for runner in ('ubuntu-latest', 'ubuntu-24.04', PR_RUNNER,
+                       '["self-hosted","pf-ci","pf-ci-release"]',
                        f"${{{{ fromJSON('{RELEASE_RUNNER}') || 'ubuntu-latest' }}}}"):
             with self.subTest(runner=runner):
                 changed = original.copy()
@@ -2757,17 +2918,17 @@ finally:
                 findings = ci_workflow_findings(*changed, others=others)
                 self.assertIn(f'promote-baseline.yml job promote must run on {RELEASE_RUNNER} '
                               '(isolated release)', findings)
-        event_finding = ('promote-baseline.yml must retain pull_request_target and '
+        event_finding = ('promote-baseline.yml must retain push and '
                          'workflow_dispatch only for pf-gcp-main promotion')
-        for event in ('pull_request', 'push'):
+        for event in ('pull_request', 'pull_request_target', 'workflow_run'):
             for key in (event, f'"{event}"', f"'{event}'", event + ' '):
                 with self.subTest(event_key=key):
                     changed = original.copy()
                     changed[2] = in_job(promote, None, '\non:\n', f'\non:\n  {key}:\n')
                     findings = ci_workflow_findings(*changed, others=others)
                     self.assertIn(event_finding, findings)
-        for before, after in (('  pull_request_target:\n', '  pull_request:\n'),
-                              ('  workflow_dispatch:\n', '  push:\n'),
+        for before, after in (('  push:\n    branches: [main]\n', ''),
+                              ('  workflow_dispatch:\n', '  workflow_call:\n'),
                               ('\non:\n', '\non: >-\n'),
                               ('\non:\n', '\non:\non:\n')):
             with self.subTest(trigger_replacement=after):
@@ -2775,6 +2936,104 @@ finally:
                 changed[2] = in_job(promote, None, before, after)
                 findings = ci_workflow_findings(*changed, others=others)
                 self.assertIn(event_finding, findings)
+
+    def test_baseline_promotion_requires_exact_main_push_filter_and_queue(self):
+        branch_finding = 'promote-baseline.yml must restrict push to exactly branches: [main]'
+        for replacement in ('', '    branches: [develop]\n',
+                            '    branches: [main, develop]\n', '    branches: ["*"]\n',
+                            '    branches-ignore: [develop]\n',
+                            '    branches: [main]\n    tags: ["*"]\n',
+                            '    branches: [main]\n    paths: ["scripts/**"]\n'):
+            with self.subTest(push_filter=replacement):
+                findings = self.mutated_file_findings(
+                    2, None, '    branches: [main]\n', replacement)
+                self.assertIn(branch_finding, findings)
+        concurrency = ('concurrency:\n  group: promote-baseline\n'
+                       '  cancel-in-progress: false\n')
+        for before, after in (
+                (concurrency, ''),
+                ('  group: promote-baseline\n', '  group: promote-${{ github.sha }}\n'),
+                ('  cancel-in-progress: false\n', '  cancel-in-progress: true\n'),
+                ('  cancel-in-progress: false\n', ''),
+                ('    steps:\n', '    concurrency: other-group\n    steps:\n')):
+            with self.subTest(concurrency=after):
+                job = 'promote' if before == '    steps:\n' else None
+                findings = self.mutated_file_findings(2, job, before, after)
+                self.assertIn('baseline promotion must queue in group promote-baseline '
+                              'without cancellation', findings)
+
+    def test_baseline_promotion_keeps_resolution_and_guards_before_credentials(self):
+        for before, after in (
+                ('SHA: ${{ github.sha }}', 'SHA: ${{ github.event.before }}'),
+                ('gh api --paginate --slurp', 'gh api'),
+                ('/commits/$SHA/pulls?per_page=100', '/commits/main/pulls?per_page=100'),
+                ('        id: pr\n', '        id: unresolved\n'),
+                ('        id: pr\n', "        id: pr\n        if: github.event_name == 'workflow_dispatch'\n"),
+                ('REF: ${{ github.ref }}', "REF: refs/heads/main")):
+            with self.subTest(resolver=after):
+                findings = self.mutated_file_findings(2, 'promote-guard', before, after)
+                self.assertIn('baseline promotion must resolve the pushed SHA or dispatch '
+                              'inputs without a PR payload', findings)
+        for key, value in (('MERGE_SHA', 'merge_commit'), ('HEAD_SHA', 'head_sha'),
+                           ('PR_NUMBER', 'pr_number'), ('PR_URL', 'pr_url'),
+                           ('MERGED_AT', 'merged_at')):
+            with self.subTest(dispatch_input=key):
+                findings = self.mutated_file_findings(2, 'promote-guard',
+                    f'          INPUT_{key}: ${{{{ github.event.inputs.{value} }}}}\n', '')
+                self.assertIn('baseline promotion must resolve the pushed SHA or dispatch '
+                              'inputs without a PR payload', findings)
+        for before, after in (
+                ('        id: exacttree\n',
+                 "        id: exacttree\n        if: github.event_name == 'workflow_dispatch'\n"),
+                ("        if: steps.exacttree.outputs.ok == 'true'\n",
+                 "        if: steps.pr.outputs.ok == 'true'\n"),
+                ("        if: steps.ci.outputs.green == 'true'\n", ''),
+                ('    steps:\n', "    if: github.event_name == 'workflow_dispatch'\n    steps:\n"),
+                ('      - name: Verify the merged tree is the gated tree\n',
+                 '      - run: echo unchecked-step\n'
+                 '      - name: Verify the merged tree is the gated tree\n')):
+            with self.subTest(guard=after):
+                findings = self.mutated_file_findings(2, 'promote', before, after)
+                self.assertIn('baseline promotion must guard resolution, tree and gate '
+                              'checks before credentials', findings)
+        for before, after in (
+                ("        if: steps.pr.outputs.ok == 'true'\n", ''),
+                ('        id: authorize\n', '        id: unchecked\n'),
+                ('      - name: Only our own merged pull requests and dispatches promote the baseline\n',
+                 '      - run: echo unchecked-step\n'
+                 '      - name: Only our own merged pull requests and dispatches promote the baseline\n')):
+            with self.subTest(authorization_order=after):
+                findings = self.mutated_file_findings(2, 'promote-guard', before, after)
+                self.assertIn('baseline promotion must guard resolution, tree and gate '
+                              'checks before credentials', findings)
+        findings = self.mutated_file_findings(2, 'promote',
+            'PR_URL: ${{ needs.promote-guard.outputs.pr_url }}',
+            'PR_URL: ${{ github.event.pull_request.html_url }}')
+        self.assertIn('baseline promotion must resolve the pushed SHA or dispatch '
+                      'inputs without a PR payload', findings)
+        findings = self.mutated_file_findings(2, 'promote',
+            '"+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"',
+            '"$HEAD_SHA:refs/remotes/origin/pr-head"')
+        self.assertIn('baseline promotion must admit a squash merge by tree equality only', findings)
+
+    def test_baseline_promotion_pins_python_selection_and_unique_match(self):
+        for before, after in (
+                ('python3 - 3<<<"$pulls" <<\'PY\'', "python3 - <<'PY'"),
+                ('sha = os.environ["SHA"]', 'sha = "a" * 40'),
+                ('pages = json.loads(open(3, encoding="utf-8").read(), parse_constant=reject_constant)',
+                 'pages = [[]]'),
+                ('matches = [pr for page in pages for pr in page',
+                 'matches = [pr for page in pages[:1] for pr in page'),
+                ('if pr.get("state") == "closed"', 'if True'),
+                ('and pr.get("merged_at") is not None', 'and True'),
+                ('and pr.get("merge_commit_sha") == sha', 'and True'),
+                ('and isinstance(pr.get("base"), dict)', 'and True'),
+                ('and pr["base"].get("ref") == "main"]', 'and True]'),
+                ('if len(matches) != 1:', 'if not matches:')):
+            with self.subTest(selection=after):
+                findings = self.mutated_file_findings(2, 'promote-guard', before, after)
+                self.assertIn('baseline promotion must resolve the pushed SHA or dispatch '
+                              'inputs without a PR payload', findings)
 
     def test_new_workflows_require_event_fleets_without_conditional_routes(self):
         original, others = self.ci_sources(), self.other_sources()
@@ -3255,6 +3514,520 @@ finally:
         self.assertEqual(summary['stages'][0]['startedAt'], finished_first['startedAt'])
         self.assertEqual(summary['stages'][0]['seconds'], finished_first['seconds'])
         self.assertEqual(summary['stages'][1]['startedAt'], running['startedAt'])
+
+
+class BaselinePromotionResolution(unittest.TestCase):
+    SHA = 'a' * 40
+    HEAD = 'b' * 40
+    IDENTITIES = {'head_repo': 'owner/engine', 'head_is_fork': 'false',
+                  'association': 'MEMBER', 'pr_author': 'author', 'merged_by': 'merger'}
+
+    def merged_pr(self, *, sha=None, head=None, number=231,
+                  merged_at='2026-10-21T08:15:30Z'):
+        return {'state': 'closed', 'merged': True,
+                'merge_commit_sha': self.SHA if sha is None else sha,
+                'head': {'sha': self.HEAD if head is None else head,
+                         'repo': {'full_name': 'owner/engine', 'fork': False}}, 'number': number,
+                'html_url': f'https://github.com/owner/engine/pull/{number}',
+                'merged_at': merged_at, 'base': {'ref': 'main'},
+                'author_association': 'MEMBER', 'user': {'login': 'author'},
+                'merged_by': {'login': 'merger'}}
+
+    def resolver_record(self, pages, *, sha=None, event='push', inputs=None, raw_json=None,
+                        details=None, raw_details=None, detail_number=None, detail_exit=0, api_exit=0,
+                        ref='refs/heads/main', workflow=None, expected_code=0,
+                        authorize=False, permissions=None):
+        if workflow is None:
+            workflow = (ROOT / CI_SOURCES[2]).read_text()
+        script = job_script(workflow, 'promote-guard', 'Resolve the merged PR')
+        self.assertNotIn('${{', script)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / 'gh'
+            # Only the API transport is fake; bash and python3 run the workflow's
+            # actual selection and output formatting against the fixture JSON.
+            # Responses are embedded in this executable; it follows no fixture
+            # path supplied by a command or environment variable.
+            details = self.merged_pr(sha=sha) if details is None else details
+            pages_text = json.dumps(pages) if raw_json is None else raw_json
+            details_text = json.dumps(details) if raw_details is None else raw_details
+            if detail_number is None:
+                detail_number = details.get('number', 231) if isinstance(details, dict) else 231
+            permissions = {'author': ('write', 0), 'merger': ('write', 0)} if permissions is None else permissions
+            gh.write_text('#!' + sys.executable + ' -I\n'
+                'import os, pathlib, sys\n'
+                f'pages = {pages_text!r}\ndetails = {details_text!r}\n'
+                f'api_exit = {api_exit!r}\ndetail_exit = {detail_exit!r}\n'
+                f'number = {detail_number!r}\npermissions = {permissions!r}\n'
+                'args = sys.argv[1:]\n'
+                'with pathlib.Path(__file__).with_name("lookup").open("a") as log:\n'
+                '    log.write(" ".join(args) + "\\n")\n'
+                'if args == ["api", "--paginate", "--slurp", '
+                '"repos/owner/engine/commits/" + os.environ["SHA"] + "/pulls?per_page=100"]:\n'
+                '    sys.stdout.write(pages)\n'
+                '    raise SystemExit(api_exit)\n'
+                'if args == ["api", "repos/owner/engine/pulls/" + str(number)]:\n'
+                '    sys.stdout.write(details)\n'
+                '    raise SystemExit(detail_exit)\n'
+                'prefix = "repos/owner/engine/collaborators/"\n'
+                'if (len(args) == 4 and args[0] == "api" and args[2:] == ["--jq", ".permission"]\n'
+                '        and args[1].startswith(prefix) and args[1].endswith("/permission")):\n'
+                '    user = args[1][len(prefix):-len("/permission")]\n'
+                '    permission, code = permissions.get(user, ("none", 0))\n'
+                '    if permission: print(permission)\n'
+                '    raise SystemExit(code)\n'
+                'raise SystemExit(2)\n')
+            gh.chmod(0o755)
+            output = root / 'outputs'
+            log = root / 'lookup'
+            summary = root / 'summary'
+            env = {**os.environ, 'EVENT_NAME': event, 'SHA': self.SHA if sha is None else sha,
+                   'GH_TOKEN': 'fixture-token', 'REPO': 'owner/engine', 'REF': ref,
+                   'INPUT_MERGE_SHA': '', 'INPUT_HEAD_SHA': '', 'INPUT_PR_NUMBER': '',
+                   'INPUT_PR_URL': '', 'INPUT_MERGED_AT': '', **(inputs or {}),
+                   'GITHUB_STEP_SUMMARY': str(summary), 'GITHUB_OUTPUT': str(output),
+                   'PATH': str(root) + os.pathsep + os.environ.get('PATH', '')}
+            ran = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script], env=env,
+                                 text=True, capture_output=True)
+            self.assertEqual(ran.returncode, expected_code, ran.stdout + ran.stderr)
+            if expected_code:
+                self.assertNotIn('authz: allowed', summary.read_text() if summary.exists() else '')
+            lines = output.read_text().splitlines() if output.exists() else []
+            values = dict(line.split('=', 1) for line in lines)
+            self.assertEqual(len(values), len(lines), 'duplicate step outputs')
+            authorization = None
+            allowed = root / 'authorized'
+            if authorize and ran.returncode == 0 and values.get('ok') == 'true':
+                step = ci_preflight._step_named(ci_preflight._steps(_jobs(workflow)['promote-guard']),
+                                                '      - name: ' + PROMOTION_AUTHORIZATION_STEP)
+                self.assertEqual(ci_preflight._step_values(step, 'if'), ["steps.pr.outputs.ok == 'true'"])
+                bindings = ci_preflight._step_block(step, 'env')
+                self.assertTrue(bindings)
+                context = {'github.event_name': event, 'github.repository': 'owner/engine',
+                           'github.token': 'fixture-token'}
+                auth_env = dict(env, GITHUB_OUTPUT=str(allowed))
+                for binding in bindings[1:]:
+                    key, value = binding.strip().split(': ', 1)
+                    expression = re.fullmatch(r'\$\{\{ (.+) \}\}', value)
+                    if expression:
+                        source = expression.group(1)
+                        if source.startswith('steps.pr.outputs.'):
+                            auth_env[key] = values.get(source.removeprefix('steps.pr.outputs.'), '')
+                        else:
+                            self.assertIn(source, context, 'unexpected workflow binding')
+                            auth_env[key] = context[source]
+                    else:
+                        auth_env[key] = json.loads(value)
+                authorization = subprocess.run(
+                    ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c',
+                     job_script(workflow, 'promote-guard', PROMOTION_AUTHORIZATION_STEP)],
+                    env=auth_env, text=True, capture_output=True)
+            return {'resolver': ran, 'values': values,
+                    'authorization': authorization,
+                    'authorized': allowed.read_text() if allowed.exists() else '',
+                    'summary': summary.read_text() if summary.exists() else '',
+                    'lookup': log.read_text() if log.exists() else ''}
+
+    def run_resolver(self, pages, **kwargs):
+        record = self.resolver_record(pages, **kwargs)
+        return record['values'], record['resolver'].stdout, bool(record['lookup'])
+
+    def test_push_returns_exact_five_values_for_one_merged_pr(self):
+        for sha, head, number, merged_at in (
+                (self.SHA, self.HEAD, 231, '2026-10-21T08:15:30Z'),
+                ('c' * 40, 'd' * 40, 466, '2026-10-22T03:04:05Z')):
+            with self.subTest(sha=sha, pr=number):
+                pr = self.merged_pr(sha=sha, head=head, number=number, merged_at=merged_at)
+                values, stdout, called = self.run_resolver([[pr]], sha=sha, details=pr)
+                self.assertEqual(values, {
+                    'merge_sha': sha, 'head_sha': head, 'pr_number': str(number),
+                    'pr_url': f'https://github.com/owner/engine/pull/{number}',
+                    'merged_at': merged_at, 'ok': 'true', **self.IDENTITIES})
+                self.assertNotIn('::notice::', stdout)
+                self.assertTrue(called)
+
+    def test_push_reads_response_larger_than_linux_environment_limit(self):
+        """The 131,072-byte limit per environment string exists only on Linux.
+
+        This catches the transport regression on the CLOUD host, not on macOS.
+        """
+        pr = dict(self.merged_pr(), body='界' * 50_000)
+        raw_json = json.dumps([[pr]], ensure_ascii=False)
+        self.assertGreater(len(raw_json.encode('utf-8')), 131_072)
+        values, stdout, called = self.run_resolver(None, raw_json=raw_json)
+        self.assertEqual(values, {
+            'merge_sha': self.SHA, 'head_sha': self.HEAD, 'pr_number': '231',
+            'pr_url': 'https://github.com/owner/engine/pull/231',
+            'merged_at': '2026-10-21T08:15:30Z', 'ok': 'true', **self.IDENTITIES})
+        self.assertNotIn('::notice::', stdout)
+        self.assertTrue(called)
+
+    def test_push_defers_with_notice_and_no_metadata_without_one_match(self):
+        pr = self.merged_pr()
+        second = self.merged_pr(head='c' * 40, number=466)
+        missing_merged_at = {key: value for key, value in pr.items() if key != 'merged_at'}
+        cases = (
+            ('another merge commit', [[dict(pr, merge_commit_sha='d' * 40)]]),
+            ('open with merge time', [[dict(pr, state='open')]]),
+            ('closed unmerged', [[dict(pr, merged_at=None)]]),
+            ('missing merge time', [[missing_merged_at]]),
+            ('two matches', [[pr, second]]),
+            ('two matches across pages', [[pr], [second]]),
+            ('empty list', [[]]),
+            ('no pages', []),
+            ('another base', [[dict(pr, base={'ref': 'release'})]]),
+            ('null base', [[dict(pr, base=None)]]),
+            ('missing base', [[{key: value for key, value in pr.items() if key != 'base'}]]),
+        )
+        for name, pages in cases:
+            with self.subTest(case=name):
+                values, stdout, called = self.run_resolver(pages)
+                self.assertEqual(values, {'ok': 'false'})
+                count = 2 if name.startswith('two matches') else 0
+                self.assertEqual(stdout, f'::notice::found {count} merged PRs with merge '
+                                 f'commit {self.SHA} and base main; skipping\n')
+                self.assertTrue(called)
+
+    def test_push_defers_on_malformed_json_without_metadata(self):
+        valid_pages = json.dumps([[self.merged_pr()]])
+        invalid_constants = [
+            json.dumps([[dict(self.merged_pr(), merged_at=None)]]).replace('null', constant)
+            for constant in ('NaN', 'Infinity', '-Infinity')]
+        for raw_json in ('', '{', valid_pages[:-1], valid_pages + '\ntrailing garbage',
+                         *invalid_constants):
+            with self.subTest(raw_json=raw_json):
+                values, stdout, called = self.run_resolver(None, raw_json=raw_json)
+                self.assertEqual(values, {'ok': 'false'})
+                self.assertEqual(stdout, '::notice::invalid merged PR response JSON; skipping\n')
+                self.assertTrue(called)
+
+    def test_push_defers_on_deeply_nested_json_without_metadata(self):
+        values, stdout, called = self.run_resolver(None, raw_json='[' * 100_000)
+        self.assertEqual(values, {'ok': 'false'})
+        self.assertEqual(stdout, '::notice::invalid merged PR response JSON; skipping\n')
+        self.assertTrue(called)
+
+    def test_push_requires_an_array_of_page_arrays_of_pr_objects(self):
+        pr = self.merged_pr()
+        for pages in (None, {}, {'pages': [[pr]]}, pr, 231, True, 'not an array',
+                      [pr], [[pr], None], [[pr], {'other': pr}],
+                      [[pr], [None]], [[pr], [231]], [[pr], ['not a PR']]):
+            with self.subTest(pages=pages):
+                values, stdout, called = self.run_resolver(pages)
+                self.assertEqual(values, {'ok': 'false'})
+                self.assertEqual(stdout,
+                                 '::notice::invalid merged PR response page array; skipping\n')
+                self.assertTrue(called)
+
+    def test_push_selects_matching_pr_across_pages_among_unrelated_prs(self):
+        pr = self.merged_pr()
+        pages = [[dict(pr, merge_commit_sha='c' * 40)],
+                 [dict(pr, state='closed', merged_at=None), pr],
+                 [dict(pr, base={'ref': 'release'})]]
+        values, stdout, called = self.run_resolver(pages)
+        self.assertEqual(values, {
+            'merge_sha': self.SHA, 'head_sha': self.HEAD, 'pr_number': '231',
+            'pr_url': 'https://github.com/owner/engine/pull/231',
+            'merged_at': '2026-10-21T08:15:30Z', 'ok': 'true', **self.IDENTITIES})
+        self.assertNotIn('::notice::', stdout)
+        self.assertTrue(called)
+
+    def test_push_treats_json_quotes_and_shell_text_as_data(self):
+        pr = self.merged_pr()
+        pr['title'] = '\nPY\nraise SystemExit(99)\n\'"$()`\n'
+        pr['html_url'] += '?literal=$(printf injected)`printf injected`\'";'
+        values, stdout, called = self.run_resolver([[pr]], details=pr)
+        self.assertEqual(values, {
+            'merge_sha': self.SHA, 'head_sha': self.HEAD, 'pr_number': '231',
+            'pr_url': pr['html_url'], 'merged_at': pr['merged_at'], 'ok': 'true', **self.IDENTITIES})
+        self.assertNotIn('::notice::', stdout)
+        self.assertTrue(called)
+
+    def test_dispatch_returns_exact_inputs_without_a_pr_lookup(self):
+        values, stdout, called = self.run_resolver(
+            [[self.merged_pr()]], sha='f' * 40, event='workflow_dispatch', inputs={
+                'INPUT_MERGE_SHA': 'd' * 40, 'INPUT_HEAD_SHA': 'e' * 40,
+                'INPUT_PR_NUMBER': '712', 'INPUT_PR_URL': 'https://github.com/owner/engine/pull/712',
+                'INPUT_MERGED_AT': '2026-10-20T01:02:03Z'})
+        self.assertEqual(values, {
+            'merge_sha': 'd' * 40, 'head_sha': 'e' * 40, 'pr_number': '712',
+            'pr_url': 'https://github.com/owner/engine/pull/712',
+            'merged_at': '2026-10-20T01:02:03Z', 'ok': 'true'})
+        self.assertNotIn('::notice::', stdout)
+        self.assertFalse(called)
+
+    def dispatch_inputs(self):
+        return {'INPUT_MERGE_SHA': 'd' * 40, 'INPUT_HEAD_SHA': 'e' * 40,
+                'INPUT_PR_NUMBER': '712', 'INPUT_PR_URL': 'https://github.com/owner/engine/pull/712',
+                'INPUT_MERGED_AT': '2026-10-20T01:02:03Z'}
+
+    def changed_pr(self, changes):
+        pr = self.merged_pr()
+        for path, value in changes:
+            target = pr
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+        return pr
+
+    def test_push_authorizes_the_selected_full_pr_response_without_payload_fields(self):
+        pr = self.merged_pr()
+        summary_pr = {key: value for key, value in pr.items() if key not in ('merged', 'merged_by')}
+        record = self.resolver_record([[summary_pr]], details=pr, authorize=True)
+        self.assertEqual(record['resolver'].returncode, 0)
+        self.assertEqual(record['values']['merged_by'], 'merger')
+        self.assertIsNotNone(record['authorization'])
+        self.assertEqual(record['authorization'].returncode, 0,
+                         record['authorization'].stdout + record['authorization'].stderr)
+        self.assertEqual(record['authorized'], 'ok=true\n')
+        self.assertIn('authz: allowed (push by author)', record['summary'])
+        self.assertEqual(record['lookup'].splitlines(), [
+            f'api --paginate --slurp repos/owner/engine/commits/{self.SHA}/pulls?per_page=100',
+            'api repos/owner/engine/pulls/231',
+            'api repos/owner/engine/collaborators/merger/permission --jq .permission'])
+
+    def test_push_resolved_foreign_heads_and_untrusted_identities_never_authorize(self):
+        cases = (
+            ([(('head', 'repo', 'full_name'), 'outside/fork')], None, 'another repository'),
+            ([(('head', 'repo', 'fork'), True)], None, 'from a fork'),
+            ([(('author_association',), 'NONE'), (('user', 'login'), 'outsider')],
+             {'outsider': ('read', 0)}, 'author outsider'),
+            ([(('author_association',), 'CONTRIBUTOR')],
+             {'author': ('write', 1)}, 'author author'),
+            ([], {'merger': ('read', 0)}, 'push merger merger'),
+            ([], {'merger': ('write', 1)}, 'push merger merger'),
+            ([], {'merger': ('', 1)}, 'push merger merger'),
+        )
+        for changes, permissions, message in cases:
+            with self.subTest(changes=changes, permissions=permissions):
+                details = self.changed_pr(changes)
+                record = self.resolver_record([[self.merged_pr()]], details=details,
+                                               authorize=True, permissions=permissions)
+                self.assertEqual(record['resolver'].returncode, 0)
+                self.assertIsNotNone(record['authorization'])
+                self.assertEqual(record['authorization'].returncode, 1,
+                                 record['authorization'].stdout + record['authorization'].stderr)
+                self.assertIn('authz: REFUSED:', record['summary'])
+                self.assertIn(message, record['summary'])
+                self.assertNotIn('authz: allowed', record['summary'])
+                self.assertEqual(record['authorized'], '')
+
+    def test_push_allows_api_bot_identities_and_private_member_permission_fallback(self):
+        cases = [
+            ([(('user', 'login'), bot), (('author_association',), 'NONE')], {})
+            for bot in ('dependabot[bot]', 'pineforge-app[bot]')]
+        # The merger still needs a permission when the author is a bot.
+        cases = [(changes, {'merger': ('write', 0)}) for changes, _ in cases]
+        cases += [([(('merged_by', 'login'), bot)], {})
+                  for bot in ('dependabot[bot]', 'pineforge-app[bot]')]
+        cases += [([(('author_association',), 'CONTRIBUTOR')],
+                   {'author': (permission, 0), 'merger': ('write', 0)})
+                  for permission in ('admin', 'maintain', 'write')]
+        for changes, permissions in cases:
+            with self.subTest(changes=changes, permissions=permissions):
+                record = self.resolver_record([[self.merged_pr()]], details=self.changed_pr(changes),
+                                               authorize=True, permissions=permissions)
+                self.assertEqual(record['authorization'].returncode, 0,
+                                 record['authorization'].stdout + record['authorization'].stderr)
+                self.assertEqual(record['authorized'], 'ok=true\n')
+                self.assertNotIn('REFUSED', record['summary'])
+
+    def test_push_unmatched_or_ambiguous_prs_never_reach_authorization(self):
+        pr = self.merged_pr()
+        for pages in ([], [[dict(pr, merged_at=None)]], [[pr, self.merged_pr(number=466)]]):
+            with self.subTest(pages=pages):
+                record = self.resolver_record(pages, authorize=True)
+                self.assertEqual(record['values'], {'ok': 'false'})
+                self.assertIsNone(record['authorization'])
+                self.assertEqual(record['authorized'], '')
+                self.assertIn('::notice::', record['resolver'].stdout)
+                self.assertEqual(len(record['lookup'].splitlines()), 1)
+
+    def test_push_refuses_unreadable_full_pr_responses_and_api_failures(self):
+        for raw in ('', '{', 'null', '[]', '231', 'NaN', '[' * 100_000):
+            with self.subTest(raw=raw[:30]):
+                record = self.resolver_record([[self.merged_pr()]], raw_details=raw,
+                                               authorize=True, expected_code=1)
+                self.assertEqual(record['values'], {})
+                self.assertIsNone(record['authorization'])
+                self.assertEqual(record['authorized'], '')
+                self.assertIn('authz: REFUSED:', record['summary'])
+        for kwargs in ({'api_exit': 1}, {'detail_exit': 1}):
+            with self.subTest(api_failure=kwargs):
+                record = self.resolver_record([[self.merged_pr()]], authorize=True,
+                                               expected_code=1, **kwargs)
+                self.assertEqual(record['values'], {})
+                self.assertIsNone(record['authorization'])
+                self.assertEqual(record['authorized'], '')
+                self.assertNotIn('authz: allowed', record['summary'])
+
+    def test_push_refuses_changed_full_pr_merge_base_head_or_number(self):
+        for path, value in (
+                (('number',), 466), (('state',), 'open'), (('merged',), False),
+                (('merged',), None), (('merged',), 'true'),
+                (('merge_commit_sha',), 'c' * 40), (('base', 'ref'), 'release'),
+                (('head', 'sha'), 'd' * 40), (('merged_at',), '2026-10-20T01:02:03Z')):
+            with self.subTest(path=path, value=value):
+                record = self.resolver_record([[self.merged_pr()]],
+                                               details=self.changed_pr([(path, value)]),
+                                               detail_number=231, authorize=True, expected_code=1)
+                self.assertEqual(record['values'], {})
+                self.assertIsNone(record['authorization'])
+                self.assertEqual(record['authorized'], '')
+                self.assertIn('resolved PR no longer matches the pushed merge', record['summary'])
+
+    def test_push_refuses_empty_unreadable_or_multiline_required_pr_fields(self):
+        paths = (('html_url',), ('head', 'sha'), ('base', 'ref'), ('merged_at',),
+                 ('head', 'repo', 'full_name'), ('author_association',),
+                 ('user', 'login'), ('merged_by', 'login'))
+        for path in paths:
+            for value in ('', '   ', None, [], {}, True, 'bad\nok=true', 'bad\rvalue', 'bad\x00value'):
+                with self.subTest(path=path, value=value):
+                    record = self.resolver_record([[self.merged_pr()]],
+                                                   details=self.changed_pr([(path, value)]),
+                                                   authorize=True, expected_code=1)
+                    self.assertEqual(record['values'], {})
+                    self.assertEqual(record['authorized'], '')
+                    self.assertIsNone(record['authorization'])
+                    self.assertIn('empty or unreadable PR field', record['summary'])
+        for value in ('', None, 'false', 0, 1):
+            with self.subTest(fork=value):
+                values, stdout, _ = self.run_resolver(
+                    [[self.merged_pr()]], details=self.changed_pr([(('head', 'repo', 'fork'), value)]),
+                    expected_code=1)
+                self.assertEqual(values, {})
+                self.assertIn('empty or unreadable PR field: head.repo.fork', stdout)
+        for number in (None, '', True, 0, -1, '231'):
+            with self.subTest(number=number):
+                values, stdout, _ = self.run_resolver(
+                    [[dict(self.merged_pr(), number=number)]], expected_code=1)
+                self.assertEqual(values, {})
+                self.assertIn('empty or unreadable PR number', stdout)
+
+    def test_full_pr_number_type_control_refuses_boolean_one(self):
+        workflow = (ROOT / CI_SOURCES[2]).read_text()
+        selected = self.merged_pr(number=1)
+        details = dict(selected, number=True)
+        values, stdout, _ = self.run_resolver(
+            [[selected]], details=details, detail_number=1, expected_code=1)
+        self.assertEqual(values, {})
+        self.assertIn('resolved PR no longer matches the pushed merge', stdout)
+        changed = in_step(workflow, 'promote-guard', 'Resolve the merged PR',
+                          'type(pr.get("number")) is not int', 'False')
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        sources[2] = changed
+        self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
+                      ci_workflow_findings(*sources))
+        values, _, _ = self.run_resolver(
+            [[selected]], details=details, detail_number=1, workflow=changed)
+        self.assertEqual(values['pr_number'], '1')
+        self.assertEqual(values['ok'], 'true')
+
+    def test_resolver_sha_controls_refuse_invalid_pushed_and_head_hashes(self):
+        workflow = (ROOT / CI_SOURCES[2]).read_text()
+        for name, value, kwargs in (
+                ('sha', '', {'sha': ''}),
+                ('sha', 'x' * 40, {'sha': 'x' * 40}),
+                ('head_sha', 'short', {}),
+                ('head_sha', 'x' * 40, {})):
+            with self.subTest(field=name, value=value):
+                pr = self.merged_pr(sha=value) if name == 'sha' else self.merged_pr(head=value)
+                values, stdout, _ = self.run_resolver([[pr]], details=pr, expected_code=1, **kwargs)
+                self.assertEqual(values, {})
+                self.assertIn('empty or unreadable', stdout)
+                changed = in_step(workflow, 'promote-guard', 'Resolve the merged PR',
+                                  f'if not re.fullmatch(r"[0-9a-f]{{40}}", {name}):', 'if False:')
+                sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+                sources[2] = changed
+                self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
+                              ci_workflow_findings(*sources))
+                values, _, _ = self.run_resolver([[pr]], details=pr, workflow=changed, **kwargs)
+                self.assertEqual(values['ok'], 'true')
+
+    def test_dispatch_keeps_its_guard_arm_and_all_five_inputs(self):
+        record = self.resolver_record([], event='workflow_dispatch', inputs=self.dispatch_inputs(),
+                                       authorize=True)
+        self.assertEqual(record['authorization'].returncode, 0,
+                         record['authorization'].stdout + record['authorization'].stderr)
+        self.assertEqual(record['authorized'], 'ok=true\n')
+        self.assertIn('authz: allowed (workflow_dispatch)', record['summary'])
+        self.assertEqual(record['lookup'], '')
+        for key in self.dispatch_inputs():
+            for value in ('', '   ', 'bad\nok=true', 'bad\rvalue'):
+                with self.subTest(input=key, value=value):
+                    inputs = dict(self.dispatch_inputs(), **{key: value})
+                    values, stdout, called = self.run_resolver(
+                        [], event='workflow_dispatch', inputs=inputs, expected_code=1)
+                    self.assertEqual(values, {})
+                    self.assertFalse(called)
+                    self.assertIn('empty or unreadable dispatch input', stdout)
+
+    def test_push_and_dispatch_refuse_unsupported_refs_before_api_or_checkout(self):
+        for event in ('push', 'workflow_dispatch'):
+            for ref in ('', 'refs/heads/develop', 'refs/tags/v1'):
+                with self.subTest(event=event, ref=ref):
+                    values, stdout, called = self.run_resolver(
+                        [[self.merged_pr()]], event=event, ref=ref,
+                        inputs=self.dispatch_inputs(), expected_code=1)
+                    self.assertEqual(values, {})
+                    self.assertFalse(called)
+                    self.assertIn('baseline promotion requires refs/heads/main', stdout)
+
+    def test_resolver_refusal_mutations_change_real_results_and_report_findings(self):
+        workflow = (ROOT / CI_SOURCES[2]).read_text()
+        cases = (
+            ('          [ "$REF" = refs/heads/main ] || fail "baseline promotion requires refs/heads/main"\n',
+             '', {'event': 'workflow_dispatch', 'ref': 'refs/heads/develop',
+                   'inputs': self.dispatch_inputs()}),
+            ('pr.get("merged") is not True', 'False',
+             {'details': dict(self.merged_pr(), merged=False)}),
+            ('field(pr, "head", "sha") != field(selected, "head", "sha")', 'False',
+             {'details': self.changed_pr([(('head', 'sha'), 'c' * 40)])}),
+            ('field(pr, "merged_at") != field(selected, "merged_at")', 'False',
+             {'details': dict(self.merged_pr(), merged_at='2026-10-20T01:02:03Z')}),
+        )
+        for before, after, kwargs in cases:
+            with self.subTest(refusal=before):
+                baseline, _, _ = self.run_resolver([[self.merged_pr()]], expected_code=1, **kwargs)
+                self.assertEqual(baseline, {})
+                changed = in_step(workflow, 'promote-guard', 'Resolve the merged PR', before, after)
+                self.assertNotEqual(changed, workflow)
+                sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+                sources[2] = changed
+                self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
+                              ci_workflow_findings(*sources))
+                values, _, _ = self.run_resolver([[self.merged_pr()]], workflow=changed, **kwargs)
+                self.assertEqual(values['ok'], 'true')
+
+    def test_resolver_nesting_control_detects_a_removed_recursion_skip(self):
+        workflow = (ROOT / CI_SOURCES[2]).read_text()
+        changed = in_step(workflow, 'promote-guard', 'Resolve the merged PR',
+                          'except (ValueError, RecursionError):', 'except ValueError:')
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        sources[2] = changed
+        self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
+                      ci_workflow_findings(*sources))
+        values, _, called = self.run_resolver(None, raw_json='[' * 100_000,
+                                              workflow=changed, expected_code=1)
+        self.assertEqual(values, {})
+        self.assertTrue(called)
+
+    def test_resolver_crash_propagates_its_own_exit_without_authorization(self):
+        workflow = (ROOT / CI_SOURCES[2]).read_text()
+        changed = in_step(workflow, 'promote-guard', 'Resolve the merged PR',
+                          '          set -euo pipefail\n',
+                          '          set -euo pipefail\n          exit 37\n')
+        sources = [(ROOT / path).read_text() for path in CI_SOURCES]
+        sources[2] = changed
+        self.assertIn('baseline promotion must start with the pinned read-only promote-guard',
+                      ci_workflow_findings(*sources))
+        record = self.resolver_record([[self.merged_pr()]], workflow=changed,
+                                       authorize=True, expected_code=37)
+        self.assertEqual(record['resolver'].returncode, 37)
+        self.assertEqual(record['values'], {})
+        self.assertEqual(record['authorized'], '')
+        self.assertIsNone(record['authorization'])
+        self.assertEqual(record['lookup'], '')
 
 
 class CanonAuthz(unittest.TestCase):

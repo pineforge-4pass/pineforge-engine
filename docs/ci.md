@@ -848,24 +848,36 @@ the PR changed no engine behaviour. The `PineForge strict CI base` ruleset
 requires these two commit statuses. GitHub Actions jobs, including `build`,
 `sanitizers`, docs and the parity subset, are advisory. Baseline promotion
 (`promote-baseline.yml`, installed from the maintainers' private campaign
-tooling) runs `main`'s own copy on the closed PR
-(`pull_request_target`) and runs no PR code. It requires both statuses to be
-successful on the verified PR head and a merge commit on the PR's base branch that carries
+tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
+It resolves the pushed SHA through the commit's associated PRs, requiring
+exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
+`main`; no match or ambiguity exits green with a notice. Manual dispatch
+retains its five merge inputs. It requires both statuses to be successful on
+the resolved PR head and a merge commit on `main` that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
 on the base branch). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
 for the tree; after the guard succeeds, ineligible baseline cases exit green
 without promoting.
 
-`promote-guard` must pass before the credential job runs.
-Every `pull_request_target` close requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
+`promote-guard` resolves the pushed SHA and must pass before the credential job runs.
+It reads the selected PR's full API response to obtain the merger, checking
+that its merge commit, base, head and merge time match the selected result.
+The guard has only `pull-requests: read` permission for
+these API reads, with no checkout, release secrets or OIDC permission.
+Every resolved PR requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
 The permission fallback admits private organization members reported as `CONTRIBUTOR`; a failed or empty author lookup refuses promotion.
-Only after those checks can an unmerged close pass without a merger lookup and skip `promote`.
-For a merged PR, the merger login must be nonempty and must be an allowlisted bot or have `admin`, `maintain` or `write` permission; a failed or empty lookup refuses promotion.
+The merger login must be nonempty and must be an allowlisted bot or have `admin`, `maintain` or `write` permission; a failed or empty lookup refuses promotion.
+Every required PR identity field must be readable and nonempty; an invalid field fails red.
 Only `dependabot[bot]` and `pineforge-app[bot]` are allowlisted bots.
 Manual `workflow_dispatch` events pass the guard because dispatch requires write access.
 Every other event fails the guard before credentials are available.
-The trigger has no `branches:` filter and the guard does not require a `main` base ref; the existing tree check reads the PR's base ref, defaulting to `main` for dispatch.
+Pushes are restricted to `branches: [main]`, resolved PRs must target `main`,
+and the guard refuses a manual dispatch on any ref except `refs/heads/main`.
+The credential job needs the guard and requires both its successful result
+and the authorization step's `ok=true` output. A skipped or failed guard, or
+a resolver skip, cannot start that job. All merge metadata comes from the
+guard's outputs; push payloads supply no PR identity fields.
 
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
@@ -1047,8 +1059,9 @@ request and four on every other event.
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
 manual dispatch and builds and verifies its own tarballs,
-`promote-baseline.yml` reads the `pineforge/verify` and `pineforge/parity`
-statuses on the pull request head, no workflow here starts on `workflow_run`,
+`promote-baseline.yml` starts on the push to `main`, resolves its merged PR,
+and reads the `pineforge/verify` and `pineforge/parity` statuses on that PR's
+head, no workflow here starts on `workflow_run`,
 and the ruleset requires only those two statuses. A documentation merge
 therefore does not rebuild; the `ci.yml` run on its commit is `preflight` and
 the skip. That run is `main`'s latest, the one the README badge shows, so after
@@ -1134,10 +1147,10 @@ pins that one job name and image, and the exception never applies to a
 workflow reachable from `pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Release and promotion are unchanged: `release`, `notify-hub`, Linux x64
+Release and promotion use the isolated release fleet: `release`, `notify-hub`, Linux x64
 `prebuilt` and baseline `promote` use `["self-hosted","pf-gcp-main"]`.
 Release's ARM/macOS artifact cells keep their existing hosted pins, and
-promotion keeps `pull_request_target` plus manual dispatch.
+promotion runs on a push to `main` plus manual dispatch from `main`.
 
 Every split workflow retains the canon authz step and its digest. All other
 jobs need authz; CI/native aggregates always run and refuse failed authz
@@ -1146,18 +1159,52 @@ reader, so a preceding job cannot authorize a GitHub-only skip. Full CI keeps
 every proof dependency and both preflight tiers. Docs deployment and parity's
 HTTPS submodule clone retain their existing credential handling behind authz.
 
+Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
+secrets and inherited `id-token: write` permission. The release class admits
+this allowlisted workflow at `refs/heads/main`; WIF pins its
+`job_workflow_ref` and run ref to main without restricting the event.
+The pushed SHA must resolve to exactly one merged PR before authorization,
+tree equality and head-status checks admit promotion. A shared
+`promote-baseline` concurrency group with `cancel-in-progress: false` runs
+promotions one at a time. GitHub keeps one pending run per group, so a further
+merge while one promotion runs and another waits cancels the waiting run,
+which is then re-fired by manual dispatch.
+
+The named promotion exception requires exactly `push` and
+`workflow_dispatch`, pins the push filter to `branches: [main]`, and requires
+the shared concurrency group without cancellation. Its resolver reads page
+JSON from file descriptor 3, with the SHA passed through the environment.
+Malformed or excessively nested JSON, or a response that is not an array of
+page arrays of PR objects, exits green with a notice and `ok=false`, without
+merge metadata. The pins retain all four PR conditions and the exactly-one
+rule. Tests run the real resolver against fixture API responses, including
+multiple pages and responses larger than Linux's per-environment-string limit.
+A full API read of the selected PR must still match its merge, base, head and
+merge time, and supply readable identity fields; failures there refuse red.
+
 Legacy `PF_CI_LABELS` metadata does not select runners. Verification and
 parity commands use `$(getconf _NPROCESSORS_ONLN)` for parallelism.
 No job or step declares `timeout-minutes`, and no proof continues on error.
 The checker retains the bans on paid larger-runner labels and
 `larger_runner` keys. GitHub's platform maximum remains the only time bound.
 
-The credential-free `promote-guard` stays hosted on `ubuntu-latest`; the credential job keeps main's isolated release runner.
-The same stage pins the complete shared `promote-guard` block byte for byte, including comments, empty permissions, payload bindings, refusal script and separator, and the merged-or-dispatch credential job's dependency on it.
-Decision tests execute the guard script extracted from the real workflow with bash and an executable `gh` stub first on PATH that returns separate author and merger permissions by username.
-Mutation tests alter the real promotion workflow to replace the script with `exit 0`, move the unmerged exit before authorization, remove author or merger lookups and other checks, disable `fail`, bypass failed author or merger lookups, add guard credentials or a checkout, or disconnect the credential job.
-The release pool is restricted to the existing pinned release and promotion jobs; reusable call edges cannot admit PR events to them.
-Retired `pf-ci-release` labels remain refused, and an unpinned `flat-peak.yml` receives no release-pool exception.
+The read-only `promote-guard` stays hosted on `ubuntu-latest`; the credential
+job keeps main's isolated release runner. Preflight pins the complete guard
+block, including its sole `pull-requests: read` scope, API resolution, identity bindings,
+refusal script, authorization output and separator. It also pins the
+credential job's dependency and successful-authorization condition.
+Decision tests execute the real guard scripts with fixture API transport;
+only the external `gh` CLI is stubbed. Separate author and merger permission
+responses are selected by username. Mutation tests replace a script with
+`exit 0`, remove repository/fork/identity checks or permission lookups, disable
+`fail`, bypass failed lookups, add guard credentials or a checkout, or
+disconnect the credential job. Missing, skipped or unsuccessful authorization
+cannot admit promotion.
+
+The release pool is restricted to the existing pinned release and promotion
+jobs; reusable call edges cannot admit PR events to them.
+Retired `pf-ci-release` labels remain refused, and an unpinned `flat-peak.yml`
+receives no release-pool exception.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
