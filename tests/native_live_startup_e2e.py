@@ -93,6 +93,10 @@ def base_cmd(strategy, warmup, ledger, config=None, extra=None):
     return cmd
 
 
+def receipts_match_ledger_order(received_bytes, event_rows):
+    return list(received_bytes) == [row[4] for row in event_rows]
+
+
 with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     root = Path(raw)
     warmup1m = root / 'w1m.csv'
@@ -266,6 +270,8 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
             'rules': [],
             'delivery': {'max_in_flight': 1, 'transport_retries': 0},
         }))
+        # Routed delivery reads transport_retries from this document;
+        # --max-attempts only configures the non-routed path.
         example_cmd = [runner, 'run', '--strategy', native_example, '--warmup', str(example_warmup),
                        '--mode', 'bars', '--ledger', str(example_ledger),
                        '--webhook-url', example_url, '--webhook-routes', str(example_routes),
@@ -281,6 +287,9 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         assert all(row[2].isdigit() and int(row[2]) != 0 for row in failed_rows['inputs'])
         receipt_sequence = lambda body: json.loads(body)['sequence']
         failed_payloads = receipts_by_sequence(received_bytes, receipt_sequence)
+        assert receipts_match_ledger_order(received_bytes[:2], failed_rows['events'])
+        assert not receipts_match_ledger_order(
+            list(reversed(received_bytes[:2])), failed_rows['events'])
         assert failed_payloads == receipts_by_sequence(
             (row[4] for row in failed_rows['events']), receipt_sequence)
 
@@ -297,6 +306,7 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         assert len(committed_rows['events']) == 2, committed_rows
         assert len(received) == 4, received
         replayed_payloads = receipts_by_sequence(received_bytes[2:], receipt_sequence)
+        assert receipts_match_ledger_order(received_bytes[2:], committed_rows['events'])
         assert replayed_payloads == failed_payloads
         assert committed_rows['inputs'][:len(failed_rows['inputs'])] == failed_rows['inputs']
         assert committed_rows['events'][0][:5] == failed_rows['events'][0][:5]
