@@ -229,14 +229,14 @@ def split_argument_elements(raw: str, table: 'Rows') -> list[str]:
 
 
 def subst(text: str, env: dict, depth: int = 0) -> str:
-    """Substitute every ${var} the walk bound, one configured value each."""
+    """Substitute every ${var} with its complete CMake semicolon list."""
     if depth > 10 or '${' not in text:
         return text
     def replace(m: re.Match) -> str:
         values = env.get(m.group(1))
-        if not values:
+        if values is None:
             return m.group(0)
-        return values[0]
+        return ';'.join(values)
     return subst(re.sub(r'\$\{(\w+)\}', replace, text), env, depth + 1)
 
 
@@ -588,15 +588,16 @@ class Rows:
             self._walk(first, last, item_env, conditions)
 
     def _do_set(self, body: str, env: dict) -> None:
-        m = re.match(r'\s*(\w+)\s+(.*)$', body, re.S)
+        m = re.match(r'\s*(\w+)(?:\s+(.*))?$', body, re.S)
         if not m:
             return
-        name, rest = m.group(1), m.group(2)
-        values = env.setdefault(name, [])
+        name, rest = m.group(1), m.group(2) or ""
+        values = []
         for token in rest.split():
             value = token.strip('"')
-            if value not in values:
-                values.append(value)
+            value = subst(value, env) if '${' in value else value
+            values.extend(value.split(';'))
+        env[name] = values
 
     def _do_cr150_glob(self, body: str, line_i: int, env: dict) -> None:
         """Bind only the lane glob whose files this sweep will include."""

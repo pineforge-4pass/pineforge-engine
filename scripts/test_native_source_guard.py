@@ -86,6 +86,11 @@ _DECLARATION_KEYWORDS = {
     "static_cast", "switch", "throw", "typeid", "typeof", "while", "xor",
     "void", "bool", "char", "short", "int", "long", "float", "double",
 }
+_CLASS_ATTRIBUTE = r"\[\[(?:[^\]]|\](?!\]))*\]\]"
+_CLASS_HEAD = re.compile(
+    rf"\b(?:class|struct)\b\s*(?:{_CLASS_ATTRIBUTE}\s*)*BacktestEngine\b"
+    rf"(?:\s*(?:{_CLASS_ATTRIBUTE}|final\b))*"
+    r"\s*(?::[^{;]*)?\{", re.S)
 
 
 def _mask_cpp(text: str) -> str:
@@ -143,7 +148,7 @@ def _mask_cpp(text: str) -> str:
 
 def _class_extent(masked: str) -> tuple[int, int] | None:
     # A forward declaration must not borrow the next class's opening brace.
-    match = re.search(r"\bclass\s+BacktestEngine\b\s*(?::[^{;]*)?\{", masked)
+    match = _CLASS_HEAD.search(masked)
     if not match:
         return None
     opening = masked.find("{", match.start(), match.end())
@@ -165,7 +170,7 @@ def _member_declarations(text: str) -> list[tuple[int, str]]:
     masked = _mask_cpp(text)
     extent = _class_extent(masked)
     if extent is None:
-        return []
+        raise ValueError("BacktestEngine definition is missing")
     start, end = extent
     segment_start = start
     brace_depth = 0
@@ -265,11 +270,8 @@ def _defined_member_names(root: Path) -> set[str]:
 
 def _declared_but_undefined(root: Path) -> list[tuple[int, str]]:
     header = root / "include/pineforge/engine.hpp"
-    try:
-        declarations = _member_declarations(
-            header.read_text(encoding="utf-8", errors="replace"))
-    except OSError:
-        return []
+    declarations = _member_declarations(
+        header.read_text(encoding="utf-8", errors="replace"))
     defined = _defined_member_names(root)
     return sorted((line, name) for line, name in declarations if name not in defined)
 
@@ -324,22 +326,30 @@ def self_test() -> int:
         source = root / "src/engine.cpp"
         header.parent.mkdir(parents=True)
         source.parent.mkdir(parents=True)
-        header.write_text(
-            "class BacktestEngine {\n"
-            "public:\n"
-            "  void missing_member(int value = 1);\n"
-            "  void defined_member();\n"
-            "  inline void inline_member() {}\n"
-            "  virtual void pure_member() = 0;\n"
-            "  int initialized = std::numeric_limits<int>::min();\n"
-            "  const char* text = \"void fake_member();\";\n"
-            "};\n", encoding="utf-8")
         source.write_text("void BacktestEngine::defined_member() {}\n", encoding="utf-8")
-        missing = _declared_but_undefined(root)
-        if missing != [(3, "missing_member")]:
-            print("native source guard: member-declaration self-test failed: "
-                  + repr(missing), file=sys.stderr)
-            return 1
+        for class_head in (
+                "class BacktestEngine {",
+                "class BacktestEngine final {",
+                "class [[nodiscard]] BacktestEngine {",
+                "class [[nodiscard]] BacktestEngine final {",
+                "class [[nodiscard]] [[deprecated]] BacktestEngine final : public Base {",
+                "class[[nodiscard]] BacktestEngine final {",
+                "struct BacktestEngine final {"):
+            header.write_text(
+                class_head + "\n"
+                "public:\n"
+                "  void missing_member(int value = 1);\n"
+                "  void defined_member();\n"
+                "  inline void inline_member() {}\n"
+                "  virtual void pure_member() = 0;\n"
+                "  int initialized = std::numeric_limits<int>::min();\n"
+                "  const char* text = \"void fake_member();\";\n"
+                "};\n", encoding="utf-8")
+            missing = _declared_but_undefined(root)
+            if missing != [(3, "missing_member")]:
+                print("native source guard: member-declaration self-test failed: "
+                      + repr(missing), file=sys.stderr)
+                return 1
         # The unrelated row-source members have no BacktestEngine definitions.
         # A forward declaration before them must still lead to the actual
         # engine definition, including its genuinely missing member.
@@ -356,6 +366,30 @@ def self_test() -> int:
         if missing != [(11, "missing_member")]:
             print("native source guard: forward-declaration self-test failed: "
                   + repr(missing), file=sys.stderr)
+            return 1
+    with tempfile.TemporaryDirectory(prefix="pf-native-source-missing-") as temporary:
+        missing_root = Path(temporary) / "missing"
+        try:
+            _declared_but_undefined(missing_root)
+        except OSError:
+            pass
+        else:
+            print("native source guard: missing-header self-test failed",
+                  file=sys.stderr)
+            return 1
+    with tempfile.TemporaryDirectory(prefix="pf-native-source-no-class-") as temporary:
+        root = Path(temporary)
+        header = root / "include/pineforge/engine.hpp"
+        header.parent.mkdir(parents=True)
+        header.write_text("class BacktestEngine;\nclass OtherEngine {};\n",
+                          encoding="utf-8")
+        try:
+            _declared_but_undefined(root)
+        except ValueError:
+            pass
+        else:
+            print("native source guard: no-class self-test failed",
+                  file=sys.stderr)
             return 1
     return 0
 
@@ -380,7 +414,12 @@ def main() -> int:
     if run_scan(FORBIDDEN_IDENTIFIER, roots, "source/Pine identifier",
                 exclude_line=excluded_identifier_line):
         return 1
-    undefined = _declared_but_undefined(ROOT)
+    try:
+        undefined = _declared_but_undefined(ROOT)
+    except (OSError, ValueError) as error:
+        print(f"native source guard: {ROOT / 'include/pineforge/engine.hpp'}: {error}",
+              file=sys.stderr)
+        return 1
     if undefined:
         print("native source guard: declared-but-undefined BacktestEngine "
               "member(s) found", file=sys.stderr)

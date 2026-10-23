@@ -506,13 +506,9 @@ class ManifestCheckerTests(unittest.TestCase):
         self.copy_tree()
         path = self.root / "docker/run_json.py"
         text = path.read_text(encoding="utf-8")
-        # Summary scalar reconstruction resolves p before the array proof;
-        # the unknown point source therefore fails there first. The trade
-        # row t reaches the factory's exact POD-binding check.
-        for block, row, diagnostic in (
-                ("trades", "t", "unrecognized array POD binding trades"),
-                ("equity_curve", "p",
-                 "unrecognized scalar producer expression: report.unknown[i]")):
+        # Each factory owns its record binding; nested p must not shadow
+        # the trade loop's scalar producer during summary reconstruction.
+        for block, row in (("trades", "t"), ("equity_curve", "p")):
             binding = f"        {row} = report.{block}[i]\n"
             with self.subTest(block=block):
                 self.assertEqual(text.count(binding), 1)
@@ -520,7 +516,8 @@ class ManifestCheckerTests(unittest.TestCase):
                                 encoding="utf-8")
                 result = self.run_checker(copied_tree=True)
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertEqual(result.stdout, f"ownership[input]: {diagnostic}\n")
+                self.assertEqual(result.stdout,
+                                 f"ownership[input]: unrecognized array POD binding {block}\n")
                 self.assertEqual(result.stderr, "")
 
     def scalar_fixture(self, source):
@@ -531,15 +528,45 @@ class ManifestCheckerTests(unittest.TestCase):
         self.assertEqual(target.id, "p")
         return ownership.scalar_type(ast.Name(id="p", ctx=ast.Load()), {"p": assignment.value})
 
-    def test_d4_report_array_scalar_index_is_accepted(self):
+    def test_d4_report_array_struct_index_is_rejected(self):
         for source in ("p = report.equity_curve[i]", "p = report.equity_curve[0]",
                        "p = report.trades[i]", "p = report.trades[0]"):
             with self.subTest(source=source):
-                self.assertEqual(self.scalar_fixture(source), {"kind": "number", "null_allowed": False})
+                with self.assertRaises(ownership.InputError) as raised:
+                    self.scalar_fixture(source)
+                self.assertEqual(str(raised.exception),
+                                 "unrecognized scalar producer expression: " + source.split(" = ", 1)[1])
+
+    def test_struct_subscript_is_not_a_scalar(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        marker = '        "summary": {\n'
+        self.assertEqual(text.count(marker), 1)
+        path.write_text(text.replace(
+            marker, marker + '            "bogus": report.trades[0],\n', 1),
+                        encoding="utf-8")
+        findings = ownership.Findings()
+        with self.assertRaisesRegex(
+                ownership.InputError,
+                r"unrecognized scalar producer expression: report\.trades\[0\]"):
+            ownership.reconstruct_schema(self.root, findings)
+
+    def test_best_trade_reads_trade_loop(self):
+        self.copy_tree()
+        path = self.root / "docker/run_json.py"
+        text = path.read_text(encoding="utf-8")
+        original = "        p = float(report.trades[i].pnl)\n"
+        self.assertEqual(text.count(original), 1)
+        path.write_text(text.replace(
+            original, "        p = _num(report.trades[i].pnl)\n", 1),
+                        encoding="utf-8")
+        findings = ownership.Findings()
+        actual = ownership.reconstruct_schema(self.root, findings)
+        self.assertEqual(actual["leaves"]["summary.best_trade"],
+                         {"kind": "number", "null_allowed": True})
 
     def test_d4_unrecognized_report_array_index_is_rejected(self):
-        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
-                         {"kind": "number", "null_allowed": False})
         for expression in ("report.unknown[i]", "other.equity_curve[i]",
                            "report.other.equity_curve[i]", "report.equity_curve.values[i]"):
             with self.subTest(expression=expression):
@@ -549,8 +576,6 @@ class ManifestCheckerTests(unittest.TestCase):
                                  "unrecognized scalar producer expression: " + expression)
 
     def test_d4_report_array_slice_is_rejected(self):
-        self.assertEqual(self.scalar_fixture("p = report.equity_curve[i]"),
-                         {"kind": "number", "null_allowed": False})
         for expression in ("report.equity_curve[i:j]", "report.equity_curve[:]",
                            "report.equity_curve[True]", "report.equity_curve[1.0]",
                            "report.equity_curve[i + 1]", "report.equity_curve[index()]",

@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+from check_broker_state_hash_coverage import executable_hash_text
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -13,6 +15,8 @@ def check(root: Path = ROOT) -> int:
     header = (root / "include/pineforge/source/market_admission.hpp").read_text()
     source = (root / "src/source/market_admission.cpp").read_text()
     adapter_hash = (root / "src/source/pine_state_hash.cpp").read_text()
+    source = executable_hash_text(source)
+    adapter_hash = executable_hash_text(adapter_hash)
     schema = json.loads((root / "scripts/market_admission_schema.json").read_text())
     required = {
         "Configuration", "PriceRequest", "CurrentPrices", "SizingObservation",

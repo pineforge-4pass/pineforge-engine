@@ -300,6 +300,58 @@ class FormulaTests(unittest.TestCase):
         facts["data"]["selected"] = 0
         self.assertEqual(arena_bound(facts)["terms"]["arena"]["inputs"]["E"]["value"], 10000)
 
+    def test_engine_fingerprint_covers_included_fragments(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copyfile(ROOT / "CMakeLists.txt", root / "CMakeLists.txt")
+            for directory in ("src", "include", "docker"):
+                shutil.copytree(ROOT / directory, root / directory)
+            baseline = engine_fingerprint(root)
+            for relative in (
+                "src/source/exit_payload_codec.inc",
+                "src/run_failure_registry.inc",
+                "docker/report_annualization.def",
+                "include/pineforge/version.h.in",
+            ):
+                with self.subTest(fragment=relative):
+                    path = root / relative
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"\n")
+                    try:
+                        self.assertNotEqual(baseline, engine_fingerprint(root))
+                    finally:
+                        path.write_bytes(original)
+
+    def test_empty_feed_inventory_is_not_zero(self):
+        vector = next(row for row in self.vectors
+                      if row["name"] == "all-terms-and-separate-feed-pages")
+        facts = copy.deepcopy(vector["facts"])
+        facts["data"]["scriptBars"] = 100000
+        facts["ohlcv"]["feeds"] = []
+        result = arena_bound(facts)
+        self.assertTrue(result["terms"]["ohlcv"]["unbounded"])
+        self.assertIsNone(result["terms"]["ohlcv"]["residentBytes"])
+        self.assertIsNone(result["terms"]["ohlcv"]["asBytes"])
+
+    def test_malformed_facts_name_the_sidecar(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            probe = Path(temporary)
+            sidecar = probe / "arena-facts.json"
+            sidecar.write_text("{", encoding="utf-8")
+            with self.assertRaises(FactsError) as raised:
+                read_compile_facts(probe)
+            self.assertIn(str(sidecar), str(raised.exception))
+
+    def test_non_object_control_flow_names_the_sidecar(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            probe = Path(temporary)
+            (probe / "generated.cpp").write_text("generated", encoding="utf-8")
+            write_sidecar(probe, {"controlFlow": "bounded"})
+            sidecar = probe / "arena-facts.json"
+            with self.assertRaises(FactsError) as raised:
+                read_compile_facts(probe)
+            self.assertIn(str(sidecar), str(raised.exception))
+
     def test_missing_and_stale_sidecar_fail_before_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
             probe = Path(temporary)

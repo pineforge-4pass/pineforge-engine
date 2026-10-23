@@ -26,9 +26,10 @@ def _sha256(data: bytes) -> str:
 def engine_fingerprint(root: Path = ENGINE_ROOT) -> str:
     """Bind a lowering/storage proof to the complete runtime header/source tree."""
     paths = [root / "CMakeLists.txt"]
-    for directory in ("src", "include"):
+    for directory in ("src", "include", "docker"):
         paths.extend(path for path in (root / directory).rglob("*")
-                     if path.is_file() and path.suffix in (".h", ".hpp", ".cpp", ".c"))
+                     if path.is_file() and path.suffix in (
+                         ".h", ".hpp", ".cpp", ".c", ".inc", ".def", ".in"))
     digest = hashlib.sha256(b"pineforge-arena-engine/v1\0")
     for path in sorted(paths):
         data = path.read_bytes()
@@ -73,7 +74,10 @@ def read_compile_facts(probe: Path) -> tuple[dict, str]:
             return {"strategy": {"controlFlow": control}}, "UNCLASSIFIED"
         return {"strategy": unknown_strategy(
             "trusted compiler/lowering FACTS record is absent", str(sidecar))}, "UNCLASSIFIED"
-    record = json.loads(sidecar.read_text(encoding="utf-8"))
+    try:
+        record = json.loads(sidecar.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise FactsError(f"{sidecar}: malformed FACTS JSON: {error}") from error
     if not isinstance(record, dict) or record.get("schema") != FACTS_SCHEMA:
         raise FactsError(f"{sidecar}: wrong FACTS schema")
     producer = record.get("producer")
@@ -105,6 +109,8 @@ def read_compile_facts(probe: Path) -> tuple[dict, str]:
     if not isinstance(strategy, dict):
         raise FactsError(f"{sidecar}: missing strategy facts")
     control = strategy.get("controlFlow", {})
+    if not isinstance(control, dict):
+        raise FactsError(f"{sidecar}: strategy.controlFlow must be an object")
     status = control.get("status")
     if status == "unbounded":
         classification = "UNBOUNDED"

@@ -866,13 +866,6 @@ def scalar_type(node, environment, resolving=frozenset()):
             return result
     if isinstance(node, ast.Name) and node.id in environment and node.id not in resolving:
         return scalar_type(environment[node.id], environment, resolving | {node.id})
-    # One indexed read from the report arrays reconstructed below, never a slice.
-    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
-            and isinstance(node.value.value, ast.Name) and node.value.value.id == "report"
-            and node.value.attr in {"trades", "equity_curve"}
-            and (isinstance(node.slice, ast.Name)
-                 or (isinstance(node.slice, ast.Constant) and type(node.slice.value) is int))):
-        return {"kind": "number", "null_allowed": False}
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         name = node.func.id
         if name in {"int", "len", "sum"}:
@@ -1010,7 +1003,16 @@ def reconstruct_schema(root, findings):
         raise InputError("unrecognized _stats_dict serializer; update the independent reconstruction")
     builder = function(tree, "build_report_dict")
     environment = {"i": ast.Constant(value=0)}
-    for node in ast.walk(builder):
+
+    def function_scope_nodes(node):
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef, ast.Lambda)):
+                continue
+            yield from function_scope_nodes(child)
+
+    for node in function_scope_nodes(builder):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):

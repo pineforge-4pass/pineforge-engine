@@ -353,6 +353,8 @@ def _ohlcv_term(record) -> dict:
         raise MissingProof("missing ohlcv.feeds physical buffer inventory")
     if not isinstance(feeds, (list, tuple)):
         raise FactsError("ohlcv.feeds must enumerate every physical bar/close/column buffer")
+    if not feeds:
+        raise MissingProof("missing ohlcv.feeds physical buffer inventory")
     resident = address_space = 0
     for index, item in enumerate(feeds):
         name = f"ohlcv.feeds[{index}]"

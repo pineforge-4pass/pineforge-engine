@@ -610,6 +610,33 @@ endfunction()
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertIn('list(SORT) is not a subcommand this sweep models', result.stdout)
 
+    def test_cmake_set_and_list_substitution_follow_cmake_semantics(self):
+        cases = (
+            (
+                'set(_fx tests/cr150_public/x.csv '
+                f'{REMOVED_EXAMPLE}/bars.csv)\n',
+                'full_list',
+            ),
+            (
+                'set(_fx tests/cr150_public/x.csv)\n'
+                f'set(_fx {REMOVED_EXAMPLE}/bars.csv)\n',
+                'replacement',
+            ),
+        )
+        for assignment, suffix in cases:
+            with self.subTest(case=suffix):
+                tree = TamperTree(Path(self._tmp.name) / f'tamper-cmake-{suffix}')
+                row = f'test_e2e_cmake_set_{suffix}'
+                tree.append('tests/CMakeLists.txt',
+                            f'{assignment}'
+                            f'add_test(NAME {row} COMMAND '
+                            f'${{CMAKE_COMMAND}} -E echo ${{_fx}})\n')
+                result = run_sweep(tree.root)
+                self.assertEqual(1, result.returncode,
+                                 result.stdout + result.stderr)
+                self.assertIn(row, result.stdout)
+                self.assertIn(f'{REMOVED_EXAMPLE}/bars.csv', result.stdout)
+
 
 class KernelPythonSweepControls(unittest.TestCase):
     """Controls for check_kernel_python_private_reads.py: its population is a
