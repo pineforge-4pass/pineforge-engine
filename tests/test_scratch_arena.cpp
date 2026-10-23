@@ -1119,11 +1119,27 @@ void tmpfs_regular_backing() {
                "/dev/shm, the test directory and TMPDIR (or /tmp)\n", stderr);
 }
 
+// A regular file with no directory entry. O_TMPFILE makes one directly; a
+// filesystem without it (overlayfs answers EOPNOTSUPP) gets the same shape from
+// a mkstemp file that is unlinked at once. The engine only ever sees the
+// descriptor of a regular file, never how it was created.
+int anonymous_regular_descriptor(const std::string& directory) {
+    const int fd = ::open(directory.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+    if (fd >= 0) return fd;
+    const int error = errno;
+    if (error != EOPNOTSUPP && error != EISDIR && error != EINVAL)
+        return created(fd, "open O_TMPFILE (anonymous_regular_backing)");
+    std::fprintf(stderr, "NOTE: O_TMPFILE unsupported here (errno=%d); the anonymous "
+                         "regular-file arena uses an unlinked mkstemp file\n", error);
+    std::string name = directory + "/anonymous-XXXXXX";
+    const int fallback = created(::mkstemp(name.data()), "mkstemp (anonymous fallback)");
+    require(fallback < 0 || ::unlink(name.c_str()) == 0, "unlink anonymous fallback file");
+    return fallback;
+}
+
 void anonymous_regular_backing() {
     TemporaryDirectory directory(".");
-    Backing backing(created(::open(directory.path.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600),
-                            "open O_TMPFILE (anonymous_regular_backing)"),
-                    4 * kChunk);
+    Backing backing(anonymous_regular_descriptor(directory.path), 4 * kChunk);
     int allocation;
     do { allocation = ::posix_fallocate(backing.fd, 0, static_cast<off_t>(backing.bytes)); }
     while (allocation == EINTR);
