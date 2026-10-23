@@ -1,4 +1,4 @@
-// Real syscall failures and the A7 writer translators. No runtime fault hooks.
+// Real I/O failures and the A7 writer translators. No runtime fault hooks.
 // Frozen batch-C lacks WriterError::run_failure() and DiskIdTable::set_store.
 // Compile fail-before and behavioral red/green evidence belong to the lab.
 #include "report_sink_failure_fixture.hpp"
@@ -25,12 +25,15 @@ constexpr auto chunk = detail::ScratchArena::kChunkBytes;
 constexpr std::size_t writer_buffer = 64 * 1024;
 
 template<class Operation>
-void expect_writer_io(Operation operation, int number, const char* reason) {
+void expect_writer_io(Operation operation, int number, const char* reason,
+                      const char* message = nullptr) {
     try {
         operation();
     } catch (const rs::WriterError& error) {
         require(error.reason() == rs::WriterFailure::io && error.error_number() == number,
-                "writer retains the real syscall errno");
+                "writer retains its I/O error number");
+        require(!message || std::strstr(error.what(), message),
+                "writer retains the expected failure origin");
         expect_failure(error.run_failure(), reason_args(reason));
         expect_failure(pineforge::classify_run_failure(error), reason_args(reason));
         return;
@@ -124,10 +127,16 @@ void writer_origins() {
         expect_writer_io([&] { (void)file.write_trailer(); }, EFBIG, "sink_io");
     }
 #if defined(__linux__)
+    // State::uncached requires a disk-backed regular path sink. /dev/full is
+    // a character device: fstat succeeds, then the type guard supplies EINVAL
+    // before any write, so the old trailer ENOSPC expectation was unreachable.
+    // The regular-file EFBIG case above still exercises a real sink write.
+    // Mutation: delete the !S_ISREG guard in src/report_sink_writer.cpp;
+    // the origin check must fail even if a later backing check gives EINVAL.
     const pf_report_sink_v1 full{sizeof full, 1, "/dev/full", "W1", directory.path.c_str()};
     rs::LineWriter device(full);
-    device.write_header({false, false, false, 0, 0});
-    expect_writer_io([&] { (void)device.write_trailer(); }, ENOSPC, "sink_io");
+    expect_writer_io([&] { device.write_header({false, false, false, 0, 0}); },
+                     EINVAL, "sink_io", "report sink requires a disk-backed regular file: ");
 #endif
     Socket socket;
     const pf_report_sink_fd_v1 fd_sink{sizeof fd_sink, 1, socket.writer.value, "W1"};
@@ -175,8 +184,15 @@ public:
         if (mode == Mode::callback) {
             socket->close_peer();
             output_bar(context.script_bar_open_ms, context.script_bar_open_ms + 60000);
-            // A real V line over one buffer forces I/O inside report_sink_record.
+            // output_event queues; output_events_clear publishes through
+            // report_sink_record. The message alone exceeds the writer's
+            // 64 KiB io_window (src/report_sink_writer.cpp), forcing socket I/O
+            // in this callback, before the sentinel can throw.
+            // Mutation: remove write_report_sink_events() from
+            // BacktestEngine::output_events_clear in src/engine_report.cpp;
+            // the sentinel then yields engine_unclassified_error and fails the code check.
             output_event(0, 1.0, std::string(writer_buffer + 1, 'v'));
+            output_events_clear();
             throw std::runtime_error("callback write unexpectedly succeeded");
         }
         if (mode == Mode::arena_failure) {
@@ -211,20 +227,39 @@ void begin_peer_translator() {
     expect_engine_failure(host, reason_args("sink_peer_closed"));
 }
 
-void begin_arena_backing_translator() {
-    // Exercise the common path/fd startup before either opens scratch. A bad
-    // inherited-fd declaration must remain an arena cause at the run getter.
+void arena_backing_admission_translator() {
+    // Both sink setters attach the inherited arena before run(). decimal()
+    // rejects a non-digit with EINVAL/arena_backing before inspecting any fd;
+    // pf_cabi_int records that typed failure on the handle and returns -1.
+    // Fresh-host run status stays 0: note_failure_record only stores the refusal.
+    // Mutation: remove attach_from_environment() from either sink setter;
+    // its now-successful admission must fail the -1 assertion below.
     Environment invalid_fd("PF_SCRATCH_ARENA_FD", "not-a-decimal-fd");
     Directory directory;
     Socket socket;
+    const auto path = directory.file("refused-before-open");
+    const pf_report_sink_v1 path_sink{sizeof path_sink, 1, path.c_str(), "W1", directory.path.c_str()};
+    const pf_report_sink_fd_v1 stream_sink{sizeof stream_sink, 1, socket.writer.value, "W1"};
     for (const bool fd_sink : {false, true}) {
         Host host;
-        if (fd_sink) install_fd(host, socket.writer.value);
-        else install_path(host, directory.file("refused-before-open"), directory.path);
-        run(host, tape(2));
-        require(host.callbacks == 0 && !detail::ScratchArena::attached(),
+        auto* handle = static_cast<pineforge::BacktestEngine*>(&host);
+        require((fd_sink ? strategy_set_report_sink_fd_v1(handle, &stream_sink)
+                         : strategy_set_report_sink_v1(handle, &path_sink)) == -1,
+                "invalid arena environment must fail sink admission");
+        require(host.last_error().find("scratch arena environment fd: ") != std::string::npos,
+                "arena admission retains the environment fd failure origin");
+        require(host.callbacks == 0 && host.presentations == 0 && !detail::ScratchArena::attached(),
                 "backing configuration must fail before scratch and callbacks");
-        expect_engine_failure(host, reason_args("arena_backing"));
+        require(host.last_run_status() == 0, "sink admission must preserve the unstarted run status");
+        const auto expected = reason_args("arena_backing");
+        expect_failure(pineforge::run_failure_value_of(host), expected);
+        require(std::string(pineforge::run_failure_code_of(host)) == "report_sink_failed"
+                    && std::string(pineforge::run_failure_args_of(host)) == expected,
+                "admission getters preserve the same complete failure");
+        pf_report_sink_receipt_v1 receipt{sizeof receipt, 1};
+        require(host.report_sink_receipt_v1(&receipt) == 0 && !receipt.complete
+                    && receipt.sha256_hex[0] == '\0',
+                "refused sink admission must not complete a receipt");
     }
 }
 
@@ -385,7 +420,7 @@ int main() {
         writer_origins();
         begin_open_translator();
         begin_peer_translator();
-        begin_arena_backing_translator();
+        arena_backing_admission_translator();
         callback_writer_translator();
         held_equity_translator();
         selected_presentation_translator();
