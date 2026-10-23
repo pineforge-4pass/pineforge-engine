@@ -221,25 +221,67 @@ def assert_native_poison(result, field, bad):
     assert math.isfinite(getattr(point, companion))
 
 
-def assert_written_curve(result, wire):
-    """H2-4: inspect the finite prefix actually written before native refusal."""
+def assert_refused_curve(result, wire):
+    """H2-4: the small native refusal discards its unflushed prefix."""
     library = result.library
-    lines = [
-        json.loads(line, parse_constant=nonfinite.reject_constant)
-        for line in wire.splitlines()
+    # full_plan supplies six window bars plus the anchor. The fixed E/T
+    # header and six finite E rows fit below LineWriter's 64 KiB io_window.
+    # append only flushes a full window; write_e's catch calls fail(), which
+    # clears used. The bridge unwinds without abandon() or write_trailer(),
+    # and State's destructor closes without flushing the retained bytes.
+    assert len(library._curve) == 7
+    assert wire == b""
+    # cr289_write_equity initializes the ABI fields, then copies counts and
+    # digest only after write_trailer. Refusal leaves every payload field zero.
+    receipt = library.native_receipt
+    assert receipt.struct_size == ctypes.sizeof(receipt)
+    assert receipt.version == 1
+    assert receipt.complete == 0
+    assert all(getattr(receipt, "count_" + tag) == 0 for tag in "etovkxh")
+    assert bytes(receipt.sha256_hex) == b""
+    assert bytes(receipt.reserved) == b"\0" * 7
+    assert receipt.trades_retained == 0
+
+
+@pytest.mark.parametrize("route", ["file", "fd"])
+def test_native_writer_flushes_completed_curve(tmp_path, native_writer, route):
+    # H2-4: write_trailer flushes these finite E rows, unlike native refusal.
+    # Expected values are the fixture inputs, independent of the wire formatter.
+    expected = [
+        (selected.T, selected.CAPITAL, 0.0),
+        (selected.T, selected.CAPITAL + 1.0, 0.0),
+        (selected.T + selected.MINUTE, FINITE["equity"], FINITE["open_profit"]),
     ]
-    assert lines[0]["schema"] == "pf-report-sink"
-    # cr289_write_equity copies counts/digest only after write_trailer; a
-    # write_e refusal leaves the receipt zeroed but preserves earlier bytes.
-    assert library.native_receipt.complete == 0
-    assert library.native_receipt.count_e == 0
-    assert bytes(library.native_receipt.sha256_hex) == b""
-    points = lines[1:]
-    assert points == [["E", *library.point(point)] for point in library._curve[:-1]]
-    assert len(points) == len(library._curve) - 1
-    assert points[0] == ["E", *library.anchor_before]
-    assert points[-1][1] < library._curve[-1].time_ms
-    assert all(all(math.isfinite(value) for value in row[2:]) for row in points)
+    curve = (run_json.EquityPointC * len(expected))(
+        *(run_json.EquityPointC(*point) for point in expected))
+    receipt = run_json.ReportSinkReceiptC()
+    if route == "file":
+        sink = tmp_path / "completed-native.sink"
+        descriptor = run_json.ReportSinkC(
+            ctypes.sizeof(run_json.ReportSinkC), 1,
+            os.fsencode(sink), b"", os.fsencode(tmp_path))
+        native_writer.write(descriptor, None, curve, receipt)
+        wire = sink.read_bytes()
+    else:
+        with fd_sinks.Stream() as stream:
+            descriptor = run_json.ReportSinkFdC(
+                ctypes.sizeof(run_json.ReportSinkFdC), 1, stream.writer, b"")
+            native_writer.write(None, descriptor, curve, receipt)
+        wire = stream.data
+    encoded = wire.splitlines(keepends=True)
+    lines = [json.loads(line, parse_constant=nonfinite.reject_constant) for line in encoded]
+    assert lines[0]["schema"] == lines[-1]["trailer"] == "pf-report-sink"
+    assert lines[1:-1] == [["E", *point] for point in expected]
+    assert len(lines[1:-1]) == len(expected)
+    assert all(all(math.isfinite(value) for value in row[2:]) for row in lines[1:-1])
+    assert lines[-1]["counts"] == {"E": len(expected), "T": 0}
+    digest = hashlib.sha256(b"".join(encoded[:-1])).hexdigest()
+    assert lines[-1]["sha256"] == digest
+    assert receipt.struct_size == ctypes.sizeof(receipt)
+    assert receipt.version == receipt.complete == 1
+    assert receipt.count_e == len(expected)
+    assert all(getattr(receipt, "count_" + tag) == 0 for tag in "tovkxh")
+    assert bytes(receipt.sha256_hex).decode("ascii") == digest
 
 
 def convert_fd_capture(tmp_path, stdout, wire):
@@ -375,7 +417,7 @@ def test_file_sink_native_nonfinite(tmp_path, native_writer, field, bad):
     assert result.library.writer_calls == 1
     assert result.library.path_descriptor is not None
     assert result.library.fd_descriptor is None
-    assert_written_curve(result, result.library.wire)
+    assert_refused_curve(result, result.library.wire)
     nonfinite.assert_failure(
         result, "report_result_invalid",
         {"field": "equity_curve." + field, "reason": "nonfinite"}, mode="selected")
@@ -393,7 +435,7 @@ def test_fd_sink_native_nonfinite(tmp_path, native_writer, field, bad):
     assert result.library.writer_calls == 1
     assert result.library.path_descriptor is None
     assert result.library.fd_descriptor.fd == stream.writer
-    assert_written_curve(result, stream.data)
+    assert_refused_curve(result, stream.data)
     converted, diagnostic = convert_fd_capture(tmp_path, result.stdout, stream.data)
     evidence = {
         "run_json_status": result.status, "run_json_stdout": result.stdout,
