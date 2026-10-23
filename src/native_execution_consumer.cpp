@@ -7063,15 +7063,21 @@ void NativeExecutionConsumer::match_path(
     auto& rows = match_rows_;
     rows.clear();
     bool rescan_winner_only = false;
-    // The request a row was scanned from, held for its reader. The book does
-    // not change between a scan and its winner's first use, so in a book that
-    // is all resident the row's own index names it. Once part of the book is
-    // outside the heap an index walks the book from its front: a row the scan
-    // found outside the heap is read where the scan found it (book_at, see
-    // the winner's row below), and a row it found resident is looked up by
-    // its handle, in the heap; the core's handle lookup also answers
-    // whenever the reuse is switched off. Held: a spilled row's copy lives as
-    // long as the answer, whatever the book reads meanwhile.
+    // The request a row was scanned from, held for its reader. In a book that
+    // is all resident a refresh updates its row in place, so between a scan
+    // and its winner's first use the row's own index names it. Once part of
+    // the book is outside the heap an index walks the book from its front: a
+    // row the scan found outside the heap is read where the scan found it
+    // (book_at, see the winner's row below), and a row it found resident is
+    // looked up by its handle. That lookup stays in the heap only while the
+    // row does: every row a refresh brings into the heap spills the heap's
+    // back row to make room, so the row that stood at the back at the scan
+    // (one per point, unless a rebuild rescanned the book first) is outside
+    // the heap by its reuse and is found by a keyed search of the spilled
+    // table, O(log N) table steps (book_lookup_reads counts it as one row read
+    // back). The core's handle lookup also answers whenever the reuse is
+    // switched off. Held: a spilled row's copy lives as long as the answer,
+    // whatever the book reads meanwhile.
     auto scanned_request = [&](const Candidate& row)
             -> std::shared_ptr<const native_order::LiveRequest> {
         if (match_row_reuse_ && !requests_.book_spilled()) {
@@ -7355,7 +7361,13 @@ void NativeExecutionConsumer::match_path(
         // The winner's row: the one the walk held; for a row kept from an
         // earlier scan, the request read at the table entry that scan found it
         // at outside the heap -- one entry and one row, in a book of any size
-        // -- or else its lookup. Held until this winner is done with.
+        // -- or else its lookup. Held until this winner is done with. That
+        // read is the matcher's own, and it is O(1) in the book only for a row
+        // the scan found outside the heap; the refresh an Evaluate winner then
+        // asks of the core (refresh_allowance: classify, promote_book_row)
+        // finds the row in the spilled table and spills the heap's back row,
+        // O(log N) table operations per spilled winner per point, which
+        // book_lookup_reads does not count (lane b1 round 4, the real bound).
         std::shared_ptr<const native_order::LiveRequest> winner_row;
         if (winner_held) {
             winner_row = std::move(winner_held);
@@ -9326,20 +9338,24 @@ void NativeExecutionConsumer::record_script_report_point(
     if (!spec) return;
     if (spec->report_policy != NativeReportPolicy::KernelRecordedAtHostMarks)
         engine.update_equity_extremes();
+    // Under a policy whose host owns the report cadence nothing is folded
+    // here, but a read of the book that failed inside a noexcept fold the host
+    // asked for since (a hash it caught the throw of, its own continuation
+    // capture) ends the run at this point, as it does under KernelRecorded,
+    // rather than completing over it. (The early return keeps its one-line
+    // spelling: scripts/check_broker_state_hash_coverage.py pins it.)
     if (spec->report_policy != NativeReportPolicy::KernelRecorded) {
-        // Nothing is folded here, but a read of the book that failed inside a
-        // noexcept fold the host asked for since (a hash it caught the throw
-        // of, its own continuation capture) ends the run at this point, as
-        // it does under KernelRecorded, rather than completing over it.
         requests_.rethrow_book_read_failure();
-        return;
     }
+    if (spec->report_policy != NativeReportPolicy::KernelRecorded) return;
     engine.retire_report_sink_hashes();
     engine.record_equity_point(script_open_ms);
-    engine.last_script_continuation_hash_ = continuation_hash();
+    const std::uint64_t execution = continuation_hash();
     // A read of the book that failed inside the noexcept fold is thrown here,
-    // before the hash it cut short is latched as valid.
+    // before the hash it cut short is latched: the latch keeps the last point
+    // it held as valid, never the cut hash.
     requests_.rethrow_book_read_failure();
+    engine.last_script_continuation_hash_ = execution;
     engine.last_script_continuation_valid_ = true;
     if (engine.broker_state_hash_recording_) {
         engine.broker_state_hashes_.push_back(engine.broker_state_hash());

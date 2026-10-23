@@ -1299,6 +1299,12 @@ list(APPEND TEST_SOURCES test_core_visit_group_recipients_visitor_reads_paged_jo
 list(APPEND TEST_SOURCES test_broker_state_hash_spilled_read_failure)
 list(APPEND TEST_SOURCES test_core_rejected_external_openings_page_reload)
 list(APPEND TEST_SOURCES test_core_codec_plan_execution_refused)
+# Lane b1, round 4 (verifier N-01): a refused request's external openings are
+# copied when its event is built, so no page spill reads the caller's
+# call-local cursor after the call (twin row _poisoned: the same run with the
+# cursor kept but unreadable, red on any build; this row frees it, the
+# sanitizers profile's AddressSanitizer control).
+list(APPEND TEST_SOURCES test_core_rejected_event_cursor_not_retained)
 # R5 PERF-K24 (K2): a retained lower feed hands each script bar its sub-bars
 # by binary search, so a lower-timeframe run stays linear in its length; the
 # values the selection feeds are pinned. Source-free, so it also runs in the
@@ -3739,6 +3745,15 @@ pineforge_add_twin_test(test_native_match_spilled_net_of_siblings_close_spilled_
     test_native_match_spilled_net_of_siblings_close --spilled-only)
 pineforge_add_twin_test(test_broker_state_hash_spilled_read_failure_swallowed
     test_broker_state_hash_spilled_read_failure --swallowed)
+# Lane b1 round 4, F-03: the base engine's projection, and the two C entry
+# points asked after the run (no exception through C; the typed failure).
+pineforge_add_twin_test(test_broker_state_hash_spilled_read_failure_base_projection
+    test_broker_state_hash_spilled_read_failure --base-projection)
+pineforge_add_twin_test(test_broker_state_hash_spilled_read_failure_c_entry
+    test_broker_state_hash_spilled_read_failure --c-entry)
+# Lane b1 round 4, N-01: refused cursors kept but unreadable after the call.
+pineforge_add_twin_test(test_core_rejected_event_cursor_not_retained_poisoned
+    test_core_rejected_event_cursor_not_retained --poisoned)
 
 # EN-134: each public C ABI fault run is also addressable for red-before and
 # mutant checks. The aggregate and these rows run in the kernel-only profile.

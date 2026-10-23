@@ -36,11 +36,32 @@
 // per reuse, so its total grows with the book. Two windows are compared, both
 // opening once bar 1 has placed the book: up to the first fill (the
 // refresh-reuse case alone) and up to the end of the run (with the fills).
-// The design gives the same total for both books in each window: what is
-// left is the fills' own lookups, which depend on K, not N. Against
-// b569c139e (O(log N) reuse) both windows' totals differ between the books;
-// mutations/m7-B1-05-o1.patch, which looks the reused winner up by handle
-// again, makes them differ too.
+// Against b569c139e (O(log N) reuse) and under mutations/m7-B1-05-o1.patch,
+// which looks the reused winner up by handle again, every reused spilled
+// winner costs a lookup: at least one per spilled row per point.
+//
+// Round 4 (argon F2/F3 on c7e3cc256): the real bound, stated as the code
+// gives it, and asserted only as far as the code gives it.
+//  * O(1) in the book: the matcher's read of a winner its scan found outside
+//    the heap (hold_scanned: one table entry and one row; no lookup).
+//  * One keyed search, O(log N) table steps, counted as one row read back: a
+//    winner its scan found resident that the refresh chain has spilled since.
+//    Each row a refresh brings into the heap spills the heap's back row, so
+//    that is the row standing at the back at the scan, at most one per point
+//    -- none when a rebuild of the spilled table (BookSpill::compact) has made
+//    the matcher rescan the book first. When a rebuild falls depends on how
+//    much garbage the book's rewrites leave, so on N: the two books' totals
+//    are NOT equal (argon traced 5 against 3 up to the first fill, 54 against
+//    52 over bar 2), and this row no longer asserts that they are.
+//  * O(log N) per spilled Evaluate winner per point, not counted here: the
+//    refresh the matcher then asks of the core (refresh_allowance: classify,
+//    promote_book_row finds the row in the spilled table, make_book_room
+//    spills the heap's back row into it). B1-05 makes the matcher's lookup
+//    O(1); it does not make the refresh path O(1).
+// What is asserted: no rank walk in either book (the table steps, equal: both
+// none), and in each window fewer keyed lookups than the spilled rows a single
+// point reuses (book - kResidentRows), which a lookup per reused spilled
+// winner cannot give. The totals are printed.
 #include "../src/native_execution_consumer.hpp"
 
 #include <pineforge/native_host.hpp>
@@ -241,20 +262,25 @@ int main() {
         if (small.fills == kWinners && large.fills == kWinners) {
             CHECK(small.steps / kWinners == large.steps / kWinners);
             CHECK(small.steps % kWinners == large.steps % kWinners);
-            // The total lookup reads per winner, rows read back and table
-            // steps, are the same for both books: in the refresh-reuse window
-            // (every spilled resting row a winner reused after its refresh,
-            // up to the first fill) and over the whole of bar 2.
+            // The reused spilled winners are not looked up: in the
+            // refresh-reuse window (every spilled resting row a winner reused
+            // after its refresh, up to the first fill) and over the whole of
+            // bar 2, each book's keyed lookups stay below the spilled rows one
+            // point reuses. Not equal between the books: the row a refresh
+            // chain spills off the heap's back is looked up once per point
+            // unless a table rebuild rescanned first, and rebuilds fall by N.
             print_window("refresh-reuse window", small, large, small.first_fill, large.first_fill);
             print_window("bar 2", small, large, small.end, large.end);
+            const std::uint64_t small_spilled = small.book - kResidentRows;
+            const std::uint64_t large_spilled = large.book - kResidentRows;
             const std::uint64_t small_reuse = total_between(small.placed, small.first_fill);
             const std::uint64_t large_reuse = total_between(large.placed, large.first_fill);
-            CHECK(small_reuse / kWinners == large_reuse / kWinners);
-            CHECK(small_reuse % kWinners == large_reuse % kWinners);
+            CHECK(small_reuse < small_spilled);
+            CHECK(large_reuse < large_spilled);
             const std::uint64_t small_bar = total_between(small.placed, small.end);
             const std::uint64_t large_bar = total_between(large.placed, large.end);
-            CHECK(small_bar / kWinners == large_bar / kWinners);
-            CHECK(small_bar % kWinners == large_bar % kWinners);
+            CHECK(small_bar < small_spilled);
+            CHECK(large_bar < large_spilled);
         }
     } catch (const std::exception& error) {
         ++failures;
