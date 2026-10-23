@@ -21,10 +21,12 @@ CachedScratchBacking::CachedScratchBacking(std::unique_ptr<ScratchBacking> inner
     if (!inner_)
         throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {},
                                            "command scratch cache requires a backing");
-    bytes_.reset(new (std::nothrow) std::byte[kCacheBytes]);
-    if (!bytes_)
-        throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
-            std::system_error(ENOMEM, std::generic_category(), "command scratch cache allocate"));
+    if (slot_count_ != 0) {
+        bytes_.reset(new (std::nothrow) std::byte[kCacheBytes]);
+        if (!bytes_)
+            throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+                std::system_error(ENOMEM, std::generic_category(), "command scratch cache allocate"));
+    }
     page_ids_.fill(scratch_no_page);
 }
 

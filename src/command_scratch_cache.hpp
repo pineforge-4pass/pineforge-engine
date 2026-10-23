@@ -11,15 +11,18 @@ namespace pineforge::detail {
 // Exclusive read-through decorator for any ScratchBacking. All access to the
 // owned inner backing must go through this object; construct the inner with
 // NO observer and install the logical I/O observer here, including cache hits.
-// Construction reserves 64 KiB of page bytes per store: at most three stores
-// per run use 192 KiB per engine, plus fixed slot-key/object metadata. Nothing
-// depends on extent or bars. No I/O operation allocates or throws.
+// Construction reserves up to 64 KiB of page bytes per store, none when
+// bypassed: at most three stores per run use 192 KiB per engine, plus fixed
+// slot-key/object metadata. Nothing depends on extent or bars. No I/O operation
+// allocates or throws.
 //
 // Page size is immutable per backing. Direct-mapped keys therefore identify
 // pages in this one geometry (512 B through 1 MiB, including non-powers of
 // two); pages above 64 KiB bypass the cache, as do sizes below 512 B.
 class CachedScratchBacking final : public ScratchBacking {
 public:
+    static constexpr std::size_t kCacheBytes = 64 * 1024;
+
     // The inner must be nonnull. A page-buffer allocation failure is a typed
     // scratch_io_failed std::system_error with ENOMEM, as for factory setup.
     explicit CachedScratchBacking(std::unique_ptr<ScratchBacking> inner,
@@ -43,7 +46,6 @@ protected:
     ScratchStatus do_sync(ScratchDurability durability) noexcept override;
 
 private:
-    static constexpr std::size_t kCacheBytes = 64 * 1024;
     static constexpr std::size_t kMinPageBytes = 512;
     static constexpr std::size_t kMaxSlots = kCacheBytes / kMinPageBytes;
 

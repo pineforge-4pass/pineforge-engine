@@ -1,9 +1,10 @@
 #pragma once
 
-// One Linux executable owns the four forwarding linker wrappers. Each CTest
+// One Linux executable owns the forwarding linker wrappers. Each CTest
 // selects a real workload in that executable, with setup outside its counters.
 #include <pineforge/detail/scratch_file.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -31,9 +32,17 @@ struct Io {
     Count whole_file_advice = 0;
 };
 
+struct AlternateReads {
+    int fd = -1;
+    Count read = 0, readv = 0, preadv = 0, preadv2 = 0, mmap = 0;
+};
+
 struct Counters {
     Io total;
     Io pages; // Platform-page-sized I/O on an unlinked regular descriptor.
+    // Retain calls by fd even before the first pread/pwrite identifies page_fd.
+    // Fixed bookkeeping only; exhausting these slots is an integrity failure.
+    std::array<AlternateReads, 16> alternate_reads{};
     int page_fd = -1;
     bool multiple_page_fds = false;
     bool classification_error = false;

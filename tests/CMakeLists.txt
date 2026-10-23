@@ -7533,7 +7533,7 @@ endif()
 # --- CR-150 core-cr150-privmoves end ---
 
 # --- CR-150 core-cr150-cr257 begin ---
-# Lane files permit registrations only; the four flags and extra translation
+# Lane files permit registrations only; the linker flags and extra translation
 # units belong in this lane-owned fence, per check_cr150_cmake_d.py.
 if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(test_cr257_source_exit_scratch_io PRIVATE
@@ -7542,6 +7542,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         test_cr257_scratch_file_io.cpp)
     target_link_options(test_cr257_source_exit_scratch_io PRIVATE
         "-Wl,--wrap=pread" "-Wl,--wrap=pwrite"
+        "-Wl,--wrap=read" "-Wl,--wrap=readv"
+        "-Wl,--wrap=preadv" "-Wl,--wrap=preadv2" "-Wl,--wrap=mmap"
         "-Wl,--wrap=posix_fadvise" "-Wl,--wrap=fdatasync")
+    # preadv2 requires glibc 2.26+; an unavailable symbol must fail linking.
 endif()
 # --- CR-150 core-cr150-cr257 end ---

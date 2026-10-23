@@ -4,6 +4,10 @@
 #error "CR-257 syscall accounting requires the Linux linker-wrap target"
 #endif
 
+#if !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "cr257_io.hpp"
 #include "../src/command_scratch_production.hpp"
 #include "../src/source/exit_scratch_versions_production.hpp"
@@ -18,8 +22,10 @@
 #include <fcntl.h>
 #include <limits>
 #include <string>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <type_traits>
 #include <unistd.h>
 #include <vector>
@@ -69,6 +75,16 @@ void data_io(int fd, std::size_t bytes, off_t offset, ssize_t result, bool write
     last_page_io = {page && result == static_cast<ssize_t>(bytes), write, fd, offset};
     errno = saved;
 }
+void alternate_read(int fd, Count AlternateReads::*calls) noexcept {
+    if (!measuring || fd < 0) return;
+    for (auto& reads : counters.alternate_reads) {
+        if (reads.fd != fd && reads.fd != -1) continue;
+        reads.fd = fd;
+        ++(reads.*calls);
+        return;
+    }
+    counters.classification_error = true; // Never silently drop an untracked fd.
+}
 void advice(Io& io, off_t bytes, int kind, int result) noexcept {
     ++io.fadvise.calls;
     if (bytes > 0) io.fadvise.bytes += static_cast<Count>(bytes);
@@ -93,7 +109,15 @@ Counters Measure::finish() {
 }
 void validate(const Counters& io) {
     require(!io.classification_error && !io.multiple_page_fds,
-            "CR-257 page I/O classification failed or found another backing");
+            "CR-257 page I/O classification/alternate-read accounting failed or found another backing");
+    for (const auto& reads : io.alternate_reads) {
+        if (reads.fd < 0 || reads.fd != io.page_fd) continue;
+        require(reads.read == 0, "CR-257 RUN used read on the command page fd");
+        require(reads.readv == 0, "CR-257 RUN used readv on the command page fd");
+        require(reads.preadv == 0, "CR-257 RUN used preadv on the command page fd");
+        require(reads.preadv2 == 0, "CR-257 RUN used preadv2 on the command page fd");
+        require(reads.mmap == 0, "CR-257 RUN used mmap on the command page fd");
+    }
     require(io.total.pread.errors == 0 && io.total.pwrite.errors == 0
             && io.total.pread.short_io == 0 && io.total.pwrite.short_io == 0
             && io.total.pread.bytes == io.total.pread.transferred
@@ -131,6 +155,11 @@ void info(const char* metric, Count actual, Count allowed, Context context) {
 
 extern "C" ssize_t __real_pread(int, void*, std::size_t, off_t);
 extern "C" ssize_t __real_pwrite(int, const void*, std::size_t, off_t);
+extern "C" ssize_t __real_read(int, void*, std::size_t);
+extern "C" ssize_t __real_readv(int, const struct iovec*, int);
+extern "C" ssize_t __real_preadv(int, const struct iovec*, int, off_t);
+extern "C" ssize_t __real_preadv2(int, const struct iovec*, int, off_t, int);
+extern "C" void* __real_mmap(void*, std::size_t, int, int, int, off_t);
 extern "C" int __real_posix_fadvise(int, off_t, off_t, int);
 extern "C" int __real_fdatasync(int);
 
@@ -142,6 +171,35 @@ extern "C" ssize_t __wrap_pread(int fd, void* data, std::size_t bytes, off_t off
 extern "C" ssize_t __wrap_pwrite(int fd, const void* data, std::size_t bytes, off_t offset) {
     const auto result = __real_pwrite(fd, data, bytes, offset);
     cr257::data_io(fd, bytes, offset, result, true);
+    return result;
+}
+extern "C" ssize_t __wrap_read(int fd, void* data, std::size_t bytes) {
+    const auto result = __real_read(fd, data, bytes);
+    cr257::alternate_read(fd, &cr257::AlternateReads::read);
+    return result;
+}
+extern "C" ssize_t __wrap_readv(int fd, const struct iovec* vectors, int count) {
+    const auto result = __real_readv(fd, vectors, count);
+    cr257::alternate_read(fd, &cr257::AlternateReads::readv);
+    return result;
+}
+extern "C" ssize_t __wrap_preadv(int fd, const struct iovec* vectors, int count, off_t offset) {
+    const auto result = __real_preadv(fd, vectors, count, offset);
+    cr257::alternate_read(fd, &cr257::AlternateReads::preadv);
+    return result;
+}
+extern "C" ssize_t __wrap_preadv2(int fd, const struct iovec* vectors, int count,
+                                 off_t offset, int flags) {
+    const auto result = __real_preadv2(fd, vectors, count, offset, flags);
+    cr257::alternate_read(fd, &cr257::AlternateReads::preadv2);
+    return result;
+}
+extern "C" void* __wrap_mmap(void* address, std::size_t length, int protection,
+                             int flags, int fd, off_t offset) {
+    const auto result = __real_mmap(address, length, protection, flags, fd, offset);
+    // Anonymous mappings ignore fd and cannot read the command backing.
+    if ((flags & MAP_ANONYMOUS) == 0)
+        cr257::alternate_read(fd, &cr257::AlternateReads::mmap);
     return result;
 }
 extern "C" int __wrap_posix_fadvise(int fd, off_t offset, off_t bytes, int kind) {
@@ -702,13 +760,18 @@ void source_bounds(const SourceRun& run) {
     info("command.total_pwrite_calls", io.pwrite.calls, write_calls, context);
     info("command.page_pwrite_bytes", pages.pwrite.bytes, write_calls * platform_page, context);
     info("command.total_pwrite_bytes", io.pwrite.bytes, write_calls * platform_page, context);
-    // DONTNEED fires once per kCacheBytes of clean bytes read, and once per kCacheBytes
-    // of bytes written (the flush that precedes dropping dirty pages): both are allowed.
+    require(pages.pread.bytes <= io.pread.bytes && pages.pwrite.bytes <= io.pwrite.bytes,
+            "CR-257 command page bytes exceed total RUN bytes");
+    const Count scratch_read_bytes = io.pread.bytes - pages.pread.bytes;
+    const Count scratch_write_bytes = io.pwrite.bytes - pages.pwrite.bytes;
+    // Only the non-page ScratchFiles (ledger/payload/sequence) issue these
+    // calls: command page-backing bytes must not inflate their allowance.
+    // DONTNEED fires per kCacheBytes read or written; writes sync before discard.
     bound("command.fadvise_calls", io.fadvise.calls,
-          ceil_div(io.pread.bytes, kCacheBytes) + ceil_div(io.pwrite.bytes, kCacheBytes) + 1,
+          ceil_div(scratch_read_bytes, kCacheBytes) + ceil_div(scratch_write_bytes, kCacheBytes) + 1,
           context);
     bound("command.fdatasync_calls", io.fdatasync.calls,
-          ceil_div(io.pwrite.bytes, kCacheBytes) + 1, context);
+          ceil_div(scratch_write_bytes, kCacheBytes) + 1, context);
     std::printf("X257 command.charges read=%llu write=%llu sync=%llu commits=%llu"
                 " insert_commits=%llu records_created=%llu N=%llu\n",
         static_cast<unsigned long long>(run.page_reads),
