@@ -1,0 +1,11 @@
+# S4E P2 scratch safety regression tests; execution belongs to the lab box.
+list(APPEND TEST_SOURCES test_scratch_store_corrupt_node_count_is_corrupt)
+pineforge_add_unit_test(test_scratch_store_corrupt_node_count_is_corrupt)
+list(APPEND TEST_SOURCES test_scratch_file_open_is_cloexec_atomically)
+pineforge_add_unit_test(test_scratch_file_open_is_cloexec_atomically)
+list(APPEND TEST_SOURCES test_command_scratch_file_open_is_cloexec_atomically)
+pineforge_add_unit_test(test_command_scratch_file_open_is_cloexec_atomically)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND TEST_SOURCES test_arena_refuses_write_sealed_memfd_at_attach)
+    pineforge_add_unit_test(test_arena_refuses_write_sealed_memfd_at_attach)
+endif()

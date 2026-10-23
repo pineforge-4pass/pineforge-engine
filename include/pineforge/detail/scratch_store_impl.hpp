@@ -255,6 +255,10 @@ public:
     static Status structural(Status status) noexcept {
         return status == Status::not_found ? Status::corrupt : status;
     }
+    Status corrupt_bytes() noexcept {
+        stored_bytes_corrupt_ = true;
+        return Status::corrupt;
+    }
 
     // ---- the page cache: copy in, copy out ---------------------------------
 
@@ -309,6 +313,19 @@ public:
         out = best;
         return Status::ok;
     }
+    // D-01: validate persisted counts once, before publishing a loaded cache
+    // page. Cache hits and pages constructed by this store stay trusted.
+    Status validate_page(const Byte* bytes) noexcept {
+        std::size_t capacity;
+        switch (ld32(bytes)) {
+        case kTypeIndexLeaf: capacity = leaf_cap_; break;
+        case kTypeIndexNode: capacity = node_cap_; break;
+        case kTypeHandleLeaf: capacity = hleaf_cap_; break;
+        case kTypeHandleNode: capacity = hnode_cap_; break;
+        default: return Status::ok; // cell/blob/free pages have no count
+        }
+        return ld32(bytes + 4) <= capacity ? Status::ok : corrupt_bytes();
+    }
     Status fetch(std::uint64_t id, bool load, std::int32_t& out) noexcept {
         std::int32_t s = find(id);
         if (s >= 0) {
@@ -324,6 +341,8 @@ public:
         if (load) {
             st = bread(id, page_at(s));
             if (st != Status::ok) return structural(st);
+            st = validate_page(page_at(s));
+            if (st != Status::ok) return st;
         }
         slot_[s].valid = true;
         slot_[s].tick = ++tick_;
@@ -351,6 +370,7 @@ public:
     }
 
     Status rd(std::uint64_t id, std::size_t off, std::size_t len, Byte* destination) noexcept {
+        if (off > usable_ || len > usable_ - off) return corrupt_bytes();
         std::int32_t s = -1;
         const Status st = fetch(id, true, s);
         if (st != Status::ok) return st;
@@ -395,6 +415,7 @@ public:
         return Status::ok;
     }
     Status wr(std::uint64_t id, std::size_t off, std::size_t len, const Byte* source) noexcept {
+        if (off > usable_ || len > usable_ - off) return corrupt_bytes();
         Status st = touch(id);
         if (st != Status::ok) return st;
         std::int32_t s = -1;
@@ -455,7 +476,10 @@ public:
 
     std::uint64_t cell_page(std::uint64_t cell) const noexcept { return cell >> 16; }
     std::size_t cell_off(std::uint64_t cell) const noexcept {
-        return kHeader + static_cast<std::size_t>(cell & 0xFFFF) * kCell;
+        const auto slot = static_cast<std::size_t>(cell & 0xFFFF);
+        // The first impossible slot can still have its first bytes inside
+        // the page. Route every invalid slot to rd/wr's corruption refusal.
+        return slot < cells_per_page_ ? kHeader + slot * kCell : page_;
     }
     Status cell_alloc(std::uint64_t& cell) noexcept {
         if (cur_.cell_free != 0) {
@@ -1349,11 +1373,13 @@ public:
     Status put(const ScratchByteSource& key, const ScratchByteSource& value, ScratchHandle& result) noexcept {
         if (open_status_ != Status::ok || !active_ || poisoned_ || busy_ != 0) return Status::programming_error;
         backing_io_failed_ = false;
+        stored_bytes_corrupt_ = false;
         std::uint64_t handle = 0;
         const Status st = put_impl(key, value, handle);
         if (st != Status::ok) {
             poisoned_ = true;
-            return backing_io_failed_ ? Status::io_error : Status::programming_error;
+            return backing_io_failed_ ? Status::io_error
+                : (stored_bytes_corrupt_ ? Status::corrupt : Status::programming_error);
         }
         result = handle;
         return Status::ok;
@@ -1406,18 +1432,21 @@ public:
     Status erase(ScratchHandle handle) noexcept {
         if (open_status_ != Status::ok || !active_ || poisoned_ || busy_ != 0) return Status::programming_error;
         backing_io_failed_ = false;
+        stored_bytes_corrupt_ = false;
         Entry entry;
         bool present = false;
         Status st = hget(handle, entry, present);
         if (st != Status::ok) {
             poisoned_ = true;
-            return backing_io_failed_ ? Status::io_error : Status::programming_error;
+            return backing_io_failed_ ? Status::io_error
+                : (stored_bytes_corrupt_ ? Status::corrupt : Status::programming_error);
         }
         if (!present || (entry.val_word & 3) != kLive) return Status::not_found;
         st = erase_impl(handle, entry);
         if (st != Status::ok) {
             poisoned_ = true;
-            return backing_io_failed_ ? Status::io_error : Status::programming_error;
+            return backing_io_failed_ ? Status::io_error
+                : (stored_bytes_corrupt_ ? Status::corrupt : Status::programming_error);
         }
         return Status::ok;
     }
@@ -1740,6 +1769,9 @@ public:
 
 private:
     bool backing_io_failed_ = false;
+    // Per-operation diagnostic, like backing_io_failed_; never durable state.
+    // Caller-source/comparator failures keep their programming_error contract.
+    bool stored_bytes_corrupt_ = false;
 };
 
 } // namespace scratch_impl

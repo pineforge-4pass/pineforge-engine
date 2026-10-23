@@ -224,7 +224,8 @@ public:
         std::string path = selected && *selected ? selected : "/tmp";
         if (path.back() != '/') path += '/';
         path += "pineforge-command-XXXXXX";
-        const int opened = ::mkstemp(path.data());
+        // D-03: creation itself must close the fork/exec inheritance window.
+        const int opened = ::mkostemp(path.data(), O_CLOEXEC);
         if (opened < 0)
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
                 std::system_error(errno, std::generic_category(), "command scratch create"));
@@ -238,15 +239,6 @@ public:
             ::close(opened);
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
                 std::system_error(error, std::generic_category(), "command scratch unlink"));
-        }
-        do {
-            result = ::fcntl(opened, F_SETFD, FD_CLOEXEC);
-        } while (result < 0 && errno == EINTR);
-        if (result < 0) {
-            const int error = errno;
-            ::close(opened);
-            throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
-                std::system_error(error, std::generic_category(), "command scratch cloexec"));
         }
         fd_ = opened;
     }

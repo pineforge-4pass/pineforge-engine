@@ -106,7 +106,8 @@ ScratchArenaBackend validate_backing(int fd, std::uint64_t bytes) {
         // already checked type and size; paths (including "(deleted)")
         // play no part in classifying either regular-file shape.
         if (seals == F_SEAL_SEAL) return ScratchArenaBackend::regular_file;
-        if ((seals & required) != required)
+        // D-08: additional seals can prohibit the arena's shared writes.
+        if (seals != required)
             arena_error(EINVAL, "scratch arena seals", "arena_backing");
         return ScratchArenaBackend::sealed_memfd;
     }
