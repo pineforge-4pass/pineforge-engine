@@ -12,7 +12,7 @@ namespace {
 using namespace cr150_w1;
 namespace detail = pineforge::detail;
 constexpr auto chunk = detail::ScratchArena::kChunkBytes;
-constexpr const char* retired_id = "W1-corrupted-retired-cohort";
+constexpr const char* retired_id = "W1-retired-corrupted-cohort";
 
 // Locate by the real AVL-node layout AND its unique key, never by an fd
 // number/prefix or an English error. Both file mode and arena mode use the
@@ -105,12 +105,19 @@ public:
             return;
         }
         if (mode == Mode::corrupt_cohort && index == 32) {
-            // Hashing walks and releases the retired scalar rows. No fixture
-            // codec replaces CohortFacts::restore_record.
+            // all_sorted()'s Range pins its first row even after the loop
+            // iterator advances. A different cohort must sort first: then
+            // advancing past our retired target spills it before poisoning.
+            // Otherwise the next find() overwrites the poison with the valid
+            // resident record before the real codec can see it.
+            require(!active.empty() && active < retired_id,
+                    "poison target must follow another cohort in hash order");
             pineforge::BrokerStateHashSink hash;
             adapter_.hash_state(hash);
             poison_cohort(arena_fd);
             poisoned = true;
+            // Mutation: replace row.handle == 0 with false in production
+            // CohortFacts::restore_record; the checks below must turn red.
             strategy_entry(retired_id, true, na, na, 1.0);
             return;
         }
@@ -150,6 +157,8 @@ void cohort_restore_translator(bool arena) {
             arena ? "arena" : "file", host.poisoned, host.callbacks, host.last_run_status(),
             pineforge::run_failure_code_of(host), pineforge::run_failure_args_of(host),
             host.last_error().c_str());
+        // No fill recalculations: callbacks at indices 0..32 total 32 + 1.
+        // A real codec rejection at recurrence must prevent index 33.
         require(host.poisoned && host.callbacks == 33,
                 "real cohort codec rejection must interrupt its recurrence");
         expect_engine_failure(host, "{}", pineforge::RunFailureCode::scratch_io_failed,
