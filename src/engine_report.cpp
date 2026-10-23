@@ -13,9 +13,11 @@
 #include "report_value_invalid.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <sys/stat.h>
 #include <unordered_set>
 
 namespace pineforge {
@@ -186,7 +188,8 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->net_profit = net;
             out->total_trades = n_closed;
         } else {
-            for (const auto& trade : trades_) {
+            for (std::size_t index = trades_.base(); index < trades_.size(); ++index) {
+                const Trade trade = trades_.numeric_at(index);
                 report::validate_trade(trade);
                 ++out->total_trades;
                 net = report::finite_value(net + trade.pnl, "summary.net_pnl");
@@ -227,7 +230,8 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         for (int i = 0; i < n; i++) {
             // Closed and terminal rows are detached values. Only the FULL
             // route's owning output array retains per-row report storage.
-            const Trade t = (i < n_closed) ? trades_[i]
+            const Trade t = (i < n_closed)
+                ? trades_.numeric_at(static_cast<std::size_t>(i))
                 : range_end_trades_.row(static_cast<std::size_t>(i - n_closed));
             report::validate_trade(t);
             out->trades[i].entry_time = t.entry_time;
@@ -266,7 +270,8 @@ double BacktestEngine::report_closed_net_profit() const {
         sum = report::finite_value(consumer->closed_trade_prefix().pnl, "summary.net_pnl");
     }
     // Continue the original left fold; the decision counters use other seeds.
-    for (const auto& trade : trades_) {
+    for (std::size_t index = trades_.base(); index < trades_.size(); ++index) {
+        const Trade trade = trades_.numeric_at(index);
         report::validate_trade(trade);
         sum = report::finite_value(sum + trade.pnl, "summary.net_pnl");
     }
@@ -295,7 +300,8 @@ void BacktestEngine::compute_report_sink_trade_metrics(
         longs.fold(row);
         shorts.fold(row);
     };
-    for (const auto& trade : trades_) fold(report_trade_row(trade));
+    for (std::size_t index = trades_.base(); index < trades_.size(); ++index)
+        fold(report_trade_row(trades_.numeric_at(index)));
     if (open_rows != nullptr || report_mode_ == ReportMode::FULL) {
         // FULL still folds the caller's presented rows (a selected capture
         // may deliberately publish none of them).
@@ -914,12 +920,52 @@ double BacktestEngine::output_constant_value(int index) const {
 
 namespace pineforge {
 
+namespace {
+
+struct BorrowedFdIdentity {
+    bool valid = false;
+    std::uint64_t device = 0;
+    std::uint64_t inode = 0;
+};
+
+BorrowedFdIdentity capture_fd_identity(int fd) noexcept {
+    struct stat info{};
+    int result;
+    do {
+        result = ::fstat(fd, &info);
+    } while (result < 0 && errno == EINTR);
+    if (result != 0) return {};
+    return {true, static_cast<std::uint64_t>(info.st_dev),
+                  static_cast<std::uint64_t>(info.st_ino)};
+}
+
+bool fd_identity_matches(int fd, const BorrowedFdIdentity& expected,
+                         int& error_number) noexcept {
+    if (!expected.valid) {
+        error_number = EBADF;
+        return false;
+    }
+    const auto actual = capture_fd_identity(fd);
+    if (!actual.valid) {
+        error_number = errno == 0 ? EBADF : errno;
+        return false;
+    }
+    if (actual.device != expected.device || actual.inode != expected.inode) {
+        error_number = EINVAL;
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 BacktestEngine::ReportSinkState::ReportSinkState() = default;
 BacktestEngine::ReportSinkState::~ReportSinkState() = default;
 BacktestEngine::ReportSinkState::ReportSinkState(const ReportSinkState& other)
     : enabled(other.enabled), trade_history_streamable(other.trade_history_streamable),
       path(other.path), run_id(other.run_id), scratch_dir(other.scratch_dir),
-      fd(other.fd) {}
+      fd(other.fd), fd_device(other.fd_device), fd_inode(other.fd_inode),
+      fd_identity_valid(other.fd_identity_valid) {}
 BacktestEngine::ReportSinkState&
 BacktestEngine::ReportSinkState::operator=(const ReportSinkState& other) {
     if (this != &other) *this = ReportSinkState(other);
@@ -982,9 +1028,6 @@ int BacktestEngine::set_report_sink_v1(const pf_report_sink_v1* descriptor) {
             next.equity_scratch = std::move(report_sink_state_.equity_scratch);
             next.equity_tail_stored = report_sink_state_.equity_tail_stored;
             next.selected_equity_stream = std::move(report_sink_state_.selected_equity_stream);
-        } else {
-            // Removing the sink restores the existing array-report contract.
-            NativeExecutionConsumer::restore_report_sink_equity_curve(*this);
         }
     }
     report_sink_state_ = std::move(next);
@@ -1007,6 +1050,10 @@ int BacktestEngine::set_report_sink_fd_v1(const pf_report_sink_fd_v1* descriptor
         next.enabled = true;
         next.fd = descriptor->fd;
         next.run_id = descriptor->run_id ? descriptor->run_id : "";
+        const auto identity = capture_fd_identity(next.fd);
+        next.fd_device = identity.device;
+        next.fd_inode = identity.inode;
+        next.fd_identity_valid = identity.valid;
         // No path parent or scratch directory exists for a borrowed stream.
         detail::ScratchArena::attach_from_environment();
     }
@@ -1124,6 +1171,13 @@ void BacktestEngine::begin_report_sink() {
     sink.receipt.trades_retained = sink.trade_history_streamable ? 0u : 1u;
     try {
         if (sink.fd >= 0) {
+            const BorrowedFdIdentity expected{sink.fd_identity_valid,
+                sink.fd_device, sink.fd_inode};
+            int error_number = EBADF;
+            if (!fd_identity_matches(sink.fd, expected, error_number))
+                throw report_sink::WriterError(
+                    report_sink::WriterFailure::io,
+                    "borrowed report sink descriptor identity changed", error_number);
             const pf_report_sink_fd_v1 descriptor{sizeof(pf_report_sink_fd_v1), 1,
                 sink.fd, sink.run_id.c_str()};
             sink.writer = std::make_unique<report_sink::LineWriter>(descriptor);
@@ -1171,7 +1225,9 @@ pf_report_sink_summary_v1 NativeExecutionConsumer::finish_report_sink_summary(
     if (summary.value.count_t != static_cast<std::int64_t>(engine.trades_.base()))
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
             "report summary count differs from the sealed trade base");
-    for (const auto& row : engine.trades_) summary.fold(report_trade_row(row));
+    for (std::size_t index = engine.trades_.base();
+         index < engine.trades_.size(); ++index)
+        summary.fold(report_trade_row(engine.trades_.numeric_at(index)));
     for (const auto& row : engine.range_end_trades_) summary.fold(report_trade_row(row));
     return summary.value;
 }
@@ -1227,7 +1283,10 @@ void BacktestEngine::finish_report_sink(ReportC* out) const {
             // during report assembly still abandons a whole-record prefix,
             // before any success trailer or complete receipt is published.
             if (NativeExecutionConsumer::abort_before_sink_trailer(
-                    const_cast<BacktestEngine&>(*this))) return;
+                    const_cast<BacktestEngine&>(*this))) {
+                free_report(out);
+                return;
+            }
             const auto trailer = sink.writer->write_trailer();
             sink.receipt.count_e = trailer.count_e;
             sink.receipt.count_t = trailer.count_t;
@@ -1522,6 +1581,7 @@ void BacktestEngine::retire_report_sink_hashes() {
         write_report_sink_hashes();
         broker_state_hashes_.clear();
         sequence_hash_folded_ = 0;
+        sequence_hash_folded_leaf_ = 0;
         return;
     }
     if (!sink.writer && optional_report_mode_ == report_sequence::ReportMode::SummaryOnly) {
@@ -1530,6 +1590,7 @@ void BacktestEngine::retire_report_sink_hashes() {
         fold_pending_hashes_into_witness();
         broker_state_hashes_.clear();
         sequence_hash_folded_ = 0;
+        sequence_hash_folded_leaf_ = 0;
     }
 }
 
@@ -1556,6 +1617,19 @@ void sequence_fold_byte(std::uint64_t& digest, std::uint8_t byte) {
 void sequence_fold_u64(std::uint64_t& digest, std::uint64_t value) {
     for (int shift = 0; shift < 64; shift += 8)
         sequence_fold_byte(digest, static_cast<std::uint8_t>(value >> shift));
+}
+
+std::uint64_t sequence_unfold_u64(std::uint64_t digest, std::uint64_t value) {
+    // The FNV prime is odd, so multiplication by it is invertible modulo
+    // 2^64. Six Newton steps produce its exact modular inverse.
+    std::uint64_t inverse = 1;
+    for (int step = 0; step < 6; ++step)
+        inverse *= 2 - kSequenceDigestPrime * inverse;
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        digest *= inverse;
+        digest ^= static_cast<std::uint8_t>(value >> shift);
+    }
+    return digest;
 }
 
 void sequence_fold_i64(std::uint64_t& digest, std::int64_t value) {
@@ -1586,6 +1660,7 @@ void sequence_fold_text(std::uint64_t& digest, const std::string& text) {
 void BacktestEngine::reset_optional_sequence_witness() {
     sequence_witness_ = report_sequence::OptionalSequenceSummary{};
     sequence_hash_folded_ = 0;
+    sequence_hash_folded_leaf_ = 0;
     sequence_row_folded_ = false;
     output_row_witness_base_ = report_sequence::SequenceWitness{};
     output_event_row_witness_ = report_sequence::SequenceWitness{};
@@ -1638,9 +1713,21 @@ void BacktestEngine::fold_event_leaf(report_sequence::SequenceWitness& witness,
 }
 
 void BacktestEngine::fold_pending_hashes_into_witness() const {
+    if (sequence_hash_folded_ != 0
+        && sequence_hash_folded_ <= broker_state_hashes_.size()) {
+        const auto current = broker_state_hashes_[sequence_hash_folded_ - 1];
+        if (sequence_hash_folded_leaf_ != current) {
+            sequence_witness_.hashes.digest =
+                sequence_unfold_u64(sequence_witness_.hashes.digest, sequence_hash_folded_leaf_);
+            --sequence_witness_.hashes.count;
+            fold_hash_leaf(sequence_witness_.hashes, current);
+            sequence_hash_folded_leaf_ = current;
+        }
+    }
     for (std::size_t i = sequence_hash_folded_; i < broker_state_hashes_.size(); ++i)
         fold_hash_leaf(sequence_witness_.hashes, broker_state_hashes_[i]);
     sequence_hash_folded_ = broker_state_hashes_.size();
+    sequence_hash_folded_leaf_ = broker_state_hashes_.empty() ? 0 : broker_state_hashes_.back();
 }
 
 void BacktestEngine::fold_current_output_row_witness() const {
