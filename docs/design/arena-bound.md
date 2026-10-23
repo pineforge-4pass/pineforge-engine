@@ -463,8 +463,11 @@ twelve persistent physical regions
 and at most two replacement indexes. In a representable 64-bit arena each
 fold component's bytes are below OFF_MAX, so it uses one segment; the
 general segment rule still governs reduced-offset fixtures and any future
-larger platform. Fourteen is not a universal file-count ceiling or a proof
-covering unlisted arena users.
+larger platform. Each independently rounded region wastes less than C.
+Summing independent peaks and adding fourteen complete chunks is conservative
+even when their real peak times differ. This covers chunk fragmentation, not
+unlisted stores or a missing population proof. Fourteen is not a universal
+file-count ceiling or a proof covering unlisted arena users.
 
 The three command stores (`RunCommandScratch`, `source::CommandScratchRun`,
 and `SourceExitScratchRun`) share that same arena. Each opens a bounded
