@@ -65,49 +65,44 @@ SelectedEquityCurve build_selected_equity_curve(
 }  // namespace report
 }  // namespace pineforge
 
-// CR-150 L17A. Kept after the existing view so its cited lines do not move.
+// CR-150 L17A selected capture validation.
 namespace pineforge {
 namespace report_sink { class LineWriter; }
 namespace report {
 
-// O(1) selected-window validation and E emission. A caller supplies each FINAL
-// point once, only when the point can no longer be rewritten. Pre-T points are
-// checked but not emitted; points at/after E are neither selected nor emitted.
-// The first emitted observation is preceded by the anchor at T, including when
-// that observation is itself stamped T. finish() emits the anchor for M = 0.
-// No point, trade row, engine pointer or writer is retained here.
+// B2-18: O(1) selected-window validation. A caller supplies each FINAL point
+// once, only when the point can no longer be rewritten. Pre-T points are
+// checked; only points in [T, E) count as observations. All final observations
+// are judged, including a suffix hidden by a presentation hook.
+// NativeExecutionConsumer::capture_selected_sink owns E emission after
+// presentation, including the anchor for M = 0. This validator emits no rows
+// and retains no point, trade row, engine pointer or writer.
 class SelectedReportStream {
 public:
     SelectedReportStream(std::int64_t start_ms, std::int64_t end_ms,
                          double initial_capital) noexcept;
     void note_trade(std::int64_t entry_time) noexcept;
     void note_open_lot(std::int64_t entry_time) noexcept;
-    // publish distinguishes a host's presented length from its metric storage
-    // length (the existing selected-report convention). All final observations
-    // are judged and counted, including a suffix hidden by a presentation hook.
-    void write_point(report_sink::LineWriter& writer,
-                     const pf_equity_point_t& final_point, bool publish);
+    // Writer and boolean arguments are unused compatibility parameters for
+    // existing internal callers, which always supply false.
+    void write_point(report_sink::LineWriter&,
+                     const pf_equity_point_t& final_point, bool);
     // Refuse in capture order: trades, lots, account, contiguity, count. A
     // refusal throws coded<logic_error>(engine_invariant) with the established
-    // selected-capture text; it never writes a trailer. publish_anchor is false
-    // only when a custom presentation publishes an empty curve.
-    void finish(report_sink::LineWriter& writer, std::uint64_t expected_observations,
-                bool publish_anchor);
-    std::int64_t equity_count() const noexcept { return equity_count_; }
+    // selected-capture text; it never writes an anchor or a trailer.
+    void finish(report_sink::LineWriter&, std::uint64_t expected_observations,
+                bool);
     std::uint64_t observations() const noexcept { return observations_; }
 
 private:
-    void write_anchor(report_sink::LineWriter& writer);
     std::int64_t start_ms_, end_ms_;
     double initial_capital_;
     std::uint64_t observations_ = 0;
-    std::int64_t equity_count_ = 0;
     bool trade_before_window_ = false;
     bool lot_before_window_ = false;
     bool account_changed_ = false;
     bool gap_after_window_ = false;
     bool not_contiguous_ = false;
-    bool anchor_written_ = false;
 };
 
 }  // namespace report

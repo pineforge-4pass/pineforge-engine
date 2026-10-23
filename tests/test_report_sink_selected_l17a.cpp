@@ -423,17 +423,17 @@ void direct_latches(Directory& directory) {
             report_sink::LineWriter writer(sink);
             writer.write_header({false, false, false, 0, 0});
             report::SelectedReportStream stream(selected.start_ms, selected.end_ms, kCapital);
-            stream.write_point(writer, {kBase, first <= 2 ? kCapital + 1.0 : kCapital, -0.0}, true);
-            stream.write_point(writer, {selected.start_ms, kCapital, 0.0}, true);
-            if (first <= 3) stream.write_point(writer, {selected.end_ms, kCapital, 0.0}, true);
-            stream.write_point(writer, {selected.start_ms + kMinute, kCapital + 1.0, 1.0}, true);
+            stream.write_point(writer, {kBase, first <= 2 ? kCapital + 1.0 : kCapital, -0.0}, false);
+            stream.write_point(writer, {selected.start_ms, kCapital, 0.0}, false);
+            if (first <= 3) stream.write_point(writer, {selected.end_ms, kCapital, 0.0}, false);
+            stream.write_point(writer, {selected.start_ms + kMinute, kCapital + 1.0, 1.0}, false);
             // Higher-priority evidence can arrive after the account/point
             // latches. Capture order decides the refusal, not arrival order.
             if (first <= 1) stream.note_open_lot(kBase);
             if (first == 0) stream.note_trade(kBase);
             bool caught = false;
             try {
-                stream.finish(writer, 3, true); // the count mismatch is always present
+                stream.finish(writer, 3, false); // the count mismatch is always present
             } catch (const std::logic_error& error) {
                 caught = true;
                 CHECK(classify_run_failure(error).code == RunFailureCode::engine_invariant);
@@ -451,20 +451,17 @@ void direct_latches(Directory& directory) {
         report::SelectedReportStream stream(selected.start_ms, selected.end_ms, kCapital);
         stream.note_trade(selected.start_ms);
         stream.note_open_lot(selected.start_ms);
-        stream.write_point(writer, {kBase, kCapital, -0.0}, true);
-        stream.write_point(writer, {selected.start_ms, 1010.0, -0.0}, true);
-        stream.write_point(writer, {selected.end_ms - kMinute, 1004.5, 4.5}, true);
-        stream.write_point(writer, {selected.end_ms, 2000.0, 1000.0}, true);
-        stream.finish(writer, 2, true);
+        // B2-18: production validates here and publishes after presentation.
+        stream.write_point(writer, {kBase, kCapital, -0.0}, false);
+        stream.write_point(writer, {selected.start_ms, 1010.0, -0.0}, false);
+        stream.write_point(writer, {selected.end_ms - kMinute, 1004.5, 4.5}, false);
+        stream.write_point(writer, {selected.end_ms, 2000.0, 1000.0}, false);
+        stream.finish(writer, 2, false);
         CHECK(stream.observations() == 2);
-        CHECK(stream.equity_count() == 3);
-        CHECK(writer.write_trailer().count_e == 3);
+        CHECK(writer.write_trailer().count_e == 0);
     }
     const auto lines = equity_lines(read(path));
-    CHECK(lines == (std::vector<std::string>{
-        equity_line({selected.start_ms, kCapital, 0.0}),
-        equity_line({selected.start_ms, 1010.0, -0.0}),
-        equity_line({selected.end_ms - kMinute, 1004.5, 4.5})}));
+    CHECK(lines.empty());
 }
 }
 
