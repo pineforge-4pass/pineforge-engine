@@ -18,7 +18,7 @@
 # Otherwise it exits green without promoting.
 #
 # It runs on a push to main, using MAIN's own copy at refs/heads/main. The
-# pf-ci-release class admits this allowlisted workflow at that ref. The
+# pf-gcp-main class admits this allowlisted workflow at that ref. The
 # promotion identity's WIF condition pins job_workflow_ref to
 # `<repo>/.github/workflows/promote-baseline.yml@refs/heads/main` and the run
 # ref to refs/heads/main, with no event restriction
@@ -107,27 +107,28 @@ permissions:
   id-token: write
 
 jobs:
-  promote:
-    runs-on: ["self-hosted","pf-ci","pf-ci-release"]
+  promote-guard:
+    name: promote-guard
+    runs-on: ubuntu-latest
+    # Resolution needs read access in private repos; no secrets or OIDC here.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ok: ${{ steps.authorize.outputs.ok }}
+      merge_sha: ${{ steps.pr.outputs.merge_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      pr_url: ${{ steps.pr.outputs.pr_url }}
+      merged_at: ${{ steps.pr.outputs.merged_at }}
     steps:
-      - name: Determine repo axis
-        id: axis
-        run: |
-          case "${{ github.repository }}" in
-            *codegen*) echo "repo=codegen" >> "$GITHUB_OUTPUT" ;;
-            *)         echo "repo=engine"  >> "$GITHUB_OUTPUT" ;;
-          esac
-
-      # The pushed main commit (or the dispatch ref), never the PR.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
       - name: Resolve the merged PR
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
           INPUT_MERGE_SHA: ${{ github.event.inputs.merge_commit }}
           INPUT_HEAD_SHA: ${{ github.event.inputs.head_sha }}
@@ -136,28 +137,54 @@ jobs:
           INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            printf '%s\n' "merge_sha=$INPUT_MERGE_SHA" "head_sha=$INPUT_HEAD_SHA" \
-              "pr_number=$INPUT_PR_NUMBER" "pr_url=$INPUT_PR_URL" \
-              "merged_at=$INPUT_MERGED_AT" "ok=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "baseline promotion requires refs/heads/main"
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              for value in "$INPUT_MERGE_SHA" "$INPUT_HEAD_SHA" "$INPUT_PR_NUMBER" "$INPUT_PR_URL" "$INPUT_MERGED_AT"; do
+                [[ -n "${value//[[:space:]]/}" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "empty or unreadable dispatch input"
+              done
+              printf '%s\n' "merge_sha=$INPUT_MERGE_SHA" "head_sha=$INPUT_HEAD_SHA" \
+                "pr_number=$INPUT_PR_NUMBER" "pr_url=$INPUT_PR_URL" \
+                "merged_at=$INPUT_MERGED_AT" "ok=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            push) ;;
+            *) fail "event $EVENT_NAME does not run baseline promotion (only push and workflow_dispatch are allowed)" ;;
+          esac
           # Search every page: a second match must defer, never pick a PR.
           pulls=$(gh api --paginate --slurp \
-            "repos/${{ github.repository }}/commits/$SHA/pulls?per_page=100")
+            "repos/$REPO/commits/$SHA/pulls?per_page=100")
           python3 - 3<<<"$pulls" <<'PY'
           import json
           import os
+          import re
+          import subprocess
 
           def skip(reason):
               print(f"::notice::{reason}; skipping")
               with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
                   output.write("ok=false\n")
 
+          def fail(reason):
+              print(f"::error title=authz::{reason}")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(f"authz: REFUSED: {reason}\n")
+              raise SystemExit(1)
+
           def reject_constant(value):
               raise ValueError(f"invalid JSON constant: {value}")
 
+          def field(obj, *keys):
+              for key in keys:
+                  obj = obj.get(key) if isinstance(obj, dict) else None
+              if (not isinstance(obj, str) or not obj.strip()
+                      or any(ord(char) < 32 for char in obj)):
+                  fail("empty or unreadable PR field: " + ".".join(keys))
+              return obj
+
           sha = os.environ["SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              fail("empty or unreadable pushed SHA")
           try:
               pages = json.loads(open(3, encoding="utf-8").read(), parse_constant=reject_constant)
           except (ValueError, RecursionError):
@@ -177,13 +204,47 @@ jobs:
           if len(matches) != 1:
               skip(f"found {len(matches)} merged PRs with merge commit {sha} and base main")
               raise SystemExit(0)
-          pr = matches[0]
+          selected = matches[0]
+          number = selected.get("number")
+          if type(number) is not int or number <= 0:
+              fail("empty or unreadable PR number")
+          # The association endpoint returns a summary PR without merged_by.
+          # Read that selected PR's full API response, binding it to the same
+          # merge, base and head before using any identity or merge metadata.
+          try:
+              response = subprocess.run(
+                  ["gh", "api", f"repos/{os.environ['REPO']}/pulls/{number}"],
+                  check=True, capture_output=True, text=True)
+              pr = json.loads(response.stdout, parse_constant=reject_constant)
+          except (subprocess.CalledProcessError, OSError, ValueError, RecursionError):
+              fail("unreadable resolved PR response")
+          if (not isinstance(pr, dict) or type(pr.get("number")) is not int
+                  or pr.get("number") != number
+                  or pr.get("state") != "closed" or pr.get("merged") is not True
+                  or pr.get("merge_commit_sha") != sha
+                  or field(pr, "base", "ref") != "main"
+                  or field(pr, "head", "sha") != field(selected, "head", "sha")
+                  or field(pr, "merged_at") != field(selected, "merged_at")):
+              fail("resolved PR no longer matches the pushed merge")
+          head_sha = field(pr, "head", "sha")
+          if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+              fail("empty or unreadable PR head SHA")
+          head = pr.get("head")
+          repo = head.get("repo") if isinstance(head, dict) else None
+          fork = repo.get("fork") if isinstance(repo, dict) else None
+          if type(fork) is not bool:
+              fail("empty or unreadable PR field: head.repo.fork")
           values = {
-              "merge_sha": pr["merge_commit_sha"],
-              "head_sha": pr["head"]["sha"],
-              "pr_number": pr["number"],
-              "pr_url": pr["html_url"],
-              "merged_at": pr["merged_at"],
+              "merge_sha": sha,
+              "head_sha": head_sha,
+              "pr_number": number,
+              "pr_url": field(pr, "html_url"),
+              "merged_at": field(pr, "merged_at"),
+              "head_repo": field(pr, "head", "repo", "full_name"),
+              "head_is_fork": str(fork).lower(),
+              "association": field(pr, "author_association"),
+              "pr_author": field(pr, "user", "login"),
+              "merged_by": field(pr, "merged_by", "login"),
               "ok": "true",
           }
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
@@ -191,17 +252,90 @@ jobs:
                   output.write(f"{key}={value}\n")
           PY
 
+      - name: Only our own merged pull requests and dispatches promote the baseline
+        id: authorize
+        if: steps.pr.outputs.ok == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
+          HEAD_IS_FORK: ${{ steps.pr.outputs.head_is_fork }}
+          ASSOCIATION: ${{ steps.pr.outputs.association }}
+          PR_AUTHOR: ${{ steps.pr.outputs.pr_author }}
+          MERGED_BY: ${{ steps.pr.outputs.merged_by }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: permission lookups for the PR author and merger
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            workflow_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            push)
+              [ -n "$REPO" ] || fail "repository is empty"
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              [ -n "$ASSOCIATION" ] || fail "pull request author association is empty"
+              [ -n "$PR_AUTHOR" ] || fail "pull request author is empty"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac
+              [ -n "$MERGED_BY" ] || fail "push merger is empty"
+              case " $ALLOWED_BOTS " in
+                *" $MERGED_BY "*) ;;
+                *)
+                  # No author_association exists for the merger: ask GitHub for the merger's permission on
+                  # this repository; anything but admin/maintain/write (or a failed call) refuses.
+                  perm=$(gh api "repos/$REPO/collaborators/$MERGED_BY/permission" --jq .permission 2>/dev/null || echo none)
+                  case "$perm" in admin|maintain|write) ;; *) fail "push merger ${MERGED_BY:-unknown} has permission '$perm', not write" ;; esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run baseline promotion (only push and workflow_dispatch are allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+  promote:
+    needs: [promote-guard]
+    if: ${{ needs.promote-guard.result == 'success' && needs.promote-guard.outputs.ok == 'true' }}
+    runs-on: ["self-hosted","pf-gcp-main"]
+    steps:
+      - name: Determine repo axis
+        id: axis
+        run: |
+          case "${{ github.repository }}" in
+            *codegen*) echo "repo=codegen" >> "$GITHUB_OUTPUT" ;;
+            *)         echo "repo=engine"  >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # The pushed main commit (or the dispatch ref), never the PR.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
       # The safety property is the TREE: the snapshot describes the gated
       # head's tree, so we promote only when the merge commit now on the base
       # branch carries exactly that tree. A base that moved before the merge,
       # or a rewrite, is skipped — those must be re-gated.
       - name: Verify the merged tree is the gated tree
         id: exacttree
-        if: steps.pr.outputs.ok == 'true'
         env:
-          MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          MERGE_SHA: ${{ needs.promote-guard.outputs.merge_sha }}
+          HEAD_SHA: ${{ needs.promote-guard.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.promote-guard.outputs.pr_number }}
           BASE_REF: main
         run: |
           set -euo pipefail
@@ -225,7 +359,7 @@ jobs:
         if: steps.exacttree.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_SHA: ${{ needs.promote-guard.outputs.head_sha }}
           AXIS: ${{ steps.axis.outputs.repo }}
         run: |
           set -euo pipefail
@@ -328,12 +462,12 @@ jobs:
           # No metadata server on a GitHub runner; mint GCS tokens from the
           # federated gcloud credential explicitly.
           PINEFORGE_GCP_TOKEN_CMD: gcloud auth print-access-token
-          MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          MERGE_SHA: ${{ needs.promote-guard.outputs.merge_sha }}
+          HEAD_SHA: ${{ needs.promote-guard.outputs.head_sha }}
           MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
-          PR_URL: ${{ steps.pr.outputs.pr_url }}
-          MERGED_AT: ${{ steps.pr.outputs.merged_at }}
+          PR_NUMBER: ${{ needs.promote-guard.outputs.pr_number }}
+          PR_URL: ${{ needs.promote-guard.outputs.pr_url }}
+          MERGED_AT: ${{ needs.promote-guard.outputs.merged_at }}
         run: |
           set -euo pipefail
           ms=$(node -e "process.stdout.write(String(Date.parse(process.env.MERGED_AT)))")
