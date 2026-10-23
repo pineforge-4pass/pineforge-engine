@@ -79,11 +79,12 @@ enum class RunFailureCode : std::uint16_t {
     window_request_invalid = 64,
     report_mode_unsupported = 65,
     report_sink_failed = 66,
-    scratch_capacity_exceeded = 67,
-    scratch_configuration_invalid = 68,
-    scratch_io_failed = 69,
+    report_sink_value_too_large = 67,
+    scratch_capacity_exceeded = 68,
+    scratch_configuration_invalid = 69,
+    scratch_io_failed = 70,
 };
 
-inline constexpr std::uint16_t kRunFailureCodeCount = 70;
+inline constexpr std::uint16_t kRunFailureCodeCount = 71;
 
 }  // namespace pineforge

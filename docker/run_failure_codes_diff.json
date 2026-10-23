@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "8ab27e1883fcca2c9efd9be062817bac8b9de663e4b3724a348565bb8249780b"
+    "catalogSha256": "27e73fd90bf31d40a0855422fad8ee920b620ee89ce6ea36f5c3e69ff7c2f196"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -120,6 +120,28 @@
           "report sink open failed",
           "report sink write failed",
           "report sink write made no progress"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
+    {
+      "code": "report_sink_value_too_large",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "field": {
+            "kind": "string"
+          },
+          "max": {
+            "kind": "integer"
+          }
+        },
+        "class": "input",
+        "description": "A report-sink string or serialized line exceeds the 1 MiB line limit, including LF. The caller must supply smaller values; the run has no completed sink or valid trailer.",
+        "english": [
+          "report sink string exceeds the line bound",
+          "report sink line exceeds 1 MiB including LF"
         ],
         "retryable": false,
         "since": "1.7.0"

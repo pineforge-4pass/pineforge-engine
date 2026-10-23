@@ -34,6 +34,11 @@ constexpr std::array<char, 7> tags{{'E', 'T', 'O', 'V', 'K', 'X', 'H'}};
     throw WriterError(WriterFailure::invalid_input, message);
 }
 
+[[noreturn]] void too_large(const char* message, const char* field) {
+    throw WriterError(WriterFailure::value_too_large, message, 0, field,
+                      static_cast<std::int64_t>(max_line));
+}
+
 // The existing wire contract bounds a line, including LF, to 1 MiB.
 // Reserve that scratch once, and check before copying each field.
 struct Line {
@@ -42,7 +47,7 @@ struct Line {
     void clear() noexcept { used = 0; }
     void append(std::string_view value) {
         if (value.size() >= bytes.size() - used)
-            invalid("report sink line exceeds 1 MiB including LF");
+            too_large("report sink line exceeds 1 MiB including LF", "report_sink.line");
         if (!value.empty()) std::memcpy(bytes.data() + used, value.data(), value.size());
         used += value.size();
     }
@@ -154,7 +159,8 @@ void string(Out& out, std::string_view utf8) {
 }
 
 void wire_string(Line& out, std::string_view value) {
-    if (value.size() >= max_line) invalid("report sink string exceeds the line bound");
+    if (value.size() >= max_line)
+        too_large("report sink string exceeds the line bound", "report_sink.string");
     string(out, value);
 }
 

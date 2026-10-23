@@ -4,6 +4,7 @@
 #include <pineforge/run_failure.hpp>
 
 #include <cerrno>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -13,18 +14,23 @@ namespace report_sink {
 
 // Carry the validated cause from the syscall to every run-boundary wrapper.
 // Only errno distinguishes a closed peer; human operation text is diagnostic.
-enum class WriterFailure { io, invalid_input, invalid_state };
+enum class WriterFailure { io, invalid_input, invalid_state, value_too_large };
 
 class WriterError final : public std::runtime_error, public RunFailureInfo {
 public:
-    WriterError(WriterFailure reason, std::string message, int error_number = 0)
+    WriterError(WriterFailure reason, std::string message, int error_number = 0,
+                const char* field = "", std::int64_t max = 0)
         : std::runtime_error(std::move(message)),
           RunFailureInfo(reason == WriterFailure::io ? RunFailureCode::report_sink_failed
-                                                     : RunFailureCode::engine_invariant,
+                         : reason == WriterFailure::value_too_large
+                             ? RunFailureCode::report_sink_value_too_large
+                             : RunFailureCode::engine_invariant,
               reason == WriterFailure::io
                   ? RunFailureArgs{{"reason", error_number == EPIPE || error_number == ECONNRESET
                                                  ? "sink_peer_closed" : "sink_io"}}
-                  : RunFailureArgs{}),
+                  : reason == WriterFailure::value_too_large
+                      ? RunFailureArgs{{"field", field}, {"max", max}}
+                      : RunFailureArgs{}),
           reason_(reason), error_number_(error_number) {}
 
     WriterFailure reason() const noexcept { return reason_; }

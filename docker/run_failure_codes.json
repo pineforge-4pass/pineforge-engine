@@ -1022,6 +1022,24 @@
    "retryable": false,
    "since": "1.7.0"
   },
+  "report_sink_value_too_large": {
+   "args": {
+    "field": {
+     "kind": "string"
+    },
+    "max": {
+     "kind": "integer"
+    }
+   },
+   "class": "input",
+   "description": "A report-sink string or serialized line exceeds the 1 MiB line limit, including LF. The caller must supply smaller values; the run has no completed sink or valid trailer.",
+   "english": [
+    "report sink string exceeds the line bound",
+    "report sink line exceeds 1 MiB including LF"
+   ],
+   "retryable": false,
+   "since": "1.7.0"
+  },
   "request_symbol_invalid": {
    "args": {},
    "class": "strategy",

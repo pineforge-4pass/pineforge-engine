@@ -7,6 +7,7 @@ version number follows semantic versioning over the surfaces the
 
 ## Unreleased
 
+- **Contract addition (B2-17):** `report_sink_value_too_large` classifies oversized report-sink strings and lines as terminal input failures.
 - **A latched `report_sink_failed` now yields an empty report.** After a run
   whose failure is `report_sink_failed` (including a sink failure at finish time
   after an otherwise successful run), every later report read returns the empty

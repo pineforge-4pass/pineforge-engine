@@ -11,9 +11,10 @@ RELEASED_FIXTURE = Path(__file__).with_name("run_failure_code_numbers_v1_6_3.jso
 V170_ADDITIONS = {
     "report_mode_unsupported": 65,
     "report_sink_failed": 66,
-    "scratch_capacity_exceeded": 67,
-    "scratch_configuration_invalid": 68,
-    "scratch_io_failed": 69,
+    "report_sink_value_too_large": 67,
+    "scratch_capacity_exceeded": 68,
+    "scratch_configuration_invalid": 69,
+    "scratch_io_failed": 70,
 }
 sys.path.insert(0, str(ROOT / "scripts"))
 
