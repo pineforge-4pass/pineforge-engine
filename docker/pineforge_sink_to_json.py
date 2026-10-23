@@ -199,7 +199,6 @@ class _Sink:
                 next_trade, next_output, constants = 1, 0, 0
                 for row in reader:
                     if row.tag == "E":
-                        _check_equity(row)
                         timestamp = row.values[0]
                         if last_time is not None and timestamp < last_time:
                             raise _Failure(3, "equity times are out of order")

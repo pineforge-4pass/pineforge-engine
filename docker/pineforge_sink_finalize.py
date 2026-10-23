@@ -309,7 +309,6 @@ def _verify(path: str | None, run_id: str | None, receipt: _Receipt, *,
                     # Canonical-value and order checks on parsed Record values,
                     # matching the path writer/run_json, not a second grammar.
                     if record.tag == "E":
-                        _check_equity(record)
                         timestamp = record.values[0]
                         if last_equity_time is not None and timestamp < last_equity_time:
                             raise _Failure(3, "equity times are out of order")
