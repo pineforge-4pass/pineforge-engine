@@ -315,6 +315,237 @@ void check_row(const Row& row) {
     CHECK(strategy_pending_orders_len(&host) == 0);
 }
 
+enum class ScopeCase { DifferentId, QueuedReplacement, ReleaseTime, ParentMismatch };
+
+struct ScopeRow {
+    const char* name;
+    ScopeCase scenario;
+};
+
+constexpr ScopeRow scope_rows[] = {
+    {"lookup-different-id", ScopeCase::DifferentId},
+    {"lookup-queued-replacement", ScopeCase::QueuedReplacement},
+    {"release-time-key", ScopeCase::ReleaseTime},
+};
+
+std::vector<pf_pending_order_v1_t> pending_rows(source::PineStrategyHost& host) {
+    std::vector<pf_pending_order_v1_t> result;
+    const int count = strategy_pending_orders_len(&host);
+    CHECK(count >= 0);
+    for (int index = 0; index < count; ++index) {
+        pf_pending_order_v1_t row{};
+        const int status = strategy_pending_order_get(&host, index, &row, sizeof row);
+        CHECK(status == 0);
+        if (status == 0) result.push_back(row);
+    }
+    return result;
+}
+
+int pending_id_count(const std::vector<pf_pending_order_v1_t>& rows, const char* id) {
+    int count = 0;
+    for (const auto& row : rows)
+        if (std::strcmp(row.id, id) == 0) ++count;
+    return count;
+}
+
+const pf_pending_order_v1_t* pending_id(
+        const std::vector<pf_pending_order_v1_t>& rows, const char* id) {
+    for (const auto& row : rows)
+        if (std::strcmp(row.id, id) == 0) return &row;
+    return nullptr;
+}
+
+class ScopeProbeHost final : public source::PineStrategyHost {
+public:
+    using BacktestEngine::open_trade_entry_id;
+    using BacktestEngine::open_trade_size;
+
+    explicit ScopeProbeHost(ScopeCase scenario) : scenario_(scenario) {
+        attach_pine_execution_adapter();
+        source::PineStrategyConfig config;
+        config.initial_capital = 100'000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = seed_units;
+        config.pyramiding = 3;
+        config.margin_long = 100.0;
+        config.margin_short = 100.0;
+        config.commission_type = static_cast<int>(CommissionType::PERCENT);
+        config.commission_value = 0.0;
+        config.slippage = 0;
+        config.process_orders_on_close = false;
+        config.calc_on_order_fills = false;
+        configure_pine_strategy(config);
+        set_syminfo_timezone("UTC");
+        set_syminfo_session("24x7");
+        set_syminfo_mintick(1.0);
+        fixture_retain_all_events();
+    }
+
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) {
+            strategy_entry("L", true);
+            return;
+        }
+        if (pine_bar_index() == 1) {
+            switch (scenario_) {
+            case ScopeCase::DifferentId:
+                strategy_entry("X", false);
+                strategy_close_all();
+                strategy_entry("Y", false);
+                break;
+            case ScopeCase::QueuedReplacement:
+                strategy_close_all();
+                strategy_entry("X", false);
+                strategy_entry("X", false, missing, missing, reissue_units);
+                break;
+            case ScopeCase::ReleaseTime:
+                // This is the transferred live NaN-quantity entry. There is
+                // deliberately no same-callback reissue in this row.
+                strategy_entry("X", true);
+                strategy_close_all();
+                break;
+            case ScopeCase::ParentMismatch:
+                strategy_close_all();
+                strategy_entry("X", false);
+                strategy_close_all();
+                strategy_entry("X", false, missing, missing, reissue_units);
+                break;
+            }
+            return;
+        }
+        if (pine_bar_index() == 2 && scenario_ == ScopeCase::ReleaseTime) {
+            // The stream invokes this next-bar callback before matching the
+            // deferred close. The fixed key lets the release replace this
+            // same-id request; an empty key leaves both X requests live.
+            strategy_entry("X", true, missing, missing, reissue_units);
+        }
+    }
+
+private:
+    ScopeCase scenario_;
+};
+
+int open_id_count(const ScopeProbeHost& host, const char* id) {
+    int count = 0;
+    for (std::size_t index = 0; index < host.physical_position().lot_count; ++index) {
+        if (host.open_trade_entry_id(static_cast<int>(index)) == id) ++count;
+    }
+    return count;
+}
+
+double open_id_units(const ScopeProbeHost& host, const char* id) {
+    double units = 0.0;
+    for (std::size_t index = 0; index < host.physical_position().lot_count; ++index) {
+        if (host.open_trade_entry_id(static_cast<int>(index)) == id)
+            units += host.open_trade_size(static_cast<int>(index));
+    }
+    return units;
+}
+
+int fill_id_count(const ScopeProbeHost& host, const char* id) {
+    int count = 0;
+    for (const auto& event : host.native_events(0)) {
+        if (!event.command) continue;
+        const auto* fill = std::get_if<native_order::ExecutionAppliedEvent>(&*event.command);
+        if (fill && fill->request().label == id) ++count;
+    }
+    return count;
+}
+
+void check_parent_scope_guard() {
+    ScopeProbeHost host(ScopeCase::ParentMismatch);
+    const Bar warmup[] = {
+        {100, 100, 100, 100, 1, start},
+        {100, 100, 100, 100, 1, start + 60'000},
+    };
+    const bool began = host.stream_begin(warmup, 2, "1", "1");
+    CHECK(began);
+    CHECK(host.last_error().empty());
+    if (!began) return;
+    // The first X belongs to the first full close. A second full close is
+    // then current, so the second X must append instead of replacing the
+    // first one. Removing only the paired-parent conjunct replaces it.
+    const auto staged = pending_rows(host);
+    CHECK(pending_id_count(staged, "X") == 2);
+    CHECK(host.stream_push_tick(TradeTick{start + 120'000, 1, 100.0, 1.0}));
+    CHECK(host.last_error().empty());
+    CHECK(host.physical_position().signed_units == -reissue_units);
+    CHECK(host.physical_position().lot_count == 1);
+    CHECK(open_id_count(host, "X") == 1);
+    CHECK(open_id_units(host, "X") == reissue_units);
+    const auto remaining = pending_rows(host);
+    CHECK(pending_id_count(remaining, "X") == 1);
+}
+
+void check_scope_row(const ScopeRow& row) {
+    row_name = row.name;
+    ScopeProbeHost host(row.scenario);
+    const Bar warmup[] = {
+        {100, 100, 100, 100, 1, start},
+        {100, 100, 100, 100, 1, start + 60'000},
+    };
+    const bool began = host.stream_begin(warmup, 2, "1", "1");
+    CHECK(began);
+    CHECK(host.last_error().empty());
+    if (!began) return;
+
+    const auto staged = pending_rows(host);
+    if (row.scenario == ScopeCase::DifferentId) {
+        // X and Y are both default-sized one-unit entries. The different-id
+        // request must append behind the close, leaving both entries for the
+        // release; dropping only the lookup key predicate makes Y overwrite X.
+        CHECK(pending_id_count(staged, "X") == 1);
+        CHECK(pending_id_count(staged, "Y") == 1);
+        const auto* x = pending_id(staged, "X");
+        const auto* y = pending_id(staged, "Y");
+        CHECK(x != nullptr && std::isnan(x->qty));
+        CHECK(y != nullptr && std::isnan(y->qty));
+        CHECK(host.stream_push_tick(TradeTick{start + 120'000, 1, 100.0, 1.0}));
+        CHECK(host.last_error().empty());
+        CHECK(host.physical_position().signed_units == -2.0);
+        CHECK(host.physical_position().lot_count == 2);
+        CHECK(open_id_count(host, "X") == 1);
+        CHECK(open_id_count(host, "Y") == 1);
+        CHECK(open_id_units(host, "X") == seed_units);
+        CHECK(open_id_units(host, "Y") == seed_units);
+        CHECK(fill_id_count(host, "X") == 1);
+        CHECK(fill_id_count(host, "Y") == 1);
+        check_parent_scope_guard();
+    } else if (row.scenario == ScopeCase::QueuedReplacement) {
+        // The second X is the declared two-unit replacement of the row
+        // appended after close_all. The key capture makes it one queued row;
+        // the unfixed adapter leaves the first one under key 0 and produces
+        // two X fills.
+        CHECK(pending_id_count(staged, "X") == 1);
+        const auto* x = pending_id(staged, "X");
+        CHECK(x != nullptr);
+        if (x) CHECK(x->qty == reissue_units);
+        CHECK(host.stream_push_tick(TradeTick{start + 120'000, 1, 100.0, 1.0}));
+        CHECK(host.last_error().empty());
+        CHECK(host.physical_position().signed_units == -reissue_units);
+        CHECK(host.physical_position().lot_count == 1);
+        CHECK(open_id_count(host, "X") == 1);
+        CHECK(open_id_units(host, "X") == reissue_units);
+        CHECK(fill_id_count(host, "X") == 1);
+    } else {
+        // The first X is a same-side default-sized live entry, so close_all
+        // transfers it as a NaN-quantity row. The next-bar X is an explicit
+        // two-unit command. A same-id release replaces that command and
+        // releases exactly the transferred one-unit X.
+        CHECK(pending_id_count(staged, "X") == 1);
+        const auto* x = pending_id(staged, "X");
+        CHECK(x != nullptr && std::isnan(x->qty));
+        CHECK(host.stream_push_tick(TradeTick{start + 120'000, 1, 100.0, 1.0}));
+        CHECK(host.last_error().empty());
+        CHECK(host.physical_position().signed_units == seed_units);
+        CHECK(host.physical_position().lot_count == 1);
+        CHECK(open_id_count(host, "X") == 1);
+        CHECK(open_id_units(host, "X") == seed_units);
+        CHECK(fill_id_count(host, "X") == 1);
+    }
+    CHECK(strategy_pending_orders_len(&host) == 0);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -325,6 +556,14 @@ int main(int argc, char** argv) {
         matched = true;
         const int before = failures;
         check_row(row);
+        std::fprintf(stderr, "[%s] %s (%d failed checks)\n",
+                     row.name, failures == before ? "PASS" : "FAIL", failures - before);
+    }
+    for (const auto& row : scope_rows) {
+        if (argc == 2 && std::strcmp(argv[1], row.name) != 0) continue;
+        matched = true;
+        const int before = failures;
+        check_scope_row(row);
         std::fprintf(stderr, "[%s] %s (%d failed checks)\n",
                      row.name, failures == before ? "PASS" : "FAIL", failures - before);
     }
