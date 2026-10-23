@@ -3700,6 +3700,22 @@ foreach(test_name ${TEST_SOURCES})
     pineforge_add_unit_test(${test_name})
 endforeach()
 
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_executable(test_pending_observer_walk test_pending_observer_walk.cpp)
+    target_link_libraries(test_pending_observer_walk PRIVATE pineforge)
+    target_compile_options(test_pending_observer_walk PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_pending_observer_walk PRIVATE ${_pf_cov_test_flags})
+    endif()
+    foreach(_pf_pending_walk_case IN ITEMS
+            pending_walk_oracle pending_walk_cost pending_walk_growth)
+        add_test(NAME ${_pf_pending_walk_case}
+            COMMAND test_pending_observer_walk ${_pf_pending_walk_case})
+    endforeach()
+    # The timing ratio needs an uncontended CTest process on the lab host.
+    set_tests_properties(pending_walk_cost pending_walk_growth PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # EN-134: each public C ABI fault run is also addressable for red-before and
 # mutant checks. The aggregate and these rows run in the kernel-only profile.
 foreach(_pf_settlement_row_case
