@@ -1008,13 +1008,18 @@ struct NativeDriver {
         proposal.physical_action = no::Transact{units};
         proposal.pre_fill = target.current_position; proposal.pre_target = target;
         proposal.inspected_opened_units = units; proposal.inspected_current_ticket = 1;
-        auto prepared = core.prepare_execution(handle, proposal, ordinal);
-        require(std::holds_alternative<no::PreparedExecution>(prepared), "prepared fill");
+        // The direct form: with a journal codec bound, 1.7.0 refuses the
+        // plan form (prepare_execution + install_execution, whose noexcept
+        // install has no phase that can throw a store failure), and every
+        // core this driver fills is codec-bound. The direct form writes the
+        // same event at the same position, its store write before it publishes.
+        auto checked = core.check_execution(handle, proposal, ordinal);
+        require(std::holds_alternative<std::monostate>(checked), "checked fill");
         no::CommittedExecutionFacts facts;
         facts.result.status = pineforge::execution::Status::Applied;
         facts.result.opened_units = units; facts.result.current_ticket = 1;
         facts.cycle_after = 1; facts.post_target = target; facts.committed_action = no::Transact{units};
-        auto installed = core.install_execution(std::get<no::PreparedExecution>(std::move(prepared)), facts);
+        auto installed = core.apply_execution(handle, proposal, facts, ordinal);
         require(std::holds_alternative<no::Installed>(installed), "installed fill");
         const auto range = std::get<no::Installed>(installed).events;
         ordinal += range.count;
