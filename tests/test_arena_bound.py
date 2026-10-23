@@ -30,8 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from arena_bound import (  # noqa: E402
-    CHUNK_BYTES, FACTS_SCHEMA, MAX_U64, FactsError, arena_bound, index_peak,
-    fold_opened_segments, ordered_fold_bytes, per_user_bytes, slots,
+    CHUNK_BYTES, FACTS_SCHEMA, MAX_ARENA_BYTES, MAX_U64, BoundOverflow, FactsError,
+    arena_bound, combined_arena_chunks, index_peak, fold_opened_segments,
+    ordered_fold_bytes, per_user_bytes, slots,
 )
 from arena_bound_manifest import (  # noqa: E402
     bound_probe, engine_fingerprint, plan_fingerprint,
@@ -69,6 +70,111 @@ class FormulaTests(unittest.TestCase):
                 self.assertEqual(command_share_capacity(arena_chunks * CHUNK_BYTES, 1, 16),
                                  store_chunks * CHUNK_BYTES)
 
+    def test_combined_arena_hand_boundaries(self):
+        # b is the ALREADY rounded non-command certificate, in chunks.
+        # 15/16/17 straddle the floor regime; 31 -> 35 skips the dip at 32.
+        for non_command, combined in (
+                (0, 3), (1, 4), (12, 15), (13, 16), (14, 17),
+                (15, 18), (16, 19), (17, 20), (28, 31), (29, 35),
+                (30, 36), (31, 37), (39, 45), (41, 47), (42, 51),
+                (1508, 1853)):
+            with self.subTest(non_command=non_command):
+                self.assertEqual(combined_arena_chunks(non_command), combined)
+                self.assertEqual(combined - 3 * max(1, combined // 16), non_command)
+
+    def test_combined_arena_is_the_first_sufficient_size(self):
+        # Enumerate the capacity inequality, independently of the closed form.
+        # Checking only n-1 would miss the dips at EVERY multiple of 16.
+        previous = 0
+        for non_command in range(513):
+            first = next(n for n in range(non_command, 2 * non_command + 4)
+                         if n - 3 * max(1, n // 16) >= non_command)
+            actual = combined_arena_chunks(non_command)
+            self.assertEqual(actual, first, f"non-command chunks={non_command}")
+            self.assertGreaterEqual(actual, previous)
+            previous = actual
+
+    def test_logical_chunk_boundaries_keep_all_fourteen_regions(self):
+        # Hand expectations include both quotient/remainder rounding and K.
+        for logical, combined in (
+                (0, 17), (CHUNK_BYTES - 1, 18), (CHUNK_BYTES, 18),
+                (CHUNK_BYTES + 1, 19),
+                (14 * CHUNK_BYTES - 1, 31), (14 * CHUNK_BYTES, 31),
+                (14 * CHUNK_BYTES + 1, 35),
+                (27 * CHUNK_BYTES - 1, 47), (27 * CHUNK_BYTES, 47),
+                (27 * CHUNK_BYTES + 1, 51)):
+            with self.subTest(logical=logical):
+                with mock.patch("arena_bound.per_user_bytes", return_value={"test": logical}):
+                    arena = arena_bound(self.vectors[0]["facts"])["terms"]["arena"]
+                self.assertFalse(arena["unbounded"])
+                self.assertEqual(arena["arenaBytes"], combined * CHUNK_BYTES)
+
+    def test_combined_arena_range_is_checked_after_command_shares(self):
+        # M=2**32-1=16*268435455+15. M-3*268435455=3489660930.
+        # The next b needs M+4 chunks, although b alone still fits uint32.
+        last_non_command = 3_489_660_930
+        last_logical = (last_non_command - 14) * CHUNK_BYTES
+        for logical, expected in ((last_logical, MAX_ARENA_BYTES),
+                                  (last_logical + 1, None)):
+            with self.subTest(logical=logical):
+                with mock.patch("arena_bound.per_user_bytes", return_value={"test": logical}):
+                    arena = arena_bound(self.vectors[0]["facts"])["terms"]["arena"]
+                self.assertEqual(arena["arenaBytes"], expected)
+                self.assertEqual(arena["unbounded"], expected is None)
+                if expected is None:
+                    self.assertIn("PLATFORM_RANGE:", arena["reason"])
+                    self.assertIn("uint32 chunk", arena["reason"])
+        with self.assertRaisesRegex(BoundOverflow, "addition exceeds uint64"):
+            combined_arena_chunks(MAX_U64)
+        with mock.patch("arena_bound.per_user_bytes", return_value={"test": MAX_U64}):
+            arena = arena_bound(self.vectors[0]["facts"])["terms"]["arena"]
+        self.assertIsNone(arena["arenaBytes"])
+        self.assertIn("PLATFORM_RANGE: multiplication exceeds uint64", arena["reason"])
+
+    def test_million_point_half_size_remains_a_negative_witness(self):
+        vector = next(row for row in self.vectors
+                      if row["name"] == "million-point-negative-control-plan")
+        certified = arena_bound(vector["facts"])["terms"]["arena"]["arenaBytes"]
+        # B=24*C+1222; b=25+14=39; q=2; n=39+6=45.
+        self.assertEqual(certified, 47_185_920)
+        self.assertEqual(certified % CHUNK_BYTES, 0)
+        self.assertEqual(certified - 3 * command_share_capacity(certified, 1, 16),
+                         39 * CHUNK_BYTES)
+        half = certified // 2
+        supplied = half - half % CHUNK_BYTES
+        self.assertEqual(supplied, 22 * CHUNK_BYTES)
+        self.assertLess(supplied, 25_165_824)  # Actual 24*C curve from the lab brief.
+
+    def test_runtime_fixture_certificates_hand_derived(self):
+        # Current fixture_facts, independently summed by hand. Columns are
+        # case, bars, logical B, old non-command chunks, combined chunks.
+        # The command capacity expectation uses only arena/share geometry.
+        for which, bars, logical, non_command, combined in (
+                (1, 32, 1_898_366_958, 1825, 2245),
+                (2, 512, 1_111_429_870, 1074, 1320),
+                (3, 32, 202_251_294, 207, 252),
+                (4, 64, 967_682_798, 937, 1150),
+                (5, 32, 1_898_366_958, 1825, 2245),
+                (6, 512, 4_207_814, 19, 22),
+                (7, 384, 631_186_438, 616, 757),
+                (0, 1_048_576, 25_167_046, 39, 45)):
+            with self.subTest(which=which):
+                facts = {
+                    "schema": FACTS_SCHEMA,
+                    "data": {"scriptBars": bars, "selected": int(which == 7),
+                             "windowBars": 256 if which == 7 else bars,
+                             "source": "hand runtime fixture plan"},
+                    "strategy": fixture_facts(which, bars),
+                }
+                arena = arena_bound(facts)["terms"]["arena"]
+                self.assertFalse(arena["unbounded"])
+                self.assertEqual(sum(per_user_bytes(arena["inputs"]).values()), logical)
+                self.assertEqual(arena["arenaBytes"], combined * CHUNK_BYTES)
+                self.assertEqual(
+                    arena["arenaBytes"]
+                    - 3 * command_share_capacity(arena["arenaBytes"], 1, 16),
+                    non_command * CHUNK_BYTES)
+
     def test_hand_vectors_and_exact_a5_wider_shape(self):
         for vector in self.vectors:
             with self.subTest(vector=vector["name"]):
@@ -86,6 +192,13 @@ class FormulaTests(unittest.TestCase):
                 if not arena["unbounded"]:
                     self.assertEqual(sum(per_user_bytes(arena["inputs"]).values()),
                                      vector["logicalBytes"])
+                    non_command = ((vector["logicalBytes"] // CHUNK_BYTES
+                                    + int(vector["logicalBytes"] % CHUNK_BYTES != 0) + 14)
+                                   * CHUNK_BYTES)
+                    self.assertEqual(
+                        arena["arenaBytes"]
+                        - 3 * command_share_capacity(arena["arenaBytes"], 1, 16),
+                        non_command)
 
     def test_rehash_startup_boundary_and_growth(self):
         # Independent index sizes: 64 slots through key 32, then new 128 +

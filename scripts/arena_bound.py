@@ -13,6 +13,8 @@ from collections.abc import Mapping
 
 CHUNK_BYTES = 1_048_576
 ROUNDING_REGIONS = 14
+COMMAND_STORES = 3
+COMMAND_SHARE_DENOMINATOR = 16  # kCommandScratchArenaShare = 1/16.
 MAX_U64 = (1 << 64) - 1
 # ScratchArena::Impl rejects chunks > uint32_t::max(), not >= 2**32.
 # This is a representation limit, NEVER a substitute bound for an unknown run.
@@ -54,6 +56,24 @@ def _mul(left: int, right: int) -> int:
     if right != 0 and left > MAX_U64 // right:
         raise BoundOverflow("multiplication exceeds uint64")
     return left * right
+
+
+def combined_arena_chunks(non_command_chunks: int) -> int:
+    """Smallest n with n - 3*max(1, n//16) >= non_command_chunks.
+
+    In share block q>=1, n=16*q+r (0<=r<=15) leaves 13*q+r
+    non-command chunks. The first block reaching b has
+    q=max(1, ceil((b-15)/13))=max(1, floor((b-3)/13)).
+    The one-chunk floor also covers n<16. Guard subtraction for b<3;
+    arena_bound itself supplies b>=ROUNDING_REGIONS=14.
+    """
+    non_command_chunks = _integer(non_command_chunks, "non-command chunks")
+    share_chunks = (
+        max(1, (non_command_chunks - COMMAND_STORES)
+            // (COMMAND_SHARE_DENOMINATOR - COMMAND_STORES))
+        if non_command_chunks >= COMMAND_STORES else 1
+    )
+    return _add(non_command_chunks, _mul(COMMAND_STORES, share_chunks))
 
 
 def _object(value, name: str) -> Mapping:
@@ -302,7 +322,7 @@ def _arena_term(facts: Mapping) -> dict:
         # Quotient/remainder avoids overflowing total + CHUNK_BYTES - 1.
         chunks = _add(total // CHUNK_BYTES, int(total % CHUNK_BYTES != 0),
                       ROUNDING_REGIONS)
-        arena_bytes = _mul(chunks, CHUNK_BYTES)
+        arena_bytes = _mul(combined_arena_chunks(chunks), CHUNK_BYTES)
         if arena_bytes > MAX_ARENA_BYTES:
             return unavailable(
                 "PLATFORM_RANGE: finite bound exceeds ScratchArena's uint32 chunk "
@@ -489,6 +509,17 @@ def arena_bound(facts: Mapping) -> dict:
         "formula": "chunkCeil(sum(perUserBytes)) + 14 * 1048576",
         "sources": ["docs/design/arena-bound.md storage derivation"],
     }
+    if not arena["unbounded"]:
+        arena["derivation"] = {
+            "formula": ("b = ceil(sum(perUserBytes) / 1048576) + 14; "
+                        "q = max(1, floor((b - 3) / (16 - 3))); "
+                        "arenaBytes = (b + 3 * q) * 1048576; f = 1/16"),
+            "sources": [
+                "docs/design/arena-bound.md storage derivation",
+                "src/command_scratch_production.hpp kCommandScratchArenaShare",
+                "src/command_scratch_production.cpp command_scratch_arena_capacity_bytes",
+            ],
+        }
     terms = {"arena": arena}
     for name, calculate, record in (
             ("ohlcv", _ohlcv_term, facts.get("ohlcv")),
