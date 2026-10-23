@@ -502,7 +502,13 @@ sufficiency and global minimality for every nonnegative b (guard b<3
 before unsigned subtraction in the general helper).
 Both b and q(b) are nondecreasing, so A=C*(b+3q(b)) is nondecreasing
 in B. Available capacity itself drops by two chunks at each multiple of
-16; checking only the immediately preceding size is insufficient.
+16 from 32 onward (it rises by one at 16); checking only the immediately preceding size is insufficient.
+
+The certificate holds for a host that supplies exactly arenaBytes. Supplying
+more is not always safe at a 16-chunk boundary: at b=28 the minimum is 31
+chunks, while 32 chunks leave only 26 non-command chunks. A host that
+supplies n' chunks other than arenaBytes/C must recheck
+n' - 3*max(1, floor(n'/16)) >= b.
 
 For example b=28 gives n=31; b=29 gives n=35. Sizes 32, 33 and 34
 leave only 26, 27 and 28 chunks. The next transition is b=41 -> n=47
@@ -816,7 +822,7 @@ the platform comparison is on final A, after all three shares.
 
 ScratchArena's current representation limit is
 (2^32-1)*1048576 = 4503599626321920 bytes, from its uint32 chunk-table
-check at `src/scratch_arena.cpp:131`. This is not a supported allocation
+check at `src/scratch_arena.cpp:144`. This is not a supported allocation
 promise or a size for an unknown strategy. A bound outside it returns
 null with PLATFORM_RANGE. It must not be clamped to the cap.
 At that cap M=2^32-1=16*268435455+15 chunks, K/C=268435455,
