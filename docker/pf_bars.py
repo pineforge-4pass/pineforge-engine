@@ -30,6 +30,9 @@ CLOSE_RECORD = struct.Struct("<q")
 MAX_COUNT = 2**31 - 1
 STAMP_MAX = 2**53 - 1
 BUFFER_SIZE = 1024 * 1024
+# A sidecar is one small metadata object; reuse the existing 1 MiB bounded
+# I/O unit as its hard input limit.
+SIDECAR_MAX_BYTES = BUFFER_SIZE
 SOURCE_VALUES_PREFIX = b"pineforge:ohlcv:barc-le:v1\0"
 SYMBOL_VALUES_PREFIX = b"pineforge:symbol-feed:barc-close-le:v1\0"
 CHART_REASONS = frozenset({
@@ -124,11 +127,31 @@ def check_order(previous, timestamp, *, feed=False):
 
 
 def read_sidecar(path, *, feed=False):
+    fd = None
     try:
-        with Path(path).open(encoding="utf-8") as stream:
-            document = json.load(stream)
-    except (OSError, UnicodeError, ValueError) as error:
+        flags = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                 | getattr(os, "O_CLOEXEC", 0))
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise BarsError(f"sidecar {path} is not a regular file", "sidecar", feed=feed)
+        if info.st_size > SIDECAR_MAX_BYTES:
+            raise BarsError(f"sidecar {path} exceeds {SIDECAR_MAX_BYTES} bytes",
+                            "sidecar", feed=feed)
+        with os.fdopen(fd, "rb") as stream:
+            fd = None
+            raw = stream.read(SIDECAR_MAX_BYTES + 1)
+        if len(raw) > SIDECAR_MAX_BYTES:
+            raise BarsError(f"sidecar {path} exceeds {SIDECAR_MAX_BYTES} bytes",
+                            "sidecar", feed=feed)
+        document = json.loads(raw)
+    except BarsError:
+        raise
+    except (OSError, UnicodeError, ValueError, RecursionError) as error:
         raise BarsError(f"cannot read sidecar {path}: {error}", "sidecar", feed=feed) from None
+    finally:
+        if fd is not None:
+            os.close(fd)
     if not isinstance(document, dict):
         raise BarsError(f"sidecar {path} must be an object", "sidecar", feed=feed)
     return document
@@ -281,6 +304,18 @@ class _Directory:
             os.close(self.fd)
 
 
+def _open_temporary(path):
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+             | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_CLOEXEC", 0))
+    fd = os.open(path, flags, 0o600)
+    try:
+        return os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _feed_pair_error(previous, current):
     values, close, line = previous
     next_values, _, next_line = current
@@ -326,11 +361,12 @@ def convert_csv(csv_path, output_path, *, symbol, tf, feed=False, fresh_private_
                         directory.sync()
                 with ExitStack() as stack:
                     bar_tmp = Path(str(output_path) + ".tmp")
-                    bars = _PackedWriter(stack.enter_context(bar_tmp.open("wb")), BAR_RECORD)
+                    bars = _PackedWriter(stack.enter_context(_open_temporary(bar_tmp)), BAR_RECORD)
                     closes = None
                     if feed:
                         close_tmp = Path(str(close_file) + ".tmp")
-                        closes = _PackedWriter(stack.enter_context(close_tmp.open("wb")), CLOSE_RECORD)
+                        closes = _PackedWriter(stack.enter_context(_open_temporary(close_tmp)),
+                                               CLOSE_RECORD)
                     count, previous, pending = 0, None, None
                     first_ts = first[0][5]
                     for current in chain((first,), rows):
@@ -367,7 +403,7 @@ def convert_csv(csv_path, output_path, *, symbol, tf, feed=False, fresh_private_
                     if closes is not None:
                         metadata["close_sha256"] = closes.hasher.hexdigest()
                 sidecar_tmp = Path(str(sidecar) + ".tmp")
-                with sidecar_tmp.open("wb") as stream:
+                with _open_temporary(sidecar_tmp) as stream:
                     stream.write(sidecar_bytes(metadata))
                     stream.flush()
                     os.fsync(stream.fileno())

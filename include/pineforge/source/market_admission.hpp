@@ -210,6 +210,10 @@ JournalRecordSource encode_journal_record(const Event&) noexcept;
 detail::ScratchStatus decode_journal_record(const detail::ScratchByteSource&,
     detail::ScratchBuffer, Event&) noexcept;
 class Journal;
+// Explicit storage-backed test/inspection seam. Production source journals
+// use the in-memory window; this binding keeps the bounded codec path
+// executable for retention, readback and failure tests without changing that
+// production ownership choice.
 void bind_journal_codec(Journal&, detail::CommandScratchStore&);
 detail::ScratchStatus append_journal_record(Journal&, const detail::ScratchByteSource&) noexcept;
 const detail::ScratchReadback& journal_readback(const Journal&);

@@ -773,7 +773,7 @@ def test_corpus_availability_accepts_materialized_csv_in_strict_mode(tmp_path, m
 
 
 def test_converted_corpus_source_values_sha256_matches_load_bars(pf, tmp_path):
-    """The L1 acceptance check uses the complete checked-in corpus CSV."""
+    """Optional corpus diagnostic; the generated row below is always-run L1."""
     path = ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_1m.csv"
     _require_materialized_corpus_csv(path)
     output = tmp_path / "chart.ETHUSDT.1.bin"
@@ -787,3 +787,28 @@ def test_converted_corpus_source_values_sha256_matches_load_bars(pf, tmp_path):
     assert digest.hexdigest() == expected
     assert metadata["first_ts"] == bars[0].timestamp
     assert metadata["last_ts"] == bars[count - 1].timestamp
+
+
+def test_generated_multimegabyte_chart_source_values_sha256(pf, tmp_path):
+    """E-13: L1 chart identity runs without an optional corpus checkout."""
+    path = tmp_path / "generated-chart.csv"
+    count = 140000
+    expected = hashlib.sha256(PREFIX)
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        stream.write("timestamp,open,high,low,close,volume\n")
+        for index in range(count):
+            timestamp = T0 + index * 60000
+            stream.write(f"{timestamp},1,2,.5,1.5,3\n")
+            expected.update(BAR.pack(1, 2, .5, 1.5, 3, timestamp))
+    assert path.stat().st_size > 4 * 1024 * 1024
+
+    output = tmp_path / "chart.ETHUSDT.1.bin"
+    metadata = pf.convert_csv(path, output, symbol="ETHUSDT", tf="1")
+    digest = hashlib.sha256(PREFIX)
+    with output.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    assert metadata["count"] == count
+    assert metadata["first_ts"] == T0
+    assert metadata["last_ts"] == T0 + (count - 1) * 60000
+    assert digest.hexdigest() == expected.hexdigest()

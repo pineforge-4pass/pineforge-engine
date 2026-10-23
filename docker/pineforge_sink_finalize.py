@@ -55,8 +55,8 @@ write(2). Parsing adds a bounded JSON working set and header, seven counters
 and SHA-256 state. File mode first copies the input, then verifies the spool.
 RAM is O(MAX_LINE_BYTES), independent of total stream size. This is a bound
 in stream length, not a universal numeric Python RSS limit.
-The 64 MiB regression test requires peak child RSS below 20 MiB for its
-16 KiB records, including the interpreter and imports.
+The 64 MiB regression test requires the big-stream peak child RSS to be no
+more than 2 MiB above its tiny-stream baseline, with at most a 1 MiB increase.
 
 With --max-bytes B, both modes read at most B+1 input bytes. Exactly B
 bytes with a valid trailer and EOF succeed. Overflow stops at byte B+1

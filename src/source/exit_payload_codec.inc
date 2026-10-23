@@ -256,7 +256,7 @@ void encode_payload(PayloadWriter& w, const ReservationGrowthSource& v) {
 PAYLOAD_MEMBERS(PlacementSnapshot,
     M(family) M(source_id) M(from_entry) M(comment) M(oca_name) M(oca_type) M(qty_type)
     M(requested_qty) M(projection_remaining_qty) M(qty_percent) M(is_long) M(immediately)
-    M(opening) M(deferred_cohort) M(reservation_deferred_to_pending_entry)
+    M(opening) M(filled_exit) M(deferred_cohort) M(reservation_deferred_to_pending_entry)
     M(void_issue) M(void_global_issue) M(pending_bound_exit) M(per_entry_origin) M(per_entry_units)
     M(crosses_zero) M(follow_up_fill) M(waypoint_margin_call) M(fixed_exit_reservation)
     M(frozen_market_instruction) M(frozen_market_own_units) M(frozen_market_transaction_units)

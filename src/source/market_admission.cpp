@@ -256,12 +256,10 @@ const std::vector<Event>& Journal::events() const {
 }
 
 Journal::Prefix Journal::folded_window() const {
-    // A destructive filter supplies no prefix proof of its own. A validated
-    // nonzero retired prefix may seed its surviving tail, but never a zero
-    // restart or a rewrite of the command gate's last rejected bar.
-    if (filtered_ && retired_prefix_.count == 0)
-        throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
-                                      "admission filter cannot rewrite folded lifetime history");
+    // A filter before the first retirement has the complete surviving history
+    // available and refolds it from the initial seed. After retirement, only
+    // the validated nonzero prefix may seed the surviving tail, and it may
+    // never rewrite the command gate's last rejected bar.
     if (codec_) CodecState::check(codec_->failure, codec_.get());
     if (fold_valid_ && !filtered_ && folded_window_.count == event_count())
         return folded_window_;
@@ -320,7 +318,8 @@ Journal::Prefix Journal::folded_window() const {
             append(source,{page.data(),page.size()});
         }
     }
-    if (filtered_ && retained_rejected_bar != folded_window_.last_rejected_command_bar)
+    if (filtered_ && retired_prefix_.count != 0
+        && retained_rejected_bar != folded_window_.last_rejected_command_bar)
         throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
                                       "admission filter cannot rewrite the rejection gate");
     folded_window_ = result;
