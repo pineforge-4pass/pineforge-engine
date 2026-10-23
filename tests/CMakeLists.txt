@@ -7598,6 +7598,19 @@ if(UNIX)
     target_compile_options(report_nonfinite_equity_fd PRIVATE -ffp-contract=off -UNDEBUG)
 endif()
 # --- CR-150 core-cr150-cr289 end ---
+
+# --- CR-150 core-cr150-cr224 begin ---
+# CR-281 ports CR-224 to Linux's sealed-memfd jailed arena. A dedicated ALL
+# module is mandatory even when ci_verify disables corpus strategy targets.
+# Missing generated.cpp is a configure/build failure, never a skipped test.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
+    add_library(cr224_nofile_strategy MODULE ../corpus/validation/bracket-same-id-exit-replace-01/generated.cpp)
+    target_link_libraries(cr224_nofile_strategy PRIVATE pineforge)
+    target_link_options(cr224_nofile_strategy PRIVATE "-Wl,--whole-archive" "$<TARGET_FILE:pineforge>" "-Wl,--no-whole-archive")
+    target_compile_options(cr224_nofile_strategy PRIVATE -ffp-contract=off -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare)
+    set_target_properties(cr224_nofile_strategy PROPERTIES PREFIX "" SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cr224_nofile")
+endif()
+# --- CR-150 core-cr150-cr224 end ---
 foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
     if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
         message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
