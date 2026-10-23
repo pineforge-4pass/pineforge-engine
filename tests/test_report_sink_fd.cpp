@@ -6,6 +6,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/metrics_stream.hpp>
 #include <pineforge/run_failure.hpp>
+#include <pineforge/detail/scratch_arena.hpp>
 
 #include <algorithm>
 #include <array>
@@ -274,6 +275,14 @@ struct Result {
 };
 enum class Expect { success, sink_failure, incomplete };
 
+std::string run_diagnostics(Fixture& host, const std::vector<Bar>& bars) {
+    return "status=" + std::to_string(host.last_run_status())
+        + ", code=" + strategy_get_last_error_code(host.handle())
+        + ", args=" + strategy_get_last_error_args(host.handle())
+        + ", callbacks=" + std::to_string(host.callbacks) + "/" + std::to_string(bars.size())
+        + ", last_error=" + host.last_error();
+}
+
 Result execute(Fixture& host, const std::vector<Bar>& bars, Expect expect = Expect::success) {
     struct Report {
         pineforge::ReportC value{};
@@ -283,7 +292,10 @@ Result execute(Fixture& host, const std::vector<Bar>& bars, Expect expect = Expe
         host.run(bars.data(), static_cast<int>(bars.size()));
         host.fill_report(&report.value);
     } catch (const std::exception& error) {
-        if (expect == Expect::success) throw;
+        if (expect == Expect::success) {
+            std::fprintf(stderr, "L22A engine exception: %s\n", run_diagnostics(host, bars).c_str());
+            throw;
+        }
         // Same boundary as generated run_backtest_full: preserve carried
         // codes from a real run/capture failure instead of inventing a result.
         pineforge::note_run_failure(host, "L22A engine run", error);
@@ -292,7 +304,8 @@ Result execute(Fixture& host, const std::vector<Bar>& bars, Expect expect = Expe
                   host.broker_state_hash()};
     if (expect == Expect::success) {
         require(host.last_run_status() == 0 && host.last_error().empty()
-                && host.callbacks == static_cast<int>(bars.size()), "engine run failed or stopped early");
+                && host.callbacks == static_cast<int>(bars.size()),
+                "engine run failed or stopped early: " + run_diagnostics(host, bars));
         require(result.receipt.complete == 1 && result.receipt.count_e > 0
                 && result.receipt.count_t > 0, "sink did not complete nonempty E/T records");
         require(report.value.equity_curve == nullptr && report.value.trades == nullptr,
@@ -538,6 +551,31 @@ private:
     std::string old_tmp_;
 };
 
+class ArenaScope {
+public:
+    explicit ArenaScope(const fs::path& directory)
+        : backing_(::open((directory / "inherited-arena").c_str(),
+                          O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600)) {
+        require(backing_.get() >= 0, "cannot prepare inherited scratch arena");
+        require(::unlink((directory / "inherited-arena").c_str()) == 0,
+                "cannot unlink inherited scratch arena");
+        // Host capacity, not an RSS bound: the command backing's 1/16 share
+        // (src/command_scratch_production.hpp) gives each store one chunk at
+        // A = 16*C. Reserving all three shares leaves 13 chunks for this
+        // three-transaction fixture's report histories; its 32-point equity
+        // curve is just 32*sizeof(pf_equity_point_t) = 768 bytes.
+        constexpr std::uint64_t bytes = 16 * pineforge::detail::ScratchArena::kChunkBytes;
+        require(::ftruncate(backing_.get(), static_cast<off_t>(bytes)) == 0,
+                "cannot size inherited scratch arena before the jail");
+        pineforge::detail::ScratchArena::attach(backing_.get(), bytes);
+    }
+    ~ArenaScope() { pineforge::detail::ScratchArena::detach(); }
+    ArenaScope(const ArenaScope&) = delete;
+    ArenaScope& operator=(const ArenaScope&) = delete;
+private:
+    Descriptor backing_;
+};
+
 void jailed(const fs::path& directory, const std::vector<Bar>& bars,
             const Result& expected, const std::string& bytes) {
     const auto jail = directory / "jail";
@@ -545,6 +583,11 @@ void jailed(const fs::path& directory, const std::vector<Bar>& bars,
     std::string captured;
     {
         SignalScope size_signal(SIGXFSZ, SIG_IGN);
+        // The fd supplies output only; provision scratch before the jail.
+        // Mutation: in include/pineforge/detail/scratch_file.hpp, open(),
+        // select `if (auto* arena = ScratchArena::attached(); false)`.
+        // The jailed fd run must fail when its first trade row needs scratch.
+        ArenaScope arena(directory);
         JailScope limits(jail); // applies BEFORE constructing/running the engine
         struct rlimit current{};
         require(::getrlimit(RLIMIT_FSIZE, &current) == 0 && current.rlim_cur == 0,
