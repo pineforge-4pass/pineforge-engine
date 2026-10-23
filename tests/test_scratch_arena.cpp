@@ -212,6 +212,16 @@ struct Environment {
     }
 };
 
+// Every Backing site shares the message "create backing descriptor"; this names
+// the creating call and its errno when it fails, so a host that refuses one of
+// them (an overlay filesystem, a sandbox) can be told apart.
+int created(int fd, const char* call) {
+    if (fd < 0)
+        std::fprintf(stderr, "test_scratch_arena: %s failed: errno=%d (%s)\n", call, errno,
+                     std::strerror(errno));
+    return fd;
+}
+
 struct Backing {
     int fd;
     std::uint64_t bytes;
@@ -262,7 +272,7 @@ Backing regular_backing(std::uint64_t bytes, bool dirty = false,
     // on tmpfs answers F_SEAL_SEAL. Both are regular-file arena shapes.
     TemporaryDirectory directory(parent);
     std::string name = directory.path + "/arena-XXXXXX";
-    Backing backing(::mkstemp(name.data()), bytes);
+    Backing backing(created(::mkstemp(name.data()), "mkstemp (regular_backing)"), bytes);
     require(::unlink(name.c_str()) == 0, "unlink regular backing");
 #if defined(__linux__)
     int allocation;
@@ -292,7 +302,9 @@ Backing regular_backing(std::uint64_t bytes, bool dirty = false,
 constexpr int kRequiredSeals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
 
 Backing memfd_backing(std::uint64_t bytes, int seals, bool dirty = false) {
-    Backing backing(::memfd_create("pineforge-scratch-test", MFD_ALLOW_SEALING | MFD_CLOEXEC),
+    Backing backing(created(::memfd_create("pineforge-scratch-test",
+                                           MFD_ALLOW_SEALING | MFD_CLOEXEC),
+                            "memfd_create (memfd_backing)"),
                     bytes, ScratchArenaBackend::sealed_memfd);
     require(::ftruncate(backing.fd, static_cast<off_t>(bytes)) == 0,
             "parent sizes the memfd before applying the jail");
@@ -1058,7 +1070,9 @@ void seal_validation() {
                        "scratch arena seals");
         require(!ScratchArena::attached(), "missing seal leaves no partial attachment");
     }
-    auto unsealable = Backing(::memfd_create("pineforge-unsealable", MFD_CLOEXEC), 4 * kChunk);
+    auto unsealable = Backing(created(::memfd_create("pineforge-unsealable", MFD_CLOEXEC),
+                                      "memfd_create (unsealable)"),
+                              4 * kChunk);
     require(::ftruncate(unsealable.fd, static_cast<off_t>(unsealable.bytes)) == 0,
             "size memfd created without ALLOW_SEALING");
     require(::fcntl(unsealable.fd, F_GET_SEALS) == F_SEAL_SEAL,
@@ -1107,7 +1121,8 @@ void tmpfs_regular_backing() {
 
 void anonymous_regular_backing() {
     TemporaryDirectory directory(".");
-    Backing backing(::open(directory.path.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600),
+    Backing backing(created(::open(directory.path.c_str(), O_TMPFILE | O_RDWR | O_CLOEXEC, 0600),
+                            "open O_TMPFILE (anonymous_regular_backing)"),
                     4 * kChunk);
     int allocation;
     do { allocation = ::posix_fallocate(backing.fd, 0, static_cast<off_t>(backing.bytes)); }
