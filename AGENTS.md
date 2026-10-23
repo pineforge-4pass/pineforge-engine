@@ -12,10 +12,11 @@ verification tooling after full verification on their x86-64 build hosts and a
 parity verdict; an outside contributor cannot post them. GitHub Actions is advisory: PRs build Ubuntu Release only (`ci.yml`); Debug, sanitizers, kernel-only and the macOS cell run post-merge (`ci-post.yml`).
 The PR build (`ci.yml`) runs only the `fast`-labelled CTest rows (`ctest -L '^fast$'`); the post-merge legs (`ci-post.yml`) run
 every row, and a documentation-only change runs preflight alone among verification jobs.
-Every CI workflow starts with the canon `authz` job and every other job needs it. Pull-request
+The seven PR/post-merge verification and documentation workflows start with the canon `authz` job and every other job in them
+needs it; release uses its status gate and baseline promotion its `promote-guard`. Pull-request
 workflows (`ci.yml`, `corpus-parity-subset.yml`, `docs.yml`) run every job on `["self-hosted","pf-gcp-pr"]`;
 post-merge workflows (`ci-post.yml` and the workflows it calls) run on `["self-hosted","pf-gcp-post"]`, and
-release jobs on `["self-hosted","pf-gcp-main"]`. In the CI workflows the only hosted job is the macOS post-merge cell `build-macos`; `release.yml` also uses hosted arm64 and macOS prebuilt cells and `promote-baseline.yml` a hosted guard job. Each CI workflow's aggregate always runs and refuses non-success authz first.
+release jobs on `["self-hosted","pf-gcp-main"]`. In the CI workflows the only hosted job is the macOS post-merge cell `build-macos`; `release.yml` also uses hosted arm64 and macOS prebuilt cells and `promote-baseline.yml` a hosted guard job. The `build-gate` jobs in `ci.yml` and `ci-post.yml` and `native-live.yml`'s `native-live-gate` always run and refuse a non-success authz result first.
 See `docs/ci.md` for the class table and docs-only exception. The commands below run the full sets.
 
 ```bash
