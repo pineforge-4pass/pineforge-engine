@@ -86,6 +86,14 @@
 #include <variant>
 #include <vector>
 
+#if defined(PINEFORGE_O1S4_LINEAR_ROSTER_CONTROL)
+// The runner's uncommitted roster header defines this mutation-window flag.
+// This test opens the window; the dirty patch alone supplies the actual scan.
+namespace pineforge::source {
+extern bool o1s4_roster_mutation_window;
+}
+#endif
+
 namespace {
 using namespace pineforge;
 using namespace pineforge::detail;
@@ -1215,8 +1223,15 @@ std::array<no::RequestHandle, 2> populate_pending_read_bound(
 
 void s4_roster_scan_read_bound_red() {
     namespace ws = ::pineforge::detail::working_store;
-    constexpr std::array<std::size_t, 2> populations{{17, 65}};
-    std::array<std::uint64_t, 2> append_reads{}, erase_reads{}, geometry_reads{};
+    constexpr std::array<std::size_t, 4> populations{{17, 65, 257, 1025}};
+    std::array<std::uint64_t, populations.size()> append_reads{}, erase_reads{}, geometry_reads{};
+#if defined(PINEFORGE_O1S4_LINEAR_ROSTER_CONTROL)
+    struct MutationWindow {
+        MutationWindow() noexcept { ps::o1s4_roster_mutation_window = true; }
+        ~MutationWindow() { close(); }
+        void close() noexcept { ps::o1s4_roster_mutation_window = false; }
+    };
+#endif
     // scratch_store_impl.hpp:68,178-184: U=512-16=496, ordered leaf=58,
     // node=29 separators (30 children), radix leaf/node=15/60. Depth/height
     // two can hold at most 58*30=1740 live keys / 15*60=900 issued handles.
@@ -1225,41 +1240,71 @@ void s4_roster_scan_read_bound_red() {
     constexpr std::uint64_t ordered_node = (usable - 24) / 16;
     constexpr std::uint64_t radix_leaf = (usable - 16) / 32;
     constexpr std::uint64_t radix_node = (usable - 16) / 8;
+    // The old 8161-row pin left only depth three: Q=1025 adds store keys too.
     // Ascending splits leave 30 keys / 16 children on the left
-    // (scratch_store_impl.hpp:908-930,977-999). Populate 17 such child groups:
-    // 30*16*17+1=8161 rows, plus the version allocator, yield 272 leaves and
-    // 16 root separators. This also avoids the root-search step at 15 keys
-    // (scratch_store_impl.hpp:800-810); lower-key subject inserts have room
-    // before the next root split, instead of starting just above depth two.
+    // (scratch_store_impl.hpp:908-930,977-999). Four groups of 16*16 leaves
+    // need 30*16*16*4+1=30721 bare records: 1024 leaves, 64 bottom nodes,
+    // four middle nodes, three root separators, hence ordered depth four.
     constexpr auto leaf_split = (ordered_leaf + 2) / 2;
     constexpr auto child_split = (ordered_node + 1) / 2 + 1;
-    constexpr auto filler_rows = leaf_split * child_split * (child_split + 1) + 1;
+    // Four is the first child count whose rightmost binary search takes two
+    // comparisons; root counts 3..6 keep that cost (impl:800-810).
+    constexpr auto root_children = std::uint64_t{1} << 2;
+    constexpr auto filler_rows = leaf_split * child_split * child_split * root_children + 1;
+    constexpr auto radix_height_three_capacity = radix_leaf * radix_node * radix_node;
+    // A new root child needs >=29*15*15 additional lower-key insertions:
+    // one leaf split, then two internal splits; erasure cannot hasten a split.
+    constexpr auto keys_per_root_child = (leaf_split - 1) * (child_split - 1) * (child_split - 1);
     static_assert(filler_rows > ordered_leaf * (ordered_node + 1)
-                      && filler_rows > radix_leaf * radix_node,
-                  "the live filler forces both store trees past height two");
+                      && filler_rows > radix_leaf * radix_node
+                      && filler_rows < radix_height_three_capacity
+                      && radix_height_three_capacity - filler_rows
+                          < root_children * keys_per_root_child,
+                  "the pin has depth four, radix height three, and a stable probe route");
     constexpr auto filler_domain = std::numeric_limits<std::uint64_t>::max();
     constexpr auto filler_owner = std::numeric_limits<std::uint64_t>::max();
+    ps::PlacementSnapshot snapshot;
+    snapshot.source_id = "q"; snapshot.requested_qty = 1.0;
+    const auto snapshot_chunks = (ws::Source<ps::PlacementSnapshot>(snapshot).size()
+        + ws::Bytes::chunk_size - 1) / ws::Bytes::chunk_size;
+    // publish_working (native_order.cpp:3471-3494): book root, <=2 chunks
+    // for this explicit limit row, priority, successor, and issued-range chunk.
+    constexpr std::uint64_t native_keys = 1 + 2 + 1 + 1 + 1;
+    // Fixed keys: allocator; four native headers/roots; roster marker/state;
+    // two empty directories; six placement roots/chunks; ten queue headers;
+    // physical-book header; count header; two minima; two erased-ID versions.
+    constexpr std::uint64_t auxiliary_keys = 1 + 4 + 2 + 2 + 6 + 10 + 1 + 1 + 2 + 2;
+    // Per name: native keys, placement root/chunks, two roster records, two
+    // count records, and one legacy suffix-version rewrite (for the base run).
+    const auto keys_per_name = native_keys + 1 + snapshot_chunks + 2 + 2 + 1;
+    // Include warm and charged appends. Count ALL issued handles, even erased
+    // chunks: committed handles are never reissued (scratch impl:739-742).
+    const auto subject_keys = auxiliary_keys + (populations.back() + 2) * keys_per_name;
+    require(filler_rows + subject_keys < radix_height_three_capacity,
+            "the encoding-derived subject budget must fit the geometry pin");
+    // All subject domains precede the filler. The budget permits at most
+    // three extra root children: root separators stay 3..6, d=4 and h=3 at
+    // EVERY Q, including 1025. The unchanged rightmost filler route stays put.
+    // Bare empty records avoid four versioned-table descents per filler row;
+    // all four fixtures together insert 122884 filler keys, not payload rows.
     std::uint64_t canonical_bytes = 0;
     for (std::size_t sample = 0; sample < populations.size(); ++sample) {
         const auto n = populations[sample];
         Rig rig;
         ScratchStore store(rig.config(), &rig.backing);
-        // An independent fixture owner, never named by the adapter. Empty
-        // values need one root and no payload chunks (working_store.hpp:418,
-        // 518-531), so the filler cardinality follows the geometry above.
+        // An independent fixture owner, never named by the adapter. A bare
+        // empty value needs just its key cell and one ordered/handle entry
+        // (scratch_store_impl.hpp:482-484,1322-1332), with no version allocator.
         // Keep every even key live for this sample; the odd probe is absent.
-        WorkingRowTable<std::monostate> filler;
-        filler.bind(store, filler_domain, filler_owner);
+        ScratchSpanSource empty({nullptr, 0});
         ws::transaction(store, [&] {
             for (std::uint64_t i = 1; i <= filler_rows; ++i)
-                filler.put(2 * i, std::monostate{});
+                ws::put(store, {filler_domain, filler_owner, 2 * i}, empty);
         });
         const auto anchor = ws::find(store, {filler_domain, filler_owner, 2});
         require(anchor != 0, "geometry filler has a live anchor");
         Subject s(store);
         std::vector<no::RequestHandle> handles;
-        ps::PlacementSnapshot snapshot;
-        snapshot.source_id = "q"; snapshot.requested_qty = 1.0;
         for (std::size_t i = 0; i < n; ++i) {
             const auto h = s.submit(limit_order(1.0, 50.0 + i % 13));
             s.remember(h, snapshot);
@@ -1278,12 +1323,12 @@ void s4_roster_scan_read_bound_red() {
         ScratchRecordInfo anchor_info{};
         status_is(store.point(anchor, anchor_info), ScratchStatus::ok,
                   "geometry filler stays live before the charged calls");
-        // The base has this contains API: working_row_table.hpp:123-125 calls
-        // one working_store::find (working_store.hpp:139-144), the same single
+        // One working_store::find (working_store.hpp:139-144), the same single
         // lower_bound/equality path as PendingRoster::find_identity
-        // (pending_roster_impl.hpp:203-210). No row pin or payload is decoded.
+        // (pending_roster_impl.hpp:203-210), also available on the base.
+        // No row pin or payload is decoded.
         const auto geometry_before = store.stats().page_reads;
-        const bool found = filler.contains(2 * filler_rows - 1);
+        const bool found = ws::find(store, {filler_domain, filler_owner, 2 * filler_rows - 1}) != 0;
         geometry_reads[sample] = store.stats().page_reads - geometry_before;
         require(!found && geometry_reads[sample] != 0,
                 "geometry probe proves an absent key through actual store reads");
@@ -1291,17 +1336,29 @@ void s4_roster_scan_read_bound_red() {
             require(geometry_reads[sample] == geometry_reads[0],
                     "store geometry was not pinned across roster populations");
 
+#if defined(PINEFORGE_O1S4_LINEAR_ROSTER_CONTROL)
+        MutationWindow append_window;
+#endif
         const auto append_before = store.stats().page_reads;
         const auto extra = s.submit(limit_order(1.0, 62.0));
         s.remember(extra, snapshot);
         const auto append_after = store.stats().page_reads;
+#if defined(PINEFORGE_O1S4_LINEAR_ROSTER_CONTROL)
+        append_window.close();
+#endif
         append_reads[sample] = append_after - append_before;
 
         const auto middle = handles[n / 2];
+#if defined(PINEFORGE_O1S4_LINEAR_ROSTER_CONTROL)
+        MutationWindow erase_window;
+#endif
         const auto erase_before = store.stats().page_reads;
         s.retire_handle(middle);
         s.projection(ProjectionEdit::erase, middle);
         const auto erase_after = store.stats().page_reads;
+#if defined(PINEFORGE_O1S4_LINEAR_ROSTER_CONTROL)
+        erase_window.close();
+#endif
         erase_reads[sample] = erase_after - erase_before;
         require(s.core().find_live(extra) != nullptr,
                 "the charged append actually submits a new native handle");
@@ -1311,48 +1368,77 @@ void s4_roster_scan_read_bound_red() {
             ::pineforge::detail::working_store::Source<ps::PlacementSnapshot>(snapshot).size()
             + ::pineforge::detail::working_store::Source<no::Request>(
                 limit_order(1.0, 62.0)).size());
-        std::printf("roster-scan-read-bound n=%zu geometry_reads=%llu append_reads=%llu erase_reads=%llu\n", n,
-                    static_cast<unsigned long long>(geometry_reads[sample]),
+        std::printf("roster-scan-read-bound Q=%zu append_reads=%llu erase_reads=%llu\n", n,
                     static_cast<unsigned long long>(append_reads[sample]),
                     static_cast<unsigned long long>(erase_reads[sample]));
         std::fflush(stdout);
     }
-    // Reuse s4_pending_size_read_bound_red's geometry: 512-byte pages, two
-    // slots, pinned d=h=3, ordered capacities 58/29 and radix capacities 15/60.
-    // L=2*d+2+[5*(d-1)+7]*(h+2)+2*h+1=100 bounds one 32-byte key find.
-    // C(S)=2*h+2*ceil(S/56)+4 bounds a direct fixed-record load; reserve S=128.
-    // An AVL of height 9 needs at least 88 names (the 1,2,4,7,... recurrence),
-    // so the largest charged roster (66 names) has height <=8. Budget
-    // A(H)=40*H+16 direct loads and W(H)=12*H+16 publications: per ancestor,
-    // two child loads, two balance loads, up to two rotations (eight loads /
-    // four writes each), parent repair and endpoint/identity/root work.
-    // Payload pieces cost <=L+h+9. Allow 16 such indexed passes per encoded
-    // byte for canonical decode/write/retirement; for each structural write
-    // allow 16 passes for descent, key/value cells, radix and undo/split work.
-    // For N=17 ->65, allow 64 extra indexed paths (two additional counted
-    // ancestors, their rotations/publications, and canonical path splitting).
-    // No population or measured delta occurs in either allowance.
+    // H(Q)=ceil(1.44*log2(Q+2)): AVL minimum nodes obey N(H)=1+N(H-1)+N(H-2).
+    // Fibonacci growth gives 1/log2(phi)=1.44042... (the conventional 1.44);
+    // ceil with Q+2 bounds all four sampled heights, including Q+1 at append.
+    const auto avl_height = [](std::size_t q) {
+        return static_cast<std::uint64_t>(std::ceil(1.44 * std::log2(static_cast<double>(q) + 2.0)));
+    };
+    // L(d,h): scratch_store_impl.hpp:762-845; working_store.hpp:139-144.
+    // 2*d+2: count/child routing reads and fixed lower_bound frames.
+    // 5*(d-1): ceil(log2(29+1)) comparisons per internal ordered page.
+    // 7: ceil(log2(58+1)) leaf comparisons plus the final candidate comparison.
+    // h+2: radix resolution plus ordered/key pages through two cache slots.
+    // 2*h+1: point/read radix traversals plus the key cell for equality.
+    constexpr std::uint64_t pinned_d = 4, pinned_h = 3;
+    constexpr std::uint64_t level_lookup =
+        2 * pinned_d + 2 + (5 * (pinned_d - 1) + 7) * (pinned_h + 2) + 2 * pinned_h + 1;
+    // Node = 12 words (pending_roster_impl.hpp:97-101); keys = 32 bytes;
+    // cells have 56 payload bytes (scratch_store_impl.hpp:69-70).
+    constexpr std::uint64_t node_cells = (12 * 8 + 55) / 56, key_cells = (32 + 55) / 56;
+    // D: point/read radix traversals + value-cell reads/hops + fixed framing
+    // (pending_roster_impl.hpp:77-94; scratch_store_impl.hpp:537-574,693-709).
+    constexpr auto level_load = 2 * pinned_h + 2 * node_cells + 4;
+    // P's L: one existing-key descent (scratch_store_impl.hpp:1287-1307).
+    // P's 2*h+4: hget/hset, leaf framing and undo/commit list heads.
+    // P's 8/cell: <=4 create/allocate + <=2 retire + <=2 undo/free-list reads
+    // (scratch_store_impl.hpp:350-384,449-471,482-509,592-600,712-730).
+    // No ordered split: balance/link/unlink save existing nodes (:1300-1320).
+    constexpr auto level_put = level_lookup + 2 * pinned_h + 4 + 8 * (key_cells + node_cells);
+    // balance steady level: n, pull's two children, two height children,
+    // parent reload = six loads; pull/save = one put
+    // (pending_roster_impl.hpp:322-344).
+    constexpr std::uint64_t steady_loads = 1 + 2 + 2 + 1, steady_puts = 1;
+    // Heavy-side probe = two loads; at most two rotations, each <=8 loads
+    // and four puts including parent/middle/pull
+    // (pending_roster_impl.hpp:285-319,331-340).
+    constexpr std::uint64_t rotation_loads = 2 + 2 * 8, rotation_puts = 2 * 4;
+    // One additional height walk: append's rank selection OR erase's
+    // successor descent (pending_roster_impl.hpp:262-272,377-407).
+    constexpr std::uint64_t traversal_loads = 1;
+    // link/unlink touch at most two endpoint frames; charge both again for
+    // each added level (conservative fixed work; pending_roster_impl.hpp:346-375).
+    constexpr std::uint64_t endpoint_frames = 2;
+    const auto per_level = (steady_loads + rotation_loads + traversal_loads + endpoint_frames) * level_load
+        + (steady_puts + rotation_puts + endpoint_frames) * level_put;
+    // R(Q)-R(17) <= [H(Q)-H(17)] * per_level. Fixed identity/descriptor and
+    // canonical paths have the same call counts at the pinned store geometry.
+    // This Q-derived formula REPLACES slack; no measured read enters it.
     //
-    // Old remember visits every prior name; old retire visits every name and
-    // rewrites the suffix. A decoded handle needs four payload finds, besides
-    // its root. Each find compares an ordered page, >=2 radix pages and a key
-    // page through two slots, repeatedly for the binary-search comparisons.
-    // The 48 additional decoded/dirty-compared rows therefore have a linear
-    // read term; unlike the indexed paths it is not a height-change allowance.
+    // Retain the round-1 absolute ceiling and its reference coefficients
+    // unchanged, independently of this new growth allowance. Its height=8
+    // and d=h=3 are reference coefficients, not this larger fixture's heights.
     constexpr std::uint64_t d = 3, h = 3;
     constexpr std::uint64_t lookup =
         2 * d + 2 + (5 * (d - 1) + 7) * (h + 2) + 2 * h + 1;
-    constexpr std::uint64_t slack = 64 * lookup;
     constexpr std::uint64_t height = 8;
     constexpr std::uint64_t direct = 2 * h + 2 * ((128 + 55) / 56) + 4;
     const auto absolute = 16 * canonical_bytes * (lookup + h + 9)
         + (40 * height + 16) * direct
         + (12 * height + 16) * 16 * (lookup + h + 9);
     for (const auto& reads : {append_reads, erase_reads}) {
-        require(reads[1] <= reads[0] + slack,
-                "one roster mutation has no live-population scan read term");
-        require(reads[0] <= absolute && reads[1] <= absolute,
-                "one roster mutation stays under the geometry-derived ceiling");
+        for (std::size_t sample = 0; sample < populations.size(); ++sample) {
+            const auto growth = (avl_height(populations[sample]) - avl_height(populations[0])) * per_level;
+            require(reads[sample] <= reads[0] + growth,
+                    "one roster mutation has no live-population scan read term");
+            require(reads[sample] <= absolute,
+                    "one roster mutation stays under the geometry-derived ceiling");
+        }
     }
 }
 
