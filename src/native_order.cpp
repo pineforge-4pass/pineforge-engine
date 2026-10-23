@@ -1432,6 +1432,31 @@ template <class Ar> void archive_io(Ar& ar, MarginCallEvent& item) {
     ar(item.position_after);
 }
 
+// Compare the definition prefix of a just-decoded book record by walking the
+// very same field lists as SaveAr/LoadAr. No output buffer or hash is involved:
+// strings, vector lengths, tags, optional flags and every leaf must match.
+// Raw leaves include padding, so a padding difference conservatively misses.
+struct DefinitionMatchAr {
+    static constexpr bool saving = true;
+    const unsigned char* at;
+    std::size_t left;
+    bool matched = true;
+
+    void raw(const void* value, std::size_t length) noexcept {
+        if (!matched) return;
+        if (length > left || (length != 0 && std::memcmp(at, value, length) != 0)) {
+            matched = false;
+            return;
+        }
+        at += length;
+        left -= length;
+    }
+    template <class T>
+    void operator()(const T& item) {
+        if (matched) archive_value(*this, const_cast<T&>(item));
+    }
+};
+
 // One page of spilled journal events: the absolute positions and ordinals it
 // covers (both ascend from page to page) and where its serialized events are.
 struct JournalPage {
@@ -1981,13 +2006,43 @@ struct WorkingRequestCore::BookSpill {
             else garbage += old.length;
         }
     }
-    LiveRequest read(const BookSlot& slot) const {
+    LiveRequest read(const WorkingRequestCore& core, const BookSlot& slot) const {
         std::vector<unsigned char> bytes(static_cast<std::size_t>(slot.length));
         blobs.read(slot.offset, bytes.data(), bytes.size());
         ByteReader in(bytes.data(), bytes.size());
         LoadAr ar{in};
         LiveRequest row;
         ar(row);
+        if (!row.definition || !core.journal_ || core.journal_->codec) return row;
+        const JournalStore& journal = *core.journal_;
+        // Restrict the existing ordinal bisection to resident events: no cold
+        // journal reads or new index. One O(log kMaxResident) lookup per book
+        // decode, then O(definition bytes) equality, never a per-child scan.
+        const auto position = journal.find_ordinal(row.birth().acceptance_ordinal, journal.first);
+        if (!position) return row;
+        const CommandEvent& event = journal.resident_at(*position);
+        const DefinitionRef* resident = nullptr;
+        if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
+            resident = &accepted->definition;
+        } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
+            // A kept-handle re-price has the same handle but a new birth and
+            // priority: only the successor can describe this book version.
+            resident = &replaced->successor_definition;
+        }
+        if (!resident || !*resident || (*resident)->handle != row.handle()
+            || (*resident)->birth != row.birth()
+            || (*resident)->priority != row.definition->priority) return row;
+        // This legacy book format does not serialize external_openings.
+        // Reusing one would add content absent from the decoded definition.
+        if (const auto* openings = std::get_if<BindOpenings>(&(*resident)->request.owner)) {
+            if (openings->external_openings) return row;
+        }
+        // LiveRequest's first field is its definition. Compare that entire
+        // serialized prefix, including request, predecessor, origin, root and
+        // kept_binding; the decoded owner survives every mismatch unchanged.
+        DefinitionMatchAr match{bytes.data(), bytes.size()};
+        match(*resident);
+        if (match.matched) row.definition = *resident;
         return row;
     }
     // Replaces the serialized row of the live entry at `at`, keeping its
@@ -2191,7 +2246,7 @@ bool WorkingRequestCore::promote_book_row(uint64_t incarnation, std::size_t* ind
             throw std::logic_error("native live book lost a spilled row");
         }
     }
-    LiveRequest row = spill.read(slot);
+    LiveRequest row = spill.read(*this, slot);
     reserve_n(live_, 1);
     if (priority != incarnation) reserve_n(repriced_, 1);
     spill.retire_row(at, slot);
@@ -2214,7 +2269,7 @@ const LiveRequest* WorkingRequestCore::spilled_row(uint64_t incarnation) const {
     BookSlot slot;
     uint64_t at = 0;
     if (!spill.find(priority, &slot, &at) || slot.incarnation != incarnation) return nullptr;
-    return spill.stash(spill.read(slot));
+    return spill.stash(spill.read(*this, slot));
 }
 
 WorkingRequestCore::BookCursor WorkingRequestCore::book_begin() const {
@@ -2255,7 +2310,7 @@ void WorkingRequestCore::visit_book(Visit&& visit) const {
     BookCursor cursor = book_begin();
     while (!book_done(cursor)) {
         if (book_next_spilled(cursor)) {
-            const LiveRequest row = book_spill_->read(book_spill_->rows.get(cursor.at));
+            const LiveRequest row = book_spill_->read(*this, book_spill_->rows.get(cursor.at));
             if (!visit(row)) return;
         } else if (!visit(live_[cursor.r])) {
             return;
@@ -2270,7 +2325,7 @@ const LiveRequest& WorkingRequestCore::live_at(std::size_t rank) const {
     BookCursor cursor = book_begin();
     for (std::size_t skipped = 0; skipped != rank; ++skipped) book_step(cursor);
     if (book_next_spilled(cursor)) {
-        return *book_spill_->stash(book_spill_->read(book_spill_->rows.get(cursor.at)));
+        return *book_spill_->stash(book_spill_->read(*this, book_spill_->rows.get(cursor.at)));
     }
     return live_[cursor.r];
 }
@@ -2285,7 +2340,7 @@ const LiveRequest& WorkingRequestCore::live_back() const {
         last = at;
     }
     if (live_.empty() || live_.back().priority() < book_spill_->priority_at(last)) {
-        return *book_spill_->stash(book_spill_->read(book_spill_->rows.get(last)));
+        return *book_spill_->stash(book_spill_->read(*this, book_spill_->rows.get(last)));
     }
     return live_.back();
 }
@@ -2301,7 +2356,7 @@ void WorkingRequestCore::LiveView::const_iterator::settle() {
         // Through the ring, so a reference the view handed out stays valid
         // for the next few spilled rows it reads, as the header promises.
         held_ = core_->book_spill_->keep(core_->book_spill_->read(
-                core_->book_spill_->rows.get(cursor_.at)));
+                *core_, core_->book_spill_->rows.get(cursor_.at)));
     }
 }
 
@@ -4832,7 +4887,7 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
     BookSpill& spill = *book_spill_;
     for (uint64_t at = spill.first_alive(); at != 0; at = spill.next_alive(at)) {
         const BookSlot slot = spill.rows.get(at);
-        LiveRequest row = spill.read(slot);
+        LiveRequest row = spill.read(*this, slot);
         if (refresh(row)) spill.rewrite(at, slot, row);
     }
     // A refresh every point may append new bytes for a row whose allowance
