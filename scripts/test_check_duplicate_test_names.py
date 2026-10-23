@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import textwrap
 import unittest
+import warnings
 
 import check_duplicate_test_names as guard
 
@@ -140,6 +141,46 @@ class CheckDuplicateTestNamesTests(unittest.TestCase):
             code, output = self.invoke(root)
             self.assertEqual(code, 0, output)
             self.assertEqual(output, '')
+
+    def test_invalid_escape_docstring_without_duplicates_is_silent(self) -> None:
+        source = r'''#!/usr/bin/env python3
+"""A pattern ends in \w*."""
+def test_gate():
+    pass
+'''
+        for action in ('always', 'error'):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.prepare_root(root)
+                self.write_source(root, source, 'scripts/check_native_c_api_surface.py')
+                with warnings.catch_warnings():
+                    warnings.simplefilter(action)
+                    code, output = self.invoke(root)
+                self.assertEqual(code, 0, output)
+                self.assertEqual(output, '')
+
+    def test_invalid_escape_docstring_reports_only_the_real_duplicate(self) -> None:
+        source = r'''#!/usr/bin/env python3
+"""A pattern ends in \w*."""
+def test_gate():
+    pass
+def test_gate():
+    pass
+'''
+        for action in ('always', 'error'):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.prepare_root(root)
+                path = self.write_source(root, source, 'scripts/check_native_c_api_surface.py')
+                with warnings.catch_warnings():
+                    warnings.simplefilter(action)
+                    code, output = self.invoke(root)
+                self.assertEqual(code, 1, output)
+                self.assertEqual(
+                    output,
+                    f'{path}:5: duplicate top-level test function test_gate '
+                    '(first defined at line 3)\n',
+                )
 
     def test_conditional_method_replaces_failing_test(self) -> None:
         source = """import unittest

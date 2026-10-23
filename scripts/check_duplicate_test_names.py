@@ -13,6 +13,7 @@ import ast
 from pathlib import Path
 import sys
 from typing import Iterable, Sequence
+import warnings
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST_GLOBS = (
@@ -92,7 +93,11 @@ def _check_scope(
 
 
 def _inspect_file(path: Path) -> tuple[list[tuple[Path, int, str]], int]:
-    tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+    with warnings.catch_warnings():
+        # Scanned source warnings must not leak or become parse failures under
+        # a caller's warning-as-error policy. Actual syntax errors still fail.
+        warnings.simplefilter('ignore')
+        tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
     findings: list[tuple[Path, int, str]] = []
     test_names = _check_scope(path, tree.body, findings)
     return findings, test_names
