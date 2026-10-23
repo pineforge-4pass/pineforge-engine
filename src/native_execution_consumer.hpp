@@ -937,7 +937,12 @@ private:
     // One candidate of match_path's winner selection at its current cursor.
     // `live_index` is the request's position in the working book when the row
     // was scanned: nothing mutates the book between a scan and the reuse of
-    // its rows, so it names the request without a handle search.
+    // its rows, so it names the request without a handle search. A request
+    // the scan found outside the heap is named by where the scan read it
+    // instead -- its entry in the book's spilled table (`book_at`, 0 for a
+    // resident row) under the table's generation then -- since the refresh a
+    // reuse follows moves rows in the heap but leaves every table entry where
+    // it is, unless it rebuilds the table, which raises the generation.
     enum class MatchKind : std::uint8_t {
         Evaluate = 0,
         ActivateStop = 1,
@@ -958,6 +963,8 @@ private:
         bool at_level = false;
         bool shared_cursor_collision = false;
         std::size_t live_index = 0;
+        std::uint64_t book_at = 0;
+        std::uint64_t book_generation = 0;
     };
     // Where a non-Evaluate row of match_path came from at its point: the row's
     // request, trigger state, side and level when it was scanned, and whether
@@ -2112,16 +2119,14 @@ private:
     // (set_match_row_reuse). A choice between two computations of the same
     // values, so it is not run state either.
     bool match_row_reuse_ = true;
-    // match_path's other per-call scratch (R5 lane PERF-L5): the pointers a
-    // scan of more than eight live requests reads the book through, the
-    // provenance of the rows it built, and the (priority, kind) keys it
-    // skips at the current cursor, kept sorted. Each is emptied where the
-    // local it replaces was born, so between calls it is capacity only and a
-    // warm matcher allocates nothing per point. match_path never re-enters
+    // match_path's other per-call scratch (R5 lane PERF-L5): the provenance
+    // of the rows it built, and the (priority, kind) keys it skips at the
+    // current cursor, kept sorted. Each is emptied where the local it
+    // replaces was born, so between calls it is capacity only and a warm
+    // matcher allocates nothing per point. match_path never re-enters
     // itself: it runs only inside the driver's delivery of an input, and a
     // host callback cannot deliver one. Scratch, never run state, and folded
     // into nothing.
-    std::vector<const native_order::LiveRequest*> match_snapshot_;
     std::vector<MatchProvenance> match_provenance_;
     std::vector<std::pair<std::uint64_t, std::uint8_t>> match_skipped_;
     // observe_trails' copy of the book's handles, the same kind of scratch:
