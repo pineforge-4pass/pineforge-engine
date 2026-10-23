@@ -1577,9 +1577,13 @@ exit "$lookup_exit"
         for profile in ('release', 'debug', 'kernel', 'sanitizers', 'native',
                         'live-sanitizers', 'live-tsan'):
             cfg = ci_verify.build_config([profile])
+            # L6 rule 2026-10-24 02:12: the Debug builds of the full registry
+            # (debug, sanitizers) exclude label slow by default; every other
+            # profile, including the runner-only Debug ones, runs every row.
+            default_exclusion = ['-LE', 'slow'] if profile in ('debug', 'sanitizers') else []
             self.assertEqual(ci_verify.ctest_command(cfg, cfg.build_dir, jobs=1, junit=False), [
                 'ctest', '--test-dir', str(cfg.build_dir), '--output-on-failure',
-                '--no-tests=error', '--parallel', '1', '--timeout', '0'])
+                '--no-tests=error', '--parallel', '1', '--timeout', '0'] + default_exclusion)
         discovered = set(discover_test_ids(ROOT / 'scripts/test_ci_verify.py'))
         self.assertTrue(discovered)
         for event in ('push', 'workflow_dispatch', 'schedule', 'release', ''):
