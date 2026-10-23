@@ -1158,6 +1158,153 @@ void s4_islands_small_n_probe_red() {
     std::fflush(stdout);
 }
 
+// The probe's axis-0 inputs and replacements, with one fresh population.
+// Keep construction outside every observer read delta; no pending enumeration
+// is needed to know either the population or its first/last projected handle.
+std::array<no::RequestHandle, 2> populate_pending_read_bound(
+        Subject& s, Model& model, std::size_t n) {
+    std::vector<no::RequestHandle> handles;
+    { OracleWork oracle; handles.reserve(n); }
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto actual = s.submit(limit_order(1.0, 50.0 + i % 13));
+        no::RequestHandle expected;
+        { OracleWork oracle;
+          expected = model.submit(1.0, 50.0 + i % 13);
+          handles.push_back(expected);
+        }
+        require(same_handle(actual, expected), "no capacity refusal on growing population");
+        ps::PlacementSnapshot snapshot;
+        snapshot.source_id = "q"; snapshot.requested_qty = 1.0;
+        s.remember(actual, std::move(snapshot));
+        { OracleWork oracle;
+          model.placements[expected.incarnation].source_id = "q";
+          model.placements[expected.incarnation].requested_qty = 1.0;
+        }
+    }
+    const auto h = handles[n / 2];
+    const auto moved = s.replace(h, limit_order(3.0, 61.0), true);
+    { OracleWork oracle; model.replace(h, 3.0, 61.0, true); }
+    require(same_handle(h, moved), "repriced_ uses the kept handle");
+    ps::PlacementSnapshot repriced;
+    repriced.source_id = "q"; repriced.requested_qty = 3.0;
+    s.projection(ProjectionEdit::put, h, &repriced);
+    { OracleWork oracle; model.placements.at(h.incarnation).requested_qty = 3.0; }
+    const auto ordinary_target = handles[n / 3];
+    const auto ordinary = s.replace(ordinary_target, limit_order(4.0, 62.0), false);
+    no::RequestHandle want;
+    { OracleWork oracle;
+      want = model.replace(ordinary_target, 4.0, 62.0, false);
+      handles[n / 3] = want;
+    }
+    require(same_handle(ordinary, want), "ordinary replacement changes only its chain row");
+    s.retire_handle(ordinary_target);
+    s.projection(ProjectionEdit::erase, ordinary_target);
+    ps::PlacementSnapshot replacement;
+    replacement.source_id = "q"; replacement.requested_qty = 4.0;
+    s.remember(ordinary, std::move(replacement));
+    { OracleWork oracle;
+      model.placements.erase(ordinary_target.incarnation);
+      model.placements[ordinary.incarnation].source_id = "q";
+      model.placements[ordinary.incarnation].requested_qty = 4.0;
+    }
+    s.retire();
+    // Keeping a handle leaves its projection slot in place; retiring the
+    // ordinary predecessor and remembering its successor appends the last row.
+    return {{handles.front(), ordinary}};
+}
+
+void s4_pending_size_read_bound_red() {
+    constexpr std::array<std::size_t, 2> populations{{17, 65}};
+    std::array<std::uint64_t, 2> size_reads{};
+    for (std::size_t sample = 0; sample < 2; ++sample) {
+        const auto n = populations[sample];
+        Model model;
+        Rig rig;
+        ScratchStore store(rig.config(), &rig.backing);
+        Subject s(store);
+        (void)populate_pending_read_bound(s, model, n);
+        const auto& pending = s.adapter().pending_intent_view();
+        require(pending.size() == static_cast<int>(n), "warm pending size is exact");
+        const auto before = store.stats().page_reads;
+        const auto count = pending.size();
+        const auto after = store.stats().page_reads;
+        size_reads[sample] = after - before;
+        require(count == static_cast<int>(n), "measured pending size is exact");
+        std::printf("pending-size-read-bound n=%zu size_reads=%llu\n", n,
+                    static_cast<unsigned long long>(size_reads[sample]));
+        std::fflush(stdout);
+    }
+    // 512-byte pages give 58 ordered-leaf entries, 29 separators, 14 handle
+    // entries/leaf and 60 handle children/node (scratch_store_impl.hpp Core).
+    // These short axis-0 records at N <= 65 need at most d=3 ordered levels
+    // and h=3 handle levels. A 32-byte key find costs at most
+    // L=2*d+2+[5*(d-1)+7]*(h+2)+2*h+1=100 page references; reading an
+    // eight-byte maintained count adds 2*h+1, hence <=107 even without hits.
+    // Round that to 112 growth slack, with a 128 absolute ceiling. Zero-read
+    // scalar access also passes. Neither allowance depends on observed reads.
+    // On the old head size(65) fetches T(65)=2145 rows. Each placement find
+    // compares an ordered page, >=2 handle pages and a key page through two
+    // cache slots: >=2 reads/fetch, so >=4290 reads, >33 times the ceiling.
+    constexpr std::uint64_t slack = 112, absolute = 128;
+    require(size_reads[1] <= size_reads[0] + slack,
+            "one pending size call has population-independent store reads");
+    require(size_reads[1] <= absolute,
+            "one pending size call reads at most a maintained scalar allowance");
+}
+
+void s4_pending_copy_read_bound_red() {
+    constexpr std::array<std::size_t, 2> populations{{17, 65}};
+    std::array<std::array<std::uint64_t, 2>, 2> copy_reads{};
+    for (std::size_t sample = 0; sample < 2; ++sample) {
+        const auto n = populations[sample];
+        Model model;
+        Rig rig;
+        ScratchStore store(rig.config(), &rig.backing);
+        Subject s(store);
+        const auto endpoints = populate_pending_read_bound(s, model, n);
+        const auto& pending = s.adapter().pending_intent_view();
+        const std::array<int, 2> indices{{0, static_cast<int>(n - 1)}};
+        for (std::size_t endpoint = 0; endpoint < 2; ++endpoint) {
+            pf_pending_order_v1_t warm{};
+            require(pending.copy_v1(indices[endpoint], &warm) >= 0,
+                    "warm pending observer row reads successfully");
+            pf_pending_order_v1_t row{};
+            const auto before = store.stats().page_reads;
+            const auto status = pending.copy_v1(indices[endpoint], &row);
+            const auto after = store.stats().page_reads;
+            copy_reads[sample][endpoint] = after - before;
+            require(status >= 0, "measured pending observer row reads successfully");
+            { OracleWork oracle;
+              const auto expected = model.placements.find(row.incarnation);
+              require(row.incarnation == endpoints[endpoint].incarnation
+                          && expected != model.placements.end()
+                          && row.qty == expected->second.requested_qty,
+                      "pending observer returns the selected input placement value");
+            }
+        }
+        std::printf("pending-copy-read-bound n=%zu first_reads=%llu last_reads=%llu\n", n,
+                    static_cast<unsigned long long>(copy_reads[sample][0]),
+                    static_cast<unsigned long long>(copy_reads[sample][1]));
+        std::fflush(stdout);
+    }
+    // Permit a factor of two for indexed rank selection and the small index
+    // height change, while retaining the same fixed snapshot decode. Each
+    // endpoint has its own warm-up, and no size() call is part of this case.
+    // The old Entry path performs 2*T(i+1)+N raw fetches per copy, including
+    // short-seed reselection and siblings: first/last = 19/323 at N=17 and
+    // 67/4355 at N=65. Its last/first fetch ratio is N. With F>=100 fixed
+    // placement chunk-piece reads, the two-slot geometry bounds a raw fetch
+    // by 6*F <= reads <= 112*F+669 at N=65 (REPORT-o1s4red.md). Thus even
+    // the conservative last/first page-read ratio exceeds 3.28, above 2.
+    constexpr std::uint64_t factor = 2;
+    for (const auto& reads : copy_reads) {
+        require(reads[1] <= factor * reads[0],
+                "last pending row costs at most twice the first row's store reads");
+    }
+    require(copy_reads[1][1] <= factor * copy_reads[0][1],
+            "last pending row's store reads grow at most logarithmically");
+}
+
 // Fixed memory, S4-RE (548). Input: P physical lots, two successive terminal
 // marks, row(index) reads in lot order, clear, then another mark; nonfinite
 // mark refusal. fails to compile: range_end_trades_.row(index), in addition
@@ -2349,6 +2496,8 @@ const TestCase tests[] = {
     {"s4_one_queue_owner_kept_handle_order_red", &s4_one_queue_owner_kept_handle_order_red},
     {"s4_queue_and_membership_islands_fixed_red", &s4_queue_and_membership_islands_fixed_red},
     {"s4_islands_small_n_probe_red", &s4_islands_small_n_probe_red},
+    {"s4_pending_size_read_bound_red", &s4_pending_size_read_bound_red},
+    {"s4_pending_copy_read_bound_red", &s4_pending_copy_read_bound_red},
     {"s4_terminal_mark_descriptor_stays_fixed_red", &s4_terminal_mark_descriptor_stays_fixed_red},
     {"s34_record_index_publication_rollback_red", &s34_record_index_publication_rollback_red},
     {"s4_predicate_retained_placement_red", &s4_predicate_retained_placement_red},
