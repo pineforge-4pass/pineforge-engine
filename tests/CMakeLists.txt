@@ -7269,6 +7269,8 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         COMMAND test_o1s4_queue_red s4_islands_small_n_probe_red)
     add_test(NAME s4_pending_size_read_bound_red
         COMMAND test_o1s4_queue_red s4_pending_size_read_bound_red)
+    add_test(NAME s4_pending_size_count_exact_red
+        COMMAND test_o1s4_queue_red s4_pending_size_count_exact_red)
     add_test(NAME s4_pending_copy_read_bound_red
         COMMAND test_o1s4_queue_red s4_pending_copy_read_bound_red)
     add_test(NAME s4_terminal_mark_descriptor_stays_fixed_red

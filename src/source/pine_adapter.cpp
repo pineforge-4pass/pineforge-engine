@@ -878,6 +878,7 @@ bool PlacementTable::erase_stored(std::uint64_t incarnation) {
     digest = fnv_append(digest, &row.command_sequence, sizeof row.command_sequence);
     ws::transaction(*store_, [&] {
         fold_sequence(erased_minima_, row);
+        projection_changed(incarnation, &row, nullptr); // Missing placements leave raw roster slots invisible.
         stored_->erase(incarnation);
         store_metadata(size_ - 1, high_water_, erased_rows_ + 1, digest);
         ws::write(*store_, ws::Key(61, 1, 4), ids);
@@ -1096,6 +1097,11 @@ void audit_placement_scan(const PlacementTable& table, unsigned line, Predicate&
 PineExecutionAdapter::PineExecutionAdapter(compat::pine::CapAttachment attachment)
     : cap(attachment) {
     pending_view_.owner_ = this;
+    placement_.observe_projection(this, [](void* owner, std::uint64_t incarnation,
+            const PlacementSnapshot* before, const PlacementSnapshot* after) {
+        static_cast<PineExecutionAdapter*>(owner)->pending_projection_placement_changed(
+            incarnation, before, after);
+    });
 }
 
 PineExecutionAdapter::PineExecutionAdapter(NativeStrategyHost& host,
@@ -1520,22 +1526,50 @@ void PineExecutionAdapter::update_l4c_priority() {
         if (handle == decision->child) return 1;
         return 2;
     };
-    if (scratch_store_) {
-        for (std::size_t i = 1; i < live_handles_.size(); ++i) {
-            const auto value = static_cast<const decltype(live_handles_)&>(live_handles_)[i];
-            auto at = i;
-            while (at != 0) {
-                const auto before = static_cast<const decltype(live_handles_)&>(live_handles_)[at - 1];
-                if (rank(before) <= rank(value)) break;
-                live_handles_[at] = before; --at;
+    const auto reorder = [&] {
+        if (scratch_store_) {
+            for (std::size_t i = 1; i < live_handles_.size(); ++i) {
+                const auto value = static_cast<const decltype(live_handles_)&>(live_handles_)[i];
+                auto at = i;
+                while (at != 0) {
+                    const auto before = static_cast<const decltype(live_handles_)&>(live_handles_)[at - 1];
+                    if (rank(before) <= rank(value)) break;
+                    live_handles_[at] = before; --at;
+                }
+                live_handles_[at] = value;
             }
-            live_handles_[at] = value;
+            live_handles_.flush();
+        } else {
+            std::stable_sort(live_handles_.begin(), live_handles_.end(),
+                             [&](const auto& left, const auto& right) { return rank(left) < rank(right); });
         }
-        live_handles_.flush();
-    } else {
-        std::stable_sort(live_handles_.begin(), live_handles_.end(),
-                         [&](const auto& left, const auto& right) { return rank(left) < rank(right); });
+    };
+    const auto limit = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (live_handles_.size() <= limit) {
+        reorder(); // Reordering the whole visible roster preserves group multiplicities.
+        return;
     }
+    // Moving two handles to the front changes prefix membership only at these four handles.
+    const auto& rows = static_cast<const decltype(live_handles_)&>(live_handles_);
+    const std::array<native_order::RequestHandle, 4> changed{{
+        decision->parent, decision->child, rows[limit - 2], rows[limit - 1]}};
+    const auto first = [&](std::size_t index) {
+        return std::find(changed.begin(), changed.begin() + index, changed[index])
+            == changed.begin() + index;
+    };
+    pending_projection_transaction([&] {
+        for (std::size_t i = 0; i < changed.size(); ++i)
+            if (first(i) && pending_projection_counts_.get(2, {}, {}, changed[i]))
+                pending_projection_live(changed[i], false);
+        reorder();
+        const std::array<native_order::RequestHandle, 2> tail{{
+            rows[limit - 2], rows[limit - 1]}};
+        for (std::size_t i = 0; i < changed.size(); ++i) {
+            if (first(i) && (changed[i] == decision->parent || changed[i] == decision->child
+                || changed[i] == tail[0] || changed[i] == tail[1]))
+                pending_projection_live(changed[i], true);
+        }
+    });
 }
 
 void PineExecutionAdapter::update_l4c_lifecycle(
@@ -2498,27 +2532,32 @@ void PineExecutionAdapter::reset_for_run() {
         index->clear();
     admission_journal.reset();
     cohorts_by_id_.clear();
+    // Reset removes live occurrences before making their placement snapshots unavailable.
+    clear_projected_pending(live_handles_);
     placement_.clear();
     live_by_source_key_.clear();
     bracket_families_.clear();
-    pending_bracket_legs_.clear();
-    pending_entries_.clear();
+    // Each queue clear removes raw occurrences and promotes any later prefix.
+    clear_projected_pending(pending_bracket_legs_);
+    clear_projected_pending(pending_entries_);
     delayed_market_orders_.clear();
     deferred_open_marketable_sells_.clear();
     throttled_reopen_rearm_.clear();
     entry_openings_interval_index_ = -1;
     entry_openings_this_interval_ = 0;
-    pending_same_bar_commands_.clear();
-    source_shadow_pending_.clear();
+    clear_projected_pending(pending_same_bar_commands_);
+    clear_projected_pending(source_shadow_pending_);
     pending_same_bar_close_qty_ = 0.0;
     pending_relative_exits_.clear();
     anchored_relative_legs_.clear();
     anchored_relative_stats_ = {};
     anchored_cohort_sequence_ = 0;
     per_entry_exits_.clear();
-    pending_coof_requests_.clear();
+    clear_projected_pending(pending_coof_requests_);
     pending_margin_revivals_.clear();
-    live_handles_.clear();
+    pending_projection_counts_.clear(); // Reset removes all six owners and their derived multiplicities.
+    projected_count_ = 0;
+    publish_projected_count();
     first_open_newborns_.clear();
     dropped_close_count_ = 0;
     dropped_close_digest_ = 1469598103934665603ULL;
@@ -3587,8 +3626,9 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
     // default-constructing a string-bearing snapshot and move-assigning it.
     const auto inserted = placement_.try_emplace(handle.incarnation, std::move(snapshot));
     if (!inserted.second) placement_.replace(handle.incarnation, std::move(snapshot));
+    // A newly named full handle contributes its placement exactly once.
     if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
-        live_handles_.push_back(handle);
+        append_projected_pending(live_handles_, handle);
     // A close order is a transient key of the entry-id table while it waits
     // (global_exit_child_ranks).
     const auto family_pin = placement_.pin_at(handle.incarnation);
@@ -3603,6 +3643,7 @@ void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
 
 void PineExecutionAdapter::bind_scratch_store(detail::ScratchStore& store) {
     ::pineforge::detail::working_store::check(store.status());
+    const bool first = !scratch_store_;
     scratch_store_ = &store;
     if (!scratch_binding_)
         scratch_binding_ = std::make_shared<::pineforge::detail::working_store::Binding>();
@@ -3622,6 +3663,17 @@ void PineExecutionAdapter::bind_scratch_store(detail::ScratchStore& store) {
     pending_margin_revivals_.bind(store, 62, 9);
     anchored_relative_legs_.bind(store, 62, 10);
     if (auto* pine = pine_view_of(host_)) pine->pyramid_entries_.bind(store, 63, 1);
+    pending_projection_counts_.bind(store);
+    const auto count = ::pineforge::detail::working_store::get_word(store, {68, 0, 0});
+    if (count) {
+        if (*count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+            ::pineforge::detail::working_store::check(::pineforge::detail::ScratchStatus::corrupt);
+        projected_count_ = static_cast<int>(*count);
+    } else {
+        if (!first)
+            ::pineforge::detail::working_store::check(::pineforge::detail::ScratchStatus::corrupt);
+        publish_projected_count(); // First binding migrates the already-maintained unbound count.
+    }
 }
 
 native_order::Request PineExecutionAdapter::store_queued_request(
@@ -3679,12 +3731,16 @@ void PineExecutionAdapter::fixture_projection_state(std::uint8_t edit,
         break;
     case 3: placement_.erase(handle.incarnation); break;
     case 4:
+        // Naming a hole still records incarnation membership for a later put.
         if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
-            live_handles_.push_back(handle);
+            append_projected_pending(live_handles_, handle);
         break;
     case 5:
-        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
-                            live_handles_.end());
+        // Unnaming removes the occurrence independently of its placement.
+        erase_projected_handle(handle, [&] {
+            live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
+                                live_handles_.end());
+        });
         break;
     default: throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {}, "source projection fixture edit");
     }
@@ -3702,11 +3758,18 @@ void PineExecutionAdapter::fixture_queue_state(std::uint8_t queue,
         const native_order::RequestHandle& handle, const native_order::RequestHandle& parent) {
     const bool clear = !request && !snapshot;
     const auto append = [&](auto& rows) {
-        if (clear) { rows.clear(); return; }
-        typename std::decay_t<decltype(rows)>::value_type row{};
+        using Row = typename std::decay_t<decltype(rows)>::value_type;
+        // Only delayed orders are outside the six-owner pending projection.
+        if (clear) {
+            if constexpr (std::is_same_v<Row, DelayedMarketOrder>) rows.clear();
+            else clear_projected_pending(rows); // Remove this owner's visible occurrences.
+            return;
+        }
+        Row row{};
         if (request) row.request = store_queued_request(*request);
         if (snapshot) row.snapshot = *snapshot;
-        rows.push_back(std::move(row));
+        if constexpr (std::is_same_v<Row, DelayedMarketOrder>) rows.push_back(std::move(row));
+        else append_projected_pending(rows, std::move(row)); // Install this owner's visible occurrence.
     };
     switch (queue) {
     case 0: append(pending_bracket_legs_); break;
@@ -3723,9 +3786,10 @@ void PineExecutionAdapter::fixture_queue_state(std::uint8_t queue,
         break;
     case 5: append(pending_same_bar_commands_); break;
     case 6:
-        if (clear) source_shadow_pending_.clear();
+        // Shadows are raw occurrences even though no native request owns them.
+        if (clear) clear_projected_pending(source_shadow_pending_);
         else { SourceShadowPending row{}; if (snapshot) row.snapshot = *snapshot;
-               source_shadow_pending_.push_back(std::move(row)); }
+               append_projected_pending(source_shadow_pending_, std::move(row)); }
         break;
     case 7: append(pending_coof_requests_); break;
     case 8:
@@ -3744,8 +3808,11 @@ void PineExecutionAdapter::fixture_queue_state(std::uint8_t queue,
 }
 
 void PineExecutionAdapter::retire(native_order::RequestHandle handle) {
-    live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
-                        live_handles_.end());
+    // Retirement removes the occurrence while retaining its placement evidence.
+    erase_projected_handle(handle, [&] {
+        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
+                            live_handles_.end());
+    });
     first_open_newborns_.erase(std::remove(first_open_newborns_.begin(),
         first_open_newborns_.end(), handle), first_open_newborns_.end());
     for (auto it = live_by_source_key_.begin(); it != live_by_source_key_.end();) {
@@ -5256,14 +5323,11 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     // 1694-1703 (exit): an accepted same-id instruction removes the prior
     // pending order, including one still queued here for a later submission.
     if (!replacement_key.empty()) {
-        pending_coof_requests_.erase(
-            std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
-                [&](const PendingCoofRequest& row) { return row.replacement_key == replacement_key; }),
-            pending_coof_requests_.end());
-        pending_bracket_legs_.erase(
-            std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-                [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; }),
-            pending_bracket_legs_.end());
+        // Remove queued occurrences under their old keys before compacting survivors.
+        erase_projected_pending_if(pending_coof_requests_,
+                [&](const PendingCoofRequest& row) { return row.replacement_key == replacement_key; });
+        erase_projected_pending_if(pending_bracket_legs_,
+                [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
         delayed_market_orders_.erase(
             std::remove_if(delayed_market_orders_.begin(), delayed_market_orders_.end(),
                 [&](const DelayedMarketOrder& row) { return row.replacement_key == replacement_key; }),
@@ -5903,12 +5967,11 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
-    pending_bracket_legs_.erase(
-        std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+    // Zero-reservation legs leave the same group counts as every other erasure.
+    erase_projected_pending_if(pending_bracket_legs_,
             [](const PendingBracketLeg& leg) {
                 return leg.snapshot.qty_percent == 0.0;
-            }),
-        pending_bracket_legs_.end());
+            });
 }
 
 // A margin call shrinks the position under its exits without filling any of
@@ -6308,9 +6371,9 @@ std::vector<std::size_t> PineExecutionAdapter::live_origin_positions(
 }
 
 void PineExecutionAdapter::cancel_bracket_origin(native_order::RequestHandle origin) {
-    pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-        [&](const PendingBracketLeg& leg) { return leg.snapshot.bracket_origin == origin; }),
-        pending_bracket_legs_.end());
+    // Removing any group member decrements its multiplicity, including the first.
+    erase_projected_pending_if(pending_bracket_legs_,
+        [&](const PendingBracketLeg& leg) { return leg.snapshot.bracket_origin == origin; });
     std::vector<native_order::RequestHandle> matches;
     for (const auto& handle : live_handles_) {
         const auto placement = placement_.find(handle.incarnation);
@@ -6409,18 +6472,13 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
             && (from_entry.empty() ? snapshot.from_entry.empty()
                                    : snapshot.from_entry == from_entry);
     };
-    pending_bracket_legs_.erase(
-        std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-            [&](const PendingBracketLeg& row) { return matches(row.snapshot); }),
-        pending_bracket_legs_.end());
-    pending_coof_requests_.erase(
-        std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
-            [&](const PendingCoofRequest& row) { return matches(row.snapshot); }),
-        pending_coof_requests_.end());
-    source_shadow_pending_.erase(
-        std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
-            [&](const SourceShadowPending& row) { return matches(row.snapshot); }),
-        source_shadow_pending_.end());
+    // Full-close withdrawal removes each projected queue's matching occurrences.
+    erase_projected_pending_if(pending_bracket_legs_,
+            [&](const PendingBracketLeg& row) { return matches(row.snapshot); });
+    erase_projected_pending_if(pending_coof_requests_,
+            [&](const PendingCoofRequest& row) { return matches(row.snapshot); });
+    erase_projected_pending_if(source_shadow_pending_,
+            [&](const SourceShadowPending& row) { return matches(row.snapshot); });
     pending_relative_exits_.erase(
         std::remove_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
             [&](const PendingRelativeExit& row) {
@@ -6538,18 +6596,13 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
             && !pending_parent(snapshot);
     };
     if (!dormant_rows_only) {
-        pending_bracket_legs_.erase(
-            std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-                [&](const PendingBracketLeg& row) { return matches(row.snapshot); }),
-            pending_bracket_legs_.end());
-        pending_coof_requests_.erase(
-            std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
-                [&](const PendingCoofRequest& row) { return matches(row.snapshot); }),
-            pending_coof_requests_.end());
-        source_shadow_pending_.erase(
-            std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
-                [&](const SourceShadowPending& row) { return matches(row.snapshot); }),
-            source_shadow_pending_.end());
+        // Flat retirement withdraws queue occurrences before survivor compaction.
+        erase_projected_pending_if(pending_bracket_legs_,
+                [&](const PendingBracketLeg& row) { return matches(row.snapshot); });
+        erase_projected_pending_if(pending_coof_requests_,
+                [&](const PendingCoofRequest& row) { return matches(row.snapshot); });
+        erase_projected_pending_if(source_shadow_pending_,
+                [&](const SourceShadowPending& row) { return matches(row.snapshot); });
     }
 
     std::vector<native_order::RequestHandle> handles;
@@ -6977,10 +7030,11 @@ void PineExecutionAdapter::stage_flat_children_before_parent(
                                  replacement_key,
                                  key_for(found->second.source_id,
                                          found->second.from_entry)};
+        // Append or replace one intact raw occurrence and its exit-group key.
         if (queued == pending_bracket_legs_.end()) {
-            pending_bracket_legs_.push_back(std::move(staged));
+            append_projected_pending(pending_bracket_legs_, std::move(staged));
         } else {
-            *queued = std::move(staged);
+            replace_projected_pending(pending_bracket_legs_, queued, std::move(staged));
         }
     }
     refresh_pending_view();
@@ -7412,15 +7466,16 @@ bool PineExecutionAdapter::coof_leg_reaches_exit(
 
 void PineExecutionAdapter::flush_coof_tail(
         bool openings_only, bool include_next_open) {
-    auto queued = std::move(pending_coof_requests_);
+    // Detached COOF rows stop contributing before processing or selective requeue.
+    auto queued = drain_projected_pending(pending_coof_requests_);
     auto keep_storage = queued.recycle_on_exit(pending_coof_requests_);
-    pending_coof_requests_.clear();
+    clear_projected_pending(pending_coof_requests_);
     for (auto& pending : queued) {
         if ((pending.next_open && !include_next_open)
             || (openings_only && (!pending.opening
                 || std::holds_alternative<native_order::Market>(
                     pending.request.trigger)))) {
-            pending_coof_requests_.push_back(std::move(pending));
+            append_projected_pending(pending_coof_requests_, std::move(pending)); // Requeued rows contribute again.
             continue;
         }
         const auto accepted = submit_or_replace(std::move(pending.request), std::move(pending.snapshot),
@@ -7528,7 +7583,8 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         snapshot.exit_levels.limit = limit_price;
         snapshot.exit_levels.stop = stop_price;
         snapshot.sizing = sizing_snapshot();
-        pending_entries_.push_back(
+        // The deferred entry contributes before it is submitted to the native host.
+        append_projected_pending(pending_entries_,
             {std::move(request), std::move(snapshot), id});
         return;
     }
@@ -7835,7 +7891,7 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         shadow.projection_created_bar = source_point
             ? projection_bar_index(source_point->decision) : -1;
         shadow.sizing = sizing_snapshot();
-        source_shadow_pending_.push_back({std::move(shadow), id});
+        append_projected_pending(source_shadow_pending_, {std::move(shadow), id}); // Shadows contribute as raw rows.
         return;
     }
     if (current == 0.0 && priced && explicit_fixed) {
@@ -9108,11 +9164,12 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
         pending.unbatched_request = std::move(unbatched_request);
         pending.unbatched_snapshot = std::move(unbatched_snapshot);
         pending.unbatched_context = submission_context;
+        // A same-bar replacement removes the old key before publishing the new row.
         if (existing == pending_same_bar_commands_.end()) {
-            pending_same_bar_commands_.push_back(std::move(pending));
+            append_projected_pending(pending_same_bar_commands_, std::move(pending));
         } else {
             source_batch_mutated_ = true;
-            *existing = std::move(pending);
+            replace_projected_pending(pending_same_bar_commands_, existing, std::move(pending));
         }
         return;
     }
@@ -9258,18 +9315,20 @@ void PineExecutionAdapter::place_entry(const SourceId& id, bool is_long, double 
                     pending.staged_reversal = true;
                     pending.staged_reversal_held_units = held_opposite_units;
                 }
+                // Appending and replacing keep exactly one raw occurrence at this site.
                 if (existing == pending_same_bar_commands_.end()) {
-                    pending_same_bar_commands_.push_back(std::move(pending));
+                    append_projected_pending(pending_same_bar_commands_, std::move(pending));
                 } else {
                     source_batch_mutated_ = true;
-                    *existing = std::move(pending);
+                    replace_projected_pending(pending_same_bar_commands_, existing, std::move(pending));
                 }
                 return;
             }
         }
     }
     if (preceding_close_all.incarnation != 0) {
-        pending_entries_.push_back({std::move(request), std::move(snapshot), id});
+        // A deferred entry is already part of the public pending projection.
+        append_projected_pending(pending_entries_, {std::move(request), std::move(snapshot), id});
         return;
     }
     submit_entry_with_policy(std::move(request), std::move(snapshot), id, submission_context);
@@ -9311,8 +9370,9 @@ void PineExecutionAdapter::submit_entry_with_policy(
         auto queued = std::find_if(pending_entries_.begin(), pending_entries_.end(),
             [&](const PendingEntry& value) { return value.replacement_key == id; });
         PendingEntry pending{std::move(request), std::move(snapshot), id};
-        if (queued == pending_entries_.end()) pending_entries_.push_back(std::move(pending));
-        else *queued = std::move(pending);
+        // Replace the queued occurrence, including its old projection key.
+        if (queued == pending_entries_.end()) append_projected_pending(pending_entries_, std::move(pending));
+        else replace_projected_pending(pending_entries_, queued, std::move(pending));
         return;
     }
     if (current == 0.0 && config_.process_orders_on_close && default_sized
@@ -9351,7 +9411,8 @@ void PineExecutionAdapter::submit_entry_with_policy(
             }
             snapshot.source_sequence = source_sequence_ + 1;
             if (child_families.size() != 1) named_entry_cancel_tokens_.erase(token);
-            pending_entries_.push_back({std::move(request), std::move(snapshot), id});
+            // Deferred entries contribute before native submission.
+            append_projected_pending(pending_entries_, {std::move(request), std::move(snapshot), id});
             return;
         }
     }
@@ -9363,7 +9424,9 @@ void PineExecutionAdapter::submit_entry_with_policy(
             // reversal before either definition reaches the generic core.
             // Flushing the old priced row after submitting this one reverses
             // the replacement and leaves the market instruction unreachable.
-            *queued = PendingEntry{std::move(request), std::move(snapshot), id};
+            // Replacing a queued row removes its old projection key first.
+            replace_projected_pending(pending_entries_, queued,
+                {std::move(request), std::move(snapshot), id});
             return;
         }
     }
@@ -9372,13 +9435,15 @@ void PineExecutionAdapter::submit_entry_with_policy(
         auto queued = std::find_if(pending_entries_.begin(), pending_entries_.end(),
             [&](const PendingEntry& value) { return value.replacement_key == id; });
         PendingEntry pending{std::move(request), std::move(snapshot), id};
-        if (queued == pending_entries_.end()) pending_entries_.push_back(std::move(pending));
-        else *queued = std::move(pending);
+        // Append or replace exactly one queued occurrence.
+        if (queued == pending_entries_.end()) append_projected_pending(pending_entries_, std::move(pending));
+        else replace_projected_pending(pending_entries_, queued, std::move(pending));
         return;
     }
     if (config_.process_orders_on_close && !close_batch_callsites_.empty()
         && !priced && !coof_recalc_active_) {
-        pending_entries_.push_back({std::move(request), std::move(snapshot), id});
+        // A held entry is a visible non-exit raw occurrence.
+        append_projected_pending(pending_entries_, {std::move(request), std::move(snapshot), id});
         return;
     }
     // The legacy source selector orders a flat COOF book by the first
@@ -9403,16 +9468,19 @@ void PineExecutionAdapter::submit_entry_with_policy(
             == stop_price;
     }();
     if (coof_flat_priced || ordinary_flat_pure_stop) {
-        pending_entries_.push_back({std::move(request), std::move(snapshot), id});
+        // Priced deferred entries contribute while waiting for the drain.
+        append_projected_pending(pending_entries_, {std::move(request), std::move(snapshot), id});
         return;
     }
     if (coof_market_next_open || coof_priced_next_open) {
-        pending_coof_requests_.push_back(
+        // COOF rows contribute even before the following open submits them.
+        append_projected_pending(pending_coof_requests_,
             {std::move(request), std::move(snapshot), id, true, 0, true});
         return;
     }
     if (defer_coof_tail() && !coof_market_at_second_extreme) {
-        pending_coof_requests_.push_back({std::move(request), std::move(snapshot), id, true, 0});
+        // Tail deferral installs a raw occurrence immediately.
+        append_projected_pending(pending_coof_requests_, {std::move(request), std::move(snapshot), id, true, 0});
         return;
     }
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), true, id);
@@ -9470,7 +9538,8 @@ void PineExecutionAdapter::submit_entry_with_policy(
         shadow.snapshot.opening = true;
         shadow.snapshot.sizing = sizing_snapshot();
         shadow.label = id;
-        source_shadow_pending_.push_back(std::move(shadow));
+        // Source-only observations contribute until their broker-open expiry.
+        append_projected_pending(source_shadow_pending_, std::move(shadow));
     }
 }
 
@@ -10032,7 +10101,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
             shadow.snapshot.source_id = "__pine_close_all";
             shadow.snapshot.sizing = sizing_snapshot();
             shadow.label = shadow.snapshot.source_id;
-            source_shadow_pending_.push_back(std::move(shadow));
+            // A source-only close observation contributes until its expiry.
+            append_projected_pending(source_shadow_pending_, std::move(shadow));
             return;
         }
         native_order::Request request;
@@ -10212,7 +10282,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                         : native_order::OrderIntent{native_order::Transact{target}};
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
-                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
+                    // The deferred replacement entry is already a raw occurrence.
+                    append_projected_pending(pending_entries_, {std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
                 }
             }
             for (auto it = pending_same_bar_commands_.begin(); it != pending_same_bar_commands_.end();) {
@@ -10221,8 +10292,9 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                     && it->snapshot.placement_script_open_ms == cur_pt->decision.script_bar_open_ms) {
                     it->snapshot.paired_reversal_parent = *accepted;
                     it->snapshot.market_admission = {};
-                    pending_entries_.push_back({std::move(it->request), std::move(it->snapshot), it->replacement_key});
-                    it = pending_same_bar_commands_.erase(it);
+                    // Keep the old source key intact until both sides of this transfer publish.
+                    append_projected_pending(pending_entries_, {std::move(it->request), it->snapshot, it->replacement_key});
+                    it = erase_projected_pending(pending_same_bar_commands_, it);
                 } else {
                     ++it;
                 }
@@ -10363,10 +10435,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     if (immediately) {
         const double current = detail::run_position(require_host()).signed_units;
         if (current != 0.0) {
-            pending_entries_.erase(std::remove_if(pending_entries_.begin(), pending_entries_.end(),
+            // Withdraw entries before remove_if overwrites any old snapshot.
+            erase_projected_pending_if(pending_entries_,
                 [&](const PendingEntry& entry) {
                     return (current > 0.0) == entry.snapshot.is_long;
-                }), pending_entries_.end());
+                });
         }
     }
     // P-DA2: an explicitly percentage-sized deferred ANY close retains
@@ -10519,7 +10592,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         const SourceId replacement_key = callsite_token == 0
             ? SourceId{}
             : "__pine_close_site__" + std::to_string(callsite_token);
-        pending_same_bar_commands_.push_back(
+        // Same-bar closes contribute as independent non-exit occurrences.
+        append_projected_pending(pending_same_bar_commands_,
             {std::move(request), std::move(snapshot), replacement_key, false});
         pending_same_bar_close_qty_ += frozen_qty;
         return;
@@ -10721,7 +10795,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         // cohort independently.  Keep only the source observation and place
         // the standing bracket behind the pair's lifecycle barrier.
         hold_reversal_pair_brackets(id);
-        source_shadow_pending_.push_back({snapshot, "__close__" + id});
+        // The source close remains a raw occurrence while its native placement is held.
+        append_projected_pending(source_shadow_pending_, {snapshot, "__close__" + id});
         return;
     }
     bool all_in_dependent_close = false;
@@ -10814,7 +10889,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     if (coof_close_next_open) {
         snapshot.forced_execution_price = kNaN;
         request.trigger = native_order::Market{};
-        pending_coof_requests_.push_back({
+        // A deferred COOF close contributes before the next-open drain.
+        append_projected_pending(pending_coof_requests_, {
             std::move(request), std::move(snapshot), replacement_key,
             false, 0, true});
         return;
@@ -10838,7 +10914,8 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     const PlacementSnapshot shadow_snapshot = snapshot;
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false, replacement_key);
     if (!accepted && all_in_dependent_close) {
-        source_shadow_pending_.push_back({shadow_snapshot, "__close__" + id});
+        // A declined native placement can still have one source-only occurrence.
+        append_projected_pending(source_shadow_pending_, {shadow_snapshot, "__close__" + id});
     }
     const bool pooc_immediate_fifo = config_.process_orders_on_close
         && !coof_recalc_active_
@@ -10978,7 +11055,8 @@ void PineExecutionAdapter::close_all() {
                         : native_order::OrderIntent{native_order::Transact{target}};
                     req.label = entry_snapshot.source_id;
                     req.comment = entry_snapshot.comment;
-                    pending_entries_.push_back({std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
+                    // A deferred replacement entry contributes immediately.
+                    append_projected_pending(pending_entries_, {std::move(req), std::move(entry_snapshot), entry_snapshot.source_id});
                 }
             }
             for (auto it = pending_same_bar_commands_.begin(); it != pending_same_bar_commands_.end();) {
@@ -10987,8 +11065,9 @@ void PineExecutionAdapter::close_all() {
                     && it->snapshot.placement_script_open_ms == cur_pt->decision.script_bar_open_ms) {
                     it->snapshot.paired_reversal_parent = *accepted;
                     it->snapshot.market_admission = {};
-                    pending_entries_.push_back({std::move(it->request), std::move(it->snapshot), it->replacement_key});
-                    it = pending_same_bar_commands_.erase(it);
+                    // Preserve the source key until its occurrence is erased.
+                    append_projected_pending(pending_entries_, {std::move(it->request), it->snapshot, it->replacement_key});
+                    it = erase_projected_pending(pending_same_bar_commands_, it);
                 } else {
                     ++it;
                 }
@@ -11136,14 +11215,11 @@ void PineExecutionAdapter::withdraw_void_exits(const SourceId& entry_id) {
     const auto voided = [&](const PlacementSnapshot& row) {
         return row.void_issue && row.from_entry == entry_id;
     };
-    pending_bracket_legs_.erase(
-        std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-            [&](const PendingBracketLeg& row) { return voided(row.snapshot); }),
-        pending_bracket_legs_.end());
-    pending_coof_requests_.erase(
-        std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
-            [&](const PendingCoofRequest& row) { return voided(row.snapshot); }),
-        pending_coof_requests_.end());
+    // Voided queue rows leave their group before survivors are moved.
+    erase_projected_pending_if(pending_bracket_legs_,
+            [&](const PendingBracketLeg& row) { return voided(row.snapshot); });
+    erase_projected_pending_if(pending_coof_requests_,
+            [&](const PendingCoofRequest& row) { return voided(row.snapshot); });
     delayed_market_orders_.erase(
         std::remove_if(delayed_market_orders_.begin(), delayed_market_orders_.end(),
             [&](const DelayedMarketOrder& row) { return voided(row.snapshot); }),
@@ -11290,14 +11366,11 @@ void PineExecutionAdapter::settle_void_global_exits(bool market_entry) {
         }
         return;
     }
-    pending_bracket_legs_.erase(
-        std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-            [&](const PendingBracketLeg& row) { return voided(row.snapshot); }),
-        pending_bracket_legs_.end());
-    pending_coof_requests_.erase(
-        std::remove_if(pending_coof_requests_.begin(), pending_coof_requests_.end(),
-            [&](const PendingCoofRequest& row) { return voided(row.snapshot); }),
-        pending_coof_requests_.end());
+    // Removing void global rows decrements every projected owner's multiplicities.
+    erase_projected_pending_if(pending_bracket_legs_,
+            [&](const PendingBracketLeg& row) { return voided(row.snapshot); });
+    erase_projected_pending_if(pending_coof_requests_,
+            [&](const PendingCoofRequest& row) { return voided(row.snapshot); });
     delayed_market_orders_.erase(
         std::remove_if(delayed_market_orders_.begin(), delayed_market_orders_.end(),
             [&](const DelayedMarketOrder& row) { return voided(row.snapshot); }),
@@ -11696,13 +11769,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     }
     if (unresolved_relative) {
-        source_shadow_pending_.erase(
-            std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
+        // Replacement shadows remove their previous group keys before insertion.
+        erase_projected_pending_if(source_shadow_pending_,
                 [&](const SourceShadowPending& row) {
                     return row.snapshot.source_id == exit_id
                         && row.snapshot.from_entry == from_entry;
-                }),
-            source_shadow_pending_.end());
+                });
         // A known absolute sibling remains executable while the relative
         // trail/profit/loss component waits for its MARKET parent's fill.
         // ab9714be pine_strategy_commands.cpp:533-537: 0.0 is a present level.
@@ -11729,7 +11801,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                               source_trail_offset, source_trail_price,
                               profit_ticks, loss_ticks};
         shadow.sizing = sizing_snapshot();
-        source_shadow_pending_.push_back({std::move(shadow), exit_id});
+        // Relative-level observations are raw exit occurrences even without native legs.
+        append_projected_pending(source_shadow_pending_, {std::move(shadow), exit_id});
         return;
         }
     }
@@ -12501,10 +12574,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     });
                 PendingBracketLeg staged{std::move(request), std::move(snapshot),
                                          replacement_key, family_key};
+                // The staged leg replaces one raw occurrence rather than adding a duplicate.
                 if (queued == pending_bracket_legs_.end())
-                    pending_bracket_legs_.push_back(std::move(staged));
+                    append_projected_pending(pending_bracket_legs_, std::move(staged));
                 else
-                    *queued = std::move(staged);
+                    replace_projected_pending(pending_bracket_legs_, queued, std::move(staged));
                 return;
             }
             if (auto queued = std::find_if(
@@ -12527,12 +12601,14 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     snapshot.projection_position_side =
                         static_cast<std::int32_t>(PositionSide::FLAT);
                 }
-                *queued = PendingBracketLeg{std::move(request), std::move(snapshot),
-                                            replacement_key, family_key};
+                // Replacing a queued row removes its old projection key first.
+                replace_projected_pending(pending_bracket_legs_, queued,
+                    {std::move(request), std::move(snapshot), replacement_key, family_key});
                 return;
             }
             if (defer_coof_tail() && !finite_positive(coof_stop_waypoint_price)) {
-                pending_coof_requests_.push_back({std::move(request), std::move(snapshot), replacement_key,
+                // Deferred exit legs join the same group directory as live legs.
+                append_projected_pending(pending_coof_requests_, {std::move(request), std::move(snapshot), replacement_key,
                                                   false, family_key, true});
                 return;
             }
@@ -12545,10 +12621,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     });
                 PendingBracketLeg staged{std::move(request), std::move(snapshot),
                                          replacement_key, family_key};
+                // A queued whole-row replacement removes its previous group key.
                 if (queued == pending_bracket_legs_.end())
-                    pending_bracket_legs_.push_back(std::move(staged));
+                    append_projected_pending(pending_bracket_legs_, std::move(staged));
                 else
-                    *queued = std::move(staged);
+                    replace_projected_pending(pending_bracket_legs_, queued, std::move(staged));
                 return;
             }
             bool defer_for_live_parent = false;
@@ -12619,10 +12696,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     });
                 PendingBracketLeg staged{std::move(request), std::move(snapshot), replacement_key,
                                          family_key};
+                // Insert or replace one pending leg with its exact current group key.
                 if (queued == pending_bracket_legs_.end())
-                    pending_bracket_legs_.push_back(std::move(staged));
+                    append_projected_pending(pending_bracket_legs_, std::move(staged));
                 else
-                    *queued = std::move(staged);
+                    replace_projected_pending(pending_bracket_legs_, queued, std::move(staged));
                 return;
             }
             if (defer_new_instance && live_by_source_key_.find(key_for(replacement_key))
@@ -12630,8 +12708,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
                     [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
                 PendingBracketLeg staged{std::move(request), std::move(snapshot), replacement_key, family_key};
-                if (queued == pending_bracket_legs_.end()) pending_bracket_legs_.push_back(std::move(staged));
-                else *queued = std::move(staged);
+                // Reissuing a staged leg must not leave its prior group counted.
+                if (queued == pending_bracket_legs_.end()) append_projected_pending(pending_bracket_legs_, std::move(staged));
+                else replace_projected_pending(pending_bracket_legs_, queued, std::move(staged));
                 return;
             }
             // ab9714be src/source/pine_strategy_commands.cpp:2627-2648 keys a
@@ -12642,8 +12721,9 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // levels resurrect when a later parent entry applies.
             for (auto stale = pending_bracket_legs_.begin();
                  stale != pending_bracket_legs_.end();) {
+                // Superseded rows leave their group before queue compaction.
                 if (stale->replacement_key == replacement_key)
-                    stale = pending_bracket_legs_.erase(stale);
+                    stale = erase_projected_pending(pending_bracket_legs_, stale);
                 else
                     ++stale;
             }
@@ -12976,10 +13056,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 const auto result = require_host().cancel(handle);
                 if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
             }
-            pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(),
-                pending_bracket_legs_.end(), [&](const PendingBracketLeg& leg) {
+            // Dropped legs remove their old occurrences before survivors shift.
+            erase_projected_pending_if(pending_bracket_legs_, [&](const PendingBracketLeg& leg) {
                     return dropped(leg.snapshot);
-                }), pending_bracket_legs_.end());
+                });
             delayed_market_orders_.erase(std::remove_if(delayed_market_orders_.begin(),
                 delayed_market_orders_.end(), [&](const DelayedMarketOrder& order) {
                     return dropped(order.snapshot);
@@ -13052,13 +13132,12 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // absent. Preserve a command projection for all-NaN absolute levels
         // with no trail arm; it never participates in matching or settlement.
         exit_cancel_bracket(exit_id, from_entry, comment);
-        source_shadow_pending_.erase(
-            std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
+        // Replacing a shadow withdraws its old group membership first.
+        erase_projected_pending_if(source_shadow_pending_,
                 [&](const SourceShadowPending& row) {
                     return row.snapshot.source_id == exit_id
                         && row.snapshot.from_entry == from_entry;
-                }),
-            source_shadow_pending_.end());
+                });
         PlacementSnapshot snapshot;
         snapshot.family = has_trail_request ? PineOrderFamily::ExitTrail
             : (!std::isnan(stop_price) || !std::isnan(loss_ticks)
@@ -13084,16 +13163,18 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                                 source_trail_offset, source_trail_price,
                                 profit_ticks, loss_ticks};
         snapshot.sizing = sizing_snapshot();
-        source_shadow_pending_.push_back({std::move(snapshot), exit_id});
+        // Even non-executable exit observations contribute one group member.
+        append_projected_pending(source_shadow_pending_, {std::move(snapshot), exit_id});
     }
 }
 
 void PineExecutionAdapter::flush_pending_bracket_legs(
         native_order::RequestHandle just_applied, bool post_calculation,
         bool pre_script_drain) {
-    auto queued = std::move(pending_bracket_legs_);
+    // Detached legs leave the projection before any detached origin edit or submission.
+    auto queued = drain_projected_pending(pending_bracket_legs_);
     auto keep_storage = queued.recycle_on_exit(pending_bracket_legs_);
-    pending_bracket_legs_.clear();
+    clear_projected_pending(pending_bracket_legs_);
     // ab9714be src/source/pine_scheduler.cpp:242 runs step 1 over the orders
     // that were already resting, and that pass walks a shared fill phase in
     // creation order (src/source/pine_fills.cpp:3782-3788). A resting bracket
@@ -13338,7 +13419,8 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
         for (auto& leg : queued) {
             const bool has_parent = resolve_parent(leg.snapshot) != nullptr;
             if (has_parent && !parent_walks_first(leg.snapshot)) {
-                pending_bracket_legs_.push_back(std::move(leg));
+                // Requeued legs contribute under their current snapshot keys.
+                append_projected_pending(pending_bracket_legs_, std::move(leg));
             } else {
                 resting.push_back(std::move(leg));
             }
@@ -13379,12 +13461,14 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                                 leg.snapshot.requested_qty, leg.snapshot.qty_percent)
             && detail::run_position(require_host()).signed_units == 0.0
             && priced_entry_order_working(nullptr)) {
-            pending_bracket_legs_.push_back(std::move(leg));
+            // A parked raw leg remains a member of its exit group.
+            append_projected_pending(pending_bracket_legs_, std::move(leg));
             continue;
         }
         if (leg.snapshot.reservation_deferred_to_pending_entry
             && !(cohort_exposure_for(leg.snapshot.from_entry) > 0.0)) {
-            pending_bracket_legs_.push_back(std::move(leg));
+            // A requeued reservation contributes again after the drain removed it.
+            append_projected_pending(pending_bracket_legs_, std::move(leg));
             continue;
         }
         // ab9714be pine_fills.cpp:7679-7700 evaluates a filled parent's priced
@@ -13454,7 +13538,8 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
                 // for a flat book's pending parent does, whatever bar the
                 // held parent reaches the book on.
                 leg.snapshot.projection_created_bar_pinned = true;
-                pending_bracket_legs_.push_back(std::move(leg));
+                // A detached origin edit becomes visible only on this insertion.
+                append_projected_pending(pending_bracket_legs_, std::move(leg));
                 continue;
             }
         }
@@ -13486,12 +13571,14 @@ void PineExecutionAdapter::flush_pending_bracket_legs(
              && leg.snapshot.bracket_origin != just_applied
              && origin_is_pending(leg.snapshot.bracket_origin))
             || retained_parent_pending) {
-            pending_bracket_legs_.push_back(std::move(leg));
+            // Still-pending parents keep their leg occurrence in the projection.
+            append_projected_pending(pending_bracket_legs_, std::move(leg));
             continue;
         }
         if (leg.snapshot.defer_until_post_parent_calculation
             && !post_calculation && !parent_walks_first(leg.snapshot)) {
-            pending_bracket_legs_.push_back(std::move(leg));
+            // Requeue restores the drained leg's group membership.
+            append_projected_pending(pending_bracket_legs_, std::move(leg));
             continue;
         }
         bool execute_after_calculation = false;
@@ -13582,11 +13669,11 @@ void PineExecutionAdapter::materialize_pending_bracket_legs(
         && parent->retained_parent_topology;
     if (parent && parent->opening && parent->oca_type == 1
         && !parent->oca_name.empty()) {
-        pending_bracket_legs_.erase(std::remove_if(
-            pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+        // OCA withdrawal removes intact queued group keys.
+        erase_projected_pending_if(pending_bracket_legs_,
             [&](const PendingBracketLeg& leg) {
                 return leg.snapshot.oca_name == parent->oca_name;
-            }), pending_bracket_legs_.end());
+            });
     }
     std::uint64_t retained_family = 0;
     bool materialize_retained = false;
@@ -13660,9 +13747,10 @@ void PineExecutionAdapter::materialize_pending_bracket_legs(
                && (it->snapshot.bracket_origin == event.handle()
                    || (it->snapshot.bracket_origin.incarnation == 0 && matches_parent)));
         if (selected) {
-            it->snapshot.bracket_origin = event.handle();
-            ready.push_back(std::move(*it));
-            it = pending_bracket_legs_.erase(it);
+            // Remove the intact old group before moving or rebinding the row.
+            auto leg = take_projected_pending(pending_bracket_legs_, it);
+            leg.snapshot.bracket_origin = event.handle();
+            ready.push_back(std::move(leg));
         } else {
             ++it;
         }
@@ -13756,9 +13844,10 @@ void PineExecutionAdapter::flush_pending_entries() {
     reroute_incomplete_fixed_batch(false);
     release_delayed_orders();
     flush_pending_same_bar_commands(false, false);
-    auto queued = std::move(pending_entries_);
+    // The detached entry workset contributes only when requeued or remembered.
+    auto queued = drain_projected_pending(pending_entries_);
     auto keep_storage = queued.recycle_on_exit(pending_entries_);
-    pending_entries_.clear();
+    clear_projected_pending(pending_entries_);
     auto deferred = std::remove_if(queued.begin(), queued.end(), [&](PendingEntry& entry) {
         const auto parent = entry.snapshot.paired_reversal_parent;
         if (parent.incarnation == 0) return false;
@@ -13768,7 +13857,7 @@ void PineExecutionAdapter::flush_pending_entries() {
                 && found->second.family != PineOrderFamily::CloseAll)) {
             return false;
         }
-        pending_entries_.push_back(std::move(entry));
+        append_projected_pending(pending_entries_, std::move(entry)); // Restore this deferred raw occurrence.
         return true;
     });
     queued.erase(deferred, queued.end());
@@ -13784,9 +13873,10 @@ void PineExecutionAdapter::flush_pending_entries() {
         return;
     }
     if (!queued.empty() && !pending_bracket_legs_.empty()) {
-        auto brackets = std::move(pending_bracket_legs_);
+        // The interleaved drain removes bracket occurrences before processing them.
+        auto brackets = drain_projected_pending(pending_bracket_legs_);
         auto keep_bracket_storage = brackets.recycle_on_exit(pending_bracket_legs_);
-        pending_bracket_legs_.clear();
+        clear_projected_pending(pending_bracket_legs_);
         struct Candidate {
             int rank = 4;
             std::size_t index = 0;
@@ -13852,9 +13942,10 @@ void PineExecutionAdapter::reroute_fixed_entries_before_request(bool invalidate_
         });
     if (!frozen_entry) return;
     if (invalidate_batch) source_batch_mutated_ = true;
-    auto queued = std::move(pending_same_bar_commands_);
+    // Rerouted commands stop contributing until their edited snapshots are reinserted.
+    auto queued = drain_projected_pending(pending_same_bar_commands_);
     auto keep_storage = queued.recycle_on_exit(pending_same_bar_commands_);
-    pending_same_bar_commands_.clear();
+    clear_projected_pending(pending_same_bar_commands_);
     pending_same_bar_close_qty_ = 0.0;
     // Dependent requests break the entry-only projection. Restore exact placement
     // requests in source order; begin_source_evaluation resets the invalidation.
@@ -13915,8 +14006,8 @@ void PineExecutionAdapter::flush_pending_same_bar_commands(
         bool flat_pair_follows, bool invalidate_batch) {
     require_cohort_ticket();
     reroute_incomplete_fixed_batch(invalidate_batch);
-    ::pineforge::detail::WorkingSequence<PendingSameBarCommand> queued;
-    queued.swap(pending_same_bar_commands_);
+    // A detached workset no longer contributes to the visible count.
+    auto queued = drain_projected_pending(pending_same_bar_commands_);
     auto keep_storage = queued.recycle_on_exit(pending_same_bar_commands_);
     pending_same_bar_close_qty_ = 0.0;
     if (queued.empty()) return;
@@ -14805,8 +14896,9 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
             return value.exit_id == exit_id && value.from_entry == from_entry;
         }), pending_relative_exits_.end());
     if (!materializing_relative_) withdraw_anchored_relative_legs(&exit_id, &from_entry);
-    pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-        [&](const PendingBracketLeg& leg) { return leg.family_key == key; }), pending_bracket_legs_.end());
+    // Cancelling a bracket family removes each intact queued group member.
+    erase_projected_pending_if(pending_bracket_legs_,
+        [&](const PendingBracketLeg& leg) { return leg.family_key == key; });
     // Cancellation can synchronously change source state. Copy the family
     // roster and release the map iterator before issuing any host operation.
     std::vector<native_order::RequestHandle> handles;
@@ -14861,10 +14953,10 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
     if (token.entry_incarnation != 0) named_entry_cancel_tokens_[id] = token;
     else named_entry_cancel_tokens_.erase(id);
     const auto same_bar_before = pending_same_bar_commands_.size();
-    pending_same_bar_commands_.erase(std::remove_if(pending_same_bar_commands_.begin(),
-        pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& command) {
+    // Each cancellation removes its source occurrence before survivor moves.
+    erase_projected_pending_if(pending_same_bar_commands_, [&](const PendingSameBarCommand& command) {
             return command.snapshot.source_id == id;
-        }), pending_same_bar_commands_.end());
+        });
     if (pending_same_bar_commands_.size() != same_bar_before)
         source_batch_mutated_ = true;
     pending_same_bar_close_qty_ = 0.0;
@@ -14877,11 +14969,11 @@ void PineExecutionAdapter::cancel(const SourceId& id) {
         pending_relative_exits_.end());
     withdraw_anchored_relative_legs(&id, nullptr);
     withdraw_anchored_relative_legs(nullptr, &id);
-    pending_entries_.erase(std::remove_if(pending_entries_.begin(), pending_entries_.end(),
-        [&](const PendingEntry& entry) { return entry.snapshot.source_id == id; }), pending_entries_.end());
-    pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-        [&](const PendingBracketLeg& leg) { return leg.snapshot.source_id == id; }),
-        pending_bracket_legs_.end());
+    // The two queues withdraw only their matching occurrences, preserving other groups.
+    erase_projected_pending_if(pending_entries_,
+        [&](const PendingEntry& entry) { return entry.snapshot.source_id == id; });
+    erase_projected_pending_if(pending_bracket_legs_,
+        [&](const PendingBracketLeg& leg) { return leg.snapshot.source_id == id; });
     // A gapped stop waiting for a margin-call revival is withdrawn with the
     // rest of the id (retire_cancelled_exits).
     pending_margin_revivals_.erase(std::remove_if(pending_margin_revivals_.begin(),
@@ -14931,12 +15023,13 @@ void PineExecutionAdapter::cancel_all() {
     retire_cancelled_exits(nullptr, cancelled);
     pending_margin_revivals_.clear();
     bracket_families_.clear();
-    pending_bracket_legs_.clear();
-    pending_entries_.clear();
+    // Only these cleared owners leave the projection; COOF and shadows remain.
+    clear_projected_pending(pending_bracket_legs_);
+    clear_projected_pending(pending_entries_);
     delayed_market_orders_.clear();
     deferred_open_marketable_sells_.clear();
     throttled_reopen_rearm_.clear();
-    pending_same_bar_commands_.clear();
+    clear_projected_pending(pending_same_bar_commands_);
     pending_same_bar_close_qty_ = 0.0;
     pending_relative_exits_.clear();
     withdraw_anchored_relative_legs(nullptr, nullptr);
@@ -22233,7 +22326,8 @@ void PineExecutionAdapter::apply_reversal_gap_bracket_policy(
                     std::move(delayed.request), std::move(delayed.snapshot),
                     std::move(delayed.replacement_key), broker_open_epoch_ + 1U});
             } else {
-                pending_bracket_legs_.push_back(std::move(*retired.delayed_leg));
+                // A restored delayed leg re-enters the visible exit-group count.
+                append_projected_pending(pending_bracket_legs_, std::move(*retired.delayed_leg));
             }
         }
     }
@@ -22777,7 +22871,8 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         reaccept_gapped_bracket_behind_same_id_add(bar, context);
     }
     order_open_marketable_limit_entries(bar, context);
-    source_shadow_pending_.clear();
+    // Broker-open expiry removes source-only raw occurrences.
+    clear_projected_pending(source_shadow_pending_);
     coof_script_bar_ = bar;
     coof_script_bar_valid_ = true;
     policy_script_bar_ = bar;
@@ -24961,14 +25056,16 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         std::vector<PendingEntry> after_close;
         remaining.reserve(pending_entries_.size());
         after_close.reserve(pending_entries_.size());
-        for (auto& entry : pending_entries_) {
+        for (const auto& entry : pending_entries_) {
             if (entry.snapshot.paired_reversal_parent == event.handle()) {
-                after_close.push_back(std::move(entry));
+                after_close.push_back(entry);
             } else {
-                remaining.push_back(std::move(entry));
+                remaining.push_back(entry);
             }
         }
-        pending_entries_ = std::move(remaining);
+        // Preserve intact old keys until survivor replacement publishes the count.
+        edit_projected_pending(2, 0, pending_entries_.size(), remaining.size(),
+            [&] { pending_entries_ = std::move(remaining); });
         for (auto& entry : after_close) {
             entry.snapshot.paired_reversal_parent = {};
             entry.snapshot.market_admission = {};
@@ -25275,7 +25372,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             const auto old = live_by_source_key_.find(old_key);
             if (old != live_by_source_key_.end() && old->second == handle)
                 live_by_source_key_.erase(old);
-            snapshot.bracket_origin = event.handle();
+            auto rebound = snapshot;
+            rebound.bracket_origin = event.handle();
+            // Rebinding a live exit moves every named occurrence between groups.
+            placement_.replace(handle.incarnation, std::move(rebound));
             live_by_source_key_[key_for(replacement(event.handle().incarnation))] = handle;
         }
         {
@@ -25669,10 +25769,9 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             delayed_market_orders_.begin(), delayed_market_orders_.end(),
             [&](const auto& order) { return reversed_global_leg(order.snapshot); }),
             delayed_market_orders_.end());
-        pending_bracket_legs_.erase(std::remove_if(
-            pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
-            [&](const PendingBracketLeg& leg) { return reversed_global_leg(leg.snapshot); }),
-            pending_bracket_legs_.end());
+        // Reversal withdrawal removes queued group members before compaction.
+        erase_projected_pending_if(pending_bracket_legs_,
+            [&](const PendingBracketLeg& leg) { return reversed_global_leg(leg.snapshot); });
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
         && event.closed_units > 0.0) {
@@ -26842,12 +26941,12 @@ PineExecutionAdapter::fixture_mutable_cancellation(int index) noexcept {
 
 void PineExecutionAdapter::fixture_remove_entry_without_named_cancel(
         const SourceId& id) {
-    pending_entries_.erase(std::remove_if(
-        pending_entries_.begin(), pending_entries_.end(),
+    // Fixture removal follows the same occurrence-erasure seam as cancellation.
+    erase_projected_pending_if(pending_entries_,
         [&](const PendingEntry& pending) {
             return pending.snapshot.family == PineOrderFamily::Entry
                 && pending.snapshot.source_id == id;
-        }), pending_entries_.end());
+        });
     std::vector<native_order::RequestHandle> matches;
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
@@ -26914,6 +27013,126 @@ std::vector<native_order::RequestHandle> PineExecutionAdapter::take_first_open_n
     auto result = std::move(first_open_newborns_);
     first_open_newborns_.clear();
     return result;
+}
+
+void PineExecutionAdapter::publish_projected_count() {
+    if (scratch_store_) {
+        namespace ws = ::pineforge::detail::working_store;
+        ws::transaction(*scratch_store_, [&] {
+            ws::put_word(*scratch_store_, {68, 0, 0}, static_cast<std::uint64_t>(projected_count_));
+        });
+    }
+}
+
+void PineExecutionAdapter::pending_projection_changed(
+        const PlacementSnapshot* before, const PlacementSnapshot* after, std::uint64_t copies) {
+    if (!copies) return;
+    namespace ws = ::pineforge::detail::working_store;
+    const auto maximum = std::numeric_limits<int>::max();
+    if (copies > static_cast<std::uint64_t>(maximum))
+        ws::check(::pineforge::detail::ScratchStatus::corrupt);
+    const auto is_exit = [](const PlacementSnapshot* row) {
+        return row && (row->family == PineOrderFamily::ExitLimit
+            || row->family == PineOrderFamily::ExitStop
+            || row->family == PineOrderFamily::ExitTrail);
+    };
+    if (before && after
+        && ((!is_exit(before) && !is_exit(after)) || same_projected_order(*before, *after)))
+        return;
+    const auto change = [&](const PlacementSnapshot* row, bool add) {
+        if (!row) return;
+        if (!is_exit(row)) {
+            const auto count = static_cast<int>(copies);
+            if (add ? projected_count_ > maximum - count : projected_count_ < count)
+                ws::check(::pineforge::detail::ScratchStatus::corrupt);
+            projected_count_ += add ? count : -count;
+            return;
+        }
+        const auto old = pending_projection_counts_.get(
+            1, row->source_id, row->from_entry, row->bracket_origin);
+        if (!add && old < copies)
+            ::pineforge::detail::working_store::check(::pineforge::detail::ScratchStatus::corrupt);
+        const auto next = add ? old + copies : old - copies;
+        if (next > static_cast<std::uint64_t>(maximum))
+            ws::check(::pineforge::detail::ScratchStatus::corrupt);
+        pending_projection_counts_.assign(
+            1, row->source_id, row->from_entry, row->bracket_origin, next);
+        if (old == 0 && next != 0) ++projected_count_;
+        if (old != 0 && next == 0) --projected_count_;
+    };
+    change(before, false);
+    change(after, true);
+}
+
+void PineExecutionAdapter::pending_projection_placement_changed(std::uint64_t incarnation,
+        const PlacementSnapshot* before, const PlacementSnapshot* after) {
+    const native_order::RequestHandle key{{}, incarnation};
+    const auto copies = pending_projection_counts_.get(3, {}, {}, key);
+    if (!copies) return;
+    pending_projection_transaction([&] {
+        pending_projection_changed(before, after, copies); // Every prefix handle sharing this incarnation sees the edit.
+    });
+}
+
+PineExecutionAdapter::PendingPrefixes PineExecutionAdapter::pending_prefixes(
+        int changed, std::size_t size) const {
+    PendingPrefixes result{{live_handles_.size(), pending_same_bar_commands_.size(),
+        pending_entries_.size(), pending_bracket_legs_.size(),
+        pending_coof_requests_.size(), source_shadow_pending_.size()}};
+    if (changed >= 0) result[changed] = size;
+    return PendingProjectionCounts::prefix_lengths(result);
+}
+
+int PineExecutionAdapter::pending_segment(const void* rows) const {
+    if (rows == &live_handles_) return 0;
+    if (rows == &pending_same_bar_commands_) return 1;
+    if (rows == &pending_entries_) return 2;
+    if (rows == &pending_bracket_legs_) return 3;
+    if (rows == &pending_coof_requests_) return 4;
+    if (rows == &source_shadow_pending_) return 5;
+    throw coded<std::logic_error>(RunFailureCode::engine_invariant, {}, "pending count owner");
+}
+
+void PineExecutionAdapter::pending_projection_live(
+        const native_order::RequestHandle& handle, bool add) {
+    const native_order::RequestHandle key{{}, handle.incarnation};
+    const auto old = pending_projection_counts_.get(3, {}, {}, key);
+    if (!add && !old)
+        ::pineforge::detail::working_store::check(::pineforge::detail::ScratchStatus::corrupt);
+    const auto snapshot = placement_.observe(handle.incarnation);
+    pending_projection_changed(add || !snapshot ? nullptr : &*snapshot,
+                               !add || !snapshot ? nullptr : &*snapshot);
+    pending_projection_counts_.assign(3, {}, {}, key, add ? old + 1 : old - 1);
+    pending_projection_counts_.assign(2, {}, {}, handle, add ? 1 : 0);
+}
+
+void PineExecutionAdapter::pending_projection_slots(
+        int segment, std::size_t first, std::size_t last, bool add) {
+    for (auto index = first; index < last; ++index) {
+        if (segment == 0) {
+            const auto handle = static_cast<const decltype(live_handles_)&>(live_handles_)[index];
+            pending_projection_live(handle, add);
+            continue;
+        }
+        const PlacementSnapshot* row = nullptr;
+        switch (segment) {
+        case 1: row = &static_cast<const decltype(pending_same_bar_commands_)&>(pending_same_bar_commands_)[index].snapshot; break;
+        case 2: row = &static_cast<const decltype(pending_entries_)&>(pending_entries_)[index].snapshot; break;
+        case 3: row = &static_cast<const decltype(pending_bracket_legs_)&>(pending_bracket_legs_)[index].snapshot; break;
+        case 4: row = &static_cast<const decltype(pending_coof_requests_)&>(pending_coof_requests_)[index].snapshot; break;
+        case 5: row = &static_cast<const decltype(source_shadow_pending_)&>(source_shadow_pending_)[index].snapshot; break;
+        default: ::pineforge::detail::working_store::check(::pineforge::detail::ScratchStatus::programming_error);
+        }
+        pending_projection_changed(add ? nullptr : row, add ? row : nullptr);
+    }
+}
+
+void PineExecutionAdapter::pending_projection_removed(
+        int segment, const PendingPrefixes& before, std::size_t removed_inside) {
+    const auto after = pending_prefixes();
+    pending_projection_slots(segment, before[segment] - removed_inside, after[segment], true);
+    for (int s = segment + 1; s < 6; ++s)
+        pending_projection_slots(s, before[s], after[s], true);
 }
 
 void PineExecutionAdapter::refresh_pending_view() noexcept {
@@ -26998,6 +27217,8 @@ bool PineExecutionAdapter::same_projected_order(
 }
 
 int PineExecutionAdapter::projected_pending_size() const noexcept {
+#ifndef NDEBUG
+    // The old specification remains diagnostic-only; Release reads one scalar.
     const int raw_count = projected_raw_pending_size();
     int count = 0;
     for (int index = 0; index < raw_count; ++index) {
@@ -27016,7 +27237,9 @@ int PineExecutionAdapter::projected_pending_size() const noexcept {
         }
         if (!duplicate && count != std::numeric_limits<int>::max()) ++count;
     }
-    return count;
+    assert(count == projected_count_);
+#endif
+    return projected_count_;
 }
 
 bool PineExecutionAdapter::projected_pending_at(
@@ -28313,9 +28536,12 @@ void PineExecutionAdapter::order_same_point_entries() {
         const native_order::Request request = live->request;
         const auto result = host.replace(handle, request, in_place);
         if (result.status != native_order::ReplaceStatus::Replaced) return;
-        live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
-                            live_handles_.end());
-        live_handles_.push_back(handle);
+        // A move-to-back can cross the raw prefix boundary, so remove and reinsert it.
+        erase_projected_handle(handle, [&] {
+            live_handles_.erase(std::remove(live_handles_.begin(), live_handles_.end(), handle),
+                                live_handles_.end());
+        });
+        append_projected_pending(live_handles_, handle);
     }
 }
 
@@ -28579,6 +28805,7 @@ void PineExecutionAdapter::set_id_tables_directory(const std::string& directory)
     exit_rank_keys_.set_directory(directory);
     placement_.set_auxiliary_tables_directory(directory);
     consumed_partial_exit_cycles_.set_directory(directory);
+    pending_projection_counts_.set_directory(directory);
 }
 
 PineExecutionAdapter::CohortTable::iterator
@@ -28628,10 +28855,12 @@ void PineExecutionAdapter::set_auxiliary_tables_directory(const std::string& dir
 void PineExecutionAdapter::fixture_use_memory_auxiliary_tables() {
     placement_.fixture_use_memory_auxiliary_tables();
     consumed_partial_exit_cycles_.fixture_use_memory_reference();
+    pending_projection_counts_.fixture_use_memory_reference();
 }
 
 std::uint64_t PineExecutionAdapter::fixture_auxiliary_disk_bytes() const noexcept {
-    return placement_.auxiliary_disk_bytes() + consumed_partial_exit_cycles_.disk_bytes();
+    return placement_.auxiliary_disk_bytes() + consumed_partial_exit_cycles_.disk_bytes()
+        + pending_projection_counts_.disk_bytes();
 }
 
 } // namespace pineforge::source
