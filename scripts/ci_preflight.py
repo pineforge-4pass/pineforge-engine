@@ -1414,7 +1414,13 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or '.["pineforge/parity"] == "success"' not in promote
             or promote.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
         findings.append("baseline promotion must run main's copy and require the latest two head statuses")
+    # The job pin cannot see inherited workflow settings.
+    for key in ('defaults', 'env'):
+        if _job_values(promote, key):
+            findings.append(f'baseline promotion must not define workflow-level {key}')
     promotion_jobs = _jobs(promote)
+    if _job_values(promotion_jobs.get('promote-guard', ''), 'defaults'):
+        findings.append('baseline promotion promote-guard must not define job-level defaults')
     promotion_text = _jobs_text(promote) or ''
     promotion_headers = list(_JOB_HEADER.finditer(promotion_text))
     if ([header.group(1) for header in promotion_headers] != ['promote-guard', 'promote']

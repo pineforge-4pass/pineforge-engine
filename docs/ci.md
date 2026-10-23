@@ -1154,6 +1154,8 @@ The checker retains the bans on paid larger-runner labels and
 
 The credential-free `promote-guard` stays hosted on `ubuntu-latest`; the credential job keeps main's isolated release runner.
 The same stage pins the complete shared `promote-guard` block byte for byte, including comments, empty permissions, payload bindings, refusal script and separator, and the merged-or-dispatch credential job's dependency on it.
+It also rejects workflow-level `defaults` and `env`, and guard-level `defaults`,
+so inherited shells or environment variables cannot bypass the guard pin.
 Decision tests execute the guard script extracted from the real workflow with bash and an executable `gh` stub first on PATH that returns separate author and merger permissions by username.
 Mutation tests alter the real promotion workflow to replace the script with `exit 0`, move the unmerged exit before authorization, remove author or merger lookups and other checks, disable `fail`, bypass failed author or merger lookups, add guard credentials or a checkout, or disconnect the credential job.
 The release pool is restricted to the existing pinned release and promotion jobs; reusable call edges cannot admit PR events to them.
