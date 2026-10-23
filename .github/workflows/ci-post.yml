@@ -1,0 +1,683 @@
+name: CI post-merge
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+    inputs:
+      cold_native_cache:
+        description: Run full native profiles without compiler or libcurl caches
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Each proof run is unique; newer pushes never cancel queued or running proof.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: "1"
+  CCACHE_MAXSIZE: 500M
+  # The run-failure source guards read the newest release tag. Every job that
+  # runs them fetches it (fetch-depth: 0), so here a missing tag fails them
+  # instead of taking their tag-less offline path (rebuilding the published
+  # catalog from the checked-in diff), which only a clone without tags needs.
+  PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
+
+# The canon authz gate admits our events before any checkout. Linux jobs
+# use the post-merge fleet with no hosted fallback; the two macOS cells are
+# the one hosted exception (LB-535), pinned by name and image in
+# scripts/ci_preflight.py.
+# Each verification sizes its parallelism to the runner that took it.
+# scripts/ci_preflight.py pins every runner, time limit and job count; every
+# job's limit is the platform's own 360-minute maximum, the only hang catcher
+# (owner rule, 2026-10-12), and docs/ci.md records why no bound of our own
+# remains.
+jobs:
+  authz:
+    name: authz
+    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-post"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  # Whether the change is documentation only; scripts/ci_docs_only.py holds the
+  # rule, and every doubt answers no. On a docs-only push the
+  # proof jobs below skip and the build aggregate accepts exactly that skip.
+  # Preflight consumes its independent verifier-class answer, and docs.yml
+  # builds the site as before. Classification uses the light pool class.
+  changes:
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-post"]
+    permissions:
+      contents: read
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}
+    steps:
+      # The tested commit and its parents: a pull request's merge and the base
+      # it merged into, a push's commit and its parent.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # The base's own copy of the rule judges the change, so a change to the
+      # rule is never judged by itself; a base without one runs every job.
+      - name: Classify the change
+        id: classify
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_FORCED: ${{ github.event.forced }}
+        run: |
+          if git show HEAD^1:scripts/ci_docs_only.py > "$RUNNER_TEMP/ci_docs_only.py"; then
+            python3 "$RUNNER_TEMP/ci_docs_only.py" --root . --github-output "$GITHUB_OUTPUT"
+          else
+            echo "not docs-only: the base holds no scripts/ci_docs_only.py"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # This helper uses the base ci_docs_only.py staged above to read the
+      # same tested diff. A base without the new rule runs every class.
+      - name: Classify verifier self-tests
+        id: verifier
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git show HEAD^1:scripts/ci_verifier_paths.py > "$RUNNER_TEMP/ci_verifier_paths.py"; then
+            python3 "$RUNNER_TEMP/ci_verifier_paths.py" --root . --github-output "$GITHUB_OUTPUT"
+          else
+            echo "verifier SLOW: the base holds no scripts/ci_verifier_paths.py"
+            echo "verifier_slow=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  preflight:
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' }}
+    runs-on: ["self-hosted","pf-gcp-post"]
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+      PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
+    # PRs run only source, documentation and policy checks. Build-driving
+    # controls and dependency-heavy harness tests live in preflight-slow.
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install workflow linters
+        if: ${{ needs.authz.result == 'success' }}
+        shell: bash
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y shellcheck
+          tools_dir="$RUNNER_TEMP/pineforge-actionlint"
+          mkdir -p "$tools_dir"
+          archive="$tools_dir/actionlint.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            --output "$archive"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" -C "$tools_dir" actionlint
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
+      - name: Verify workflow wiring and source guards
+        if: ${{ needs.authz.result == 'success' }}
+        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier fast
+
+      - name: Retain preflight diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-preflight
+          path: build-ci-preflight/
+          if-no-files-found: warn
+
+  # CR-233: build-driving controls and the pytest harness run only on full events.
+  preflight-slow:
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' }}
+    runs-on: ["self-hosted","pf-gcp-post"]
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the harness test runner
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+      - name: Verify deferred preflight stages
+        if: ${{ needs.authz.result == 'success' }}
+        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight-slow --tier slow
+      - name: Retain preflight diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-preflight-slow
+          path: build-ci-preflight-slow/
+          if-no-files-found: warn
+
+  build:
+    # Each leg keeps its name, build (<image>, <type>), whatever the matrix
+    # carries. A skipped matrix is never expanded: a docs-only run shows one
+    # skipped build check under the unexpanded name.
+    name: build (${{ matrix.platform.os }}, ${{ matrix.build_type }})
+    # Proof jobs follow authz and classification alongside preflight. Only a
+    # successful docs-only answer skips scheduling.
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    # 360 minutes (the platform maximum): a full-set leg waits on the
+    # test_ci_verify CTest row, 976-1288 s on the standard runners at
+    # 0d76a099, which more cores do not shorten. No bound of ours may fail a
+    # slow leg (owner rule, 2026-10-12).
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: ubuntu-24.04
+        build_type: [Release, Debug]
+
+    # Linux post-merge cells use the fixed post fleet.
+    runs-on: ["self-hosted","pf-gcp-post"]
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - name: Require the requested platform
+        if: ${{ needs.authz.result == 'success' }}
+        env:
+          REQUESTED_PLATFORM: ${{ matrix.platform.os }}
+          ACTUAL_OS: ${{ runner.os }}
+        run: |
+          case "$REQUESTED_PLATFORM:$ACTUAL_OS" in
+            ubuntu-24.04:Linux|macos-26:macOS) ;;
+            *) echo "::error::post fleet runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Only the full profiles run the pytest CTest rows.
+      - name: Install the CTest pytest runner
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
+      # tzdata-legacy carries the backward links test_native_calendar resolves
+      # (US/Eastern, Japan, GB); noble split them out of tzdata, and the hosted
+      # image happens to have it, so the row stays green on a bare runner too.
+      - name: Install dependencies (Linux)
+        if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
+
+      # PRs restore the newest compatible main cache via the default-branch
+      # fallback. Only main writes this namespace, never a PR merge ref.
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
+          restore-keys: |
+            ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
+
+      # The release profile fails below its CTest row floor (its row of the
+      # PRIVATE_FIXTURE_PROFILE_FLOORS table in scripts/ci_verify.py);
+      # debug registers a subset of those rows.
+      - name: Verify (${{ matrix.build_type }})
+        env:
+          # A40 rev 7: the relative runtime witness gates on process CPU time,
+          # so every Release lane runs it, hosted macOS included (A40 rev 6 had
+          # exempted that VM while the gated sample was wall clock). '1' is the
+          # escape -- the row registers --candidate-only, one sample and no
+          # ratio -- for a runner whose CPU accounting is unusable; record the
+          # measured reason here and in docs/ci.md before setting it.
+          PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+
+      - name: Stage and summarize diagnostics
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build --profile ${{ matrix.build_type == 'Release' && 'release' || 'debug' }}
+
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}
+          path: ci-diagnostics/
+          if-no-files-found: warn
+
+      - name: Save main ccache
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+  # LB-535 canon keeps macOS as the sole hosted exception in engine/app.
+  # pf-gcp-post is the Linux fleet, so macOS proof needs a separate hosted job.
+  build-macos:
+    name: build (${{ matrix.os }}, ${{ matrix.build_type }})
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26]
+        build_type: [Release, Debug]
+    runs-on: macos-26
+
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - name: Require the requested platform
+        if: ${{ needs.authz.result == 'success' }}
+        env:
+          REQUESTED_PLATFORM: ${{ matrix.os }}
+          ACTUAL_OS: ${{ runner.os }}
+        run: |
+          case "$REQUESTED_PLATFORM:$ACTUAL_OS" in
+            ubuntu-24.04:Linux|macos-26:macOS) ;;
+            *) echo "::error::post fleet runner OS $ACTUAL_OS cannot verify $REQUESTED_PLATFORM"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Only the full profiles run the pytest CTest rows.
+      - name: Install the CTest pytest runner
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
+      - name: Install dependencies (macOS)
+        if: ${{ needs.authz.result == 'success' && runner.os == 'macOS' }}
+        run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew install eigen ccache
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix eigen)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+
+      # Keep the main cache namespace shared with PR restores. Only main saves.
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
+          restore-keys: |
+            ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
+
+      # The release profile fails below its CTest row floor; debug registers
+      # a subset of those rows, just as in the Linux full profiles.
+      - name: Verify (${{ matrix.build_type }})
+        env:
+          # A40 rev 7 gates the runtime witness on process CPU time on hosted
+          # macOS too; the candidate-only escape remains disabled.
+          PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+
+      - name: Stage and summarize diagnostics
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build --profile ${{ matrix.build_type == 'Release' && 'release' || 'debug' }}
+
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-${{ matrix.os }}-${{ matrix.build_type }}
+          path: ci-diagnostics/
+          if-no-files-found: warn
+
+      - name: Save main ccache
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+  # Dedicated AddressSanitizer + UndefinedBehaviorSanitizer lane. Without this,
+  # the determinism / NaN-propagation / handle-reuse / C-ABI-lifecycle probes
+  # would run un-instrumented and could not actually trip the leak / double-free
+  # / UB they target. The library is built with the sanitizers PUBLIC so the
+  # instrumentation propagates into every test binary (CMakeLists.txt option
+  # PINEFORGE_ENABLE_SANITIZERS).
+  sanitizers:
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    runs-on: ["self-hosted","pf-gcp-post"]
+    # 360 minutes (the platform maximum). No CTest stage bound remains: main's
+    # full set ran out of the old 30- and 60-minute stage bounds twice, and
+    # the owner rule of 2026-10-12 removed the bounds rather than raising
+    # them again.
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
+      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
+      # hash-pinned wheels as the preflight job. A failed install fails the job.
+      - name: Install the CTest pytest runner
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
+      - name: Install dependencies
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-
+
+      - name: Verify (sanitizers)
+        if: ${{ needs.authz.result == 'success' }}
+        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache
+
+      - name: Stage and summarize diagnostics
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-asan --profile sanitizers
+
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-sanitizers
+          path: ci-diagnostics/
+          if-no-files-found: warn
+
+  # Kernel-only lane: PINEFORGE_BUILD_SOURCE_LAYER=OFF. Proves the engine
+  # still configures, builds, installs and passes its source-free CTest set
+  # with no Pine adapter compiled, and that libpineforge_kernel.a carries no
+  # source-layer symbol. The live runner stays ON so its two native example
+  # modules are built from the kernel alone, and every examples/native host
+  # runs as an example_* row asserting both its exit code and its summary line.
+  kernel-only:
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    runs-on: ["self-hosted","pf-gcp-post"]
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
+    # Main, nightly and dispatch run the whole kernel set. GitHub's platform
+    # maximum is the only hang catcher (owner rule, 2026-10-12).
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
+      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
+      # hash-pinned wheels as the preflight job. A failed install fails the job.
+      - name: Install the CTest pytest runner
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-input \
+            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
+
+      - name: Install dependencies
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-kernel-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-kernel-
+
+      - name: Set up pinned WebSocket-enabled libcurl
+        id: curl-deps
+        if: ${{ needs.authz.result == 'success' }}
+        uses: ./.github/actions/setup-live-curl
+
+      - name: Verify (kernel)
+        if: ${{ needs.authz.result == 'success' }}
+        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}"
+
+      - name: Stage and summarize diagnostics
+        if: ${{ always() && needs.authz.result == 'success' }}
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-kernel --profile kernel --dependency-dir build-native-deps
+
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-kernel
+          path: ci-diagnostics/
+          if-no-files-found: warn
+
+  # Reuse all three native profiles on main, nightly and manual CI runs.
+  native-live:
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    uses: ./.github/workflows/native-live.yml
+    with:
+      exclude_slow: false
+      cold_cache: ${{ inputs.cold_native_cache || false }}
+
+  # Keep the advisory subset on full events as well as in the separate PR file.
+  # The maintainers post the required pineforge/parity status from their
+  # separate parity verdict.
+  corpus-parity-subset:
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    uses: ./.github/workflows/corpus-parity.yml
+    with:
+      mode: subset
+
+  corpus-parity:
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    uses: ./.github/workflows/corpus-parity.yml
+    with:
+      mode: full
+
+  # Advisory aggregate context covering every GitHub Actions lane. The merge
+  # ruleset requires pineforge/verify and pineforge/parity, posted by the
+  # maintainers, rather than this build context.
+  build-gate:
+    name: build
+    needs: [authz, changes, preflight, build, build-macos, sanitizers, native-live, kernel-only, corpus-parity-subset, preflight-slow, corpus-parity]
+    if: always()
+    # The aggregate runs inline Python and shell on the light pool class.
+    runs-on: ["self-hosted","pf-gcp-post"]
+    permissions:
+      contents: read
+    env:
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
+    steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      - name: Require every verification lane to have passed
+        shell: bash
+        env:
+          AUTHZ_RESULT: ${{ needs.authz.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          MACOS_BUILD_RESULT: ${{ needs.build-macos.result }}
+          SANITIZER_RESULT: ${{ needs.sanitizers.result }}
+          NATIVE_RESULT: ${{ needs.native-live.result }}
+          KERNEL_RESULT: ${{ needs.kernel-only.result }}
+          PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
+          SLOW_PREFLIGHT_RESULT: ${{ needs.preflight-slow.result }}
+          FULL_PARITY_RESULT: ${{ needs.corpus-parity.result }}
+        run: |
+          printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
+            "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
+            "macOS matrix: $MACOS_BUILD_RESULT" \
+            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
+            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT" \
+            "preflight (slow): $SLOW_PREFLIGHT_RESULT" "corpus parity (full): $FULL_PARITY_RESULT"
+          # All four matrix cells and every full-event proof must pass.
+          # Only a classified docs-only push may skip proof jobs.
+          # Both preflight tiers must pass even for a docs-only push.
+          docs_only=false
+          if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
+          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
+          [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
+            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && passed "$MACOS_BUILD_RESULT" \
+            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
+            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT" \
+            && [[ "$SLOW_PREFLIGHT_RESULT" == "success" ]] && passed "$FULL_PARITY_RESULT"

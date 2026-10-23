@@ -1,22 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      cold_native_cache:
-        description: Run full native profiles without compiler or libcurl caches
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
-# Cancel superseded PR runs only. Main/post-merge uses a unique run_id group so
-# in-progress and queued proof runs are never cancelled.
+# Post-merge events live in ci-post.yml; this file only schedules PR jobs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -32,34 +22,167 @@ env:
   # catalog from the checked-in diff), which only a clone without tags needs.
   PINEFORGE_REQUIRE_RELEASE_TAGS: "1"
 
-# The ci-spot pool is live (2026-10-18): Linux x64 builds use its 16-vCPU
-# class, light jobs its 4-vCPU class. Forks and untrusted events stay hosted.
+# The canon authz gate admits our pull requests before any checkout.
 # Each verification sizes its parallelism to the runner that took it.
 # scripts/ci_preflight.py pins every runner, time limit and job count; every
 # job's limit is the platform's own 360-minute maximum, the only hang catcher
 # (owner rule, 2026-10-12), and docs/ci.md records why no bound of our own
 # remains.
 jobs:
+  authz:
+    name: authz
+    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
   # Whether the change is documentation only; scripts/ci_docs_only.py holds the
   # rule, and every doubt answers no. On a docs-only pull request or push the
   # proof jobs below skip and the build aggregate accepts exactly that skip.
   # Preflight consumes its independent verifier-class answer, and docs.yml
-  # builds the site as before. A few seconds of git: the light pool
-  # class, with the public fragment's hosted fallback.
+  # builds the site as before. Classification uses the light pool class.
   changes:
-    runs-on: >-
-      ${{ github.event_name != 'pull_request_target' &&
-          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-          (github.event_name != 'pull_request' ||
-           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-pr"]
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     outputs:
+      github_only: ${{ steps.github-only.outputs.github_only }}
       docs_only: ${{ steps.classify.outputs.docs_only }}
       verifier_slow: ${{ steps.verifier.outputs.verifier_slow }}
     steps:
+      # Scheduling hint only: build-gate repeats this API read for itself.
+      - name: Read the PR diff independently
+        id: github-only
+        shell: python3 {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+          from urllib.request import Request, urlopen
+
+          github_only = False
+          if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+              pr = event["pull_request"]
+              number = event["number"]
+              repo = os.environ["GITHUB_REPOSITORY"]
+              head, base = pr["head"]["sha"], pr["base"]["sha"]
+              if (type(number) is not int or number <= 0 or pr["number"] != number
+                      or event["repository"]["full_name"] != repo
+                      or not re.fullmatch(r"[0-9a-f]{40}", head)
+                      or not re.fullmatch(r"[0-9a-f]{40}", base)):
+                  raise ValueError("missing or invalid PR identity")
+              endpoint = os.environ["GITHUB_API_URL"].rstrip("/") + f"/repos/{repo}/pulls/{number}"
+
+              def api(url):
+                  request = Request(url, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  })
+                  with urlopen(request) as response:
+                      return json.load(response)
+
+              def snapshot():
+                  current = api(endpoint)
+                  if (current["number"] != number or current["head"]["sha"] != head
+                          or current["base"]["sha"] != base):
+                      raise ValueError("PR changed since this event; rerun CI")
+                  count = current["changed_files"]
+                  if type(count) is not int or not 0 < count <= 3000:
+                      raise ValueError("empty or incomplete PR diff")
+                  return count
+
+              def path(value):
+                  if (not isinstance(value, str) or not value
+                          or any(ord(char) < 32 for char in value) or "\\" in value
+                          or any(part in ("", ".", "..") for part in value.split("/"))):
+                      raise ValueError("unreadable PR path")
+                  return value
+
+              count = snapshot()
+              paths, filenames = [], set()
+              for page in range(1, (count + 99) // 100 + 1):
+                  rows = api(endpoint + f"/files?per_page=100&page={page}")
+                  if not isinstance(rows, list) or len(rows) != min(100, count - len(filenames)):
+                      raise ValueError("missing or truncated PR files page")
+                  for row in rows:
+                      filename = path(row["filename"])
+                      if filename in filenames or row["status"] not in (
+                              "added", "modified", "removed", "renamed", "copied", "changed", "unchanged"):
+                          raise ValueError("duplicate or unreadable PR file")
+                      filenames.add(filename)
+                      paths.append(filename)
+                      if row["status"] == "renamed" or "previous_filename" in row:
+                          paths.append(path(row["previous_filename"]))
+              if len(filenames) != count or snapshot() != count:
+                  raise ValueError("PR diff changed while reading files")
+              github_only = bool(paths) and all(value.startswith(".github/") for value in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("github_only=" + str(github_only).lower() + "\n")
+
       # The tested commit and its parents: a pull request's merge and the base
       # it merged into, a push's commit and its parent.
       - uses: actions/checkout@v4
@@ -98,41 +221,28 @@ jobs:
           fi
 
   preflight:
-    needs: changes
-    if: ${{ !cancelled() }}
-    runs-on: >-
-      ${{ github.event_name != 'pull_request_target' &&
-          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-          (github.event_name != 'pull_request' ||
-           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' }}
+    runs-on: ["self-hosted","pf-gcp-pr"]
     env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
+      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
       PINEFORGE_VERIFIER_SLOW: ${{ needs.changes.result == 'success' && needs.changes.outputs.verifier_slow || 'true' }}
-    # 360 minutes is GitHub's job maximum and deliberately the only limit:
-    # its verifier-tests stage runs test_ci_verify.py across parallel unittest
-    # shards, and no stage of this preflight carries a timeout of its own any
-    # more (owner rule, 2026-10-12). A hang reaches the platform maximum; a
-    # slow stage never fails the run.
+    # PRs run only source, documentation and policy checks. Build-driving
+    # controls and dependency-heavy harness tests live in preflight-slow.
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      # pytest for the run-json-harness-tests stage (docker/run_json_*_test.py),
-      # every wheel pinned by version and sha256 like actionlint below.
-      - name: Install the harness test runner
-        run: |
-          python3 -m pip install --disable-pip-version-check --no-input \
-            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
-
       - name: Install workflow linters
+        if: ${{ needs.authz.result == 'success' }}
         shell: bash
         env:
           ACTIONLINT_VERSION: "1.7.12"
@@ -152,7 +262,8 @@ jobs:
           echo "$tools_dir" >> "$GITHUB_PATH"
 
       - name: Verify workflow wiring and source guards
-        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight
+        if: ${{ needs.authz.result == 'success' }}
+        run: python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier ${{ github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.github_only == 'true' && 'github-only' || 'fast' }}
 
       - name: Retain preflight diagnostics
         if: always()
@@ -166,12 +277,12 @@ jobs:
     # Each leg keeps its name, build (<image>, <type>), whatever the matrix
     # carries. A skipped matrix is never expanded: a docs-only run shows one
     # skipped build check under the unexpanded name.
-    name: build (${{ matrix.os }}, ${{ matrix.build_type }})
-    # Every proof job waits for the changes job alone and skips only when it
-    # succeeded and answered docs-only, exactly the skip the build aggregate
-    # accepts; a failed or unanswered classification runs it.
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    name: build (${{ matrix.platform.os }}, ${{ matrix.build_type }})
+    # Proof jobs follow authz and classification alongside preflight. Only a
+    # successful docs-only or GitHub-only answer skips scheduling; the aggregate
+    # independently reads the PR diff before accepting the latter skip.
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true'))) }}
     # 360 minutes (the platform maximum): a full-set leg waits on the
     # test_ci_verify CTest row, 976-1288 s on the standard runners at
     # 0d76a099, which more cores do not shorten. No bound of ours may fail a
@@ -179,28 +290,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-26]
-        build_type: [Release, Debug]
-        include:
+        platform:
           - os: ubuntu-24.04
-            runner: >-
-              ${{ github.event_name != 'pull_request_target' &&
-                  github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-                  contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-                  (github.event_name != 'pull_request' ||
-                   (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-                  fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
-          - os: macos-26
-            runner: macos-26
+        build_type: [Release]
 
-    # Only Linux x64 legs use the pool; macOS keeps its hosted image and name.
-    runs-on: ${{ matrix.runner }}
+    runs-on: ["self-hosted","pf-gcp-pr"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
 
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
       - uses: actions/checkout@v4
+        if: ${{ needs.authz.result == 'success' }}
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
@@ -208,37 +315,25 @@ jobs:
         with:
           python-version: '3.12'
 
-      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
-      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
-      # hash-pinned wheels as the preflight job. A failed install fails the job.
-      - name: Install the CTest pytest runner
-        run: |
-          python3 -m pip install --disable-pip-version-check --no-input \
-            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
-
       # tzdata-legacy carries the backward links test_native_calendar resolves
       # (US/Eastern, Japan, GB); noble split them out of tzdata, and the hosted
       # image happens to have it, so the row stays green on a bare runner too.
       - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+        if: ${{ needs.authz.result == 'success' && runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
 
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          brew install eigen ccache
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix eigen)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
-
+      # PRs restore the newest compatible main cache via the default-branch
+      # fallback. Only main writes this namespace, never a PR merge ref.
       - name: Restore ccache
-        uses: actions/cache@v4
+        id: ccache-restore
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
+          key: ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
+            ccache-main-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
 
       # The release profile fails below its CTest row floor (its row of the
       # PRIVATE_FIXTURE_PROFILE_FLOORS table in scripts/ci_verify.py);
@@ -252,221 +347,162 @@ jobs:
           # ratio -- for a runner whose CPU accounting is unusable; record the
           # measured reason here and in docs/ci.md before setting it.
           PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: '0'
-        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
+        if: ${{ needs.authz.result == 'success' }}
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPINEFORGE_VERSION_SOURCE=FILE \
+            -DPython3_EXECUTABLE="$(command -v python3)" -DPINEFORGE_BUILD_TESTS=ON \
+            -DPINEFORGE_BUILD_SOURCE_LAYER=ON -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DPINEFORGE_BUILD_LIVE_RUNNER=OFF -DPINEFORGE_BUILD_CORPUS_STRATEGIES=OFF \
+            -DPINEFORGE_BUILD_EXAMPLES=OFF -DPINEFORGE_REQUIRE_ABI_RECEIPTS=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build --target pineforge_pr_smoke --parallel "$(getconf _NPROCESSORS_ONLN)"
+          ctest --test-dir build -L '^fast$' --output-on-failure --no-tests=error \
+            --parallel "$(getconf _NPROCESSORS_ONLN)" --timeout 0 --output-junit build/ctest-junit.xml
 
       - name: Stage and summarize diagnostics
-        if: always()
+        if: ${{ always() && needs.authz.result == 'success' }}
         run: python3 scripts/collect_ci_diagnostics.py --build-dir build --profile ${{ matrix.build_type == 'Release' && 'release' || 'debug' }}
 
       - name: Retain CI diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics-${{ matrix.os }}-${{ matrix.build_type }}
+          name: ci-diagnostics-${{ matrix.platform.os }}-${{ matrix.build_type }}
           path: ci-diagnostics/
           if-no-files-found: warn
 
-  # Dedicated AddressSanitizer + UndefinedBehaviorSanitizer lane. Without this,
-  # the determinism / NaN-propagation / handle-reuse / C-ABI-lifecycle probes
-  # would run un-instrumented and could not actually trip the leak / double-free
-  # / UB they target. The library is built with the sanitizers PUBLIC so the
-  # instrumentation propagates into every test binary (CMakeLists.txt option
-  # PINEFORGE_ENABLE_SANITIZERS).
-  sanitizers:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: >-
-      ${{ github.event_name != 'pull_request_target' &&
-          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-          (github.event_name != 'pull_request' ||
-           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
-    # 360 minutes (the platform maximum). No CTest stage bound remains: main's
-    # full set ran out of the old 30- and 60-minute stage bounds twice, and
-    # the owner rule of 2026-10-12 removed the bounds rather than raising
-    # them again.
-    env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
-      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
-      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
-      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
-      # hash-pinned wheels as the preflight job. A failed install fails the job.
-      - name: Install the CTest pytest runner
-        run: |
-          python3 -m pip install --disable-pip-version-check --no-input \
-            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev tzdata-legacy ccache
-
-      - name: Restore ccache
-        uses: actions/cache@v4
+      - name: Save main ccache
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
-      - name: Verify (sanitizers)
-        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
-
-      - name: Stage and summarize diagnostics
-        if: always()
-        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-asan --profile sanitizers
-
-      - name: Retain CI diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-diagnostics-sanitizers
-          path: ci-diagnostics/
-          if-no-files-found: warn
-
-  # Kernel-only lane: PINEFORGE_BUILD_SOURCE_LAYER=OFF. Proves the engine
-  # still configures, builds, installs and passes its source-free CTest set
-  # with no Pine adapter compiled, and that libpineforge_kernel.a carries no
-  # source-layer symbol. The live runner stays ON so its two native example
-  # modules are built from the kernel alone, and every examples/native host
-  # runs as an example_* row asserting both its exit code and its summary line.
-  kernel-only:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    runs-on: >-
-      ${{ github.event_name != 'pull_request_target' &&
-          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-          (github.event_name != 'pull_request' ||
-           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64-16"]') || 'ubuntu-24.04' }}
-    env:
-      PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64-16"]'
-    # PRs exclude the measured slow rows; push and dispatch run the whole
-    # kernel set. 360 minutes is the platform maximum, the only hang catcher
-    # (owner rule, 2026-10-12).
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      # pytest for the CTest rows that run `python -m pytest` (tests/CMakeLists.txt:
-      # test_run_json_selected_window, test_compile_inventory_pipeline), the same
-      # hash-pinned wheels as the preflight job. A failed install fails the job.
-      - name: Install the CTest pytest runner
-        run: |
-          python3 -m pip install --disable-pip-version-check --no-input \
-            --require-hashes --only-binary ':all:' -r scripts/requirements-preflight.txt
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev tzdata-legacy libsqlite3-dev libssl-dev zlib1g-dev ccache
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-kernel-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-kernel-
-
-      - name: Set up pinned WebSocket-enabled libcurl
-        id: curl-deps
-        uses: ./.github/actions/setup-live-curl
-
-      - name: Verify (kernel)
-        run: python3 scripts/ci_verify.py kernel --build-dir build-kernel --jobs "$(getconf _NPROCESSORS_ONLN)" --ccache --curl-dir "${{ steps.curl-deps.outputs.curl-dir }}" ${{ github.event_name == 'pull_request' && '--exclude-label slow' || '' }}
-
-      - name: Stage and summarize diagnostics
-        if: always()
-        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-kernel --profile kernel --dependency-dir build-native-deps
-
-      - name: Retain CI diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-diagnostics-kernel
-          path: ci-diagnostics/
-          if-no-files-found: warn
-
-  # Reuse native proof once per CI run. Its manual dispatch runs every row.
-  native-live:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    uses: ./.github/workflows/native-live.yml
-    with:
-      exclude_slow: ${{ github.event_name == 'pull_request' }}
-      cold_cache: ${{ inputs.cold_native_cache || false }}
-
-  # Advisory TradingView parity subset on every CI run of a change that is not
-  # docs-only. The maintainers post the required pineforge/parity status from
-  # their separate parity verdict. Keep this job unfiltered by path so
-  # build-gate reports its result on every such run.
+  # Advisory TradingView parity subset, except docs-only and GitHub-only PRs.
+  # The maintainers post the required pineforge/parity status from their
+  # separate parity verdict. build-gate independently verifies GitHub-only skips.
   corpus-parity-subset:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
-    uses: ./.github/workflows/corpus-parity.yml
-    with:
-      mode: subset
+    needs: [authz, changes]
+    if: ${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.github_only != 'true'))) }}
+    uses: ./.github/workflows/corpus-parity-subset.yml
 
   # Advisory aggregate context covering every GitHub Actions lane. The merge
   # ruleset requires pineforge/verify and pineforge/parity, posted by the
   # maintainers, rather than this build context.
   build-gate:
     name: build
-    needs: [changes, preflight, build, sanitizers, native-live, kernel-only, corpus-parity-subset]
+    needs: [authz, changes, preflight, build, corpus-parity-subset]
     if: always()
-    # A few seconds of shell: the light class, with the hosted fallback.
-    runs-on: >-
-      ${{ github.event_name != 'pull_request_target' &&
-          github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' &&
-          contains(fromJSON('["push","pull_request","workflow_dispatch","schedule","release"]'), github.event_name) &&
-          (github.event_name != 'pull_request' ||
-           (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.repo.fork == false)) &&
-          fromJSON('["self-hosted","pf-ci","pf-ci-x64"]') || 'ubuntu-24.04' }}
+    # The aggregate runs inline Python and shell on the light pool class.
+    runs-on: ["self-hosted","pf-gcp-pr"]
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     steps:
+      - name: Refuse an unauthorised run before anything else
+        if: ${{ needs.authz.result != 'success' }}
+        run: |
+          echo "::error::authz did not pass; nothing of this run's code is checked out or run"
+          exit 1
+      # No checkout and no changes-job classification is used for this verdict.
+      - name: Read the PR diff independently
+        id: github-only
+        shell: python3 {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+          from urllib.request import Request, urlopen
+
+          github_only = False
+          if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+              pr = event["pull_request"]
+              number = event["number"]
+              repo = os.environ["GITHUB_REPOSITORY"]
+              head, base = pr["head"]["sha"], pr["base"]["sha"]
+              if (type(number) is not int or number <= 0 or pr["number"] != number
+                      or event["repository"]["full_name"] != repo
+                      or not re.fullmatch(r"[0-9a-f]{40}", head)
+                      or not re.fullmatch(r"[0-9a-f]{40}", base)):
+                  raise ValueError("missing or invalid PR identity")
+              endpoint = os.environ["GITHUB_API_URL"].rstrip("/") + f"/repos/{repo}/pulls/{number}"
+
+              def api(url):
+                  request = Request(url, headers={
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  })
+                  with urlopen(request) as response:
+                      return json.load(response)
+
+              def snapshot():
+                  current = api(endpoint)
+                  if (current["number"] != number or current["head"]["sha"] != head
+                          or current["base"]["sha"] != base):
+                      raise ValueError("PR changed since this event; rerun CI")
+                  count = current["changed_files"]
+                  if type(count) is not int or not 0 < count <= 3000:
+                      raise ValueError("empty or incomplete PR diff")
+                  return count
+
+              def path(value):
+                  if (not isinstance(value, str) or not value
+                          or any(ord(char) < 32 for char in value) or "\\" in value
+                          or any(part in ("", ".", "..") for part in value.split("/"))):
+                      raise ValueError("unreadable PR path")
+                  return value
+
+              count = snapshot()
+              paths, filenames = [], set()
+              for page in range(1, (count + 99) // 100 + 1):
+                  rows = api(endpoint + f"/files?per_page=100&page={page}")
+                  if not isinstance(rows, list) or len(rows) != min(100, count - len(filenames)):
+                      raise ValueError("missing or truncated PR files page")
+                  for row in rows:
+                      filename = path(row["filename"])
+                      if filename in filenames or row["status"] not in (
+                              "added", "modified", "removed", "renamed", "copied", "changed", "unchanged"):
+                          raise ValueError("duplicate or unreadable PR file")
+                      filenames.add(filename)
+                      paths.append(filename)
+                      if row["status"] == "renamed" or "previous_filename" in row:
+                          paths.append(path(row["previous_filename"]))
+              if len(filenames) != count or snapshot() != count:
+                  raise ValueError("PR diff changed while reading files")
+              github_only = bool(paths) and all(value.startswith(".github/") for value in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("github_only=" + str(github_only).lower() + "\n")
+
       - name: Require every verification lane to have passed
         shell: bash
         env:
+          AUTHZ_RESULT: ${{ needs.authz.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          GITHUB_ONLY: ${{ steps.github-only.outputs.github_only }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           BUILD_RESULT: ${{ needs.build.result }}
-          SANITIZER_RESULT: ${{ needs.sanitizers.result }}
-          NATIVE_RESULT: ${{ needs.native-live.result }}
-          KERNEL_RESULT: ${{ needs.kernel-only.result }}
           PARITY_RESULT: ${{ needs.corpus-parity-subset.result }}
         run: |
-          printf '%s\n' "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
+          printf '%s\n' "authz: $AUTHZ_RESULT" "changes: $CHANGES_RESULT, docs only: ${DOCS_ONLY:-unanswered}" \
             "preflight: $PREFLIGHT_RESULT" "matrix: $BUILD_RESULT" \
-            "sanitizers: $SANITIZER_RESULT" "native: $NATIVE_RESULT" \
-            "kernel: $KERNEL_RESULT" "corpus parity (subset): $PARITY_RESULT"
-          # A proof lane passes by succeeding, or by having been skipped after
-          # the changes job succeeded and answered docs-only. A lane skipped
-          # for any other reason fails, and preflight must always succeed.
+            "corpus parity (subset): $PARITY_RESULT"
+          # Every selected PR proof must pass.
+          # GitHub-only skips use this job's own API read, never changes' output.
+          # Classified docs-only skips retain their policy; preflight must pass.
           docs_only=false
           if [[ "$CHANGES_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then docs_only=true; fi
-          passed() { [[ "$1" == "success" || ( "$docs_only" == "true" && "$1" == "skipped" ) ]]; }
-          [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
-            && passed "$SANITIZER_RESULT" && passed "$NATIVE_RESULT" \
-            && passed "$KERNEL_RESULT" && passed "$PARITY_RESULT"
+          github_only=false
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" && "${GITHUB_ONLY:-false}" == "true" ]]; then github_only=true; fi
+          passed() { [[ "$1" == "success" || ( ( "$docs_only" == "true" || "$github_only" == "true" ) && "$1" == "skipped" ) ]]; }
+          [[ "$AUTHZ_RESULT" == "success" && "$CHANGES_RESULT" == "success" ]] \
+            && [[ "$PREFLIGHT_RESULT" == "success" ]] && passed "$BUILD_RESULT" \
+            && passed "$PARITY_RESULT"

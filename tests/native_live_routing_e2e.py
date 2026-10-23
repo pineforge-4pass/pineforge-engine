@@ -16,6 +16,8 @@ import tempfile
 import threading
 import time
 
+from native_live_receipts import receipts_by_sequence
+
 
 runner, library = sys.argv[1:3]
 secrets = {'MAIN_HMAC': 'main-loopback-secret', 'ENTRY_HMAC': 'entry-loopback-secret',
@@ -554,7 +556,12 @@ with tempfile.TemporaryDirectory(prefix='pineforge-routing-e2e-') as directory:
                 process.kill(); process.wait()
         main_receiver.clear(); main_receiver.mode = 'ok'
         run(crash_ledger, crash_routes)
-        assert [row['action']['sequence'] for row in main_receiver.rows] == [1, 2, 3, 4]
+        assert len(main_receiver.rows) == 4
+        receipt_sequence = lambda body: json.loads(body)['sequence']
+        recovered = receipts_by_sequence((row['body'] for row in main_receiver.rows), receipt_sequence)
+        expected = receipts_by_sequence((row[2].encode() for row in before_crash[1]), receipt_sequence)
+        assert set(recovered) == set(range(1, 5))
+        assert recovered == expected
         assert stored(crash_ledger) == before_crash
         run(crash_ledger, crash_routes)
         assert len(main_receiver.rows) == 4

@@ -10,6 +10,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from native_live_receipts import receipts_by_sequence
+
 (runner, legacy_library, native_example, absent, unknown, no_export, stub) = sys.argv[1:]
 
 
@@ -277,8 +279,10 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         assert all(row[5:] == (1, 0) for row in failed_rows['events']), failed_rows
         assert len(failed_rows['inputs']) == len(feed_rows), failed_rows
         assert all(row[2].isdigit() and int(row[2]) != 0 for row in failed_rows['inputs'])
-        failed_payload = received_bytes[0]
-        assert failed_rows['events'][0][4] == failed_payload
+        receipt_sequence = lambda body: json.loads(body)['sequence']
+        failed_payloads = receipts_by_sequence(received_bytes, receipt_sequence)
+        assert failed_payloads == receipts_by_sequence(
+            (row[4] for row in failed_rows['events']), receipt_sequence)
 
         receiver_status = 200
         example = invoke(example_cmd)
@@ -292,12 +296,13 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
         committed_rows = ledger_rows(example_ledger)
         assert len(committed_rows['events']) == 2, committed_rows
         assert len(received) == 4, received
-        assert received_bytes[0] == received_bytes[2] == failed_payload
+        replayed_payloads = receipts_by_sequence(received_bytes[2:], receipt_sequence)
+        assert replayed_payloads == failed_payloads
         assert committed_rows['inputs'][:len(failed_rows['inputs'])] == failed_rows['inputs']
         assert committed_rows['events'][0][:5] == failed_rows['events'][0][:5]
         assert committed_rows['events'][0][5:] == (2, 1), committed_rows
         assert committed_rows['events'][1][5:] == (2, 1), committed_rows
-        assert [row[4] for row in committed_rows['events']] == received_bytes[2:]
+        assert receipts_by_sequence((row[4] for row in committed_rows['events']), receipt_sequence) == replayed_payloads
         assert len({row[3] for row in committed_rows['events']}) == 2
         actions = [json.loads(row[4]) for row in committed_rows['events']]
         assert [(a['timestamp'], a['order']['action'], a['order']['contracts'],

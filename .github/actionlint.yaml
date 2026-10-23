@@ -4,5 +4,8 @@ self-hosted-runner:
     - self-hosted
     - pf-ci
     - pf-ci-release
+    - pf-gcp-pr
+    - pf-gcp-post
+    - pf-gcp-main
     - pf-ci-x64
     - pf-ci-x64-16

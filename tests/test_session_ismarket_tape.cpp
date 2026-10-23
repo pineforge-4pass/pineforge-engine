@@ -22,7 +22,7 @@
  * is "M1", the Sunday-evening CME/FX opens included.
  *
  * What each reading gives on those bars, per host session string:
- *   1. the campaign's lane facts (pineforge-lab config/symbol-lanes-v1.json:
+ *   1. the campaign's lane facts (config/symbol-lanes-v1.json of the maintainers' campaign verifier:
  *      ES1! "1700-1600" America/Chicago, EURUSD "1700-1700" and XAUUSD
  *      "1800-1700" America/New_York, 24x7 UTC for the crypto perp): the
  *      predicate, the kernel fact and TradingView agree on every bar;
