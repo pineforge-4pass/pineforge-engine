@@ -525,10 +525,10 @@ See the [JSON field types and presence table](../pages/report-schema.md#report_s
 
 This slice adds data types and C++ method declarations only: **zero** new
 `PF_API` declarations/definitions and no runtime storage/behavior.
-`include/pineforge/pineforge.h` has 100 public declarations.
-`scripts/check_c_abi_runtime.py` pins 111 declarations across its four
-`RUNTIME_HEADERS` and 91 runtime implementations; `scripts/test_ci_verify.py`
-pins the same 111/91.
+`include/pineforge/pineforge.h` has 102 public declarations.
+`scripts/check_c_abi_runtime.py` pins 113 declarations across its four
+`RUNTIME_HEADERS` and 93 runtime implementations; `scripts/test_ci_verify.py`
+pins the same 113/93.
 The separate native-C inventory remains 43 declarations / 43 implementations.
 There is no ABI-4 struct/count bump, README symbol-table change or update to
 legacy ctypes report strides.
