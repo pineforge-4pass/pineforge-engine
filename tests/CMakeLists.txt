@@ -7504,3 +7504,30 @@ if(UNIX)
     pineforge_add_unit_test(test_command_scratch_arena_bounded)
 endif()
 # --- CR-150 core-cr150-arena end ---
+
+# --- CR-150 core-cr150-privmoves begin ---
+# Set A uses only the c7b06a6a19 API. Compare is expected to match on that
+# implementation; jail/directory rows are intended behavioral fail-before.
+if(UNIX)
+    list(APPEND TEST_SOURCES test_privmoves)
+    add_executable(test_privmoves test_privmoves.cpp)
+    target_link_libraries(test_privmoves PRIVATE pineforge)
+    target_compile_options(test_privmoves PRIVATE -ffp-contract=off -UNDEBUG)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(test_privmoves PRIVATE ${_pf_cov_test_flags})
+    endif()
+    add_test(NAME test_privmoves_compare_tables COMMAND test_privmoves compare tables)
+    add_test(NAME test_privmoves_compare_fold COMMAND test_privmoves compare fold)
+    add_test(NAME test_privmoves_compare_roots COMMAND test_privmoves compare roots)
+    add_test(NAME test_privmoves_compare_openings COMMAND test_privmoves compare openings)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(test_privmoves PRIVATE
+            "-Wl,--wrap=mkstemp" "-Wl,--wrap=open" "-Wl,--wrap=openat" "-Wl,--wrap=pread")
+        add_test(NAME test_privmoves_directory COMMAND test_privmoves directory)
+        add_test(NAME test_privmoves_jail_tables COMMAND test_privmoves jail tables)
+        add_test(NAME test_privmoves_jail_fold COMMAND test_privmoves jail fold)
+        add_test(NAME test_privmoves_jail_roots COMMAND test_privmoves jail roots)
+        add_test(NAME test_privmoves_jail_openings COMMAND test_privmoves jail openings)
+    endif()
+endif()
+# --- CR-150 core-cr150-privmoves end ---
