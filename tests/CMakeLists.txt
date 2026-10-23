@@ -1502,8 +1502,7 @@ list(APPEND TEST_SOURCES test_native_direct_mutation)
 # the matcher's mutations, the journal's retirement -- nothing but the
 # calendar's session-day spans; a Full read of the whole record stays within
 # one result vector plus the definitions decoded from spilled journal pages
-# (fails on 10f20197, several per fill). Source-free, so it
-# also runs in the kernel-only profile.
+# (fails on 10f20197, several per fill). Source-free: runs in kernel-only too.
 list(APPEND TEST_SOURCES test_native_direct_mutation_allocations)
 # R5 lane V19-D: a replace that keeps its handle or carries a close's book
 # binding (ReplaceOptions::keep_handle / keep_binding) matches exactly what a
