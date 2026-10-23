@@ -160,6 +160,7 @@ void wire_string(Line& out, std::string_view value) {
 
 struct Column { std::string_view field, type, unit; };
 constexpr Column equity_columns[] = {
+    // v1 keeps f64? for byte compatibility; E never emits null, and converter/finalizer refuse it with exit 3 report_result_invalid.
     {"time_ms", "i64", "unix_ms"}, {"equity", "f64?", "account_ccy"},
     {"open_profit", "f64?", "account_ccy"},
 };
@@ -506,6 +507,7 @@ void LineWriter::write_e(const pf_equity_point_t& point) {
         if (state.trailer.count_e == safe_integer) invalid("report sink E count exceeds its bound");
         if (state.has_equity_time && point.time_ms < state.equity_time)
             invalid("report sink equity times are not ordered");
+        // Streaming precedence is the earliest released point, equity first; completed metrics check final open_profit first.
         (void)report::finite_value(point.equity, "equity_curve.equity");
         (void)report::finite_value(point.open_profit, "equity_curve.open_profit");
         auto& line = state.scratch;

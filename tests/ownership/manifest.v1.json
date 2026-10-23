@@ -245,6 +245,10 @@
       {"field": "metrics.equity.time_in_market_pct", "reasons": ["nonfinite"]},
       {"field": "metrics.equity.open_pl", "reasons": ["nonfinite"]}
     ]},
+    {"id": "report.docker/pineforge_sink_finalize.py._check_equity", "file": "docker/pineforge_sink_finalize.py", "anchor": "_check_equity", "producer": "report_result_invalid", "stage": null, "fields": [
+      {"field": "equity_curve.equity", "reasons": ["nonfinite"]},
+      {"field": "equity_curve.open_profit", "reasons": ["nonfinite"]}
+    ]},
     {"id": "report.build_report_dict", "file": "docker/run_json.py", "anchor": "build_report_dict", "producer": "report_result_invalid", "stage": null, "fields": [
       {"field": "trades.pnl", "reasons": ["nonfinite"]}, {"field": "summary.max_drawdown", "reasons": ["nonfinite"]}
     ]},

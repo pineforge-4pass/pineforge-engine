@@ -439,6 +439,34 @@ def metric_result_fields(tree, validator):
     return paths
 
 
+def sink_equity_fields(root, validator):
+    # _check_equity labels the parsed E descriptor, not a manifest field list.
+    # Recognize its exact traversal and label expression; unfamiliar syntax
+    # must not silently erase this shared finalizer/converter producer.
+    loops = [node for node in validator.body if isinstance(node, ast.For)]
+    labels = [node for node in ast.walk(validator) if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "field"
+                      for target in node.targets)]
+    if (len(loops) != 1 or ast.unparse(loops[0].target) != "(name, value)"
+            or ast.unparse(loops[0].iter) != "zip(record.fields[1:], record.values[1:])"
+            or len(labels) != 1 or not isinstance(labels[0].value, ast.BinOp)
+            or not isinstance(labels[0].value.op, ast.Add)
+            or not isinstance(labels[0].value.left, ast.Constant)
+            or not isinstance(labels[0].value.left.value, str)
+            or not isinstance(labels[0].value.right, ast.Name)
+            or labels[0].value.right.id != "name"):
+        raise InputError("unrecognized sink equity guard; update the independent reconstruction")
+    reader = ast.parse(read(root / "docker/pf_sink.py"))
+    columns = ast.literal_eval(py_assignments(reader)["_E"])
+    if (not isinstance(columns, tuple) or len(columns) < 2
+            or any(not isinstance(column, tuple) or len(column) != 3
+                   or not all(isinstance(value, str) for value in column)
+                   for column in columns)
+            or len({column[0] for column in columns}) != len(columns)):
+        raise InputError("unrecognized sink E descriptor")
+    return {labels[0].value.left.value + column[0] for column in columns[1:]}
+
+
 def python_producers(root, findings):
     rows = []
     for path in sorted((root / "docker").glob("*.py")):
@@ -452,12 +480,26 @@ def python_producers(root, findings):
             domains = py_domains(function)
             if path.name == "run_json.py" and function.name == "_validate_report_result":
                 domains["metric_field"] = metric_result_fields(tree, function)
+            if path.name == "pineforge_sink_finalize.py" and function.name == "_check_equity":
+                domains["field"] = sink_equity_fields(root, function)
             domains["phase"].update(phases)
             grouped, post_reasons, post_phases = defaultdict(list), set(), set()
             for node in ast.walk(function):
                 args = None
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "RunFailure":
                     args = node.args
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_Failure":
+                    names = [keyword.arg for keyword in node.keywords]
+                    if not names:
+                        continue  # untyped transport/grammar refusal
+                    if (set(names) != {"failure_code", "failure_args"}
+                            or len(names) != 2):
+                        raise InputError("unrecognized _Failure producer keywords")
+                    keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+                    code = keywords["failure_code"]
+                    if not isinstance(code, ast.Constant) or code.value not in PRODUCERS:
+                        raise InputError("unresolved _Failure producer code")
+                    args = (None, code, keywords["failure_args"])
                 elif isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple):
                     args = node.value.elts
                 if args is None or len(args) < 3 or not isinstance(args[1], ast.Constant) or args[1].value not in PRODUCERS:
