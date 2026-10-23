@@ -77,12 +77,15 @@ SOURCE_HEADERS = (
 EXIT_SCRATCH_CONTEXT_FOLDS = {
     "store": "hash_scratch_store(f, &scratch->store);",
     "run": "hash_source_run_identity(f, scratch->run);",
-    "next_scope": "f.u(scratch->next_scope);",
     "versions": "f.b(scratch->versions != nullptr);",
     "lots": "f.b(scratch->lots != nullptr);",
     "working": "f.b(scratch->working != nullptr);",
 }
 EXIT_SCRATCH_OBSERVATION_WAIVERS = {
+    "next_scope": (
+        "scope-allocation counter, not state; retained records, "
+        "store digest and run identity are folded"
+    ),
     "observation": "Borrowed instrumentation context; no trading decision reads it.",
     "observe_rows": "Reports temporary scope row counts; does not supply trading state.",
     "observe_lookup": "Reports lookup work; does not supply trading state.",
@@ -298,6 +301,12 @@ def exit_scratch_context_fields(root: Path, source_hash: str) -> int:
     require_once(fold, "if (!scratch) return;", label + " unbound guard")
     for field, statement in EXIT_SCRATCH_CONTEXT_FOLDS.items():
         require_once(fold, statement, label + "." + field + " fold")
+    for field, reason in EXIT_SCRATCH_OBSERVATION_WAIVERS.items():
+        if re.search(r"\bscratch\s*->\s*" + re.escape(field) + r"\b", fold):
+            raise ValueError(label + "." + field + " is waived, not folded: " + reason)
+    identity = _function_body(
+        source_hash, r"\bvoid\s+hash_source_run_identity\s*\(", label + " run identity")
+    require_once(identity, "f.s(identity.session_key);", label + " run identity session key")
     adapter = _function_body(
         source_hash, r"\bvoid\s+source::PineExecutionAdapter::hash_state\s*\(",
         "source adapter hash")
