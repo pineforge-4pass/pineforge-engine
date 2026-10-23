@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "73103a15010ecc80b637ff20c358bd25a8d432d2e6e9d51c23c4ea7f417df5f2"
+    "catalogSha256": "8ab27e1883fcca2c9efd9be062817bac8b9de663e4b3724a348565bb8249780b"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -263,7 +263,7 @@
           "beforePresent": true,
           "afterPresent": true,
           "before": "The run was aborted on request.",
-          "after": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The abort line itself carries no retry semantics: it has no retryable field, and a retry is APP's decision from which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used)."
+          "after": "The run was aborted on request. Cooperative SIGTERM stops after the in-flight input bar completes, leaves no sink trailer, and exits 1. bars_count is the nonnegative number of fully completed input bars, mirrored as top-level bars.count, matching the runner's bars_processed population; strategy_started is a boolean mirrored at the top level. Both are optional for legacy abort raisers. There is no cancelled class: the abort path has exactly two internal callers, the orchestrator's hand-off at the service limit (the run is restarted with the same run id) and an operator stop. The failure line has no retryable field. The catalog's retryable true means an aborted run is eligible for retry; APP decides whether to retry based on which caller stopped the run. On the abort path bars_count is diagnostic only and is never billed. No live-counter descriptor is used (fd 6 is not used)."
         }
       ]
     },
