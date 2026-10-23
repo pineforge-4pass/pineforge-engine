@@ -1,0 +1,21 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -307,7 +307,15 @@
+             const auto found = descend(r, position, depth);
+             const bool present = found && frames_[0].position_or_bit == position;
+-            if ((op == Operation::insert && present)
+-                || (op == Operation::replace && !present)) invalid();
++            if (op == Operation::insert && present) {
++                auto& leaf = frames_[0];
++                leaf.raw = raw;
++                leaf.sum = cohort_index_detail::ar::make_leaf(raw);
++                save(r, leaf, found);
++                repair(r, depth, found, found);
++                edited = result(r);
++                return;
++            }
++            if (op == Operation::replace && !present) invalid();
+             if (op == Operation::erase && !present) {
+                 edited = result(r);
+                 return;

@@ -7282,6 +7282,19 @@ target_compile_options(test_cohort_exposure_arith PRIVATE
     -fno-fast-math -ffp-contract=off -frounding-math -UNDEBUG)
 add_test(NAME test_cohort_exposure_arith COMMAND test_cohort_exposure_arith)
 
+# EI1 r2: real store-backed position tree; each contract has its own row.
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    list(APPEND TEST_SOURCES test_cohort_exposure_index)
+    pineforge_add_unit_test(test_cohort_exposure_index)
+    target_compile_features(test_cohort_exposure_index PRIVATE cxx_std_17)
+    target_compile_options(test_cohort_exposure_index PRIVATE
+        -fno-fast-math -ffp-contract=off -frounding-math -UNDEBUG)
+    foreach(_pf_exposure_index_case IN ITEMS differential exposure_candidate cost recovery refusals)
+        add_test(NAME cohort_index_${_pf_exposure_index_case}
+            COMMAND test_cohort_exposure_index cohort_index_${_pf_exposure_index_case})
+    endforeach()
+endif()
+
 # LAB-O1SEAMS s4: one executable, one independently selected row per clause.
 if(PINEFORGE_BUILD_SOURCE_LAYER)
     list(APPEND TEST_SOURCES test_o1s4_queue_red)

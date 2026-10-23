@@ -1,0 +1,15 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -112,5 +112,11 @@
+     std::array<std::byte, 64> key{};
+     check(store_->read(handle, Field::key, 0, {key.data(), key.size()}));
++    ::pineforge::detail::ScratchSpanSource key_source({key.data(), key.size()});
++    Handle searched = 0;
++    ++metrics_.key_searches;
++    check(store_->lower_bound(key_source, searched));
++    if (searched != handle) invalid();
++    handle = searched;
+     // Read offset zero ONCE. Decode explicitly in place: the object is just a
+     // bounded transfer frame here, not a host-layout persistence codec.
+     auto* wire = reinterpret_cast<std::uint8_t*>(&n);

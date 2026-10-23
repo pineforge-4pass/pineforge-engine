@@ -1,0 +1,21 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -330,6 +330,16 @@
+                     if (n.left != found && n.right != found) invalid();
+                     check(store_->erase(found));
+                     check(store_->erase(parent));
+-                    repair(r, depth - 1, parent, sibling);
++                    if (depth > 1) {
++                        const auto ancestor = path_[depth - 2];
++                        load(r, ancestor, frames_[0]);
++                        const auto stale = frames_[0].sum;
++                        repair(r, depth - 1, parent, sibling);
++                        load(r, ancestor, frames_[0]);
++                        frames_[0].sum = stale;
++                        save(r, frames_[0], ancestor);
++                    } else {
++                        repair(r, depth - 1, parent, sibling);
++                    }
+                 }
+                 --r.count;

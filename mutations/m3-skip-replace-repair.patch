@@ -1,0 +1,12 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -316,7 +316,7 @@
+                 auto& n = frames_[0];
+                 n.raw = raw;
+                 n.sum = cohort_index_detail::ar::make_leaf(raw);
+                 save(r, n, found);
+-                repair(r, depth, found, found);
++                (void)depth;
+             } else if (op == Operation::erase) {
+                 if (!depth) {

@@ -1,0 +1,11 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -435,6 +435,6 @@
+                     const auto grandparent = path_[depth - 2];
+                     load(r, grandparent, frames_[0]);
+                     if (frames_[0].left != parent) invalid();
+-                    frames_[0].left = sibling;
++                    (void)sibling;
+                     // Detached arithmetic is deliberately not recomposed.
+                     save(r, frames_[0], grandparent);

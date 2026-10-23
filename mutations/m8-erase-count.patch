@@ -1,0 +1,10 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -333,5 +333,5 @@
+                     repair(r, depth - 1, parent, sibling);
+                 }
+-                --r.count;
++                (void)r.count;
+             } else {
+                 if (r.count == std::numeric_limits<std::uint64_t>::max()) exhausted();

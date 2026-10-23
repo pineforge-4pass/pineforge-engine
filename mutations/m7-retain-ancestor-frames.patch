@@ -1,0 +1,12 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -197,5 +197,8 @@
+ inline void CohortExposureIndex::repair(
+         Root& r, std::size_t depth, Handle old_child, Handle new_child) {
++    std::vector<std::unique_ptr<Node>> retained;
++    retained.reserve(depth);
+     while (depth) {
++        retained.emplace_back(new Node);
+         const auto parent = path_[--depth];
+         load(r, parent, frames_[0]);

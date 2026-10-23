@@ -1,0 +1,22 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -282,4 +282,17 @@
+ inline CohortExposureIndex::Edit CohortExposureIndex::result(Root r) {
+     const auto bits = evaluate_tree(r);
+-    return {r, bits, metrics_.puts, metrics_.loads};
++    (void)bits;
++    std::array<std::byte, 48> descriptor_key{};
++    const RecordKey position_key(table_owner_, r, 0);
++    check(position_key.read(0, {descriptor_key.data(), descriptor_key.size()}));
++    descriptor_key[31] = std::byte{3};
++    ::pineforge::detail::ScratchSpanSource key_source(
++        {descriptor_key.data(), descriptor_key.size()});
++    Handle descriptor = 0;
++    check(store_->lower_bound(key_source, descriptor));
++    std::array<std::byte, 8> old_answer{};
++    check(store_->read(descriptor, Field::value, 88,
++                       {old_answer.data(), old_answer.size()}));
++    const auto stale = cohort_index_detail::ws::word(old_answer.data());
++    return {r, stale, metrics_.puts, metrics_.loads};
+ }

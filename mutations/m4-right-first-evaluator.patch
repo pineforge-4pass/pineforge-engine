@@ -1,0 +1,11 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -256,5 +256,5 @@
+     bool is_leaf(Handle h) { ensure(h); return owner_.frames_[0].leaf(); }
+-    Handle left(Handle h) { ensure(h); return owner_.frames_[0].left; }
+-    Handle right(Handle h) { ensure(h); return owner_.frames_[0].right; }
++    Handle left(Handle h) { ensure(h); return owner_.frames_[0].right; }
++    Handle right(Handle h) { ensure(h); return owner_.frames_[0].left; }
+     std::uint64_t raw_units(Handle h) {
+         ensure(h);

@@ -1,0 +1,10 @@
+diff --git a/include/pineforge/source/cohort_exposure_index_impl.hpp b/include/pineforge/source/cohort_exposure_index_impl.hpp
+--- a/include/pineforge/source/cohort_exposure_index_impl.hpp
++++ b/include/pineforge/source/cohort_exposure_index_impl.hpp
+@@ -173,5 +173,5 @@ inline void CohortExposureIndex::pull(Root r) {
+     n.count = a.count + b.count;
+     n.height = 1 + std::max(a.height, b.height);
+     if (n.height > maximum_height) invalid();
+-    n.sum = cohort_index_detail::ar::compose_summary(a.sum, b.sum);
++    n.sum = cohort_index_detail::ar::compose_summary(b.sum, a.sum);
+ }

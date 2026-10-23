@@ -89,6 +89,8 @@ endif()
 # includes a src/source or src/compat/pine header, so these TUs are appended
 # only when PINEFORGE_BUILD_SOURCE_LAYER is ON.
 set(PINEFORGE_SOURCE_LAYER_SOURCES
+    include/pineforge/source/cohort_exposure_index.hpp
+    include/pineforge/source/cohort_exposure_index_impl.hpp
     include/pineforge/source/cohort_unit_owner.hpp
     include/pineforge/source/cohort_unit_owner_impl.hpp
     src/compat/pine/exit_activation.cpp
