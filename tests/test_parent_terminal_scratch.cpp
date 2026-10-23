@@ -1,5 +1,6 @@
 // X08: the actual waiting population and every descendant are drained in the
-// base queue's order, while the drain's additional resident bytes stay fixed.
+// base queue's order, under a constant per-engine resident cap plateau.
+// Resident-definition cases also retain the smaller drain scratch contract.
 // The production exercise also compiles on 21ba62bd; there the byte assertion
 // fails because Item rows survive in the queue. Only the store audit is gated.
 #include "../src/native_execution_consumer.hpp"
@@ -239,7 +240,64 @@ constexpr std::size_t kJournalSpillPageBytes = 32768;
 // src/native_order.cpp:1582: std::array<Cached, 4>; :1567 has four read buffers.
 // exercise_reload_control counts the decoded storage slots through history_at.
 constexpr std::size_t kJournalCacheSlots = 4;
+// Mirrors kBookMax at src/native_order.cpp:1486 and BookSpill::kSide at :1926.
+constexpr std::size_t kBookMaxResident = 4096;
+constexpr std::size_t kBookSideRows = 8;
+constexpr std::size_t kWideRootCount = 2;
+constexpr std::size_t kBookOnlyPopulation = 5000;
+constexpr std::size_t kLastTargetedPopulation = kJournalMaxResident / 2 - 1;
 constexpr std::size_t kDrainBytes = 4096;
+
+// GNU make_shared: one vptr and two uint32_t reference counts. Other standard
+// libraries retain the prior conservative control-block/rounding allowance.
+#if defined(__GLIBCXX__)
+constexpr auto kSharedControlBytes = sizeof(void*) + 2 * sizeof(std::uint32_t);
+#else
+constexpr auto kSharedControlAlignment = alignof(std::max_align_t);
+constexpr auto kSharedControlBytes =
+    (2 * sizeof(void*) + sizeof(std::size_t) + kSharedControlAlignment - 1)
+    / kSharedControlAlignment * kSharedControlAlignment;
+#endif
+constexpr auto kDefinitionAllocationBytes = sizeof(no::RequestDefinition) + kSharedControlBytes;
+constexpr auto kLiveAllocationBytes = sizeof(no::LiveRequest) + kSharedControlBytes;
+constexpr auto kDrainSideBytes =
+    kBookSideRows * (kDefinitionAllocationBytes + kLiveAllocationBytes);
+
+// SaveAr's short waiting-child row, including the definition presence byte.
+// Prefixes end immediately before WaitForApplied and Wait, respectively.
+constexpr auto kArchiveTagBytes = sizeof(std::uint32_t);
+constexpr auto kArchiveFlagBytes = sizeof(unsigned char);
+constexpr auto kWaitingOwnerPrefixBytes =
+    kArchiveFlagBytes + sizeof(no::RequestHandle) + kArchiveTagBytes + sizeof(no::Reduce)
+    + 2 * sizeof(std::uint64_t) + sizeof("child") - 1
+    + kArchiveTagBytes + sizeof(no::Market)
+    + kArchiveTagBytes + sizeof(no::ImmediateRemaining) + kArchiveTagBytes;
+constexpr auto kWaitingDefinitionBytes =
+    kWaitingOwnerPrefixBytes + sizeof(no::WaitForApplied)
+    + kArchiveTagBytes + sizeof(no::NoGroup) + kArchiveTagBytes + sizeof(no::Absolute)
+    + sizeof(no::Birth) + kArchiveFlagBytes + sizeof(no::RequestOrigin)
+    + kArchiveFlagBytes + sizeof(std::uint64_t) + kArchiveFlagBytes;
+constexpr auto kWaitingAuthorityPrefixBytes =
+    kWaitingDefinitionBytes + 2 * kArchiveTagBytes + sizeof(no::RemainingUnits);
+constexpr auto kWaitingBookRowBytes =
+    kWaitingAuthorityPrefixBytes + sizeof(no::Wait) + 3 * kArchiveTagBytes
+    + sizeof(no::MarketReady) + sizeof(no::AllowanceUnset) + sizeof(no::PendingNone)
+    + 3 * kArchiveFlagBytes;
+// GNU vector range-insert doubles the used prefix at these two growths.
+// The old and new buffers overlap while the Wait payload is appended.
+constexpr auto kBookWriterOverlapBytes =
+    2 * kWaitingOwnerPrefixBytes + 2 * kWaitingAuthorityPrefixBytes;
+constexpr auto kPlateauBookDefinitions = kBookMaxResident / 2 + kWideRootCount;
+// One cold cause chunk includes a replacement with two definitions.
+constexpr auto kPlateauCauseDefinitions = kJournalChunk + 1;
+// Per ENGINE, constant and independent of symbol count and trades. This Wide
+// fixture's pre-reuse plateau holds a full journal, the promoted half-book
+// (plus the two-root displacement), one cause page, the side ring and the
+// overlapping book writer buffers. Reuse should shrink the measured peak;
+// larger populations retain this cap bound, not a general kDrainBytes claim.
+constexpr auto kDrainPlateauBytes =
+    (kJournalMaxResident + kPlateauBookDefinitions + kPlateauCauseDefinitions)
+    * kDefinitionAllocationBytes + kDrainSideBytes + kBookWriterOverlapBytes;
 
 void print_reserve(std::size_t population, Shape shape, bool direct, std::size_t reserve_peak) {
     std::printf("X08 reserve population=%zu shape=%d direct=%d reserve_peak=%zu "
@@ -254,7 +312,7 @@ Probe::Seeds populate(NativeExecutionConsumer& consumer, std::size_t population,
                       std::size_t* reserve_peak = nullptr) {
     auto& core = Probe::core(consumer);
     core.reset(no::RunIdentity{"x08-scratch", 1});
-    const auto root_count = shape == Shape::ManySeeds ? population : 2;
+    const auto root_count = shape == Shape::ManySeeds ? population : kWideRootCount;
     // Retained command output is not queue scratch. Allocate it before the
     // measured drain so the census charges only the drain and one mutation.
     const auto expected_events = 2 * population + 2 * root_count + 64;
@@ -422,11 +480,15 @@ void exercise(std::size_t population, Shape shape, bool direct) {
 }
 
 std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
-    // Wide needs only two roots and tests the same journal capacity as Deep
-    // and Tree. Avoid the oracle's per-child book scans at these populations.
+    // Wide needs only two roots. The book-only case isolates definition
+    // duplication; the others cross the journal cap as Deep and Tree do.
+    // Avoid the oracle's per-child book scans at these populations.
     constexpr auto shape = Shape::Wide;
-    constexpr std::size_t root_count = 2;
-    CHECK(2 * population + 2 * root_count + 64 > kJournalMaxResident);
+    constexpr auto root_count = kWideRootCount;
+    const bool book_only = population == kBookOnlyPopulation;
+    CHECK(population + root_count > kBookMaxResident);
+    if (book_only) CHECK(2 * population + 2 * root_count + 64 <= kJournalMaxResident);
+    else CHECK(2 * population + 2 * root_count + 64 > kJournalMaxResident);
 #ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
     ScratchFixture scratch;
     CHECK(scratch.store.status() == detail::ScratchStatus::ok);
@@ -441,14 +503,28 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     std::size_t reserve_peak = 0;
     const auto seeds = populate(consumer, population, shape, &reserve_peak);
     print_reserve(population, shape, direct, reserve_peak);
-    CHECK(reserve_peak >= kJournalMaxResident * sizeof(std::optional<no::CommandEvent>));
+    if (!book_only)
+        CHECK(reserve_peak >= kJournalMaxResident * sizeof(std::optional<no::CommandEvent>));
     CHECK(!seeds.empty());
     if (seeds.empty()) return reserve_peak;
     const auto before = consumer.request_core().history_end();
+    const auto live_before = consumer.request_core().live_size();
+    // These are the case's actual book/history counts, not its reserve request.
+    // A live population above the fixed book cap necessarily has spilled rows;
+    // this reset, unretired journal spills only after its actual event cap.
+    const bool book_spilled = live_before > kBookMaxResident;
+    const bool journal_spilled_before = before > kJournalMaxResident;
+    CHECK(live_before == population);
+    CHECK(book_spilled);
     // One acceptance per child/root, one re-price and two root cancellations.
-    // Cross the actual retained-event limit too, rather than just reserving it.
     CHECK(before == population + root_count + 1 + root_count);
-    CHECK(before + population > kJournalMaxResident);
+    if (book_only) {
+        CHECK(!journal_spilled_before);
+        CHECK(before + population <= kJournalMaxResident);
+    } else {
+        // Cross the actual retained-event limit, not just its reservation.
+        CHECK(before + population > kJournalMaxResident);
+    }
 
     // Reserve's marked chunks are recycled through JournalStore::spare during
     // these one-event appends, not freed against this separate recording window.
@@ -459,13 +535,26 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     Probe::drain(consumer, actual, seeds);
     global_allocation::recording = false;
     global_allocation::on_recorded = nullptr;
-    CHECK(peak_bytes <= kDrainBytes);
+    // The B-targeted contract covers the book-only isolator and 8190/8191.
+    // Once definitions are wholly external, CR-262 owns the general fix.
+    if (population <= kLastTargetedPopulation) CHECK(peak_bytes <= kDrainBytes);
+    CHECK(peak_bytes <= kDrainPlateauBytes);
     std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",
-                population, static_cast<int>(shape), direct, peak_bytes, kDrainBytes);
+                population, static_cast<int>(shape), direct, peak_bytes,
+                population <= kLastTargetedPopulation ? kDrainBytes : kDrainPlateauBytes);
+    std::printf("X08 plateau population=%zu direct=%d peak=%zu plateau=%zu\n",
+                population, direct, peak_bytes, kDrainPlateauBytes);
 
     CHECK(!Probe::failed(consumer));
     CHECK(consumer.request_core().live().empty());
     CHECK(consumer.request_core().history_end() - before == population);
+    const auto after = consumer.request_core().history_end();
+    const bool journal_spilled = after > kJournalMaxResident;
+    CHECK(journal_spilled == !book_only);
+    std::printf("X08 spill_state population=%zu direct=%d events_before=%zu events_after=%zu "
+                "book_spilled=%d journal_spilled_before=%d journal_spilled=%d\n",
+                population, direct, before, after, book_spilled,
+                journal_spilled_before, journal_spilled);
     std::size_t drained = 0;
     for (std::size_t index = before; index < consumer.request_core().history_end(); ++index) {
         const auto* row = std::get_if<no::CancelledEvent>(
@@ -592,15 +681,9 @@ void exercise_reload(bool direct) {
     const no::Request root_request{no::Transact{1.0}, "root", ""};
     const no::Request child_request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
     const no::Request filler{no::Transact{0.0}, "filler", ""};
-    // Conservative make_shared control block plus rounding allowance: two
-    // pointer widths and a size_t, rounded to max_align_t; no private STL type.
     // Definitions are allocated by src/native_order.cpp:1285, once per event.
-    constexpr auto alignment = alignof(std::max_align_t);
-    constexpr auto control_block_bytes =
-        (2 * sizeof(void*) + sizeof(std::size_t) + alignment - 1) / alignment * alignment;
     constexpr auto decoded_events = kJournalCacheSlots * kJournalChunk;
-    constexpr auto definition_bytes =
-        decoded_events * (sizeof(no::RequestDefinition) + control_block_bytes);
+    constexpr auto definition_bytes = decoded_events * kDefinitionAllocationBytes;
     // archive_string (:1205-1215) resizes fresh strings. Bound both text fields
     // by these actual case strings' largest capacities, including terminators,
     // even where short-string storage is already included in sizeof(definition).
@@ -638,14 +721,21 @@ void exercise_reload(bool direct) {
             bytes += next * sizeof(std::uint32_t);
         return bytes;
     }();
-    // Fixed production caps and fixed case payloads only: no population or
-    // retained-window length contributes to this byte budget.
-    const auto reload_budget_bytes =
+    const auto cache_reload_budget_bytes =
         definition_bytes + string_bytes + id_vector_bytes + arena_chunk_table_bytes;
+    // Original definitions need not still be resident when a spilled book
+    // row is promoted. Bound the full book cap, the eight side rows (each
+    // with a definition and LiveRequest owner), and one serialized read row.
+    constexpr auto promoted_book_definition_bytes = kBookMaxResident * kDefinitionAllocationBytes;
+    // Per ENGINE, constant and independent of symbol count and trades, like
+    // kDrainPlateauBytes. Only fixed production caps and case payloads enter.
+    const auto reload_budget_bytes =
+        cache_reload_budget_bytes + promoted_book_definition_bytes
+        + kDrainSideBytes + kWaitingBookRowBytes;
     CHECK(population < kJournalMaxResident);
-    // A fifth full decoded page must exceed this SAME budget even counting
-    // only its definitions, so growing the cache cannot hide in the allowances.
-    CHECK(reload_budget_bytes <
+    // A fifth full decoded page must exceed the cache-only control's SAME
+    // tighter budget; book promotion must not hide growing the journal cache.
+    CHECK(cache_reload_budget_bytes <
           (kJournalCacheSlots + 1) * kJournalChunk * sizeof(no::RequestDefinition));
 #ifdef PINEFORGE_HAS_DEPENDENCY_SCRATCH_V1
     ScratchFixture scratch;
@@ -718,15 +808,17 @@ void exercise_reload(bool direct) {
     global_allocation::on_recorded = nullptr;
     std::printf("X08 reload population=%zu direct=%d cause_position=%zu peak=%zu bound=%zu "
                 "allocations=%zu definition_bytes=%zu\n",
-                population, direct, cause_position, peak_bytes, kDrainBytes,
+                population, direct, cause_position, peak_bytes, reload_budget_bytes,
                 global_allocation::allocations - allocations_before, sizeof(no::RequestDefinition));
     const auto measured_reload_peak = peak_bytes;
     std::printf("X08 reload_budget population=%zu direct=%d measured_peak=%zu budget=%zu "
-                "slots=%zu definition_bytes=%zu\n",
+                "slots=%zu definition_bytes=%zu book_definition_bytes=%zu side_bytes=%zu "
+                "book_read_bytes=%zu cache_budget=%zu\n",
                 population, direct, measured_reload_peak, reload_budget_bytes,
-                kJournalCacheSlots, sizeof(no::RequestDefinition));
-    // Only reload uses its computed byte budget; kDrainBytes remains 4096
-    // for every other drain (and is retained in the diagnostic above).
+                kJournalCacheSlots, sizeof(no::RequestDefinition), promoted_book_definition_bytes,
+                kDrainSideBytes, kWaitingBookRowBytes, cache_reload_budget_bytes);
+    // Cold-cause reload has its own budget; the targeted drains still check
+    // kDrainBytes, and the cache-only control keeps its tighter allowance.
     CHECK(measured_reload_peak <= reload_budget_bytes);
     CHECK(!Probe::failed(consumer));
     CHECK(core.live().empty());
@@ -760,7 +852,7 @@ void exercise_reload(bool direct) {
     scratch.check_empty();
     CHECK(scratch.digest() == scratch_digest);
 #endif
-    exercise_reload_control(direct, root_request, filler, reload_budget_bytes);
+    exercise_reload_control(direct, root_request, filler, cache_reload_budget_bytes);
 }
 
 no::SubmitResult submit_limit_case(no::WorkingRequestCore& core, const no::Request& request,
@@ -953,6 +1045,7 @@ int main() {
         exercise(512, Shape::Tree, direct);
         exercise(64, Shape::ManySeeds, direct);
         exercise(512, Shape::ManySeeds, direct);
+        exercise_beyond_cap(kBookOnlyPopulation, direct);
         // The smallest adjacent populations whose 2*N + 5 actual events spill;
         // their reserve requests are 16448 and 16450, both above 16384.
         // Without the cap, these requests need different numbers of chunks.
@@ -960,6 +1053,8 @@ int main() {
         const auto reserve_peak_beyond_cap = exercise_beyond_cap(8191, direct);
         CHECK(reserve_peak_at_cap > 0);
         CHECK(reserve_peak_at_cap == reserve_peak_beyond_cap);
+        exercise_beyond_cap(kJournalMaxResident - 2, direct);
+        exercise_beyond_cap(4 * kJournalMaxResident, direct);
         exercise_reload(direct);
         exercise_limits(direct);
         invalid_cause(direct);
