@@ -1303,6 +1303,27 @@ one release bump only when all three conditions hold:
    filtered API's 1000-run limit also refuses, because completeness at that
    boundary cannot be inferred. Zero matching runs refuse. A bump pushed seconds
    ago may not have a post-merge run yet; retry the release once that push run exists.
+   At gate time, the guard also reads `repos/{repo}` to confirm main is still
+   the default branch, lists `repos/{repo}/rulesets?includes_parents=true&per_page=100`
+   with every page, and reads each branch ruleset by id for its conditions,
+   rules and `bypass_actors`. It selects branch rulesets whose `ref_name`
+   includes main (`~DEFAULT_BRANCH`, `refs/heads/main`, `~ALL`, or a matching
+   pathname pattern) without excluding main. Simple `*` and `?` patterns do
+   not cross `/`; advanced or unknown pattern syntax refuses.
+   There must be at least one applicable `pull_request` or
+   `required_status_checks` rule. Every applicable ruleset carrying either
+   push-blocking rule must be `active`; disabled or evaluate enforcement refuses.
+   Their bypass-list **intersection**, including actor type, id and mode,
+   must be exactly Integration `4105147` with `bypass_mode == "always"`,
+   the release App token used by `release.yml`. Another shared actor, a
+   PR-only App bypass, an empty intersection, or no blocking ruleset refuses.
+   Broader bypass lists on another cumulative ruleset do not grant access
+   through an App-only restriction. Ruleset names and ids are not pinned;
+   tag-creation rulesets provide no evidence about pushes to main.
+   The list read retains HTTP Link headers and checks every advertised next
+   page, consecutive page numbers and a terminal page; missing headers,
+   incomplete pagination, API errors, inconsistent list/detail fields and
+   malformed payloads refuse.
 2. The bump has exactly one parent, and that parent passes the ordinary
    phase-1 merged-PR/tree/full-status checks above, including the allowed
    status creator. This depth is exactly one: a bump on another bump refuses
@@ -1322,6 +1343,16 @@ metadata provide no push-identity evidence. Condition 3 bounds the content
 changes to the two files whose values the release workflow computes: the next
 version and the reset catalog diff. Preflight pins the exact writer, staging,
 commit and atomic-push step and the App-token checkout wiring.
+
+The gate relies on the release App permission `administration: read` to read
+`bypass_actors`. The App installation has that permission and `contents: write`;
+the workflow-level `contents: write` setting scopes GITHUB_TOKEN and does not
+grant App permissions. Tokens without administration access may receive a
+ruleset response with `bypass_actors` omitted; a missing field refuses, and
+the guard never assumes an unreadable list is empty or App-only.
+Removing this App permission makes every release-bump exemption refuse.
+Preflight pins the unconditional gate invocation and its App token, and its
+binding release-gate tests pin this permission dependency in code and docs.
 
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
 `scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the

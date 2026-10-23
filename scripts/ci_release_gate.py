@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 from typing import Callable
+from urllib.parse import parse_qs, urlsplit
 
 
 CONTEXTS = ("pineforge/verify", "pineforge/parity")
@@ -27,6 +28,10 @@ ALLOWED_STATUS_CREATORS = (("luisleo526", "User"),)
 # release.yml pushes protected main with its PINEFORGE_APP_ID installation token.
 # This is GitHub's authenticated push actor, never the commit's author/committer.
 RELEASE_PUSH_ACTOR = "pineforge-app[bot]"
+# Integration for release.yml's PINEFORGE_APP_ID installation token.
+# The gate relies on App permission administration: read to see bypass_actors;
+# removing it makes every release-bump exemption refuse, even with contents: write.
+RELEASE_APP_ID = 4105147
 RELEASE_BUMP_PATHS = frozenset(("VERSION", "docker/run_failure_codes_diff.json"))
 MAIN_PROOF_WATCHER_FIRST_SHA: str | None = None
 """None = the watcher is not live yet. Otherwise its FIRST recorded main sha.
@@ -75,7 +80,8 @@ def _http_failure(raw: str, *, exception: bool = False) -> str | None:
     return None
 
 
-def _read_text(api: API, endpoint: str, **options) -> str:
+def _read_text(api: API, endpoint: str, *, complete_rulesets: bool = False,
+               **options) -> str:
     try:
         raw = api(endpoint, **options)
     except subprocess.CalledProcessError as exc:
@@ -94,6 +100,36 @@ def _read_text(api: API, endpoint: str, **options) -> str:
     # --include emits one header block per page, also when --jq is used.
     # Preserve page boundaries so a good page cannot hide an empty response.
     responses = list(_HTTP_RESPONSE.finditer(raw))
+    if complete_rulesets:
+        # Unlike Actions, the ruleset list has no total_count. Keep gh's HTTP
+        # Link evidence until we prove every advertised next page was read.
+        failure = f"API {endpoint} returned incomplete ruleset pagination"
+        if not responses or not options.get("paginate"):
+            raise ReleaseGateError(f"{failure}: missing HTTP page headers")
+        for index, response in enumerate(responses):
+            links = re.findall(r"^Link:[ \t]*([^\r\n]*)", response[0],
+                               re.MULTILINE | re.IGNORECASE)
+            relations = {}
+            for field in links:
+                for link in field.split(","):
+                    parsed = re.fullmatch(
+                        r'\s*<(https://[^<>\s]+)>;\s*rel="(next|prev|first|last)"\s*', link)
+                    if parsed is None or parsed[2] in relations:
+                        raise ReleaseGateError(f"{failure}: malformed Link header")
+                    try:
+                        page = parse_qs(urlsplit(parsed[1]).query).get("page")
+                    except ValueError as exc:
+                        raise ReleaseGateError(f"{failure}: invalid page URL") from exc
+                    if (page is None or len(page) != 1
+                            or re.fullmatch(r"[1-9][0-9]*", page[0]) is None):
+                        raise ReleaseGateError(f"{failure}: invalid page number")
+                    relations[parsed[2]] = int(page[0])
+            if ("next" in relations) != (index + 1 < len(responses)):
+                raise ReleaseGateError(f"{failure}: unread or unlinked next page")
+            expected = {"next": index + 2, "prev": index,
+                        "first": 1, "last": len(responses)}
+            if any(page != expected[relation] for relation, page in relations.items()):
+                raise ReleaseGateError(f"{failure}: skipped, repeated or truncated pages")
     if responses:
         if raw[:responses[0].start()].strip() or (
                 not options.get("paginate", False) and len(responses) != 1):
@@ -112,8 +148,8 @@ def _read_text(api: API, endpoint: str, **options) -> str:
 
 
 def _read_json(api: API, endpoint: str, *, paginate: bool = False,
-               items_key: str | None = None):
-    raw = _read_text(api, endpoint, paginate=paginate)
+               items_key: str | None = None, complete_rulesets: bool = False):
+    raw = _read_text(api, endpoint, paginate=paginate, complete_rulesets=complete_rulesets)
     try:
         if not paginate:
             result = json.loads(raw)
@@ -246,6 +282,113 @@ def _require_release_push(api: API, repo: str, sha: str) -> None:
         raise ReleaseGateError(f"no exact-main push workflow run for release bump {sha}")
 
 
+def _ruleset_applies_to_main(payload: dict, endpoint: str) -> bool:
+    conditions = payload.get("conditions")
+    refs = conditions.get("ref_name") if isinstance(conditions, dict) else None
+    if (not isinstance(refs, dict)
+            or any(not isinstance(refs.get(key), list)
+                   or any(not isinstance(pattern, str) or not pattern
+                          for pattern in refs[key]) for key in ("include", "exclude"))):
+        raise ReleaseGateError(f"API {endpoint} returned invalid ref_name conditions")
+
+    def matches(pattern: str) -> bool:
+        if pattern in ("~DEFAULT_BRANCH", "~ALL"):
+            return True
+        # GitHub uses pathname-aware fnmatch: * and ? cannot cross '/'.
+        # Refuse advanced/unknown syntax instead of guessing applicability.
+        if (pattern.startswith("~") or "**" in pattern
+                or any(char in pattern for char in ("[", "]", "{", "}", "\\"))):
+            raise ReleaseGateError(f"API {endpoint} returned invalid ref_name conditions: "
+                                   f"unsupported pattern {pattern!r}")
+        expression = re.escape(pattern).replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
+        return re.fullmatch(expression, "refs/heads/main") is not None
+
+    included = [matches(pattern) for pattern in refs["include"]]
+    excluded = [matches(pattern) for pattern in refs["exclude"]]
+    return any(included) and not any(excluded)
+
+
+def _ruleset_bypasses(payload: dict, endpoint: str) -> set[tuple[str, int | None, str]]:
+    actors = payload.get("bypass_actors")
+    if not isinstance(actors, list):
+        raise ReleaseGateError(f"API {endpoint} returned missing or invalid bypass_actors "
+                               "(App requires administration: read)")
+    bypasses = set()
+    for actor in actors:
+        if not isinstance(actor, dict):
+            raise ReleaseGateError(f"API {endpoint} returned invalid bypass actor: {actor!r}")
+        kind, number, mode = (actor.get(key) for key in
+                              ("actor_type", "actor_id", "bypass_mode"))
+        if (not isinstance(kind, str)
+                or kind not in ("Integration", "OrganizationAdmin", "DeployKey",
+                                "RepositoryRole", "Team")
+                or "actor_id" not in actor
+                or (number is None and kind not in ("OrganizationAdmin", "DeployKey"))
+                or (number is not None and (type(number) is not int or number <= 0))
+                or not isinstance(mode, str) or mode not in ("always", "pull_request")):
+            raise ReleaseGateError(f"API {endpoint} returned invalid bypass actor: {actor!r}")
+        identity = (kind, number, mode)
+        if identity in bypasses:
+            raise ReleaseGateError(f"API {endpoint} returned invalid bypass actor: duplicate")
+        bypasses.add(identity)
+    return bypasses
+
+
+def _require_release_rulesets(api: API, repo: str) -> None:
+    endpoint = f"repos/{repo}"
+    repository = _read_json(api, endpoint)
+    if not isinstance(repository, dict) or repository.get("default_branch") != "main":
+        raise ReleaseGateError(f"API {endpoint} must identify main as the default branch")
+
+    endpoint = f"repos/{repo}/rulesets?includes_parents=true&per_page=100"
+    inventory = _read_json(api, endpoint, paginate=True, complete_rulesets=True)
+    seen, summaries = set(), []
+    for row in inventory:
+        if (not isinstance(row, dict) or type(row.get("id")) is not int or row["id"] <= 0
+                or not isinstance(row.get("target"), str)
+                or row["target"] not in ("branch", "tag", "push")
+                or not isinstance(row.get("enforcement"), str)
+                or row["enforcement"] not in ("active", "disabled", "evaluate")):
+            raise ReleaseGateError(f"API {endpoint} returned invalid ruleset summary: {row!r}")
+        if row["id"] in seen:
+            raise ReleaseGateError(f"API {endpoint} returned duplicate ruleset id {row['id']}")
+        seen.add(row["id"])
+        summaries.append(row)
+
+    intersection = None
+    for summary in summaries:
+        if summary["target"] != "branch":
+            continue
+        endpoint = f"repos/{repo}/rulesets/{summary['id']}"
+        payload = _read_json(api, endpoint)
+        if (not isinstance(payload, dict) or type(payload.get("id")) is not int
+                or any(payload.get(key) != summary[key]
+                       for key in ("id", "target", "enforcement"))):
+            raise ReleaseGateError(f"API {endpoint} returned inconsistent ruleset detail")
+        bypasses = _ruleset_bypasses(payload, endpoint)
+        applies = _ruleset_applies_to_main(payload, endpoint)
+        rules = payload.get("rules")
+        if (not isinstance(rules, list)
+                or any(not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
+                       or not rule["type"] for rule in rules)):
+            raise ReleaseGateError(f"API {endpoint} returned invalid rules")
+        blocking = any(rule["type"] in ("pull_request", "required_status_checks")
+                       for rule in rules)
+        if not applies or not blocking:
+            continue
+        if payload["enforcement"] != "active":
+            raise ReleaseGateError(
+                f"main push-blocking ruleset {summary['id']} must be active")
+        # Rulesets are cumulative: an actor must bypass EVERY main push blocker.
+        intersection = bypasses if intersection is None else intersection & bypasses
+
+    if intersection is None:
+        raise ReleaseGateError("main has no active applicable push-blocking ruleset")
+    if intersection != {("Integration", RELEASE_APP_ID, "always")}:
+        raise ReleaseGateError("main direct-push bypass intersection must be exactly "
+                               f"Integration {RELEASE_APP_ID} with bypass_mode always")
+
+
 def _tree_files(api: API, repo: str, tree: str) -> dict[str, tuple[str, str, str]]:
     endpoint = f"repos/{repo}/git/trees/{tree}?recursive=1"
     payload = _read_json(api, endpoint)
@@ -275,6 +418,7 @@ def _tree_files(api: API, repo: str, tree: str) -> dict[str, tuple[str, str, str
 
 def _release_bump(api: API, repo: str, sha: str) -> str:
     _require_release_push(api, repo, sha)
+    _require_release_rulesets(api, repo)
     candidate = _commit_info(api, repo, sha)
     parents = candidate.get("parents")
     if (not isinstance(parents, list) or len(parents) != 1

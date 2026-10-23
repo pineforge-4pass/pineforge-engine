@@ -115,6 +115,10 @@ jobs:
 
       # Phase 1 also accepts an App-pushed two-file bump on a gated PR merge.
       # No matching post-merge push run yet: refuse; retry after it exists.
+      # The gate reads main's cumulative branch rulesets with this App token.
+      # Its App permission administration: read exposes bypass_actors; removing
+      # that permission makes the release-bump exemption refuse every release.
+      # The workflow-level contents: write scope belongs to GITHUB_TOKEN.
       - name: Refuse unless pineforge/verify and pineforge/parity are green
         id: gate
         env:

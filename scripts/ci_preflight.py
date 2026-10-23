@@ -1135,6 +1135,20 @@ RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag,
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 '''
 
+# This App installation has administration: read, which exposes bypass_actors.
+# The workflow's contents: write GITHUB_TOKEN cannot replace that credential.
+RELEASE_GATE_STEP = r'''      - name: Refuse unless pineforge/verify and pineforge/parity are green
+        id: gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          python3 scripts/ci_release_gate.py gate \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
+'''
+
 
 def release_bump_workflow_findings(workflow: str) -> list[str]:
     steps = _steps(_jobs(workflow).get('release', ''))
@@ -1143,6 +1157,10 @@ def release_bump_workflow_findings(workflow: str) -> list[str]:
     if _code(publish) != _code(RELEASE_BUMP_PUBLISH_STEP):
         findings.append('release.yml must keep the exact two-file release bump writer, '
                         'commit and atomic push')
+    gate = _step_named(steps, '      - name: Refuse unless pineforge/verify and pineforge/parity are green')
+    if _code(gate) != _code(RELEASE_GATE_STEP):
+        findings.append('release.yml must keep the unconditional release gate '
+                        'with its administration-readable App token')
     app = _step_named(steps, '      - name: Mint org App token')
     checkout = _step_named(steps, '      - name: Checkout (full history)')
     if (_step_values(app, 'id') != ['app']
@@ -1926,7 +1944,8 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_report_outputs_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
-        # Includes authenticated bump identity, gated parent and exact tree diff.
+        # Includes App-only main rulesets, permission docs, authenticated bump
+        # identity, gated parent and exact tree diff; binding in both fast/all.
         ('release-gate-tests', [sys.executable, str(source / 'scripts/test_ci_release_gate.py')]),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are

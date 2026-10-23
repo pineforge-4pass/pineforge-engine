@@ -3416,6 +3416,24 @@ finally:
                               ci_workflow_findings(
                                   *original, others={**others, 'release.yml': changed}))
 
+    def test_release_ruleset_reader_token_and_invocation_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        release = others['release.yml']
+        gate_name = 'Refuse unless pineforge/verify and pineforge/parity are green'
+        for before, after in (
+                ('GH_TOKEN: ${{ steps.app.outputs.token }}', 'GH_TOKEN: ${{ github.token }}'),
+                ('        id: gate', '        id: gate\n        if: inputs.dry_run'),
+                ('python3 scripts/ci_release_gate.py gate', 'echo release gate green'),
+                ('--ref "${GITHUB_REF}"', '--ref "${GITHUB_REF}" || true'),
+                ('        run: |', '        continue-on-error: true\n        run: |')):
+            with self.subTest(after=after):
+                changed = in_step(release, 'release', gate_name, before, after)
+                self.assertNotEqual(changed, release)
+                self.assertIn('release.yml must keep the unconditional release gate '
+                              'with its administration-readable App token',
+                              ci_workflow_findings(
+                                  *original, others={**others, 'release.yml': changed}))
+
     def test_no_stage_is_advisory_today(self):
         for entry in check_commands(Path('/src')):
             self.assertFalse(len(entry) > 2 and entry[2], entry[0])
