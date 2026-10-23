@@ -1253,7 +1253,7 @@ void compare_pine_selected(Directory& directory, const char* name, bool open,
 }
 #endif
 
-#if PINEFORGE_LIBRARY_DEBUG_CHECKS
+// H1-09: the borrowed-window refusal is enforced in every library build.
 struct InvalidWindowHost final : NativeStrategyHost {
     enum class Fault { grow, negative, replace, throw_after_replace };
     explicit InvalidWindowHost(Fault fault) : fault_(fault) {}
@@ -1303,7 +1303,6 @@ void invalid_window_hooks_refuse(Directory& directory) {
         CHECK(read(path).find("{\"trailer\":") == std::string::npos);
     }
 }
-#endif
 
 struct CaptureStorage {
     std::size_t largest_request = 0;
@@ -2140,9 +2139,7 @@ int main() {
         compare_pine_selected(directory, "pine-empty.ndjson", false, true, false);
         compare_pine_selected(directory, "pine-refills.ndjson", true, true, false, refills);
 #endif
-#if PINEFORGE_LIBRARY_DEBUG_CHECKS
         invalid_window_hooks_refuse(directory);
-#endif
         selected_capture_storage_is_bounded(directory);
         trade_capture_and_read_storage(directory, "trades-open-selected.ndjson",
                                        23, true, true, true);
