@@ -319,7 +319,7 @@ def genuine_case(strategy, reference, warmup_rows, packets, output, runner, scen
     result = {"scenario": scenario, "probe": strategy.path.stem, "batch_size": batch_size,
         "transport": transport, "messages": len(messages), "feed_bytes": feed_path.stat().st_size,
         "fail_first": fail_first, "restart": restart,
-        "delivery_policy": "single-flight, two explicit transport retries"}
+        "delivery_policy": "max_in_flight=8, two explicit transport retries"}
     costs = []
     commands = []
     try:

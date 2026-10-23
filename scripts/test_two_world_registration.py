@@ -39,10 +39,14 @@ Controls:
  19. a math(EXPR) in a form the sweep cannot read -> 2, named
  20. the ctest row's TMPDIR shape (an untracked build dir inside the source
      tree) is a legal write area; tracked paths stay refused -> no raise / raise
- 21. a public lane row is evaluated in both worlds from a neutral cwd
- 22. a pinned private lane row registered in only one world is drift
- 23. a glob-fed file(STRINGS) reads relative paths against the tree root
- 24. the lane include fixture excludes a fenced block after the include loop
+ 21. parenthesised boolean groups register exactly zero or one extra row;
+     an unmodelled parenthesised predicate still exits 2, named
+ 22. get_test_property binds its output to the property-read NOTFOUND value;
+     IN_LIST walks cleanly, and a registration behind that false value is absent
+ 23. a public lane row is evaluated in both worlds from a neutral cwd
+ 24. a pinned private lane row registered in only one world is drift
+ 25. a glob-fed file(STRINGS) reads relative paths against the tree root
+ 26. the lane include fixture excludes a fenced block after the include loop
 """
 from __future__ import annotations
 
@@ -576,6 +580,43 @@ endif()
 ''')
         self.assertEqual(baseline + 1, self.row_count(RUNNER))
 
+    # control 22: a property read overwrites its output, rather than ignoring
+    # the command or binding the test/property argument. Like other property
+    # reads, NOTFOUND is false and has no ordinary label in its list.
+    def test_get_test_property_binds_unknown_values_and_controls_registration(self):
+        baseline = self.row_count(RUNNER)
+        self.tree.append(RUNNER, '''
+add_test(NAME e2e_two_world_property_probe COMMAND ${CMAKE_COMMAND} -E echo ok)
+foreach(_e2e_two_world_property_name IN ITEMS
+        DISABLED SKIP_RETURN_CODE SKIP_REGULAR_EXPRESSION LABELS)
+    set(_e2e_two_world_property_value e2e_stale_label)
+    get_test_property(e2e_two_world_property_probe ${_e2e_two_world_property_name} _e2e_two_world_property_value)
+    if(e2e_stale_label IN_LIST _e2e_two_world_property_value)
+        message(FATAL_ERROR "get_test_property left its output unchanged")
+    endif()
+    if(_e2e_two_world_property_value OR NOT _e2e_two_world_property_value STREQUAL "NOTFOUND")
+        message(FATAL_ERROR "get_test_property must use the property-read unknown value")
+    endif()
+endforeach()
+''')
+        self.assertEqual(baseline + 1, self.row_count(RUNNER))
+        registration = ('add_test(NAME e2e_two_world_property_guarded '
+                        'COMMAND ${CMAKE_COMMAND} -E echo ok)\n')
+        self.tree.append(RUNNER, '\n' + registration)
+        self.assertEqual(baseline + 2, self.row_count(RUNNER))
+        for condition in ('_e2e_two_world_property_value',
+                          'e2e_stale_label IN_LIST _e2e_two_world_property_value'):
+            with self.subTest(condition=condition):
+                guarded = f'if({condition})\n    {registration}endif()\n'
+                self.tree.edit(RUNNER, registration, guarded)
+                # Unknown property values follow the existing false-condition
+                # rule: the guarded registration is not walked.
+                self.assertEqual(baseline + 1, self.row_count(RUNNER))
+                known = 'set(_e2e_two_world_property_value e2e_stale_label)\n' + guarded
+                self.tree.edit(RUNNER, guarded, known)
+                self.assertEqual(baseline + 2, self.row_count(RUNNER))
+                self.tree.edit(RUNNER, known, registration)
+
     # control 19: a math(EXPR) form the sweep cannot read is exit 2, named
     def test_an_unreadable_math_expression_exits_2(self):
         self.tree.append(RUNNER, '''
@@ -640,6 +681,45 @@ math(EXPR _e2e_two_world_math "1 +")
                              'the tampered copy must lose exactly one profile')
             self.assertNotEqual(set(ci_verify.PROFILES), set(module.PROFILES),
                                 'a table an entry short must not compare equal')
+
+    # control 21: reached parenthesised groups are FALSE or TRUE according to
+    # their predicates; an unmodelled predicate stays exit 2, named
+    def test_parenthesised_boolean_groups_and_unmodelled_predicates(self):
+        # The checker reads tests/ for its records even with --cmakelists
+        # runner/. Flatten its existing guard in the tamper copy only, so
+        # 64137d89 reaches the synthetic group instead of failing the baseline.
+        self.tree.edit(
+            TREES_DIR,
+            'if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} '
+            'OR NOT TARGET ${_pf_fast_test}))',
+            'if(PINEFORGE_BUILD_SOURCE_LAYER AND NOT TEST ${_pf_fast_test} '
+            'OR PINEFORGE_BUILD_SOURCE_LAYER AND NOT TARGET ${_pf_fast_test})')
+        baseline = self.row_count(RUNNER)
+        self.tree.append(RUNNER, '''
+if((TEST e2e_two_world_ct21_missing AND NOT TEST e2e_two_world_ct21_missing))
+    add_test(NAME e2e_two_world_ct21_false COMMAND ${CMAKE_COMMAND} -E echo bad)
+endif()
+''')
+        # Count the FALSE group before adding the TRUE group so they cannot
+        # cancel each other's registration errors.
+        self.assertEqual(baseline, self.row_count(RUNNER))
+        self.tree.append(RUNNER, '''
+if((NOT TEST e2e_two_world_ct21_missing OR NOT TARGET e2e_two_world_ct21_missing))
+    add_test(NAME e2e_two_world_ct21_true COMMAND ${CMAKE_COMMAND} -E echo ok)
+endif()
+''')
+        self.assertEqual(baseline + 1, self.row_count(RUNNER))
+        # VERSION_LESS is not among _atom's modelled comparisons.
+        self.tree.append(RUNNER, '''
+if((1 VERSION_LESS 2))
+    add_test(NAME e2e_two_world_ct21_unmodelled COMMAND ${CMAKE_COMMAND} -E echo bad)
+endif()
+''')
+        result = self.run_check('--cmakelists', RUNNER, '--profile', 'release')
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("unmodelled condition '1 VERSION_LESS 2'",
+                      result.stdout + result.stderr)
+        self.assertIn(RUNNER, result.stdout + result.stderr)
 
     def lane_tree(self, body: str) -> Path:
         """An isolated include probe over the copied tree and real pin set."""
