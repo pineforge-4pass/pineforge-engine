@@ -81,7 +81,6 @@ void hash_exit_scratch(BrokerStateHashSink& f,
     f.b(scratch != nullptr);
     if (!scratch) return;
     hash_source_run_identity(f, scratch->run);
-    f.u(scratch->next_scope);
     f.b(scratch->versions != nullptr);
     f.b(scratch->lots != nullptr); f.b(scratch->working != nullptr);
     hash_scratch_store(f, &scratch->store);

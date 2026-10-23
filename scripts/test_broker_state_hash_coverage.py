@@ -171,10 +171,35 @@ class Coverage(unittest.TestCase):
                 self.assertEqual(result, 1, output)
                 self.assertIn("exit_scratch_", output)
 
+    def test_exit_scratch_run_identity_helper_is_required(self):
+        # The context-call mutation below cannot catch a helper that silently
+        # drops the session key. This control is red before the helper guard.
+        fold = "f.s(identity.session_key);"
+        for replacement in ("", 'f.s("");', "if (false) { " + fold + " }"):
+            with self.subTest(replacement=replacement):
+                result, output = self.check(((
+                    "src/source/pine_state_hash.cpp", fold, replacement),))
+                self.assertEqual(result, 1, output)
+                self.assertIn("ExitScratchContext run identity", output)
+
+    def test_exit_scratch_scope_counter_is_explicitly_waived(self):
+        self.assertNotIn("next_scope", checker.EXIT_SCRATCH_CONTEXT_FOLDS)
+        self.assertEqual(checker.EXIT_SCRATCH_OBSERVATION_WAIVERS["next_scope"],
+                         "scope-allocation counter, not state; retained records, "
+                         "store digest and run identity are folded")
+        # Reintroducing the counter must invalidate its waiver, even when all
+        # five real context fields still have their required folds.
+        identity = "hash_source_run_identity(f, scratch->run);"
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", identity,
+            identity + "\n    f.u(scratch->next_scope);"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("ExitScratchContext.next_scope", output)
+
     def test_exit_scratch_context_fields_are_required(self):
         result, output = self.check()
         self.assertEqual(result, 0, output)
-        self.assertIn("6 exit-context fields", output)
+        self.assertIn("5 exit-context fields", output)
         for field, fold in checker.EXIT_SCRATCH_CONTEXT_FOLDS.items():
             for replacement in ("", "if (false) { " + fold + " }"):
                 with self.subTest(field=field, replacement=replacement):
@@ -185,7 +210,6 @@ class Coverage(unittest.TestCase):
         for before, after in (
             ("hash_source_run_identity(f, scratch->run);",
              "hash_source_run_identity(f, {});"),
-            ("f.u(scratch->next_scope);", "f.u(0);"),
             ("f.b(scratch->versions != nullptr);", "f.b(false);"),
             ("f.b(scratch->lots != nullptr);", "f.b(false);"),
             ("f.b(scratch->working != nullptr);", "f.b(false);"),
