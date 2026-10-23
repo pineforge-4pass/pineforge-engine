@@ -304,6 +304,21 @@ void scratch_trade_text(const ::pineforge::detail::ScratchReadback& store, ::pin
                         const TradeScratchHeader& header, Trade& row) {
     const std::array<std::string*, 4> text{
         &row.entry_id, &row.entry_comment, &row.exit_comment, &row.exit_id};
+    // A-7: validate the entire text extent before any string can allocate.
+    // Subtraction checks both individual lengths and their cumulative extent
+    // without allowing a forged sum to wrap.
+    ::pineforge::detail::ScratchRecordInfo info{};
+    require_trade_scratch(store.point(handle, info), store);
+    if (info.value_bytes < sizeof header)
+        require_trade_scratch(::pineforge::detail::ScratchStatus::corrupt, store);
+    std::uint64_t remaining = info.value_bytes - sizeof header;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const auto bytes = header[19 + index];
+        if (bytes > remaining || bytes > std::numeric_limits<std::size_t>::max()
+            || bytes > text[index]->max_size())
+            require_trade_scratch(::pineforge::detail::ScratchStatus::corrupt, store);
+        remaining -= bytes;
+    }
     std::uint64_t offset = sizeof header;
     for (std::size_t index = 0; index < text.size(); ++index) {
         text[index]->resize(static_cast<std::size_t>(header[19 + index]));
@@ -546,14 +561,13 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
 }
 
 void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args) {
-    // Idle abort requests are consumed by the public begin entry even when
-    // input validation refuses before a run starts.  Crucially, validation
-    // runs before any provider-owned state is changed.
+    // A-11: admission owns a reentrant begin's refusal. Keep the running
+    // caller span, source state and abort request intact.
+    if (native_state().kind == NativeLifecycleKind::Running) return;
+    // Idle abort requests are consumed even when borrowed-input validation
+    // refuses the start. Validation precedes source configuration changes.
     abort_requested_.store(false, std::memory_order_relaxed);
     validate_source_begin_bars(args);
-    // Admission owns a reentrant begin's refusal. Keep the running caller
-    // span and source state intact until the outer public call unwinds.
-    if (native_state().kind == NativeLifecycleKind::Running) return;
     if (args.syminfo) {
         syminfo_ = *args.syminfo;
         syminfo_mintick_ = syminfo_.mintick;
@@ -674,9 +688,9 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     const bool failed_before = native_state().kind == NativeLifecycleKind::Failed;
     NativeSetupResult setup;
     try {
-        // project() establishes the actual run identity and installs a
-        // standalone store. Replace it with the host's service afterwards,
-        // before configure or any run/bar callback can read the adapter.
+        // project() establishes the actual run identity and leaves this
+        // host's adapter to use the service created above. Bind it before
+        // configure or any run/bar callback can read the adapter.
         // Keeping this in the feed-return guard also covers binding failure.
         command_scratch->exit_context.run = spec.identity;
         adapter_.bind_exit_scratch(command_scratch->exit_context);

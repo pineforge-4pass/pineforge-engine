@@ -2105,7 +2105,18 @@ private:
         double fill_price = std::numeric_limits<double>::quiet_NaN();
         double units = 0.0;
         bool consumed = false;
+        // A-8: name and initialize the raw scratch row's trailing bytes.
+        std::uint8_t reserved[7]{};
     };
+    static_assert(sizeof(PerEntryExitChild) == sizeof(std::uint64_t) + 2 * sizeof(double)
+                                              + sizeof(bool) + 7 * sizeof(std::uint8_t)
+                  && sizeof(PerEntryExitChild) == 32
+                  && offsetof(PerEntryExitChild, origin) == 0
+                  && offsetof(PerEntryExitChild, fill_price) == 8
+                  && offsetof(PerEntryExitChild, units) == 16
+                  && offsetof(PerEntryExitChild, consumed) == 24
+                  && offsetof(PerEntryExitChild, reserved) == 25,
+                  "A-8: scratch child has no unnamed bytes; preserve its layout");
     struct PerEntryExit {
         SourceId exit_id;
         std::int64_t cycle = 0;

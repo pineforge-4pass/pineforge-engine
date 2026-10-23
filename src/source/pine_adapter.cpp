@@ -3182,10 +3182,13 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                       "Pine adapter produced invalid native run spec field "
                                       + std::to_string(static_cast<unsigned>(validation.field)));
     }
-    // Projection owns only the standalone exit service. Trade and dependency
-    // workspaces are installed once by the admitted run's consumer/host setup.
-    auto exit_scratch = detail::make_exit_scratch(spec.identity);
-    exit_scratch_ = std::move(exit_scratch);
+    // A-10: the Pine host installs its own adapter's exit service immediately
+    // after projection. Other adapters still need their standalone owner.
+    const auto* pine_host = pine_view_of(host_);
+    if (!pine_host || &pine_host->adapter_ != this) {
+        auto exit_scratch = detail::make_exit_scratch(spec.identity);
+        exit_scratch_ = std::move(exit_scratch);
+    }
     return spec;
 }
 
@@ -6633,12 +6636,12 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
 // minimum is kept as a documented fallback for a re-issued exit whose row was
 // bound to no entry (it preserves the historical ordering of those rows);
 // UINT64_MAX is returned only when the exit id has no placement row at all.
-// ab9714be pine_fills.cpp:664-670: candidate exit fills tie-break by order creation sequence created_seq
+// The legacy candidate exit fills tie-break by their created_seq.
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
         const SourceId& exit_id, const SourceId& from_entry) const {
-    // The same-bar exit sort asks this on every script bar while its tail
-    // group persists; the table answers from its per-id index instead of a
-    // scan over every placement ever retained (quadratic over a long run).
+    // A-9: PlacementTable::command_sequence_for scans retained placement
+    // rows, then consults erased_minima_ for retired source/pair minima.
+    // The same-bar exit sort uses that minimum while its tail group persists.
     return placement_.command_sequence_for(exit_id, from_entry);
 }
 
@@ -6664,8 +6667,9 @@ void PineExecutionAdapter::permute_exit_phases(std::size_t start,
 void PineExecutionAdapter::permute_exit_phase_rows(
         std::size_t start, std::size_t count,
         const std::function<std::size_t(std::size_t)>& source_at) {
-    // Both same-bar permutation and global-child re-cut use this seam,
-    // including amendments which leave the closed-row count unchanged.
+    // A-9: permute_exit_phases retains this vector-based compatibility seam.
+    // The host's scratch-backed same-bar sort and global-child re-cut update
+    // phase slots directly; they do not call this invalidation.
     if (position_tail_summary_)
         position_tail_summary_->invalidate(PositionTailGuard::Amendment,
                                            PINEFORGE_POSITION_TAIL_DIAGNOSTICS{});
@@ -24198,8 +24202,19 @@ void PineExecutionAdapter::order_per_entry_point_ties() {
         std::uint64_t incarnation = 0;
         std::uint64_t request = 0;
         int rank = 0;
+        // A-8: initialize the alignment gap before priority at every creation.
+        std::uint32_t reserved = 0;
         std::uint64_t priority = 0;
     };
+    static_assert(sizeof(Ranked) == 3 * sizeof(std::uint64_t) + sizeof(int)
+                                    + sizeof(std::uint32_t)
+                  && sizeof(Ranked) == 32
+                  && offsetof(Ranked, incarnation) == 0
+                  && offsetof(Ranked, request) == 8
+                  && offsetof(Ranked, rank) == 16
+                  && offsetof(Ranked, reserved) == 20
+                  && offsetof(Ranked, priority) == 24,
+                  "A-8: ranked scratch row has no unnamed bytes; preserve its layout");
     detail::ExitScratchRows<Ranked> rows(*this);
     auto& versions = detail::exit_scratch_versions(rows.context());
     bool supported = true;
@@ -24226,6 +24241,7 @@ void PineExecutionAdapter::order_per_entry_point_ties() {
         rows.push_back({definition.handle.incarnation,
                         versions.request(rows.scope(), definition.request),
                         order_class * 2 + (buy ? 0 : 1),
+                        0,
                         definition.priority != 0 ? definition.priority
                                                  : definition.handle.incarnation});
         return true;
@@ -26062,8 +26078,21 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 std::uint64_t rank = 0;
                 bool full = true;
                 bool reserved = false;
+                // A-8: initialize the alignment gap before units.
+                std::uint8_t reserved_bytes[6]{};
                 double units = 0.0;
             };
+            static_assert(sizeof(GlobalExit) == 2 * sizeof(std::uint64_t)
+                                              + 2 * sizeof(bool)
+                                              + 6 * sizeof(std::uint8_t) + sizeof(double)
+                          && sizeof(GlobalExit) == 32
+                          && offsetof(GlobalExit, key) == 0
+                          && offsetof(GlobalExit, rank) == 8
+                          && offsetof(GlobalExit, full) == 16
+                          && offsetof(GlobalExit, reserved) == 17
+                          && offsetof(GlobalExit, reserved_bytes) == 18
+                          && offsetof(GlobalExit, units) == 24,
+                          "A-8: global scratch row has no unnamed bytes; preserve its layout");
             detail::ExitScratchRows<GlobalExit> armed(*this);
             detail::ExitScratchIndex families(armed.context());
             detail::ExitScratchIndex members(armed.context());
@@ -26092,7 +26121,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 if (index == detail::ExitScratchIndex::absent) {
                     index = armed.size();
                     families.put(key, index);
-                    armed.push_back({key, rank, full, reserved, units});
+                    armed.push_back({key, rank, full, reserved, {}, units});
                 } else {
                     GlobalExit family = armed[index];
                     family.rank = std::min(family.rank, rank);
