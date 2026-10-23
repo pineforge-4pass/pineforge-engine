@@ -181,7 +181,7 @@ or failed run has no valid trailer. A trusted finalizer consumes the stream.
 Sockets use `send(..., MSG_NOSIGNAL)`. A FIFO host must ignore SIGPIPE
 (Python does by default; a C host calls `signal(SIGPIPE, SIG_IGN)`) so a
 closed reader becomes `report_sink_failed`. The library does not change
-process-wide signal handling.
+process-wide SIGPIPE handling. A successful new inherited-arena attach sets SIGXFSZ to `SIG_IGN` process-wide; detach does not restore it. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena.
 
 ## Report sink summary receipt
 

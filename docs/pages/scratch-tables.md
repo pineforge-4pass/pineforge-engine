@@ -216,10 +216,10 @@ APP acceptance tests remain **planned**, not established by engine host fakes.
 
 ## Jail responsibilities and exclusions
 
-**The HOST owns SIGXFSZ disposition.** APP's `pf-jail.c` must install
+**The HOST must configure SIGXFSZ.** APP's `pf-jail.c` must install
 `SIG_IGN` for SIGXFSZ **before** applying `RLIMIT_FSIZE`, including the zero
-limit, and check that setup succeeds. The engine never changes process signal
-disposition. Ignoring the signal makes forbidden file growth report EFBIG;
+limit, and check that setup succeeds. A successful new inherited-arena attach sets SIGXFSZ to `SIG_IGN` process-wide; detach does not restore it.
+Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena. Ignoring the signal makes forbidden file growth report EFBIG;
 it does not permit a disk write. Without it, an accidental disk write may
 terminate the child before a typed failure/refund can be transported.
 

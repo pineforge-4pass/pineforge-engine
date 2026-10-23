@@ -932,8 +932,8 @@ typedef struct pf_scratch_tables_v1 {
  *  -2 during a stream, and -3 during a batch run (including begin callbacks).
  *  A refusal preserves the installed configuration and active run ownership.
  *  Finite streams must supply maxima for their complete admitted lifetime.
- *  The embedding host owns SIGXFSZ policy for disk scratch on file-size-
- *  limited systems; this library never changes process signal disposition. */
+ *  The embedding host sets RLIMIT_FSIZE and owns disk-scratch SIGXFSZ policy. A successful new inherited-arena attach sets SIGXFSZ to SIG_IGN process-wide;
+ *  detach does not restore it. Ignoring SIGXFSZ makes forbidden file growth return EFBIG. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena. */
 PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s,
                                          const pf_scratch_tables_v1* config);
 

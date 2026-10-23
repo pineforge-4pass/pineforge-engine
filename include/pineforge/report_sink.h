@@ -53,7 +53,7 @@ typedef struct pf_report_sink_v1 {
  *  Socket writes use send(..., MSG_NOSIGNAL). For a FIFO the host MUST ignore
  *  SIGPIPE (Python does by default; C hosts use signal(SIGPIPE, SIG_IGN))
  *  so a closed reader becomes the typed report_sink_failed error. The
- *  library never changes process-wide signal dispositions. */
+ *  library never changes process-wide SIGPIPE disposition. A successful new inherited-arena attach sets SIGXFSZ to SIG_IGN process-wide; detach does not restore it. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena. */
 typedef struct pf_report_sink_fd_v1 {
     uint32_t    struct_size;
     uint32_t    version;
