@@ -4549,11 +4549,11 @@ to `source::PineStrategyHost` (`pine_strategy_host.hpp:286-289`), and the cap
 type itself lives in the adapter (`IntradayCap` `intraday_cap.hpp:84`).
 
 Nor is there a build-level one. The two source sets are disjoint:
-`PINEFORGE_SOURCE_LAYER_SOURCES` (`CMakeLists.txt:91`) holds all six
-`src/compat/pine/` units and all fourteen `src/source/` ones, and
-`PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:118`) holds the kernel's own
-forty-five, which are what `add_library` (`CMakeLists.txt:169`) compiles into
-`pineforge_kernel`. `libpineforge.a` still carries both sets when
+`PINEFORGE_SOURCE_LAYER_SOURCES` in `CMakeLists.txt` holds all six
+`src/compat/pine/` units and all 16 `src/source/` ones, and
+`PINEFORGE_KERNEL_SOURCES` holds the kernel's own 48 translation units,
+which the `pineforge_kernel` target compiles.
+`libpineforge.a` still carries both sets when
 `PINEFORGE_BUILD_SOURCE_LAYER` is ON, which is the default; the kernel archive
 exists either way. The installed-header closure is clean too, which the
 independence checker proves

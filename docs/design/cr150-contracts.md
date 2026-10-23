@@ -52,13 +52,14 @@ built, compiled or tested on the P00 machine.
 | `LineWriter::write_trailer()` | 3.7:833-837,881-888 | L6a/L6b-1 |
 
 `report_sink.h` follows the additive runtime-header pattern used by
-`execution_observer.h`. `scripts/check_c_abi_runtime.py` currently names
-`pineforge.h`, `execution_observer.h`, `selected_window.h` in `RUNTIME_HEADERS`.
-P00 adds no definitions, so it leaves that inventory and its counts intact.
-L6b-1 must enroll `report_sink.h`, the three definitions and their counts
-together, and add `PINEFORGE_HAS_REPORT_SINK_V1` only with runtime support
-(DESIGN 6:1268-1271,1333-1338). There is no transitive include from an existing
-header in P00. O/V/K/X/H operations remain L6b-3's extension.
+`execution_observer.h`. `RUNTIME_HEADERS` in `scripts/check_c_abi_runtime.py`
+contains `pineforge.h`, `execution_observer.h`, `selected_window.h` and
+`report_sink.h`. P00 supplied declarations only; the current runtime supplies
+the sink definitions in `src/c_abi.cpp`, and `PINEFORGE_HAS_REPORT_SINK_V1`
+in `pineforge.h` advertises that support (DESIGN 6:1268-1271,1333-1338).
+Future exports must update the enrolled declarations, runtime inventory and
+counts together. Callers include the additive header explicitly.
+O/V/K/X/H operations remain L6b-3's extension.
 
 CORE-TOP's CX-SINK-B1/B2 amendment supersedes DESIGN 3.11's path-only
 statement for jailed children. `LineWriter` also accepts a borrowed
@@ -315,8 +316,8 @@ recovered from resident storage.
 
 L17c/d and L8c use one report path. `fill_trades_section`
 (`src/engine_report.cpp:134-191`) keeps the logical global count and copies only
-open rows for a sink. `report_closed_net_profit`
-(`src/engine_report.cpp:195-208`) starts at `ClosedTradePrefix::pnl` and adds the
+open rows for a sink. `BacktestEngine::report_closed_net_profit`
+in `src/engine_report.cpp` starts at `ClosedTradePrefix::pnl` and adds the
 resident suffix in order. `finish_streamed_trade_metrics`
 (`src/native_execution_consumer.cpp:13810`) finishes copies of the sealed
 accumulators over resident closed rows, then the presented open rows. The
@@ -333,7 +334,10 @@ already in the sink are emitted exactly once, followed by the resident suffix
 and open rows. The sink remains the complete row report.
 
 HostRecorded contract, also to be carried into DESIGN 3.6 and the release-notes
-draft: a host that owns and pushes the curve owns its memory; the production Pine host uses KernelRecordedAtHostMarks (src/source/pine_adapter.cpp:2870), whose recorded curve is held in O(1) and streamed to the scratch file.
+draft: a host that owns and pushes the curve owns its memory. The production
+Pine host selects `NativeReportPolicy::KernelRecordedAtHostMarks` in
+`PineExecutionAdapter::project` (`src/source/pine_adapter.cpp`); its recorded
+curve is held in O(1) and streamed to the scratch file.
 HostRecorded's host-owned curve and the sink-OFF curve path retain their
 existing behavior.
 
@@ -362,11 +366,16 @@ by the same lexically ordered key/value bytes for every incoming hash seed.
 The disk backend keeps its radix buckets, journal, pending header/slot overlay
 and constant-time hash read.
 
-The slab's existing 40-byte records and 16-byte slots have no radix-node
-region. Its mutation path rebuilds an independent 257-word root transform
-with repeated ordered scans and fixed comparison buffers, then publishes the
-admitted header/slot and root. This costs quadratic key comparisons per
-mutation; hashing remains constant-time, with no file IO or allocation.
+The slab's existing 40-byte records and admitted index region have no
+radix-node region. `IdPairStore::publish_fold` uses
+`IdPairSlabFold::update` in `include/pineforge/detail/id_pair_slab_fold.hpp`:
+binary search takes at most `ceil(log2(N+1))` fold row comparisons for N
+ever-keys, and only the affected bucket's bytes are folded (at most M+1
+rows on a split, with M=256 or 1,024 according to offset width).
+The root composes the cached bucket transforms; a new key can also shift
+O(N) roster offsets. Hashing remains constant-time, with no file IO or
+allocation. See the [slab work bound](consumed-partial-exit-fold.md#slab-work-bound)
+and `slab_work_bound_and_oracle_4096` in `tests/test_id_pair_ordered_fold.cpp`.
 The slab layout, admission limits, refusal-before-mutation rule and first-seen
 iteration stay unchanged. The root is reconstructible physical storage of the
 existing hash leaf, not a new logical hash field. Clear resets both roots;

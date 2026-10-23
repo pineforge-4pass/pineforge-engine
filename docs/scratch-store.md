@@ -276,11 +276,17 @@ them.
 
 Its limits, which a replacement need not share: a page size of at most 1 MiB, a
 page count of at most 16 Mi, records below 2^61 bytes and handle numbers below
-2^62; index nodes are not merged after erasures; cell pages never return to the
-page pool; the journal pool keeps as many pages as the largest transaction so
-far touched; and the interior nodes of the handle table are not reclaimed, so
-the backing grows by well under one byte per handle ever issued even when the
-live set is bounded.
+2^62; partially occupied index nodes are not merged after erasures; cell pages
+never return to the page pool; and the journal pool keeps as many pages as the
+largest transaction so far touched.
+
+Empty non-root handle-table leaves and their emptied interior ancestors are
+returned to the page pool by `scratch_impl::Core::hset`. Empty index leaves
+are freed by `scratch_impl::Core::tree_erase`; `scratch_impl::Core::remove_child`
+releases emptied ancestors and collapses an empty index root. These pages can
+be reused under a bounded live set rather than accumulating for every handle
+ever issued. `space_is_reused_under_churn` in `tests/test_scratch_store.cpp`
+checks that the backing extent plateaus while handles and record bytes churn.
 
 ## Statuses
 

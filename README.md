@@ -527,6 +527,24 @@ Full coverage map — every TA class, every order primitive, every `request.secu
 
 TradingView ties some day-boundary logic (intraday order caps, session rollovers) to `syminfo.timezone` and other calculations to the chart timezone. `scripts/run_strategy.py` runs the engine in UTC unless told otherwise; to set a chart timezone, put `"chart_timezone": "<IANA name>"` in the probe's `inputs.json` (`""` keeps UTC) or pass `--chart-tz`.
 
+### Command scratch settings
+
+Command scratch uses these environment settings, read by
+`environment_byte_cap` and `CommandScratchFile` in
+`src/command_scratch_production.cpp`:
+
+| Variable | Meaning and default |
+| --- | --- |
+| `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` | Default shared byte cap for command-scratch backings created on the current thread. Unset means no default cap. When set, it must be a positive decimal `uint64_t`; empty, zero, signed, whitespace-containing and overflowing values are invalid. An explicit run-owner budget takes precedence, but this environment value is still validated. |
+| `PINEFORGE_COMMAND_SCRATCH_DIR` | Directory for disk command-scratch files. Unset or empty selects `/tmp`; `TMPDIR` is not consulted. Failure in the selected directory does not fall back elsewhere. |
+
+A malformed byte cap produces `scratch_configuration_invalid` with
+`stage=command_scratch_byte_cap` and `reason=nondecimal`, `overflow` or
+`nonpositive`. Correct or unset `PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` before
+retrying. `make_command_scratch_backing` uses an attached scratch arena
+instead of a disk file when one is available; the byte cap applies to both
+backings, and the directory setting applies to disk files.
+
 ---
 
 ## Public C ABI
@@ -571,6 +589,11 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_set_account_currency_fx_series` | Effective-time quote-to-account FX |
 | `strategy_get_last_error` | The latest runtime error |
 | `strategy_get_last_error_code` / `strategy_get_last_error_args` | The latest failure's stable code from the closed [run-failure vocabulary](docs/pages/run-failure-codes.md) (`""` when the run succeeded) and its typed arguments as canonical JSON; behind `PINEFORGE_HAS_RUN_FAILURE_CODES_V1` |
+| `pf_report_sink_version` | Report-sink ABI version 1; include `<pineforge/report_sink.h>` for the five sink exports and their descriptors |
+| `strategy_set_report_sink_v1` | Install, replace or remove a path sink that streams canonical v1 report records |
+| `strategy_set_report_sink_fd_v1` | Install, replace or remove a borrowed FIFO or stream-socket sink; the caller retains ownership of the fd |
+| `strategy_report_sink_receipt_v1` | Query record counts, SHA-256 and successful trailer completion |
+| `strategy_report_sink_summary_v1` | Query the ordered T-row summary after successful report capture, without reading back the sink |
 | `pf_report_scratch_arena_stats` | Process-wide scratch-arena peak claimed bytes and exact supplied size; query after finalization and before detach for stdout diagnostics, outside sink bytes |
 | `strategy_require_report_scratch_arena_v1` | Jailed startup admission: attach/validate the inherited fd-5 arena, or refuse with typed `report_sink_failed/arena_backing`; no temporary-file fallback |
 | `strategy_report_sink_diagnostics_v1` | Fixed-size presented equity endpoints and first-bar trade provenance after a completed sink; stdout annualization needs no sink read-back |

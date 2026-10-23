@@ -127,10 +127,11 @@ At the default K=4,096, Q=8,192, w=4, the reserved storage is 115,200 bytes
 inside the existing 131,072-byte index region.
 
 The root and scalar layout state stay in the store; the slab update workspace
-is 4,632 bytes, below the existing disk workspace allowance. The final store
-static assertion still bounds the store plus update workspace and fixed
-buffer/frame allowance to 32 KiB
-(`include/pineforge/detail/id_pair_store.hpp:825`), excluding the separately
+is 4,632 bytes, below the existing disk workspace allowance. The final size
+assertion for `IdPairStore<std::int64_t, true>` and
+`IdPairOrderedFold::workspace_bytes()` in
+`include/pineforge/detail/id_pair_store.hpp` still bounds the store plus update
+workspace and fixed buffer/frame allowance to 32 KiB, excluding the separately
 admitted, fixed slab. All slab access copies through `read_at`/`write_at`;
 there are no retained payload pointers, allocations or file operations.
 
@@ -138,7 +139,7 @@ The existing read-only key/data admission still precedes the first write.
 After admission, the roster and map writes fit spans that were made readable
 at bind; they cannot introduce a capacity refusal. Slab publication uses the
 prospective header while folding, then copies the admitted header and slot
-(`include/pineforge/detail/id_pair_store.hpp:789`). A refused operation
+in `IdPairStore::publish_fold` in that header. A refused operation
 changes no row, map, slot, count, root, byte or extent. The disk pending-write
 and undo protocol remains the one described below. Move carries the roster
 layout, bucket count and root with the slab owner. Clear zeros the same
@@ -303,25 +304,39 @@ WL-PTAILFIX fixture targeted c15d224588, whose `IdPairStore` lacked the
 ordered-fold template argument. The slab fixture instead uses the
 ba5bfdcfb2 fail-before protocol above; neither expectation is a recorded run.
 
-## Separate percentage-exit history walk (unchanged)
+## Percentage-exit certificate and ordered replay fallback
 
-`PineExecutionAdapter::exit` still walks closed trades in reverse to
-the position-start barrier, then continues through `PositionTailSpill` when
-the resident walk reaches its base. Every qualifying percentage exit repeats
-that walk, including rows whose incarnation no longer qualifies. Its work
-is Theta(sum of history lengths), hence Theta(N^2) for an unbroken position.
+For qualifying percentage exits, `PineExecutionAdapter::exit` first observes
+new closed rows and queries `PositionTailSummary::ancestry` or
+`PositionTailSummary::margin` in `src/source/pine_position_tail_summary.hpp`.
+R11's certificate skips the history walk when the selected facts are valid
+and `PositionTailExact` proves the sum exact: quantities are finite,
+nonnegative dyadic values whose whole selected numerator at a common
+binary quantum is strictly below 2^53. Every partial sum is then exactly
+representable, including the original newest-first binary64 fold.
 
-The 100k feed has 400,004 bars and 100,001 qualifying exit calls. In its FIFO
-shape the first exit closes one slice and every subsequent exit closes two.
-Before call j+1 there are 2*j-1 closed rows (j>=1). Summing the preceding
-histories gives `sum(j=1..100000, 2*j-1) = 10,000,000,000` row visits per
-principal execution, or 20,000,000,000 across sink-off and sink-on. This is
-a code-derived count, not a timing measurement. The streamed rows have
-96-byte IDs plus 30-byte footers, about 1.26 TB of repeated window coverage
-for its principal execution, apart from its small resident tail.
+An uncertified query calls `replay_position_tail` in that same header.
+Fallback conditions include a failed exactness check (quantum/magnitude
+shift or sum overflow), invalidated or incomplete summary facts, and missing
+or reactivated old-origin facts. The replay walks resident closed trades in
+reverse to the position-start barrier, then continues through
+`PositionTailSpill` when the resident walk reaches its base. It preserves
+direction, current live-incarnation ancestry, FIFO/from_entry selection,
+the distinct margin-call rule and the original addition order.
 
-That remaining walk can still take hours after hashing is fixed. A future
-fix must preserve position-start filtering, direction, live-incarnation
-ancestry, FIFO/from_entry selection, the distinct margin-call rule, and the
-reverse-order binary64 accumulation used for percentage reservation. A
-reassociated sum can change quantities and trades. No such fix is included.
+Repeated fallback still costs Theta(sum of history lengths), hence
+Theta(N^2) for an unbroken position. The 100k feed has 400,004 bars and
+100,001 qualifying exit calls. In its FIFO shape the first exit closes one
+slice and every subsequent exit closes two. Before call j+1 there are
+2*j-1 closed rows (j>=1). If every call replays, the preceding histories give
+`sum(j=1..100000, 2*j-1) = 10,000,000,000` row visits per principal
+execution, or 20,000,000,000 across sink-off and sink-on. This is a
+code-derived fallback count, not a timing measurement. The integer-quantity
+fixture instead certifies its queries and avoids those repeated visits.
+
+`tests/test_position_tail_summary.cpp` compares certification and fallback
+with an independent ordered walk. `tests/test_position_tail_summary_scale.cpp`
+checks the 100k fixture's certified-query population, zero replay rows and
+linear update work. `tests/test_position_tail_retirement_work.cpp` separately
+checks completed-family retirement work. These existing checks describe the
+implemented paths; execution evidence belongs to the supervisor's lab run.

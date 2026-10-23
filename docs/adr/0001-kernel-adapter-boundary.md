@@ -4,9 +4,9 @@
 - **Applies to:** `pineforge-engine` (this repo) and the `pineforge-codegen` transpiler (separate; public source `pineforge-codegen-oss`)
 - **Companion:** `README.md` "Architecture: kernel vs. parity"; `docs/pages/native-engine.md`;
   `docs/design/native-feature-parity.md` (gap inventory + lane roadmap)
-- **Reconciled against:** this tree. Every concrete claim below was re-read off the working
-  copy and is cited `path:line` in the grammar `scripts/check_doc_anchors.py` enforces, so a
-  citation that stops naming its symbol fails a gate rather than rotting quietly.
+- **Reconciled against:** this tree. Source evidence names definition symbols;
+  remaining `path:line` citations use the grammar enforced by
+  `scripts/check_doc_anchors.py`.
 
 ## Context
 
@@ -31,14 +31,14 @@ Three layers, two of them meant to be optional:
 
 1. **Generic kernel — Pine-agnostic (the reusable core).** The public host is
    `pineforge::NativeStrategyHost` (`native_host.hpp:865`), an abstract subclass of
-   `BacktestEngine`. Kernel translation units are named, not inferred: they are the
-   forty-five members of `PINEFORGE_KERNEL_SOURCES` (`CMakeLists.txt:118`) — the `engine_*`,
+   `BacktestEngine`. Kernel translation units are named, not inferred:
+   `PINEFORGE_KERNEL_SOURCES` in `CMakeLists.txt` has 48 members, including the `engine_*`,
    `native_*`, `ta_*`, `market_driver`, `magnifier`, `math`, `matrix`, `session_time`,
    `timeframe`, `timezone`, `str_utils`, `c_abi`, `native_c_host`, `reservation_expansion`
-   (`CMakeLists.txt:129`) and `pending_order_mirror` (`CMakeLists.txt:135`) units — plus the
-   headers directly under `include/pineforge/`. That list is what `add_library`
-   (`CMakeLists.txt:169`) compiles into `pineforge_kernel` / `PineForge::kernel`, and it and
-   `PINEFORGE_SOURCE_LAYER_SOURCES` are disjoint: no file is in both, and none is outside both.
+   and `pending_order_mirror` units. The kernel also includes the headers directly
+   under `include/pineforge/`. The `pineforge_kernel` target (`PineForge::kernel`
+   alias) compiles the kernel source set, which is disjoint from
+   `PINEFORGE_SOURCE_LAYER_SOURCES`; together they enumerate the library's translation units.
    **Two stems exist twice; the kernel copy is the generic half** —
    `ReservationExpansion` (`src/reservation_expansion.cpp:10`) and
    `include/pineforge/order_birth.hpp` — the TradingView-selection halves keep the stem under
@@ -50,7 +50,7 @@ Three layers, two of them meant to be optional:
    translation unit ever consumed it), and `src/compat/pine/market_admission.cpp` holds the scope
    predicates over it, inside the source-layer set.
 2. **Source-adapter parity runtime — optional, TradingView parity.** The
-   `PINEFORGE_SOURCE_LAYER_SOURCES` set (`CMakeLists.txt:91`): the fourteen `src/source/` units and
+   `PINEFORGE_SOURCE_LAYER_SOURCES` set in `CMakeLists.txt`: the 16 `src/source/` units and
    **all six** `src/compat/pine/` units, with headers under `include/pineforge/source/` and
    `include/pineforge/compat/pine/`. It maps Pine execution semantics onto the kernel.
    `-DPINEFORGE_BUILD_SOURCE_LAYER=OFF` compiles none of them.

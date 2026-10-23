@@ -10,21 +10,35 @@ The exact per-file change list is:
 | File | Change |
 | --- | --- |
 | `src/command_scratch_production.cpp` (moved out of the source layer by `c6f7fb23` to share the factory with the independent kernel) | New production factory and exclusive POSIX file backing: `mkstemp`, immediate `unlink`, close-on-exec, checked positional I/O, sparse extension, real durability calls, errno status mapping, and observer registration. |
-| `src/source/pine_command_scratch_production.hpp` | New factory declaration, observer registration hook, directory/default documentation, geometry/error and observer lifetime contracts. |
+| `src/command_scratch_production.hpp` (forwarded by `src/source/pine_command_scratch_production.hpp`) | Factory declaration, observer registration hook, directory/default documentation, geometry/error and observer lifetime contracts. The source header preserves its existing names as aliases. |
 | `tests/test_o1bk_production_backing.cpp` | New executable with seven named cases, using the library factory without any fixture lease or replacement definition. |
-| `CMakeLists.txt` | One source registration line in `PINEFORGE_SOURCE_LAYER_SOURCES`. |
+| `CMakeLists.txt` | The production provider is registered in `PINEFORGE_KERNEL_SOURCES`, shared by source-enabled and kernel-only builds. |
 | `tests/CMakeLists.txt` | Appended test-list and `pineforge_add_unit_test` registration, conditional on `PINEFORGE_BUILD_SOURCE_LAYER AND UNIX`. |
 | `docs/o1inv-a7-cx-handoff-LAB-o1bk.md` | This handoff, including scope checks, must-fail arguments, and pending remote work. |
 
 The selected directory is `PINEFORGE_COMMAND_SCRATCH_DIR`; unset or empty means
-`/tmp`. A failure in the selected directory throws `std::system_error` with the
-underlying errno. Each successful factory call owns a distinct descriptor and
+`/tmp`, independently of `TMPDIR`. `CommandScratchFile` in
+`src/command_scratch_production.cpp` does not fall back if that directory fails;
+it throws `std::system_error` with the underlying errno.
+Each successful disk factory call owns a distinct descriptor and
 starts at zero pages. `ftruncate` extends the file before positional writes and
 zero-fills gaps; after a successful extension the recorded extent remains real
 even if the subsequent write fails. Offsets are checked before multiplication
 and conversion to `off_t`. Short transfers and early EOF return `io_error`.
-ENOSPC, EDQUOT, and EFBIG map to the contract's `programming_error`; other syscall
-errors map to `io_error`.
+`command_scratch_io_status` in `src/command_scratch_production.cpp` maps
+ENOSPC, EDQUOT, EFBIG and other backing syscall faults to `io_error`;
+`programming_error` is reserved for caller contract violations.
+
+`PINEFORGE_COMMAND_SCRATCH_MAX_BYTES` supplies the default shared byte cap
+when the run owner has not registered an explicit budget. Unset means no
+default cap; a set value must be a positive decimal `uint64_t`.
+`environment_byte_cap` validates it even with an explicit budget, rejecting
+nondecimal text, overflow and empty/zero values with
+`scratch_configuration_invalid`, `stage=command_scratch_byte_cap` and
+`reason=nondecimal`, `overflow` or `nonpositive`, respectively. Correct or
+unset this variable before retrying. `make_command_scratch_backing` applies
+the budget to disk and attached-arena backings; the directory setting only
+selects disk backing placement.
 
 `buffered` sync is a no-op; `data` calls `fdatasync`; `full` calls `fsync`.
 Interrupted I/O is retried. Zero, non-platform-page-multiple, and
@@ -121,8 +135,9 @@ Remote execution belongs on the maintainers' x86-64 lab build hosts after the
 supervisor applies this diff. With the source layer enabled on UNIX, the normal
 test registration links the test against `pineforge`; its descriptor checks
 require `/dev/fd` and its temporary directory is created under the CTest working
-directory. The provider and row are intentionally absent from source-layer-OFF
-kernel-only builds.
+directory. The provider is included in kernel-only builds through
+`PINEFORGE_KERNEL_SOURCES`; this test row remains conditional on the source
+layer and UNIX in `tests/CMakeLists.txt`.
 
 The remote owner should first capture the frozen-closure fail-before, then run
 preflight, a complete release verification build (all test executables), and

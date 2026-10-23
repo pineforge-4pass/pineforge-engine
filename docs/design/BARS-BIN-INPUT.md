@@ -219,10 +219,10 @@ and invokes `--ohlcv`; renaming its mount alone does not switch routes
 
 Read-only searches covered `docker/`, `scripts/`, `runner/` and repository
 filenames/release notes; `campaign/` and `cloudrun/` are absent. The local
-backtest entry is `main` docker/run_json.py:5442; the catalog itself
-identifies the optimizer-only refusal separately (`description`
-docker/run_failure_codes.json:2002). Neither establishes the production HPO
-runner's input support.
+backtest entry is `main` docker/run_json.py:5442; the catalog's
+`window_pruner_unsupported.description` in `docker/run_failure_codes.json`
+identifies the optimizer-only refusal separately. Neither establishes the
+production HPO runner's input support.
 
 Check the separate **pineforge-hpo** repository named by this repository's
 release notes (`HPO` CHANGELOG.md:96): its production runner's accepted
@@ -373,9 +373,9 @@ History inspection with `git log -S` identifies converter commit
 commit `0d05bfa7a8` (`load_bars_bin` docker/run_json.py:2779;
 `bars_bin_version` docker/run_json.py:4726).
 `git tag --contains` returns no tags for either commit in this checkout,
-including no `v1.6.2-rc.1`. The checked-in value remains `1.6.1` (VERSION:1;
-version-file reader `_pineforge_read_version_file`
-cmake/PineForgeVersion.cmake:29).
+including no `v1.6.2-rc.1`. The checked-in value in `VERSION` is `1.6.3`;
+the version-file reader is `_pineforge_read_version_file` in
+`cmake/PineForgeVersion.cmake`.
 The `1.7.0` wording in the loader's selected-window comment is not an
 emitted release version (comment's `QC6a` docker/run_json.py:4761).
 

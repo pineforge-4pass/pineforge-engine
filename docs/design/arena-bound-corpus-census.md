@@ -56,8 +56,10 @@ for certified tightening; the bound tightens nothing yet.
 
 The childPrivate flag remains reported but never enters `unboundedTerms`,
 the top-level `unbounded` or its reason. The child is capped by `RLIMIT_AS`;
-growth beyond that cap is the strategy's typed `memory_limit`, charged to
-the user.
+an allocation failure at that cap is classified as `out_of_memory` by
+`classify_run_failure` in `src/run_failure.cpp`. Its entry in
+`docker/run_failure_codes.json` has class `resource` and `retryable=true`;
+billing remains a host policy.
 
 OHLCV counts, mappings and feeds cannot be read from an empty submodule.
 The child private AS term is additionally unmeasured, and the brief's

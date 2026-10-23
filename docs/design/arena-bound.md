@@ -89,9 +89,11 @@ bounds outside the representation range.
 A typed `arena_exhausted` re-places the run on the next rung of COMPUTE's
 trusted ladder, with escalation cap 2. Arena exhaustion is never charged to
 the user and raises an alert. The child's private allocations are capped by
-its `RLIMIT_AS`; exceeding that cap is the strategy's own typed
-`memory_limit`, charged to the user. The calculator reports facts and
-verdicts; COMPUTE owns the default, ladder and re-placement policy.
+its `RLIMIT_AS`. An allocation failure caused by that cap is classified as
+`out_of_memory` by `classify_run_failure` in `src/run_failure.cpp`;
+`docker/run_failure_codes.json` marks that code as class `resource`,
+`retryable=true`. Billing remains a host policy. The calculator reports facts
+and verdicts; COMPUTE owns the default, ladder and re-placement policy.
 
 ## Facts and the producer's proof obligations
 
@@ -158,9 +160,9 @@ The carried declaration fields are visible in `PineStrategyConfig` at
 | --- | --- |
 | pyramiding | Source entry admission policy, including pending/same-point rules. The optional generic cap is `max_open_lots` at `include/pineforge/native_run_spec.hpp:664`; the Pine projection deliberately leaves it unset (the `max_open_lots` setting spelling is at `src/source/pine_adapter.cpp:2807`). Do not assume this caps strategy.order or use it as an unconditional H. |
 | calc_on_order_fills | Extra source callbacks. The adapter passes its 1<<20 guard `kCoofLoopGuard` through the native cadence at `src/source/pine_adapter.cpp:2988`; the `kCoofLoopGuard` literal is declared at `include/pineforge/source/pine_adapter.hpp:75`. The native point budget is a callback bound, not a total fill bound. |
-| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment and `max_recalculations_per_point` declaration at `include/pineforge/native_run_spec.hpp:686-695`. The actual counter check is `src/native_execution_consumer.cpp:7765`. |
+| max_recalculations_per_point | Further executions still apply after callbacks stop; see the cadence comment on `NativeRunSpec::max_recalculations_per_point` in `include/pineforge/native_run_spec.hpp`. The actual counter check is `NativeExecutionConsumer::claim_recalculation` in `src/native_execution_consumer.cpp`. |
 | first-open COOF chain | A second source-side guard exists at `src/source/pine_scheduler_native.cpp:888`. Count this source path; a native budget of 8 is not Pine's bound. |
-| process_orders_on_close | Adds a matching opportunity after calculation; projection at `src/source/pine_adapter.cpp:2823`. It does not impose an order/trade count. |
+| process_orders_on_close | Adds a matching opportunity after calculation; `PineExecutionAdapter::project` in `src/source/pine_adapter.cpp` selects `NativeCloseExecution::AfterCalculation`. It does not impose an order/trade count. |
 | default_qty, margin, initial capital | Admission/sizing predicates can tighten a separately proved schedule. They provide no universal positive minimum close quantity or minimum loss, hence no universal T. Margin can create additional reductions. |
 | max_bars_back | Series-history setting, not a run/trade limit. The native mapping explicitly rules it out at `docs/pages/pine-to-native.md:142`. |
 | timeframe, input sessions, magnifier | Determine script buckets, path/sub-bar matching opportunities and callbacks. A magnifier with many sub-bars must enter the fill/root proof even if S is unchanged. |
@@ -552,10 +554,13 @@ so 47,185,920 - 3*2,097,152 = 40,894,464 = Bcert. The remaining
 vectors have K=C; subtracting 3C=3,145,728 recovers their former
 non-command certificates exactly.
 
-These formulas apply to the EngineRecorded streamed invocation. The
-selected recorder appends its anchor and selected observations in one
-writer (`src/engine_report.cpp:833`), and capture transfers that writer as `metric_curve`
-instead of copying its prefix (`src/native_execution_consumer.cpp:12915`).
+These formulas apply to the EngineRecorded streamed invocation.
+`BacktestEngine::begin_report_sink` in `src/engine_report.cpp` appends the
+selected anchor; `BacktestEngine::prepare_equity_point` in
+`src/native_execution_consumer.cpp` stages selected observations through
+`BacktestEngine::stage_report_sink_equity_point` into that same scratch
+writer. `NativeExecutionConsumer::capture_presentation` transfers the
+writer as `metric_curve` instead of copying its prefix.
 HostRecorded array presentation and a second full curve are outside this
 profile. Adding another persistent scratch user requires another term and
 rounding region.
@@ -607,7 +612,7 @@ feed/copy inventory makes the entire OHLCV term unbounded/unknown.
 The finalizer receives the sink, not the arena. Its spool bound includes
 the header, all records, trailer and LF bytes. It is not its private heap
 bound. The hard successful-line ceiling is 1,048,576 including LF:
-`src/report_sink_writer.cpp:27` and `src/report_sink_writer.cpp:29`.
+`max_line` and the fixed `Line` buffer in `src/report_sink_writer.cpp`.
 The ceiling is already enforced by the writer; this calculator adds no
 new run-capacity gate.
 
@@ -628,26 +633,28 @@ nX = S*tracePerBar + traceFixed            if trace else 0
 nH = S*hashesPerBar + hashesFixed          if hashes else 0
 ```
 
-K is at most one by `src/report_sink_writer.cpp:531`. The compiler can
+K is at most one by `report_sink::LineWriter::write_k` in
+`src/report_sink_writer.cpp`. The compiler can
 tighten other counts only with a proof; finite E/T does not bound event
 or trace calls made inside an unknown loop.
 
 Safe signed JSON integers use <=17 characters, hash64 is 18 quoted
-characters, and f64 conservatively uses <=64 characters: the formatter
-`f64` at `src/report_sink_writer.cpp:162` builds scientific output with a fixed
-buffer then performs bounded exponent relayout. Each input string byte
-becomes at most six JSON bytes, plus two quotes; see
-`src/report_sink_writer.cpp:207`. Counting delimiters and the LF gives:
+characters, and f64 conservatively uses <=64 characters:
+`report_sink::f64` in `src/report_sink_writer.cpp` delegates to the shared
+`real` formatter, which builds scientific output with a fixed buffer then
+performs bounded exponent relayout. Each input string byte becomes at most
+six JSON bytes, plus two quotes; see `string`, shared by `escaped_string`
+and `wire_string` in that file. Counting delimiters and the LF gives:
 
-| Tag | Maximum line bytes, before taking the hard ceiling | Builder |
+| Tag | Maximum line bytes, before taking the hard ceiling | Builder in `src/report_sink_writer.cpp` |
 | --- | --- | --- |
-| E | 154 | `src/report_sink_writer.cpp:379` |
-| T | 675 + 12*L + 6*commentBytes | `src/report_sink_writer.cpp:398` |
-| O | 60 + 65*seriesSlots | `src/report_sink_writer.cpp:603` |
-| V | 239 + 6*messageBytes | `src/report_sink_writer.cpp:513` |
-| K | 6 + 65*constantSlots | `src/report_sink_writer.cpp:527` |
-| X | 110 + 6*traceNameBytes | `src/report_sink_writer.cpp:537` |
-| H | 25 | `src/report_sink_writer.cpp:545` |
+| E | 154 | `report_sink::LineWriter::write_e` |
+| T | 675 + 12*L + 6*commentBytes | `report_sink::LineWriter::write_t` |
+| O | 60 + 65*seriesSlots | `report_sink::LineWriter::write_o` |
+| V | 239 + 6*messageBytes | `report_sink::LineWriter::write_v` |
+| K | 6 + 65*constantSlots | `report_sink::LineWriter::write_k` |
+| X | 110 + 6*traceNameBytes | `report_sink::LineWriter::write_x` |
+| H | 25 | `report_sink::LineWriter::write_h` |
 
 For variable-width rows use min(expression,1048576). Missing comment,
 message or trace-name byte proofs use the existing full-line ceiling,
@@ -674,7 +681,8 @@ describes the RSS observation only. It never claims an AS measurement.
 The term is unbounded if either value is unknown or either certification
 flag is false. This flag is informational: it does not affect the top-level
 verdict, its reason or `unboundedTerms`. Private growth is capped by the
-child's `RLIMIT_AS` and a breach is the strategy's typed `memory_limit`.
+child's `RLIMIT_AS`; an allocation failure at that cap uses the engine's
+`out_of_memory` classification (class `resource`, `retryable=true`).
 
 The native request `JournalStore` has a resident cap of 2,048 committed
 events in 32-event chunks, with a keep-resident floor of 128, a 32,768-byte

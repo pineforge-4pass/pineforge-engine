@@ -23,9 +23,10 @@ observation. Original opening qualification is also distinct from the later
 broker `OpeningReceipt` Check/Exempt decision, which belongs to a committed fill.
 
 Three historical placement views are fixed when an order is placed and kept in
-the adapter's placement snapshot (`projection_after_close`,
-`projection_over_pyramiding`, `projection_opposite_market_predecessor`
-pine_adapter.hpp:329-340):
+the adapter's `PlacementSnapshot` in `include/pineforge/source/pine_adapter.hpp`:
+`PlacementSnapshot::projection_after_close`,
+`PlacementSnapshot::projection_over_pyramiding` and
+`PlacementSnapshot::projection_opposite_market_predecessor`.
 
 - The prior-close view compares the original accepted-close
   quantity with the existing quantity tolerance. This describes a source-time
