@@ -29,48 +29,49 @@ namespace {
 using ReadStatus = detail::ScratchStatus;
 
 struct OpeningFile {
-    int fd = -1;
+    detail::ScratchFile storage;
     OpeningFile() = default;
     OpeningFile(const OpeningFile&) = delete;
     OpeningFile& operator=(const OpeningFile&) = delete;
-    ~OpeningFile() { if (fd >= 0) ::close(fd); }
-    ReadStatus open() noexcept {
-        char path[] = "/tmp/pineforge-openings-XXXXXX";
-        fd = ::mkstemp(path);
-        if (fd < 0) return ReadStatus::io_error;
-        if (::unlink(path) || ::fcntl(fd, F_SETFD, FD_CLOEXEC) == -1) {
-            ::close(fd);
-            fd = -1;
+    ReadStatus open(const std::string& directory) noexcept {
+        try {
+            storage.set_directory(directory);
+            storage.open("pineforge-openings");
+            return ReadStatus::ok;
+        } catch (...) {
             return ReadStatus::io_error;
         }
-        return ReadStatus::ok;
     }
 };
 
-ReadStatus opening_word(int fd, std::uint64_t index, std::uint64_t& value,
-                        bool write) noexcept {
+ReadStatus write_opening_word(detail::ScratchFile& file, std::uint64_t index,
+                             std::uint64_t value) noexcept {
     if (index > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
         return ReadStatus::programming_error;
     std::array<unsigned char, 8> bytes{};
-    if (write) {
-        for (unsigned i = 0; i != 8; ++i)
-            bytes[i] = static_cast<unsigned char>(value >> (i * 8));
+    for (unsigned i = 0; i != 8; ++i)
+        bytes[i] = static_cast<unsigned char>(value >> (i * 8));
+    try {
+        file.write(index * 8, bytes.data(), bytes.size());
+    } catch (...) {
+        return ReadStatus::io_error;
     }
-    std::size_t done = 0;
-    while (done != bytes.size()) {
-        const auto offset = static_cast<off_t>(index * 8 + done);
-        const auto n = write
-            ? ::pwrite(fd, bytes.data() + done, bytes.size() - done, offset)
-            : ::pread(fd, bytes.data() + done, bytes.size() - done, offset);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) return ReadStatus::io_error;
-        done += static_cast<std::size_t>(n);
+    return ReadStatus::ok;
+}
+
+ReadStatus read_opening_word(const detail::ScratchFile& file, std::uint64_t index,
+                            std::uint64_t& value) noexcept {
+    if (index > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
+        return ReadStatus::programming_error;
+    std::array<unsigned char, 8> bytes{};
+    try {
+        file.read(index * 8, bytes.data(), bytes.size());
+    } catch (...) {
+        return ReadStatus::io_error;
     }
-    if (!write) {
-        value = 0;
-        for (unsigned i = 0; i != 8; ++i)
-            value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8);
-    }
+    value = 0;
+    for (unsigned i = 0; i != 8; ++i)
+        value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8);
     return ReadStatus::ok;
 }
 
@@ -82,7 +83,7 @@ public:
     ReadStatus opening_at(std::uint64_t index, RequestHandle& out) const noexcept override {
         if (index >= count_) return ReadStatus::not_found;
         std::uint64_t incarnation = 0;
-        const auto status = opening_word(file.fd, index, incarnation, false);
+        const auto status = read_opening_word(file.storage, index, incarnation);
         if (status == ReadStatus::ok) out = RequestHandle{run_, incarnation};
         return status;
     }
@@ -107,24 +108,25 @@ ReadStatus OpeningInputCursor::opening_at(
     }
 }
 
-ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
-                           std::shared_ptr<const OpeningReadback>& out) {
+static ReadStatus freeze_openings_in_directory(
+        const RunIdentity& run, const OpeningReadback& input,
+        std::shared_ptr<const OpeningReadback>& out, const std::string& directory) {
     if (input.count() == 0
         || input.count() > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()) / 8)
         return ReadStatus::programming_error;
     // The owner is fixed size; only the anonymous file grows with membership.
     auto frozen = std::make_shared<FrozenOpenings>(run, input.count());
-    auto status = frozen->file.open();
+    auto status = frozen->file.open(directory);
     if (status != ReadStatus::ok) return status;
     OpeningFile work;
-    status = work.open();
+    status = work.open(directory);
     if (status != ReadStatus::ok) return status;
     for (std::uint64_t i = 0; i != input.count(); ++i) {
         RequestHandle handle;
         status = input.opening_at(i, handle);
         if (status != ReadStatus::ok) return status;
         if (!handle.incarnation || handle.run != run) return ReadStatus::programming_error;
-        status = opening_word(frozen->file.fd, i, handle.incarnation, true);
+        status = write_opening_word(frozen->file.storage, i, handle.incarnation);
         if (status != ReadStatus::ok) return status;
     }
     // Bottom-up external merge sort. Two words of merge state, no population
@@ -139,35 +141,42 @@ ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
             for (auto dest = start; dest != end; ++dest) {
                 std::uint64_t a = 0, b = 0;
                 if (left < middle) {
-                    status = opening_word(frozen->file.fd, left, a, false);
+                    status = read_opening_word(frozen->file.storage, left, a);
                     if (status != ReadStatus::ok) return status;
                 }
                 if (right < end) {
-                    status = opening_word(frozen->file.fd, right, b, false);
+                    status = read_opening_word(frozen->file.storage, right, b);
                     if (status != ReadStatus::ok) return status;
                 }
                 const bool take_left = right == end || (left < middle && a <= b);
                 auto value = take_left ? a : b;
                 if (take_left) ++left;
                 else ++right;
-                status = opening_word(work.fd, dest, value, true);
+                status = write_opening_word(work.storage, dest, value);
                 if (status != ReadStatus::ok) return status;
             }
             start = end;
         }
-        std::swap(work.fd, frozen->file.fd);
+        std::swap(work.storage, frozen->file.storage);
         width = width > count / 2 ? count : width * 2;
     }
     std::uint64_t previous = 0;
     for (std::uint64_t i = 0; i != count; ++i) {
         std::uint64_t value = 0;
-        status = opening_word(frozen->file.fd, i, value, false);
+        status = read_opening_word(frozen->file.storage, i, value);
         if (status != ReadStatus::ok) return status;
         if (i && value == previous) return ReadStatus::programming_error;
         previous = value;
     }
     out = std::move(frozen);
     return ReadStatus::ok;
+}
+
+ReadStatus freeze_openings(const RunIdentity& run, const OpeningReadback& input,
+                           std::shared_ptr<const OpeningReadback>& out) {
+    // Standalone readbacks use ScratchFile's TMPDIR policy. Core-owned
+    // freezes below also honor the core's explicitly configured directory.
+    return freeze_openings_in_directory(run, input, out, {});
 }
 
 std::uint64_t opening_count(const std::vector<RequestHandle>& owned,
@@ -444,12 +453,13 @@ bool handle_less(const RequestHandle& a, const RequestHandle& b) noexcept {
     return a.incarnation < b.incarnation;
 }
 
-void canonicalize_owner(Request& request, const RunIdentity& run) {
+void canonicalize_owner(Request& request, const RunIdentity& run, const std::string& directory) {
     if (auto* bind = std::get_if<BindOpenings>(&request.owner)) {
         if (bind->external_openings) {
             if (!dynamic_cast<const FrozenOpenings*>(bind->external_openings.get())) {
                 std::shared_ptr<const OpeningReadback> frozen;
-                const auto status = freeze_openings(run, *bind->external_openings, frozen);
+                const auto status = freeze_openings_in_directory(
+                    run, *bind->external_openings, frozen, directory);
                 if (status != ReadStatus::ok)
                     throw detail::ScratchIoError(EIO, "native opening freeze");
                 bind->external_openings = std::move(frozen);
@@ -4202,7 +4212,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
         impl->result.event_ordinal = ordinal;
         return PreparedSubmit(std::move(impl));
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -4295,7 +4305,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         impl->plan = std::move(plan);
         return PreparedReplace(std::move(impl));
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     // A replace that keeps the handle or carries a binding (R5 lane V19-D)
@@ -4466,7 +4476,7 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
                 SubmitResult{SubmitStatus::Rejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -4556,7 +4566,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
                 ReplaceResult{ReplaceStatus::ReplaceRejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged, identity_);
+    canonicalize_owner(staged, identity_, scratch_directory());
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     if constexpr (Kept) {
         // A replace that keeps the handle or carries a binding (R5 lane
@@ -7927,55 +7937,33 @@ struct WorkingRequestCore::SuccessorRootIndex {
 
     // These are storage metadata, not additional broker state: the prefix
     // and tail partition the root sequence already in chain_roots_. The slab,
-    // descriptor, directory and partition boundary do not enter its digest.
+    // backing, directory and partition boundary do not enter its digest.
     std::array<Row, kTailRows> tail{};
     std::size_t tail_size = 0;
     uint64_t disk_rows = 0;
-    int fd = -1;
+    detail::ScratchFile file{detail::ScratchFile::IoRaiser::auxiliary};
     std::string directory;
     std::shared_ptr<detail::ScratchSlab> slab;
     // Transient input for one bounded-memory preparation, never a root count.
     bool next_adds_root = true;
 
-    SuccessorRootIndex() = default;
+    SuccessorRootIndex() { file.set_store(detail::ScratchStore::successor_roots); }
     explicit SuccessorRootIndex(const std::shared_ptr<detail::ScratchSlab>& owner) noexcept
-        : slab(owner) {}
+        : SuccessorRootIndex() { slab = owner; }
     SuccessorRootIndex(const SuccessorRootIndex&) = delete;
     SuccessorRootIndex& operator=(const SuccessorRootIndex&) = delete;
-    ~SuccessorRootIndex() { if (fd >= 0) ::close(fd); }
 
     void set_directory(const std::string& value) {
-        if (fd >= 0 && directory != value) {
+        if (file.opened() && directory != value) {
             throw std::logic_error("native successor roots directory changed after spill");
         }
+        file.set_directory(value);
         directory = value;
     }
 
     void open_file() {
         assert(!slab);
-        if (fd >= 0) return;
-        const char* temporary = std::getenv("TMPDIR");
-        std::string name = directory.empty()
-                ? (temporary && *temporary ? temporary : "/tmp") : directory;
-        if (name.back() != '/') name += '/';
-        name += "pineforge-roots-XXXXXX";
-        const int opened = ::mkstemp(name.data());
-        if (opened < 0) {
-            throw detail::AuxiliaryScratchIoError(errno, "native successor roots create");
-        }
-        // Unlink before publishing the descriptor: an opened scratch file
-        // has no directory entry. mkstemp creates it with mode 0600.
-        if (::unlink(name.c_str()) != 0) {
-            const int error = errno;
-            ::close(opened);
-            throw detail::AuxiliaryScratchIoError(error, "native successor roots unlink");
-        }
-        if (::fcntl(opened, F_SETFD, FD_CLOEXEC) == -1) {
-            const int error = errno;
-            ::close(opened);
-            throw detail::AuxiliaryScratchIoError(error, "native successor roots cloexec");
-        }
-        fd = opened;
+        file.open("pineforge-roots");
     }
 
     void prepare_append() {
@@ -8007,19 +7995,7 @@ struct WorkingRequestCore::SuccessorRootIndex {
                         "native successor roots file offset exhausted");
             }
             open_file();
-            const off_t offset = static_cast<off_t>(disk_rows * sizeof(Row));
-            const auto* bytes = reinterpret_cast<const unsigned char*>(tail.data());
-            std::size_t written = 0;
-            while (written < length) {
-                const ssize_t count = ::pwrite(fd, bytes + written, length - written,
-                                               offset + static_cast<off_t>(written));
-                if (count < 0 && errno == EINTR) continue;
-                if (count <= 0) {
-                    const int error = count < 0 ? errno : EIO;
-                    throw detail::AuxiliaryScratchIoError(error, "native successor roots write");
-                }
-                written += static_cast<std::size_t>(count);
-            }
+            file.write(disk_rows * sizeof(Row), tail.data(), length);
         }
         // Publish only a complete batch. A short/error write leaves the
         // authoritative tail intact; retry overwrites the same file offset.
@@ -8035,25 +8011,13 @@ struct WorkingRequestCore::SuccessorRootIndex {
     }
 
     Row read(uint64_t index) const {
-        assert((slab || fd >= 0) && index < disk_rows);
+        assert((slab || file.opened()) && index < disk_rows);
         Row row;
         if (slab) {
             slab->read_at(detail::ScratchResource::successor_roots,
                           index * sizeof(Row), &row, sizeof(Row));
         } else {
-            auto* bytes = reinterpret_cast<unsigned char*>(&row);
-            const off_t offset = static_cast<off_t>(index * sizeof(Row));
-            std::size_t received = 0;
-            while (received < sizeof(Row)) {
-                const ssize_t count = ::pread(fd, bytes + received, sizeof(Row) - received,
-                                              offset + static_cast<off_t>(received));
-                if (count < 0 && errno == EINTR) continue;
-                if (count <= 0) {
-                    const int error = count < 0 ? errno : EIO;
-                    throw detail::AuxiliaryScratchIoError(error, "native successor roots read");
-                }
-                received += static_cast<std::size_t>(count);
-            }
+            file.read(index * sizeof(Row), &row, sizeof(Row));
         }
         if (row.root == 0 || row.root >= row.successor) {
             throw detail::AuxiliaryScratchIoError(EIO, "native successor roots invalid row");

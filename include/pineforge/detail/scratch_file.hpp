@@ -74,9 +74,9 @@ public:
     // Default unknown, retained by clear/reopen and moves; file mode ignores
     // it. ScratchFile remains noncopyable; owners cloning a store reapply it.
     // CR150-CX's ports label cohort (cohorts_by_id_), exit_rank
-    // (exit_rank_keys_), sequence_index / erased_minima (IdPairStore data)
-    // and their *_idx files, partial_cycles (consumed_partial_exit_cycles_
-    // data) and partial_cycles_idx, and native_order's successor_roots.
+    // (exit_rank_keys_), erased_minima (IdPairStore data) and its *_idx
+    // file, partial_cycles (consumed_partial_exit_cycles_ data) and
+    // partial_cycles_idx (hash/fold/journal), and successor_roots.
     // l22p labels curve (equity scratch shared by SpillCurve/read windows)
     // and position_tail (L18's separate spill). Rehash replacement files
     // inherit their index label before open(); prefixes are never identities.
@@ -227,6 +227,37 @@ public:
                                       {{"reason", arena ? "arena_io" : "scratch_io"}});
         }
     }
+    // One positional transfer for adapters that already own a retry loop and
+    // observe actual short transfers (IdPairScratchFile's fixture counters).
+    // File mode returns the syscall result/errno, including EINTR; arena/slab
+    // mode copies the same prefix or throws its existing typed failure.
+    // No descriptor escape: even fixture prefix writes select the arena.
+    ssize_t write_some(std::uint64_t offset, const void* data, std::size_t length) {
+        check_extent(offset, length, arena_ != nullptr, io_raiser_);
+        const auto count = std::min(length, bounded_cache_
+            ? kCacheBytes - static_cast<std::size_t>(offset % kCacheBytes)
+            : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+        if (slab_) slab_->write_at(resource_, offset, data, count);
+        else if (arena_) arena_io([&] { arena_->write(region_, offset, data, count); });
+        else {
+            prepare_write(offset, count);
+            return ::pwrite(fd_, data, count, static_cast<off_t>(offset));
+        }
+        return static_cast<ssize_t>(count);
+    }
+    ssize_t read_some(std::uint64_t offset, void* data, std::size_t length) const {
+        check_extent(offset, length, arena_ != nullptr, io_raiser_);
+        const auto count = std::min(length, bounded_cache_ ? kCacheBytes
+            : static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+        if (slab_) slab_->read_at(resource_, offset, data, count);
+        else if (arena_) arena_io([&] { arena_->read(region_, offset, data, count); });
+        else {
+            const auto received = ::pread(fd_, data, count, static_cast<off_t>(offset));
+            if (received > 0) discard_clean_cache();
+            return received;
+        }
+        return static_cast<ssize_t>(count);
+    }
     void write(std::uint64_t offset, const void* data, std::size_t length) {
         if (slab_) {
             slab_->write_at(resource_, offset, data, length);
@@ -323,15 +354,18 @@ private:
         }
     }
     int fd_ = -1;
+    // Group policy scalars in existing padding: the fixed fold-segment
+    // arrays embed this type and retain their unchanged 32 KiB assertion,
+    // including the command lane's additional per-region limit metadata.
+    IoRaiser io_raiser_ = IoRaiser::report_sink;
     std::string directory_;
     // Physical backing only; logical table records and hash folds are shared
     // by both backends. No region base/payload pointer is retained here.
     std::shared_ptr<ScratchSlab> slab_;
     ScratchResource resource_ = ScratchResource::cohort;
+    bool bounded_cache_ = false;
     ScratchArena* arena_ = nullptr;
     ScratchArena::Region region_;
-    IoRaiser io_raiser_ = IoRaiser::report_sink;
-    bool bounded_cache_ = false;
     std::uint64_t dirty_begin_ = 0, dirty_end_ = 0;
 };
 } // namespace pineforge::detail
