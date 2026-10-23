@@ -101,14 +101,13 @@ The full contract is
 `<pineforge/report_mode.h>` for the C-compatible data declarations. Native C++
 clients use `ReportMode`, `ReportEnvelopeV1`,
 `BacktestEngine::set_report_mode_v1` and
-`BacktestEngine::fill_report_envelope_v1`. The methods are declarations only
-until the runtime implementation lands. C/ctypes clients access the envelope
+`BacktestEngine::fill_report_envelope_v1`. C/ctypes clients access the envelope
 through an explicitly negotiated provider bridge.
 
 | Mode | Metrics and summary scalars | Resident sequences | External sequences |
 | --- | --- | --- | --- |
 | FULL (`0`) | Existing values/bits | Existing owning arrays | None through the explicit FULL envelope |
-| SUMMARY_ONLY (`1`) | Bit-identical to FULL, including all four metric blocks | None | No captured report sequences or private curve tape |
+| SUMMARY_ONLY (`1`) | Exact metrics require an eligible presentation/replay provider | No arrays in the returned report; execution retention uses the controls below | None |
 | STREAMED (`2`) | Same values/bits | None | Complete enabled sequences, in existing report order, through a bounded sink |
 
 Legacy calls, including the existing sink-v1 route, keep their current
@@ -116,6 +115,23 @@ behavior. Explicit FULL conflicts with an installed sink; STREAMED requires
 one; SUMMARY_ONLY conflicts with sequence-sink capture. FULL is an owning-array
 compatibility action and makes no fixed-memory claim. SUMMARY_ONLY must not
 allocate full arrays and delete them after reporting.
+
+`set_report_mode_v1(SUMMARY_ONLY)` selects the returned report shape. By
+itself it retains the ordinary equity history and does not disable trace,
+hash or output recording. It makes no fixed-memory guarantee for execution.
+Bounded summary recording also requires both independent controls before
+the next run:
+
+- `set_equity_report_mode(ReportMode::SUMMARY_ONLY)` keeps the held equity
+  point and fixed metric folds instead of the curve or a private curve tape.
+- `set_optional_report_mode(report_sequence::ReportMode::SummaryOnly)`
+  omits the resident trace/name, broker-hash and output row/event histories.
+
+Check every setter's status. These recording controls are necessary for
+bounded summary storage; they do not supply the exact presentation adapter
+or second replay required by the O1 contract. A provider must establish those
+capabilities before certifying a complete exact summary. Script-readable
+historical trade storage is separate from report capture.
 
 The new data layout wraps the ABI-4 payload rather than growing it:
 

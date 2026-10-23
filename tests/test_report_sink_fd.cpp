@@ -359,9 +359,9 @@ Result baseline(const fs::path& directory, const std::vector<Bar>& bars) {
         install_fd(host, unused->fd());
         install_path(host, directory / "path.ndjson"); // path replaces fd
         result = execute(host, bars);
-        require(strategy_set_report_sink_fd_v1(host.handle(), nullptr) == 0,
+        require(strategy_set_report_sink_fd_v1(host.handle(), nullptr) == -3,
                 "fd setter cannot remove a path sink");
-        require(receipt(host).complete == 0, "sink removal retained a receipt");
+        require(receipt(host).complete == 1, "refused sink removal preserved the completed receipt");
     }
     require(::fcntl(unused->fd(), F_GETFD) >= 0, "path replacement closed borrowed fd");
     require(unused->finish().empty(), "replaced fd sink received bytes");

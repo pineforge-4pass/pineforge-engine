@@ -443,6 +443,8 @@ public:
                                       const TradeC* open_rows, int count) const;
     pf_report_sink_summary_v1 finish_report_sink_summary(const BacktestEngine& engine,
         const TradeC* open_rows, int count) const;
+    // Non-FULL capture rebuilds terminal rows without an owning open-lot view.
+    pf_report_sink_summary_v1 finish_report_sink_summary(const BacktestEngine& engine) const;
     void fold_sealed_exit_phase(std::uint8_t phase);
     std::uint64_t replay_sealed_exit_phases(std::uint64_t seed) const noexcept;
     void restart_exit_phases() noexcept { exit_phases_restarted_ = closed_trade_prefix_.base != 0; }
