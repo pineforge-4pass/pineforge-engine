@@ -222,8 +222,8 @@ inline ScratchStatus finish(CommandScratchStore& store, ScratchStatus status) no
     if (status == ScratchStatus::ok)
         status = store.commit(ScratchDurability::buffered);
     if (status != ScratchStatus::ok && store.transaction_active()) {
-        const auto rollback = store.rollback();
-        if (rollback != ScratchStatus::ok) return rollback;
+        // D-07: cleanup must preserve the first status and its carried failure.
+        (void)store.rollback();
     }
     return status;
 }

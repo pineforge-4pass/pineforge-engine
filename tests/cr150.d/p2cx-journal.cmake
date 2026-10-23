@@ -1,0 +1,2 @@
+list(APPEND TEST_SOURCES test_journal_codec_finish_preserves_first_failure)
+pineforge_add_unit_test(test_journal_codec_finish_preserves_first_failure)

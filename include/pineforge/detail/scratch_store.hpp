@@ -91,9 +91,11 @@ public:
 
     // Construction/open result; no operation is legal unless this is ok.
     ScratchStatus status() const noexcept;
-    // The last typed backing I/O failure, retained across successful rollback
-    // I/O so a status raiser can preserve it. A new begin clears it. Diagnostic
-    // state only; it is absent from the store's logical/durable digests.
+    // The first typed backing I/O failure in an active transaction, retained
+    // across rollback I/O, including failures. Outside a transaction, a later
+    // I/O failure replaces it (or clears it for a status-only failure).
+    // Successful I/O preserves it; a new begin clears it. Diagnostic state
+    // only; it is absent from the store's logical/durable digests.
     const ReportScratchIoError* carried_failure() const noexcept override;
     std::size_t page_size() const noexcept override;
     std::uint64_t record_count() const noexcept override;

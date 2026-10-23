@@ -230,7 +230,10 @@ public:
         backing_io_failed_ = true;
         // Diagnostic transport, not durable logical state. Successful cleanup
         // I/O must not erase the exception for the status an owner will raise.
-        // A later status-only I/O failure replaces it; a fresh begin resets it.
+        // D-07: keep the transaction's first typed failure through failed
+        // rollback too. Independent reads outside a transaction still replace
+        // an older diagnostic, including with a status-only I/O failure.
+        if (active_ && carried_failure_) return;
         carried_failure_.reset();
         if (const auto* failure = backing_->carried_failure()) carried_failure_ = *failure;
     }
