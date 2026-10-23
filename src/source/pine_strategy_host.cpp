@@ -2414,9 +2414,7 @@ void source::PineStrategyHost::order_global_exit_children(
         scratch_put(scratch, {scratch_row, row_count++, 0, 0}, row);
     };
     const auto header_for = [&](std::size_t source, const Trade& row) {
-        const auto none = static_cast<std::uint8_t>(NativePathPhase::None);
-        const auto phase = source < adapter_.trade_exit_phase_.size()
-            ? adapter_.trade_exit_phase_[source] : none;
+        const auto phase = adapter_.exit_phase_value(source);
         return scratch_trade_header(row, source, phase);
     };
     // The rule the adapter runs under, not the host's live copy a body writes.
@@ -2527,7 +2525,7 @@ void source::PineStrategyHost::order_global_exit_children(
         const auto header = scratch_read_trade(scratch, handle);
         const auto target = first + static_cast<std::size_t>(key[1]);
         const auto phase = static_cast<std::uint8_t>(header[1]);
-        if (target >= adapter_.trade_exit_phase_.size() && phase == none) return;
+        if (phase == none && adapter_.exit_phase_value(target) == none) return;
         adapter_.set_exit_phase(target, phase);
     });
     transaction.finish();
@@ -2573,8 +2571,7 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
         auto& scratch = trade_scratch();
         TradeScratchTransaction transaction(scratch);
         for (std::size_t source = start; source < end; ++source) {
-            const auto phase = source < adapter.trade_exit_phase_.size()
-                ? adapter.trade_exit_phase_[source] : none;
+            const auto phase = adapter.exit_phase_value(source);
             const auto sequence = adapter.command_sequence_for_exit(
                 trades[source].exit_id, trades[source].entry_id);
             scratch_put(scratch,
@@ -2607,7 +2604,10 @@ std::optional<std::size_t> source::PineStrategyHost::sort_same_bar_exit_trades(
                     scratch_buffer(mapping.data(), sizeof mapping)), scratch);
                 const auto source = static_cast<std::size_t>(mapping[0]);
                 const auto phase = static_cast<std::uint8_t>(mapping[1]);
-                if (current < adapter.trade_exit_phase_.size() || phase != none)
+                // Both indices are global; only the adapter translates the
+                // sealed base. Clear an existing phase even when None moves
+                // here, without extending an absent all-None tail.
+                if (phase != none || adapter.exit_phase_value(current) != none)
                     adapter.set_exit_phase(current, phase);
                 if (source == cycle) trades.replace(current, row);
                 else trades.replace(current, trades[source]);

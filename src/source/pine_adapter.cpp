@@ -14984,8 +14984,13 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
         found_family = true;
     }
     if (!found_family) return;
-    // Every member the kernel no longer works, including settled members,
-    // uses one same-run incarnation that no request is ever issued under.
+    // Source bracket-cancel target contract (L19h): every non-working
+    // member, including the settled prefix, records one NotWorking outcome
+    // targeting same-run UINT64_MAX in roster order. Settled members retain
+    // only count/digest state, so normalize the non-working tail too: the
+    // recorded target must not depend on placement-retirement timing.
+    // Working members still target their own handles. Pinned by
+    // test_bracket_cancel_not_working_target; no hash domain is changed.
     constexpr std::uint64_t kNeverIssued = std::numeric_limits<std::uint64_t>::max();
     for (std::size_t index = 0; index < settled; ++index)
         (void)require_host().cancel(native_order::RequestHandle{settled_run, kNeverIssued});
