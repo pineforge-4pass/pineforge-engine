@@ -147,6 +147,32 @@ instead ([Run-failure codes](pages/run-failure-codes.md)).
 
 ## Current remote CTest contract: `ctest-shard-union/v1`
 
+**L6 rule, 2026-10-24 02:12 (supersedes the 01:48 ruling below):**
+the default `slow` exclusion follows the declared CMake **Debug build type**.
+It covers `debug` and `sanitizers`, with or without `--ctest-shard`, and a
+future Debug profile inherits it whenever it uses the full test registry.
+These builds compile the Debug-only closed-row re-fold, which makes the
+large ledger rows quadratic. `release`, `kernel` and `native` use Release
+builds, retain `excludeLabel: null` by default, and run every registered
+`slow` row at its full size. Release remains the gate for these rows.
+`live-sanitizers` and `live-tsan` are Debug builds but select CTest only from
+`build/runner` (`scripts/ci_verify.py`, `LIVE_ONLY_PROFILES` and the
+`test_dir /= 'runner'` branch): that registry has no `slow` rows, so both
+retain no label exclusion and still reject `--exclude-label`.
+
+The declared exclusion and summary accounting apply equally to `debug` and
+`sanitizers`: sharded summaries declare
+`excludeLabel: "slow"` and every `ctestExcludedNames` entry; selection is the
+full registry minus those names, and only selection is partitioned.
+The registry hash still covers every registered name. Both profiles retain
+null default execution floors, unchanged registration floors and the same
+unsharded/1-of-1 accounting. An explicit valid `--exclude-label X` still wins
+on the unsharded and 1/1 paths. For `N > 1`, only the profile's declared
+Debug-build-type `slow` exclusion is accepted; Release and kernel exclusions
+remain refused. This rule supersedes the older sanitizer-full-population
+claims below; the only additional unsharded default change is that
+`sanitizers` now excludes `slow`.
+
 **L6 ruling, 2026-10-24 01:48:** the `debug` profile now excludes CTest label
 `slow` by default, both with and without `--ctest-shard`. The 1.7.0 Debug gate
 does not run these rows; Release and the sanitizer profile must still run

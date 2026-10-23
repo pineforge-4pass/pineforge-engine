@@ -1109,7 +1109,7 @@ def validate_ctest_shard_union(
     if not names_valid(registry):
         raise ValueError('invalid CTest registry names')
     digest = ctest_registry_sha256(registry)
-    exclude_label = 'slow' if profile == 'debug' else None
+    exclude_label = PROFILE[profile].exclude_label
     excluded = first.get('ctestExcludedNames')
     if (not names_valid(excluded) or excluded != sorted(set(excluded))
             or not set(excluded) <= set(registry)
@@ -1242,13 +1242,19 @@ class Profile:
     # Minimum CTest rows the profile must run; None leaves the count ungated.
     min_tests: int | None = None
     thread_sanitizers: bool = False
-    exclude_label: str | None = None
+
+    @property
+    def exclude_label(self) -> str | None:
+        # Runner-only profiles select runner/, which has no slow ledger rows.
+        # Every other Debug build compiles the quadratic Debug-only checks.
+        return ('slow' if self.build_type == 'Debug' and self.name not in LIVE_ONLY_PROFILES
+                else None)
 
 
 PROFILE = {
     'release': Profile('release', 'Release', False, False, True, True,
                        profile_full_floor('release')),
-    'debug': Profile('debug', 'Debug', False, False, True, True, exclude_label='slow'),
+    'debug': Profile('debug', 'Debug', False, False, True, True),
     'sanitizers': Profile('sanitizers', 'Debug', True, False, True, True),
     'native': Profile('native', 'Release', False, True, False, True),
     'live-sanitizers': Profile('live-sanitizers', 'Debug', True, True, False, True,
@@ -1516,7 +1522,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
     parser.add_argument('--exclude-label', default=None,
                         help='exclude one CTest label; verify the run count against '
                              'CTest discovery with and without -LE; default: slow '
-                             'for debug only, no exclusion for other profiles')
+                             'for Debug build types except runner-only profiles '
+                             '(currently debug and sanitizers); otherwise no exclusion')
     parser.add_argument('--ctest-shard', type=parse_ctest_shard, default=None, metavar='I/N',
                         help='run deterministic CTest shard I of N (1 <= I <= N <= 8); '
                              'all shards are required for a full verification')
@@ -1559,9 +1566,9 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
     if args.ctest_shard is not None and args.ctest_shard.count > 1:
         if args.profile not in CTEST_SHARD_PROFILES:
             raise ConfigError('--ctest-shard with N > 1 requires release, debug, sanitizers or kernel')
-        if exclude_label is not None and (args.profile != 'debug' or exclude_label != 'slow'):
+        if exclude_label is not None and exclude_label != PROFILE[args.profile].exclude_label:
             raise ConfigError('--ctest-shard with N > 1 only permits the declared '
-                              'debug exclusion of label slow')
+                              'Debug-build-type exclusion of label slow')
         minimum = profile_min_tests(PROFILE[args.profile], source)
         if minimum is not None and args.min_tests is not None and args.min_tests < minimum:
             raise ConfigError('--ctest-shard must not lower the undivided profile floor '
@@ -1989,8 +1996,9 @@ class Driver:
                 raise ValueError('label-selected CTest names are outside the registry')
             shard = self.cfg.ctest_shard
             if (shard.count > 1 and self.cfg.exclude_label is not None
-                    and (self.cfg.profile.name != 'debug' or self.cfg.exclude_label != 'slow')):
-                raise ValueError('ctest-shard-union/v1 only permits the declared debug exclusion')
+                    and self.cfg.exclude_label != self.cfg.profile.exclude_label):
+                raise ValueError('ctest-shard-union/v1 only permits the declared '
+                                 'Debug-build-type exclusion')
             excluded = ()
             if self.cfg.exclude_label:
                 labelled = self.invoke(
