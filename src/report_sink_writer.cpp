@@ -1,4 +1,5 @@
 #include "report_sink_writer.hpp"
+#include "report_value_invalid.hpp"
 #include "sha256.hpp"
 
 #include <pineforge/version.h>
@@ -505,6 +506,8 @@ void LineWriter::write_e(const pf_equity_point_t& point) {
         if (state.trailer.count_e == safe_integer) invalid("report sink E count exceeds its bound");
         if (state.has_equity_time && point.time_ms < state.equity_time)
             invalid("report sink equity times are not ordered");
+        (void)report::finite_value(point.equity, "equity_curve.equity");
+        (void)report::finite_value(point.open_profit, "equity_curve.open_profit");
         auto& line = state.scratch;
         line.clear();
         line.append("[\"E\","); integer(line, point.time_ms);
