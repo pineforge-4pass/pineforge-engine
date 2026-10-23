@@ -196,6 +196,23 @@ class Coverage(unittest.TestCase):
         self.assertEqual(result, 1, output)
         self.assertIn("ExitScratchContext.next_scope", output)
 
+    def test_exit_scratch_teardown_failure_is_explicitly_waived(self):
+        self.assertNotIn("teardown_failure", checker.EXIT_SCRATCH_CONTEXT_FOLDS)
+        self.assertEqual(
+            checker.EXIT_SCRATCH_OBSERVATION_WAIVERS["teardown_failure"],
+            "Run-local failure memory of a failed scope teardown, rethrown at the next "
+            "entry point; the run then ends in a typed failure, no trading decision "
+            "reads it and no durable state carries it.")
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
+        # A diagnostic-only waiver must also reject an accidental hash re-pin.
+        identity = "hash_source_run_identity(f, scratch->run);"
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", identity,
+            identity + "\n    f.b(scratch->teardown_failure.pending());"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("ExitScratchContext.teardown_failure is waived, not folded", output)
+
     def test_exit_scratch_context_fields_are_required(self):
         result, output = self.check()
         self.assertEqual(result, 0, output)
@@ -222,6 +239,8 @@ class Coverage(unittest.TestCase):
                 self.assertIn("ExitScratchContext", output)
 
     def test_new_exit_scratch_context_field_is_not_silently_ignored(self):
+        result, output = self.check()
+        self.assertEqual(result, 0, output)
         for declaration in (
             "    std::uint64_t injected_exit_state = 0;\n",
             "    bool (*injected_exit_reader)(void*) = nullptr;\n",

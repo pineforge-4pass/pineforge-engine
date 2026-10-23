@@ -729,6 +729,8 @@ def _check_fence(fence: Fence, owners: dict[str, dict[str, set[str]]]) -> None:
             for value in tests:
                 _owned(statement, fence.lane, "test", value, owners)
             reads = words[property_at + 2:]
+            _check_skip_values(CMAKE, statement,
+                               [words[property_at + 1], ";".join(reads)])
         else:
             raise CheckFailure(
                 f"{CMAKE}:{statement.line}: statement {statement.name}() is not allowed in a fence")
