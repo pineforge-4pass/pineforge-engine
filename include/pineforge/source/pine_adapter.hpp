@@ -22,6 +22,7 @@
 #include <pineforge/detail/working_minima.hpp>
 #include <pineforge/source/working_snapshot_codec.hpp>
 #include <pineforge/source/pending_roster.hpp>
+#include <pineforge/source/pending_projection_counts.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -919,6 +920,7 @@ public:
             PlacementSnapshot row(std::forward<Args>(args)...);
             const auto high = std::max(high_water_, incarnation);
             ::pineforge::detail::working_store::transaction(*store_, [&] {
+                projection_changed(incarnation, nullptr, &row); // Named placements contribute once per roster occurrence.
                 stored_->put(incarnation, row);
                 store_metadata(size_ + 1, high, erased_rows_, erased_digest_);
             });
@@ -939,6 +941,7 @@ public:
         }
         PlacementSnapshot* row = node.get();
         place(incarnation, std::move(node));
+        projection_changed(incarnation, nullptr, row); // Named placements contribute once per roster occurrence.
         ++size_;
         high_water_ = std::max(high_water_, incarnation);
         return {iterator(this, incarnation, row), true};
@@ -951,12 +954,16 @@ public:
             if (!stored_->contains(incarnation)) {
                 throw coded<std::out_of_range>(RunFailureCode::engine_invariant, {}, "source placement handle is absent");
             }
+            const auto before = observe(incarnation);
             ::pineforge::detail::working_store::transaction(*store_, [&] {
+                projection_changed(incarnation, &*before, &snapshot); // Replacement removes the old group before adding the new one.
                 stored_->put(incarnation, snapshot);
             });
             return;
         }
-        at(incarnation) = std::move(snapshot);
+        auto& before = at(incarnation);
+        projection_changed(incarnation, &before, &snapshot); // Replacement removes the old group before adding the new one.
+        before = std::move(snapshot);
     }
 
     // Borrow the complete retirement workset before touching any row, cohort
@@ -982,6 +989,7 @@ public:
         // Fold the admitted pair before taking the node as well: a disk I/O
         // failure must not lose its retained-row query evidence.
         fold_sequence(erased_minima_, *row);
+        projection_changed(incarnation, row, nullptr); // Missing placements leave their raw roster slots invisible.
         std::unique_ptr<PlacementSnapshot> node = take(incarnation);
         remember_erased(*node);
         --size_;
@@ -1024,6 +1032,18 @@ public:
     std::uint64_t erased_digest() const noexcept { return erased_digest_; }
 
 private:
+    friend class PineExecutionAdapter;
+    using ProjectionNotify = void (*)(void*, std::uint64_t,
+                                      const PlacementSnapshot*, const PlacementSnapshot*);
+    void observe_projection(void* owner, ProjectionNotify notify) noexcept {
+        projection_owner_ = owner; projection_notify_ = notify;
+    }
+    void projection_changed(std::uint64_t incarnation, const PlacementSnapshot* before,
+                            const PlacementSnapshot* after) {
+        if (projection_notify_) projection_notify_(projection_owner_, incarnation, before, after);
+    }
+    void* projection_owner_ = nullptr;
+    ProjectionNotify projection_notify_ = nullptr;
     template<bool Const>
     auto stored_find(std::uint64_t incarnation) const
         -> Iterator<Const> {
@@ -2771,6 +2791,153 @@ private:
     void revive_brackets_after_margin(
         const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
     int projected_pending_size() const noexcept;
+    // Lane A's only logical count seam; lane B can replace its implementation.
+    void pending_projection_changed(const PlacementSnapshot* before,
+                                    const PlacementSnapshot* after,
+                                    std::uint64_t copies = 1);
+    void pending_projection_placement_changed(std::uint64_t incarnation,
+        const PlacementSnapshot* before, const PlacementSnapshot* after);
+    void publish_projected_count();
+    using PendingPrefixes = std::array<std::size_t, 6>;
+    PendingPrefixes pending_prefixes(int changed = -1, std::size_t size = 0) const;
+    int pending_segment(const void* rows) const;
+    void pending_projection_slots(int segment, std::size_t first, std::size_t last,
+                                  bool add);
+    void pending_projection_live(const native_order::RequestHandle&, bool add);
+    void pending_projection_removed(int segment, const PendingPrefixes& before,
+                                    std::size_t removed_inside);
+    template<class Edit> void pending_projection_transaction(Edit&& edit) {
+        const auto before = projected_count_;
+        try {
+            const auto apply = [&] { edit(); publish_projected_count(); };
+            if (scratch_store_)
+                ::pineforge::detail::working_store::transaction(*scratch_store_, apply);
+            else apply();
+        } catch (...) { projected_count_ = before; throw; }
+    }
+    template<class Edit>
+    void edit_projected_pending(int segment, std::size_t position,
+            std::size_t erased, std::size_t inserted, Edit&& edit) {
+        pending_projection_transaction([&] {
+            const auto before = pending_prefixes();
+            const std::array<std::size_t, 6> sizes{{live_handles_.size(),
+                pending_same_bar_commands_.size(), pending_entries_.size(),
+                pending_bracket_legs_.size(), pending_coof_requests_.size(),
+                source_shadow_pending_.size()}};
+            const auto after = pending_prefixes(segment, sizes[segment] - erased + inserted);
+            const auto old_end = position + erased, new_end = position + inserted;
+            const auto old_tail = before[segment] > old_end ? before[segment] - old_end : 0;
+            const auto new_tail = after[segment] > new_end ? after[segment] - new_end : 0;
+            pending_projection_slots(segment, std::min(position, before[segment]),
+                                     std::min(old_end, before[segment]), false);
+            if (old_tail > new_tail)
+                pending_projection_slots(segment, old_end + new_tail, old_end + old_tail, false);
+            for (int s = segment + 1; s < 6; ++s)
+                if (before[s] > after[s])
+                    pending_projection_slots(s, after[s], before[s], false);
+            edit();
+            pending_projection_slots(segment, std::min(position, after[segment]),
+                                     std::min(new_end, after[segment]), true);
+            if (new_tail > old_tail)
+                pending_projection_slots(segment, new_end + old_tail, new_end + new_tail, true);
+            for (int s = segment + 1; s < 6; ++s)
+                if (after[s] > before[s])
+                    pending_projection_slots(s, before[s], after[s], true);
+        });
+    }
+    template<class T>
+    void append_projected_pending(::pineforge::detail::WorkingSequence<T>& rows,
+            typename ::pineforge::detail::WorkingSequence<T>::value_type row) {
+        // The edited raw range and any INT_MAX boundary crossings change together.
+        edit_projected_pending(pending_segment(&rows), rows.size(), 0, 1,
+                               [&] { rows.push_back(std::move(row)); });
+    }
+    template<class T>
+    void clear_projected_pending(::pineforge::detail::WorkingSequence<T>& rows) {
+        // Clearing one queue can promote rows from a later raw segment.
+        edit_projected_pending(pending_segment(&rows), 0, rows.size(), 0,
+                               [&] { rows.clear(); });
+    }
+    template<class T>
+    auto erase_projected_pending(::pineforge::detail::WorkingSequence<T>& rows,
+            typename ::pineforge::detail::WorkingSequence<T>::iterator at) {
+        auto result = rows.end();
+        // Remove the intact source row before erase shifts its successors.
+        edit_projected_pending(pending_segment(&rows), at.index(), 1, 0,
+                               [&] { result = rows.erase(at); });
+        return result;
+    }
+    template<class T>
+    T take_projected_pending(::pineforge::detail::WorkingSequence<T>& rows,
+            typename ::pineforge::detail::WorkingSequence<T>::iterator& at) {
+        T result{};
+        // Observe the old key before the caller takes ownership of its bytes.
+        edit_projected_pending(pending_segment(&rows), at.index(), 1, 0, [&] {
+            result = std::move(*at);
+            at = rows.erase(at);
+        });
+        return result;
+    }
+    template<class T>
+    void replace_projected_pending(::pineforge::detail::WorkingSequence<T>& rows,
+            typename ::pineforge::detail::WorkingSequence<T>::iterator at,
+            typename ::pineforge::detail::WorkingSequence<T>::value_type row) {
+        // Whole-row replacement may change exit membership or any group key.
+        edit_projected_pending(pending_segment(&rows), at.index(), 1, 1,
+                               [&] { rows.set(at.index(), row); });
+    }
+    template<class T, class Predicate>
+    void erase_projected_pending_if(::pineforge::detail::WorkingSequence<T>& rows,
+                                    Predicate&& predicate) {
+        pending_projection_transaction([&] {
+            const auto segment = pending_segment(&rows);
+            const auto before = pending_prefixes();
+            std::size_t index = 0, removed_inside = 0;
+            // Observe each removed row before remove_if moves a survivor over it.
+            const auto end = std::remove_if(rows.begin(), rows.end(), [&](const T& row) {
+                const bool remove = predicate(row);
+                if (remove && index < before[segment]) {
+                    pending_projection_changed(&row.snapshot, nullptr);
+                    ++removed_inside;
+                }
+                ++index;
+                return remove;
+            });
+            rows.erase(end, rows.end());
+            pending_projection_removed(segment, before, removed_inside);
+        });
+    }
+    template<class T>
+    ::pineforge::detail::WorkingSequence<T> drain_projected_pending(
+            ::pineforge::detail::WorkingSequence<T>& rows) {
+        ::pineforge::detail::WorkingSequence<T> detached;
+        // Drained storage stops contributing before any detached row is edited.
+        edit_projected_pending(pending_segment(&rows), 0, rows.size(), 0,
+                               [&] { detached = std::move(rows); });
+        return detached;
+    }
+    // Integration of lane A (count) with lane C (roster owner): the live roster
+    // is a PendingRoster, not a WorkingSequence, so its two bulk edits go through
+    // edit_projected_pending with the roster facade as the edit.
+    void append_projected_roster(const native_order::RequestHandle& handle) {
+        edit_projected_pending(0, live_handles_.size(), 0, 1,
+                               [&] { live_handles_.append(handle); });
+    }
+    void clear_projected_roster() {
+        edit_projected_pending(0, 0, live_handles_.size(), 0,
+                               [&] { live_handles_.clear(); });
+    }
+    template<class Edit>
+    void erase_projected_handle(const native_order::RequestHandle& handle, Edit&& edit) {
+        pending_projection_transaction([&] {
+            const auto before = pending_prefixes();
+            const bool included = pending_projection_counts_.get(2, {}, {}, handle) != 0;
+            // Full-handle prefix membership avoids a second roster search.
+            if (included) pending_projection_live(handle, false);
+            edit();
+            pending_projection_removed(0, before, included ? 1 : 0);
+        });
+    }
     bool projected_pending_at(int index, std::optional<PlacementSnapshot>& snapshot,
                               native_order::RequestHandle& handle) const noexcept;
     int projected_raw_pending_size() const noexcept;
@@ -2877,6 +3044,9 @@ private:
     CohortTable cohorts_by_id_;
     CohortTable::iterator require_cohort(const SourceId&);
     PlacementTable placement_;
+    // Derived from already-hashed rows; never included in the semantic fold.
+    PendingProjectionCounts pending_projection_counts_;
+    int projected_count_ = 0;
     ::pineforge::detail::WorkingMap<native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, BracketRoster> bracket_families_;
     ::pineforge::detail::WorkingSequence<PendingBracketLeg> pending_bracket_legs_;

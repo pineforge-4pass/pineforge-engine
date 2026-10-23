@@ -1530,6 +1530,372 @@ void s4_roster_index_exact_red() {
     s.adapter().reset_for_run(); model.clear(); check();
 }
 
+// A plain-vector specification of the six raw owners. It neither enumerates
+// the production projection nor uses its grouping/count helpers.
+struct PendingSizeModel {
+    std::vector<no::RequestHandle> live;
+    std::vector<std::pair<std::uint64_t, ps::PlacementSnapshot>> placements;
+    // The raw API order, deliberately different from QueueId's enum order.
+    std::array<std::vector<ps::PlacementSnapshot>, 5> queued;
+
+    static std::size_t segment(QueueId id) {
+        switch (id) {
+        case QueueId::same_bar: return 0;
+        case QueueId::entry: return 1;
+        case QueueId::bracket: return 2;
+        case QueueId::coof: return 3;
+        case QueueId::shadow: return 4;
+        default: throw std::runtime_error("count model requires a projected queue");
+        }
+    }
+    void edit(ProjectionEdit edit, const no::RequestHandle& h,
+              const ps::PlacementSnapshot* snapshot = nullptr) {
+        auto at = std::find_if(placements.begin(), placements.end(),
+            [&](const auto& row) { return row.first == h.incarnation; });
+        if (edit == ProjectionEdit::remember || edit == ProjectionEdit::put) {
+            require(snapshot != nullptr, "model placement input is explicit");
+            if (at == placements.end()) placements.emplace_back(h.incarnation, *snapshot);
+            else at->second = *snapshot;
+        } else if (edit == ProjectionEdit::erase && at != placements.end()) {
+            placements.erase(at);
+        }
+        if (edit == ProjectionEdit::remember || edit == ProjectionEdit::name) {
+            if (!has_handle(live, h)) live.push_back(h);
+        } else if (edit == ProjectionEdit::retire || edit == ProjectionEdit::unname) {
+            live.erase(std::remove_if(live.begin(), live.end(),
+                [&](const auto& row) { return same_handle(row, h); }), live.end());
+        }
+    }
+    int count() const {
+        std::vector<ps::PlacementSnapshot> visible;
+        std::size_t raw = 0;
+        const auto exit = [](const ps::PlacementSnapshot& row) {
+            switch (row.family) {
+            case ps::PineOrderFamily::ExitLimit:
+            case ps::PineOrderFamily::ExitStop:
+            case ps::PineOrderFamily::ExitTrail: return true;
+            default: return false;
+            }
+        };
+        const auto offer = [&](const ps::PlacementSnapshot* row) {
+            if (raw++ >= static_cast<std::size_t>(std::numeric_limits<int>::max()) || !row)
+                return;
+            if (exit(*row)) {
+                for (const auto& prior : visible) {
+                    if (exit(prior) && prior.source_id == row->source_id
+                        && prior.from_entry == row->from_entry
+                        && same_handle(prior.bracket_origin, row->bracket_origin))
+                        return;
+                }
+            }
+            visible.push_back(*row);
+        };
+        for (const auto& h : live) {
+            const auto at = std::find_if(placements.begin(), placements.end(),
+                [&](const auto& row) { return row.first == h.incarnation; });
+            offer(at == placements.end() ? nullptr : &at->second);
+        }
+        for (const auto& owner : queued)
+            for (const auto& row : owner) offer(&row);
+        return static_cast<int>(visible.size());
+    }
+    void check(const ps::PineExecutionAdapter& adapter) const {
+        require(adapter.pending_intent_view().size() == count(),
+                "pending size equals the independent vector model after every edit");
+    }
+};
+
+struct PendingSizeSchedulerHost final : ps::PineStrategyHost {
+    PendingSizeModel model;
+    unsigned callbacks = 0;
+    explicit PendingSizeSchedulerHost(ScratchStore& store) {
+        ps::PineStrategyConfig config;
+        config.initial_capital = 100000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.margin_long = config.margin_short = 0.0;
+        configure_pine_strategy(config);
+        auto& core = const_cast<no::WorkingRequestCore&>(
+            as_native_consumer(execution_consumer()).request_core());
+        core.reset(run_id());
+        core.bind_scratch_store(store);
+        adapter_.bind_scratch_store(store);
+    }
+    void on_source_bar(const Bar&) override {
+        ++callbacks;
+        if (pine_bar_index() == 0) {
+            // Invalid native quantities make these real drains remove rows,
+            // independently of a successful submit's later remember().
+            const auto invalid = limit_order(0.0, 50.0);
+            ps::PlacementSnapshot row;
+            row.source_id = "drain-invalid";
+            row.requested_qty = 0.0;
+            for (auto owner : {QueueId::same_bar, QueueId::entry, QueueId::bracket}) {
+                adapter_.fixture_queue_state(static_cast<std::uint8_t>(owner),
+                    &invalid, &row, {}, {});
+                model.queued[PendingSizeModel::segment(owner)].push_back(row);
+                model.check(adapter_);
+            }
+            adapter_.flush_pending_entries();
+            for (auto& owner : model.queued) owner.clear();
+            model.check(adapter_);
+            for (auto owner : {QueueId::coof, QueueId::shadow}) {
+                adapter_.fixture_queue_state(static_cast<std::uint8_t>(owner),
+                    &invalid, &row, {}, {});
+                model.queued[PendingSizeModel::segment(owner)].push_back(row);
+                model.check(adapter_);
+            }
+            return;
+        }
+        if (pine_bar_index() == 1) {
+            // The real broker open drains COOF and expires shadows.
+            for (auto& owner : model.queued) owner.clear();
+            model.check(adapter_);
+            ps::PlacementSnapshot parent;
+            parent.source_id = "count-parent";
+            parent.requested_qty = 1.0;
+            strategy_entry(parent.source_id, true);
+            // For these small populations, symbolic raw rows suffice: the
+            // count is independent of whether the scheduler queues or submits them.
+            auto& rows = model.queued[1];
+            rows.push_back(parent);
+            model.check(adapter_);
+            const auto nan = std::numeric_limits<double>::quiet_NaN();
+            strategy_exit("count-exit", parent.source_id, 110.0, 90.0,
+                          nan, nan, nan, 100.0, {}, 1.0);
+            auto limit = parent;
+            limit.family = ps::PineOrderFamily::ExitLimit;
+            limit.source_id = "count-exit";
+            limit.from_entry = parent.source_id;
+            rows.push_back(limit);
+            limit.family = ps::PineOrderFamily::ExitStop;
+            rows.push_back(limit);
+            model.check(adapter_);
+            strategy_exit("count-exit", parent.source_id, 112.0, 88.0,
+                          nan, nan, nan, 100.0, {}, 1.0);
+            model.check(adapter_); // Same-id queued/live leg replacement keeps one exit group.
+            return;
+        }
+        if (pine_bar_index() == 2) {
+            // The parent fills at 100, away from both resting exit levels.
+            auto& rows = model.queued[1];
+            rows.erase(std::remove_if(rows.begin(), rows.end(), [](const auto& row) {
+                return row.family == ps::PineOrderFamily::Entry;
+            }), rows.end());
+            model.check(adapter_);
+            strategy_cancel("count-exit");
+            rows.clear();
+            model.check(adapter_); // Materialized/rebound groups must erase under their new key.
+            strategy_close("count-parent", {}, 1.0);
+            ps::PlacementSnapshot close;
+            close.family = ps::PineOrderFamily::Close;
+            close.source_id = close.from_entry = "count-parent";
+            rows.push_back(close);
+            model.check(adapter_);
+            strategy_cancel_all();
+            rows.clear();
+            model.check(adapter_);
+        }
+    }
+};
+
+void s4_pending_size_count_exact_red() {
+    const auto maximum = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    require(ps::PendingProjectionCounts::prefix_lengths({{maximum - 2, 1, maximum, 5, 8, 13}})
+                == std::array<std::size_t, 6>{{maximum - 2, 1, 1, 0, 0, 0}},
+            "INT_MAX clips raw slots across segment boundaries");
+    require(ps::PendingProjectionCounts::prefix_lengths({{
+                std::numeric_limits<std::size_t>::max(), 1, 1, 1, 1, 1}})
+                == std::array<std::size_t, 6>{{maximum, 0, 0, 0, 0, 0}},
+            "prefix arithmetic does not sum overflowing raw lengths");
+    Rig rig;
+    auto store = std::make_unique<ScratchStore>(rig.config(), &rig.backing);
+    Subject s(*store);
+    PendingSizeModel model;
+    const auto check = [&] { model.check(s.adapter()); };
+    const auto edit = [&](ProjectionEdit action, no::RequestHandle h,
+                          const ps::PlacementSnapshot* row = nullptr) {
+        s.projection(action, h, row);
+        model.edit(action, h, row);
+        check();
+    };
+    const auto queue = [&](QueueId owner, const ps::PlacementSnapshot* row) {
+        const auto request = limit_order(1.0, 50.0);
+        s.queue(owner, row ? &request : nullptr, row);
+        auto& rows = model.queued[PendingSizeModel::segment(owner)];
+        if (row) rows.push_back(*row);
+        else rows.clear();
+        check();
+    };
+    check();
+    ps::PendingIntentView unattached;
+    require(unattached.size() == 0, "unattached pending view stays empty");
+    ps::PlacementSnapshot entry;
+    entry.source_id = "count-entry";
+    entry.requested_qty = 1.0;
+    const auto h = s.submit(limit_order(1.0, 50.0));
+    check(); // Native submission alone does not create a source placement.
+    edit(ProjectionEdit::remember, h, &entry);
+    edit(ProjectionEdit::remember, h, &entry); // Repeated remember is not another raw slot.
+    const auto kept = s.replace(h, limit_order(2.0, 51.0), true);
+    require(same_handle(kept, h), "count test takes the real keep-handle route");
+    check();
+    entry.requested_qty = 2.0;
+    edit(ProjectionEdit::put, kept, &entry);
+    const auto successor = s.replace(kept, limit_order(3.0, 52.0), false);
+    require(!same_handle(successor, kept), "ordinary replacement issues a successor");
+    check();
+    edit(ProjectionEdit::retire, kept);
+    edit(ProjectionEdit::erase, kept);
+    edit(ProjectionEdit::remember, successor, &entry);
+
+    ps::PlacementSnapshot limit;
+    limit.family = ps::PineOrderFamily::ExitLimit;
+    limit.source_id = std::string(100, 'x') + std::string("\0one", 4);
+    limit.from_entry = "parent";
+    limit.bracket_origin = {{"count-origin", 41}, 9};
+    auto stop = limit;
+    stop.family = ps::PineOrderFamily::ExitStop;
+    auto trail = limit;
+    trail.family = ps::PineOrderFamily::ExitTrail;
+    const no::RequestHandle a{run_id(), 101}, b{run_id(), 102}, c{run_id(), 103};
+    edit(ProjectionEdit::name, a); // A hole consumes a raw slot but contributes no row.
+    edit(ProjectionEdit::put, a, &limit);
+    edit(ProjectionEdit::put, b, &stop); // An unrostered placement contributes nothing.
+    edit(ProjectionEdit::name, b);
+    edit(ProjectionEdit::remember, c, &trail);
+    const no::RequestHandle alias{{"foreign-roster", 88}, a.incarnation};
+    edit(ProjectionEdit::name, alias); // Full handles sharing an incarnation are distinct raw slots.
+    auto split = limit;
+    split.family = ps::PineOrderFamily::Entry;
+    edit(ProjectionEdit::put, a, &split); // Both aliases become separate non-exits.
+    edit(ProjectionEdit::put, a, &limit);
+    split = stop;
+    split.source_id = std::string(100, 'x') + std::string("\0two", 4);
+    edit(ProjectionEdit::put, b, &split);
+    split = stop; split.from_entry = "other-parent";
+    edit(ProjectionEdit::put, b, &split);
+    split = stop; split.bracket_origin.run.run_number += 1;
+    edit(ProjectionEdit::put, b, &split);
+    split = stop; split.bracket_origin.run.session_key = "different-session";
+    edit(ProjectionEdit::put, b, &split);
+    split = stop; split.bracket_origin.incarnation += 1;
+    edit(ProjectionEdit::put, b, &split);
+    edit(ProjectionEdit::remember, b, &stop); // Whole-row replacement rejoins the old group.
+    edit(ProjectionEdit::erase, a); // All aliases become holes before they are unnamed.
+    edit(ProjectionEdit::put, a, &limit);
+    edit(ProjectionEdit::unname, a); // Removing the first member promotes a later one.
+    edit(ProjectionEdit::retire, b); // Removing another member leaves the group present.
+    edit(ProjectionEdit::unname, alias);
+    edit(ProjectionEdit::erase, c); // Removing the final placement drops the group.
+    edit(ProjectionEdit::unname, c);
+    edit(ProjectionEdit::retire, successor);
+
+    constexpr std::array<QueueId, 5> owners{{
+        QueueId::same_bar, QueueId::entry, QueueId::bracket, QueueId::coof, QueueId::shadow}};
+    for (auto owner : owners) {
+        queue(owner, &limit);
+        queue(owner, &stop); // Equal exit groups merge across every raw owner.
+        auto plain = limit;
+        plain.family = ps::PineOrderFamily::Order;
+        plain.source_id = "queue-plain";
+        queue(owner, &plain);
+        queue(owner, &plain); // Identical non-exits remain separate.
+    }
+    s.adapter().cancel("queue-plain");
+    for (std::size_t segment : {std::size_t{0}, std::size_t{1}, std::size_t{2}}) {
+        auto& rows = model.queued[segment];
+        rows.erase(std::remove_if(rows.begin(), rows.end(), [](const auto& row) {
+            return row.source_id == "queue-plain";
+        }), rows.end());
+    }
+    check(); // Predicate erasure observes keys before survivor moves.
+    s.adapter().cancel_all();
+    for (std::size_t segment : {std::size_t{0}, std::size_t{1}, std::size_t{2}})
+        model.queued[segment].clear();
+    check(); // cancel_all deliberately retains COOF and shadow rows.
+    for (auto owner : owners) queue(owner, nullptr);
+
+    // These real drains requeue their intact rows without needing a native
+    // execution point. Omitting either the removal or reinsert doubles/loses rows.
+    ps::PlacementSnapshot close;
+    close.family = ps::PineOrderFamily::Close;
+    close.source_id = "held-close";
+    const no::RequestHandle parent{run_id(), 900};
+    edit(ProjectionEdit::put, parent, &close);
+    auto held = entry;
+    held.paired_reversal_parent = parent;
+    queue(QueueId::entry, &held);
+    queue(QueueId::entry, &held);
+    s.adapter().flush_pending_entries();
+    check();
+    s.adapter().flush_pending_entries();
+    check(); // Recycled empty storage is not a logical insertion.
+    queue(QueueId::entry, nullptr);
+    auto parked = limit;
+    parked.reservation_deferred_to_pending_entry = true;
+    parked.from_entry = "absent-parent";
+    queue(QueueId::bracket, &parked);
+    queue(QueueId::bracket, &parked);
+    s.adapter().flush_pending_bracket_legs();
+    check();
+    queue(QueueId::bracket, nullptr);
+
+    // Recovery selects the committed derived count as well as canonical rows.
+    queue(QueueId::coof, &stop);
+    const auto saved = model;
+    status_is(store->begin(), ScratchStatus::ok, "begin count rollback");
+    queue(QueueId::shadow, &entry);
+    status_is(store->rollback(), ScratchStatus::ok, "rollback count and queue together");
+    s.rebind(*store);
+    model = saved;
+    check();
+    const auto hash = source_hash(s);
+    store.reset();
+    store = std::make_unique<ScratchStore>(rig.config(ScratchOpenMode::reopen), &rig.backing);
+    s.rebind(*store);
+    check();
+    require(source_hash(s) == hash, "count rebind preserves every semantic hash byte");
+    s.adapter().reset_for_run();
+    model = {};
+    check();
+
+    // First binding migrates counts already maintained by the compatibility backend.
+    ps::PineExecutionAdapter unbound;
+    unbound.fixture_use_memory_auxiliary_tables();
+    PendingSizeModel migration;
+    unbound.fixture_projection_state(static_cast<std::uint8_t>(ProjectionEdit::name), a, nullptr);
+    migration.edit(ProjectionEdit::name, a);
+    migration.check(unbound);
+    unbound.fixture_projection_state(static_cast<std::uint8_t>(ProjectionEdit::put), a, &limit);
+    migration.edit(ProjectionEdit::put, a, &limit);
+    migration.check(unbound);
+    Rig migration_rig;
+    ScratchStore migrated(migration_rig.config(), &migration_rig.backing);
+    unbound.bind_scratch_store(migrated);
+    migration.check(unbound);
+    unbound.fixture_projection_state(static_cast<std::uint8_t>(ProjectionEdit::erase), a, nullptr);
+    migration.edit(ProjectionEdit::erase, a);
+    migration.check(unbound); // Exercise the migrated group multiplicity, not just its scalar.
+    unbound.fixture_projection_state(static_cast<std::uint8_t>(ProjectionEdit::unname), a, nullptr);
+    migration.edit(ProjectionEdit::unname, a);
+    migration.check(unbound);
+    unbound.fixture_projection_state(static_cast<std::uint8_t>(ProjectionEdit::put), a, &entry);
+    migration.edit(ProjectionEdit::put, a, &entry);
+    migration.check(unbound); // The migrated hole membership must have been removed too.
+
+    Rig scheduled_rig;
+    ScratchStore scheduled_store(scheduled_rig.config(), &scheduled_rig.backing);
+    PendingSizeSchedulerHost scheduled(scheduled_store);
+    const std::array<Bar, 3> bars{{
+        {100, 100, 100, 100, 1, 1736121600000LL},
+        {100, 100, 100, 100, 1, 1736121660000LL},
+        {100, 100, 100, 100, 1, 1736121720000LL}}};
+    scheduled.run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+    require(scheduled.last_error().empty() && scheduled.callbacks == bars.size(),
+            "count test executes every real scheduler callback and drain");
+}
+
 void s4_pending_size_read_bound_red() {
     constexpr std::array<std::size_t, 2> populations{{17, 65}};
     std::array<std::uint64_t, 2> size_reads{};
@@ -2816,6 +3182,7 @@ const TestCase tests[] = {
     {"s4_roster_scan_read_bound_red", &s4_roster_scan_read_bound_red},
     {"s4_roster_index_exact_red", &s4_roster_index_exact_red},
     {"s4_pending_size_read_bound_red", &s4_pending_size_read_bound_red},
+    {"s4_pending_size_count_exact_red", &s4_pending_size_count_exact_red},
     {"s4_pending_copy_read_bound_red", &s4_pending_copy_read_bound_red},
     {"s4_terminal_mark_descriptor_stays_fixed_red", &s4_terminal_mark_descriptor_stays_fixed_red},
     {"s34_record_index_publication_rollback_red", &s34_record_index_publication_rollback_red},
