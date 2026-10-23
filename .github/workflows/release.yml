@@ -81,6 +81,7 @@ jobs:
 
     outputs:
       tag:        ${{ steps.bump.outputs.tag }}
+      sha:        ${{ steps.publish.outputs.sha }}
       version:    ${{ steps.bump.outputs.next }}
       prerelease: ${{ steps.bump.outputs.prerelease }}
 
@@ -109,6 +110,17 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Refuse unless pineforge/verify and pineforge/parity are green
+        id: gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          python3 scripts/ci_release_gate.py gate \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
 
       # current / next / tag / prerelease / previous (the release-notes base),
       # validated; see scripts/release_version.py.
@@ -203,6 +215,7 @@ jobs:
       # notes step writes them; the prebuilt and notify-hub jobs need it and
       # did not run.
       - name: Write bumped VERSION, commit, tag, push
+        id: publish
         if: ${{ !inputs.dry_run }}
         env:
           NEXT:  ${{ steps.bump.outputs.next }}
@@ -217,6 +230,7 @@ jobs:
           git tag -a "${TAG}" -m "Release ${TAG}"
           python3 scripts/gen_run_failure_catalog_diff.py --check
           git push --atomic origin HEAD "${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # The range starts at scripts/release_version.py's `previous`: the last
       # tag below this release in semver order (git's v:refname sort puts
@@ -355,11 +369,24 @@ jobs:
 
     steps:
       # A dry run has no tag yet: it builds the dispatched commit.
-      - name: Checkout tag
+      - name: Checkout release commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.tag }}
+          ref: ${{ inputs.dry_run && github.sha || needs.release.outputs.sha }}
           fetch-depth: 0   # the version helper still observes the git sha
+
+      - name: Assert tag still names the emitted release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid emitted release sha: ${SHA}" >&2
+            exit 1
+          fi
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${SHA}"
 
       - name: Write the dry run's VERSION
         if: ${{ inputs.dry_run }}
