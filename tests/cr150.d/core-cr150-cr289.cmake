@@ -1,4 +1,10 @@
 # CR-289: native nonfinite E values through the three report paths (committed bridge module built in this lane's fence).
 if(UNIX)
     add_test(NAME test_report_nonfinite_equity_paths COMMAND ${CMAKE_COMMAND} -E env "PINEFORGE_REPORT_NONFINITE_EQUITY_WRITER=$<TARGET_FILE:report_nonfinite_equity_fd>" ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_report_nonfinite_equity_paths.py)
+    list(APPEND TEST_SOURCES test_report_nonfinite_equity_writer)
+    pineforge_add_unit_test(test_report_nonfinite_equity_writer)
+    list(APPEND TEST_SOURCES test_report_nonfinite_equity_cabi_fd)
+    pineforge_add_unit_test(test_report_nonfinite_equity_cabi_fd)
+    list(APPEND TEST_SOURCES test_report_nonfinite_equity_cpp_fd)
+    pineforge_add_unit_test(test_report_nonfinite_equity_cpp_fd)
 endif()
