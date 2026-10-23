@@ -1410,7 +1410,18 @@ PF_API int strategy_require_report_scratch_arena_v1(pf_strategy_t s) {
     return pf_cabi_int(s, [&] {
         if (!s) return -1;
         pineforge::detail::ScratchArena::attach_from_environment();
-        if (!pineforge::detail::ScratchArena::attached())
+        const auto* arena = pineforge::detail::ScratchArena::attached();
+        // Admission requires sealed backing independently of the caller's environment.
+        // Use the retained backend even if inherited fd 5 has since been rebound.
+        // Sealed memfds exist on Linux only (tests/test_scratch_arena_jailed_seals.cpp);
+        // elsewhere the jailed arena stays an ordinary file, as test_report_sink_jail_write builds it.
+#if defined(__linux__)
+        const bool sealed = arena
+            && arena->stats().backend == pineforge::detail::ScratchArenaBackend::sealed_memfd;
+#else
+        const bool sealed = arena != nullptr;
+#endif
+        if (!sealed)
             throw pineforge::detail::ReportScratchIoError(EINVAL, "scratch arena admission",
                 {{"reason", "arena_backing"}});
         return 0;
