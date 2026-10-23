@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -1815,6 +1816,9 @@ public:
     /// at queue rank `rank` (std::out_of_range when none).
     std::size_t live_size() const noexcept;
     const LiveRequest& live_at(std::size_t rank) const;
+    /// Whether some live rows are outside the heap: live_at and live_back
+    /// then walk the book in queue order instead of indexing it.
+    bool book_spilled() const noexcept { return spilled_count() != 0; }
     /// The command journal's retained window, oldest first. Commits append at
     /// the back and retire_history drops a prefix, so the window holds the
     /// absolute journal positions [history_base(), history_end()). A core
@@ -1902,6 +1906,31 @@ public:
         return issued_;
     }
     const LiveRequest* find_live(const RequestHandle& handle) const;
+    /// find_live for a reader that keeps the row across further reads of the
+    /// book. A spilled row's copy lives as long as the answer does, whatever
+    /// the book reads next; a resident row's answer owns nothing and, like
+    /// find_live's, stays valid until the next command. Null when no live
+    /// request has the handle.
+    std::shared_ptr<const LiveRequest> hold_live(const RequestHandle& handle) const;
+    /// A read of the book's spilled rows that failed where its reader cannot
+    /// throw (a noexcept fold of the book): the reader hands the failure here
+    /// and answers true, and from then on every read of the spilled rows and
+    /// every command that moves one throws it again -- an I/O failure as the
+    /// typed scratch failure (scratch_io_failed) -- until reset. False, with
+    /// nothing kept, when the book has never spilled: it then has no such read.
+    bool carry_book_read_failure(std::exception_ptr failure) const noexcept;
+    /// Throws the failure carry_book_read_failure kept, if any.
+    void rethrow_book_read_failure() const;
+    /// How many spilled rows the book has read back to answer a lookup -- by
+    /// handle (find_live, hold_live), by rank (live_at, live_back) -- and how
+    /// many table steps those lookups walked, since this core was built or
+    /// reset. A walk of live() in queue order is not counted. Diagnostics
+    /// only: nothing folds them and no decision reads them.
+    struct BookLookupReads {
+        std::uint64_t rows = 0;
+        std::uint64_t steps = 0;
+    };
+    BookLookupReads book_lookup_reads() const noexcept;
     const CommandEvent* event_at(const EventId& id) const;
 
     /// Command-boundary roster maintenance.  A rejected add/remove records a
@@ -2518,6 +2547,8 @@ private:
     void make_book_room();
     bool promote_book_row(uint64_t incarnation, std::size_t* index);
     const LiveRequest* spilled_row(uint64_t incarnation) const;
+    std::shared_ptr<LiveRequest> spilled_held(uint64_t incarnation) const;
+    const LiveRequest* find_resident(const RequestHandle& handle) const noexcept;
     void forget_repriced(uint64_t incarnation) noexcept;
     BookCursor book_begin() const;
     bool book_done(const BookCursor& cursor) const noexcept;
@@ -2777,6 +2808,10 @@ public:
         const_iterator() noexcept = default;
         reference operator*() const;
         pointer operator->() const { return &**this; }
+        /// The row the iterator stands on, held as hold_live holds it: a
+        /// spilled row stays valid as long as the answer does, however far
+        /// the iterator or any other reader of the book moves on.
+        std::shared_ptr<const LiveRequest> hold() const;
         const_iterator& operator++();
         const_iterator operator++(int) {
             const_iterator previous = *this;

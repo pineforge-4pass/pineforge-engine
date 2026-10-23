@@ -1,5 +1,6 @@
 #include <pineforge/native_order.hpp>
 #include <pineforge/detail/disk_id_table.hpp>
+#include <pineforge/detail/scratch_errors.hpp>
 #include <pineforge/detail/scratch_file.hpp>
 #include <pineforge/detail/scratch_slab.hpp>
 #include <pineforge/detail/journal_codec.hpp>
@@ -16,9 +17,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <exception>
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 #include <variant>
 
@@ -1330,11 +1333,60 @@ void LoadAr::operator()(T& item) {
     archive_value(*this, item);
 }
 
+// The external openings of a bound close (BindOpenings, OpeningsClose): how
+// many, then each opening's handle in the readback's order. A reload freezes
+// the list again, so a spilled row or a paged event keeps its membership
+// rather than coming back with none; DefinitionMatchAr compares the same
+// bytes, so a resident definition is reused only when its list is this one.
+template <class Ar>
+void archive_external_openings(Ar& ar, std::shared_ptr<const OpeningReadback>& external) {
+    std::uint64_t count = 0;
+    if constexpr (Ar::saving) {
+        count = external ? external->count() : 0;
+        ar.raw(&count, sizeof count);
+        for (std::uint64_t index = 0; index != count; ++index) {
+            RequestHandle opening;
+            if (external->opening_at(index, opening) != ReadStatus::ok) {
+                throw detail::ScratchIoError(EIO, "native opening readback");
+            }
+            ar(opening);
+        }
+    } else {
+        ar.raw(&count, sizeof count);
+        if (count == 0) {
+            external.reset();
+            return;
+        }
+        // Every handle takes at least a byte: a count past the bytes left is
+        // a damaged record, never an allocation.
+        if (count > ar.remaining()) {
+            throw detail::ScratchIoError(EIO, "native o1 store record is truncated");
+        }
+        std::vector<RequestHandle> openings(static_cast<std::size_t>(count));
+        for (auto& opening : openings) ar(opening);
+        const OpeningInputCursor input(
+                count, &openings, [](void* context, std::uint64_t index, RequestHandle& out) {
+                    const auto& list = *static_cast<const std::vector<RequestHandle>*>(context);
+                    if (index >= list.size()) return ReadStatus::not_found;
+                    out = list[static_cast<std::size_t>(index)];
+                    return ReadStatus::ok;
+                });
+        std::shared_ptr<const OpeningReadback> frozen;
+        if (freeze_openings_in_directory(openings.front().run, input, frozen, {})
+            != ReadStatus::ok) {
+            throw detail::ScratchIoError(EIO, "native opening freeze");
+        }
+        external = std::move(frozen);
+    }
+}
+
 template <class Ar> void archive_io(Ar& ar, BindOpenings& item) {
     ar(item.openings); ar(item.cycle);
+    archive_external_openings(ar, item.external_openings);
 }
 template <class Ar> void archive_io(Ar& ar, OpeningsClose& item) {
     ar(item.openings); ar(item.cycle); ar(item.side); ar(item.enrollment);
+    archive_external_openings(ar, item.external_openings);
 }
 template <class Ar> void archive_io(Ar& ar, SelectedExposure& item) {
     ar(item.cycle); ar(item.incarnations);
@@ -1971,6 +2023,25 @@ struct WorkingRequestCore::BookSpill {
     uint64_t garbage = 0;   // blob bytes no live entry reads
     mutable std::array<std::shared_ptr<LiveRequest>, kSide> side{};
     mutable std::size_t side_next = 0;
+    // A read failure a reader that cannot throw handed over
+    // (carry_book_read_failure); every later read of these rows throws it.
+    std::exception_ptr failure;
+    // book_lookup_reads: rows read back and table steps walked by lookups.
+    mutable uint64_t lookup_rows = 0;
+    mutable uint64_t lookup_steps = 0;
+
+    // Throws the carried failure, if any: an I/O failure as the typed
+    // scratch failure (scratch_io_failed), anything else as it was thrown.
+    void check() const {
+        if (!failure) return;
+        try {
+            std::rethrow_exception(failure);
+        } catch (const detail::AuxiliaryScratchIoError&) {
+            throw;
+        } catch (const std::system_error& error) {
+            throw detail::AuxiliaryScratchIoError(error);
+        }
+    }
 
     void set_directory(const std::string& value) {
         directory = value;
@@ -2031,13 +2102,9 @@ struct WorkingRequestCore::BookSpill {
         if (!resident || !*resident || (*resident)->handle != row.handle()
             || (*resident)->birth != row.birth()
             || (*resident)->priority != row.definition->priority) return row;
-        // This legacy book format does not serialize external_openings.
-        // Reusing one would add content absent from the decoded definition.
-        if (const auto* openings = std::get_if<BindOpenings>(&(*resident)->request.owner)) {
-            if (openings->external_openings) return row;
-        }
         // LiveRequest's first field is its definition. Compare that entire
-        // serialized prefix, including request, predecessor, origin, root and
+        // serialized prefix, including request (an owner's external openings
+        // among it, handle by handle), predecessor, origin, root and
         // kept_binding; the decoded owner survives every mismatch unchanged.
         DefinitionMatchAr match{bytes.data(), bytes.size()};
         match(*resident);
@@ -2202,6 +2269,7 @@ void WorkingRequestCore::forget_repriced(uint64_t incarnation) noexcept {
 // the epoch: a token prepared before it installs as stale.
 void WorkingRequestCore::make_book_room() {
     if (live_.size() < kBookMax) return;
+    if (book_spill_) book_spill_->check();
     if (!book_spill_) {
         auto created = std::make_shared<BookSpill>();
         const std::string& directory = scratch_directory();
@@ -2233,6 +2301,7 @@ void WorkingRequestCore::make_book_room() {
 // live_, so a token prepared before indexes stale places.
 bool WorkingRequestCore::promote_book_row(uint64_t incarnation, std::size_t* index) {
     BookSpill& spill = *book_spill_;
+    spill.check();
     const uint64_t priority = spill.priority_of(incarnation);
     BookSlot slot;
     uint64_t at = 0;
@@ -2263,17 +2332,68 @@ bool WorkingRequestCore::promote_book_row(uint64_t incarnation, std::size_t* ind
 }
 
 const LiveRequest* WorkingRequestCore::spilled_row(uint64_t incarnation) const {
+    return spilled_held(incarnation).get();
+}
+
+// The spilled row `incarnation`, read back and kept in the ring as
+// spilled_row keeps it; the answer holds the copy too, so it outlives the
+// ring for a reader that keeps it (hold_live).
+std::shared_ptr<LiveRequest> WorkingRequestCore::spilled_held(uint64_t incarnation) const {
     const BookSpill& spill = *book_spill_;
+    spill.check();
     const uint64_t priority = spill.priority_of(incarnation);
     BookSlot slot;
     uint64_t at = 0;
     if (!spill.find(priority, &slot, &at) || slot.incarnation != incarnation) return nullptr;
-    return spill.stash(spill.read(*this, slot));
+    ++spill.lookup_rows;
+    return spill.keep(spill.read(*this, slot));
+}
+
+const LiveRequest* WorkingRequestCore::find_resident(const RequestHandle& handle) const noexcept {
+    if (!repriced_.empty()) return find_repriced(handle.incarnation);
+    const std::size_t index = book_position<false>(live_, handle.incarnation);
+    return index != live_.size() ? &live_[index] : nullptr;
+}
+
+namespace {
+// A resident row in the held form hold_live answers: it owns nothing and is
+// valid, as a pointer find_live answers, until the next command.
+std::shared_ptr<const LiveRequest> unowned_live(const LiveRequest& row) noexcept {
+    return std::shared_ptr<const LiveRequest>(std::shared_ptr<const LiveRequest>(), &row);
+}
+}  // namespace
+
+std::shared_ptr<const LiveRequest> WorkingRequestCore::hold_live(
+        const RequestHandle& handle) const {
+    if (!names_run(handle, identity_)) return nullptr;
+    if (const LiveRequest* resident = find_resident(handle)) return unowned_live(*resident);
+    if (spilled_count() == 0) return nullptr;
+    return spilled_held(handle.incarnation);
+}
+
+bool WorkingRequestCore::carry_book_read_failure(std::exception_ptr failure) const noexcept {
+    if (!book_spill_ || !failure) return false;
+    if (!book_spill_->failure) book_spill_->failure = std::move(failure);
+    return true;
+}
+
+void WorkingRequestCore::rethrow_book_read_failure() const {
+    if (book_spill_) book_spill_->check();
+}
+
+WorkingRequestCore::BookLookupReads WorkingRequestCore::book_lookup_reads() const noexcept {
+    BookLookupReads reads;
+    if (book_spill_) {
+        reads.rows = book_spill_->lookup_rows;
+        reads.steps = book_spill_->lookup_steps;
+    }
+    return reads;
 }
 
 WorkingRequestCore::BookCursor WorkingRequestCore::book_begin() const {
     BookCursor cursor;
     if (spilled_count() != 0) {
+        book_spill_->check();
         cursor.at = book_spill_->first_alive();
         if (cursor.at != 0) cursor.spilled_priority = book_spill_->priority_at(cursor.at);
     }
@@ -2322,8 +2442,12 @@ const LiveRequest& WorkingRequestCore::live_at(std::size_t rank) const {
     if (rank >= live_size()) throw std::out_of_range("native live book rank is not live");
     if (spilled_count() == 0) return live_[rank];
     BookCursor cursor = book_begin();
-    for (std::size_t skipped = 0; skipped != rank; ++skipped) book_step(cursor);
+    for (std::size_t skipped = 0; skipped != rank; ++skipped) {
+        if (book_next_spilled(cursor)) ++book_spill_->lookup_steps;
+        book_step(cursor);
+    }
     if (book_next_spilled(cursor)) {
+        ++book_spill_->lookup_rows;
         return *book_spill_->stash(book_spill_->read(*this, book_spill_->rows.get(cursor.at)));
     }
     return live_[cursor.r];
@@ -2334,11 +2458,14 @@ const LiveRequest& WorkingRequestCore::live_back() const {
         if (live_.empty()) throw std::out_of_range("native live book is empty");
         return live_.back();
     }
+    book_spill_->check();
     uint64_t last = 0;
     for (uint64_t at = book_spill_->first_alive(); at != 0; at = book_spill_->next_alive(at)) {
+        ++book_spill_->lookup_steps;
         last = at;
     }
     if (live_.empty() || live_.back().priority() < book_spill_->priority_at(last)) {
+        ++book_spill_->lookup_rows;
         return *book_spill_->stash(book_spill_->read(*this, book_spill_->rows.get(last)));
     }
     return live_.back();
@@ -2361,6 +2488,11 @@ void WorkingRequestCore::LiveView::const_iterator::settle() {
 
 const LiveRequest& WorkingRequestCore::LiveView::const_iterator::operator*() const {
     return held_ ? *held_ : core_->live_[cursor_.r];
+}
+
+std::shared_ptr<const LiveRequest> WorkingRequestCore::LiveView::const_iterator::hold() const {
+    if (held_) return held_;
+    return unowned_live(core_->live_[cursor_.r]);
 }
 
 WorkingRequestCore::LiveView::const_iterator&
@@ -2922,9 +3054,13 @@ std::size_t WorkingRequestCore::retire_history(uint64_t through_ordinal) {
         if (count == 0) return 0;
         const uint64_t newest = journal_->ordinal_at(cut - 1);
         const std::size_t receipts_base = receipts_first_above(newest);
+        // Only a bound codec's erase can throw here, and one that throws has
+        // changed nothing: the store rolls its transaction back and the
+        // journal's first position moves only after the commit. So
+        // retired_through_ and the window move after it, never ahead of it.
+        if (cut > journal_->first) journal_->drop_front(cut);
         // Nothing below can throw.
         retired_through_ = newest;
-        if (cut > journal_->first) journal_->drop_front(cut);
         if (cut >= journal_->first && journal_->pages.size() != 0) journal_->release_pages();
         history_base_ = static_cast<std::size_t>(cut);
         apply_receipt_base(receipts_base);
@@ -4884,6 +5020,7 @@ void WorkingRequestCore::refresh_point_allowances(uint64_t point,
     // behind the point; the next call picks them up, a row already at the
     // point being skipped.
     BookSpill& spill = *book_spill_;
+    spill.check();
     for (uint64_t at = spill.first_alive(); at != 0; at = spill.next_alive(at)) {
         const BookSlot slot = spill.rows.get(at);
         LiveRequest row = spill.read(*this, slot);

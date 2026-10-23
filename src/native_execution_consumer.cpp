@@ -1252,6 +1252,14 @@ uint64_t command_ordinal(const native_order::CommandEvent& event) {
     return std::visit([](const auto& payload) { return payload.ordinal; }, event);
 }
 
+// A resident row in the held form WorkingRequestCore::hold_live answers: it
+// owns nothing and is valid, as a find_live pointer is, until the next command.
+std::shared_ptr<const native_order::LiveRequest> unowned_live(
+        const native_order::LiveRequest& row) noexcept {
+    return std::shared_ptr<const native_order::LiveRequest>(
+            std::shared_ptr<const native_order::LiveRequest>(), &row);
+}
+
 }  // namespace
 
 struct NativeExecutionConsumer::RunCommandScratch {
@@ -2265,19 +2273,29 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     hash_tz_identity(f, tz_identity_);
     f.s(requests_.identity().session_key);
     f.u(requests_.live().size());
-    for (const auto& live : requests_.live()) {
-        hash_definition(f, live.definition);
-        hash_remaining(f, live.remaining);
-        hash_authority(f, live.authority);
-        hash_trigger_state(f, live.trigger_state);
-        hash_allowance(f, live.allowance);
-        hash_pending(f, live.pending);
-        // L3b: a placement-time sizing measurement is durable decision state
-        // only for the request that froze one. Folding it conditionally keeps
-        // every pre-lane request table byte-identical.
-        if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }
-        if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }
-        if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
+    // A row outside the heap is read back for this fold, and that read can
+    // fail; the hash cannot throw. The core carries the failure, the fold
+    // stops at the row it could not read, and the next read of the book --
+    // native_continuation_hash's own, before it answers -- throws it again.
+    try {
+        for (const auto& live : requests_.live()) {
+            hash_definition(f, live.definition);
+            hash_remaining(f, live.remaining);
+            hash_authority(f, live.authority);
+            hash_trigger_state(f, live.trigger_state);
+            hash_allowance(f, live.allowance);
+            hash_pending(f, live.pending);
+            // L3b: a placement-time sizing measurement is durable decision
+            // state only for the request that froze one. Folding it
+            // conditionally keeps every pre-lane request table byte-identical.
+            if (live.sizing_units) { f.u(1); f.d(*live.sizing_units); }
+            if (live.sizing_scope) { f.u(2); f.d(*live.sizing_scope); }
+            if (live.sizing_price) { f.u(3); f.d(*live.sizing_price); }
+        }
+    } catch (...) {
+        // A book that never spilled reads nothing back: nothing else here
+        // throws, and what would is left to noexcept as before.
+        if (!requests_.carry_book_read_failure(std::current_exception())) std::terminate();
     }
     // The host-maintained roster is durable matching authority.  Fold it
     // immediately after the request table so a membership-only change cannot
@@ -5193,7 +5211,9 @@ void NativeExecutionConsumer::drain_after_applied(
         requests_.bound_close_handles(bound);
         for (const auto& handle : bound) {
             if (failed()) return;
-            const auto* live = requests_.find_live(handle);
+            // Held: the target read may read other spilled rows.
+            const auto held = requests_.hold_live(handle);
+            const auto* live = held.get();
             auto target = read_target(engine, live);
             CoreStep step = direct_mutation_
                 ? core_step(requests_.apply_bound_expiry(applied, handle, target,
@@ -5253,7 +5273,9 @@ void NativeExecutionConsumer::observe_trails(
     for (const auto& live : live_requests) handles.push_back(live.handle());
     for (const auto& handle : handles) {
         if (failed()) return;
-        const auto* live = requests_.find_live(handle);
+        // Held: the cohort side read below may read other spilled rows.
+        const auto held = requests_.hold_live(handle);
+        const auto* live = held.get();
         if (!live) continue;
         evaluation.cohort_side = scratch_cohort_side(engine, *live);
         if (std::holds_alternative<native_order::CohortClose>(live->authority)
@@ -5723,13 +5745,30 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
 double NativeExecutionConsumer::sibling_claimed_units(
         const native_order::LiveRequest& live) const noexcept {
     double claimed = 0.0;
-    for (const auto& other : requests_.live()) {
-        if (other.handle() == live.handle()) continue;
-        if (!same_reduction_scope(live.authority, other.authority)) continue;
-        const auto* units = std::get_if<native_order::RemainingUnits>(&other.remaining);
-        if (!units || !std::isfinite(units->q) || units->q <= 0.0) continue;
-        claimed += units->q;
-        if (!std::isfinite(claimed)) return std::numeric_limits<double>::quiet_NaN();
+    // A row outside the heap is read back for the walk, and that read can
+    // fail; this fold cannot throw. The core carries the failure and the next
+    // read of the book throws it again -- resolve_sized_units, the caller,
+    // reads it at once -- and the claim answered meanwhile is NaN, which no
+    // caller sizes from.
+    try {
+        // `live` may itself be a spilled row's copy that the book's small
+        // ring of recent reads lets go while the walk reads the rows after
+        // it, so what the walk compares is copied first.
+        const native_order::RequestHandle handle = live.handle();
+        const native_order::Authority authority = live.authority;
+        for (const auto& other : requests_.live()) {
+            if (other.handle() == handle) continue;
+            if (!same_reduction_scope(authority, other.authority)) continue;
+            const auto* units = std::get_if<native_order::RemainingUnits>(&other.remaining);
+            if (!units || !std::isfinite(units->q) || units->q <= 0.0) continue;
+            claimed += units->q;
+            if (!std::isfinite(claimed)) return std::numeric_limits<double>::quiet_NaN();
+        }
+    } catch (...) {
+        // A book that never spilled reads nothing back: nothing else here
+        // throws, and what would is left to noexcept as before.
+        if (!requests_.carry_book_read_failure(std::current_exception())) std::terminate();
+        return std::numeric_limits<double>::quiet_NaN();
     }
     return claimed;
 }
@@ -5918,6 +5957,8 @@ std::optional<double> NativeExecutionConsumer::resolve_sized_units(
     }
     if (fraction->claim == native_order::ScopeClaim::NetOfSiblings) {
         scope -= sibling_claimed_units(live);
+        // A failed read of the book inside that noexcept walk is thrown here.
+        requests_.rethrow_book_read_failure();
     }
     if (!std::isfinite(scope) || scope <= 0.0) return std::nullopt;
     // units = scope * fraction, one binary64 multiplication. A percent-spelled
@@ -6927,7 +6968,9 @@ void NativeExecutionConsumer::match_path(
     };
 
     auto provenance_still_matches = [&](const CandidateProvenance& row) {
-        const auto* live = requests_.find_live(row.handle);
+        // Held: a cohort close's target read looks up other spilled rows.
+        const auto held = requests_.hold_live(row.handle);
+        const auto* live = held.get();
         if (!live) return false;
         const auto* target = cached_cohort_target(engine, *live);
         const bool buy = target ? requests_.working_is_buy(*live, side_from_target(*target))
@@ -7014,17 +7057,25 @@ void NativeExecutionConsumer::match_path(
     auto& rows = match_rows_;
     rows.clear();
     bool rescan_winner_only = false;
-    // The request a row was scanned from. The book does not change between a
-    // scan and its winner's first use, so the row's own index names it; the
-    // core's handle lookup answers whenever the reuse is switched off.
-    auto scanned_request = [&](const Candidate& row) -> const native_order::LiveRequest* {
-        const auto& book = requests_.live();
-        if (match_row_reuse_ && row.live_index < book.size()
-            && book[row.live_index].handle() == row.handle) {
-            return &book[row.live_index];
+    // The request a row was scanned from, held for its reader. The book does
+    // not change between a scan and its winner's first use, so in a book that
+    // is all resident the row's own index names it. Once part of the book is
+    // outside the heap an index walks the book from its front, so the row is
+    // looked up by its handle instead; the core's handle lookup also answers
+    // whenever the reuse is switched off. Held: a spilled row's copy lives as
+    // long as the answer, whatever the book reads meanwhile.
+    auto scanned_request = [&](const Candidate& row)
+            -> std::shared_ptr<const native_order::LiveRequest> {
+        if (match_row_reuse_ && !requests_.book_spilled()) {
+            const auto& book = requests_.live();
+            if (row.live_index < book.size() && book[row.live_index].handle() == row.handle) {
+                return unowned_live(book[row.live_index]);
+            }
         }
-        return requests_.find_live(row.handle);
+        return requests_.hold_live(row.handle);
     };
+    // The refreshed winner a winner-only rescan reads again (see below).
+    native_order::RequestHandle rescan_handle{};
 
     while (!failed()) {
         const bool winner_only = rescan_winner_only;
@@ -7049,34 +7100,35 @@ void NativeExecutionConsumer::match_path(
         std::optional<Candidate> winner;
         // Candidate selection makes no request-core mutation; only the
         // selected winner can replace or retire a later request afterwards.
-        // Snapshot pointers through that selection pass. The ordinary route
-        // has only the two bracket siblings, so keep it on the stack.
-        std::array<const native_order::LiveRequest*, 8> inline_snapshot{};
+        // The selection walks the book itself and reads each row where the
+        // view's iterator stands on it: the iterator keeps that row alive. A
+        // row outside the heap is a copy the book's small ring of recent reads
+        // lets go a few reads later, so no row is read through a pointer saved
+        // before the walk moved on. The winner's row is held past the walk.
         const auto& live_requests = requests_.live();
-        const native_order::LiveRequest* const* snapshot = inline_snapshot.data();
         std::size_t snapshot_size = live_requests.size();
         std::size_t winner_index = 0;
+        auto book_row = live_requests.end();
+        std::shared_ptr<const native_order::LiveRequest> rescanned;
+        std::shared_ptr<const native_order::LiveRequest> winner_held;
         if (winner_only) {
             // The refreshed winner's row is the first one: take it off and
-            // scan that one request again.
+            // scan that one request again. Its index names it in a book that
+            // is all resident; otherwise its handle does (the refresh brought
+            // it back into the heap, so the lookup reads no spilled row).
             winner_index = rows.take_first();
-            inline_snapshot[0] = &live_requests[winner_index];
+            rescanned = requests_.book_spilled() ? requests_.hold_live(rescan_handle)
+                                                 : unowned_live(live_requests[winner_index]);
             snapshot_size = 1;
-        } else if (snapshot_size <= inline_snapshot.size()) {
-            for (std::size_t i = 0; i < snapshot_size; ++i)
-                inline_snapshot[i] = &live_requests[i];
         } else {
-            auto& overflow_snapshot = match_snapshot_;
-            overflow_snapshot.clear();
-            overflow_snapshot.reserve(snapshot_size);
-            for (const auto& live : live_requests) overflow_snapshot.push_back(&live);
-            snapshot = overflow_snapshot.data();
+            book_row = live_requests.begin();
         }
         const bool keep_rows = winner_only
             || (match_row_reuse_ && live_requests.size() >= kKeepRowsFrom);
         if (!winner_only) rows.clear();
         for (std::size_t snapshot_index = 0; snapshot_index < snapshot_size; ++snapshot_index) {
-            const auto* live = snapshot[snapshot_index];
+            if (!winner_only && snapshot_index != 0) ++book_row;
+            const auto* live = winner_only ? rescanned.get() : &*book_row;
             if (!live) continue;
             const auto& handle = live->handle();
             const bool cohort_close =
@@ -7245,7 +7297,10 @@ void NativeExecutionConsumer::match_path(
             }
             row.live_index = winner_only ? winner_index : snapshot_index;
             if (keep_rows) rows.keep(row);
-            if (!winner || MatchRows::precedes(row, *winner)) winner = row;
+            if (!winner || MatchRows::precedes(row, *winner)) {
+                winner = row;
+                if (!winner_only) winner_held = book_row.hold();
+            }
         }
         if (winner_only) {
             // Every other request's row is the one the last scan built.
@@ -7264,7 +7319,11 @@ void NativeExecutionConsumer::match_path(
         cursor_price = winner->price;
         path_cursor = make_cursor(point, t_cursor);
         eval.cursor = path_cursor;
-        const auto* live = scanned_request(*winner);
+        // The winner's row: the one the walk held, or for a row kept from an
+        // earlier scan, its lookup. Held until this winner is done with.
+        const std::shared_ptr<const native_order::LiveRequest> winner_row =
+                winner_held ? std::move(winner_held) : scanned_request(*winner);
+        const auto* live = winner_row.get();
         if (!live) continue;
         eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point)
             || born_on_remaining_path(*live);
@@ -7283,6 +7342,7 @@ void NativeExecutionConsumer::match_path(
         if (winner->kind == Kind::Evaluate) {
             // A refresh at this cursor leaves every other row as it is.
             const bool reuse_after_refresh = keep_rows && cursor_unmoved;
+            rescan_handle = winner->handle;
             try {
                 if (winner_target) {
                     // The cohort refresh: the core's context-bearing form under
@@ -7402,7 +7462,9 @@ void NativeExecutionConsumer::match_path(
                 return;
             }
             if (winner->kind == Kind::ActivateStop || winner->kind == Kind::ActivateTrail) {
-                const auto* activated = requests_.find_live(winner->handle);
+                // Held: the side read below may read other spilled rows.
+                const auto activated_row = requests_.hold_live(winner->handle);
+                const auto* activated = activated_row.get();
                 if (activated) {
                     const bool buy = scratch_request_is_buy(engine, *activated);
                     CandidateProvenance transfer;
@@ -7421,8 +7483,7 @@ void NativeExecutionConsumer::match_path(
             continue;
         }
 
-        live = scanned_request(*winner);
-        if (!live) continue;
+        // Nothing has changed the book since the winner's row was read above.
         const bool buy = scratch_request_is_buy(engine, *live);
         const bool limit_governed =
             std::holds_alternative<native_order::LimitReady>(live->trigger_state)
@@ -7618,7 +7679,9 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     NativeCurrentExecutionPreview out;
     out.refusal = validate_current_execution(engine, command);
     if (out.refusal) return out;
-    const auto* live = requests_.find_live(command.target);
+    // Held: the cohort side read below may read other spilled rows.
+    const auto held = requests_.hold_live(command.target);
+    const auto* live = held.get();
     native_order::MatchCursor cursor;
     cursor.point = current_execution_coordinate(next_timeline_ordinal_);
     native_order::EvaluationContext evaluation;
@@ -7848,7 +7911,10 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         evaluation.cursor = make_cursor(point, 0.0);
         evaluation.driver_class = native_order::DriverEligibilityClass::CurrentExecution;
         evaluation.existing_matching_bit = true;
-        const auto* live = requests_.find_live(command.target);
+        // Held: the cohort side and target reads below may read other
+        // spilled rows.
+        auto held = requests_.hold_live(command.target);
+        const auto* live = held.get();
         evaluation.cohort_side = live ? cohort_side(engine, *live) : std::nullopt;
         const auto history_before = requests_.history_end();
         const auto target = read_target(engine, live);
@@ -7867,7 +7933,8 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
                 throw coded<std::runtime_error>(recorded_cause(),
                                                 "native current evaluation install failed");
         }
-        live = requests_.find_live(command.target);
+        held = requests_.hold_live(command.target);
+        live = held.get();
         if (live && !same_allowance_bits(
                 native_order::WorkingRequestCore::evaluated_allowance(
                     *live, point.coordinate.ordinal), live->allowance)) {
@@ -9218,6 +9285,9 @@ void NativeExecutionConsumer::record_script_report_point(
     engine.retire_report_sink_hashes();
     engine.record_equity_point(script_open_ms);
     engine.last_script_continuation_hash_ = continuation_hash();
+    // A read of the book that failed inside the noexcept fold is thrown here,
+    // before the hash it cut short is latched as valid.
+    requests_.rethrow_book_read_failure();
     engine.last_script_continuation_valid_ = true;
     if (engine.broker_state_hash_recording_) {
         engine.broker_state_hashes_.push_back(engine.broker_state_hash());
@@ -12564,8 +12634,12 @@ uint64_t NativeStrategyHost::native_consumed_high_water() const {
 }
 
 uint64_t NativeStrategyHost::native_continuation_hash() const {
-    return NativeExecutionConsumer::bound(*this)
-        .calc_continuation_hash();
+    const NativeExecutionConsumer& consumer = NativeExecutionConsumer::bound(*this);
+    const uint64_t hash = consumer.calc_continuation_hash();
+    // The fold cannot throw: a read of the book that failed inside it was
+    // carried by the core, and this is the first reader that can throw it.
+    consumer.request_core().rethrow_book_read_failure();
+    return hash;
 }
 
 void NativeStrategyHost::native_closed_rows_amended(std::size_t first_row) {
