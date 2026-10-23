@@ -5,6 +5,8 @@ The corpus harness supplies its existing settings, windowing and CSV export.
 Only its container launcher is replaced: execution is a subprocess running the
 unmodified docker/run_json.py against the CMake-built real strategy module.
 Missing fixtures, modules or fresh feeds are failures, never skips.
+H2-9: on the lab, run `python3 scripts/derive_corpus_feeds.py` once before
+ctest and before parallel feed consumers. This E2E never derives feeds.
 """
 from __future__ import annotations
 
@@ -51,15 +53,24 @@ def require_reversing_tape(rows, label):
 def require_fresh_derived():
     # The E2E reads the lab's existing feeds. Never materialize or race a
     # writer, and never modify the corpus submodule from this test.
-    assert derived.SOURCE_1M.is_file() and derived.SOURCE_1M.stat().st_size >= 1_000_000, (
-        "E2E needs the existing full corpus 1m feed, not an LFS pointer")
-    assert derived._derived_cache_is_fresh(
-        derived.SOURCE_1M, (derived.DERIVED_15M, derived.DERIVED_15M_WINDOW),
-        derived.DERIVATION_STAMP), (
-            "E2E needs fresh derived corpus feeds prepared once before consumers run")
+    preparation = (
+        "prepare the corpus before ctest: python3 scripts/derive_corpus_feeds.py "
+        "(run once before parallel consumers)")
+    if not derived.SOURCE_1M.is_file() or derived.SOURCE_1M.stat().st_size < 1_000_000:
+        raise RuntimeError(
+            f"E2E needs the full corpus 1m feed, not an LFS pointer: {derived.SOURCE_1M}; "
+            f"fetch the corpus LFS data, then {preparation}")
+    if not derived._derived_cache_is_fresh(
+            derived.SOURCE_1M, (derived.DERIVED_15M, derived.DERIVED_15M_WINDOW),
+            derived.DERIVATION_STAMP):
+        raise RuntimeError(
+            f"E2E needs fresh derived feeds: {derived.DERIVED_15M}, "
+            f"{derived.DERIVED_15M_WINDOW}, stamp {derived.DERIVATION_STAMP}; {preparation}")
 
 
 def run_probe(module, artifacts):
+    # Check even when run_strategy's selected metadata needs no derivation.
+    require_fresh_derived()
     reference = PROBE / "engine_trades.csv"
     for path in (module, reference, PROBE / "strategy.pine", PROBE / "generated.cpp",
                  PROBE / "inputs.json"):

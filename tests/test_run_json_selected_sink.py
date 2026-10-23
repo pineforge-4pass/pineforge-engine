@@ -34,8 +34,7 @@ import test_run_json_selected_window as selected
 import test_run_json_sink as sinks
 import test_run_json_sink_summary as summaries
 
-# Reuse the existing immutable producer and its SHA-256 guard.
-frozen = sinks.frozen
+# Share the ordinary fixture's optional native arena statistics.
 arena_stats = sinks.arena_stats
 
 
@@ -235,7 +234,7 @@ def masked_bytes(text):
 
 @pytest.mark.parametrize("outputs", [False, True])
 @pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
-def test_selected_sink_matches_frozen_array_bytes(
+def test_selected_sink_matches_array_route_bytes(
         tmp_path, monkeypatch, outputs, pnls, arena_stats):
     before = invoke(tmp_path, monkeypatch, outputs=outputs,
                     library=sinks.without_report_sink(SelectedSinkLibrary(
@@ -335,7 +334,8 @@ def test_selected_named_sink_yields_the_summary_projection(
     assert directories == [str(spill)]
 
 
-def test_selected_validation_reads_only_the_first_equity_record(tmp_path, monkeypatch):
+def test_selected_equity_passes_verify_results_endpoints_anchor_and_serialization(
+        tmp_path, monkeypatch):
     new_sink, equity_passes = run_json._new_report_sink, []
 
     def counting_sink(*args, **kwargs):
@@ -603,7 +603,7 @@ def native_compare(tmp_path, module, argv):
     (0, 99, "3", False),      # aggregated selected observations
     (4, 4, "1", True),        # M = 0, anchor only; REVISION F13(2)
 ])
-def test_native_selected_frozen_bytes(tmp_path, start, count, script_tf, empty):
+def test_native_selected_sink_matches_array_route_bytes(tmp_path, start, count, script_tf, empty):
     module = os.environ.get("PINEFORGE_L9S_STRATEGY_SO")
     if not module:
         pytest.skip("SKIP lab module not supplied: PINEFORGE_L9S_STRATEGY_SO; CTest wires it")
@@ -616,7 +616,7 @@ def test_native_selected_frozen_bytes(tmp_path, start, count, script_tf, empty):
         assert report["trades"] and any(trade["open_at_end"] for trade in report["trades"])
 
 
-def test_native_selected_corpus_frozen_bytes(tmp_path):
+def test_native_selected_corpus_sink_matches_array_route_bytes(tmp_path):
     """Ready selected corpus cases: [{so, argv}], prepared once by CORE-TOP."""
     manifest = os.environ.get("PINEFORGE_L9S_CORPUS_CASES")
     if not manifest:

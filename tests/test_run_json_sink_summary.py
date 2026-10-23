@@ -24,7 +24,7 @@ import pf_sink
 import run_json
 import test_run_json_bin as bars
 import test_run_json_sink as full
-from test_run_json_sink import arena_stats, frozen  # noqa: F401 (shared pytest fixtures)
+from test_run_json_sink import arena_stats  # noqa: F401 (shared pytest fixture)
 
 
 OUTPUT_KEYS = ("schema_version", "message_format", "manifest_sha256",
@@ -150,7 +150,7 @@ def project_summary(document, reference):
 
 @pytest.mark.parametrize("outputs", [False, True])
 @pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
-def test_named_summary_matches_frozen_projection(
+def test_named_summary_matches_array_route_projection(
         tmp_path, monkeypatch, outputs, pnls, arena_stats):
     """Fail-before: the base parser refuses --report-sink and emits no summary."""
     path = tmp_path / "report 漢.ndjson"
@@ -265,7 +265,7 @@ def test_bench_only_body_run_writes_named_path(tmp_path, monkeypatch):
     assert json.loads(text)["report_sink"] == read_reference(path)
 
 
-def test_full_mode_with_run_id_and_spill_keeps_frozen_bytes(
+def test_full_mode_with_run_id_and_spill_matches_array_route_bytes(
         tmp_path, monkeypatch, arena_stats):
     before = full.invoke(
         tmp_path, monkeypatch,
@@ -376,7 +376,7 @@ def native_summary_compare(tmp_path, module, argv):
                                             ("PINEFORGE_L9B_OUTPUTS_SO", True)])
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize("bench", [False, True])
-def test_native_frozen_summary_bytes(tmp_path, fixture, outputs, binary, bench):
+def test_native_summary_matches_array_route_bytes(tmp_path, fixture, outputs, binary, bench):
     module = os.environ.get(fixture)
     if not module:
         pytest.skip("SKIP lab module not supplied: " + fixture + "; CTest wires native targets")
@@ -427,7 +427,7 @@ def test_native_sink_open_failure_never_publishes_summary(tmp_path):
     assert "summary" not in json.loads(result.stdout)
 
 
-def test_native_corpus_subset_frozen_summary_bytes(tmp_path):
+def test_native_corpus_subset_summary_matches_array_route_bytes(tmp_path):
     manifest = os.environ.get("PINEFORGE_L9B_CORPUS_CASES")
     if not manifest:
         pytest.skip("SKIP corpus proof requires PINEFORGE_L9B_CORPUS_CASES from CORE-TOP")

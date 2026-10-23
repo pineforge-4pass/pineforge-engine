@@ -292,7 +292,83 @@ def invoke(tmp_path, monkeypatch, runner=run_json, *, library=None, extra=(), fo
 
 @pytest.mark.parametrize("outputs", [False, True])
 @pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
-def test_full_json_installs_sink_and_matches_frozen(
+def test_array_route_document_matches_frozen_with_r13_deltas(tmp_path, frozen, outputs, pnls):
+    """H2-5: shared assembly/serialization changes must reach an immutable oracle."""
+    report = run_json.ReportC()
+    trades = (run_json.TradeC * len(pnls))()
+    for index, (trade, pnl) in enumerate(zip(trades, pnls)):
+        trade.entry_time, trade.exit_time = bars.T0, bars.T0 + 60000
+        trade.entry_price, trade.exit_price, trade.qty = 100., 101., 2.
+        trade.pnl, trade.pnl_pct = pnl, 5.
+        trade.max_runup, trade.max_drawdown, trade.commission = 12., -8., .5
+        trade.is_long, trade.open_at_end = index % 2, int(index == len(pnls) - 1)
+        trade.entry_bar_index, trade.exit_bar_index = index, index + 1
+    curve = (run_json.EquityPointC * 5)(*(
+        run_json.EquityPointC(bars.T0 + index * 60000, 10000. + index, -0.)
+        for index in range(5)))
+    report.trades, report.trades_len, report.total_trades = trades, len(trades), len(trades)
+    report.equity_curve, report.equity_curve_len = curve, len(curve)
+    report.net_profit = sum(pnls)
+    report.input_bars_processed = report.script_bars_processed = len(curve)
+    report.magnifier_sub_bars_total, report.magnifier_sample_ticks_total = 17, 23
+    report.bar_magnifier_enabled = 1
+    for group in ("all", "longs", "shorts", "equity"):
+        block = getattr(report.metrics, group)
+        for index, (name, kind) in enumerate(block._fields_):
+            setattr(block, name, (index + 1) / 7 if kind is ctypes.c_double else index)
+    report.metrics.all.profit_factor = float("nan")  # Defined metric absence.
+    report.metrics.equity.open_pl = -0.
+    incarnations = tuple(range(41, 41 + len(trades)))
+    arguments = (
+        report, Path("frozen-oracle.csv"), len(curve), curve[0].time_ms, curve[-1].time_ms,
+        1.25, {"length": "7"}, {"commission_value": "0.5"}, {"chart_tz": "Etc/UTC"},
+        incarnations)
+    reference = frozen.build_report_dict(*arguments)
+    assert "annualization" not in reference["diagnostics"]
+    # R13 / revision 3.1 is the only report delta for this finite subday
+    # population: both native cagr and calmar are defined and finite.
+    assert 0 < curve[-1].time_ms - curve[0].time_ms < 86_400_000
+    reference["diagnostics"]["annualization"] = {
+        "cagr": "simple_proportional_subday",
+        "calmar": "simple_proportional_subday",
+    }
+    document = run_json.build_report_dict(*arguments)
+    if outputs:
+        reference["outputs"] = frozen.build_outputs_block(outputs_reader())
+        document["outputs"] = run_json.build_outputs_block(outputs_reader())
+    expected = json.dumps(reference, separators=(",", ":"), allow_nan=False) + "\n"
+    run_json._validate_report_result(document)
+    with contextlib.ExitStack() as resources:
+        artifact = run_json._prepare_stream_report(document, resources, str(tmp_path))
+        assert artifact.read() == expected
+
+
+@pytest.mark.parametrize("source_bytes", [None, b"version https://git-lfs.github.com/spec/v1\n",
+                                        b"0" * 1_000_000],
+                         ids=["missing-source", "lfs-pointer", "missing-derived-feeds"])
+def test_reversal_scratch_unprepared_feeds_fail_with_preparation_command(
+        tmp_path, monkeypatch, source_bytes):
+    # H2-9: use this existing pytest registration; the E2E has a direct CLI
+    # registration owned by another lane and must not silently skip.
+    import test_run_json_reversal_scratch as reversal
+
+    source = tmp_path / "full.csv"
+    if source_bytes is not None:
+        source.write_bytes(source_bytes)
+    monkeypatch.setattr(reversal.derived, "SOURCE_1M", source)
+    monkeypatch.setattr(reversal.derived, "DERIVED_15M", tmp_path / "15m.csv")
+    monkeypatch.setattr(reversal.derived, "DERIVED_15M_WINDOW", tmp_path / "window.csv")
+    monkeypatch.setattr(reversal.derived, "DERIVATION_STAMP", tmp_path / "derivation.stamp")
+    with pytest.raises(RuntimeError, match=r"before ctest.*python3 scripts/derive_corpus_feeds\.py"):
+        reversal.require_fresh_derived()
+    assert not (tmp_path / "15m.csv").exists()
+    assert not (tmp_path / "window.csv").exists()
+    assert not (tmp_path / "derivation.stamp").exists()
+
+
+@pytest.mark.parametrize("outputs", [False, True])
+@pytest.mark.parametrize("pnls", [(10., -7., -0.), (), (-0., 0.), (1e16, 1., -1e16, -2.)])
+def test_full_json_installs_sink_and_matches_array_route(
         tmp_path, monkeypatch, outputs, pnls, arena_stats):
     extra = ["--outputs"] if outputs else []
     before = invoke(tmp_path, monkeypatch,
@@ -587,7 +663,7 @@ def native_compare(tmp_path, module, argv, *, binary=False, phase_fd=False):
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize("bench", [False, True])
 @pytest.mark.parametrize("phase_fd", [False, True])
-def test_native_frozen_producer_bytes(tmp_path, fixture, outputs, binary, bench, phase_fd):
+def test_native_sink_matches_array_route_bytes(tmp_path, fixture, outputs, binary, bench, phase_fd):
     module = os.environ.get(fixture)
     if not module:
         pytest.skip("SKIP lab module not supplied: " + fixture + "; CTest wires the native targets")
@@ -606,7 +682,7 @@ def test_native_frozen_producer_bytes(tmp_path, fixture, outputs, binary, bench,
     native_compare(tmp_path, module, argv, phase_fd=phase_fd)
 
 
-def test_lab_corpus_subset_frozen_bytes(tmp_path):
+def test_lab_corpus_subset_sink_matches_array_route_bytes(tmp_path):
     """CORE-TOP supplies exact probe argv after preparing derived feeds ONCE.
 
     Manifest: [{"so": "/lab/probe.so", "argv": ["--ohlcv", "...", ...]}, ...].

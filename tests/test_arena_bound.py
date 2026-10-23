@@ -146,18 +146,77 @@ class FormulaTests(unittest.TestCase):
         self.assertLess(supplied, 25_165_824)  # Actual 24*C curve from the lab brief.
 
     def test_runtime_fixture_certificates_hand_derived(self):
-        # Current fixture_facts, independently summed by hand. Columns are
-        # case, bars, logical B, old non-command chunks, combined chunks.
+        # H2-10: expand the storage-design terms beside their pinned sums.
+        # No sizing helper
+        # supplies any expected input, term, slot count or saved-path count.
+        #
+        # For S bars and width w, f=4*(w+9*w*w+1), H=Z=w*S:
+        # T=S*f*H+Z; D=6+8*w*S+8; Q=16*w*w*S (<D*D); R=4*f*S.
+        # Cases 1/5: S=32,w=8,f=2340,H=256; T=74880*256+256.
+        # Case 2: S=512,w=1,f=44,H=512; T=22528*512+512.
+        # Case 3: S=32,w=1,f=44,H=32; T=1408*32+32, L=4160.
+        # Case 4: S=64,w=4,f=596,H=256; T=38144*256+256.
+        # Case 7: S=384,w=1,f=44,H=384; T=16896*384+384,
+        #         with selected E=256+1 rather than S.
+        # Cases 0/6: T=Q=0,D=1,L=0; R=0 / 512*512 respectively.
+        #
+        # Storage coefficients for L=64: tail=94, cohort=160, rank=124,
+        # erased single/pair=104/168, consumed pair=169; J=min(D,27).
+        # For L=4160 they are 4190,4256,4220,4200/8360,8361.
+        # Each nonempty cohort/rank store adds its own one-byte sentinel.
+        # Index peak is 24*slots for >32 keys, 16*64 for 1..32, 0 for none;
+        # slots is the first power of two >=2*keys, at least 64.
+        # Fold = 136*Q + 2088*(Q-1) + 2096*saved for nonempty Q:
+        # saved=min(Q-1,9*(2*L+2))+1 = 1171 for the large L=64 rows,
+        # and 512 for case 3 (511 branches plus the final leaf).
+        # Roots use 16*R; stock-source external openings contribute zero.
+        term_names = (
+            "equity", "positionTail", "cohorts", "exitRank", "erasedData",
+            "erasedIndex", "consumedData", "consumedIndex", "orderedFold",
+            "successorRoots", "openings",
+        )
+        # Columns: case, S, (T,D,Q,L,R,E), terms in term_names order,
+        # logical B, old non-command chunks, combined chunks.
         # The command capacity expectation uses only arena/share geometry.
-        for which, bars, logical, non_command, combined in (
-                (1, 32, 1_898_366_958, 1825, 2245),
-                (2, 512, 1_111_429_870, 1074, 1320),
-                (3, 32, 202_251_294, 207, 252),
-                (4, 64, 967_682_798, 937, 1150),
-                (5, 32, 1_898_366_958, 1825, 2245),
-                (6, 512, 4_207_814, 19, 22),
-                (7, 384, 631_186_438, 616, 757),
-                (0, 1_048_576, 25_167_046, 39, 45)):
+        for which, bars, counts, terms, logical, non_command, combined in (
+                (1, 32, (19_169_536, 2062, 32_768, 64, 299_520, 32),
+                 (24*32, 94*19_169_536, 160*2062+1, 124*27+1,
+                  104*2062+168*32_768, 24*131_072, 169*32_768, 24*65_536,
+                  136*32_768+2088*32_767+2096*1171, 16*299_520, 0),
+                 1_898_366_958, 1825, 2245),
+                (2, 512, (11_534_848, 4110, 8192, 64, 90_112, 512),
+                 (24*512, 94*11_534_848, 160*4110+1, 124*27+1,
+                  104*4110+168*8192, 24*32_768, 169*8192, 24*16_384,
+                  136*8192+2088*8191+2096*1171, 16*90_112, 0),
+                 1_111_429_870, 1074, 1320),
+                (3, 32, (45_088, 270, 512, 4160, 5632, 32),
+                 (24*32, 4190*45_088, 4256*270+1, 4220*27+1,
+                  4200*270+8360*512, 24*2048, 8361*512, 24*1024,
+                  136*512+2088*511+2096*512, 16*5632, 0),
+                 202_251_294, 207, 252),
+                (4, 64, (9_765_120, 2062, 16_384, 64, 152_576, 64),
+                 (24*64, 94*9_765_120, 160*2062+1, 124*27+1,
+                  104*2062+168*16_384, 24*65_536, 169*16_384, 24*32_768,
+                  136*16_384+2088*16_383+2096*1171, 16*152_576, 0),
+                 967_682_798, 937, 1150),
+                (5, 32, (19_169_536, 2062, 32_768, 64, 299_520, 32),
+                 (24*32, 94*19_169_536, 160*2062+1, 124*27+1,
+                  104*2062+168*32_768, 24*131_072, 169*32_768, 24*65_536,
+                  136*32_768+2088*32_767+2096*1171, 16*299_520, 0),
+                 1_898_366_958, 1825, 2245),
+                (6, 512, (0, 1, 0, 0, 262_144, 512),
+                 (24*512, 30*0, 96*1+1, 60*1+1, 40*1, 16*64,
+                  0, 0, 0, 16*262_144, 0),
+                 4_207_814, 19, 22),
+                (7, 384, (6_488_448, 3086, 6144, 64, 67_584, 257),
+                 (24*257, 94*6_488_448, 160*3086+1, 124*27+1,
+                  104*3086+168*6144, 24*32_768, 169*6144, 24*16_384,
+                  136*6144+2088*6143+2096*1171, 16*67_584, 0),
+                 631_186_438, 616, 757),
+                (0, 1_048_576, (0, 1, 0, 0, 0, 1_048_576),
+                 (24*1_048_576, 30*0, 96*1+1, 60*1+1, 40*1, 16*64,
+                  0, 0, 0, 16*0, 0),
+                 25_167_046, 39, 45)):
             with self.subTest(which=which):
                 facts = {
                     "schema": FACTS_SCHEMA,
@@ -168,7 +227,16 @@ class FormulaTests(unittest.TestCase):
                 }
                 arena = arena_bound(facts)["terms"]["arena"]
                 self.assertFalse(arena["unbounded"])
-                self.assertEqual(sum(per_user_bytes(arena["inputs"]).values()), logical)
+                self.assertEqual(
+                    tuple(arena["inputs"][name]["value"] for name in "TDQLRE"), counts)
+                actual_terms = per_user_bytes(arena["inputs"])
+                self.assertEqual(set(actual_terms), set(term_names))
+                self.assertEqual(len(terms), len(term_names))
+                for name, expected in zip(term_names, terms):
+                    with self.subTest(term=name):
+                        self.assertEqual(actual_terms[name], expected)
+                self.assertEqual(sum(terms), logical)
+                self.assertEqual(sum(actual_terms.values()), logical)
                 self.assertEqual(arena["arenaBytes"], combined * CHUNK_BYTES)
                 self.assertEqual(
                     arena["arenaBytes"]

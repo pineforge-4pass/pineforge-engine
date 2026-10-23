@@ -14,9 +14,14 @@ authority is the L0b row of PARALLEL-PLAN section 3, DESIGN sections 2.1, 3.9,
 unconditional. The 18:21 scope ruling assigns the L0 acceptance harnesses to
 integration; this lane does not modify them.
 
-Source anchors below were refreshed for the merge of integration
-`69fdd0e0172d89481c724867f1b12a1db7f5a66b`. The historical measurements and
-model basis above are unchanged; no census measurement is inferred from the merge.
+H2-7 release clarification: this is a historical L0B handoff through integration
+`69fdd0e0172d89481c724867f1b12a1db7f5a66b`, not a measured census for 1.7.0.
+No 1.7.0 measured `census.json`, generated `CENSUS.md` or allocation snapshots
+are attached or identified here; the release census verdict remains OPEN in
+this record. Establishing that verdict requires the lab artifacts and their
+exact source/module/library hashes. The historical measurements and model
+basis above are unchanged. Source references below use symbols rather than
+line offsets so later integrations do not silently retarget them.
 
 ## Allocation-site ownership inventory
 
@@ -70,16 +75,14 @@ non-production in DESIGN 2.4/3.9. If any appears as a growing stack in the
 production battery/corpus, the driver reports it; it does not exempt a whole
 file or class name.
 
-Relevant declarations in the merged tree: `trades_` in include/pineforge/engine.hpp:659;
-`equity_curve_` in include/pineforge/engine.hpp:700; `closed_row_prefix_` in
-src/native_execution_consumer.hpp:1937; `events_` in
-include/pineforge/source/market_admission.hpp:213; `OriginRoster` in
-include/pineforge/source/pine_adapter.hpp:935; the per-id cohort members in
-include/pineforge/source/pine_adapter.hpp:2518 and :2519; `trade_exit_phase_` in
-include/pineforge/source/pine_adapter.hpp:2734; `exit_rank_keys_` in
-include/pineforge/source/pine_adapter.hpp:2740; `cohorts_` in
-include/pineforge/native_order.hpp:2318; N-day stamp arrays in
-include/pineforge/timeframe.hpp:555 and :556.
+Declaration anchors for the historical inventory: `trades_` and `equity_curve_`
+in `include/pineforge/engine.hpp`; `closed_row_prefix_` in
+`src/native_execution_consumer.hpp`; `Journal::events_` in
+`include/pineforge/source/market_admission.hpp`; `OriginRoster`,
+`cohorts_by_id_`, `trade_exit_phase_` and `exit_rank_keys_` in
+`include/pineforge/source/pine_adapter.hpp`; `cohorts_` in
+`include/pineforge/native_order.hpp`; `TimeframeAggregator::set_native_periods`
+for the N-day stamp storage in `include/pineforge/timeframe.hpp`.
 
 ## Q9 bytes per additional distinct entry id
 
@@ -125,10 +128,10 @@ still have to be counted on the lab. The table inventory deliberately does
 not add a fabricated B/id total.
 
 One source-level qualification: `note_exit_rank_key` in
-src/source/pine_adapter.cpp:6342 returns once the table exceeds 26 keys. The
-check is at :6345 and the append at :6350, so this particular table saturates
-at 27 at the brief's base. DESIGN's F3 inventory groups it with per-distinct-id
-tables. This lane changes neither the bound nor the contract; CORE-TOP/L19l
+`src/source/pine_adapter.cpp` checks `exit_rank_keys_` before appending and
+returns once the table exceeds 26 keys, so this particular table saturates
+at 27 at the historical brief's base. DESIGN's F3 inventory groups it with
+per-distinct-id tables. This lane changes neither the bound nor the contract; CORE-TOP/L19l
 should retain the observation when attributing the early-rung cost.
 
 ## Lab procedure and artifacts
@@ -217,19 +220,19 @@ The source read behind the replacement keys is:
 
 | Owner | Demangled function/type keys | Source of allocation |
 |---|---|---|
-| L19a | `WorkingRequestCore::index_committed` | src/native_order.cpp:1189, append at :1206 |
-| L19b/L19c | `ReceiptKey`, `CohortReceipt` | src/native_order.cpp:1505 and :5206; :1284 and :1306 |
-| L19d | `OriginRoster::push_back` | include/pineforge/source/pine_adapter.hpp:941 |
-| L19e | `Journal::append`, `Journal::reserve`, `Journal::next_sequence`, `CommandObservation` | src/source/market_admission.cpp:144, :125, :117 and :177 |
-| L19h | `BracketRoster` methods; `PlacementTable::try_emplace`/`replace` with an unsigned 64-bit vector element | include/pineforge/source/pine_adapter.hpp:772 and :790 |
-| L19l | `cohort_for`, `CohortFacts`, `CohortRoster`, `note_exit_rank_key`, `fold_sequence`, `IdPairStore`; signed consumed-cycle entries under `on_applied` | src/source/pine_adapter.cpp:3021, :6355, :24439; include/pineforge/source/pine_adapter.hpp:865 |
-| L19i | `NativeExecutionConsumer::begin_timeframe_subscriptions` | src/native_execution_consumer.cpp:9397, assign at :9444 |
-| L19k | `tradingview_multi_day_stamps`, `TimeframeAggregator::set_native_periods` | src/source/pine_strategy_host.cpp:1560; src/timeframe.cpp:1769 |
-| L3/L4 | `PineScheduler::capture_begin`, `native_module::run_batch`; `script_bucket_completions`, `PineScheduler::run_begin` | src/source/pine_scheduler_native.cpp:19 and :176; include/pineforge/native_module.hpp:229; src/native_execution_consumer.cpp:9049 |
-| L15/L16 | `PineStrategyHost::set_symbol_feed`, `tradingview_magnifier_bars` | src/source/pine_security_eval.cpp:1347; src/source/magnifier_intrabars.cpp:73 |
-| L7/L8 | `compute_equity_stats`; `Trade`, `record_close_trade`, `closed_rows_digest`, `set_exit_phase` | src/engine_metrics.cpp:316; src/engine_orders.cpp:217; src/native_execution_consumer.cpp:11921; src/source/pine_adapter.cpp:6446 |
-| L6b | `record_equity_point`; `record_script_report_point`, `scheduler_record_broker_hash`, `output_bar`, `record_output_event`, `trace`, `intern_trace_name`, `fill_trace_section` | include/pineforge/engine.hpp:1381; src/native_execution_consumer.cpp:8972; src/source/pine_strategy_host.cpp:2795; src/engine_report.cpp:436, :489, :30, :20 and :242 |
-| L9/L17 | `fill_metrics_section`, `fill_trades_section`, `capture_presentation` | src/engine_report.cpp:192 and :103; src/native_execution_consumer.cpp:12447 |
+| L19a | `WorkingRequestCore::index_committed` | `src/native_order.cpp` |
+| L19b/L19c | `ReceiptKey`, `CohortReceipt` | `src/native_order.cpp` |
+| L19d | `OriginRoster::push_back` | `include/pineforge/source/pine_adapter.hpp` |
+| L19e | `Journal::append`, `Journal::reserve`, `Journal::next_sequence`, `CommandObservation` | `src/source/market_admission.cpp` |
+| L19h | `BracketRoster` methods; `PlacementTable::try_emplace`/`replace` with an unsigned 64-bit vector element | `include/pineforge/source/pine_adapter.hpp` |
+| L19l | `cohort_for`, `CohortFacts`, `CohortRoster`, `note_exit_rank_key`, `fold_sequence`, `IdPairStore`; signed consumed-cycle entries under `on_applied` | `src/source/pine_adapter.cpp`; `include/pineforge/source/pine_adapter.hpp` |
+| L19i | `NativeExecutionConsumer::begin_timeframe_subscriptions` | `src/native_execution_consumer.cpp` |
+| L19k | `tradingview_multi_day_stamps`, `TimeframeAggregator::set_native_periods` | `src/source/pine_strategy_host.cpp`; `src/timeframe.cpp` |
+| L3/L4 | `PineScheduler::capture_begin`, `native_module::run_batch`; `script_bucket_completions`, `PineScheduler::run_begin` | `src/source/pine_scheduler_native.cpp`; `include/pineforge/native_module.hpp`; `src/native_execution_consumer.cpp` |
+| L15/L16 | `PineStrategyHost::set_symbol_feed`, `tradingview_magnifier_bars` | `src/source/pine_security_eval.cpp`; `src/source/magnifier_intrabars.cpp` |
+| L7/L8 | `compute_equity_stats`; `Trade`, `record_close_trade`, `closed_rows_digest`, `set_exit_phase` | `src/engine_metrics.cpp`; `src/engine_orders.cpp`; `src/native_execution_consumer.cpp`; `src/source/pine_adapter.cpp` |
+| L6b | `record_equity_point`; `record_script_report_point`, `scheduler_record_broker_hash`, `output_bar`, `record_output_event`, `trace`, `intern_trace_name`, `fill_trace_section` | `include/pineforge/engine.hpp`; `src/native_execution_consumer.cpp`; `src/source/pine_strategy_host.cpp`; `src/engine_report.cpp` |
+| L9/L17 | `fill_metrics_section`, `fill_trades_section`, `capture_presentation` | `src/engine_report.cpp`; `src/native_execution_consumer.cpp` |
 
 The unfolded-vector rule requires both its pushing method and vector element
 type because the same `try_emplace` also allocates `PlacementSnapshot` nodes.
@@ -246,16 +249,15 @@ Chart selection is armed by the `Strategy.run` wrapper and keyed to that run's
 chart prefix. Planner loads outside the wrapper keep their original count and
 bounds, including a report-only quote loaded before execution. Once the chart
 is selected, its final timestamp still bounds the other run-time feed loads.
-The source seams are scripts/run_strategy.py:4059 for the planner's quote,
-scripts/run_strategy.py:4486 for `strat.run`, and scripts/run_strategy.py:2496
-for the chart load inside `Strategy.run`.
+The source seams in `scripts/run_strategy.py` are `_declared_magnifier_plan`
+for the planner's quote, `_main_run` for the `strat.run` dispatch, and
+`_load_bars` for the chart load inside `Strategy.run`.
 
 Symbol request feeds bypass `_load_bars`. The worker now wraps
-`_parse_requests_feed` (scripts/run_strategy.py:1755), mapping its returned bar,
+`_parse_requests_feed` in `scripts/run_strategy.py`, mapping its returned bar,
 int64 close-time and double column arrays before `_read_probe_requests` stores
-them in the request dictionary at scripts/run_strategy.py:1893. The existing
-`_install_probe_requests` setter loop at scripts/run_strategy.py:2275 receives
-those same mapped arrays. Counts, element types, full validated feed bytes and
+them in the request dictionary. The existing `_install_probe_requests` setter
+loop receives those same mapped arrays. Counts, element types, full validated feed bytes and
 metadata are preserved; an engine-owned copy remains visible to Massif. No
 blanket admission for Python frames was introduced.
 
@@ -275,42 +277,46 @@ PASS/RED/OPEN conditions are unchanged by these mapping fixes. New lab controls
 and the real chart/feed probes still need execution. The census itself and
 both measured Q9 cells remain OPEN for CORE-TOP.
 
-## Merge round: registration and source coordinates
+## Merge round: registration and source symbols
 
 The merge of `refs/heads/pf/cr150-p00-contracts` at
-`23834ffa4cc83cb56fca2581ad2cb91c74a5d7c3` keeps its complete test-registration
-prefix, now ending at tests/CMakeLists.txt:7114. The current L0b Python row
-is at tests/CMakeLists.txt:7124 and its guarded native row at :7128, with its existing
-dynamic-loader link and executable-export settings. The private-fixture
-evidence line at :3267 and its supporting lines 3235, 3263, 3287 and 3293-3294
-were re-read in the merged file and retain their original content.
+`23834ffa4cc83cb56fca2581ad2cb91c74a5d7c3` kept its complete test-registration
+prefix in `tests/CMakeLists.txt`. The L0b anchors are
+`add_test(NAME test_heap_census)` and the
+`PINEFORGE_BUILD_SOURCE_LAYER AND UNIX` block registering
+`test_heap_census_unique_ids`, with `${CMAKE_DL_LIBS}` linkage and
+`ENABLE_EXPORTS ON`. The private-fixture evidence anchor is the
+`_pf_pcv_emitted GREATER 0 AND _pf_pcv_emitted EQUAL _pf_pcv_listed`
+condition for `pooc_close_fill_view_tapes`, supported by `_pf_pcv_fixtures`,
+`_pf_pcv_entry_points`, `_pf_pcv_tapes` and its `TARGET`-guarded test.
 
 The conflict resolution changes registrations and documentation coordinates
 only. The census driver, Python controls, native fixture and Pine/JSON
 fixtures remain byte-identical to the accepted fix-round head
 `8a604337927b7881bb3ae6eea48867b7c110ed10`. Incoming implementation and document
 changes are inherited from integration without further source edits. This
-report's shifted source anchors were refreshed by source reads; no build,
+report's historical source anchors were recorded by source reads; no build,
 test, generator or anchor-checker script was executed here. CORE-TOP owns the
 merged-head re-proof.
 
 ## Merge round 3: L8b registration
 
 The merge of `refs/heads/pf/cr150-p00-contracts` at
-`94647174962941ab8b199cc49720c0dfc63b700d` preserves the full integration
-registration prefix, now through tests/CMakeLists.txt:7117, including the
-`test_trade_percent_prefix` registration on that line. After the later metric
-rows, the unchanged L0b block's current Python row is at tests/CMakeLists.txt:7124,
-source-layer guard at :7126 and native registration at :7128. Its loader linkage
-and executable exports remain at :7129 and :7130. The evidence condition at :3267 and supporting
-lines 3235, 3263, 3287 and 3293-3294 were re-read and are unchanged.
+`94647174962941ab8b199cc49720c0dfc63b700d` preserved the full integration
+registration prefix, including `test_trade_percent_prefix` in
+`tests/CMakeLists.txt`. After the metric rows, the L0b anchors remain
+`test_heap_census` and `test_heap_census_unique_ids`, the latter guarded by
+`PINEFORGE_BUILD_SOURCE_LAYER AND UNIX` with `${CMAKE_DL_LIBS}` linkage and
+`ENABLE_EXPORTS ON`. The private-fixture anchor remains the
+`_pf_pcv_emitted` / `_pf_pcv_listed` completeness condition for
+`pooc_close_fill_view_tapes` described above.
 
 The only resolution edits are the CMake registration ordering and this report's
-integration reference, live registration citations and merge note. Existing
-source anchors still point at the same lines: L8b's accessor replacements have
-equal line counts, and its added state/helpers follow the cited declarations
-and metric functions. No accepted census source, control, native fixture or
-fixture data was edited; incoming sources remain exactly integration's tree.
+integration reference, registration citations and merge note. Existing
+source anchors name the same declarations and metric functions across L8b's
+accessor replacements and added state/helpers. No accepted census source,
+control, native fixture or fixture data was edited; incoming sources remain
+exactly integration's tree.
 No build, test, generator or checker script ran here. CORE-TOP re-proves the
 merge HEAD; the prior green at `46ff545ac929ae2b7b02307316fbbcd0f124b780` is not
 a verification verdict for this merge.
@@ -319,10 +325,12 @@ a verification verdict for this merge.
 
 Merged `refs/heads/pf/cr150-p00-contracts` at
 `69fdd0e0172d89481c724867f1b12a1db7f5a66b`. Its complete registration prefix
-through tests/CMakeLists.txt:7121 is preserved, including the point-source and
-trade-stat accumulator rows. L0b follows at :7124 and :7128 with its original
-guard and linker settings. Pinned line :3267 and all supporting evidence
-lines were re-read unchanged. Only registrations and shifted documentation
-coordinates were resolved; accepted source and test bodies were not edited.
-The equity-metric anchor now names the template body at src/engine_metrics.cpp:316.
+was preserved, including the point-source and trade-stat accumulator rows.
+The L0b anchors in `tests/CMakeLists.txt` are `test_heap_census` and
+`test_heap_census_unique_ids` with the source-layer/UNIX guard, loader linkage
+and executable-export settings described above. The private-fixture evidence
+anchor is the `_pf_pcv_emitted` / `_pf_pcv_listed` completeness condition.
+Only registrations and documentation references were resolved; accepted
+source and test bodies were not edited.
+The equity-metric anchor is `compute_equity_stats` in `src/engine_metrics.cpp`.
 No build, test, generator or checker script ran on this machine.

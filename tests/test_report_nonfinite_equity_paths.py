@@ -3,9 +3,11 @@
 The selected-window execution stand-in owns native EquityPointC allocations.
 Only its last, ordinary point is poisoned; its anchor stays intact. Arrays
 reach the real report builder/validator. Sink points reach the production
-C++ LineWriter through a test-only bridge; no Python fixture encodes E rows.
+C++ LineWriter through a test-only bridge.
 Fd bytes are drained with the existing fd harness and replayed unchanged by
-the real standalone converter. Tests never inject JSON NaN or bare null.
+the real standalone converter. Separate completed-stream producer doubles
+encode a final null E field to reach the downstream validation boundaries
+that a native writer refusal cannot exercise. No test injects JSON NaN.
 
 Lab only. The supervisor builds report_nonfinite_equity_fd and supplies
 PINEFORGE_REPORT_NONFINITE_EQUITY_WRITER (CTest does this automatically).
@@ -15,6 +17,7 @@ failure classifier, sink reader, or converter is mocked.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import math
 import os
@@ -32,6 +35,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import run_json
 import test_run_json_nonfinite_report as nonfinite
 import test_run_json_selected_window as selected
+import test_run_json_sink as full_sinks
 import test_run_json_sink_fd as fd_sinks
 
 
@@ -217,33 +221,31 @@ def assert_native_poison(result, field, bad):
     assert math.isfinite(getattr(point, companion))
 
 
-def assert_written_curve(result, wire, field):
-    """Check writer provenance only when it completed, allowing writer refusal."""
+def assert_written_curve(result, wire):
+    """H2-4: inspect the finite prefix actually written before native refusal."""
     library = result.library
-    if not library.native_receipt.complete:
-        return
     lines = [
         json.loads(line, parse_constant=nonfinite.reject_constant)
         for line in wire.splitlines()
     ]
     assert lines[0]["schema"] == "pf-report-sink"
-    assert lines[-1]["trailer"] == "pf-report-sink"
-    points = [row for row in lines[1:-1] if row[0] == "E"]
-    assert len(points) == library.native_receipt.count_e == len(library._curve)
+    # cr289_write_equity copies counts/digest only after write_trailer; a
+    # write_e refusal leaves the receipt zeroed but preserves earlier bytes.
+    assert library.native_receipt.complete == 0
+    assert library.native_receipt.count_e == 0
+    assert bytes(library.native_receipt.sha256_hex) == b""
+    points = lines[1:]
+    assert points == [["E", *library.point(point)] for point in library._curve[:-1]]
+    assert len(points) == len(library._curve) - 1
     assert points[0] == ["E", *library.anchor_before]
-    assert points[-1][1] == library._curve[-1].time_ms
-    position = 2 if field == "equity" else 3
-    companion = "open_profit" if field == "equity" else "equity"
-    # This null is observed ONLY after the native poison above went through
-    # the real writer. This is no claim about independently supplied nulls.
-    assert points[-1][position] is None
-    assert points[-1][5 - position] == FINITE[companion]
+    assert points[-1][1] < library._curve[-1].time_ms
+    assert all(all(math.isfinite(value) for value in row[2:]) for row in points)
 
 
-def convert_fd_capture(tmp_path, result, wire):
+def convert_fd_capture(tmp_path, stdout, wire):
     sink, metadata = tmp_path / "retained.sink", tmp_path / "stdout.json"
     sink.write_bytes(wire)  # Retain the exact drained bytes; never refold/edit.
-    metadata.write_text(result.stdout, encoding="utf-8")
+    metadata.write_text(stdout, encoding="utf-8")
     converted = subprocess.run(
         [sys.executable, "-I", "-B", "-S", str(CONVERTER),
          "--in", str(sink), "--stdout-json", str(metadata), "--out", "-",
@@ -263,11 +265,97 @@ def convert_fd_capture(tmp_path, result, wire):
     return converted, diagnostics[-1]
 
 
+class CompletedNullEquityWriter:
+    """H2-4: a receipt-valid producer double that bypasses LineWriter."""
+
+    def __init__(self, field):
+        self.field = field
+
+    def write(self, path, fd, curve, receipt):
+        assert path is not None and fd is None
+        rows = [["E", point.time_ms, point.equity, point.open_profit] for point in curve]
+        rows[-1][2 if self.field == "equity" else 3] = None
+        counts, digest = full_sinks.write_sink(os.fsdecode(path.path), rows)
+        receipt.struct_size, receipt.version = ctypes.sizeof(receipt), 1
+        for tag in "ETOVKXH":
+            setattr(receipt, "count_" + tag.lower(), counts.get(tag, 0))
+        receipt.sha256_hex = digest.encode("ascii")
+        receipt.complete = 1
+
+
+def assert_completed_null_curve(wire, field):
+    """Validate framing/digest separately from the canonical null-E refusal."""
+    encoded = wire.splitlines(keepends=True)
+    lines = [json.loads(line, parse_constant=nonfinite.reject_constant) for line in encoded]
+    assert lines[0]["schema"] == lines[-1]["trailer"] == "pf-report-sink"
+    points = lines[1:-1]
+    assert len(points) >= 2 and all(row[0] == "E" for row in points)
+    assert lines[-1]["counts"] == {"E": len(points), "T": 0}
+    assert lines[-1]["sha256"] == hashlib.sha256(b"".join(encoded[:-1])).hexdigest()
+    assert all(all(math.isfinite(value) for value in row[2:]) for row in points[:-1])
+    position = 2 if field == "equity" else 3
+    assert points[-1][position] is None
+    assert math.isfinite(points[-1][5 - position])
+    return lines[-1]
+
+
+@pytest.mark.parametrize("field", ["equity", "open_profit"])
+def test_file_sink_validator_refuses_completed_null_e(tmp_path, field):
+    # H2-4: writer refusal must not mask _build_sink_report's validation.
+    result = run_path(
+        tmp_path, field, float("nan"), "file", writer=CompletedNullEquityWriter(field),
+        extra=("--spill-dir", str(tmp_path)))
+    library = result.library
+    trailer = assert_completed_null_curve(library.wire, field)
+    assert_native_poison(result, field, float("nan"))
+    assert library.writer_calls == library.receipt_queries == 1
+    assert library.native_receipt.complete == 1
+    assert library.native_receipt.count_e == trailer["counts"]["E"] == len(library._curve)
+    assert bytes(library.native_receipt.sha256_hex).decode("ascii") == trailer["sha256"]
+    rows = [json.loads(line) for line in library.wire.splitlines()][1:-1]
+    assert rows[:-1] == [["E", *library.point(point)] for point in library._curve[:-1]]
+    expected_last = ["E", library._curve[-1].time_ms, FINITE["equity"], FINITE["open_profit"]]
+    expected_last[2 if field == "equity" else 3] = None
+    assert rows[-1] == expected_last
+    nonfinite.assert_failure(
+        result, "report_result_invalid",
+        {"field": "equity_curve." + field, "reason": "nonfinite"}, mode="selected")
+
+
+@pytest.mark.parametrize("field", ["equity", "open_profit"])
+def test_converter_refuses_completed_null_e(tmp_path, field):
+    # Obtain real, successful fd metadata with finite native-call fixtures.
+    # Only the retained E payload is then changed; rebuild its real digest.
+    source = full_sinks.bars.csv_file(tmp_path)
+    library = fd_sinks.FdLibrary(pnls=())
+    with fd_sinks.Stream() as stream:
+        status, stdout, stderr = fd_sinks.invoke(
+            source, library, ("--report-sink-fd", str(stream.writer)))
+    assert status == 0 and stderr == "", (stdout, stderr)
+    metadata = nonfinite.strict_line(stdout)
+    assert "trades" not in metadata and "equity_curve" not in metadata
+    lines = [json.loads(line, parse_constant=nonfinite.reject_constant)
+             for line in stream.data.splitlines()]
+    assert lines[-1]["trailer"] == "pf-report-sink"
+    rows = lines[1:-1]
+    assert all(row[0] == "E" for row in rows)
+    rows[-1][2 if field == "equity" else 3] = None
+    retained = tmp_path / "completed-null.sink"
+    full_sinks.write_sink(retained, rows)
+    wire = retained.read_bytes()
+    assert_completed_null_curve(wire, field)
+    converted, diagnostic = convert_fd_capture(tmp_path, stdout, wire)
+    assert converted.returncode == 3, (converted.stdout, converted.stderr)
+    assert converted.stdout == ""
+    assert diagnostic["event"] == "sink_refused"
+    assert diagnostic["code"] == "report_result_invalid"
+    assert diagnostic["args"] == {"field": "equity_curve." + field, "reason": "nonfinite"}
+
+
 @pytest.mark.parametrize("field,bad", CASES)
 def test_non_sink_native_nonfinite(tmp_path, field, bad):
-    # Mutation: for equity, remove ("equity", "equity_curve.equity") at
-    # docker/run_json.py:4211; for open_profit, remove
-    # ("open_profit", "equity_curve.open_profit") at docker/run_json.py:4212.
+    # Removing the matching equity field from _validate_report_result's
+    # equity_curve loop must make the corresponding array cases fail.
     result = run_path(tmp_path, field, bad, "array")
     assert_native_poison(result, field, bad)
     assert not any(hasattr(result.library, name) for name in SINK_EXPORTS)
@@ -279,15 +367,15 @@ def test_non_sink_native_nonfinite(tmp_path, field, bad):
 
 @pytest.mark.parametrize("field,bad", CASES)
 def test_file_sink_native_nonfinite(tmp_path, native_writer, field, bad):
-    # Mutation: remove _validate_report_result(out) in _build_sink_report's
-    # non-fd branch at docker/run_json.py:6435.
+    # This native path proves LineWriter::write_e refusal, not the later
+    # _build_sink_report validator covered by the completed-stream row.
     result = run_path(tmp_path, field, bad, "file", writer=native_writer,
                       extra=("--spill-dir", str(tmp_path)))
     assert_native_poison(result, field, bad)
     assert result.library.writer_calls == 1
     assert result.library.path_descriptor is not None
     assert result.library.fd_descriptor is None
-    assert_written_curve(result, result.library.wire, field)
+    assert_written_curve(result, result.library.wire)
     nonfinite.assert_failure(
         result, "report_result_invalid",
         {"field": "equity_curve." + field, "reason": "nonfinite"}, mode="selected")
@@ -295,9 +383,8 @@ def test_file_sink_native_nonfinite(tmp_path, native_writer, field, bad):
 
 @pytest.mark.parametrize("field,bad", CASES)
 def test_fd_sink_native_nonfinite(tmp_path, native_writer, field, bad):
-    # Mutation: remove _check_equity(row) from _Sink.records in
-    # docker/pineforge_sink_to_json.py; all six fd cases then see real
-    # run_json/converter statuses 0/0 and fail the status assertion below.
+    # The writer rejects the last native point before emitting it or a
+    # trailer. Completed-null converter coverage uses its own fixture above.
     with fd_sinks.Stream() as stream:
         result = run_path(
             tmp_path, field, bad, "fd", writer=native_writer,
@@ -306,48 +393,20 @@ def test_fd_sink_native_nonfinite(tmp_path, native_writer, field, bad):
     assert result.library.writer_calls == 1
     assert result.library.path_descriptor is None
     assert result.library.fd_descriptor.fd == stream.writer
-    assert_written_curve(result, stream.data, field)
-    converted, diagnostic = convert_fd_capture(tmp_path, result, stream.data)
+    assert_written_curve(result, stream.data)
+    converted, diagnostic = convert_fd_capture(tmp_path, result.stdout, stream.data)
     evidence = {
         "run_json_status": result.status, "run_json_stdout": result.stdout,
         "run_json_stderr": result.stderr, "converter_status": converted.returncode,
         "converter_stdout": converted.stdout, "converter_stderr": converted.stderr,
     }
-    # These are the real harness/CLI statuses, not a test-created exit code:
-    # run_json failure is 1; the converter's unusable-row refusal is 3.
-    status = result.status if result.status else converted.returncode
-    assert status in (1, 3), evidence
-    if result.status:
-        # A native writer refusal is relayed by main's real failure handler.
-        # A completed stream can also be refused later by report assembly.
-        nonfinite.assert_failure(
-            result, "report_result_invalid",
-            {"field": "equity_curve." + field, "reason": "nonfinite"}, mode="selected")
-        if result.library.native_receipt.complete:
-            # A valid retained stream still gets its documented converter
-            # verdict; it cannot override the producer's typed failure.
-            assert converted.returncode in (0, 3), evidence
-            if converted.returncode == 0:
-                nonfinite.strict_line(converted.stdout)
-                assert diagnostic["event"] == "converter_complete", evidence
-            else:
-                assert converted.stdout == "", evidence
-                assert diagnostic["event"] == "sink_refused", evidence
-        else:
-            # Existing converter convention: EOF without a trailer is 6.
-            assert converted.returncode == 6, evidence
-            assert converted.stdout == "", evidence
-            assert diagnostic["event"] == "sink_refused", evidence
-    else:
-        # A converter-side fix retains its existing stderr-only failure
-        # channel. Require typed metadata there, with no report stdout.
-        assert result.status == 0 and result.stderr == "", evidence
-        small = nonfinite.strict_line(result.stdout)
-        assert "equity_curve" not in small and "trades" not in small, evidence
-        assert converted.returncode == 3, evidence
-        assert converted.stdout == "", evidence
-        assert diagnostic["event"] == "sink_refused", evidence
-        assert diagnostic["code"] == "report_result_invalid", evidence
-        assert diagnostic["args"] == {
-            "field": "equity_curve." + field, "reason": "nonfinite",
-        }, evidence
+    # The ctypes bridge raises the writer's typed Python RunFailure. This
+    # does not exercise the native last-error relay.
+    assert result.status == 1, evidence
+    nonfinite.assert_failure(
+        result, "report_result_invalid",
+        {"field": "equity_curve." + field, "reason": "nonfinite"}, mode="selected")
+    # Existing converter convention: EOF without a trailer is 6.
+    assert converted.returncode == 6, evidence
+    assert converted.stdout == "", evidence
+    assert diagnostic["event"] == "sink_refused", evidence
