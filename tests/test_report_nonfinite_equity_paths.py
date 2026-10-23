@@ -277,9 +277,9 @@ def test_file_sink_native_nonfinite(tmp_path, native_writer, field, bad):
 
 @pytest.mark.parametrize("field,bad", CASES)
 def test_fd_sink_native_nonfinite(tmp_path, native_writer, field, bad):
-    # Mutation: delete the CR-289 native-nonfinite E refusal at whichever
-    # production boundary the fix adds it. With that one refusal removed,
-    # the native writer + real converter complete with status 0 below.
+    # Mutation: remove _check_equity(row) from _Sink.records in
+    # docker/pineforge_sink_to_json.py; all six fd cases then see real
+    # run_json/converter statuses 0/0 and fail the status assertion below.
     with fd_sinks.Stream() as stream:
         result = run_path(
             tmp_path, field, bad, "fd", writer=native_writer,
