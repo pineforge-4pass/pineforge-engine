@@ -384,6 +384,8 @@ int main(int argc, char** argv) {
         const std::string prefix = argc == 3 ? argv[2] : "";
 #ifdef PINEFORGE_LEDGER_HISTORY_400K
         run(400000, prefix, write_reference);
+#elif defined(PINEFORGE_LEDGER_HISTORY_4K)
+        run(4000, prefix, write_reference);
 #else
         run(100000, prefix, write_reference);
 #endif
