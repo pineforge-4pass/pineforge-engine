@@ -711,6 +711,15 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
 PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes,
                                        uint64_t* arena_bytes);
 
+struct pf_report_sink_diagnostics_v1;
+/** Read bounded sink provenance without reading the sink or replaying rows.
+ *  Include report_sink.h for the descriptor; initialize struct_size and
+ *  version=1. Returns 0 filled; -1 with *out unchanged for a bad handle,
+ *  size, version or NULL output. Completion follows the sink trailer.
+ *  Queries never execute callbacks, advance a cursor or change last_error. */
+PF_API int strategy_report_sink_diagnostics_v1(
+    pf_strategy_t s, struct pf_report_sink_diagnostics_v1* out);
+
 /** Install the invocation's cooperative SIGTERM handler. The handler only
  *  stores a volatile sig_atomic_t flag; batch runs observe it at completed
  *  input-bar boundaries, independently of #strategy_request_abort.

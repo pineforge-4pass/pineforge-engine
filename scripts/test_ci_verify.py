@@ -1203,8 +1203,8 @@ class CAbiRuntimeInventory(unittest.TestCase):
         header = [name for relative in RUNTIME_HEADERS
                   for name in _pf_api_names(ROOT / 'include/pineforge' / relative)]
         runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
-        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 111)
-        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 91)
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 112)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 92)
         self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
         self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
         self.assertEqual(len(header), len(set(header)))
@@ -1216,6 +1216,7 @@ class CAbiRuntimeInventory(unittest.TestCase):
         self.assertIn('strategy_configure_native_fx_curve_ext_v1', runtime)
         for name in ('strategy_set_report_sink_fd_v1',
                      'strategy_report_sink_summary_v1',
+                     'strategy_report_sink_diagnostics_v1',
                      'strategy_set_scratch_tables_v1',
                      'pf_run_abort_install_sigterm_v1',
                      'pf_run_abort_requested_v1',

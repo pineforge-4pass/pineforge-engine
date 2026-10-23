@@ -533,11 +533,11 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 The counts below describe the current API, including recorded outputs, the report sink and scratch-table selection; recorded outputs are not part of 1.4.0.
 
-A newly generated strategy `.so` exposes 107 compiled-strategy `PF_API` declarations
-(91 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 150 `PF_API` exports in total; `use_bar_magnifier = true` adds
+A newly generated strategy `.so` exposes 108 compiled-strategy `PF_API` declarations
+(92 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 151 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 111 and 154. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 112 and 155. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s
@@ -567,6 +567,7 @@ inventories are pinned by `scripts/check_c_abi_runtime.py`:
 | `strategy_get_last_error` | The latest runtime error |
 | `strategy_get_last_error_code` / `strategy_get_last_error_args` | The latest failure's stable code from the closed [run-failure vocabulary](docs/pages/run-failure-codes.md) (`""` when the run succeeded) and its typed arguments as canonical JSON; behind `PINEFORGE_HAS_RUN_FAILURE_CODES_V1` |
 | `pf_report_scratch_arena_stats` | Process-wide scratch-arena peak claimed bytes and exact supplied size; query after finalization and before detach for stdout diagnostics, outside sink bytes |
+| `strategy_report_sink_diagnostics_v1` | Fixed-size presented equity endpoints and first-bar trade provenance after a completed sink; stdout annualization needs no sink read-back |
 | `pf_version_get` / `pf_version_string` / `pf_abi_version` | Runtime version, version string, struct-layout version (`PF_ABI_VERSION == 4`) |
 | `strategy_execution_contract` / `strategy_configure_native_v1` / `strategy_configure_native_fx_curve_v1` / `_fx_curve_ext_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification (an invalid or refused base call returns `-1` and leaves the handle Failed; a cooperative `Aborted` handle may be reused with the same key and a higher run number); stage or clear an immutable native FX curve, `_fx_curve_ext_v1` also writing the typed refusal (`pf_native_fx_curve_error_e`) and the offending point's index |
 | `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; `0`=completed, `1`=aborted |
