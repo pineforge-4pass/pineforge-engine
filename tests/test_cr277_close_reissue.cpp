@@ -4,16 +4,18 @@
 // result comes from the engine's same-id contract, NOT a TradingView export:
 // TV equality for entry/close/re-entry is still owed.
 //
-// On b3d483d6c1 close("L") never reaches the faulty close() push: that push is
-// inside id.empty(). Also, pyramiding=1 batches the first X, so close_all()
-// transfers it through the already-correct PendingSameBarCommand sibling.
-// The site rows therefore use pyramiding=3 to reach the live-entry pushes,
-// close("") for the first site, and withdraw the close AFTER reissue. That
-// lets both entries reach a common flush before either fills, exposing the
-// lost key as two accepted/live X orders instead of one replacement.
+// close("L") never reaches the faulty close() push: that push is inside
+// id.empty(). Pyramiding=1 batches the first X, so close_all() transfers it
+// through the already-correct PendingSameBarCommand sibling. The site rows
+// use pyramiding=3 with nonzero margins, prove that X was accepted and then
+// cancelled by the full close, and keep the close so its fill releases X.
+// A same-id reissue must replace X in pending_entries_ BEFORE choosing a
+// same-bar batch or appending another entry behind the close. Otherwise both
+// the correct and the moved-from replacement key go unused.
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -38,25 +40,47 @@ const char* row_name = "";
 
 constexpr double missing = std::numeric_limits<double>::quiet_NaN();
 constexpr std::int64_t start = 1'736'121'600'000LL;
+constexpr double seed_units = 1.0;
+constexpr double reissue_units = 2.0;
 
 enum class Close { None, Named, Empty, All };
+
+bool full_close(Close close) {
+    return close == Close::Empty || close == Close::All;
+}
+
+const char* close_label(Close close) {
+    return close == Close::Empty ? "__pine_close_all" : "__close__";
+}
 
 struct Row {
     const char* name;
     Close close;
     int pyramiding;
-    bool withdraw_close;
 };
 
 constexpr Row rows[] = {
-    {"probe-close", Close::Named, 1, false},
-    {"probe-close-all", Close::All, 1, false},
-    {"control-close", Close::None, 1, false},
-    {"control-close-all", Close::None, 1, false},
-    {"site-close-empty", Close::Empty, 3, true},
-    {"site-close-all", Close::All, 3, true},
-    {"site-control", Close::None, 3, false},
+    {"probe-close", Close::Named, 1},
+    {"probe-close-all", Close::All, 1},
+    {"control-close", Close::None, 1},
+    {"control-close-all", Close::None, 1},
+    {"site-close-empty", Close::Empty, 3},
+    {"site-close-all", Close::All, 3},
+    {"site-control", Close::None, 3},
 };
+
+std::vector<pf_pending_order_v1_t> pending_x(source::PineStrategyHost& host) {
+    std::vector<pf_pending_order_v1_t> result;
+    const int count = strategy_pending_orders_len(&host);
+    CHECK(count >= 0);
+    for (int i = 0; i < count; ++i) {
+        pf_pending_order_v1_t row{};
+        const int status = strategy_pending_order_get(&host, i, &row, sizeof row);
+        CHECK(status == 0);
+        if (status == 0 && std::strcmp(row.id, "X") == 0) result.push_back(row);
+    }
+    return result;
+}
 
 class ReissueHost final : public source::PineStrategyHost {
 public:
@@ -69,7 +93,7 @@ public:
         source::PineStrategyConfig config;
         config.initial_capital = 100'000.0;
         config.default_qty_type = static_cast<int>(QtyType::FIXED);
-        config.default_qty_value = 1.0;
+        config.default_qty_value = seed_units;
         config.pyramiding = row.pyramiding;
         config.margin_long = 100.0;
         config.margin_short = 100.0;
@@ -88,52 +112,81 @@ public:
     bool seed_ready = false;
     int sequence_calls = 0;
     std::uint64_t flush_boundary = 0;
+    native_order::RequestHandle first_x{};
+    native_order::RequestHandle parent_close{};
+    int first_x_acceptances = 0;
+    int first_x_cancellations = 0;
 
     void on_source_bar(const Bar&) override {
         if (pine_bar_index() == 0) strategy_entry("L", true);
         if (pine_bar_index() != 1) return;
         ++sequence_calls;
-        seed_ready = physical_position().signed_units == 1.0
+        seed_ready = physical_position().signed_units == seed_units
             && physical_position().lot_count == 1
             && open_trade_entry_id(0) == "L";
         for (const auto& event : native_events(0))
             flush_boundary = event.ordinal;
         strategy_entry("X", false);
+        for (const auto& event : native_events(flush_boundary)) {
+            if (!event.command) continue;
+            const auto* accepted = std::get_if<native_order::AcceptedEvent>(&*event.command);
+            if (accepted && accepted->request().label == "X") {
+                first_x = accepted->handle();
+                ++first_x_acceptances;
+            }
+        }
+        const auto first = pending_x(*this);
+        CHECK(first.size() == 1);
+        if (first.size() == 1) {
+            CHECK(std::isnan(first[0].qty));
+            CHECK((first[0].incarnation != 0) == (row_.pyramiding > 1));
+        }
         switch (row_.close) {
         case Close::None: break;
         case Close::Named: strategy_close("L"); break;
         case Close::Empty: strategy_close(""); break;
         case Close::All: strategy_close_all(); break;
         }
+        if (full_close(row_.close)) {
+            for (const auto& event : native_events(flush_boundary)) {
+                if (!event.command) continue;
+                if (const auto* accepted = std::get_if<native_order::AcceptedEvent>(&*event.command)) {
+                    if (accepted->request().label == close_label(row_.close)) {
+                        parent_close = accepted->handle();
+                        CHECK(std::holds_alternative<native_order::Flatten>(accepted->request().intent));
+                    }
+                }
+                if (const auto* cancelled = std::get_if<native_order::CancelledEvent>(&*event.command)) {
+                    if (first_x.incarnation != 0 && cancelled->handle() == first_x)
+                        ++first_x_cancellations;
+                }
+            }
+            CHECK(parent_close.incarnation != 0);
+            // With these configurations, cancellation of the just-accepted,
+            // unpriced X inside this full-close call is the live-entry push.
+            // Pyramiding=1 instead transfers its unaccepted batch sibling.
+            const int live_transfer = row_.pyramiding > 1 ? 1 : 0;
+            CHECK(first_x_acceptances == live_transfer);
+            CHECK(first_x_cancellations == live_transfer);
+            const auto transferred = pending_x(*this);
+            std::fprintf(stderr, "[%s] before reissue: X accepted=%d, cancelled=%d, transferred=%zu\n",
+                         row_name, first_x_acceptances, first_x_cancellations, transferred.size());
+            CHECK(transferred.size() == 1);
+            if (transferred.size() == 1) {
+                CHECK(std::isnan(transferred[0].qty));
+                CHECK(transferred[0].incarnation == 0);
+            }
+        }
         if (row_.close != Close::None) {
             for (const auto& event : native_events(0))
                 flush_boundary = event.ordinal;
         }
-        strategy_entry("X", false, missing, missing, 2.0);
-        if (row_.withdraw_close) {
-            // Source cancellation retires the adapter's parent as well as
-            // the native request. It leaves the queued X definitions intact.
-            strategy_cancel(row_.close == Close::Empty
-                ? "__pine_close_all" : "__close__");
-        }
+        strategy_entry("X", false, missing, missing, reissue_units);
     }
 
 private:
     Row row_;
 };
-
-std::vector<pf_pending_order_v1_t> pending_x(ReissueHost& host) {
-    std::vector<pf_pending_order_v1_t> result;
-    const int count = strategy_pending_orders_len(&host);
-    CHECK(count >= 0);
-    for (int i = 0; i < count; ++i) {
-        pf_pending_order_v1_t row{};
-        const int status = strategy_pending_order_get(&host, i, &row, sizeof row);
-        CHECK(status == 0);
-        if (status == 0 && std::strcmp(row.id, "X") == 0) result.push_back(row);
-    }
-    return result;
-}
 
 int accepted_x_after_boundary(const ReissueHost& host) {
     int count = 0;
@@ -142,10 +195,10 @@ int accepted_x_after_boundary(const ReissueHost& host) {
         const auto* accepted = std::get_if<native_order::AcceptedEvent>(&*event.command);
         if (accepted && accepted->request().label == "X") ++count;
     }
-    // ReplacedEvent is an amendment of that pending order, not another
-    // independently accepted order. With a close, the old pre-close X was
-    // cancelled before the boundary. Without a close, include the first
-    // accepted X because it remains the replacement's target.
+    // ReplacedEvent is an amendment, not an independently accepted order.
+    // A full close cancels/transfers X before this boundary; its fill must
+    // release exactly one new X. Without a close, include the first accepted
+    // X because it remains the replacement's target.
     return count;
 }
 
@@ -162,18 +215,28 @@ void check_row(const Row& row) {
     if (!began) return;
     CHECK(host.sequence_calls == 1);
     CHECK(host.seed_ready);
+    CHECK(host.physical_position().signed_units == seed_units);
 
     // stream_begin has flushed the final historical callback but has not
     // consumed the following open. Inspect actual pending instructions here.
     const auto pending = pending_x(host);
     const int flushed = accepted_x_after_boundary(host);
+    const bool close_first = full_close(row.close);
     std::fprintf(stderr, "[%s] staged X=%zu, newly accepted X=%d, qty:",
                  row_name, pending.size(), flushed);
     for (const auto& order : pending) std::fprintf(stderr, " %.17g", order.qty);
     std::fprintf(stderr, "\n");
     CHECK(pending.size() == 1);
-    if (pending.size() == 1) CHECK(pending[0].qty == 2.0);
-    CHECK(flushed == 1);
+    if (pending.size() == 1) {
+        CHECK(pending[0].qty == reissue_units);
+        CHECK(pending[0].is_long == 0);
+        CHECK((pending[0].incarnation == 0) == close_first);
+    }
+    // flush_pending_entries holds a paired entry while its close is live.
+    // It is accepted at that close's next-open fill, not at this boundary.
+    const int expected_preopen_acceptances = close_first ? 0 : 1;
+    CHECK(flushed == expected_preopen_acceptances);
+    if (close_first) CHECK(strategy_pending_orders_len(&host) == 2); // close and X
 
     // The stream avoids end-of-range liquidation/report artifacts. The first
     // tick is exactly the next bar's open, at the same price as the callback.
@@ -181,24 +244,58 @@ void check_row(const Row& row) {
     CHECK(host.last_error().empty());
     int x_fills = 0;
     double x_opened = 0.0;
+    double x_closed = 0.0;
+    int parent_fills = 0;
+    std::uint64_t parent_fill_ordinal = 0;
+    std::uint64_t x_acceptance_ordinal = 0;
+    std::uint64_t x_fill_ordinal = 0;
     for (const auto& event : host.native_events(0)) {
         if (!event.command) continue;
+        if (close_first && event.ordinal > host.flush_boundary) {
+            if (const auto* accepted = std::get_if<native_order::AcceptedEvent>(&*event.command)) {
+                if (accepted->request().label == "X") {
+                    const auto* transaction = std::get_if<native_order::Transact>(&accepted->request().intent);
+                    CHECK(transaction != nullptr);
+                    if (transaction) CHECK(transaction->signed_units == -reissue_units);
+                    x_acceptance_ordinal = accepted->ordinal;
+                }
+            }
+        }
         const auto* fill = std::get_if<native_order::ExecutionAppliedEvent>(&*event.command);
+        if (fill && close_first && fill->handle() == host.parent_close) {
+            ++parent_fills;
+            parent_fill_ordinal = fill->ordinal;
+            CHECK(fill->closed_units == seed_units);
+            CHECK(fill->opened_units == 0.0);
+        }
         if (!fill || fill->request().label != "X") continue;
         ++x_fills;
         x_opened += fill->opened_units;
+        x_closed += fill->closed_units;
+        x_fill_ordinal = fill->ordinal;
     }
-    // With the close kept, close_all flattens L first and the sole X opens
-    // two short units. Otherwise the replacement transacts two against the
-    // held long of one, leaving one short (the existing entry/entry rule).
-    const bool close_first = row.close == Close::All && !row.withdraw_close;
-    const double expected_short = close_first ? 2.0 : 1.0;
-    std::fprintf(stderr, "[%s] X fills=%d, opened=%.17g, position=%.17g, lots=%zu\n",
-                 row_name, x_fills, x_opened, host.physical_position().signed_units,
+    // order_action::plan(Transact) subtracts closed opposite units from the
+    // transaction and keeps the remainder's sign. The R1 same-id rule uses
+    // the reissue's own transaction. A full close consumes the seed first;
+    // otherwise X consumes it. These are engine contracts, not a TV verdict.
+    const double expected_x_closed = close_first ? 0.0 : seed_units;
+    const double expected_short = reissue_units - expected_x_closed;
+    std::fprintf(stderr, "[%s] close fills=%d, X fills=%d, closed=%.17g, opened=%.17g, position=%.17g, lots=%zu\n",
+                 row_name, parent_fills, x_fills, x_closed, x_opened, host.physical_position().signed_units,
                  host.physical_position().lot_count);
     CHECK(accepted_x_after_boundary(host) == 1);
+    CHECK(parent_fills == (close_first ? 1 : 0));
+    if (close_first) {
+        CHECK(parent_fill_ordinal != 0);
+        CHECK(x_acceptance_ordinal > parent_fill_ordinal);
+        CHECK(x_fill_ordinal > x_acceptance_ordinal);
+    }
     CHECK(x_fills == 1);
-    CHECK(x_opened == expected_short);
+    // ExecutionAppliedEvent carries signed opened units. A Transact of -2
+    // against +1 closes one unit and opens the negative remainder; after a
+    // full close it opens the whole negative transaction instead.
+    CHECK(x_opened == -expected_short);
+    CHECK(x_closed == expected_x_closed);
     CHECK(host.physical_position().signed_units == -expected_short);
     CHECK(host.physical_position().lot_count == 1);
     CHECK(host.open_trade_entry_id(0) == "X");
@@ -208,10 +305,10 @@ void check_row(const Row& row) {
     if (host.trade_count() == 1) {
         const auto& trade = host.get_trade(0);
         CHECK(trade.entry_id == "L");
-        CHECK(trade.qty == 1.0);
+        CHECK(trade.qty == seed_units);
         CHECK(trade.entry_price == 100.0);
         CHECK(trade.exit_price == 100.0);
-        CHECK(trade.exit_id == (close_first ? "__close__" : "X"));
+        CHECK(trade.exit_id == (close_first ? close_label(row.close) : "X"));
         CHECK(trade.entry_time == start + 60'000);
         CHECK(trade.exit_time == start + 120'000);
     }
@@ -226,7 +323,10 @@ int main(int argc, char** argv) {
     for (const auto& row : rows) {
         if (argc == 2 && std::strcmp(argv[1], row.name) != 0) continue;
         matched = true;
+        const int before = failures;
         check_row(row);
+        std::fprintf(stderr, "[%s] %s (%d failed checks)\n",
+                     row.name, failures == before ? "PASS" : "FAIL", failures - before);
     }
     if (!matched) {
         std::fprintf(stderr, "unknown CR-277 row\n");
