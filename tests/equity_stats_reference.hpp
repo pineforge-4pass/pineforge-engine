@@ -2,13 +2,15 @@
 
 // R5 lane D2-D: the report's equity statistics as src/engine_metrics.cpp
 // computed them at 6c081f5d, before the monthly walk read its UTC month key
-// through a memo -- month_key_utc, month_key_local, sharpe_sortino and
-// compute_equity_stats transcribed verbatim, renamed into this namespace. The
-// rows that hold the memoized walk to it (tests/test_utc_month_memo.cpp,
-// tests/test_chart_day_memo.cpp) compare every field bit for bit. Source-free.
+// through a memo. The calendar, ratio and extremes walks remain frozen;
+// CAGR/Calmar independently follow docs/pages/report-schema.md's subsequent
+// annualization rule, sharing only its boundary constant with the kernel.
+// The memo rows (tests/test_utc_month_memo.cpp, tests/test_chart_day_memo.cpp)
+// compare every field bit for bit. Source-free.
 
 #include <pineforge/pineforge.h>
 
+#include "../src/metrics_annualization.hpp"
 #include "../src/timezone.hpp"
 
 #include <algorithm>
@@ -111,12 +113,20 @@ inline pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, in
         }
     }
 
-    const double span_years =
-        (double)(curve[n - 1].time_ms - curve[0].time_ms) / (365.25 * 86400.0 * 1000.0);
+    const double span_ms = (double)(curve[n - 1].time_ms - curve[0].time_ms);
+    const double span_years = span_ms / (365.25 * 86400.0 * 1000.0);
 
     if (span_years > 0.0 && initial_capital > 0.0 && curve[n - 1].equity > 0.0) {
-        e.cagr = (std::pow(curve[n - 1].equity / initial_capital, 1.0 / span_years)
-                  - 1.0) * 100.0;
+        const double ratio = curve[n - 1].equity / initial_capital;
+        const bool subday = span_ms
+            < static_cast<double>(pineforge::metrics::detail::kMinAnnualizationSpanMs);
+        // Report schema: sub-day spans always use the simple proportional
+        // return. At/above the boundary, only a nonfinite compounded percent
+        // permits that fallback (including overflow in the final * 100).
+        if (!subday)
+            e.cagr = (std::pow(ratio, 1.0 / span_years) - 1.0) * 100.0;
+        if (subday || !std::isfinite(e.cagr))
+            e.cagr = (ratio - 1.0) * (1.0 / span_years) * 100.0;
     }
     if (e.max_equity_drawdown > 0.0) {
         e.recovery_factor = net_profit / e.max_equity_drawdown;
