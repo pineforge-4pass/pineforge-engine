@@ -8,7 +8,7 @@
   "to": {
     "version": null,
     "unreleased": true,
-    "catalogSha256": "1064d44e74fe52357071a0bd796cabe335acf9e6cfdd19400b1b168db4d8eca4"
+    "catalogSha256": "73103a15010ecc80b637ff20c358bd25a8d432d2e6e9d51c23c4ea7f417df5f2"
   },
   "catalogSchema": {
     "before": "pineforge-run-failure-catalog/v1",
@@ -31,6 +31,27 @@
     }
   ],
   "added": [
+    {
+      "code": "report_mode_unsupported",
+      "collection": "codes",
+      "entry": {
+        "args": {
+          "contract": {
+            "kind": "string"
+          },
+          "mode": {
+            "kind": "string"
+          }
+        },
+        "class": "unsupported",
+        "description": "The host has no provider bridge for the requested report mode and contract.",
+        "english": [
+          "unsupported report mode: {mode} (no {contract} provider bridge for this host)"
+        ],
+        "retryable": false,
+        "since": "1.7.0"
+      }
+    },
     {
       "code": "report_sink_failed",
       "collection": "codes",

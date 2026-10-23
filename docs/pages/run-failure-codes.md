@@ -141,6 +141,7 @@ The `outputs_limit` and `outputs_rejected` rows below are released in 1.5.0, and
 | `recalc_cap` | `strategy_limit` | no | none | The script's calc_on_order_fills recalculation loop reached its cap. |
 | `recorded_request_missing` | `no_data` | no | none | No recorded series is installed for a request the script reads. |
 | `recorded_request_refused` | `input` | no | `reason` (vocab, 5 values) | A recorded request series was refused. |
+| `report_mode_unsupported` | `unsupported` | no | `contract` (string), `mode` (string) | The host has no provider bridge for the requested report mode and contract. |
 | `report_platform_unavailable` | `engine_fault` | no | `field` (vocab, 6 values) | The runner cannot establish an execution-platform fact its report contract requires. A pre-load backstop for an image that claimed results-digest support, raised before any strategy code loads. |
 | `report_post_execution_failed` | `engine_fault` | no | `phase` (vocab, 3 values), `reason` (vocab, 4 values) | The engine could not finish producing the result after strategy execution completed: a deadline or an otherwise unclassified failure in result assembly, the results digest or serialization. An engine fault, never a strategy failure; a specific typed engine fault keeps its own code. |
 | `report_result_invalid` | `engine_fault` | no | `field` (string), `reason` (vocab, 4 values) | The report producer generated an invalid canonical result: an engine or harness fault, never a strategy failure. |

@@ -146,6 +146,32 @@ set_target_properties(literal PROPERTIES FOO bar)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
 
+    def test_foreign_test_properties_are_refused_in_a_lane_file(self) -> None:
+        self.cmake.write_text(
+            'add_test(NAME test_main COMMAND ${Python3_EXECUTABLE} main.py)\n'
+            + INCLUDE_LOOP)
+        (self.lane.parent / 'other.cmake').write_text(
+            'add_test(NAME test_other COMMAND ${Python3_EXECUTABLE} other.py)\n')
+        result = self.run_check(
+            'set_tests_properties(test_lane_property PROPERTIES TIMEOUT 30)')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for name in ('test_main', 'test_other'):
+            for properties in ('TIMEOUT 30', 'SKIP_RETURN_CODE 1', 'LABELS "slow"'):
+                with self.subTest(name=name, properties=properties):
+                    self.assert_refused(
+                        f'set_tests_properties({name} PROPERTIES {properties})',
+                        'is not owned by')
+
+    def test_only_receipt_skip_return_code_is_allowed(self) -> None:
+        result = self.run_check(
+            'set_tests_properties(test_lane_property PROPERTIES SKIP_RETURN_CODE 77)')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for value in ('0', '1', '-1', '"${skip_code}"'):
+            with self.subTest(value=value):
+                self.assert_refused(
+                    f'set_tests_properties(test_lane_property PROPERTIES SKIP_RETURN_CODE {value})',
+                    'SKIP_RETURN_CODE must be 77')
+
 
 class FenceControls(CMakeControls):
     OWNER = 'core-cr150-owner'
