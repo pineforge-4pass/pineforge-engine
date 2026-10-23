@@ -22,7 +22,8 @@ std::array<std::byte, N * 8> encode(const std::array<std::uint64_t, N>& words) {
 class PendingRoster::IdentityKey final : public ::pineforge::detail::ScratchByteSource {
 public:
     IdentityKey(std::uint64_t owner, const value_type& handle)
-        : prefix_(67, owner, handle.incarnation), handle_(handle) {
+        : prefix_(pending_roster_detail::ws::domain_pending_roster_directory,
+                  owner, handle.incarnation), handle_(handle) {
         for (unsigned i = 0; i < 8; ++i)
             run_[i] = std::byte(handle.run.run_number >> (56 - 8 * i));
     }
@@ -172,13 +173,13 @@ inline void PendingRoster::bind(Store& store, std::uint64_t owner) {
     }
     if (!first || marker) ws::check(Status::corrupt);
     std::uint64_t orphan = 0;
-    if (ws::seek(store, 68, owner, 1, orphan)) ws::check(Status::corrupt);
+    if (ws::seek(store, ws::domain_pending_roster_tree, owner, 1, orphan)) ws::check(Status::corrupt);
     descriptor_ = 0; state_ = {};
     // This is the ONLY population rebuild. Ordinary reopen above is read-only.
     // Legacy rows are consumed in order and then retired in the same tx.
-    const auto legacy_count = ws::get_word(store, Key(51, owner, 0));
+    const auto legacy_count = ws::get_word(store, Key(ws::domain_pending_roster_legacy, owner, 0));
     ::pineforge::detail::WorkingSequence<value_type> legacy;
-    if (legacy_count) legacy.bind_existing(store, 51, owner);
+    if (legacy_count) legacy.bind_existing(store, ws::domain_pending_roster_legacy, owner);
     auto memory = std::move(memory_);
     try {
         edit([&] {
@@ -188,7 +189,7 @@ inline void PendingRoster::bind(Store& store, std::uint64_t owner) {
                 for (const auto& handle : static_cast<const decltype(legacy)&>(legacy))
                     append(handle);
                 legacy.clear();
-                ws::erase(store, Key(51, owner, 0));
+                ws::erase(store, Key(ws::domain_pending_roster_legacy, owner, 0));
             } else {
                 for (const auto& row : memory) append(row.occurrence.handle);
             }
@@ -230,7 +231,7 @@ inline PendingRoster::value_type PendingRoster::read_identity(Handle identity) c
     std::array<std::byte, 40> prefix{};
     ws::check(store_->read(identity, Field::key, 0, {prefix.data(), prefix.size()}));
     std::array<std::byte, 32> expected{};
-    ws::check(Key(67, owner_, big_word(prefix.data() + 24)).read(
+    ws::check(Key(ws::domain_pending_roster_directory, owner_, big_word(prefix.data() + 24)).read(
         0, {expected.data(), expected.size()}));
     if (std::memcmp(prefix.data(), expected.data(), expected.size())) ws::check(Status::corrupt);
     value_type out;
@@ -561,7 +562,7 @@ void PendingRoster::visit_incarnation(std::uint64_t incarnation, Visit&& visit) 
             if (row.occurrence.handle.incarnation == incarnation && !visit(row.occurrence)) return;
         return;
     }
-    const Key prefix(67, owner_, incarnation);
+    const Key prefix(ws::domain_pending_roster_directory, owner_, incarnation);
     std::array<std::byte, 32> expected{}, actual{};
     ws::check(prefix.read(0, {expected.data(), expected.size()}));
     Handle cursor = 0;
@@ -586,7 +587,7 @@ inline PendingRoster::Snapshot::Snapshot(const PendingRoster& roster) {
         store_ = roster.store_;
         ws::transaction(*store_, [&] {
             owner_ = ws::allocate(*store_) | (std::uint64_t{1} << 63);
-            rows_.bind(*store_, 51, owner_);
+            rows_.bind(*store_, ws::domain_pending_roster_legacy, owner_);
             for (const auto& h : roster) rows_.push_back(h);
         });
     } else {
@@ -597,7 +598,8 @@ inline PendingRoster::Snapshot::~Snapshot() noexcept(false) {
     if (!store_ || std::uncaught_exceptions() != 0) return;
     pending_roster_detail::ws::transaction(*store_, [&] {
         rows_.clear();
-        pending_roster_detail::ws::erase(*store_, Key(51, owner_, 0));
+        pending_roster_detail::ws::erase(*store_, Key(
+            pending_roster_detail::ws::domain_pending_roster_legacy, owner_, 0));
     });
 }
 

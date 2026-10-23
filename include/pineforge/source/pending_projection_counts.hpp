@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pineforge/detail/id_pair_store.hpp>
+#include <pineforge/detail/scratch_domains.hpp>
 #include <pineforge/detail/working_store.hpp>
 
 #include <algorithm>
@@ -13,7 +14,8 @@
 namespace pineforge::source {
 
 // WorkingMinima's exact, streaming keyed-table pattern, with assign/erase
-// instead of min-assign. Domain 68 is temporary lane-A derived bookkeeping.
+// instead of min-assign. domain_pending_projection_counts is temporary lane-A
+// derived bookkeeping until lane B replaces it.
 // Bound owners borrow the adapter's store and retain no population directory.
 class PendingProjectionCounts {
     using Store = ::pineforge::detail::ScratchStore;
@@ -21,8 +23,9 @@ class PendingProjectionCounts {
     class Key final : public ::pineforge::detail::ScratchByteSource {
     public:
         Key(std::uint64_t kind, const std::string& id, const std::string& from,
-            const Handle& origin) : prefix_(68, kind, 0), id_(id), from_(from),
-                                    origin_(origin) {
+            const Handle& origin)
+            : prefix_(::pineforge::detail::working_store::domain_pending_projection_counts, kind, 0),
+              id_(id), from_(from), origin_(origin) {
             ::pineforge::detail::working_store::Save ar;
             fields(ar);
             size_ = ar.position();
@@ -73,7 +76,8 @@ public:
         if (!first) return;
         // Like the canonical owners, an existing descriptor selects committed
         // state rather than overwriting it with an unbound compatibility row.
-        if (!::pineforge::detail::working_store::get_word(store, {68, 0, 0})) {
+        if (!::pineforge::detail::working_store::get_word(
+                store, {::pineforge::detail::working_store::domain_pending_projection_counts, 0, 0})) {
             ::pineforge::detail::working_store::transaction(store, [&] {
                 for (const auto& row : legacy_) {
                     ::pineforge::detail::ScratchSpanSource key({
@@ -118,26 +122,31 @@ public:
         if (!store_) { legacy_.clear(); return; }
         using namespace ::pineforge::detail;
         working_store::transaction(*store_, [&] {
-            ScratchHandle at = 0;
-            auto status = store_->lower_bound(working_store::Key(68, 0, 0), at);
-            while (status == ScratchStatus::ok) {
-                ScratchRecordInfo info{};
-                working_store::check(store_->point(at, info));
-                if (info.key_bytes < 16) break;
-                std::array<std::byte, 16> prefix{}, actual{};
-                working_store::check(working_store::Key(68, 0, 0).read(
+            working_store::erase(*store_, {working_store::domain_pending_projection_counts, 0, 0});
+            // Kinds are owners: never sweep another owner's records in this domain.
+            for (std::uint64_t kind = 1; kind <= 3; ++kind) {
+                const working_store::Key first(working_store::domain_pending_projection_counts, kind, 0);
+                std::array<std::byte, 24> prefix{}, actual{};
+                working_store::check(first.read(
                     0, {prefix.data(), prefix.size()}));
-                working_store::check(store_->read(at, ScratchField::key, 0,
-                    {actual.data(), actual.size()}));
-                if (prefix != actual) break;
-                ScratchHandle next = 0;
-                const auto step = store_->next(at, next);
-                if (step != ScratchStatus::end) working_store::check(step);
-                working_store::check(store_->erase(at));
-                at = next; status = step;
+                ScratchHandle at = 0;
+                auto status = store_->lower_bound(first, at);
+                while (status == ScratchStatus::ok) {
+                    ScratchRecordInfo info{};
+                    working_store::check(store_->point(at, info));
+                    if (info.key_bytes < prefix.size()) break;
+                    working_store::check(store_->read(at, ScratchField::key, 0,
+                        {actual.data(), actual.size()}));
+                    if (prefix != actual) break;
+                    ScratchHandle next = 0;
+                    const auto step = store_->next(at, next);
+                    if (step != ScratchStatus::end) working_store::check(step);
+                    working_store::check(store_->erase(at));
+                    at = next; status = step;
+                }
+                if (status != ScratchStatus::ok && status != ScratchStatus::end)
+                    working_store::check(status);
             }
-            if (status != ScratchStatus::ok && status != ScratchStatus::end)
-                working_store::check(status);
         });
     }
 private:

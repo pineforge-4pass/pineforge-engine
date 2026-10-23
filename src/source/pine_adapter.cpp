@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/detail/scratch_domains.hpp>
 // Store faults crossing a noexcept boundary terminate; they never mean absence.
 #include <pineforge/source/pine_input_domain.hpp>
 #include <pineforge/source/magnifier_intrabars.hpp>
@@ -3648,7 +3649,8 @@ void PineExecutionAdapter::bind_scratch_store(detail::ScratchStore& store) {
     anchored_relative_legs_.bind(store, 62, 10);
     if (auto* pine = pine_view_of(host_)) pine->pyramid_entries_.bind(store, 63, 1);
     pending_projection_counts_.bind(store);
-    const auto count = ::pineforge::detail::working_store::get_word(store, {68, 0, 0});
+    const auto count = ::pineforge::detail::working_store::get_word(
+        store, {::pineforge::detail::working_store::domain_pending_projection_counts, 0, 0});
     if (count) {
         if (*count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
             ::pineforge::detail::working_store::check(::pineforge::detail::ScratchStatus::corrupt);
@@ -26996,7 +26998,8 @@ void PineExecutionAdapter::publish_projected_count() {
     if (scratch_store_) {
         namespace ws = ::pineforge::detail::working_store;
         ws::transaction(*scratch_store_, [&] {
-            ws::put_word(*scratch_store_, {68, 0, 0}, static_cast<std::uint64_t>(projected_count_));
+            ws::put_word(*scratch_store_, {ws::domain_pending_projection_counts, 0, 0},
+                         static_cast<std::uint64_t>(projected_count_));
         });
     }
 }
@@ -27194,7 +27197,8 @@ bool PineExecutionAdapter::same_projected_order(
 }
 
 int PineExecutionAdapter::projected_pending_size() const noexcept {
-#ifndef NDEBUG
+    // Define PINEFORGE_PENDING_COUNT_AUDIT in a Debug build to enable the brute-force count audit.
+#if !defined(NDEBUG) && defined(PINEFORGE_PENDING_COUNT_AUDIT)
     // The old specification remains diagnostic-only; Release reads one scalar.
     const int raw_count = projected_raw_pending_size();
     int count = 0;
@@ -28513,12 +28517,20 @@ void PineExecutionAdapter::order_same_point_entries() {
         const native_order::Request request = live->request;
         const auto result = host.replace(handle, request, in_place);
         if (result.status != native_order::ReplaceStatus::Replaced) return;
-        // A move-to-back can cross the raw prefix boundary: the count seam sees a
-        // removal then a reinsertion; the roster owner keeps the occurrence's
-        // identity (lane C's erase and append, the same visible order as a
-        // move_to_back).
-        erase_projected_handle(handle, [&] { live_handles_.erase(handle); });
-        append_projected_roster(handle);
+        // The same erase-then-append order, with one move and a stable occurrence id.
+        pending_projection_transaction([&] {
+            const auto limit = static_cast<std::size_t>(std::numeric_limits<int>::max());
+            if (live_handles_.size() <= limit
+                || !pending_projection_counts_.get(2, {}, {}, handle)) {
+                live_handles_.move_to_back(handle);
+                return; // Every visible group keeps its multiplicity.
+            }
+            // A single move out of the prefix promotes exactly its first excluded handle.
+            const auto promoted = live_handles_.observe_at(limit);
+            pending_projection_live(handle, false);
+            live_handles_.move_to_back(handle);
+            pending_projection_live(promoted, true);
+        });
     }
 }
 

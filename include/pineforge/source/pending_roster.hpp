@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pineforge/detail/scratch_domains.hpp>
 #include <pineforge/detail/working_members.hpp>
 #include <array>
 #include <exception>
@@ -42,16 +43,17 @@ namespace pineforge::source {
 // compare Order labels when needed. A placement edit costs with its k aliases;
 // no incarnation-only deduplication or second identity relation is needed.
 //
-// First bind explicitly migrates memory or legacy (51,1) rows. Normal
+// First bind explicitly migrates memory or domain_pending_roster_legacy rows. Normal
 // rebind/reopen only loads the descriptor, discards read frames and reattaches:
 // it performs no writes/rebuild. After external rollback, rebind is REQUIRED,
 // as for WorkingSequence's cached count. B must similarly recover its roots.
 // Attach/rebuild B explicitly at that lifecycle boundary, never during a query.
 // First migration may replace unbound occurrence ids; B attaches afterwards.
 //
-// Private store domains: 67 = full identity directory; 68 = counted AVL/root.
-// Item UINT64_MAX in 68 is the format marker (never an issued node key).
-// Domain 66 remains available to B. Only two handle frames and fixed node
+// Private domains: domain_pending_roster_directory = full identity directory;
+// domain_pending_roster_tree = counted AVL/root, with item UINT64_MAX reserved
+// for the format marker (never an issued node key). domain_pending_projection_index
+// is reserved for B. Only two handle frames and fixed node
 // locals reside in RAM when bound; the vector is unbound compatibility only.
 // Structural traversal/publication is O(log roster); each key-based store
 // publication also pays the store's ordered-index lookup. There is no scan
@@ -202,7 +204,9 @@ private:
 
     void validate() const;
     void drop_frames() const { for (auto& frame : frames_) frame.id = 0; }
-    Key key(std::uint64_t item) const { return {68, owner_, item}; }
+    Key key(std::uint64_t item) const {
+        return {::pineforge::detail::working_store::domain_pending_roster_tree, owner_, item};
+    }
     Node load(Handle) const;
     void save(Node&);
     void load_state();
