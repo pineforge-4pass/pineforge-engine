@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -315,8 +316,9 @@ std::vector<ExpectedRow> expected_rows(const std::vector<RawRow>& rows,
     return expected;
 }
 
-bool same_double(double a, double b) {
-    return (std::isnan(a) && std::isnan(b)) || std::memcmp(&a, &b, sizeof a) == 0;
+bool same_double(const double& a, const double& b) {
+    // Compare representations, including NaN payloads and signed zero.
+    return std::memcmp(&a, &b, sizeof a) == 0;
 }
 void check_projection(const Adapter& adapter, const source::PineStrategyHost& host) {
     const auto raw = capture_raw(adapter);
@@ -605,11 +607,54 @@ static_assert(Clock::is_steady, "pending walk measurement requires a monotonic c
 constexpr double kMinimumSampleUs = 20'000.0;
 struct Cost {
     double pass_us = 0.0, size_us = 0.0, copy_last_us = 0.0;
+    double linear_per_row_us = 0.0;
     double minimum_sample_us = 0.0;
     Models model;
 };
 double elapsed_us(Clock::time_point start) {
     return std::chrono::duration<double, std::micro>(Clock::now() - start).count();
+}
+std::uint64_t linear_walk(const Adapter& adapter) {
+    std::uint64_t sum = 0;
+    const auto add = [&](const PlacementSnapshot& snapshot) {
+        // Read the actual row on every walk, not an oracle copy or a value
+        // the optimizer can hoist out of the repeated timing workload.
+        const volatile PineOrderFamily& family = snapshot.family;
+        sum += 1 + static_cast<std::uint64_t>(family);
+    };
+    const auto& placements = adapter.*access(Placements{});
+    for (const auto& handle : adapter.*access(Live{})) {
+        const auto found = placements.find(handle.incarnation);
+        if (found != placements.end()) add(found->second);
+    }
+    const auto append = [&](const auto& owner) {
+        for (const auto& row : owner) add(row.snapshot);
+    };
+    append(adapter.*access(SameBar{}));
+    append(adapter.*access(Entries{}));
+    append(adapter.*access(Brackets{}));
+    append(adapter.*access(Coof{}));
+    append(adapter.*access(Shadows{}));
+    return sum;
+}
+double measure_linear_per_row(const Adapter& adapter, const std::vector<RawRow>& raw) {
+    std::uint64_t expected = 0;
+    for (const auto& row : raw)
+        if (row.snapshot)
+            expected += 1 + static_cast<std::uint64_t>(row.snapshot->family);
+    double best = std::numeric_limits<double>::infinity();
+    for (int trial = 0; trial < 3; ++trial) {
+        const auto start = Clock::now();
+        std::size_t walks = 0;
+        double total = 0.0;
+        do {
+            CHECK(linear_walk(adapter) == expected);
+            ++walks;
+            total = elapsed_us(start);
+        } while (total < kMinimumSampleUs);
+        best = std::min(best, total / static_cast<double>(walks));
+    }
+    return best / static_cast<double>(raw.size());
 }
 bool full_pass(const source::PendingIntentView& view,
                const std::vector<ExpectedRow>& expected) {
@@ -666,8 +711,12 @@ Cost measure(const Adapter& adapter, const source::PineStrategyHost& host, std::
     result.copy_last_us = elapsed_us(start);
     CHECK(status == 0);
     CHECK(std::memcmp(&last, &expected.back().pod, sizeof last) == 0);
-    std::printf("pending-walk-cost q=%zu pass_us=%.3f size_us=%.3f copy_last_us=%.3f\n",
-                q, result.pass_us, result.size_us, result.copy_last_us);
+    result.linear_per_row_us = measure_linear_per_row(adapter, raw);
+    CHECK(result.linear_per_row_us > 0.0);
+    std::printf("pending-walk-cost q=%zu pass_us=%.3f size_us=%.3f copy_last_us=%.3f "
+                "linear_per_row_us=%.6f\n",
+                q, result.pass_us, result.size_us, result.copy_last_us,
+                result.linear_per_row_us);
     std::fflush(stdout);
     return result;
 }
@@ -779,6 +828,12 @@ void oracle_case() {
     CHECK(empty.effective_levels(0, &levels.stop, &levels.limit, &levels.trail) == -1);
     CHECK(empty.level_resolved(0) == -1);
 }
+// Same PINEFORGE_*_SCALING_GATE=0 convention as the P7/V19-E ratio rows.
+// CMake disables only the final ratio comparison for non-Release libraries.
+bool gated() {
+    const char* gate = std::getenv("PINEFORGE_PENDING_WALK_SCALING_GATE");
+    return !(gate && std::strcmp(gate, "0") == 0);
+}
 void cost_case(bool growth) {
     WalkHost small(257, true);
     run_host(small);
@@ -799,6 +854,15 @@ void cost_case(bool growth) {
     // sqrt((Q2/Q1)^2 * (Q2/Q1)^3) would give slightly LESS than 4x margin.
     // The geometric mean of port growth and the smaller old/mutation growth
     // gives >4x room on BOTH sides for this fixed-prefix population.
+    // Raw fetches do not have equal cost at both sizes: a family-only read
+    // strides over full PlacementSnapshot values in the queue elements.
+    // Cache/TLB and ASan-shadow cost growth systematically erodes that margin.
+    // The lab's original raw ratio was 166.1 against 886.7, with modelled port
+    // growth 193.3, so the roughly 4.59x model margin held in that run.
+    // Keep both sizes and normalise by the measured linear-walk cost per raw
+    // row over the same owners. This accounts for memory-hierarchy growth
+    // without including prior scans in the reference; their extra Q factor
+    // remains, with modelled old growth about 4068x still above the bound.
     // No measured timing chooses the threshold. Every sample has >=20 ms of
     // complete passes, best of three at both sizes. Differential contention,
     // clock/thermal frequency changes or pauses exceeding that >4x margin
@@ -808,15 +872,27 @@ void cost_case(bool growth) {
         large.cost.model.old / small.cost.model.old,
         large.cost.model.mutation / small.cost.model.mutation);
     const long double threshold = std::sqrt(port_growth * old_growth);
+    // Design asserts, not evidence: fixed-population model margins and
+    // sample lengths guaranteed by measure()'s do/while loop.
     CHECK(threshold >= 4 * port_growth);
     CHECK(old_growth >= 4 * threshold);
     CHECK(small.cost.minimum_sample_us >= kMinimumSampleUs);
     CHECK(large.cost.minimum_sample_us >= kMinimumSampleUs);
     CHECK(small.cost.pass_us > 0.0 && large.cost.pass_us > 0.0);
-    const double observed = large.cost.pass_us / small.cost.pass_us;
+    CHECK(small.cost.linear_per_row_us > 0.0 && large.cost.linear_per_row_us > 0.0);
+    const double raw_observed = large.cost.pass_us / small.cost.pass_us;
+    const double linear_per_row_growth =
+        large.cost.linear_per_row_us / small.cost.linear_per_row_us;
+    const double observed = raw_observed / linear_per_row_growth;
     std::printf("pending-walk-growth ratio=%.3f bound=%.3Lf "
-                "model_port=%.3Lf model_old_min=%.3Lf minimum_sample_us=%.0f\n",
-                observed, threshold, port_growth, old_growth, kMinimumSampleUs);
+                "model_port=%.3Lf model_old_min=%.3Lf minimum_sample_us=%.0f "
+                "raw_ratio=%.3f linear_per_row_growth=%.3f\n",
+                observed, threshold, port_growth, old_growth, kMinimumSampleUs,
+                raw_observed, linear_per_row_growth);
+    if (!gated()) {
+        std::printf("  (ratio not gated: non-Release library)\n");
+        return;
+    }
     CHECK(observed <= threshold);
 }
 

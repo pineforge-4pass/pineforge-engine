@@ -3712,8 +3712,15 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         add_test(NAME ${_pf_pending_walk_case}
             COMMAND test_pending_observer_walk ${_pf_pending_walk_case})
     endforeach()
-    # The timing ratio needs an uncontended CTest process on the lab host.
-    set_tests_properties(pending_walk_cost pending_walk_growth PROPERTIES RUN_SERIAL TRUE)
+    # Match the P7/V19-E scaling rows: keep both workloads and correctness
+    # checks everywhere, but gate the ratio and run serially only in Release.
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        set_tests_properties(pending_walk_growth PROPERTIES
+            ENVIRONMENT "PINEFORGE_PENDING_WALK_SCALING_GATE=0")
+    endif()
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        set_tests_properties(pending_walk_cost pending_walk_growth PROPERTIES RUN_SERIAL TRUE)
+    endif()
 endif()
 
 # EN-134: each public C ABI fault run is also addressable for red-before and
