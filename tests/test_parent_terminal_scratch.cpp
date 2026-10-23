@@ -1,6 +1,7 @@
 // X08: the actual waiting population and every descendant are drained in the
-// base queue's order, under a constant per-engine resident cap plateau.
-// Resident-definition cases also retain the smaller drain scratch contract.
+// base queue's order, and every drain stays under kDrainBytes after the book-read
+// definition reuse. kDrainPlateauBytes (the per-engine cap plateau a drain reached
+// before that fix) is documented and printed, never asserted.
 // The production exercise also compiles on 21ba62bd; there the byte assertion
 // fails because Item rows survive in the queue. Only the store audit is gated.
 #include "../src/native_execution_consumer.hpp"
@@ -245,7 +246,6 @@ constexpr std::size_t kBookMaxResident = 4096;
 constexpr std::size_t kBookSideRows = 8;
 constexpr std::size_t kWideRootCount = 2;
 constexpr std::size_t kBookOnlyPopulation = 5000;
-constexpr std::size_t kLastTargetedPopulation = kJournalMaxResident / 2 - 1;
 constexpr std::size_t kDrainBytes = 4096;
 
 // GNU make_shared: one vptr and two uint32_t reference counts. Other standard
@@ -535,13 +535,14 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     Probe::drain(consumer, actual, seeds);
     global_allocation::recording = false;
     global_allocation::on_recorded = nullptr;
-    // The B-targeted contract covers the book-only isolator and 8190/8191.
-    // Once definitions are wholly external, CR-262 owns the general fix.
-    if (population <= kLastTargetedPopulation) CHECK(peak_bytes <= kDrainBytes);
-    CHECK(peak_bytes <= kDrainPlateauBytes);
+    // L6 08:29: AFTER the reuse fix every drain is held to kDrainBytes at EVERY
+    // population (5,000 / 8,190 / 8,191 / 16,382 / 65,536). kDrainPlateauBytes is
+    // NOT asserted: it is the documented pre-fix cap plateau, and asserting it after
+    // the fix would hide a regression (a mutation that disables the reuse must turn
+    // this check RED, not pass under the plateau). It is printed for reference only.
+    CHECK(peak_bytes <= kDrainBytes);
     std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",
-                population, static_cast<int>(shape), direct, peak_bytes,
-                population <= kLastTargetedPopulation ? kDrainBytes : kDrainPlateauBytes);
+                population, static_cast<int>(shape), direct, peak_bytes, kDrainBytes);
     std::printf("X08 plateau population=%zu direct=%d peak=%zu plateau=%zu\n",
                 population, direct, peak_bytes, kDrainPlateauBytes);
 
