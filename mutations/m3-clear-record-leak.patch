@@ -1,0 +1,22 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -3692,7 +3692,17 @@ PineExecutionAdapter::fixture_cohort_state(const SourceId& id, std::uint8_t edit,
+     case 5: facts.opened.clear(); break;
+     case 6: facts.live_units_by_origin[handle.incarnation] = units; break;
+     case 7: facts.live_units_by_origin.erase(handle.incarnation); break;
+-    case 8: facts.live_units_by_origin.clear(); break;
++    case 8: {
++        facts.live_units_by_origin.clear();
++        if (scratch_store_) {
++            namespace ws = ::pineforge::detail::working_store;
++            ws::transaction(*scratch_store_, [&] {
++                const auto leaked = ws::allocate(*scratch_store_);
++                ws::put_word(*scratch_store_, ws::Key(69, UINT64_MAX, leaked), 0);
++            });
++        }
++        break;
++    }
+     default: throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {}, "source cohort fixture edit");
+     }
+     return {facts.handle, &facts.origins};

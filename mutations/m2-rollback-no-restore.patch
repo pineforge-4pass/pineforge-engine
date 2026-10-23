@@ -1,0 +1,12 @@
+diff --git a/include/pineforge/detail/scratch_store_impl.hpp b/include/pineforge/detail/scratch_store_impl.hpp
+--- a/include/pineforge/detail/scratch_store_impl.hpp
++++ b/include/pineforge/detail/scratch_store_impl.hpp
+@@ -1266,7 +1266,7 @@ class Core {
+             tainted_slot_ = kNoSlot;
+         }
+         const std::uint64_t pool = cur_.pool_head;
+-        cur_ = snap_;
++        cur_.seq = snap_.seq; // MUTANT: omit logical roots/count/handle restoration.
+         cur_.pool_head = pool;
+         active_ = false;
+         poisoned_ = false;

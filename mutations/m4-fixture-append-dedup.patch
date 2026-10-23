@@ -1,0 +1,20 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -3682,7 +3682,15 @@ PineExecutionAdapter::fixture_cohort_state(const SourceId& id, std::uint8_t edit,
+     auto& facts = at->second;
+     switch (edit) {
+     case 0: case 1: break;
+-    case 2: facts.origins.push_back(handle); break;
++    case 2: {
++        bool present = false;
++        facts.origins.visit_incarnation_positions(handle.incarnation, [&](std::size_t) {
++            present = true;
++            return false;
++        });
++        if (!present) facts.origins.push_back(handle);
++        break;
++    }
+     case 3: facts.opened.push_back(handle); break;
+     case 4: {
+         const auto found = std::find(facts.opened.begin(), facts.opened.end(), handle);

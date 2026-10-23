@@ -7303,6 +7303,23 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
         COMMAND test_o1s4_cohort_exposure s4_cohort_exposure_positions_and_ties)
     add_test(NAME s4_named_pending_exposure_bound_red
         COMMAND test_o1s4_cohort_exposure s4_named_pending_exposure_bound_red)
+    # S4E T2 round 1b: mutation/resource gates and independent lifecycle controls.
+    list(APPEND TEST_SOURCES test_o1s4_cohort_exposure_mutation)
+    add_executable(test_o1s4_cohort_exposure_mutation test_o1s4_cohort_exposure_mutation.cpp)
+    target_link_libraries(test_o1s4_cohort_exposure_mutation PRIVATE pineforge)
+    target_compile_features(test_o1s4_cohort_exposure_mutation PRIVATE cxx_std_17)
+    target_compile_options(test_o1s4_cohort_exposure_mutation PRIVATE -fno-fast-math -ffp-contract=off -UNDEBUG)
+    target_compile_definitions(test_o1s4_cohort_exposure_mutation PRIVATE
+        PINEFORGE_COHORT_EXPOSURE_HASH_GOLDEN=\"${CMAKE_CURRENT_SOURCE_DIR}/data/cohort_exposure_hash_golden.txt\")
+    foreach(_pf_cohort_t2_row IN ITEMS
+            s4_cohort_exposure_mutation_bound_red
+            s4_cohort_exposure_hash_golden
+            s4_cohort_exposure_reopen_rollback_fault
+            s4_cohort_exposure_churn_bounded
+            s4_cohort_exposure_fixture_multiset_kept)
+        add_test(NAME ${_pf_cohort_t2_row}
+            COMMAND test_o1s4_cohort_exposure_mutation ${_pf_cohort_t2_row})
+    endforeach()
     add_test(NAME s4_terminal_mark_descriptor_stays_fixed_red
         COMMAND test_o1s4_queue_red s4_terminal_mark_descriptor_stays_fixed_red)
     add_test(NAME s34_record_index_publication_rollback_red

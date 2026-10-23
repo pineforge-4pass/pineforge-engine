@@ -1,0 +1,16 @@
+diff --git a/src/source/pine_state_hash.cpp b/src/source/pine_state_hash.cpp
+--- a/src/source/pine_state_hash.cpp
++++ b/src/source/pine_state_hash.cpp
+@@ -317,7 +317,11 @@ void PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
+         hash_native_handle_vector(f, cohort.opened);
+         f.u(cohort.erased_opening_sides);
+         f.u(cohort.live_units_by_origin.size());
+-        for (const auto& row : cohort.live_units_by_origin) { f.u(row.first); f.d(row.second); }
++        auto cursor = cohort.live_units_by_origin.end();
++        while (cursor != cohort.live_units_by_origin.begin()) {
++            const auto& unit = *--cursor;
++            f.u(unit.first); f.d(unit.second);
++        }
+     }
+     f.u(cohorts_by_id_.size());
+     cohorts_by_id_.for_each_id([&](const auto& key) { f.s(key); });

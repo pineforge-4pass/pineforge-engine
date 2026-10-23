@@ -1,0 +1,19 @@
+diff --git a/src/source/pine_adapter.cpp b/src/source/pine_adapter.cpp
+--- a/src/source/pine_adapter.cpp
++++ b/src/source/pine_adapter.cpp
+@@ -3690,7 +3690,14 @@ PineExecutionAdapter::fixture_cohort_state(const SourceId& id, std::uint8_t edit,
+         break;
+     }
+     case 5: facts.opened.clear(); break;
+-    case 6: facts.live_units_by_origin[handle.incarnation] = units; break;
++    case 6: {
++        volatile double scanned = 0.0;
++        for (const auto& unit : std::as_const(facts.live_units_by_origin))
++            scanned = unit.second;
++        (void)scanned;
++        facts.live_units_by_origin[handle.incarnation] = units;
++        break;
++    }
+     case 7: facts.live_units_by_origin.erase(handle.incarnation); break;
+     case 8: facts.live_units_by_origin.clear(); break;
+     default: throw coded<std::invalid_argument>(RunFailureCode::engine_invariant, {}, "source cohort fixture edit");
