@@ -96,54 +96,7 @@ public:
             throw std::logic_error("scratch sequence erase is not a prefix");
         base_ += last.index_;
     }
-    template<class Compare>
-    void stable_sort(Compare before) {
-        ScratchSequence scratch;
-        scratch.set_directory(directory_);
-        for (std::size_t width = 1; width < size();) {
-            scratch.clear();
-            PageReader left_page(*this), right_page(*this);
-            for (std::size_t start = 0; start < size();) {
-                const auto middle = start + std::min(width, size() - start);
-                const auto stop = middle + std::min(width, size() - middle);
-                auto left = start, right = middle;
-                while (left < middle || right < stop) {
-                    if (right == stop || (left < middle
-                        && !before(right_page.at(right), left_page.at(left))))
-                        scratch.push_back(left_page.at(left++));
-                    else
-                        scratch.push_back(right_page.at(right++));
-                }
-                start = stop;
-            }
-            using std::swap;
-            swap(*this, scratch);
-            if (width > size() / 2) break;
-            width *= 2;
-        }
-    }
 private:
-    class PageReader {
-    public:
-        explicit PageReader(const ScratchSequence& source) : source_(source) {}
-        T at(std::size_t index) {
-            if (index < first_ || index - first_ >= count_) {
-                source_.flush();
-                const auto first = index - index % kValues;
-                const auto count = std::min(kValues, source_.size() - first);
-                count_ = 0;
-                source_.file_.read(byte_offset(source_.base_ + first),
-                                   values_.data(), count * sizeof(T));
-                first_ = first;
-                count_ = count;
-            }
-            return values_[index - first_];
-        }
-    private:
-        const ScratchSequence& source_;
-        std::array<T, kValues> values_{};
-        std::size_t first_ = 0, count_ = 0;
-    };
     static std::uint64_t byte_offset(std::size_t index) {
         if (index > std::numeric_limits<std::uint64_t>::max() / sizeof(T))
             throw ScratchIoError(EFBIG, "scratch sequence offset");

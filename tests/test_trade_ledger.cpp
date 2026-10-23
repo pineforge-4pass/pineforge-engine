@@ -4,8 +4,10 @@
 #include <pineforge/detail/scratch_sequence.hpp>
 #include "native_current_fixture.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <memory>
 #include <type_traits>
 #include <utility>
 
@@ -375,6 +377,60 @@ void migrated_historical_readers() {
     CHECK(host.ledger().resident_size() <= TradeLedger::kResidentRows);
 }
 
+// D-10: the test-only merge owns its sequence and read buffers on the heap.
+template<class T, class Compare>
+void stable_sort_scratch_sequence(detail::ScratchSequence<T>& sequence, Compare before) {
+    const auto count = sequence.size();
+    if (count < 2) return;
+    class PageReader {
+    public:
+        explicit PageReader(const detail::ScratchSequence<T>& source)
+            : source_(source),
+              values_(std::make_unique<T[]>(detail::ScratchSequence<T>::resident_capacity())) {}
+        T at(std::size_t index) {
+            if (index < first_ || index - first_ >= count_) {
+                const auto capacity = detail::ScratchSequence<T>::resident_capacity();
+                const auto first = index - index % capacity;
+                const auto count = std::min(capacity, source_.size() - first);
+                for (std::size_t i = 0; i < count; ++i)
+                    values_[i] = source_[first + i];
+                first_ = first;
+                count_ = count;
+            }
+            return values_[index - first_];
+        }
+    private:
+        const detail::ScratchSequence<T>& source_;
+        std::unique_ptr<T[]> values_;
+        std::size_t first_ = 0, count_ = 0;
+    };
+    auto scratch = std::make_unique<detail::ScratchSequence<T>>();
+    auto* source = &sequence;
+    auto* destination = scratch.get();
+    for (std::size_t width = 1; width < count;) {
+        destination->clear();
+        PageReader left_page(*source), right_page(*source);
+        for (std::size_t start = 0; start < count;) {
+            const auto middle = start + std::min(width, count - start);
+            const auto stop = middle + std::min(width, count - middle);
+            auto left = start, right = middle;
+            while (left < middle || right < stop) {
+                if (right == stop || (left < middle
+                    && !before(right_page.at(right), left_page.at(left))))
+                    destination->push_back(left_page.at(left++));
+                else
+                    destination->push_back(right_page.at(right++));
+            }
+            start = stop;
+        }
+        // Swap pointers, avoiding a full sequence temporary on the stack.
+        std::swap(source, destination);
+        if (width > count / 2) break;
+        width *= 2;
+    }
+    if (source != &sequence) sequence = std::move(*source);
+}
+
 void phase_pages_and_stable_permutation() {
     detail::ScratchSequence<std::uint32_t> phases;
     constexpr std::size_t population = 100003;
@@ -406,7 +462,7 @@ void phase_pages_and_stable_permutation() {
     }
     const auto before = [](Ordered a, Ordered b) { return a.key < b.key; };
     std::stable_sort(oracle.begin(), oracle.end(), before);
-    indices.stable_sort(before);
+    stable_sort_scratch_sequence(indices, before);
     for (std::size_t i = 0; i < population; ++i) {
         const auto actual = indices[i];
         CHECK(actual.key == oracle[i].key && actual.ordinal == oracle[i].ordinal);
