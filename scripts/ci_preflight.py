@@ -49,7 +49,12 @@ CI_EVENTS = '''on:
   pull_request:
     # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
     # ready_for_review starts the full run when the PR is marked ready.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+'''
+CI_CONCURRENCY = '''concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.draft && 'draft' || 'ready' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 '''
 POST_CI_EVENTS = '''on:
   push:
@@ -1019,7 +1024,8 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
             'pull_request:\n'
             '    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);\n'
             '    # ready_for_review starts the full run when the PR is marked ready.\n'
-            '    types: [opened, synchronize, reopened, ready_for_review]')):
+            '    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.\n'
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]')):
         findings.append('ci.yml must run on every pull_request without event filters')
     if _job_values(workflow, 'permissions') != ['contents: read']:
         findings.append(f'{name} must retain contents: read workflow permissions')
@@ -1240,6 +1246,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     events = CI_EVENTS if pr else POST_CI_EVENTS
     if _job_block(workflow, 'on') != _code(events):
         findings.append(f'{name} must keep its exact {"unfiltered PR" if pr else "main push, nightly and manual"} triggers')
+    if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
+        findings.append('ci.yml must keep its exact draft and ready concurrency groups')
     jobs = _jobs(workflow)
     proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}

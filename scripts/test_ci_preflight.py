@@ -1189,10 +1189,26 @@ exit "$lookup_exit"
     def test_ci_split_requires_ready_for_review(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
         findings = self.mutated_file_findings(0, None,
-            '    types: [opened, synchronize, reopened, ready_for_review]\n',
-            '    types: [opened, synchronize, reopened]\n')
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]\n',
+            '    types: [opened, synchronize, reopened, converted_to_draft]\n')
         self.assertIn('ci.yml must keep its exact unfiltered PR triggers', findings)
         self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_ci_split_requires_converted_to_draft(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]\n',
+            '    types: [opened, synchronize, reopened, ready_for_review]\n')
+        self.assertIn('ci.yml must keep its exact unfiltered PR triggers', findings)
+        self.assertIn('ci.yml must run on every pull_request without event filters', findings)
+
+    def test_ci_split_requires_separate_draft_and_ready_concurrency_groups(self):
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+        findings = self.mutated_file_findings(0, None,
+            '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}'
+            "-${{ github.event.pull_request.draft && 'draft' || 'ready' }}\n",
+            '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n')
+        self.assertIn('ci.yml must keep its exact draft and ready concurrency groups', findings)
 
     def test_ci_split_requires_draft_guards_on_every_pr_suite_job(self):
         self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
