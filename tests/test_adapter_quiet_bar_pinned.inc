@@ -2301,6 +2301,15 @@
 // final hash 276); trades digest and the three counts moved 0. Cause: the exit and trade scratch folds of 3c6f46d159
 // (pine_state_hash.cpp hash_exit_scratch, hash_host_extension) and the provider's context.versions of 4b5ef3dd28
 // (pine_adapter.cpp, the versions != nullptr byte); design, not a bug. The generator owns the rows.
+// expectation corrected (CR-277, 4 of 276 rows), because PineExecutionAdapter::close("") and close_all() now store the
+// pending entry's real source id as its replacement key (they stored the empty string of a moved-from SourceId), and
+// pine_state_hash.cpp:422 folds every pending_entries_ key into the broker-state hash; harvested by the generator
+// (both harvest switches on, engine f9b47e478c, job rj-20261023t184958-b59eca, lab-only). Only the recorded-row
+// digest of the four recording-on runs moves; boundary, trades, final hash and the three counts move 0:
+//   Random04/0/1: rows 0x888409cc84a5fe9bull -> 0xb07836a4db4df04dull
+//   Random04/1/1: rows 0x4e88357c559bd862ull -> 0x0f78cbf4c1ea726bull
+//   Random47/0/1: rows 0x6d71f20c08279c54ull -> 0xa5566aa0a1918a42ull
+//   Random47/1/1: rows 0xeb1ed80e91cef773ull -> 0x33c424c045eadf21ull
 constexpr Pinned kPinned[] = {
     {"Quiet", 0, 1, 0x17dafc2ca577de99ull, 0x90a5dccbcc38ea7eull, 0x47fe0d7eaf8e51e3ull, 0x03db0ee33ef0f61eull, 40, 40, 0},
     {"Quiet", 0, 0, 0x17dafc2ca577de99ull, 0x14650fb0739d0383ull, 0x47fe0d7eaf8e51e3ull, 0x03db0ee33ef0f61eull, 40, 0, 0},
@@ -2398,9 +2407,9 @@ constexpr Pinned kPinned[] = {
     {"Random03", 0, 0, 0xfb75eebf69d38b53ull, 0x14650fb0739d0383ull, 0x6ed2b968ae7e07fcull, 0x0beeb91441ec62aeull, 44, 0, 12},
     {"Random03", 1, 1, 0xf2c13cbc50abdc42ull, 0x99125b45fb19ee46ull, 0x80ca2343fcd2c1d0ull, 0xe7c8f7363dc5ce5eull, 44, 44, 12},
     {"Random03", 1, 0, 0xf2c13cbc50abdc42ull, 0x14650fb0739d0383ull, 0x80ca2343fcd2c1d0ull, 0xe7c8f7363dc5ce5eull, 44, 0, 12},
-    {"Random04", 0, 1, 0xe0b97532f73401c6ull, 0x888409cc84a5fe9bull, 0xcc6cf8406a1f71a0ull, 0xaf71e95faf399a43ull, 44, 44, 15},
+    {"Random04", 0, 1, 0xe0b97532f73401c6ull, 0xb07836a4db4df04dull, 0xcc6cf8406a1f71a0ull, 0xaf71e95faf399a43ull, 44, 44, 15},
     {"Random04", 0, 0, 0xe0b97532f73401c6ull, 0x14650fb0739d0383ull, 0xcc6cf8406a1f71a0ull, 0xaf71e95faf399a43ull, 44, 0, 15},
-    {"Random04", 1, 1, 0x09e444d09550484full, 0x4e88357c559bd862ull, 0x3659e955e5220f85ull, 0xadb55b5e44cc4458ull, 44, 44, 15},
+    {"Random04", 1, 1, 0x09e444d09550484full, 0x0f78cbf4c1ea726bull, 0x3659e955e5220f85ull, 0xadb55b5e44cc4458ull, 44, 44, 15},
     {"Random04", 1, 0, 0x09e444d09550484full, 0x14650fb0739d0383ull, 0x3659e955e5220f85ull, 0xadb55b5e44cc4458ull, 44, 0, 15},
     {"Random05", 0, 1, 0x0452b762ce9ecdc5ull, 0x424ac9df85d0ac74ull, 0xf91857e72781f5aeull, 0xb5f23cff320bd98aull, 58, 53, 3},
     {"Random05", 0, 0, 0x0452b762ce9ecdc5ull, 0x14650fb0739d0383ull, 0xf91857e72781f5aeull, 0xb5f23cff320bd98aull, 58, 0, 3},
@@ -2570,9 +2579,9 @@ constexpr Pinned kPinned[] = {
     {"Random46", 0, 0, 0x28cb98253ffcb71full, 0x14650fb0739d0383ull, 0xfaba8060a07d20fdull, 0x987b5daa042a61f0ull, 52, 0, 1},
     {"Random46", 1, 1, 0xf36c8d0ec54bd587ull, 0xbe19b760ffdee9fcull, 0xfaba8060a07d20fdull, 0x4b19d47e8bbf29d1ull, 52, 52, 1},
     {"Random46", 1, 0, 0xf36c8d0ec54bd587ull, 0x14650fb0739d0383ull, 0xfaba8060a07d20fdull, 0x4b19d47e8bbf29d1ull, 52, 0, 1},
-    {"Random47", 0, 1, 0x22a3f7da396a4b86ull, 0x6d71f20c08279c54ull, 0x522497c980811fd9ull, 0x43d0757513764c12ull, 57, 57, 13},
+    {"Random47", 0, 1, 0x22a3f7da396a4b86ull, 0xa5566aa0a1918a42ull, 0x522497c980811fd9ull, 0x43d0757513764c12ull, 57, 57, 13},
     {"Random47", 0, 0, 0x22a3f7da396a4b86ull, 0x14650fb0739d0383ull, 0x522497c980811fd9ull, 0x43d0757513764c12ull, 57, 0, 13},
-    {"Random47", 1, 1, 0x5a7f2186e6c4b5eeull, 0xeb1ed80e91cef773ull, 0xd71728e8746a5845ull, 0xcbbe21f2853b66daull, 57, 57, 13},
+    {"Random47", 1, 1, 0x5a7f2186e6c4b5eeull, 0x33c424c045eadf21ull, 0xd71728e8746a5845ull, 0xcbbe21f2853b66daull, 57, 57, 13},
     {"Random47", 1, 0, 0x5a7f2186e6c4b5eeull, 0x14650fb0739d0383ull, 0xd71728e8746a5845ull, 0xcbbe21f2853b66daull, 57, 0, 13},
     {"Random48", 0, 1, 0x501b81db16e2947dull, 0xe38d3e4e33cdc473ull, 0x935393ec134d3933ull, 0x792502365ab4ef50ull, 48, 48, 7},
     {"Random48", 0, 0, 0x501b81db16e2947dull, 0x14650fb0739d0383ull, 0x935393ec134d3933ull, 0x792502365ab4ef50ull, 48, 0, 7},
