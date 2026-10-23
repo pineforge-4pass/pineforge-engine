@@ -1,0 +1,12 @@
+diff --git a/include/pineforge/source/cohort_exposure_arith.hpp b/include/pineforge/source/cohort_exposure_arith.hpp
+--- a/include/pineforge/source/cohort_exposure_arith.hpp
++++ b/include/pineforge/source/cohort_exposure_arith.hpp
+@@ -97,7 +97,7 @@
+         const auto a = A[p];
+         if (a > S) throw std::logic_error("exposure increment exceeds S");
+         if (a == S) {
+-            D[p] = S;
++            D[p] = a + Bpair[(p + (a & 1)) & 1];
+             continue;
+         }
+         const auto p_after = (p + (a & 1)) & 1;

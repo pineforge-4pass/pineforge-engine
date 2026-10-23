@@ -1,0 +1,12 @@
+diff --git a/include/pineforge/source/cohort_exposure_arith.hpp b/include/pineforge/source/cohort_exposure_arith.hpp
+--- a/include/pineforge/source/cohort_exposure_arith.hpp
++++ b/include/pineforge/source/cohort_exposure_arith.hpp
+@@ -123,7 +123,7 @@
+     if (T.b > 2046) throw std::logic_error("exposure summary header exceeds 2046");
+     if (T.b == 0) return {0, 0};
+     if (g < static_cast<std::int32_t>(T.b)) return {S, S};
+-    if (g >= static_cast<std::int32_t>(T.b) + 54) return {0, 0};
++    if (g >= static_cast<std::int32_t>(T.b) + 53) return {0, 0};
+     const auto pair = T.row[static_cast<std::size_t>(g - static_cast<std::int32_t>(T.b))];
+     if (pair[0] > S || pair[1] > S)
+         throw std::logic_error("exposure increment exceeds S");

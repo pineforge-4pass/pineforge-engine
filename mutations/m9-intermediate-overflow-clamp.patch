@@ -1,0 +1,11 @@
+diff --git a/include/pineforge/source/cohort_exposure_arith.hpp b/include/pineforge/source/cohort_exposure_arith.hpp
+--- a/include/pineforge/source/cohort_exposure_arith.hpp
++++ b/include/pineforge/source/cohort_exposure_arith.hpp
+@@ -260,6 +260,7 @@
+             } else if (source.is_leaf(node)) {
+                 const auto raw = source.raw_units(node);
+                 if (eligible(raw)) raw_total = real_binary64_add(raw_total, raw);
++                if (raw_total == INF) raw_total = 0;
+             } else {
+                 const Node left = source.left(node);
+                 const Node right = source.right(node);

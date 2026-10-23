@@ -1,0 +1,15 @@
+diff --git a/tests/test_cohort_exposure_arith.cpp b/tests/test_cohort_exposure_arith.cpp
+--- a/tests/test_cohort_exposure_arith.cpp
++++ b/tests/test_cohort_exposure_arith.cpp
+@@ -148,9 +148,11 @@
+     void repair(Handle h) {
+         if (h == 0 || nodes_.at(h - 1).leaf) return;
+         auto& node = nodes_.at(h - 1);
+         repair(node.left);
+         repair(node.right);
++        const auto stale_base = node.sum.b;
+         node.sum = ar::compose_summary(nodes_.at(node.left - 1).sum,
+                                        nodes_.at(node.right - 1).sum);
++        node.sum.b = stale_base;
+     }
+ };

@@ -1,0 +1,12 @@
+diff --git a/include/pineforge/source/cohort_exposure_arith.hpp b/include/pineforge/source/cohort_exposure_arith.hpp
+--- a/include/pineforge/source/cohort_exposure_arith.hpp
++++ b/include/pineforge/source/cohort_exposure_arith.hpp
+@@ -255,7 +255,7 @@
+             const auto accumulator = decode_accumulator(raw_total);
+             const Pair D = get_pair(source.summary(node), accumulator.g);
+             const auto d = D[accumulator.k & 1];
+-            if (d < S - accumulator.k) {
++            if (std::max(D[0], D[1]) < S - accumulator.k) {
+                 raw_total = encode_accumulator(accumulator.g, accumulator.k + d);
+             } else if (source.is_leaf(node)) {
+                 const auto raw = source.raw_units(node);
