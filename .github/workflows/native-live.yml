@@ -21,11 +21,11 @@ on:
 permissions:
   contents: read
 
-# The caller owns PR cancellation. A reusable workflow's github.workflow is
-# its caller, so the prefix avoids cancelling CI. Main/manual runs are unique.
+# A reusable workflow's github.workflow is its caller, so use a distinct prefix.
+# Only post-merge callers and main/manual runs use this workflow.
 concurrency:
-  group: native-live-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: native-live-${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   CCACHE_COMPILERCHECK: content
@@ -38,8 +38,8 @@ env:
 jobs:
   authz:
     name: authz
-    # GCP fleet (owner #1050): non-release jobs on pf-gcp-pr; release-class jobs only on pf-gcp-main.
-    runs-on: ["self-hosted", "pf-gcp-pr"]
+    # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
+    runs-on: ["self-hosted", "pf-gcp-post"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
     steps:
@@ -101,8 +101,8 @@ jobs:
   native-live:
     name: native-live (${{ matrix.profile }})
     needs: [authz]
-    # All three profiles use the canon heavy pool class on every event.
-    runs-on: ["self-hosted","pf-gcp-pr"]
+    # All three post-merge profiles use the same fixed fleet.
+    runs-on: ["self-hosted","pf-gcp-post"]
     strategy:
       fail-fast: false
       matrix:
@@ -208,7 +208,7 @@ jobs:
   native-live-gate:
     needs: [authz, native-live]
     if: always()
-    runs-on: ["self-hosted","pf-gcp-pr"]
+    runs-on: ["self-hosted","pf-gcp-post"]
     env:
       PF_CI_LABELS: '["self-hosted","pf-ci","pf-ci-x64"]'
     steps:
