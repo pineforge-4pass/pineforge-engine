@@ -64,6 +64,12 @@ class IdPairFoldFile {
         (kMaximumRows + kRowsPerSegment - 1) / kRowsPerSegment);
     std::array<IdPairScratchFile, kSegments> files_;
 public:
+    IdPairFoldFile() {
+        // These regions are the consumed-cycle auxiliary index, including
+        // its undo path and every lazy segment. Reuse the closed identity
+        // vocabulary; a file prefix is never a diagnostic store identity.
+        for (auto& file : files_) file.set_store(ScratchStore::partial_cycles_idx);
+    }
     bool opened() const noexcept {
         for (const auto& file : files_) if (file.opened()) return true;
         return false;
