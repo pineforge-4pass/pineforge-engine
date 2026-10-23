@@ -87,6 +87,39 @@ Anything else leaves `status()` at `programming_error` and performs no I/O.
 Cache and slot counts are not part of the stored format: a reopen may use
 different ones.
 
+### Resident bound of the parent-terminal drain (native order)
+
+The native request core's `JournalStore` has a resident cap of 2,048
+committed events in 32-event chunks, with a keep-resident floor of 128.
+A single bar can exceed the cap before its journal is retired; older events
+then spill to pages and remain readable at their original positions and
+ordinals. The spill page remains 32,768 bytes and the decoded cache has four
+slots. The separately bound `CommandScratchStore` codec uses its own fixed
+workspace instead of this resident tail.
+
+For the short waiting-child definitions in the Wide parent-terminal fixture,
+the book cap is 4,096 rows and the journal cap is 2,048 events. Its per-engine
+drain plateau is 1,890,980 bytes (about 1.9 MB) on the GNU 13.4 x86-64
+allocation sizes, constant and independent of symbols, window and trades.
+`tests/test_parent_terminal_scratch.cpp` derives `kDrainPlateauBytes` from
+the caps and `sizeof` terms: `456*(2048 + (4096/2+2) + (32+1)) + 6720 + 524`.
+The terms are the journal definitions, promoted half-book plus two roots,
+one decoded cause chunk with a two-definition replacement, eight side owners,
+and overlapping book-writer buffers. During growth, the side owners and a
+216-byte book read instead contribute the fixed `6720+216=6936` bytes;
+that read buffer is not the plateau's 524-byte writer overlap.
+The fixture keeps the separate 4,096-byte drain allowance through population
+`2048/2-1=1023` and pins the plateau for larger spilled books.
+This definition budget excludes the journal event slots and spill buffers
+reserved before the drain, and does not bound arbitrary request strings or
+nested payloads.
+
+`test_journal_resident_cap` samples residency after every command in a single
+unretired 18,000-event window, requires a peak no greater than `2048+32`,
+and reads expired original definitions back from spilled events. Its receipt
+and core-state oracles are constructed independently; a one-bar settlement
+fixture separately checks 3,000 literal round-trip trades.
+
 ## Transactions, rollback and commit
 
 One transaction is active at a time. `begin` snapshots the logical state

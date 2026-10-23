@@ -233,13 +233,68 @@ struct Host final : NativeStrategyHost {
 enum class Shape { Wide, Deep, Tree, ManySeeds };
 
 // Mirrors JournalStore's private constants; the event value itself is public.
-constexpr std::size_t kJournalMaxResident = 16384;
+constexpr std::size_t kJournalMaxResident = 2048;
 constexpr std::size_t kJournalChunk = 32;
 constexpr std::size_t kJournalSpillPageBytes = 32768;
 // src/native_order.cpp:1582: std::array<Cached, 4>; :1567 has four read buffers.
 // exercise_reload_control counts the decoded storage slots through history_at.
 constexpr std::size_t kJournalCacheSlots = 4;
 constexpr std::size_t kDrainBytes = 4096;
+// kBookMax and BookSpill::kSide in src/native_order.cpp.
+constexpr std::size_t kBookMaxResident = 4096;
+constexpr std::size_t kBookSideRows = 8;
+constexpr std::size_t kWideRootCount = 2;
+constexpr std::size_t kLastTargetedPopulation = kJournalMaxResident / 2 - 1;
+
+// GNU make_shared has one vptr and two uint32_t reference counts. Retain
+// the reload control's conservative rounding allowance on other libraries.
+#if defined(__GLIBCXX__)
+constexpr auto kSharedControlBytes = sizeof(void*) + 2 * sizeof(std::uint32_t);
+#else
+constexpr auto kSharedControlAlignment = alignof(std::max_align_t);
+constexpr auto kSharedControlBytes =
+    (2 * sizeof(void*) + sizeof(std::size_t) + kSharedControlAlignment - 1)
+    / kSharedControlAlignment * kSharedControlAlignment;
+#endif
+constexpr auto kDefinitionAllocationBytes = sizeof(no::RequestDefinition) + kSharedControlBytes;
+constexpr auto kLiveAllocationBytes = sizeof(no::LiveRequest) + kSharedControlBytes;
+constexpr auto kDrainSideBytes =
+    kBookSideRows * (kDefinitionAllocationBytes + kLiveAllocationBytes);
+
+// SaveAr's short waiting-child row, derived from archive_io's field order.
+// These prefixes precede the WaitForApplied and Wait payloads respectively.
+constexpr auto kArchiveTagBytes = sizeof(std::uint32_t);
+constexpr auto kArchiveFlagBytes = sizeof(unsigned char);
+constexpr auto kWaitingOwnerPrefixBytes =
+    kArchiveFlagBytes + sizeof(no::RequestHandle) + kArchiveTagBytes + sizeof(no::Reduce)
+    + 2 * sizeof(std::uint64_t) + sizeof("child") - 1
+    + kArchiveTagBytes + sizeof(no::Market)
+    + kArchiveTagBytes + sizeof(no::ImmediateRemaining) + kArchiveTagBytes;
+constexpr auto kWaitingDefinitionBytes =
+    kWaitingOwnerPrefixBytes + sizeof(no::WaitForApplied)
+    + kArchiveTagBytes + sizeof(no::NoGroup) + kArchiveTagBytes + sizeof(no::Absolute)
+    + sizeof(no::Birth) + kArchiveFlagBytes + sizeof(no::RequestOrigin)
+    + kArchiveFlagBytes + sizeof(std::uint64_t) + kArchiveFlagBytes;
+constexpr auto kWaitingAuthorityPrefixBytes =
+    kWaitingDefinitionBytes + 2 * kArchiveTagBytes + sizeof(no::RemainingUnits);
+constexpr auto kWaitingBookRowBytes =
+    kWaitingAuthorityPrefixBytes + sizeof(no::Wait) + 3 * kArchiveTagBytes
+    + sizeof(no::MarketReady) + sizeof(no::AllowanceUnset) + sizeof(no::PendingNone)
+    + 3 * kArchiveFlagBytes;
+// GNU vector insert doubles each used prefix at these two growths; the old
+// and new buffers overlap while the Wait payload is appended.
+constexpr auto kBookWriterOverlapBytes =
+    2 * kWaitingOwnerPrefixBytes + 2 * kWaitingAuthorityPrefixBytes;
+constexpr auto kPlateauBookDefinitions = kBookMaxResident / 2 + kWideRootCount;
+// One decoded cause chunk includes a replacement with two definitions.
+constexpr auto kPlateauCauseDefinitions = kJournalChunk + 1;
+// Per engine, constant for this Wide fixture, independent of symbols,
+// window and trades. GNU x86-64: 456*(2048+2050+33)+6720+524=1,890,980 B.
+// During growth the side owners plus the book read are 6720+216=6936 B;
+// at the plateau the overlapping writer buffers replace that read term.
+constexpr auto kDrainPlateauBytes =
+    (kJournalMaxResident + kPlateauBookDefinitions + kPlateauCauseDefinitions)
+    * kDefinitionAllocationBytes + kDrainSideBytes + kBookWriterOverlapBytes;
 
 void print_reserve(std::size_t population, Shape shape, bool direct, std::size_t reserve_peak) {
     std::printf("X08 reserve population=%zu shape=%d direct=%d reserve_peak=%zu "
@@ -459,9 +514,14 @@ std::size_t exercise_beyond_cap(std::size_t population, bool direct) {
     Probe::drain(consumer, actual, seeds);
     global_allocation::recording = false;
     global_allocation::on_recorded = nullptr;
-    CHECK(peak_bytes <= kDrainBytes);
+    const auto bound = population <= kLastTargetedPopulation ? kDrainBytes : kDrainPlateauBytes;
+    CHECK(peak_bytes <= bound);
     std::printf("X08 population=%zu shape=%d direct=%d peak=%zu bound=%zu\n",
-                population, static_cast<int>(shape), direct, peak_bytes, kDrainBytes);
+                population, static_cast<int>(shape), direct, peak_bytes, bound);
+    std::printf("X08 plateau population=%zu direct=%d peak=%zu plateau=%zu "
+                "side_bytes=%zu book_read_bytes=%zu writer_overlap_bytes=%zu\n",
+                population, direct, peak_bytes, kDrainPlateauBytes,
+                kDrainSideBytes, kWaitingBookRowBytes, kBookWriterOverlapBytes);
 
     CHECK(!Probe::failed(consumer));
     CHECK(consumer.request_core().live().empty());
@@ -588,7 +648,7 @@ void exercise_reload_control(bool direct, const no::Request& request, const no::
 }
 
 void exercise_reload(bool direct) {
-    constexpr std::size_t population = 8191;
+    constexpr std::size_t population = kLastTargetedPopulation;
     const no::Request root_request{no::Transact{1.0}, "root", ""};
     const no::Request child_request{no::Reduce{no::ExplicitUnits{1.0}}, "child", ""};
     const no::Request filler{no::Transact{0.0}, "filler", ""};
@@ -630,7 +690,7 @@ void exercise_reload(bool direct) {
     constexpr std::size_t arena_chunk_bytes = detail::ScratchArena::kChunkBytes;
     constexpr auto max_arena_chunks = (max_spill_bytes + arena_chunk_bytes - 1) / arena_chunk_bytes;
     // src/scratch_arena.cpp:295-301 doubles the uint32_t table capacity:
-    // at most five growths, 1 -> 2 -> 4 -> 8 -> 16 -> 32 (17 chunks needed).
+    // at most two growths, 1 -> 2 -> 4 (three chunks needed at this cap).
     // Sum every allocation, including replaced tables, to bound the live peak.
     constexpr auto arena_chunk_table_bytes = [] {
         std::size_t bytes = 0;
@@ -954,12 +1014,17 @@ int main() {
         exercise(64, Shape::ManySeeds, direct);
         exercise(512, Shape::ManySeeds, direct);
         // The smallest adjacent populations whose 2*N + 5 actual events spill;
-        // their reserve requests are 16448 and 16450, both above 16384.
+        // their reserve requests are 2112 and 2114, both above 2048.
         // Without the cap, these requests need different numbers of chunks.
-        const auto reserve_peak_at_cap = exercise_beyond_cap(8190, direct);
-        const auto reserve_peak_beyond_cap = exercise_beyond_cap(8191, direct);
+        const auto reserve_peak_at_cap =
+            exercise_beyond_cap(kLastTargetedPopulation - 1, direct);
+        const auto reserve_peak_beyond_cap =
+            exercise_beyond_cap(kLastTargetedPopulation, direct);
         CHECK(reserve_peak_at_cap > 0);
         CHECK(reserve_peak_at_cap == reserve_peak_beyond_cap);
+        // Retain the spilled-book populations, and reach the cap plateau.
+        for (const auto population : {5000u, 8190u, 8191u, 16382u, 65536u})
+            exercise_beyond_cap(population, direct);
         exercise_reload(direct);
         exercise_limits(direct);
         invalid_cause(direct);
