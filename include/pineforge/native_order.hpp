@@ -1162,8 +1162,9 @@ struct NoEffectEvent {
 
 /// One candidate's execution terms, recorded. For a request whose units were
 /// deferred it also binds them: it spends the pending group chain
-/// (`prior_adjustment_ids`, `pending_total`), takes `effective_deduction` off the
-/// resolved units and leaves `remaining_after`. That deduction is 0 with a
+/// (`pending_total`, enumerated by WorkingRequestCore::visit_prior_adjustments),
+/// takes `effective_deduction` off the resolved units and leaves `remaining_after`.
+/// That deduction is 0 with a
 /// positive `pending_total` and positive resolved units when binary64 cannot
 /// take the total off them -- absorbed, and the units stand (R5 lane K-ULP5).
 struct TermsResolvedEvent {
@@ -1171,6 +1172,11 @@ struct TermsResolvedEvent {
     DefinitionRef definition;
     MatchCursor cursor{};
     TermsResolvedInput input;
+    /// B1-12: chain-order ids only for chains of at most 256 links
+    /// (WorkingRequestCore::kInlineAdjustmentIds). Empty for longer chains;
+    /// WorkingRequestCore::visit_prior_adjustments is their only complete
+    /// enumeration route. Use WorkingRequestCore::prior_adjustment_count to
+    /// distinguish a paged chain from no prior adjustments.
     std::vector<EventId> prior_adjustment_ids;
     double pending_total = 0.0;
     double effective_deduction = 0.0;
@@ -1311,6 +1317,11 @@ struct QuantityBoundEvent {
     DefinitionRef definition;
     EventId source;
     double source_units = 0.0;
+    /// B1-12: chain-order ids only for chains of at most 256 links
+    /// (WorkingRequestCore::kInlineAdjustmentIds). Empty for longer chains;
+    /// WorkingRequestCore::visit_prior_adjustments is their only complete
+    /// enumeration route. Use WorkingRequestCore::prior_adjustment_count to
+    /// distinguish a paged chain from no prior adjustments.
     std::vector<EventId> prior_adjustment_ids;
     double pending_total = 0.0;
     double effective_deduction = 0.0;
@@ -2301,7 +2312,8 @@ private:
     std::optional<RequestRejectReason> validate_request(
             const Request& request,
             const CommandContext& context,
-            const std::optional<RequestHandle>& replace_target) const;
+            const std::optional<RequestHandle>& replace_target,
+            std::shared_ptr<const OpeningReadback>& admitted_openings) const;
     /// Resolves tick-spelled trail offsets and trigger anchors in place
     /// against context.price_tick. Runs after validate_request, on the staged
     /// copy that becomes the stored definition.

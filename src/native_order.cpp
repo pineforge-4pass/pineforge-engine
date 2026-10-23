@@ -456,9 +456,14 @@ bool handle_less(const RequestHandle& a, const RequestHandle& b) noexcept {
     return a.incarnation < b.incarnation;
 }
 
-void canonicalize_owner(Request& request, const RunIdentity& run, const std::string& directory) {
+void canonicalize_owner(Request& request, const RunIdentity& run, const std::string& directory,
+                        std::shared_ptr<const OpeningReadback> admitted) {
     if (auto* bind = std::get_if<BindOpenings>(&request.owner)) {
         if (bind->external_openings) {
+            if (admitted) {
+                bind->external_openings = std::move(admitted);
+                return;
+            }
             if (!dynamic_cast<const FrozenOpenings*>(bind->external_openings.get())) {
                 std::shared_ptr<const OpeningReadback> frozen;
                 const auto status = freeze_openings_in_directory(
@@ -647,6 +652,93 @@ std::optional<CoreFailure> observe_openings(const TargetObservation& observation
     return observe_openings(close.openings, close.cycle, close.side,
                             observation.current_position, observation.openings, live_count,
                             close.external_openings.get(), observation.external_openings);
+}
+
+// B1-07: admission alone may allocate scratch; post-commit observation reads
+// above remain allocation-free. Sort external membership once, reuse that
+// freeze for the accepted definition, and sort observation handles only when
+// they are not already in the same order. Every observation must be live at
+// admission, so its handle is the only field needed in the temporary sort.
+struct AdmissionOpenings final : OpeningReadback {
+    const CommandContext& context;
+    int64_t cycle;
+    PositionIdentity position;
+    AdmissionOpenings(const CommandContext& value, int64_t c, PositionIdentity p)
+        : context(value), cycle(c), position(std::move(p)) {}
+    std::uint64_t count() const noexcept override {
+        return context.external_openings ? context.external_openings->count()
+                                         : context.openings.size();
+    }
+    ReadStatus observation_at(std::uint64_t i, OpeningObservation& out) const noexcept {
+        if (context.external_openings) return context.external_openings->observation_at(i, out);
+        if (i >= context.openings.size()) return ReadStatus::not_found;
+        out = context.openings[static_cast<std::size_t>(i)];
+        return ReadStatus::ok;
+    }
+    ReadStatus opening_at(std::uint64_t i, RequestHandle& out) const noexcept override {
+        OpeningObservation value;
+        const auto status = observation_at(i, value);
+        if (status != ReadStatus::ok) return status;
+        if (value.queried_cycle != cycle || !same_position(value.current_position, position)
+            || !value.has_live_matching_lot) return ReadStatus::programming_error;
+        out = value.queried_opening;
+        return ReadStatus::ok;
+    }
+};
+
+bool admit_external_openings(const RunIdentity& run, const BindOpenings& bind,
+                             const CommandContext& context, const std::string& directory,
+                             std::shared_ptr<const OpeningReadback>& admitted) {
+    const auto count = bind.external_openings->count();
+    // Preserve the borrowed-reader refusal before beginning the scratch sort.
+    for (std::uint64_t i = 0; i != count; ++i) {
+        RequestHandle member;
+        if (bind.external_openings->opening_at(i, member) != ReadStatus::ok
+            || !member.incarnation || member.run != run) return false;
+    }
+    OpeningObservation first;
+    if (context.external_openings) {
+        if (context.external_openings->count() != count
+            || context.external_openings->observation_at(0, first) != ReadStatus::ok) return false;
+    } else {
+        if (context.openings.size() != count) return false;
+        first = context.openings.front();
+    }
+    const auto* position = std::get_if<PositionNonflat>(&first.current_position);
+    if (!position || position->cycle != bind.cycle || !valid_position(first.current_position))
+        return false;
+    auto canonical = bind.external_openings;
+    if (!dynamic_cast<const FrozenOpenings*>(canonical.get())) {
+        const auto status = freeze_openings_in_directory(
+            run, *bind.external_openings, canonical, directory);
+        if (status == ReadStatus::io_error)
+            throw detail::ScratchIoError(EIO, "native opening freeze");
+        if (status != ReadStatus::ok) return false;
+    }
+    AdmissionOpenings observations(context, bind.cycle, first.current_position);
+    bool same_order = true;
+    for (std::uint64_t i = 0; i != count; ++i) {
+        RequestHandle member, observed;
+        if (canonical->opening_at(i, member) != ReadStatus::ok
+            || !member.incarnation || member.run != run
+            || observations.opening_at(i, observed) != ReadStatus::ok) return false;
+        if (member != observed) same_order = false;
+    }
+    if (!same_order) {
+        std::shared_ptr<const OpeningReadback> sorted;
+        const auto status = freeze_openings_in_directory(run, observations, sorted, directory);
+        if (status == ReadStatus::io_error)
+            throw detail::ScratchIoError(EIO, "native opening freeze");
+        if (status != ReadStatus::ok) return false;
+        for (std::uint64_t i = 0; i != count; ++i) {
+            RequestHandle member, observed;
+            if (canonical->opening_at(i, member) != ReadStatus::ok
+                || sorted->opening_at(i, observed) != ReadStatus::ok
+                || member != observed) return false;
+        }
+    }
+    admitted = std::move(canonical);
+    return true;
 }
 
 bool current_shape(const LiveRequest& live) noexcept {
@@ -965,9 +1057,9 @@ inline std::size_t book_position(const std::vector<LiveRequest>& live, uint64_t 
 // deferred chains' id lists keep a fixed resident part and write the rest to
 // run-owned scratch files: detail::ScratchFile, an unlinked close-on-exec file
 // read and written by position. A store that outgrows its resident part spills;
-// a failed write/read or an oversized serialized journal event is a
-// ScratchIoError. Spill preparation can open the journal files before the first
-// spill; a run whose reservation stays resident never touches them. Every spill
+// a failed write/read is a ScratchIoError. Spill preparation can open the journal
+// files before the first spill; a run whose reservation stays resident never
+// touches them. Every spill
 // is made where the caller may still throw (reserve_plan, seal_direct), never
 // in commit.
 namespace {
@@ -1333,6 +1425,74 @@ void LoadAr::operator()(T& item) {
     archive_value(*this, item);
 }
 
+// B1-06: only an event that outgrows an ordinary page takes these archives.
+// Reuse the page buffers while streaming one record; no record-sized byte
+// vector or retained allocation is needed, and SaveAr/LoadAr stay unchanged.
+struct StreamSaveAr {
+    static constexpr bool saving = true;
+    ExtFile& file;
+    unsigned char* buffer;
+    std::size_t capacity;
+    std::size_t used = 0;
+
+    void flush() {
+        if (used) file.append(buffer, used);
+        used = 0;
+    }
+    void raw(const void* data, std::size_t length) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        while (length) {
+            const auto take = std::min(length, capacity - used);
+            std::memcpy(buffer + used, bytes, take);
+            bytes += take;
+            length -= take;
+            used += take;
+            if (used == capacity) flush();
+        }
+    }
+    template <class T>
+    void operator()(const T& item) {
+        archive_value(*this, const_cast<T&>(item));
+    }
+};
+
+struct StreamLoadAr {
+    static constexpr bool saving = false;
+    const ExtFile& file;
+    unsigned char* buffer;
+    std::size_t capacity;
+    uint64_t offset;
+    uint64_t unread;
+    std::size_t at = 0;
+    std::size_t available = 0;
+
+    uint64_t remaining() const noexcept { return unread + available - at; }
+    void raw(void* data, std::size_t length) {
+        if (length > remaining()) {
+            throw detail::ScratchIoError(EIO, "native o1 store record is truncated");
+        }
+        auto* bytes = static_cast<unsigned char*>(data);
+        while (length) {
+            if (at == available) {
+                available = static_cast<std::size_t>(std::min<uint64_t>(unread, capacity));
+                file.read(offset, buffer, available);
+                offset += available;
+                unread -= available;
+                at = 0;
+            }
+            const auto take = std::min(length, available - at);
+            std::memcpy(bytes, buffer + at, take);
+            bytes += take;
+            length -= take;
+            at += take;
+        }
+    }
+    template <class T>
+    void operator()(T& item) {
+        archive_value(*this, item);
+    }
+};
+
 // The external openings of a bound close (BindOpenings, OpeningsClose): how
 // many, then each opening's handle in the readback's order. A reload freezes
 // the list again, so a spilled row or a paged event keeps its membership
@@ -1628,8 +1788,8 @@ struct WorkingRequestCore::JournalStore {
     static constexpr std::size_t kKeepResident = 128;
     // Page layout: concatenated events, each starting with a uint32_t
     // alternative and a uint64_t ordinal, followed by its fields. This 32,768 B
-    // buffer is sized by the largest single serialized CommandEvent we admit:
-    // an event above it is refused with ScratchIoError(EFBIG). Request
+    // buffer bounds ordinary multi-event pages. A larger single event streams
+    // through the same buffer into a one-event page (B1-06). Request
     // label/comment, BindOpenings/OpeningsClose opening vectors,
     // SelectedExposure incarnations and TermsResolvedEvent/QuantityBoundEvent
     // adjustment-id vectors have no finite schema bound. A full page closes
@@ -1763,6 +1923,22 @@ struct WorkingRequestCore::JournalStore {
         }
         if (chunks.empty()) chunk0_base = first;
     }
+    // One oversized event, streamed without a record-sized byte allocation.
+    // Publish its page only after serialization and every write succeed.
+    void spill_large_front_event() {
+        pages.make_room();
+        JournalPage page;
+        page.first_position = first;
+        page.count = 1;
+        page.first_ordinal = page.last_ordinal = event_ordinal(resident_at(first));
+        page.offset = data.size();
+        StreamSaveAr ar{data, spill->write.data(), spill->write.size()};
+        ar(resident_at(first));
+        ar.flush();
+        page.length = data.size() - page.offset;
+        pages.push(page);
+        drop_front(first + 1);
+    }
     // Writes the oldest resident events that fit, up to their chunk's end,
     // as one page and drops exactly that prefix. Everything that can throw
     // comes before publishing the page or changing the resident prefix.
@@ -1780,8 +1956,8 @@ struct WorkingRequestCore::JournalStore {
             } catch (const ByteWriter::CapacityExceeded&) {
                 out.rewind(event_start);
                 if (page_end == first) {
-                    throw detail::ScratchIoError(
-                            EFBIG, "native o1 journal event exceeds the spill page byte bound");
+                    spill_large_front_event();
+                    return;
                 }
                 break;
             }
@@ -1837,7 +2013,8 @@ struct WorkingRequestCore::JournalStore {
         for (const Cached& slot : cache) {
             if (slot.valid && slot.page_no == page_no) return slot.events;
         }
-        if (!spill || page.length > kSpillPageBytes || page.count > kChunk) {
+        if (!spill || page.count > kChunk
+            || (page.length > kSpillPageBytes && page.count != 1)) {
             throw detail::ScratchIoError(EFBIG, "native o1 journal page exceeds byte bound");
         }
         Cached& slot = cache[cache_next];
@@ -1846,11 +2023,16 @@ struct WorkingRequestCore::JournalStore {
         // leave a partially replaced event vector under its old cache key.
         slot.valid = false;
         slot.events.clear();
-        data.read(page.offset, bytes.data(), static_cast<std::size_t>(page.length));
-        ByteReader in(bytes.data(), static_cast<std::size_t>(page.length));
-        LoadAr ar{in};
         slot.events.resize(static_cast<std::size_t>(page.count));
-        for (CommandEvent& event : slot.events) ar(event);
+        if (page.length > kSpillPageBytes) {
+            StreamLoadAr ar{data, bytes.data(), bytes.size(), page.offset, page.length};
+            ar(slot.events.front());
+        } else {
+            data.read(page.offset, bytes.data(), static_cast<std::size_t>(page.length));
+            ByteReader in(bytes.data(), static_cast<std::size_t>(page.length));
+            LoadAr ar{in};
+            for (CommandEvent& event : slot.events) ar(event);
+        }
         cache_next = (cache_next + 1) % cache.size();
         slot.page_no = page_no;
         slot.first_position = page.first_position;
@@ -3702,7 +3884,8 @@ void WorkingRequestCore::reset(RunIdentity identity) {
 std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         const Request& request,
         const CommandContext& context,
-        const std::optional<RequestHandle>& replace_target) const {
+        const std::optional<RequestHandle>& replace_target,
+        std::shared_ptr<const OpeningReadback>& admitted_openings) const {
     require_grid(context.quantity_grid);
     const auto* reverse_to = as_reverse_to(request.intent);
     const auto* host_sized = as_host_sized(request.intent);
@@ -3880,38 +4063,35 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
             || (bind->external_openings && !bind->openings.empty())) {
             return RequestRejectReason::InvalidOwner;
         }
-        // Keep the existing vector admission complexity. The external path
-        // never materializes this compatibility copy.
-        std::vector<RequestHandle> canonical;
-        const auto* cohort = &bind->openings;
-        if (!bind->external_openings) {
-            canonical = bind->openings;
-            std::sort(canonical.begin(), canonical.end(), handle_less);
-            cohort = &canonical;
-        }
-        for (std::uint64_t i = 0; i < count; ++i) {
-            RequestHandle member;
-            if (opening_at(*cohort, bind->external_openings.get(), i, member)
-                    != ReadStatus::ok
-                || !member.incarnation || member.run != identity_)
+        if (bind->external_openings) {
+            if (!admit_external_openings(identity_, *bind, context, scratch_directory(),
+                                         admitted_openings)) {
                 return RequestRejectReason::InvalidOwner;
-        }
-        OpeningObservation first;
-        if (context.external_openings) {
-            if (context.external_openings->observation_at(0, first) != ReadStatus::ok)
-                return RequestRejectReason::InvalidOwner;
+            }
         } else {
-            if (context.openings.empty()) return RequestRejectReason::InvalidOwner;
-            first = context.openings.front();
+            // Keep vector admission and its refusal behavior unchanged.
+            std::vector<RequestHandle> canonical = bind->openings;
+            std::sort(canonical.begin(), canonical.end(), handle_less);
+            for (const auto& member : canonical) {
+                if (!member.incarnation || member.run != identity_)
+                    return RequestRejectReason::InvalidOwner;
+            }
+            OpeningObservation first;
+            if (context.external_openings) {
+                if (context.external_openings->observation_at(0, first) != ReadStatus::ok)
+                    return RequestRejectReason::InvalidOwner;
+            } else {
+                if (context.openings.empty()) return RequestRejectReason::InvalidOwner;
+                first = context.openings.front();
+            }
+            const auto& position = first.current_position;
+            const auto* nonflat = std::get_if<PositionNonflat>(&position);
+            if (!nonflat || nonflat->cycle != bind->cycle) return RequestRejectReason::InvalidOwner;
+            std::size_t live_count = 0;
+            if (observe_openings(canonical, bind->cycle, nonflat->side, position,
+                                 context.openings, &live_count, nullptr, context.external_openings)
+                || live_count != count) return RequestRejectReason::InvalidOwner;
         }
-        const auto& position = first.current_position;
-        const auto* nonflat = std::get_if<PositionNonflat>(&position);
-        if (!nonflat || nonflat->cycle != bind->cycle) return RequestRejectReason::InvalidOwner;
-        std::size_t live_count = 0;
-        if (observe_openings(*cohort, bind->cycle, nonflat->side, position,
-                             context.openings, &live_count, bind->external_openings.get(),
-                             context.external_openings)
-            || live_count != count) return RequestRejectReason::InvalidOwner;
     } else if (const auto* bind = std::get_if<BindCohort>(&request.owner)) {
         if (!host_sized || host_sized->kind != HostSizedKind::Close
             || !cohort_exists(bind->cohort)) {
@@ -4369,11 +4549,16 @@ void WorkingRequestCore::visit_group_recipients(
     if (!member) return;
     if (member->effect == GroupEffect::Cancel && !payload->terminal) return;
     if (member->effect == GroupEffect::Reduce && !(payload->filled_working > 0.0)) return;
+    // B1-08: the visitor may evict the journal page/codec slot holding both
+    // pointers. Keep only the fixed-size values used by the remaining walk.
+    const Member group = *member;
+    const RequestHandle source = payload->handle();
+    const uint64_t ordinal = payload->ordinal;
     visit_book([&](const LiveRequest& live) {
         const auto* other = std::get_if<Member>(&live.request().group);
-        if (!other || other->group != member->group || other->cohort == member->cohort) return true;
-        if (live.handle() == payload->handle()) return true;
-        if (live.birth().acceptance_ordinal >= payload->ordinal) return true;
+        if (!other || other->group != group.group || other->cohort == group.cohort) return true;
+        if (live.handle() == source) return true;
+        if (live.birth().acceptance_ordinal >= ordinal) return true;
         // In queue order, as the book holds them (waiting_children).
         visitor(context, live.handle());
         return true;
@@ -4389,7 +4574,8 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
     Request staged = request;
     MutationPlan plan = begin_plan();
-    auto reason = validate_request(staged, context, std::nullopt);
+    std::shared_ptr<const OpeningReadback> admitted_openings;
+    auto reason = validate_request(staged, context, std::nullopt, admitted_openings);
     if (!reason) reason = resolve_tick_spellings(staged, context);
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
     auto impl = std::make_unique<PreparedSubmit::Impl>();
@@ -4402,7 +4588,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
         impl->result.event_ordinal = ordinal;
         return PreparedSubmit(std::move(impl));
     }
-    canonicalize_owner(staged, identity_, scratch_directory());
+    canonicalize_owner(staged, identity_, scratch_directory(), std::move(admitted_openings));
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -4455,7 +4641,8 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         impl->plan = std::move(plan);
         return PreparedReplace(std::move(impl));
     }
-    auto reason = validate_request(staged, context, staged_target);
+    std::shared_ptr<const OpeningReadback> admitted_openings;
+    auto reason = validate_request(staged, context, staged_target, admitted_openings);
     if (!reason) reason = resolve_tick_spellings(staged, context);
     // A retained trigger state only describes the trigger alternative it came
     // from, and a retained trail best must still produce a representable
@@ -4495,7 +4682,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         impl->plan = std::move(plan);
         return PreparedReplace(std::move(impl));
     }
-    canonicalize_owner(staged, identity_, scratch_directory());
+    canonicalize_owner(staged, identity_, scratch_directory(), std::move(admitted_openings));
     const TriggerState retained = live_[live_index].trigger_state;
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     // A replace that keeps the handle or carries a binding (R5 lane V19-D)
@@ -4654,7 +4841,8 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
     require_distinct_counters(next_order_incarnation, next_timeline_ordinal);
     Request staged = request;
     begin_direct();
-    auto reason = validate_request(staged, context, std::nullopt);
+    std::shared_ptr<const OpeningReadback> admitted_openings;
+    auto reason = validate_request(staged, context, std::nullopt, admitted_openings);
     if (!reason) reason = resolve_tick_spellings(staged, context);
     const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
     if (reason) {
@@ -4666,7 +4854,7 @@ CommandInstalled<SubmitResult> WorkingRequestCore::apply_submit(
                 SubmitResult{SubmitStatus::Rejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged, identity_, scratch_directory());
+    canonicalize_owner(staged, identity_, scratch_directory(), std::move(admitted_openings));
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -4719,7 +4907,8 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
         return CommandInstalled<ReplaceResult>{
                 ReplaceResult{status, ordinal, std::nullopt, std::nullopt}, finish_direct(first)};
     }
-    auto reason = validate_request(staged, context, staged_target);
+    std::shared_ptr<const OpeningReadback> admitted_openings;
+    auto reason = validate_request(staged, context, staged_target, admitted_openings);
     if (!reason) reason = resolve_tick_spellings(staged, context);
     // A retained trigger state only describes the trigger alternative it came
     // from, and a retained trail best must still produce a representable
@@ -4756,7 +4945,7 @@ CommandInstalled<ReplaceResult> WorkingRequestCore::apply_replace_as(
                 ReplaceResult{ReplaceStatus::ReplaceRejected, ordinal, std::nullopt, reason},
                 finish_direct(first)};
     }
-    canonicalize_owner(staged, identity_, scratch_directory());
+    canonicalize_owner(staged, identity_, scratch_directory(), std::move(admitted_openings));
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     if constexpr (Kept) {
         // A replace that keeps the handle or carries a binding (R5 lane
