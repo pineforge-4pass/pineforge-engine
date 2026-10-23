@@ -7,6 +7,8 @@ namespace pineforge {
 inline namespace engine_script_run_v19 {
 int native_set_selected_window_v1(
     BacktestEngine*, const pf_selected_window_config_v1*) noexcept;
+int native_selected_window_counts_v1(
+    const BacktestEngine*, pf_selected_window_counts_v1*) noexcept;
 }
 }
 
@@ -14,8 +16,11 @@ using namespace report_modes_fix;
 
 int main() {
     return test_main("test_report_envelope_equity_logical_count", [] {
-        const auto bars = tape();
         {
+            // count_selected_script counts every consumed label >= start_ms;
+            // SelectedCaptureLatches validates only [start_ms,end_ms). Feed
+            // the two preroll bars and six window bars, with no post-end bars.
+            const auto bars = tape(8);
             Host selected;
             configure(selected);
             const pf_selected_window_config_v1 window{
@@ -27,6 +32,15 @@ int main() {
             require(selected.set_report_mode_v1(ReportMode::STREAMED)
                         == PF_REPORT_MODE_ACCEPTED, "STREAMED refused");
             run(selected, bars);
+            pf_selected_window_counts_v1 counts{};
+            counts.struct_size = sizeof counts;
+            counts.version = 1;
+            require(native_selected_window_counts_v1(&selected, &counts) == 0,
+                    "selected fixture has no successful counts");
+            require(counts.fed_input_bars == 8 && counts.fed_script_bars == 8
+                        && counts.preroll_input_bars == 2 && counts.preroll_script_bars == 2
+                        && counts.window_input_bars == 6 && counts.window_script_bars == 6,
+                    "selected fixture did not consume two preroll and six window bars");
             Envelope result;
             require(selected.fill_report_envelope_v1(&result.value) == PF_REPORT_MODE_ACCEPTED,
                     "selected envelope refused");
@@ -41,6 +55,7 @@ int main() {
             require_trailer(read_sink(path));
         }
         {
+            const auto bars = tape(12);
             Host summary_host;
             configure(summary_host);
             require(summary_host.set_report_mode_v1(ReportMode::SUMMARY_ONLY)

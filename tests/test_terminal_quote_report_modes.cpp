@@ -64,7 +64,9 @@ int main() {
                     "legacy terminal-quote sink changed the last equity point");
             require_trailer(read_sink(path));
         }
-        require_non_presenter_mode_parity(ReportMode::SUMMARY_ONLY, "quote-no-presenter-summary");
-        require_non_presenter_mode_parity(ReportMode::STREAMED, "quote-no-presenter-streamed");
+        require_non_presenter_mode_parity<SealedPrefixHost>(
+            ReportMode::SUMMARY_ONLY, "quote-no-presenter-summary");
+        require_non_presenter_mode_parity<SealedPrefixHost>(
+            ReportMode::STREAMED, "quote-no-presenter-streamed");
     });
 }

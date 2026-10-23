@@ -41,7 +41,9 @@ int main() {
             result.value.report.equity_curve_len - 1];
         require(std::memcmp(&actual_last, &last, sizeof last) == 0,
                 "mode refusal changed FULL terminal equity bits");
-        require_non_presenter_mode_parity(ReportMode::SUMMARY_ONLY, "summary-no-presenter-summary");
-        require_non_presenter_mode_parity(ReportMode::STREAMED, "summary-no-presenter-streamed");
+        require_non_presenter_mode_parity<SealedPrefixHost>(
+            ReportMode::SUMMARY_ONLY, "summary-no-presenter-summary");
+        require_non_presenter_mode_parity<SealedPrefixHost>(
+            ReportMode::STREAMED, "summary-no-presenter-streamed");
     });
 }

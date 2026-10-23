@@ -21,12 +21,28 @@ namespace no = pineforge::native_order;
 constexpr std::int64_t start_ms = INT64_C(1704067200000);
 constexpr std::int64_t minute_ms = 60000;
 
-inline void require(bool condition, const char* message) {
+inline void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
 inline bool same_bits(double a, double b) {
     return std::memcmp(&a, &b, sizeof a) == 0;
+}
+
+inline void require_distinct_closed_prefix(const ReportC& report, int closed_count) {
+    require(report.trades_len >= closed_count, "FULL fixture lacks its closed prefix");
+    for (int i = 0; i < closed_count; ++i) {
+        const auto& row = report.trades[i];
+        require(!row.open_at_end, "warmup row did not really close");
+        if (i > 0)
+            require(report.trades[i - 1].exit_time < row.exit_time,
+                    "warmup closes do not have distinct increasing timestamps");
+    }
+    if (closed_count > 0) {
+        for (int i = closed_count; i < report.trades_len; ++i)
+            require(report.trades[closed_count - 1].exit_time < report.trades[i].entry_time,
+                    "terminal lot entered before the warmup closes finished");
+    }
 }
 
 // Keep generated evidence in the lane's named scratch directory. No cleanup
@@ -182,29 +198,37 @@ inline void configure(Host& host, std::uint64_t run_number = 1) {
             "native configure refused");
 }
 
-inline void run(Host& host, const std::vector<Bar>& bars) {
-    host.run(bars.data(), static_cast<int>(bars.size()));
-    require(host.last_error().empty(), "fixture run failed");
+template<class RunHost>
+inline void require_completed_run(const RunHost& host, const std::vector<Bar>& bars) {
+    require(host.last_run_status() == 0 && host.last_error().empty(),
+            "fixture run failed (status " + std::to_string(host.last_run_status())
+                + "): " + host.last_error());
     require(host.native_state().kind == NativeLifecycleKind::Completed,
             "fixture did not complete");
     require(host.calculations == static_cast<int>(bars.size()),
             "fixture did not calculate all bars");
 }
 
+inline void run(Host& host, const std::vector<Bar>& bars) {
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    require_completed_run(host, bars);
+}
+
 // The presenter refusal must leave native hosts without a presenter eligible.
 // Compare their omitted/external rows with the owning FULL view, including
-// three nonzero range-end rows and, in the second case, one closed row first.
+// three nonzero range-end rows and, in the second case, six real closes first.
+// ParityHost uses source publication for the production seal and explicitly
+// supplies no presentation; the ordinary native Host above stays source-free.
+template<class ParityHost>
 inline void require_non_presenter_mode_parity(ReportMode mode, const char* label) {
     require(mode == ReportMode::SUMMARY_ONLY || mode == ReportMode::STREAMED,
             "parity fixture needs a non-FULL mode");
     const bool streamed = mode == ReportMode::STREAMED;
-    const auto bars = tape();
     for (bool closed_prefix : {false, true}) {
-        Host full, candidate;
+        const auto bars = tape(closed_prefix ? ParityHost::closed_tape_bars : 12);
+        ParityHost full, candidate;
         full.hold_lots = candidate.hold_lots = 3;
         full.close_first = candidate.close_first = closed_prefix;
-        configure(full);
-        configure(candidate);
         require(full.set_report_mode_v1(ReportMode::FULL) == PF_REPORT_MODE_ACCEPTED,
                 "non-presenter FULL mode refused");
         const std::string name = std::string(label) + (closed_prefix ? "-closed" : "-open");
@@ -219,15 +243,27 @@ inline void require_non_presenter_mode_parity(ReportMode mode, const char* label
         run(candidate, bars);
         require(full.open_lots() == 3 && candidate.open_lots() == 3,
                 "non-presenter fixture did not leave three open lots");
-        if (streamed && closed_prefix)
+        require(full.closed_rows() == (closed_prefix ? ParityHost::warmup_closes : 0)
+                    && candidate.closed_rows() == full.closed_rows(),
+                "non-presenter fixture did not produce its real closes");
+        require(candidate.sealed_base() == candidate.prefix_base(),
+                "non-presenter ledger and report fold disagree on the sealed base");
+        if (streamed && closed_prefix) {
             require(candidate.sealed_base() > 0, "non-presenter closed prefix never sealed");
+            require(candidate.base_before_open > 0,
+                    "non-presenter terminal entries preceded the production seal");
+        } else {
+            require(candidate.sealed_base() == 0, "retained fixture unexpectedly sealed");
+        }
 
         Report reference;
         full.fill_report(&reference.value);
-        const int expected_trades = closed_prefix ? 4 : 3;
+        const int expected_trades = (closed_prefix ? ParityHost::warmup_closes : 0) + 3;
         require(reference.value.total_trades == expected_trades
                     && reference.value.trades_len == expected_trades,
                 "FULL fixture lost closed or range-end rows");
+        require_distinct_closed_prefix(reference.value,
+                                       closed_prefix ? ParityHost::warmup_closes : 0);
         int open_rows = 0;
         for (int i = 0; i < reference.value.trades_len; ++i) {
             if (!reference.value.trades[i].open_at_end) continue;
@@ -235,8 +271,10 @@ inline void require_non_presenter_mode_parity(ReportMode mode, const char* label
             require(reference.value.trades[i].pnl > 0.0, "terminal row has no open PnL");
         }
         require(open_rows == 3, "FULL fixture lacks three terminal rows");
-        require(reference.value.equity_curve_len == 12, "FULL fixture lacks twelve equity points");
-        const auto& last = reference.value.equity_curve[11];
+        const auto expected_equity = static_cast<std::int64_t>(bars.size());
+        require(reference.value.equity_curve_len == expected_equity,
+                "FULL fixture lacks one equity point per bar");
+        const auto& last = reference.value.equity_curve[expected_equity - 1];
 
         for (int read = 0; read < 2; ++read) {
             Envelope result;
@@ -248,7 +286,7 @@ inline void require_non_presenter_mode_parity(ReportMode mode, const char* label
             require(result.value.report.total_trades == expected_trades
                         && result.value.metadata.trades.logical_count == expected_trades,
                     "non-FULL report lost closed or terminal trades");
-            require(result.value.metadata.equity_curve.logical_count == 12,
+            require(result.value.metadata.equity_curve.logical_count == expected_equity,
                     "non-FULL report lost logical equity points");
             require(result.value.report.trades == nullptr && result.value.report.trades_len == 0
                         && result.value.report.equity_curve == nullptr
