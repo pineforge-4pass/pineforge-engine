@@ -1,4 +1,6 @@
-// CR-267. Compile this test against b3d483d6c1 before applying the engine fix.
+// CR-267. Compile the original rows against b3d483d6c1 before the engine fix.
+// CR-267 r2: the write-seal refusal rows
+// must fail against 385bc316b1/b42d70739b before applying the r2 engine fix.
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
 #endif
@@ -20,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
 
@@ -30,6 +33,19 @@ using pineforge::detail::ScratchArenaBackend;
 constexpr int kFd = ScratchArena::kInheritedFd;
 constexpr std::uint64_t kBytes = 2 * ScratchArena::kChunkBytes;
 constexpr int kSeals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
+// Linux UAPI values let older build headers exercise the running kernel.
+#if defined(F_SEAL_FUTURE_WRITE)
+constexpr int kFutureWriteSeal = F_SEAL_FUTURE_WRITE;
+#else
+constexpr int kFutureWriteSeal = 0x0010;
+#endif
+#if defined(F_SEAL_EXEC)
+constexpr int kExecSeal = F_SEAL_EXEC;
+#else
+constexpr int kExecSeal = 0x0020;
+#endif
+
+struct UnsupportedExecSeal {};
 
 void check(bool value, const char* expression, int line) {
     if (!value)
@@ -115,7 +131,17 @@ OwnedFd memfd_backing(unsigned flags, int seals) {
     OwnedFd fd(::memfd_create("pineforge-cr267", flags | MFD_CLOEXEC));
     CHECK(fd.value >= 0);
     CHECK(::ftruncate(fd.value, static_cast<off_t>(kBytes)) == 0);
-    if (seals != 0) CHECK(::fcntl(fd.value, F_ADD_SEALS, seals) == 0);
+    if (seals & kExecSeal) {
+        // Model MFD_NOEXEC_SEAL: on an executable memfd F_SEAL_EXEC also
+        // installs write seals, which would invalidate this admission control.
+        CHECK(::fchmod(fd.value, S_IRUSR | S_IWUSR) == 0);
+    }
+    if (seals != 0) {
+        const int result = ::fcntl(fd.value, F_ADD_SEALS, seals);
+        if (result < 0 && errno == EINVAL && (seals & kExecSeal))
+            throw UnsupportedExecSeal{};
+        CHECK(result == 0);
+    }
     const int expected = (flags & MFD_ALLOW_SEALING) ? seals : F_SEAL_SEAL;
     CHECK(::fcntl(fd.value, F_GET_SEALS) == expected);
     return keep_away_from_inherited_slot(std::move(fd));
@@ -243,6 +269,9 @@ int main() {
             ScratchArena::detach();
             CHECK(ScratchArena::attached() == nullptr);
             std::printf("PASS %s\n", name.c_str());
+        } catch (const UnsupportedExecSeal&) {
+            std::printf("SKIP %s: F_ADD_SEALS rejected F_SEAL_EXEC with EINVAL "
+                        "(kernel before 6.3)\n", name.c_str());
         } catch (const std::exception& failure) {
             ++failures;
             std::fprintf(stderr, "FAIL %s: %s\n", name.c_str(), failure.what());
@@ -268,6 +297,22 @@ int main() {
         run("d/jailed/shrink-only", [&] { attachment_case(shrink, "1", false); });
         run("d/jailed/grow-shrink-without-seal", [&] {
             attachment_case(mutable_seals, "1", false);
+        });
+        for (const char* profile : {"1", "0", static_cast<const char*>(nullptr)}) {
+            const std::string profile_name = !profile ? "unset/"
+                : std::strcmp(profile, "1") == 0 ? "jailed/" : "zero/";
+            run("e/" + profile_name + "write-sealed-refused", [&] {
+                auto backing = memfd_backing(MFD_ALLOW_SEALING, kSeals | F_SEAL_WRITE);
+                attachment_case(backing, profile, false);
+            });
+            run("f/" + profile_name + "future-write-sealed-refused", [&] {
+                auto backing = memfd_backing(MFD_ALLOW_SEALING, kSeals | kFutureWriteSeal);
+                attachment_case(backing, profile, false);
+            });
+        }
+        run("g/jailed/exec-sealed-admitted", [&] {
+            auto backing = memfd_backing(MFD_ALLOW_SEALING, kSeals | kExecSeal);
+            attachment_case(backing, "1", true, ScratchArenaBackend::sealed_memfd);
         });
         run("e/jailed/ordinary-file", [&] { attachment_case(regular, "1", false); });
         for (const char* profile : {static_cast<const char*>(nullptr), "0"}) {

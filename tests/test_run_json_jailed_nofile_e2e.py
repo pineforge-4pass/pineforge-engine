@@ -4,8 +4,10 @@ CTest builds the unchanged WIDE corpus probe. The jailed children use the real
 run_json profile, table setter and arena admission. Only the unjailed reference
 and negative control suppress the Python report-sink factory, as that profile
 has no sink-OFF CLI switch. No ctypes loader or native export is replaced.
-The child environment is APP's allowlist plus FD/BYTES for an arena; no caller
-sets PF_SCRATCH_ARENA_JAILED, including for the admitted sealed arena.
+This proves the ENGINE contract for future APP wiring: APP today neither
+supplies FD/BYTES nor selects the jailed profile. The fixture selects that
+profile explicitly and adds FD/BYTES to exactly APP's environment allowlist;
+no caller sets PF_SCRATCH_ARENA_JAILED, including for the admitted sealed arena.
 """
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
 F_SEAL_SEAL = getattr(fcntl, "F_SEAL_SEAL", 0x0001)
 F_SEAL_SHRINK = getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
 F_SEAL_GROW = getattr(fcntl, "F_SEAL_GROW", 0x0004)
+F_SEAL_WRITE = getattr(fcntl, "F_SEAL_WRITE", 0x0008)
 # Use the line's hosting default, not a guessed bound for an unavailable FACTS
 # record: test_arena_bound.py:47-49 and docs/design/arena-bound.md:82-87.
 ARENA_BYTES = 1 << 30
@@ -47,10 +50,13 @@ CONSTRAINTS_OK = "CR281 constraints: RLIMIT_FSIZE=0/0 SIGXFSZ=SIG_IGN write=EFBI
 ARENA_OK = f"CR281 arena: fd=5 bytes={ARENA_BYTES} seals=GROW|SHRINK|SEAL pwrite=EFBIG"
 NO_ARENA_OK = "CR281 arena: fd=5 absent"
 FILE_ARENA_OK = f"CR267 arena: fd=5 bytes={ARENA_BYTES} backing=regular_file pwrite=EFBIG"
+WRITE_ARENA_OK = (
+    f"CR267 arena: fd=5 bytes={ARENA_BYTES} seals=GROW|SHRINK|SEAL|WRITE pwrite=EFBIG")
 ARENA_RECEIPTS = {
     None: NO_ARENA_OK,
     "sealed_memfd": ARENA_OK,
     "regular_file": FILE_ARENA_OK,
+    "write_sealed_memfd": WRITE_ARENA_OK,
 }
 TRACE_CALL = re.compile(r"^(openat|open|creat|memfd_create)\(")
 TRACE_PREFIX = re.compile(r"^(?:(?:\[pid\s+(\d+)\]|(\d+))\s+)?(.*)$")
@@ -66,8 +72,9 @@ def _library():
 
 
 def _child_environment(cwd, temporary, *, profile, arena):
-    # Exactly APP's allowlist, with explicit repo paths instead of inherited
-    # settings. -B on the child command prevents bytecode writes.
+    # Future APP wiring: its exact allowlist, explicit repo paths, and optional
+    # FD/BYTES below. APP today supplies neither an arena nor a jailed profile.
+    # -B on the child command prevents bytecode writes.
     environment = {
         "PATH": os.defpath,
         "PYTHONPATH": str(ROOT / "docker"),
@@ -109,14 +116,14 @@ def _memfd_create(name, flags):
     return fd
 
 
-def _new_arena():
+def _new_arena(*, extra_seals=0):
     # MFD_CLOEXEC = 1, MFD_ALLOW_SEALING = 2 (linux/memfd.h).
     fd = _keep_above_arena_slot(_memfd_create("pineforge-cr281-arena", 1 | 2))
     try:
         # All sizing/sealing is parent-side, BEFORE the child's zero limit.
         # The engine writes shared mappings; it never write/pwrites this fd.
         os.ftruncate(fd, ARENA_BYTES)
-        seals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL
+        seals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL | extra_seals
         fcntl.fcntl(fd, F_ADD_SEALS, seals)
         assert fcntl.fcntl(fd, F_GET_SEALS) == seals
         assert os.fstat(fd).st_size == ARENA_BYTES
@@ -154,7 +161,7 @@ def _new_file_arena(path):
 
 def _install_arena(source_fd, *, arena):
     if source_fd >= 0:
-        assert arena in ("sealed_memfd", "regular_file")
+        assert arena in ("sealed_memfd", "regular_file", "write_sealed_memfd")
         assert source_fd > ARENA_FD
         # pass_fds preserves the parent's backing across subprocess's fd
         # cleanup. Remap here, rather than risking a preexec dup being closed
@@ -163,8 +170,10 @@ def _install_arena(source_fd, *, arena):
         os.close(source_fd)
         status = os.fstat(ARENA_FD)
         assert stat.S_ISREG(status.st_mode) and status.st_size == ARENA_BYTES
-        if arena == "sealed_memfd":
+        if arena in ("sealed_memfd", "write_sealed_memfd"):
             seals = F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL
+            if arena == "write_sealed_memfd":
+                seals |= F_SEAL_WRITE
             assert fcntl.fcntl(ARENA_FD, F_GET_SEALS) == seals
         else:
             _assert_regular_arena(ARENA_FD)
@@ -224,7 +233,7 @@ def _check_child_constraints(canary_fd, *, profile, arena):
     finally:
         os.close(canary_fd)  # The write canary never reaches the engine.
     if arena:
-        # Even an in-size pwrite to either backing is forbidden at FSIZE=0.
+        # Even an in-size pwrite to an arena is forbidden at FSIZE=0.
         # Successful native execution must use the real arena's MAP_SHARED
         # copies (scratch_arena.cpp), not a relaxed limit or syscall writes.
         _expect_efbig(ARENA_FD, positional=True)
@@ -279,8 +288,9 @@ def _run_child(tmp_path, name, library, tape, *, profile, restricted, arena=None
             canary_fd = _keep_above_arena_slot(os.open(
                 canary, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600))
             canary.chmod(0o444)
-        if arena == "sealed_memfd":
-            arena_fd = _new_arena()
+        if arena in ("sealed_memfd", "write_sealed_memfd"):
+            arena_fd = _new_arena(
+                extra_seals=F_SEAL_WRITE if arena == "write_sealed_memfd" else 0)
         elif arena == "regular_file":
             arena_fd = _new_file_arena(directory / "ordinary-arena")
         command = [sys.executable, "-B", str(Path(__file__).resolve()),
@@ -523,6 +533,23 @@ def test_d_real_jailed_ordinary_file_arena_refuses_without_caller_jailed_flag(tm
         if tracer:
             _assert_no_scratch_opens(refused.stderr, library, tape)
         print(f"CR267 CHECK (d) PASS: ordinary-file fd 5; no caller jailed flag; "
+              f"exit=1 code={failure['code']} args={failure['args']} "
+              f"reason={failure['reason']}; no report body/trades; "
+              "cwd=empty TMPDIR=empty", flush=True)
+
+
+def test_e_real_jailed_write_sealed_arena_refuses_before_execution_without_caller_jailed_flag(
+        tmp_path):
+    tracer = _tracer()
+    with _inputs(tmp_path) as (library, tape):
+        refused, census = _run_child(tmp_path, "jailed-write-sealed-arena", library, tape,
+                                     profile="jailed", restricted=True,
+                                     arena="write_sealed_memfd", tracer=tracer)
+        failure = _failure(refused, "report_sink_failed", {"reason": "arena_backing"})
+        assert census == {"cwd": [], "TMPDIR": []}, census
+        if tracer:
+            _assert_no_scratch_opens(refused.stderr, library, tape)
+        print(f"CR267 CHECK (e) PASS: WRITE-sealed memfd 5; no caller jailed flag; "
               f"exit=1 code={failure['code']} args={failure['args']} "
               f"reason={failure['reason']}; no report body/trades; "
               "cwd=empty TMPDIR=empty", flush=True)
