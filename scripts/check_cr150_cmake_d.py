@@ -12,6 +12,27 @@ ROOT = Path(__file__).resolve().parent.parent
 CMAKE = ROOT / "tests" / "CMakeLists.txt"
 LANE_DIR = ROOT / "tests" / "cr150.d"
 README = LANE_DIR / "README.md"
+FAST_TEST_REGISTRATION = '''foreach(_pf_fast_test IN LISTS PINEFORGE_PR_FAST_TESTS)
+    if(PINEFORGE_BUILD_SOURCE_LAYER AND (NOT TEST ${_pf_fast_test} OR NOT TARGET ${_pf_fast_test}))
+        message(FATAL_ERROR "PR fast row or executable is missing: ${_pf_fast_test}")
+    endif()
+    if(TEST ${_pf_fast_test})
+        get_test_property(${_pf_fast_test} DISABLED _pf_fast_disabled)
+        get_test_property(${_pf_fast_test} SKIP_RETURN_CODE _pf_fast_skip_code)
+        get_test_property(${_pf_fast_test} SKIP_REGULAR_EXPRESSION _pf_fast_skip_regex)
+        get_test_property(${_pf_fast_test} LABELS _pf_fast_labels)
+        if(_pf_fast_disabled OR NOT _pf_fast_skip_code STREQUAL "NOTFOUND"
+                OR NOT _pf_fast_skip_regex STREQUAL "NOTFOUND"
+                OR "slow" IN_LIST _pf_fast_labels OR "private_fixtures" IN_LIST _pf_fast_labels)
+            message(FATAL_ERROR "PR fast row must execute without skips: ${_pf_fast_test}")
+        endif()
+        set_property(TEST ${_pf_fast_test} APPEND PROPERTY LABELS fast)
+    endif()
+endforeach()
+if(PINEFORGE_BUILD_SOURCE_LAYER)
+    add_custom_target(pineforge_pr_smoke DEPENDS ${PINEFORGE_PR_FAST_TESTS})
+endif()
+'''
 ALLOWED_TEST_PROPERTIES = frozenset({
     "LABELS", "SKIP_RETURN_CODE", "TIMEOUT", "RUN_SERIAL", "DEPENDS",
 })
@@ -374,7 +395,10 @@ def _fences(text: str, markers: list[FenceMarker]) -> list[Fence]:
             active = None
     if active is not None:
         raise CheckFailure(f"{CMAKE}:{active.line}: missing end fence for {active.lane}")
-    _no_unfenced_statements(text, previous_end, len(text))
+    tail_code = " ".join(_without_comments(text[previous_end:], bracket_comments=True).split())
+    fast_code = " ".join(_without_comments(FAST_TEST_REGISTRATION, bracket_comments=True).split())
+    if tail_code != fast_code:
+        _no_unfenced_statements(text, previous_end, len(text))
     return fences
 
 

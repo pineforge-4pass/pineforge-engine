@@ -1401,6 +1401,25 @@ exit "$lookup_exit"
                 self.assertIn('PR fast rows must keep one pinned CMake label list and executable build target',
                               findings)
 
+    def test_fast_rows_refuse_property_writes_after_the_registration_block(self):
+        sources = self.ci_sources()
+        cmake = sources[3]
+        finding = 'PR fast rows must keep one pinned CMake label list and executable build target'
+        self.assertIn('test_ta', ci_preflight.fast_rows(cmake))
+        self.assertNotIn(finding, ci_workflow_findings(*sources, others=self.other_sources()))
+        self.assertNotIn(
+            finding, self.mutated_file_findings(
+                3, None, cmake, cmake + '\n# A comment after registration is harmless.\n'))
+        for statement in (
+                'set_tests_properties(test_ta PROPERTIES LABELS "cr999")',
+                'set_tests_properties(test_ta PROPERTIES SKIP_RETURN_CODE 77)',
+                'set_property(TEST test_ta APPEND PROPERTY LABELS "cr999")',
+                'add_test(NAME test_ta_x COMMAND true)'):
+            with self.subTest(statement=statement):
+                findings = self.mutated_file_findings(
+                    3, None, cmake, cmake + '\n' + statement + '\n')
+                self.assertIn(finding, findings)
+
     def test_reusable_heavy_profiles_keep_full_populations_and_dispatch(self):
         for before, after in (
                 ('  workflow_dispatch:\n', ''),

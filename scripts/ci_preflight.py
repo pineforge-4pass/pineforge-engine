@@ -1464,7 +1464,7 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
         rows = []
     if (hashlib.sha256(('\n'.join(rows) + '\n').encode()).hexdigest() != PR_FAST_ROWS_SHA256
             or cmake.count('APPEND PROPERTY LABELS fast') != 1
-            or '\n'.join(_code(cmake)).count('\n'.join(_code(FAST_TEST_REGISTRATION))) != 1):
+            or _code(cmake)[-len(_code(FAST_TEST_REGISTRATION)):] != _code(FAST_TEST_REGISTRATION)):
         findings.append('PR fast rows must keep one pinned CMake label list and executable build target')
     return list(dict.fromkeys(findings))
 
