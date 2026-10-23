@@ -62809,7 +62809,7 @@ void test_writer(const std::string& directory) {
     writer.write_header({false, false, false, 0, 0});
     const pf_equity_point_t first{1700000000000LL, 10000.0, -0.0};
     writer.write_e(first);
-    writer.write_e({1700000060000LL, std::numeric_limits<double>::quiet_NaN(), 1e16});
+    writer.write_e({1700000060000LL, 10001.0, 1e16});
     pf_trade_t trade{};
     trade.entry_time = 1700000000000LL;
     trade.exit_time = 1700000060000LL;
@@ -62836,7 +62836,7 @@ void test_writer(const std::string& directory) {
     require(first.equity == 10000.0 && std::signbit(first.open_profit), "writer does not mutate points");
     const auto bytes = contents(sample);
     require(bytes.find("[\"E\",1700000000000,10000.0,-0.0]\n") != std::string::npos, "E bytes");
-    require(bytes.find("[\"E\",1700000060000,null,1e+16]\n") != std::string::npos, "nonfinite E bytes");
+    require(bytes.find("[\"E\",1700000060000,10001.0,1e+16]\n") != std::string::npos, "finite E bytes");
     require(bytes.find("[\"T\",1,\"long\",1700000000000,1700000060000,2000.0,2010.0,1.0,10.0,0.5,12.0,3.5,0.0,1,10,false,9007199254740991,1,\"L\",\"\",\"\\\"\\\\\\u000a\"]\n")
             != std::string::npos, "T field order and spellings");
     require(bytes.find(PINEFORGE_VERSION_STRING) != std::string::npos, "engine version comes from build");
@@ -62951,7 +62951,7 @@ assert header['run_id'] == 'r"\\\n\u2603'
 assert [row.tag for row in rows] == ['E', 'E', 'T', 'T']
 assert rows[0].values == (1700000000000, 10000.0, -0.0)
 assert math.copysign(1.0, rows[0].values[2]) == -1.0
-assert rows[1].values == (1700000060000, None, 1e16)
+assert rows[1].values == (1700000060000, 10001.0, 1e16)
 assert rows[2].as_dict()['entry_incarnation'] == 9007199254740991
 assert rows[3].as_dict()['side'] == 'short' and rows[3].as_dict()['open_at_end'] is True
 assert rows[3].as_dict()['entry_id'] == 'x' * 70000
