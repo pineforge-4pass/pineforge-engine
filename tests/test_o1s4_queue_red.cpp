@@ -1214,13 +1214,48 @@ std::array<no::RequestHandle, 2> populate_pending_read_bound(
 }
 
 void s4_roster_scan_read_bound_red() {
+    namespace ws = ::pineforge::detail::working_store;
     constexpr std::array<std::size_t, 2> populations{{17, 65}};
-    std::array<std::uint64_t, 2> append_reads{}, erase_reads{};
+    std::array<std::uint64_t, 2> append_reads{}, erase_reads{}, geometry_reads{};
+    // scratch_store_impl.hpp:68,178-184: U=512-16=496, ordered leaf=58,
+    // node=29 separators (30 children), radix leaf/node=15/60. Depth/height
+    // two can hold at most 58*30=1740 live keys / 15*60=900 issued handles.
+    constexpr std::uint64_t usable = page_bytes - 16;
+    constexpr std::uint64_t ordered_leaf = (usable - 32) / 8;
+    constexpr std::uint64_t ordered_node = (usable - 24) / 16;
+    constexpr std::uint64_t radix_leaf = (usable - 16) / 32;
+    constexpr std::uint64_t radix_node = (usable - 16) / 8;
+    // Ascending splits leave 30 keys / 16 children on the left
+    // (scratch_store_impl.hpp:908-930,977-999). Populate 17 such child groups:
+    // 30*16*17+1=8161 rows, plus the version allocator, yield 272 leaves and
+    // 16 root separators. This also avoids the root-search step at 15 keys
+    // (scratch_store_impl.hpp:800-810); lower-key subject inserts have room
+    // before the next root split, instead of starting just above depth two.
+    constexpr auto leaf_split = (ordered_leaf + 2) / 2;
+    constexpr auto child_split = (ordered_node + 1) / 2 + 1;
+    constexpr auto filler_rows = leaf_split * child_split * (child_split + 1) + 1;
+    static_assert(filler_rows > ordered_leaf * (ordered_node + 1)
+                      && filler_rows > radix_leaf * radix_node,
+                  "the live filler forces both store trees past height two");
+    constexpr auto filler_domain = std::numeric_limits<std::uint64_t>::max();
+    constexpr auto filler_owner = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t canonical_bytes = 0;
     for (std::size_t sample = 0; sample < populations.size(); ++sample) {
         const auto n = populations[sample];
         Rig rig;
         ScratchStore store(rig.config(), &rig.backing);
+        // An independent fixture owner, never named by the adapter. Empty
+        // values need one root and no payload chunks (working_store.hpp:418,
+        // 518-531), so the filler cardinality follows the geometry above.
+        // Keep every even key live for this sample; the odd probe is absent.
+        WorkingRowTable<std::monostate> filler;
+        filler.bind(store, filler_domain, filler_owner);
+        ws::transaction(store, [&] {
+            for (std::uint64_t i = 1; i <= filler_rows; ++i)
+                filler.put(2 * i, std::monostate{});
+        });
+        const auto anchor = ws::find(store, {filler_domain, filler_owner, 2});
+        require(anchor != 0, "geometry filler has a live anchor");
         Subject s(store);
         std::vector<no::RequestHandle> handles;
         ps::PlacementSnapshot snapshot;
@@ -1237,6 +1272,24 @@ void s4_roster_scan_read_bound_red() {
         s.retire_handle(warm);
         s.projection(ProjectionEdit::erase, warm);
         s.cancel(warm);
+
+        // point traverses three radix pages through two slots, leaving the
+        // same two anchor pages before each isolated probe (impl:693-703).
+        ScratchRecordInfo anchor_info{};
+        status_is(store.point(anchor, anchor_info), ScratchStatus::ok,
+                  "geometry filler stays live before the charged calls");
+        // The base has this contains API: working_row_table.hpp:123-125 calls
+        // one working_store::find (working_store.hpp:139-144), the same single
+        // lower_bound/equality path as PendingRoster::find_identity
+        // (pending_roster_impl.hpp:203-210). No row pin or payload is decoded.
+        const auto geometry_before = store.stats().page_reads;
+        const bool found = filler.contains(2 * filler_rows - 1);
+        geometry_reads[sample] = store.stats().page_reads - geometry_before;
+        require(!found && geometry_reads[sample] != 0,
+                "geometry probe proves an absent key through actual store reads");
+        if (sample != 0)
+            require(geometry_reads[sample] == geometry_reads[0],
+                    "store geometry was not pinned across roster populations");
 
         const auto append_before = store.stats().page_reads;
         const auto extra = s.submit(limit_order(1.0, 62.0));
@@ -1258,13 +1311,14 @@ void s4_roster_scan_read_bound_red() {
             ::pineforge::detail::working_store::Source<ps::PlacementSnapshot>(snapshot).size()
             + ::pineforge::detail::working_store::Source<no::Request>(
                 limit_order(1.0, 62.0)).size());
-        std::printf("roster-scan-read-bound n=%zu append_reads=%llu erase_reads=%llu\n", n,
+        std::printf("roster-scan-read-bound n=%zu geometry_reads=%llu append_reads=%llu erase_reads=%llu\n", n,
+                    static_cast<unsigned long long>(geometry_reads[sample]),
                     static_cast<unsigned long long>(append_reads[sample]),
                     static_cast<unsigned long long>(erase_reads[sample]));
         std::fflush(stdout);
     }
     // Reuse s4_pending_size_read_bound_red's geometry: 512-byte pages, two
-    // slots, d,h<=3, ordered capacities 58/29 and radix capacities 14/60.
+    // slots, pinned d=h=3, ordered capacities 58/29 and radix capacities 15/60.
     // L=2*d+2+[5*(d-1)+7]*(h+2)+2*h+1=100 bounds one 32-byte key find.
     // C(S)=2*h+2*ceil(S/56)+4 bounds a direct fixed-record load; reserve S=128.
     // An AVL of height 9 needs at least 88 names (the 1,2,4,7,... recurrence),
