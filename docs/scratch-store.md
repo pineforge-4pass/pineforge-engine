@@ -87,6 +87,19 @@ Anything else leaves `status()` at `programming_error` and performs no I/O.
 Cache and slot counts are not part of the stored format: a reopen may use
 different ones.
 
+### Resident bound of the parent-terminal drain (native order)
+
+This is a bound of the native request core, not of `CommandScratchStore`: the
+parent-terminal drain holds at most about 8.4 MB of resident definitions at the
+caps (book 4,096 + journal 16,384 events), constant, independent of symbols,
+window and trades. The test pins it as `kDrainPlateauBytes` (8,428,196 B on the
+GNU 13.4 x86-64 sizes, a per-engine figure derived from the caps and the
+allocation sizes in `tests/test_parent_terminal_scratch.cpp`). Below it the drain
+is held to 4,096 B for every population up to 8,191, where the resident journal
+events own the definitions the spilled book rows need (the definition reuse in
+`BookSpill::read`); beyond that the original definitions are spilled with their
+events and the plateau applies until the non-owning terminal path (CR-262) lands.
+
 ## Transactions, rollback and commit
 
 One transaction is active at a time. `begin` snapshots the logical state
