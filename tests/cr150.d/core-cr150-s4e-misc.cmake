@@ -3,6 +3,7 @@ add_test(NAME test_s4e_run_failure_code_numbers COMMAND ${Python3_EXECUTABLE} -B
 add_test(NAME test_s4e_ci_guard_gaps COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/tests/test_s4e_ci_guard_gaps.py)
 if(UNIX)
     add_test(NAME test_s4e_converter_metadata COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/docker/run_json_converter_metadata_test.py)
+    add_test(NAME test_s4e_converter_session COMMAND ${Python3_EXECUTABLE} -B -m pytest -q -p no:cacheprovider ${PROJECT_SOURCE_DIR}/docker/run_json_converter_session_test.py)
 endif()
 if(PINEFORGE_BUILD_SOURCE_LAYER AND UNIX)
     list(APPEND TEST_SOURCES test_exit_scratch_scope_teardown_fault)
