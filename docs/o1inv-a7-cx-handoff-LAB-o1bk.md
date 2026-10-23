@@ -9,7 +9,7 @@ The exact per-file change list is:
 
 | File | Change |
 | --- | --- |
-| `src/source/pine_command_scratch_production.cpp` | New production factory and exclusive POSIX file backing: `mkstemp`, immediate `unlink`, close-on-exec, checked positional I/O, sparse extension, real durability calls, errno status mapping, and observer registration. |
+| `src/command_scratch_production.cpp` (moved out of the source layer by `c6f7fb23` to share the factory with the independent kernel) | New production factory and exclusive POSIX file backing: `mkstemp`, immediate `unlink`, close-on-exec, checked positional I/O, sparse extension, real durability calls, errno status mapping, and observer registration. |
 | `src/source/pine_command_scratch_production.hpp` | New factory declaration, observer registration hook, directory/default documentation, geometry/error and observer lifetime contracts. |
 | `tests/test_o1bk_production_backing.cpp` | New executable with seven named cases, using the library factory without any fixture lease or replacement definition. |
 | `CMakeLists.txt` | One source registration line in `PINEFORGE_SOURCE_LAYER_SOURCES`. |

@@ -33,7 +33,7 @@ The separate PineForge compiler, [`pineforge-codegen`](https://github.com/pinefo
 - **Open runtime.** The engine and native live runner are Apache-2.0. The separately distributed [PineForge compiler](https://github.com/pineforge-4pass/pineforge-codegen-oss/blob/main/LICENSE) is source-available under the PineForge Source License 1.2 from its release 1.3.0 (release 1.2.0 keeps the PineForge Source License 1.1, and releases up to 1.1.0 keep the PolyForm Noncommercial terms they shipped with); personal trading is free, and commercial use requires a separate license; the capital in an account a proprietary-trading firm or funded-trader program provides or allocates, including a challenge, evaluation or simulated account, is investment capital. Public reference strategies, benchmarks and validation tooling are available in their respective repositories; the community-script test set is not redistributed.
 - **Fast.** In-process, no interpreter: median **36× faster than PyneCore** on the 200 strategies both engines time (100 corpus probes and 100 held-out private strategies), measured at engine `35db01c8` on 2026-09-29 on an AWS c7a.8xlarge with PyneCore timed as a subprocess, its interpreter start-up included (PineForge runs a median 807k bars/s per strategy over its 201 slots with the bar magnifier on; [method](benchmarks/results/speed.md)). Parameter sweeps re-run a loaded `.so` with new inputs — no recompile, no fork.
 - **Deterministic to the bit.** Two runs with the same inputs produce identical trade lists. Same on Linux and macOS.
-- **Yours to embed.** 156 `PF_API` declarations across six installed headers — `pineforge.h`'s 100 (80 of the 91 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
+- **Yours to embed.** 158 `PF_API` declarations across six installed headers — `pineforge.h`'s 102 (82 of the 93 runtime exports and up to 20 per-strategy functions a generated module defines), eleven more runtime declarations in `execution_observer.h`, `selected_window.h` and `report_sink.h` (three, three and five), `native_c_api.h`'s 43 native-host declarations and `selected_window_plan.h`'s two planner declarations — an ABI that is append-only within a major version from 1.0 on. Call it from C, Python, Rust, Go, Node, Julia — or let an AI agent drive it over MCP.
 
 Recorded outputs and their additional API declarations described here are
 part of **1.5.0**.
@@ -538,11 +538,11 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 The counts below describe the current API, including recorded outputs, the report sink and scratch-table selection; recorded outputs are not part of 1.4.0.
 
-A newly generated strategy `.so` exposes 107 compiled-strategy `PF_API` declarations
-(91 runtime implementations plus sixteen generated exports) plus 43 native-host
-declarations: 150 `PF_API` exports in total; `use_bar_magnifier = true` adds
+A newly generated strategy `.so` exposes 109 compiled-strategy `PF_API` declarations
+(93 runtime implementations plus sixteen generated exports) plus 43 native-host
+declarations: 152 `PF_API` exports in total; `use_bar_magnifier = true` adds
 `strategy_declares_bar_magnifier` and a module that records [outputs](docs/outputs.md) its
-three outputs exports, bringing the inventories to at most 111 and 154. Older modules lack the six opt-in
+three outputs exports, bringing the inventories to at most 113 and 156. Older modules lack the six opt-in
 [checked-settings exports](docs/checked-settings.md). Older modules can also lack
 the two opt-in [execution-capability exports](docs/strategy-capabilities.md).
 In an optimized build `nm -gU` also shows libc++'s

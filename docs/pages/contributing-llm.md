@@ -261,15 +261,15 @@ decision, and removing one is a regression:
 
 **kernel** — the Pine-agnostic half of the engine: matching, fills, sizing,
 margin, settlement, indicators, calendars. Buildable alone as
-`PineForge::kernel` CMakeLists.txt:165 with `PINEFORGE_BUILD_SOURCE_LAYER`
+`PineForge::kernel` CMakeLists.txt:173 with `PINEFORGE_BUILD_SOURCE_LAYER`
 CMakeLists.txt:43 off.
 
 **adapter** — `src/source/` and `src/compat/pine/`: the TradingView-parity
 policy layer that *uses* kernel features. Where every TradingView rule lives.
 
 **front door** — one of the three ways in: PineScript through codegen, C++
-through `NativeStrategyHost` native_host.hpp:845, or C through the
-`strategy_native_*` surface (`strategy_native_host_create_v1` native_c_api.h:2682).
+through `NativeStrategyHost` native_host.hpp:865, or C through the
+`strategy_native_*` surface (`strategy_native_host_create_v1` native_c_api.h:2688).
 
 **twin** — a test unit compiled twice, once against a frozen historical header
 closure and once against the current one, so a behaviour change has to be
