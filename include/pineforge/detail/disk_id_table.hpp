@@ -68,6 +68,9 @@ public:
     Offset first_inserted() const noexcept { return first_; }
     Offset next_inserted(Offset at) const { return links(at).next; }
     std::string key(Offset at) const { return read_key(at, links(at)); }
+    void key(Offset at, std::string& destination) const {
+        read_key(at, links(at), destination);
+    }
     Offset first_sorted() const { return leftmost(root_); }
     Offset next_sorted(Offset at) const {
         auto row = links(at);
@@ -87,7 +90,7 @@ public:
         Offset at = root_;
         while (at != 0) {
             const auto row = links(at);
-            const int order = key.compare(read_key(at, row));
+            const int order = compare_key(key, at, row);
             if (order == 0) return at;
             at = order < 0 ? row.left : row.right;
         }
@@ -139,7 +142,7 @@ public:
         bool left = false;
         while (at != 0) {
             const auto row = links(at);
-            const int order = key.compare(read_key(at, row));
+            const int order = compare_key(key, at, row);
             if (order == 0) return {at, false};
             parent = at;
             left = order < 0;
@@ -242,12 +245,33 @@ private:
         return row;
     }
     void put_links(Offset at, const Links& row) { file_.write(at, &row, sizeof row); }
+    int compare_key(const std::string& key, Offset at, const Links& row) const {
+        // D-04: searches borrow a fixed window, never an allocated node key.
+        // char_traits preserves std::string's unsigned byte order and NULs.
+        char bytes[256];
+        const auto common = std::min<std::uint64_t>(key.size(), row.key_size);
+        std::uint64_t offset = 0;
+        while (offset < common) {
+            const auto count = static_cast<std::size_t>(
+                std::min<std::uint64_t>(sizeof bytes, common - offset));
+            file_.read(at + sizeof(Links) + sizeof(Value) + offset, bytes, count);
+            const int order = std::char_traits<char>::compare(key.data() + offset, bytes, count);
+            if (order != 0) return order;
+            offset += count;
+        }
+        if (key.size() == row.key_size) return 0;
+        return key.size() < row.key_size ? -1 : 1;
+    }
     std::string read_key(Offset at, const Links& row) const {
+        std::string key;
+        read_key(at, row, key);
+        return key;
+    }
+    void read_key(Offset at, const Links& row, std::string& key) const {
         if (row.key_size > std::string{}.max_size())
             io_error(EFBIG, "scratch id key too long");
-        std::string key(static_cast<std::size_t>(row.key_size), '\0');
+        key.resize(static_cast<std::size_t>(row.key_size));
         file_.read(at + sizeof(Links) + sizeof(Value), key.data(), key.size());
-        return key;
     }
     std::uint64_t height(Offset at) const { return at == 0 ? 0 : links(at).height; }
     void refresh(Links& row) const { row.height = 1 + std::max(height(row.left), height(row.right)); }

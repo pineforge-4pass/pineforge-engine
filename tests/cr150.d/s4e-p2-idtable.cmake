@@ -1,0 +1,6 @@
+list(APPEND TEST_SOURCES test_disk_id_table_find_is_allocation_free)
+pineforge_add_unit_test(test_disk_id_table_find_is_allocation_free)
+list(APPEND TEST_SOURCES test_cohort_hash_walk_writes_nothing)
+pineforge_add_unit_test(test_cohort_hash_walk_writes_nothing)
+list(APPEND TEST_SOURCES test_resident_cohort_scan_linear)
+pineforge_add_unit_test(test_resident_cohort_scan_linear)
