@@ -1,295 +1,364 @@
-# SEC846 engine lane handoff
+# SEC846 engine handoff, corrected by SEC846E
 
-HEAD/base: `0212cabe2d87e64b9656791ade118be0bdee01bc`.
-The changes are an unstaged worktree diff for the supervisor to commit.
-No repository code, parser, workflow, script, build or test was executed.
-Canon read: `/Users/haoliangwen/.config/laneboss/orgs/pineforge/ci-labels.md`,
-sections "The `authz` job" and "The required aggregate job".
-Addendum 2 supersedes the first pass's unmerged-close ordering. Short
-Addendum 4 supersedes the old association/bot-only author refusal with the
-16:02 canon's author-permission fallback; its nested case, comment, lookup
-and refusal wording are copied without modification. This lane edits only
-the engine worktree; the codegen and workflow-template lanes must supply
-their own repo-specific reports and edits.
+Edit-only work is complete in the engine lane. Validation is **NOT RUN**.
+HEAD remains `dcbdc1f16fb9ddec6bb4e01b084ca6a057762b3f` on
+`ci/sec846-engine`; the supervisor's merge of origin/main
+`3a0d1504fd1b7b754ca08fb4fbdbaa7cecb2bbd6` remains in progress.
+No index, branch, history or remote was changed by this lane.
 
-Tracked worktree scope from read-only `git diff --stat` (includes the
-existing first and second passes and these Addendum 4 edits):
+This is the full replacement for root REPORT-SEC846.md. The supervisor must
+install it and COMMIT-MSG-SEC846.new.md; the root handoff files were read but
+not edited. Earlier claims that they were untracked, that HEAD was the
+pre-SEC846 base, or that both promotion jobs remained hosted are superseded.
 
-```text
- .github/workflows/promote-baseline.yml |  59 ++++++
- README.md                              |   5 +
- docs/ci.md                             |  22 +-
- scripts/ci_preflight.py                |  65 +++++-
- scripts/test_ci_preflight.py           | 356 ++++++++++++++++++++++++++++++++-
- 5 files changed, 501 insertions(+), 6 deletions(-)
-```
-
-The two additional root files, `COMMIT-MSG-SEC846.md` and this report,
-remain untracked. HEAD is still the base; no commit or staged diff exists.
+Read in order: the SEC846 base brief, Addendum 2, Addendum 4, the permitted
+ci-labels.md canon, and READ-CODEX12.md. The current author case, including
+its private-membership comment and permission fallback, remains verbatim.
 
 ## PR BODY
 
-`.github/workflows/promote-baseline.yml` runs in the base repository on
-`pull_request_target` with `types: [closed]`
-(`.github/workflows/promote-baseline.yml:69`, line 70) and on
-`workflow_dispatch` (`.github/workflows/promote-baseline.yml:74`).
-Its credential job previously had no head-repository and actor authorization
-dependency. Add `promote-guard` as the first job and require
-`needs: [promote-guard]` on `promote`.
-The author case now copies the updated canon: a private organization member
-reported as `CONTRIBUTOR` can proceed with GitHub-confirmed write access.
+`.github/workflows/promote-baseline.yml:69` uses
+`pull_request_target: types: [closed]`; line 74 also allows
+`workflow_dispatch`. A new first job, `promote-guard` at line 103, must
+succeed before the credential job: line 162 is `needs: [promote-guard]`.
+Its empty job-level permissions at line 106 override workflow permissions.
+It has no checkout, repository secret or OIDC use. GH_TOKEN at line 120
+is github.token for author and merger metadata permission reads.
 
-Credential locations in the edited workflow:
-
-| Credential or permission | File:line | Job |
+| Credential or permission | File:line | Scope |
 | --- | --- | --- |
-| `id-token: write` | `.github/workflows/promote-baseline.yml:100` | Workflow grant retained for `promote`; guard overrides with `permissions: {}` at line 106 |
-| `secrets.PINEFORGE_APP_ID` | `.github/workflows/promote-baseline.yml:252` | `promote`, org App token mint |
-| `secrets.PINEFORGE_APP_PRIVATE_KEY` | `.github/workflows/promote-baseline.yml:253` | `promote`, org App token mint |
-| GCP OIDC authentication | `.github/workflows/promote-baseline.yml:274` | `promote`, existing Google auth action |
-| GCP provider and service account | `.github/workflows/promote-baseline.yml:276` and `.github/workflows/promote-baseline.yml:277` | Existing OIDC identity inputs |
+| `id-token: write` | `.github/workflows/promote-baseline.yml:100` | Workflow grant retained for `promote`; overridden by guard permissions |
+| `secrets.PINEFORGE_APP_ID` | `.github/workflows/promote-baseline.yml:252` | Existing App token step |
+| `secrets.PINEFORGE_APP_PRIVATE_KEY` | `.github/workflows/promote-baseline.yml:253` | Existing App token step |
+| Google OIDC authentication | `.github/workflows/promote-baseline.yml:274` | Existing auth action |
+| Provider / service account variables | `.github/workflows/promote-baseline.yml:276` | Existing identity inputs; service account at line 277 |
 
-The guard uses `ubuntu-latest`, matching `promote`, with `permissions: {}`,
-no checkout, no `secrets.` access and no `id-token` use. Its only token
-binding is `GH_TOKEN: ${{ github.token }}` for the metadata permission reads.
-Its empty job-level permissions override the workflow's `contents: read`,
-`statuses: read`, `checks: read` and `id-token: write`; those grants do not
-apply to the guard. `promote` waits only on `[promote-guard]`
-(`.github/workflows/promote-baseline.yml:162`) and its existing job condition.
+Every close first checks head-repository equality and the exact false fork
+flag, then author authorization, including the canon permission fallback.
+OWNER, MEMBER, COLLABORATOR and the two named bots pass the author rule;
+every other author needs admin, maintain or write permission. Failed or
+empty lookups refuse, including an error that printed a permission first.
+This admits a private-member CONTRIBUTOR with write access.
 
-On every PR close, merged or unmerged, the guard first refuses a different
-head repository or a fork head, then checks the author. An author outside
-`OWNER|MEMBER|COLLABORATOR` who is neither `dependabot[bot]` nor
-`pineforge-app[bot]` must have `admin|maintain|write` permission from
-`gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission`.
-This admits private-member `CONTRIBUTOR` authors with write access and
-refuses a non-writer, an empty permission or a failed call. The canon
-comment and refusal wording are retained verbatim. Only after these checks
-does an unmerged close pass without promotion. For a merged PR, an empty
-merger login refuses before a merger lookup; the merger must be one of
-those same bots or have
-`admin|maintain|write` permission from
-`gh api "repos/$REPO/collaborators/$MERGED_BY/permission" --jq .permission`.
-Either lookup refuses on failure or an empty permission; failure after
-printing any permission also refuses. The failed-call fallback appends
-`none`, never a permission that can pass. Author and merger permissions are
-independent: a writer author merged by a reader refuses.
+Only an authorized same-repository unmerged close exits successfully
+without a merger lookup, with summary
+`promote-guard: unmerged pull request; promotion is skipped`.
+The existing merged-only credential condition then skips promotion.
+A merged own PR independently requires a nonempty MERGED_BY and either a
+named bot merger or admin/maintain/write from the merger's own lookup.
+A writer author merged by a reader refuses. The bot list is exactly
+`dependabot[bot] pineforge-app[bot]`. Dispatch passes; every other event
+refuses. An unmerged fork close still fails red.
 
-Exact refusal message templates, as present in the workflow:
+Exact refusal templates in `.github/workflows/promote-baseline.yml:131`,
+line 132, line 144, line 148, line 155 and line 157, respectively:
 
-- `pull request from another repository (${HEAD_REPO:-unknown})`
-- `pull request from a fork`
-- `author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot`
-- `pull_request_target merger is empty`
-- `pull_request_target merger ${MERGED_BY:-unknown} has permission '$perm', not write`
-- `event $EVENT does not run baseline promotion (only pull_request_target and workflow_dispatch are allowed)`
+```text
+pull request from another repository (${HEAD_REPO:-unknown})
+pull request from a fork
+author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot
+pull_request_target merger is empty
+pull_request_target merger ${MERGED_BY:-unknown} has permission '$perm', not write
+event $EVENT does not run baseline promotion (only pull_request_target and workflow_dispatch are allowed)
+```
 
-Each refusal emits `::error title=authz::<message>`, appends
-`authz: REFUSED: <message>` to the step summary, and exits 1. These retain
-the canon's error/summary prefixes even though the job is named
-`promote-guard`. A failed guard prevents `promote` through its new `needs`
-and the existing condition, which contains no status function.
+`fail` emits `::error title=authz::<message>`, appends
+`authz: REFUSED: <message>` and exits 1. The credential condition has no
+status override, so a failed guard prevents it from running.
 
-Manual dispatches are accepted under the canon's write-access event rule.
-An authorised same-repository unmerged close returns success without a
-merger lookup, writes
-`promote-guard: unmerged pull request; promotion is skipped`, and cannot
-start `promote` because its existing merged-or-dispatch condition is retained.
-An unmerged fork close fails red. All other events take the failing default arm.
-
-### Existing merged and base-ref conditions: engine
-
-The original `origin/main` workflow at
-`.github/workflows/promote-baseline.yml:104` already required merged == true
-for the PR path, with dispatch as the alternative. The line is unchanged
-at `.github/workflows/promote-baseline.yml:163`:
+The original merged-or-dispatch condition remains verbatim at
+`.github/workflows/promote-baseline.yml:163`:
 
 ```yaml
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
 ```
 
-Base ref `main` is NOT required today: the `pull_request_target` trigger
-has no `branches:` filter, and neither this `if:` nor the guard checks
-`github.event.pull_request.base.ref == 'main'`. Every executable base-ref
-binding/use in the edited workflow is quoted below; `github.event.pull_request.base.ref`
-has only the one binding.
+Base main is **not** required: the target trigger has no branches filter,
+and neither job checks `github.event.pull_request.base.ref == 'main'`.
+All executable base-ref bindings/uses remain:
 
-| Edited file:line | Exact binding or use | Original `origin/main` line |
-| --- | --- | --- |
-| `.github/workflows/promote-baseline.yml:189` | `BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}` | 130 |
-| `.github/workflows/promote-baseline.yml:193` | `git fetch --quiet origin "$BASE_REF" "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"` | 134 |
-| `.github/workflows/promote-baseline.yml:194` | `if ! git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"; then` | 135 |
-| `.github/workflows/promote-baseline.yml:195` | `echo "::notice::merge commit $MERGE_SHA is not on origin/$BASE_REF; skipping"` | 136 |
+| File:line | Exact text |
+| --- | --- |
+| `.github/workflows/promote-baseline.yml:189` | `BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}` |
+| `.github/workflows/promote-baseline.yml:193` | `git fetch --quiet origin "$BASE_REF" "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"` |
+| `.github/workflows/promote-baseline.yml:194` | `if ! git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"; then` |
+| `.github/workflows/promote-baseline.yml:195` | `echo "::notice::merge commit $MERGE_SHA is not on origin/$BASE_REF; skipping"` |
 
-The workflow itself describes a merge commit "now on the base branch"
-(`.github/workflows/promote-baseline.yml:9`) and compares against that
-payload-selected branch. Its main-copy identity comments do not establish a
-main-only PR base rule. No base-ref condition was added; a separate
-main-only restriction needs a supervisor decision. The documentation now
-states the existing base-branch check precisely.
+No base-ref or other workflow condition was changed by SEC846E.
 
-### WIF second layer and promotion-account blast radius
+### Shared promotion guard and literal pin
 
-Read-only sources: `git show origin/main:terraform/gcp/github-wif.tf` and
-`git show origin/main:docs/VERIFY.md` in
-`/Users/haoliangwen/code/pineforge-workflow`; that local `origin/main` is
-`6d8a82791e87992b64ede831547f12fef66df76f`. No Terraform was edited.
+`.github/workflows/promote-baseline.yml:103` is the final reference for the
+codegen and workflow lanes. No repository-specific byte belongs in this
+guard. It uses github.repository rather than a repository-name literal.
+Its full-block MD5, including the separating blank line, is
+`933cc1f869787b37f3b339978d3828a2`.
 
-The provider's `attribute_condition` at
-`terraform/gcp/github-wif.tf:129` requires all five clauses:
+`scripts/ci_preflight.py:389` contains one independent literal copy of that
+entire block, including the header, comments and separator.
+`scripts/ci_preflight.py:1417` compares the actual complete first job slice
+against the literal without `_code` normalization. Missing, duplicate,
+renamed and reordered jobs still fail safely before indexing headers.
+The literal's MD5 is also `933cc1f869787b37f3b339978d3828a2`.
+The workflow, literal and canon author-case MD5 is
+`f684468222dd2d9915868e54fee8accc`.
 
-- `assertion.repository_owner_id` equals `var.github_owner_id` (`terraform/gcp/github-wif.tf:130`).
-- `assertion.repository_id` belongs to `values(var.github_promotion_repo_ids)` (`terraform/gcp/github-wif.tf:131`).
-- `assertion.repository` belongs to `local.promotion_repo_names` (`terraform/gcp/github-wif.tf:132`).
-- `assertion.ref == "refs/heads/main"` (`terraform/gcp/github-wif.tf:133`, resolving `local.promotion_ref` at line 81).
-- `assertion.job_workflow_ref == assertion.repository + "/.github/workflows/promote-baseline.yml@refs/heads/main"` (`terraform/gcp/github-wif.tf:134`, resolving the path at line 69 and ref at line 81).
+The token-use comment now accurately names both author and merger lookups.
+All existing shell behavior is retained. Added must-fail rows at
+`scripts/test_ci_preflight.py:808` mutate the real bot comment, step name,
+separator and job header; the existing no-op, authorization, lookup,
+credential-isolation, dependency and decision mutations remain.
 
-`docs/VERIFY.md:1180` and line 1181 state the exact ref/workflow pin;
-lines 1182 and 1183 explain that `pull_request_target` runs the default
-branch's workflow with `GITHUB_REF` set to that branch. Here that is main.
-For ANY `pull_request_target` run of this workflow, including one for a fork
-PR, the workflow runs main's own copy with `GITHUB_REF = refs/heads/main`;
-its owner/repository claims identify the base repository. The provider
-condition is therefore satisfied for these runs regardless of the PR head
-repository. The guard is the only layer that distinguishes a fork PR.
-The docs' sentence beginning "Fork PRs never could" at line 1187 concerns
-workflow runs from a fork; it must not be treated as protection for a
-base-repository `pull_request_target` run about a fork PR.
+Engine `promote` retains main's `["self-hosted","pf-gcp-main"]` at workflow
+line 164. Codegen/template currently retain ubuntu-latest for their
+credential jobs. This runner difference is outside the shared guard.
+No per-repository guard difference is necessary or authorized.
 
-The promotion account's capabilities are quoted from
-`docs/VERIFY.md:1178` and line 1179:
+The codegen and template worktrees were read-only here. Their present guard
+hashes are `f1c9bd69db010986a5c168e0d62b03f4` and
+`992e4138351a228a119db7956d9487e3`, respectively. They must copy the engine
+reference and update their independent literal pins in the following lanes.
+Cross-repository equality is not claimed at this engine-first checkpoint.
+Exact commands and results are in REPORT-SEC846E.md.
+
+### Release-pool scope after merging main
+
+Main removed POOL_CLASSES and JOB_RUNNERS. The current policy is
+JOB_COMMANDS plus RELEASE_JOB_RUNNERS and event reachability through local
+reusable calls. Main already refuses retired pf-ci-release labels and
+requires pf-gcp-main only for named isolated release jobs, including its
+existing baseline-promotion exception. Those pins and main's PR/post fleet
+rules remain intact.
+
+`scripts/ci_preflight.py:160` names the old and current release labels for
+the scope check. `runner_findings` at line 807 refuses incoming untrusted
+events even for a workflow with a release filename and valid direct
+triggers. At line 817 it scans runner values and matrix strategy text:
+release labels require an existing RELEASE_JOB_RUNNERS job pin.
+Renaming a PR workflow or adding a job cannot grant release-fleet access.
+
+`.github/workflows/flat-peak.yml` is absent. The current graph propagates
+events, not a proof that a callee has only release.yml callers, and no
+flat-peak job is pinned. It receives no release-pool exception by default,
+including when a non-release trusted workflow calls it.
+
+Tests at `scripts/test_ci_preflight.py:186`, line 206, line 219 and line 244
+mutate real workflow text to assert:
+
+- PR jobs naming either pf-ci-release or pf-gcp-main refuse, under both
+  the real CI filename and an arbitrary filename.
+- Real release.yml with its current literal pf-gcp-main runner is accepted.
+  Restoring pf-ci-release is refused, preserving main's existing negative
+  controls rather than re-enabling a retired label.
+- A workflow_call flat-peak mutation has no release privilege when orphaned,
+  called from PR CI, or called from non-release post-merge CI.
+- Local PR call edges cannot reach either pinned release workflow.
+
+All these assertions are authored expectations: **NOT RUN**.
+The brief's old positive pf-ci-release example is adapted to main's current
+pf-gcp-main pin. The promotion exception is retained because the brief
+requires main's new rules and features to stay. Other repositories' pool
+checks are outside this engine-only item.
+
+### WIF second layer and blast radius
+
+Read-only sources are local origin/main in
+`/Users/haoliangwen/code/pineforge-workflow`. No Terraform was edited.
+`terraform/gcp/github-wif.tf:129` joins these requirements:
+
+- repository_owner_id matches var.github_owner_id (line 130);
+- repository_id is in the promotion repository IDs (line 131);
+- repository is in the promotion names (line 132);
+- assertion.ref is refs/heads/main (line 133; ref definition at line 81);
+- job_workflow_ref is this repository's
+  `.github/workflows/promote-baseline.yml@refs/heads/main`
+  (line 134; workflow path at line 69).
+
+Current origin/main:docs/VERIFY.md:1247 describes the exact workflow pin;
+line 1248 describes target runs of main's copy and line 1249 the default
+branch GITHUB_REF. A base-repository main-pinned pull_request_target run
+about a fork PR satisfies these WIF conditions too. **The guard is the
+only layer that distinguishes that fork head.** The old sentence beginning
+“Fork PRs never could” does not protect this base-context target event.
+
+The service-account capabilities are quoted from current
+origin/main:docs/VERIFY.md:1244:
 
 ```text
-`pineforge-promotion` service account (Cloud SQL client on the registry
-instance, accessor on the registry-db secret, read on the evidence bucket).
+  `pineforge-promotion` service account (Cloud SQL client on the registry
+  instance, accessor on the registry-db secret, read on the evidence bucket).
 ```
 
-Those privileges are the GCP blast radius: registry-instance connectivity,
-access to the registry database credential, and evidence-bucket reads.
-The GitHub App token remains scoped to reading the private
-`pineforge-workflow` repo (`.github/workflows/promote-baseline.yml:255`,
-line 256). The guard must succeed before either token minting or GCP
-authentication is reachable.
+Registry database connectivity, access to its database secret and reads of
+the evidence bucket are the GCP blast radius. Terraform comments at lines
+41 and 42 describe registry_rw database writes; lines 49 through 51 say the
+account has no Cloud Run role. Real IAM, OIDC exchange and metadata access
+were not queried: **NOT CHECKED**.
 
-### Tests written for pool execution: NOT RUN
+### P3 publication record and template scope
 
-`scripts/ci_preflight.py` now independently pins the guard's entire code
-block, including all ten env bindings, empty permissions, runner, terminating
-`fail`, author/head checks, author and merger lookups and default refusal. It pins the
-two-job order, `promote` dependency and original job condition, and the exact
-trigger set without weakening existing tree/status/runner checks.
+The full corrected COMMIT-MSG-SEC846.new.md quotes all added/rewritten
+engine documentation and the removed text with source revisions and lines.
+Key engine omissions from the prior handoff, quoted from
+0212cabe2d87e64b9656791ade118be0bdee01bc:docs/ci.md:
 
-`scripts/test_ci_preflight.py` adds must-fail mutations of the real workflow
-text: whole guard script replaced by `exit 0`; no-op `fail`; unmerged exit
-inserted before the head/author checks; each env binding removed, including `HEAD_IS_FORK`;
-head/fork checks removed; author association bypassed; bot allowlist widened;
-author lookup, empty-merger check or merger lookup removed; either
-failed-lookup fallback changed to write; read permission accepted for either
-actor; default refusal removed; extra allowed events; guard
-permissions removed or OIDC granted; guard secret/checkout inserted; job/step
-error suppression; guard skip; runner drift; `promote` dependency removed or
-emptied or given an extra dependency; status-function bypass; missing, duplicate or reordered job contract;
-and trigger drift. Each mutation must produce the corresponding preflight
-finding. Existing hosted-route mutations now cover the guard as well.
+```text
+successful on the verified PR head and a merge commit on `main` that carries
+```
 
-The decision tests extract the `run: |` shell from the real workflow file
-and execute it with bash. An executable fixture `gh` is first on PATH and
-is the only fake: it logs/validates the API arguments and selects separate
-permission and exit fixtures by username (`PR_AUTHOR` versus `MERGED_BY`).
-Each decision row asserts the exact ordered API calls, including no merger
-lookup after author refusal. No shell function or replacement guard driver
-is prepended. They cover member/owner/collaborator authors, both bots,
-`CONTRIBUTOR` authors with all three write-capable permissions, dispatch and
-unmerged-close acceptance; foreign/fork/missing heads, authors without write
-access, missing mergers, read/triage/none/empty permissions, failed author
-and merger lookups (including partial output), a writer author merged by a
-reader, and other events must refuse with the exact messages. These tests have been
-written, not run. Missing bash fails explicitly with
-`NOT RUN: bash is required to execute the promote-guard decision cases`;
-it is never silently skipped. Tool availability here was NOT RUN.
+That removed line is at 771. Line 773 contains the removed `on main` clause,
+and line 775 was:
 
-Required decision rows implemented in the unittest tables (expected exits
-are assertions, not execution results):
+```text
+for the tree; every other case exits green without promoting.
+```
 
-| Environment / PR case | Expected exit | Validation |
-| --- | --- | --- |
-| Fork head, unmerged | 1 | NOT RUN |
-| Fork head, merged | 1 | NOT RUN |
-| Same-repo head with `fork=true` | 1 | NOT RUN |
-| Same-repo author `NONE`, not an allowlisted bot, author permission `none` | 1 | NOT RUN |
-| Own merged PR, author `CONTRIBUTOR` with permission `write`, merger permission `write` | 0 | NOT RUN |
-| Own merged PR, author `CONTRIBUTOR` with permission `read` | 1 | NOT RUN |
-| Own merged PR, author `CONTRIBUTOR`, author lookup fails | 1 | NOT RUN |
-| Own merged PR, author `CONTRIBUTOR`, author permission empty | 1 | NOT RUN |
-| Own merged PR, author `CONTRIBUTOR` with permission `write`, merger permission `read` | 1 | NOT RUN |
-| Own merged PR, member author, merger permission `write` | 0 | NOT RUN |
-| Own merged PR, merger permission `read` | 1 | NOT RUN |
-| Own merged PR, merger permission lookup fails | 1 | NOT RUN |
-| Own merged PR, empty merger | 1 | NOT RUN |
-| Own unmerged close, member author | 0 | NOT RUN |
-| Own unmerged close, author `CONTRIBUTOR` with permission `write` | 0 | NOT RUN |
-| Own PR by `dependabot[bot]`, merged by a write user | 0 | NOT RUN |
-| `workflow_dispatch` | 0 | NOT RUN |
-| `push` and other events | 1 | NOT RUN |
+Line 1059 was:
 
-Additional execution-based mutation cases require the original script to
-exit 1 and the changed script to exit 0 for a whole-script no-op, no-op
-`fail`, missing fork check, missing head-repository check and an early
-unmerged exit. A syntax error cannot count as the expected difference.
-The structure pins separately refuse missing `needs`, guard OIDC,
-secrets and checkout mutations, and every other listed contract mutation.
-The two author-lookup mutations also have explicit decision differences:
-deleting the author lookup changes the merged `CONTRIBUTOR`-with-write
-case from exit 0 to exit 1, while changing only the failed author lookup's
-fallback to `write` changes the failed-call case from exit 1 to exit 0.
-Both mutations must also trigger the independent literal pin; NOT RUN.
-No previous pin is loosened.
+```text
+Promotion stays hosted for both target and dispatch triggers.
+```
 
-README.md and docs/ci.md document the authorization and hosted exception.
-COMMIT-MSG-SEC846.md quotes every added or rewritten documentation sentence.
+The corrected record also identifies the intermediate all-hosted guard
+sentence from the SEC846 branch, superseded by main's runner migration.
+README.md gains four authorization sentences at line 361 and removes none.
+
+Read-only cross-repository P3 inventory, source workflow revision
+6d8a82791e87992b64ede831547f12fef66df76f:
+
+| Removed source | Removed claim, quoted verbatim |
+| --- | --- |
+| `docs/VERIFY.md:1187` | `Fork PRs never could: a workflow run from a fork is not granted write` |
+| `docs/CODEGEN-DOCS-GATE.md:144` | `The engine repo's own copy is an older revision; this` |
+| `docs/CODEGEN-DOCS-GATE.md:145` | `change touches only the codegen branch, so the engine needs no update for it.` |
+| `docs/CODEGEN-DOCS-GATE.md:153` | `The checker is builtins-only and uses the same rule. PR CI uses the trusted` |
+| `docs/CODEGEN-DOCS-GATE.md:154` | ``default-branch workflow definition (`pull_request_target`), not the PR's`` |
+| `docs/CODEGEN-DOCS-GATE.md:171` | `PR pytest runs in the trusted gate workflow. The separate test workflow` |
+| `docs/CODEGEN-DOCS-GATE.md:194` | ``- A fork's code PR runs no code here: its `gate` fails, saying a maintainer`` |
+| `docs/CODEGEN-DOCS-GATE.md:196` | `  full gate. A fork's accepted docs proof clears as a same-repository one does.` |
+| `docs/CODEGEN-DOCS-GATE.md:208` | `Trust boundary, for whoever reviews the installation PR. The classifier and` |
+| `docs/CODEGEN-DOCS-GATE.md:209` | `` the reporter run trusted code from `main`, for a fork's PR too. `differential` `` |
+| `docs/CODEGEN-DOCS-GATE.md:210` | ``and `pytest` run the PR head's code under `pull_request_target` only for a`` |
+
+The commit handoff includes the complete removed passages, including event
+policy, timeout and trust-boundary text, rather than only these excerpts.
+The replacements document the pull_request/authz port and promotion guard.
+Codegen's original SEC846 CONTRIBUTING.md change is additive, with no
+removed documentation quote to supply.
+
+What the template got beyond the promotion guard/dependency insertion:
+
+- `campaign/ci/promote-baseline.yml:21` replaces
+  `# Otherwise it exits green without promoting.` with
+  `# After promote-guard passes, unmet tree/gate conditions exit green without promoting.`
+- Lines 32 and 33 add
+  `# WIF admits main's workflow for fork PRs too. The credential-free`
+  and `# promote-guard refuses their heads before promote can use secrets or OIDC.`
+  These are accurate but outside item A's literal workflow edit scope.
+  **Restore or split out those comments**, as READ-CODEX12 T2 requests.
+- `campaign/ci/codegen-gate.yml:7`, line 17, lines 81/131/169/196 and
+  lines 202/206 implement item B's trigger, authz, needs and guarded
+  aggregate. That port is justified by item B.
+- The classifier base-ref change at line 91, PR event tests at lines
+  96/117/216/239 and AUTHZ_RESULT wiring at lines 211/221 preserve a trusted
+  base checker and fail-closed status reporting under that port. They are
+  justified by item B and explicitly included in its scope record.
+
+These are observations of the other worktree, not engine edits. The
+workflow lane must restore/split the unrelated comments and carry its own
+final handoff and synchronization evidence.
+
+## CONFLICT RESOLUTIONS
+
+| File:line | Resolution |
+| --- | --- |
+| `scripts/ci_preflight.py:138` | Keep main's hosted macOS and isolated release maps; add only the shared hosted guard exception |
+| `scripts/ci_preflight.py:389` | Keep SEC846's independent literal and author canon; retain main's PR/post gate constants at line 449 |
+| `scripts/test_ci_preflight.py:735` | Keep all SEC846 guard mutation/decision tests before main's matrix, full-profile, corpus and event tests |
+| `scripts/test_ci_preflight.py:379` | Exclude the explicitly hosted guard from the fleet-only mutation helper; its own hosted refusal rows remain |
+| `scripts/test_ci_preflight.py:2838` | Use the correct hosted guard expectation alongside main's isolated credential-job expectations |
+| `docs/ci.md:1137` | Keep main's new release/fleet description and legacy-metadata retirement; retain SEC846 authorization and test documentation |
+
+The three conflict files have no conflict markers by the required grep.
+Git still lists their index entries as unmerged because the supervisor
+alone may stage and complete the merge. Main's superseded pool-fragment
+prose and old gate constants are not reintroduced.
 
 ## NOT CHANGED
 
-- The existing `pull_request_target: types: [closed]` and dispatch triggers, and the original `promote` merged-or-dispatch condition, are retained as required.
-- Every existing `promote` step, secret reference, App token scope, OIDC grant/provider/account, environment and hosted runner is retained; only its guard dependency is added.
-- Existing newest-status, merge-tree, campaign-verdict and promotion-defer behavior is retained; authorization now precedes it.
-- No aggregate refuse-first step is added: `promote` has no status function that bypasses a failed dependency.
-- Other engine workflows and all runtime, native, source-layer, ABI and corpus files are untouched; this brief assigns the engine promotion workflow only.
-- Codegen, workflow-template and license cases B/C are outside this worktree and were not edited; the codegen-only `gate.yml` report item does not apply to this engine lane.
-- Only the explicitly requested WIF Terraform and VERIFY sources were read from the workflow repo, via local `origin/main`; Terraform is untouched.
-- The trigger still has no base-branch filter, and no base-ref condition was added; existing executable base-ref uses are quoted above.
-- Existing CI runner fragments, hosted fallbacks and time limits remain pinned; changing the broader runner rollout is outside SEC846.
-- Repository settings, real token metadata access, policy checks and hosted runs were not queried or executed in this offline edit-only lane.
-- No file was deleted, no memory/instruction file was written, and no git staging, commit or push was performed.
+- No credential step, secret reference, OIDC scope/provider/account or
+  promotion condition was changed beyond the already authorized guard/needs.
+- Main's exact release runner and matrix pins, event fleets, authz/aggregate
+  checks, PR smoke and full-event populations remain.
+- The measured C++ sources, headers, ABI, runtime and corpus were not opened
+  or edited for this task. Main's staged changes remain the supervisor's.
+- No codegen, template, Terraform, instruction or root handoff file was edited.
+- No file was deleted; no git mutation, network, test or repository script ran.
 
 ## DECISION
 
-- Use the explicitly authorized `promote-guard` canon variant because the canonical CI `authz` block deliberately rejects `pull_request_target`.
-- Keep both jobs hosted on `ubuntu-latest`; the brief defers credential-workflow migration until `pf-ci-release`.
-- Copy the 16:02 canon's nested PR-author case, private-membership comment, author lookup and refusal wording verbatim; `CONTRIBUTOR` authors with `admin|maintain|write` permission proceed, and failed or empty author lookups refuse.
-- Apply this author rule to every closed PR before considering merged state, and independently require a write-capable or allowlisted `MERGED_BY` only for a merged PR.
-- Preserve all other guard text, bot comments, error/summary prefixes, token binding, empty permissions and the `promote` dependency.
-- Keep Addendum 2's order as retained by Addendum 4: head repository and fork flag, author including its permission fallback, authorised-unmerged exit, then nonempty and write-capable/allowlisted merger.
-- Leave the base-ref behavior unchanged because the existing workflow uses the PR's base branch; flag a main-only restriction for the supervisor.
-- Use an independent literal guard pin with actual-text mutations; no expected guard is derived from the workflow being checked.
-- Use a PATH-first executable `gh` stub that answers by username with independent author and merger fixtures; assert exact ordered lookups and expected decisions for the real extracted script.
-- Add both author-lookup must-differ mutations (lookup deletion and failed-call acceptance) without weakening existing pins or cases; all validation remains NOT RUN in this edit-only lane.
+- Use the promotion-specific canon variant because CI authz refuses target
+  events; retain Addendum 4's author case and Addendum 2's refusal order.
+- Share one complete literal guard block without repository-specific bytes.
+- Preserve main's isolated promotion runner outside the shared hosted guard.
+- Adapt the retired pool-label request to main's current pins and keep
+  flat-peak refused by default until a release-only caller proof exists.
+- Quote removed docs as well as replacements; record and split/restore the
+  template's unrelated promotion comments in the following workflow lane.
+- Keep the existing PR-base behavior; no new main-base condition is inferred.
+
+## COLLECT-ONLY TO RUN
+
+- `scripts/test_ci_preflight.py`: **NOT RUN**. Added lines were reread as
+  source only; collection and Python syntax validation still require CI/box.
+
+## GUARD DECISIONS TO RUN
+
+These literal expected exits are assertions in the retained real-script
+decision tables, not execution results.
+
+| Case | Expected exit | Status |
+| --- | --- | --- |
+| Foreign fork head, unmerged | 1 | NOT RUN |
+| Foreign fork head, merged | 1 | NOT RUN |
+| Same repository with fork=true | 1 | NOT RUN |
+| NONE/unknown non-bot author without write | 1 | NOT RUN |
+| CONTRIBUTOR writer author, writer merger | 0 | NOT RUN |
+| CONTRIBUTOR reader author | 1 | NOT RUN |
+| Failed or empty author lookup | 1 | NOT RUN |
+| Writer author, reader merger | 1 | NOT RUN |
+| Member author, writer merger | 0 | NOT RUN |
+| Failed or empty merger lookup | 1 | NOT RUN |
+| Empty merger login | 1 | NOT RUN |
+| Authorized own unmerged close | 0 | NOT RUN |
+| Dependabot author, writer merger | 0 | NOT RUN |
+| Manual dispatch | 0 | NOT RUN |
+| Push or any unsupported event | 1 | NOT RUN |
+| Deleted author lookup, writer-author case | baseline 0 / mutant 1 | NOT RUN |
+| Failed author lookup changed to write | baseline 1 / mutant 0 | NOT RUN |
+| Disabled fail / removed fork check / early unmerged bypass | baseline 1 / mutant 0 | NOT RUN |
 
 ## NOT RUN
 
-| Changed file | Validation |
+| Verification | Status |
 | --- | --- |
-| `.github/workflows/promote-baseline.yml` | NOT RUN |
-| `scripts/ci_preflight.py` | NOT RUN |
-| `scripts/test_ci_preflight.py` | NOT RUN |
-| `README.md` | NOT RUN |
-| `docs/ci.md` | NOT RUN |
-| `COMMIT-MSG-SEC846.md` | NOT RUN |
-| `REPORT-SEC846.md` | NOT RUN |
+| `scripts/ci_preflight.py` and all source guards | NOT RUN |
+| `scripts/test_ci_preflight.py`, guard decisions and all mutations | NOT RUN |
+| Test collection / syntax parser / actionlint / ShellCheck | NOT RUN |
+| `scripts/ci_verify.py` release/debug/sanitizers/native profiles | NOT RUN |
+| C++ unit suites / ABI matrix / verifier self-tests | NOT RUN |
+| Full corpus verification / `scripts/run_corpus.sh` | NOT RUN |
+| Org policy checker / TypeSafe diff guard / supervisor Codex read | NOT RUN |
 
-Preflight, the new mutation/decision tests, C++ unit tests, all verification
-profiles, full corpus verification, `ci-policy-check.py` and the TypeSafe
-diff guard and supervisor Codex review: NOT RUN. No PASS or runtime/parity verdict is claimed.
-No execution summary or log path exists because no validation was run.
-The supervisor must run the required verification and review before
-committing or advancing the change.
+No execution summary or validation log exists. Source-only marker grep,
+read-only git diffs and awk/md5 measurements are the only checks performed.
+`git diff --check origin/main` over the four edited tracked files returned
+no whitespace diagnostics; it is not test evidence.
+
+## NOT CHECKED
+
+CI collection, runtime behavior, parity, required statuses on the merged
+tree, real metadata-token lookup permissions, deployed IAM/OIDC, repository
+fork settings, final codegen/template synchronization and the supervisor's
+handoff installation remain unchecked. The supervisor must run required
+verification and commit the merge after the remaining lanes finish.
