@@ -242,6 +242,26 @@ per-store arena share carries this same typed verdict, with needed bytes
 computed as the arena size satisfying that store's required extent. A separate
 command byte-budget refusal retains its status-only I/O behavior.
 
+File-backed scratch must have disk backing. With no scratch directory configured,
+the engine checks filesystem type with `statfs`, using nonempty `TMPDIR` if
+disk-backed, or the legacy `/tmp` candidate when `TMPDIR` is unset or empty.
+Only a successful query proving that first candidate is tmpfs/ramfs permits
+trying `/var/tmp`, also checked by filesystem type. A failed query stops
+resolution with its syscall errno and names the failed candidate. Directory
+names are not a medium test; tmpfs/ramfs is never silently chosen. If both default
+candidates are proven tmpfs/ramfs, the engine retains `ENODEV` /
+`scratch requires disk backing`, names every candidate tried and its rejection
+reason in the failure detail, and adds `set TMPDIR to a disk-backed directory`.
+
+An explicit scratch/spill directory is kept as supplied and never falls back;
+explicit tmpfs/ramfs directories remain refused. The explicit sink-path refusal
+`requires disk backing, not tmpfs or ramfs` is unchanged. The jailed profile
+still requires a sealed arena and never creates a backing file or falls back to
+`TMPDIR`, `/tmp` or `/var/tmp`. These policies keep the existing failure codes:
+report scratch uses `report_sink_failed` with `reason: scratch_io`; auxiliary
+tables use `scratch_io_failed`; sink-path I/O uses `report_sink_failed` with
+`reason: sink_io`.
+
 The English templates describe the texts a code is raised with; they are not
 a grammar. A `{name}` marks a part that varies and need not be an argument of
 that name, and one text can sit under more than one code: a frame that fails

@@ -15,7 +15,7 @@
 namespace pineforge::source::detail {
 
 struct PositionTailBinding {
-    // L6b-4: positional binary I/O; an empty directory selects TMPDIR.
+    // L6b-4: empty directory uses disk-backed TMPDIR or /tmp, then /var/tmp.
     class File {
     public:
         explicit File(const std::string& directory)

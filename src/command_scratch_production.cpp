@@ -221,7 +221,12 @@ public:
     CommandScratchFile(std::size_t size, ScratchIoObserver observer, CommandScratchByteCap budget)
         : ScratchBacking(ScratchBackingKind::disk, size, observer), budget_(std::move(budget)) {
         const char* selected = std::getenv("PINEFORGE_COMMAND_SCRATCH_DIR");
-        std::string path = selected && *selected ? selected : "/tmp";
+        std::string refusal;
+        int directory_error = 0;
+        std::string path = resolve_scratch_directory(selected ? selected : "", refusal, directory_error);
+        if (path.empty())
+            throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
+                std::system_error(directory_error, std::generic_category(), refusal));
         if (path.back() != '/') path += '/';
         path += "pineforge-command-XXXXXX";
         const int opened = ::mkstemp(path.data());
