@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
