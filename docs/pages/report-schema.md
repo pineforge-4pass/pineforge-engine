@@ -243,6 +243,12 @@ provider must refuse before execution with `report_mode_unsupported`, args
 `{"mode":"SUMMARY_ONLY","contract":"pineforge-report/v1"}` for that request,
 and diagnostic `unsupported report mode: SUMMARY_ONLY`. It must never return
 FULL, accept an empty legacy array as evidence, or ignore the requested mode.
+A native host with the provider bridge also refuses begin with that code,
+args and diagnostic when the v1 report mode or pending legacy equity mode
+is `SUMMARY_ONLY`, an observer or selected window is configured, and no
+report sink is enabled. The refusal precedes callbacks and bars. Drop the
+window or the observer, or select `FULL`; `SUMMARY_ONLY` with a capture
+needs a sink.
 
 Explicit-mode JSON includes `report_contract: "pineforge-report/v1"` and
 `report_capture`, containing `version`, the mode name, `complete`, and all
