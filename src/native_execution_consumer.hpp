@@ -2287,7 +2287,9 @@ public:
     // with no consumer bound included.
     //
     // A setter answers -2 for an execution contract other than the 2 that
-    // BacktestEngine::execution_contract() reports, -3 for a consumer that is
+    // BacktestEngine::execution_contract() reports (and, for a non-null observer
+    // only, while the v1 report mode or the pending legacy equity mode is
+    // SUMMARY_ONLY; that check precedes the -3 answer), -3 for a consumer that is
     // busy (selected_epoch_busy) and -4 when a descriptor needs a consumer and
     // none can be allocated. It copies or clears only its pending descriptor and
     // registration flag (never phase_observed or admitted_selected), and a
