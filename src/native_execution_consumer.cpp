@@ -3009,9 +3009,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     // Capture without trade rows cannot supply a complete v1 report. Check
-    // both report modes before reset/admission and the first host callback.
-    if ((engine.report_mode_ == ReportMode::SUMMARY_ONLY
-         || engine.pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+    // the envelope mode before reset/admission and the first host callback.
+    if (engine.report_mode_ == ReportMode::SUMMARY_ONLY
         && !engine.report_sink_state_.enabled
         && (selected_epoch_.observer_registered || selected_epoch_.window_configured
             || selected_epoch_.admitted_selected)) {
