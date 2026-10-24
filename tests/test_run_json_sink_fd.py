@@ -907,7 +907,15 @@ def test_native_fd_fsize_zero_without_arena_refuses_before_file_operations(tmp_p
         refused = child_run(source, [*extra, "--report-sink", str(work / "bad.sink")],
                             stub=False, jail=True, work=work, temporary=temporary)
         assert refused[0] == 1 and refused[2] == "", refused
-        assert json.loads(refused[1])["code"] == "report_sink_failed"
+        # This second run is the default (unjailed) profile with no arena, so the
+        # command scratch is a directory file. L6's D1(ii) ruling: the command
+        # scratch resolves TMPDIR like every other scratch and refuses at begin
+        # (docs/pages/run-failure-codes.md, the default scratch directory policy:
+        # scratch_io_failed, class resource). Before the series it used the literal
+        # /tmp, so the read-only TMPDIR was first met by the sink ledger
+        # (report_sink_failed). Nothing may be created in work or TMPDIR either way.
+        assert json.loads(refused[1])["code"] == "scratch_io_failed"
+        assert snapshot(work, temporary) == before
     finally:
         work.chmod(0o755)
         temporary.chmod(0o755)
