@@ -3176,7 +3176,10 @@ finally:
                 (6, 'kernel-only', '      - name: Verify (kernel)\n',
                  '      - name: Verify (kernel), no longer --jobs 4\n'),
                 (6, 'kernel-only', KERNEL_VERIFY,
-                 'uses: nick-fields/retry@v3\n        with:\n          command: python3 scripts/ci_verify.py '
+                 # A wrapper action spelled the way the ORG-ACTIONPINS lint accepts: a (synthetic) 40-hex sha
+                 # and a version comment, so only the harmless spelling of the command is under test here.
+                 'uses: nick-fields/retry@0123456789abcdef0123456789abcdef01234567 # v3.2.0\n        with:\n'
+                 '          command: python3 scripts/ci_verify.py '
                  f'kernel --build-dir build-kernel --jobs {CORES} --ccache'),
                 (2, 'promote', f'    runs-on: {RELEASE_RUNNER}\n',
                  f'    runs-on: {RELEASE_RUNNER}  # isolated release\n'),
