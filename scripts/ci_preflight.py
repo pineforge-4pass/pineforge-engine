@@ -47,6 +47,14 @@ POST_RUNNER = '["self-hosted","pf-gcp-post"]'
 RELEASE_RUNNER = '["self-hosted","pf-gcp-main"]'
 CI_EVENTS = '''on:
   pull_request:
+    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);
+    # ready_for_review starts the full run when the PR is marked ready.
+    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+'''
+CI_CONCURRENCY = '''concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.draft && 'draft' || 'ready' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 '''
 POST_CI_EVENTS = '''on:
   push:
@@ -142,9 +150,11 @@ HOSTED_JOB_RUNNERS = {
 }
 # LB-435 plus addendum 2: isolate releases and the named promotion exception.
 # The strategy pin keeps the existing macOS and Linux ARM hosted legs.
+# The probe's credential-free authz retains the canon non-release fleet.
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'authz': PR_RUNNER, 'probe': POST_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -170,14 +180,16 @@ PR_PROOF_JOBS = {'build': 'BUILD_RESULT', 'corpus-parity-subset': 'PARITY_RESULT
 HEAVY_JOBS = frozenset(('sanitizers', 'kernel-only', 'native-live', 'corpus-parity'))
 AUTHZ_SUCCESS = "${{ needs.authz.result == 'success' }}"
 AUTHZ_ALWAYS = "${{ always() && needs.authz.result == 'success' }}"
+PREFLIGHT_IF = "${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success') }}"
 AUTHZ_FULL_SUCCESS = "${{ needs.authz.result == 'success' && github.event_name != 'pull_request' }}"
 DOCS_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
                   "needs.changes.outputs.docs_only != 'true') }}")
 # Only the scheduling hint comes from changes. The aggregate recomputes this
 # class from the event-bound API diff inside its own job.
-GITHUB_ONLY_SKIP = ("${{ always() && needs.authz.result == 'success' && (needs.changes.result != 'success' || "
+GITHUB_ONLY_SKIP = ("${{ !github.event.pull_request.draft && (always() && needs.authz.result == 'success' && "
+                    "(needs.changes.result != 'success' || "
                     "(needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || "
-                    "needs.changes.outputs.github_only != 'true'))) }}")
+                    "needs.changes.outputs.github_only != 'true')))) }}")
 HEAVY_SKIP = DOCS_ONLY_SKIP
 SLOW_PREFLIGHT_IF = AUTHZ_ALWAYS
 BUILD_VERIFY_RUN = ' '.join(r'''|
@@ -259,8 +271,8 @@ endif()
 # PR-only ALLOWED_BOTS is dependabot[bot] and pineforge-app[bot]. No local canon
 # file is needed on CI runners. Changing the script requires a new canon pin.
 AUTHZ_STEP_SHA256 = '94bf3afefe4588bc33dad5fd4d8fa3d2a104cc45743ad59286c756fa3a17baa6'
-# The canon header is text, not a decoded array: the fleet comment and the
-# space after the comma bind every authz job byte for byte.
+# Scoped CI workflows bind this canon header byte for byte, including its
+# fleet comment and comma spacing. The release probe pins executable lines.
 AUTHZ_JOB_HEADER = '''    name: authz
     # Fleet routing is fixed for this workflow; releases use pf-gcp-main.
     runs-on: ["self-hosted", "pf-gcp-pr"]
@@ -383,39 +395,183 @@ GITHUB_ONLY_STEP = r'''      - name: Read the PR diff independently
 '''
 _CONTINUE_ON_ERROR = re.compile(r'\s*(?:-\s+)?["\']?continue-on-error["\']?\s*:')
 # SEC846: an independent literal pins the promotion-specific canon variant.
-# No checkout, secrets, inherited OIDC, skip condition or error suppression may
-# be inserted into this job. Include the header, comments and separator exactly;
+# Only the read scopes needed for API resolution are granted. No checkout,
+# secrets, inherited OIDC, job skip or error suppression may be inserted.
+# Include the header, comments and separator exactly;
 # the codegen and campaign pins must carry this same literal, without repo edits.
-PROMOTE_GUARD = '''  promote-guard:
+PROMOTE_GUARD = r'''  promote-guard:
     name: promote-guard
     runs-on: ubuntu-latest
-    permissions: {}
+    # Resolution needs read access in private repos; no secrets or OIDC here.
+    permissions:
+      pull-requests: read
+    outputs:
+      ok: ${{ steps.authorize.outputs.ok }}
+      merge_sha: ${{ steps.pr.outputs.merge_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      pr_url: ${{ steps.pr.outputs.pr_url }}
+      merged_at: ${{ steps.pr.outputs.merged_at }}
     steps:
+      - name: Resolve the merged PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          INPUT_MERGE_SHA: ${{ github.event.inputs.merge_commit }}
+          INPUT_HEAD_SHA: ${{ github.event.inputs.head_sha }}
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          INPUT_PR_URL: ${{ github.event.inputs.pr_url }}
+          INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "baseline promotion requires refs/heads/main"
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              for value in "$INPUT_MERGE_SHA" "$INPUT_HEAD_SHA" "$INPUT_PR_NUMBER" "$INPUT_PR_URL" "$INPUT_MERGED_AT"; do
+                [[ -n "${value//[[:space:]]/}" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "empty or unreadable dispatch input"
+              done
+              printf '%s\n' "merge_sha=$INPUT_MERGE_SHA" "head_sha=$INPUT_HEAD_SHA" \
+                "pr_number=$INPUT_PR_NUMBER" "pr_url=$INPUT_PR_URL" \
+                "merged_at=$INPUT_MERGED_AT" "ok=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            push) ;;
+            *) fail "event $EVENT_NAME does not run baseline promotion (only push and workflow_dispatch are allowed)" ;;
+          esac
+          # Search every page: a second match must defer, never pick a PR.
+          pulls=$(gh api --paginate --slurp \
+            "repos/$REPO/commits/$SHA/pulls?per_page=100")
+          python3 - 3<<<"$pulls" <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          def skip(reason):
+              print(f"::notice::{reason}; skipping")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                  output.write("ok=false\n")
+
+          def fail(reason):
+              print(f"::error title=authz::{reason}")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                  summary.write(f"authz: REFUSED: {reason}\n")
+              raise SystemExit(1)
+
+          def reject_constant(value):
+              raise ValueError(f"invalid JSON constant: {value}")
+
+          def field(obj, *keys):
+              for key in keys:
+                  obj = obj.get(key) if isinstance(obj, dict) else None
+              if (not isinstance(obj, str) or not obj.strip()
+                      or any(ord(char) < 32 for char in obj)):
+                  fail("empty or unreadable PR field: " + ".".join(keys))
+              return obj
+
+          sha = os.environ["SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              fail("empty or unreadable pushed SHA")
+          try:
+              pages = json.loads(open(3, encoding="utf-8").read(), parse_constant=reject_constant)
+          except (ValueError, RecursionError):
+              skip("invalid merged PR response JSON")
+              raise SystemExit(0)
+          if (not isinstance(pages, list)
+                  or any(not isinstance(page, list) for page in pages)
+                  or any(not isinstance(pr, dict) for page in pages for pr in page)):
+              skip("invalid merged PR response page array")
+              raise SystemExit(0)
+          matches = [pr for page in pages for pr in page
+                     if pr.get("state") == "closed"
+                     and pr.get("merged_at") is not None
+                     and pr.get("merge_commit_sha") == sha
+                     and isinstance(pr.get("base"), dict)
+                     and pr["base"].get("ref") == "main"]
+          if len(matches) != 1:
+              skip(f"found {len(matches)} merged PRs with merge commit {sha} and base main")
+              raise SystemExit(0)
+          selected = matches[0]
+          number = selected.get("number")
+          if type(number) is not int or number <= 0:
+              fail("empty or unreadable PR number")
+          # The association endpoint returns a summary PR without merged_by.
+          # Read that selected PR's full API response, binding it to the same
+          # merge, base and head before using any identity or merge metadata.
+          try:
+              response = subprocess.run(
+                  ["gh", "api", f"repos/{os.environ['REPO']}/pulls/{number}"],
+                  check=True, capture_output=True, text=True)
+              pr = json.loads(response.stdout, parse_constant=reject_constant)
+          except (subprocess.CalledProcessError, OSError, ValueError, RecursionError):
+              fail("unreadable resolved PR response")
+          if (not isinstance(pr, dict) or type(pr.get("number")) is not int
+                  or pr.get("number") != number
+                  or pr.get("state") != "closed" or pr.get("merged") is not True
+                  or pr.get("merge_commit_sha") != sha
+                  or field(pr, "base", "ref") != "main"
+                  or field(pr, "head", "sha") != field(selected, "head", "sha")
+                  or field(pr, "merged_at") != field(selected, "merged_at")):
+              fail("resolved PR no longer matches the pushed merge")
+          head_sha = field(pr, "head", "sha")
+          if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+              fail("empty or unreadable PR head SHA")
+          head = pr.get("head")
+          repo = head.get("repo") if isinstance(head, dict) else None
+          fork = repo.get("fork") if isinstance(repo, dict) else None
+          if type(fork) is not bool:
+              fail("empty or unreadable PR field: head.repo.fork")
+          values = {
+              "merge_sha": sha,
+              "head_sha": head_sha,
+              "pr_number": number,
+              "pr_url": field(pr, "html_url"),
+              "merged_at": field(pr, "merged_at"),
+              "head_repo": field(pr, "head", "repo", "full_name"),
+              "head_is_fork": str(fork).lower(),
+              "association": field(pr, "author_association"),
+              "pr_author": field(pr, "user", "login"),
+              "merged_by": field(pr, "merged_by", "login"),
+              "ok": "true",
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          PY
+
       - name: Only our own merged pull requests and dispatches promote the baseline
+        id: authorize
+        if: steps.pr.outputs.ok == 'true'
         env:
           EVENT: ${{ github.event_name }}
           REPO: ${{ github.repository }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          ASSOCIATION: ${{ github.event.pull_request.author_association }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          MERGED: ${{ github.event.pull_request.merged }}
-          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+          HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
+          HEAD_IS_FORK: ${{ steps.pr.outputs.head_is_fork }}
+          ASSOCIATION: ${{ steps.pr.outputs.association }}
+          PR_AUTHOR: ${{ steps.pr.outputs.pr_author }}
+          MERGED_BY: ${{ steps.pr.outputs.merged_by }}
           GH_TOKEN: ${{ github.token }}   # read-only use: permission lookups for the PR author and merger
           # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
           # and the org's own GitHub App bot logins by name (space-separated), nothing else.
           ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
         run: |
-          set -eu
+          set -euo pipefail
           fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
           case "$EVENT" in
             workflow_dispatch)
               # Only someone with write access to this repository (or our App's token) can cause these
               # events; none of them runs pull-request code.
               ;;
-            pull_request_target)
+            push)
+              [ -n "$REPO" ] || fail "repository is empty"
               [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
               [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              [ -n "$ASSOCIATION" ] || fail "pull request author association is empty"
+              [ -n "$PR_AUTHOR" ] || fail "pull request author is empty"
               case "$ASSOCIATION" in
                 OWNER|MEMBER|COLLABORATOR) ;;
                 *)
@@ -429,23 +585,23 @@ PROMOTE_GUARD = '''  promote-guard:
                       case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
                   esac ;;
               esac
-              # Only our own authorised unmerged closes pass without promotion.
-              [ "$MERGED" = "true" ] || { echo "promote-guard: unmerged pull request; promotion is skipped" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
-              [ -n "$MERGED_BY" ] || fail "pull_request_target merger is empty"
+              [ -n "$MERGED_BY" ] || fail "push merger is empty"
               case " $ALLOWED_BOTS " in
                 *" $MERGED_BY "*) ;;
                 *)
                   # No author_association exists for the merger: ask GitHub for the merger's permission on
                   # this repository; anything but admin/maintain/write (or a failed call) refuses.
                   perm=$(gh api "repos/$REPO/collaborators/$MERGED_BY/permission" --jq .permission 2>/dev/null || echo none)
-                  case "$perm" in admin|maintain|write) ;; *) fail "pull_request_target merger ${MERGED_BY:-unknown} has permission '$perm', not write" ;; esac ;;
+                  case "$perm" in admin|maintain|write) ;; *) fail "push merger ${MERGED_BY:-unknown} has permission '$perm', not write" ;; esac ;;
               esac ;;
-            *) fail "event $EVENT does not run baseline promotion (only pull_request_target and workflow_dispatch are allowed)" ;;
+            *) fail "event $EVENT does not run baseline promotion (only push and workflow_dispatch are allowed)" ;;
           esac
           echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+          echo "ok=true" >> "$GITHUB_OUTPUT"
 
 '''
-PROMOTE_IF = "${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}"
+PROMOTE_IF = ("${{ needs.promote-guard.result == 'success' && "
+              "needs.promote-guard.outputs.ok == 'true' }}")
 GATE_NEEDS = 'needs: [authz, changes, preflight, build, corpus-parity-subset]'
 POST_GATE_NEEDS = ('needs: [authz, changes, preflight, build, build-macos, sanitizers, native-live, kernel-only, '
                    'corpus-parity-subset, preflight-slow, corpus-parity]')
@@ -733,8 +889,8 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
     findings = []
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
-        # These existing isolated-release pins are checked by runner_findings;
-        # they are the two exceptions explicitly retained by FLEET-POST=A.
+        # Per-job release/probe pins are checked by runner_findings; the probe
+        # shares release.yml's App credential and uses the post fleet.
         if name in RELEASE_JOB_RUNNERS:
             continue
         events = _events(workflow)
@@ -801,10 +957,14 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                 and _events(workflow) != {'workflow_dispatch'}):
             findings.append(f'{name} must retain workflow_dispatch only for pf-gcp-main jobs')
         if (name == 'promote-baseline.yml'
-                and _events(workflow) != {'pull_request_target', 'workflow_dispatch'}):
-            findings.append(f'{name} must retain pull_request_target and workflow_dispatch '
+                and _events(workflow) != {'push', 'workflow_dispatch'}):
+            findings.append(f'{name} must retain push and workflow_dispatch '
                             'only for pf-gcp-main promotion')
-        release_events = ({'pull_request_target', 'workflow_dispatch'}
+        if name == 'promote-baseline.yml':
+            on_body = '\n'.join(_job_block(workflow, 'on')[1:])
+            if _job_values(on_body, 'push') != ['branches: [main]']:
+                findings.append(f'{name} must restrict push to exactly branches: [main]')
+        release_events = ({'push', 'workflow_dispatch'}
                           if name == 'promote-baseline.yml' else {'workflow_dispatch'})
         if fixed_release and not routes[name] <= release_events:
             findings.append(f'{name} must not admit untrusted caller events to isolated release jobs')
@@ -840,9 +1000,17 @@ def runner_findings(workflows: dict[str, str]) -> list[str]:
                                bool(re.fullmatch(r'ubuntu-(?:\d{2}\.\d{2}|latest)-arm', runs_on[0]))))
             if job in fixed_release:
                 # A quoted JSON scalar does not select a YAML label array.
-                if _job_values(body, 'runs-on', unquote=False) != [fixed_release[job]]:
-                    findings.append(f'{name} job {job} must run on {fixed_release[job]} '
-                                    '(isolated release)')
+                actual = _job_values(body, 'runs-on', unquote=False)
+                expected = [fixed_release[job]]
+                if fixed_release[job] == PR_RUNNER:
+                    # Normalize the runner array here; the probe workflow pin below
+                    # compares nonblank lines after removing comment-only lines.
+                    actual = [_runner_value(value) for value in actual]
+                    expected = [_runner_value(value) for value in expected]
+                if actual != expected:
+                    suffix = {PR_RUNNER: '', POST_RUNNER: ' (post fleet)'}.get(
+                        fixed_release[job], ' (isolated release)')
+                    findings.append(f'{name} job {job} must run on {fixed_release[job]}{suffix}')
                 environments = _job_values(workflow, 'env') + _job_values(body, 'env')
                 if any(re.search(r'\bPF_CI_LABELS["\']?\s*:', value) for value in environments):
                     findings.append(f'{name} job {job} must not set PF_CI_LABELS '
@@ -967,6 +1135,200 @@ def _step_block(step: str, key: str) -> list[str]:
     return _job_block(re.sub(r'^( *)- ', r'\1  ', step, count=1), key)
 
 
+# ci_release_gate.py's phase-1 exemption is bounded by this exact writer.
+RELEASE_BUMP_PUBLISH_STEP = r'''      - name: Write bumped VERSION, commit, tag, push
+        id: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT:  ${{ steps.bump.outputs.next }}
+          TAG:   ${{ steps.bump.outputs.tag }}
+          RESET: ${{ steps.catalog.outputs.reset }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${NEXT}" > VERSION
+          cp "${RESET}" docker/run_failure_codes_diff.json
+          git add VERSION docker/run_failure_codes_diff.json
+          git commit -m "chore(release): ${TAG}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          python3 scripts/gen_run_failure_catalog_diff.py --check
+          git push --atomic origin HEAD "${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+'''
+
+# The release App token must see bypass_actors on every branch ruleset.
+# release-ruleset-probe.yml reports that visibility with the same token mint.
+# The gate requires one active main pull_request ruleset whose own bypass list
+# is exactly Integration 4105147 with bypass_mode always.
+# The workflow's contents: write GITHUB_TOKEN cannot replace that credential.
+RELEASE_GATE_STEP = r'''      - name: Refuse unless pineforge/verify and pineforge/parity are green
+        id: gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          python3 scripts/ci_release_gate.py gate \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
+'''
+
+# This tiny release-class workflow has no writer or release-gate phases.
+# Pin the complete executable shape so no extra token consumer can be hidden
+# in a workflow/job environment, an additional step or an error override.
+RELEASE_RULESETS_PROBE_WORKFLOW = '''name: Release ruleset probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authz:
+    name: authz
+    # Preflight pins executable workflow lines after removing comment-only lines.
+    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.
+    runs-on: ["self-hosted", "pf-gcp-pr"]
+    permissions: {}
+    # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
+    steps:
+      - name: Only our own pull requests and our own events run CI
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ github.token }}   # read-only use: one permission lookup for workflow_run
+          # Bot logins whose same-repository pull requests count as ours: dependabot[bot] (CI-DEPBOT A)
+          # and the org's own GitHub App bot logins by name (space-separated), nothing else.
+          ALLOWED_BOTS: "dependabot[bot] pineforge-app[bot]"
+        run: |
+          set -eu
+          fail() { echo "::error title=authz::$1"; echo "authz: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          case "$EVENT" in
+            push|workflow_dispatch|schedule|merge_group|release|workflow_call|repository_dispatch)
+              # Only someone with write access to this repository (or our App's token) can cause these
+              # events; none of them runs pull-request code.
+              ;;
+            workflow_run)
+              # LB-437: bind identity to the triggering run and its re-runner.
+              # These two App bots are fixed canon policy; ALLOWED_BOTS is PR-only.
+              [ -n "${WR_HEAD_REPO:-}" ] || fail "workflow_run head repository is missing"
+              [ -n "${WR_ACTOR:-}" ] || fail "workflow_run triggering actor is missing"
+              [ "$WR_HEAD_REPO" = "$REPO" ] || fail "workflow_run head repository does not match this repository"
+              case "$WR_ACTOR" in
+                "pineforge-app[bot]"|"pineforge-ci-dispatcher[bot]") ;;
+                *"[bot]") fail "workflow_run bot is not on the canon allowlist" ;;
+                *)
+                  perm=$(gh api "repos/$REPO/collaborators/$WR_ACTOR/permission" --jq .permission 2>/dev/null) || fail "workflow_run permission lookup failed"
+                  case "$perm" in admin|maintain|write) ;; *) fail "workflow_run triggering actor does not have write permission" ;; esac ;;
+              esac ;;
+            pull_request)
+              [ "$HEAD_REPO" = "$REPO" ] || fail "pull request from another repository (${HEAD_REPO:-unknown})"
+              [ "$HEAD_IS_FORK" = "false" ] || fail "pull request from a fork"
+              case "$ASSOCIATION" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  case " $ALLOWED_BOTS " in
+                    *" $PR_AUTHOR "*) ;;
+                    *)
+                      # A member whose org membership is private shows as CONTRIBUTOR: ask GitHub for the
+                      # author's permission on this repository; anything but admin/maintain/write (or a
+                      # failed call) refuses.
+                      perm=$(gh api "repos/$REPO/collaborators/$PR_AUTHOR/permission" --jq .permission 2>/dev/null || echo none)
+                      case "$perm" in admin|maintain|write) ;; *) fail "author ${PR_AUTHOR:-unknown} (${ASSOCIATION:-NONE}) has permission '$perm', not write, and is not an allowlisted bot" ;; esac ;;
+                  esac ;;
+              esac ;;
+            *) fail "event $EVENT does not run CI (pull_request_target and other events are not allowed)" ;;
+          esac
+          echo "authz: allowed ($EVENT${PR_AUTHOR:+ by $PR_AUTHOR})" >> "$GITHUB_STEP_SUMMARY"
+
+  probe:
+    needs: [authz]
+    runs-on: ["self-hosted","pf-gcp-post"]
+    steps:
+      - name: Refuse a dispatch ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=rulesets-probe::$1"; echo "rulesets-probe: REFUSED: $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$REF" = refs/heads/main ] || fail "release ruleset probe requires refs/heads/main"
+
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout
+        if: ${{ needs.authz.result == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Probe release ruleset barrier
+        if: ${{ needs.authz.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"
+'''
+
+
+def release_rulesets_probe_workflow_findings(workflow: str, release: str) -> list[str]:
+    steps = _steps(_jobs(workflow).get('probe', ''))
+    expected = _steps(_jobs(RELEASE_RULESETS_PROBE_WORKFLOW)['probe'])
+    findings = []
+    if not steps or _code(steps[0]) != _code(expected[0]):
+        findings.append('release-ruleset-probe.yml probe must refuse a dispatch ref other than '
+                        'refs/heads/main as its first step before minting the App token or checkout')
+    probe_app = _step_named(steps, '      - name: Mint org App token')
+    release_app = _step_named(_steps(_jobs(release).get('release', '')),
+                             '      - name: Mint org App token')
+    if (_code(workflow) != _code(RELEASE_RULESETS_PROBE_WORKFLOW)
+            or _code(probe_app) != _code(release_app)):
+        findings.append('release-ruleset-probe.yml must keep the dispatch-only read-only probe '
+                        'with the same release App token')
+    return findings
+
+
+def release_bump_workflow_findings(workflow: str) -> list[str]:
+    steps = _steps(_jobs(workflow).get('release', ''))
+    publish = _step_named(steps, '      - name: Write bumped VERSION, commit, tag, push')
+    findings = []
+    if _code(publish) != _code(RELEASE_BUMP_PUBLISH_STEP):
+        findings.append('release.yml must keep the exact two-file release bump writer, '
+                        'commit and atomic push')
+    gate = _step_named(steps, '      - name: Refuse unless pineforge/verify and pineforge/parity are green')
+    if _code(gate) != _code(RELEASE_GATE_STEP):
+        findings.append('release.yml must keep the unconditional release gate '
+                        'with its release App token '
+                        'for the App-only main pull_request barrier')
+    app = _step_named(steps, '      - name: Mint org App token')
+    checkout = _step_named(steps, '      - name: Checkout (full history)')
+    if (_step_values(app, 'id') != ['app']
+            or _step_values(app, 'uses') != ['actions/create-github-app-token@v1']
+            or _step_block(app, 'with') != [
+                '        with:',
+                '          app-id: ${{ secrets.PINEFORGE_APP_ID }}',
+                '          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}',
+                '          owner: ${{ github.repository_owner }}',
+                '          repositories: pineforge-engine']
+            or _step_values(checkout, 'uses') != ['actions/checkout@v4']
+            or _step_block(checkout, 'with') != [
+                '        with:', '          fetch-depth: 0',
+                '          token: ${{ steps.app.outputs.token }}']):
+        findings.append('release.yml bump push must use the release App installation token')
+    return findings
+
+
 def fast_rows(cmake: str) -> list[str]:
     """Read the single CMake population; no duplicate Python list of rows."""
     blocks = re.findall(r'^set\(PINEFORGE_PR_FAST_TESTS\n(.*?)^\)', cmake,
@@ -1010,7 +1372,12 @@ def authz_workflow_findings(workflow: str, name: str, aggregate: str) -> list[st
     if events is None or 'pull_request_target' in events:
         findings.append(f'{name} must use readable events without pull_request_target')
     pr = re.search(r'(?m)^  pull_request:[^\n]*(?:\n(?:    [^\n]*|[ \t]*))*', workflow)
-    if name == 'ci.yml' and (not pr or pr[0].strip() != 'pull_request:'):
+    if name == 'ci.yml' and (not pr or pr[0].strip() != (
+            'pull_request:\n'
+            '    # LB-387: suite jobs skip on a draft PR (the required aggregate then fails, never passes);\n'
+            '    # ready_for_review starts the full run when the PR is marked ready.\n'
+            '    # converted_to_draft re-runs the workflow so its failing aggregate supersedes the earlier ready run.\n'
+            '    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]')):
         findings.append('ci.yml must run on every pull_request without event filters')
     if _job_values(workflow, 'permissions') != ['contents: read']:
         findings.append(f'{name} must retain contents: read workflow permissions')
@@ -1231,6 +1598,8 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
     events = CI_EVENTS if pr else POST_CI_EVENTS
     if _job_block(workflow, 'on') != _code(events):
         findings.append(f'{name} must keep its exact {"unfiltered PR" if pr else "main push, nightly and manual"} triggers')
+    if pr and _job_block(workflow, 'concurrency') != _code(CI_CONCURRENCY):
+        findings.append('ci.yml must keep its exact draft and ready concurrency groups')
     jobs = _jobs(workflow)
     proofs = PR_PROOF_JOBS if pr else PROOF_JOBS
     expected_jobs = {'authz', 'changes', 'preflight', *proofs, 'build-gate'}
@@ -1256,7 +1625,7 @@ def pipeline_workflow_findings(workflow: str, name: str, *, pr: bool) -> list[st
         findings.append("changes must publish the base's scripts/ci_verifier_paths.py answer, exactly")
     preflight = jobs.get('preflight', '')
     if (sorted(_needs(preflight)) != ['authz', 'changes']
-            or _job_values(preflight, 'if') != [AUTHZ_ALWAYS]):
+            or _job_values(preflight, 'if') != [PREFLIGHT_IF if pr else AUTHZ_ALWAYS]):
         findings.append('preflight must follow authz and changes and run even if classification fails')
     if (f'      PINEFORGE_VERIFIER_SLOW: {PREFLIGHT_VERIFIER_SLOW}\n' not in preflight
             or preflight.count('PINEFORGE_VERIFIER_SLOW:') != 1):
@@ -1389,6 +1758,10 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             or _job_values(_jobs(subset).get('corpus-parity-subset', ''), 'if')):
         findings.append('PR parity workflow must retain only workflow_call, authz and an unconditional subset job')
     findings += docs_workflow_findings(docs, docs_post)
+    if 'release.yml' in workflows:
+        findings += release_bump_workflow_findings(workflows['release.yml'])
+        findings += release_rulesets_probe_workflow_findings(
+            workflows.get('release-ruleset-probe.yml', ''), workflows['release.yml'])
     for name, workflow in workflows.items():
         if name in RELEASE_JOB_RUNNERS:
             continue
@@ -1396,52 +1769,127 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
             if any(_CONTINUE_ON_ERROR.match(line) for line in _code(body)):
                 findings.append(f'{name} job {job} must not continue on error')
     # Baseline promotion is pineforge-workflow's campaign/ci/promote-baseline.yml,
-    # installed unchanged. Main's own copy runs on the closed PR
-    # (pull_request_target, never the PR's copy) and runs no PR code; the
-    # engine axis needs the newest pineforge/verify and pineforge/parity
-    # statuses on the PR head.
-    if ('  pull_request_target:\n    types: [closed]' not in promote
-            or _events(promote) != {'pull_request_target', 'workflow_dispatch'}
-            or re.search(r'^  pull_request:', promote, re.MULTILINE)
+    # installed unchanged. Main's own copy runs on push to main and resolves
+    # exactly one merged PR in the guard before authorizing its API identities.
+    # PR objects are fetched only for tree comparison. Both events retain
+    # the newest two engine head statuses and the codegen check-run rule.
+    promote_job = _jobs(promote).get('promote', '')
+    guard_job = _jobs(promote).get('promote-guard', '')
+    guard_steps = _steps(guard_job)
+    promote_steps = _steps(promote_job)
+    resolved = _step_named(guard_steps, '        id: pr')
+    authorized = _step_named(guard_steps, '        id: authorize')
+    exacttree = _step_named(promote_steps, '        id: exacttree')
+    head_gate = _step_named(promote_steps, '        id: ci')
+    if (_job_values(promote, 'concurrency') != [
+            'group: promote-baseline cancel-in-progress: false']
+            or _job_values(promote_job, 'concurrency')):
+        findings.append('baseline promotion must queue in group promote-baseline without cancellation')
+    resolver_env = (
+        'GH_TOKEN: ${{ github.token }}',
+        'EVENT_NAME: ${{ github.event_name }}',
+        'REPO: ${{ github.repository }}',
+        'REF: ${{ github.ref }}',
+        'SHA: ${{ github.sha }}',
+        'INPUT_MERGE_SHA: ${{ github.event.inputs.merge_commit }}',
+        'INPUT_HEAD_SHA: ${{ github.event.inputs.head_sha }}',
+        'INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}',
+        'INPUT_PR_URL: ${{ github.event.inputs.pr_url }}',
+        'INPUT_MERGED_AT: ${{ github.event.inputs.merged_at }}',
+    )
+    resolver_selection = (
+        'python3 - 3<<<"$pulls" <<\'PY\'',
+        'sha = os.environ["SHA"]',
+        'pages = json.loads(open(3, encoding="utf-8").read(), parse_constant=reject_constant)',
+        ('matches = [pr for page in pages for pr in page '
+         'if pr.get("state") == "closed" '
+         'and pr.get("merged_at") is not None '
+         'and pr.get("merge_commit_sha") == sha '
+         'and isinstance(pr.get("base"), dict) '
+         'and pr["base"].get("ref") == "main"]'),
+        'if len(matches) != 1:',
+    )
+    resolver_code = ' '.join(line.strip() for line in _code(resolved))
+    if (not resolved or _step_values(resolved, 'if')
+            or any(value not in resolved for value in resolver_env)
+            or any(value not in resolver_code for value in resolver_selection)
+            or 'gh api --paginate --slurp' not in resolved
+            or 'repos/$REPO/commits/$SHA/pulls?per_page=100' not in resolved
+            or 'github.event.pull_request' in promote
+            or 'pull_request_target' in promote):
+        findings.append('baseline promotion must resolve the pushed SHA or dispatch inputs without a PR payload')
+    # The guard resolves and authorizes before the promote job is admitted.
+    # Its main checkout, tree and gate checks precede any release credentials.
+    # No extra step before them may acquire credentials or bypass a refusal.
+    if ([_step_values(step, 'id') for step in guard_steps] != [['pr'], ['authorize']]
+            or _step_values(authorized, 'if') != ["steps.pr.outputs.ok == 'true'"]
+            or [_step_values(step, 'id') for step in promote_steps[:4]]
+            != [['axis'], [], ['exacttree'], ['ci']]
+            or _job_values(promote_job, 'if') != [PROMOTE_IF]
+            or len(promote_steps) < 4
+            or not any(value.startswith('actions/checkout@')
+                       for value in _step_values(promote_steps[1], 'uses'))
+            or _step_values(promote_steps[1], 'with') != ['fetch-depth: 0']
+            or _step_values(exacttree, 'if')
+            or _step_values(head_gate, 'if') != ["steps.exacttree.outputs.ok == 'true'"]
+            or any(_step_values(step, 'if') != ["steps.ci.outputs.green == 'true'"]
+                   for step in promote_steps[4:])):
+        findings.append('baseline promotion must guard resolution, tree and gate checks before credentials')
+    if (_events(promote) != {'push', 'workflow_dispatch'}
+            or re.search(r'^  pull_request(?:_target)?:', promote, re.MULTILINE)
             or '  statuses: read' not in promote
+            or '  pull-requests: read' not in promote
             or '  id-token: write' not in promote
-            or 'ref: ${{ github.event.pull_request.head' in promote
-            or '/commits/$HEAD_SHA/statuses?per_page=100' not in promote
-            or 'gh api --paginate' not in promote
-            or 'reduce (.[][]) as $s' not in promote
-            or 'if has($s.context) then . else .[$s.context] = $s.state end' not in promote
-            or '.["pineforge/verify"] == "success"' not in promote
-            or '.["pineforge/parity"] == "success"' not in promote
-            or promote.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
+            or promote.count('needs.promote-guard.outputs.head_sha') != 3
+            or promote.count('needs.promote-guard.outputs.pr_number') != 2
+            or promote.count('refs/pull/') != 1
+            or '/commits/$HEAD_SHA/statuses?per_page=100' not in head_gate
+            or 'gh api --paginate' not in head_gate
+            or 'reduce (.[][]) as $s' not in head_gate
+            or 'if has($s.context) then . else .[$s.context] = $s.state end' not in head_gate
+            or '.["pineforge/verify"] == "success"' not in head_gate
+            or '.["pineforge/parity"] == "success"' not in head_gate
+            or head_gate.count('echo "green=false" >> "$GITHUB_OUTPUT"; exit 0') != 2):
         findings.append("baseline promotion must run main's copy and require the latest two head statuses")
+    # The job pin cannot see inherited workflow settings.
+    for key in ('defaults', 'env'):
+        if _job_values(promote, key):
+            findings.append(f'baseline promotion must not define workflow-level {key}')
     promotion_jobs = _jobs(promote)
+    if _job_values(promotion_jobs.get('promote-guard', ''), 'defaults'):
+        findings.append('baseline promotion promote-guard must not define job-level defaults')
     promotion_text = _jobs_text(promote) or ''
     promotion_headers = list(_JOB_HEADER.finditer(promotion_text))
     if ([header.group(1) for header in promotion_headers] != ['promote-guard', 'promote']
+            or _job_values(guard_job, 'permissions') != ['pull-requests: read']
             or promotion_text[promotion_headers[0].start():promotion_headers[1].start()]
             != PROMOTE_GUARD):
-        findings.append('baseline promotion must start with the pinned credential-free promote-guard')
+        findings.append('baseline promotion must start with the pinned read-only promote-guard')
     promotion = promotion_jobs.get('promote', '')
     if (_job_values(promotion, 'needs') != ['[promote-guard]']
             or _job_values(promotion, 'if') != [PROMOTE_IF]):
-        findings.append('baseline promotion must need promote-guard and keep its merged-or-dispatch condition')
+        findings.append('baseline promotion must need promote-guard and require successful authorization')
     # PRs are squash-merged, so the PR head is never an ancestor of the base
-    # branch. The merge commit (the event's merge_commit_sha, or the dispatch
+    # branch. The merge commit (the resolved merge_commit_sha, or the dispatch
     # input) must be on the base branch and carry the gated PR head's tree; the
     # campaign tool gets that tree and promotes only the pair the merge gate's
     # verdict measured for it. Every skip exits green before promotion.
-    merge_env = ('MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha'
-                 ' || github.event.inputs.merge_commit }}')
-    head_env = 'HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}'
+    merge_env = 'MERGE_SHA: ${{ needs.promote-guard.outputs.merge_sha }}'
+    head_env = 'HEAD_SHA: ${{ needs.promote-guard.outputs.head_sha }}'
     if (promote.count(merge_env) != 2 or promote.count(head_env) != 3
-            or 'github.event.pull_request.head.sha || github.event.inputs.merge_commit' in promote
+            or promote.count('PR_NUMBER: ${{ needs.promote-guard.outputs.pr_number }}') != 2
+            or 'PR_URL: ${{ needs.promote-guard.outputs.pr_url }}' not in promote
+            or 'MERGED_AT: ${{ needs.promote-guard.outputs.merged_at }}' not in promote
             or '      head_sha:\n' not in promote
-            or 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"' not in promote
+            or 'BASE_REF: main' not in exacttree
+            or 'git fetch --quiet origin "$BASE_REF" "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/pr-head"'
+            not in exacttree
+            or 'git merge-base --is-ancestor "$MERGE_SHA" "origin/$BASE_REF"' not in exacttree
             or '--is-ancestor "$HEAD_SHA"' in promote
-            or 'merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")' not in promote
-            or 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")' not in promote
-            or 'if [ "$merge_tree" != "$head_tree" ]; then' not in promote
-            or promote.count('echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0') != 2
+            or 'merge_tree=$(git rev-parse "$MERGE_SHA^{tree}")' not in exacttree
+            or 'head_tree=$(git rev-parse "$HEAD_SHA^{tree}")' not in exacttree
+            or 'if [ "$merge_tree" != "$head_tree" ]; then' not in exacttree
+            or exacttree.count('echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0') != 2
             or 'MERGE_TREE: ${{ steps.exacttree.outputs.merge_tree }}' not in promote
             or '--merge-commit "$MERGE_SHA" --head-sha "$HEAD_SHA" --merge-tree "$MERGE_TREE"'
             not in promote
@@ -1662,6 +2110,9 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/test_report_outputs_keys.py')]),
         ('release-version-tests',
          [sys.executable, str(source / 'scripts/test_release_version.py')]),
+        # Includes the single App-only main pull_request barrier, complete
+        # Actions/ruleset pages, permission docs, bump identity/parent/tree diff.
+        # Binding in both fast/all.
         ('release-gate-tests', [sys.executable, str(source / 'scripts/test_ci_release_gate.py')]),
         # R5 run-failure codes: the catalog diff release.yml stamps is a tested
         # script, and the code tables of docs/pages/run-failure-codes.md are
@@ -1722,6 +2173,11 @@ def check_commands(source: Path, output: Path | None = None,
          [sys.executable, str(source / 'scripts/check_pine_to_native_coverage.py')]),
         ('doc-pine-coverage-tests',
          [sys.executable, str(source / 'scripts/test_check_pine_to_native_coverage.py')]),
+        ('duplicate-test-names-tests',
+         [sys.executable, str(source / 'scripts/test_check_duplicate_test_names.py')]),
+        ('duplicate-test-names',
+         [sys.executable, str(source / 'scripts/check_duplicate_test_names.py'),
+          '--root', str(source)]),
     ]
     if tier == 'github-only':
         return [entry for entry in commands if entry[0] in GITHUB_ONLY_PREFLIGHT_STAGES]

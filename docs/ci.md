@@ -67,13 +67,16 @@ or `slow` rows. The target rebuilds those executables with their library.
 PRs restore the newest compatible default-branch compiler cache, and only
 successful runs on `main` save that cache namespace.
 
-FLEET-POST=A splits routing at the file boundary: PR jobs use
-`["self-hosted","pf-gcp-pr"]`, and push/schedule/manual jobs use
-`["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
+FLEET-POST=A splits verification and documentation routing at the file boundary:
+PR jobs use `["self-hosted","pf-gcp-pr"]`, and post-merge push/schedule/manual
+jobs use `["self-hosted","pf-gcp-post"]`. No job chooses its label by event.
 `corpus-parity-subset.yml` is reusable only from the PR pipeline;
 `corpus-parity.yml` keeps full parity and the full-event subset on the post
 fleet. The checker follows local reusable calls, so a PR caller cannot borrow
 a post workflow even behind a job condition.
+
+The manual `release-ruleset-probe.yml` workflow runs `authz` on
+`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
@@ -1229,24 +1232,36 @@ the PR changed no engine behaviour. The `PineForge strict CI base` ruleset
 requires these two commit statuses. GitHub Actions jobs, including `build`,
 `sanitizers`, docs and the parity subset, are advisory. Baseline promotion
 (`promote-baseline.yml`, installed from the maintainers' private campaign
-tooling) runs `main`'s own copy on the closed PR
-(`pull_request_target`) and runs no PR code. It requires both statuses to be
-successful on the verified PR head and a merge commit on the PR's base branch that carries
+tooling) runs `main`'s own copy on a `push` to `main` and runs no PR code.
+It resolves the pushed SHA through the commit's associated PRs, requiring
+exactly one merged PR whose `merge_commit_sha` is that SHA and whose base is
+`main`; no match or ambiguity exits green with a notice. Manual dispatch
+retains its five merge inputs. It requires both statuses to be successful on
+the resolved PR head and a merge commit on `main` that carries
 exactly that head's tree (PRs are squash-merged, so the head itself never lands
 on the base branch). It hands the campaign tool the merge commit, the PR head and that
 tree, and the tool promotes the pair the merge gate's parity verdict measured
 for the tree; after the guard succeeds, ineligible baseline cases exit green
 without promoting.
 
-`promote-guard` must pass before the credential job runs.
-Every `pull_request_target` close requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
+`promote-guard` resolves the pushed SHA and must pass before the credential job runs.
+It reads the selected PR's full API response to obtain the merger, checking
+that its merge commit, base, head and merge time match the selected result.
+The guard has only `pull-requests: read` permission for
+these API reads, with no checkout, release secrets or OIDC permission.
+Every resolved PR requires a non-fork head in this repository and an author whose association is `OWNER`, `MEMBER` or `COLLABORATOR`, whose login is an allowlisted bot, or whose GitHub permission is `admin`, `maintain` or `write`.
 The permission fallback admits private organization members reported as `CONTRIBUTOR`; a failed or empty author lookup refuses promotion.
-Only after those checks can an unmerged close pass without a merger lookup and skip `promote`.
-For a merged PR, the merger login must be nonempty and must be an allowlisted bot or have `admin`, `maintain` or `write` permission; a failed or empty lookup refuses promotion.
+The merger login must be nonempty and must be an allowlisted bot or have `admin`, `maintain` or `write` permission; a failed or empty lookup refuses promotion.
+Every required PR identity field must be readable and nonempty; an invalid field fails red.
 Only `dependabot[bot]` and `pineforge-app[bot]` are allowlisted bots.
 Manual `workflow_dispatch` events pass the guard because dispatch requires write access.
 Every other event fails the guard before credentials are available.
-The trigger has no `branches:` filter and the guard does not require a `main` base ref; the existing tree check reads the PR's base ref, defaulting to `main` for dispatch.
+Pushes are restricted to `branches: [main]`, resolved PRs must target `main`,
+and the guard refuses a manual dispatch on any ref except `refs/heads/main`.
+The credential job needs the guard and requires both its successful result
+and the authorization step's `ok=true` output. A skipped or failed guard, or
+a resolver skip, cannot start that job. All merge metadata comes from the
+guard's outputs; push payloads supply no PR identity fields.
 
 The full corpus sweep remains a separate acceptance step. The nightly and
 manual corpus workflow, and the maintainers' full parity verification, keep
@@ -1464,8 +1479,9 @@ request and four on every other event.
 A push to `main` follows the same rule, since nothing downstream needs the
 proof jobs to have run on a merged commit: `release.yml` starts only on a
 manual dispatch and builds and verifies its own tarballs,
-`promote-baseline.yml` reads the `pineforge/verify` and `pineforge/parity`
-statuses on the pull request head, no workflow here starts on `workflow_run`,
+`promote-baseline.yml` starts on the push to `main`, resolves its merged PR,
+and reads the `pineforge/verify` and `pineforge/parity` statuses on that PR's
+head, no workflow here starts on `workflow_run`,
 and the ruleset requires only those two statuses. A documentation merge
 therefore does not rebuild; the `ci.yml` run on its commit is `preflight` and
 the skip. That run is `main`'s latest, the one the README badge shows, so after
@@ -1551,10 +1567,13 @@ pins that one job name and image, and the exception never applies to a
 workflow reachable from `pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Release and promotion are unchanged: `release`, `notify-hub`, Linux x64
-`prebuilt` and baseline `promote` use `["self-hosted","pf-gcp-main"]`.
+Release and promotion use the isolated release fleet:
+`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
+`["self-hosted","pf-gcp-main"]`.
+The release ruleset probe runs `authz` on `["self-hosted","pf-gcp-pr"]` and
+`probe` on `["self-hosted","pf-gcp-post"]`.
 Release's ARM/macOS artifact cells keep their existing hosted pins, and
-promotion keeps `pull_request_target` plus manual dispatch.
+promotion runs on a push to `main` plus manual dispatch from `main`.
 
 Every split workflow retains the canon authz step and its digest. All other
 jobs need authz; CI/native aggregates always run and refuse failed authz
@@ -1569,18 +1588,54 @@ default excludes `slow` from Debug and sanitizer runs on every event,
 including non-PR events; Release, kernel and native retain every row.
 PR CI keeps CR-233's Release smoke selected by CTest label `fast`.
 
+Baseline promotion uses `["self-hosted","pf-gcp-main"]` for its GitHub App
+secrets and inherited `id-token: write` permission. The release class admits
+this allowlisted workflow at `refs/heads/main`; WIF pins its
+`job_workflow_ref` and run ref to main without restricting the event.
+The pushed SHA must resolve to exactly one merged PR before authorization,
+tree equality and head-status checks admit promotion. A shared
+`promote-baseline` concurrency group with `cancel-in-progress: false` runs
+promotions one at a time. GitHub keeps one pending run per group, so a further
+merge while one promotion runs and another waits cancels the waiting run,
+which is then re-fired by manual dispatch.
+
+The named promotion exception requires exactly `push` and
+`workflow_dispatch`, pins the push filter to `branches: [main]`, and requires
+the shared concurrency group without cancellation. Its resolver reads page
+JSON from file descriptor 3, with the SHA passed through the environment.
+Malformed or excessively nested JSON, or a response that is not an array of
+page arrays of PR objects, exits green with a notice and `ok=false`, without
+merge metadata. The pins retain all four PR conditions and the exactly-one
+rule. Tests run the real resolver against fixture API responses, including
+multiple pages and responses larger than Linux's per-environment-string limit.
+A full API read of the selected PR must still match its merge, base, head and
+merge time, and supply readable identity fields; failures there refuse red.
+
 Legacy `PF_CI_LABELS` metadata does not select runners. Verification and
 parity commands use `$(getconf _NPROCESSORS_ONLN)` for parallelism.
 No job or step declares `timeout-minutes`, and no proof continues on error.
 The checker retains the bans on paid larger-runner labels and
 `larger_runner` keys. GitHub's platform maximum remains the only time bound.
 
-The credential-free `promote-guard` stays hosted on `ubuntu-latest`; the credential job keeps main's isolated release runner.
-The same stage pins the complete shared `promote-guard` block byte for byte, including comments, empty permissions, payload bindings, refusal script and separator, and the merged-or-dispatch credential job's dependency on it.
-Decision tests execute the guard script extracted from the real workflow with bash and an executable `gh` stub first on PATH that returns separate author and merger permissions by username.
-Mutation tests alter the real promotion workflow to replace the script with `exit 0`, move the unmerged exit before authorization, remove author or merger lookups and other checks, disable `fail`, bypass failed author or merger lookups, add guard credentials or a checkout, or disconnect the credential job.
-The release pool is restricted to the existing pinned release and promotion jobs; reusable call edges cannot admit PR events to them.
-Retired `pf-ci-release` labels remain refused, and an unpinned `flat-peak.yml` receives no release-pool exception.
+The read-only `promote-guard` stays hosted on `ubuntu-latest`; the credential
+job keeps main's isolated release runner. Preflight pins the complete guard
+block, including its sole `pull-requests: read` scope, API resolution, identity bindings,
+refusal script, authorization output and separator. It also pins the
+credential job's dependency and successful-authorization condition.
+Decision tests execute the real guard scripts with fixture API transport;
+only the external `gh` CLI is stubbed. Separate author and merger permission
+responses are selected by username. Mutation tests replace a script with
+`exit 0`, remove repository/fork/identity checks or permission lookups, disable
+`fail`, bypass failed lookups, add guard credentials or a checkout, or
+disconnect the credential job. Missing, skipped or unsuccessful authorization
+cannot admit promotion. The stage also rejects workflow-level `defaults` and
+`env`, and guard-level `defaults`, so an inherited shell or environment
+variable cannot bypass the guard pin.
+
+The release pool is restricted to the existing pinned release and promotion
+jobs; reusable call edges cannot admit PR events to them.
+Retired `pf-ci-release` labels remain refused, and an unpinned `flat-peak.yml`
+receives no release-pool exception.
 
 More cores do not shorten every job. The `test_ci_verify` CTest row
 (`scripts/test_ci_verify.py`) is one Python process, and in the main run at
@@ -1662,8 +1717,109 @@ exactly one associated merged PR targeting `main`, with `merge_commit_sha`
 equal to the release sha and a head tree matching the released tree, then
 reads that head's full contexts through the statuses API. PRs targeting other
 bases or naming a different merge commit are ignored; malformed fields refuse.
-Zero matches refuse; multiple matches refuse and name every matching PR, with
-no preference for the newest.
+When qualifying merged PRs exist, zero tree matches refuse; multiple matches
+refuse and name every matching PR, with no preference for the newest. A failed
+tree or status check never falls back to a release bump.
+
+When there is no qualifying merged PR for the current main sha, phase 1 permits
+one release bump only when all three conditions hold:
+
+1. GitHub's `repos/{repo}/actions/runs?head_sha=<sha>&per_page=100` returns at
+   least one run with `event == "push"`, `head_branch == "main"` and
+   `head_sha == <sha>`. Every such run must have both `actor.login` and
+   `triggering_actor.login` equal to the gate's fixed `RELEASE_PUSH_ACTOR`,
+   `pineforge-app[bot]`, the release App installation token used by
+   `release.yml`. All pages are read; missing HTTP headers, malformed pages,
+   an advertised unread Link next page, changing `total_count` or a row count
+   different from that total refuse. A matching count never overrides an
+   unread next page. Reaching the filtered API's 1000-run limit also refuses,
+   because completeness at that boundary cannot be inferred. Zero matching
+   runs refuse. A bump pushed seconds
+   ago may not have a post-merge run yet; retry the release once that push run exists.
+   At gate time, the guard also reads `repos/{repo}` to confirm main is still
+   the default branch, lists `repos/{repo}/rulesets?includes_parents=true&per_page=100`
+   with every page, and reads each branch ruleset by id for its conditions,
+   rules and `bypass_actors`. It selects branch rulesets whose `ref_name`
+   includes main (`~DEFAULT_BRANCH`, `refs/heads/main`, `~ALL`, or a matching
+   pathname pattern) without excluding main. Simple `*` and `?` patterns do
+   not cross `/`; advanced or unknown pattern syntax refuses.
+   There must be **one active applicable branch ruleset** carrying a
+   `pull_request` rule whose **own** `bypass_actors` list is exactly
+   `[{"actor_type": "Integration", "actor_id": 4105147, "bypass_mode": "always"}]`,
+   the release App token used by `release.yml`. That ruleset's PR rule blocks
+   every direct push by an actor that cannot bypass that same ruleset.
+   A status-check-only rule permits writers to push when its checks pass
+   and supplies no barrier. A disabled, evaluating or main-excluded App-only
+   PR ruleset supplies no barrier either. A second bypass actor, a different
+   App/type or a PR-only bypass mode on the candidate disqualifies it.
+   Other rulesets' bypass lists and enforcement do not supply or invalidate
+   a valid App-only PR barrier. Lists are never intersected: a person may hold
+   a repository role and belong to a team represented by different descriptors.
+   Ruleset names and ids are not pinned; tag-creation rulesets provide no
+   evidence about pushes to main. Every branch detail is still validated,
+   including details after a valid barrier, so unreadable or malformed
+   evidence refuses.
+   Both Actions and ruleset list reads retain HTTP Link headers and check
+   every advertised next page, consecutive page numbers and a terminal page;
+   missing headers, incomplete pagination, API errors, inconsistent
+   list/detail fields and malformed payloads refuse.
+   Every HTTP response body read as JSON, including paginated PR and status
+   lists, must contain exactly one JSON document before pagination is checked.
+   Extra documents (including a later page without its HTTP headers) or
+   trailing garbage refuse with an endpoint-specific diagnostic:
+   `returned an HTTP response body with trailing data; expected exactly one JSON document`.
+   Empty bodies refuse with `returned an empty payload`; a valid empty JSON
+   array is still a complete document.
+2. The bump has exactly one parent, and that parent passes the ordinary
+   phase-1 merged-PR/tree/full-status checks above, including the allowed
+   status creator. This depth is exactly one: a bump on another bump refuses
+   even when its grandparent was gated. A merge commit also refuses.
+3. The complete parent-to-bump file diff is exactly `VERSION` and
+   `docker/run_failure_codes_diff.json`, both status `M`, both regular blobs
+   with mode `100644` before and after. The gate compares complete recursive
+   Git trees, derives `M` from an existing path with a changed blob, and
+   refuses truncated trees. Added, deleted or renamed files, mode changes,
+   any extra file (including README or CHANGELOG), either missing
+   modification, and an empty diff refuse.
+
+Condition 1 proves who pushed this sha to main. It does not prove that the
+pushed content is what a particular release run built, or exclusive use of
+the App credential by this workflow. Commit author, committer and verification
+metadata provide no push-identity evidence. Condition 3 bounds the content
+changes to the two files whose values the release workflow computes: the next
+version and the reset catalog diff. Preflight pins the exact writer, staging,
+commit and atomic-push step and the App-token checkout wiring.
+
+The gate needs `bypass_actors` visible on every branch ruleset in the inventory.
+If the release App token cannot see them, the bump is refused.
+`release-ruleset-probe.yml` reports whether that token can see them.
+Visibility with the installation token, including inherited organization
+rulesets, is unverified until the probe runs. A missing field refuses;
+the guard never assumes an unreadable list is empty or App-only.
+The workflow-level `contents: write` setting scopes GITHUB_TOKEN.
+Preflight pins the unconditional gate invocation and its App token, and its
+binding release-gate tests pin this visibility requirement in code and docs.
+
+Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
+`main` to check actual ruleset visibility with the same App token mint as
+`release.yml`. The workflow file must be on the default branch, and the run
+must use `main`'s copy.
+The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on
+`["self-hosted","pf-gcp-pr"]`.
+`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
+so the one-time probe uses `pf-gcp-post`.
+The dispatch must run from `main`; the workflow itself refuses any other ref
+before minting the App token or checking out repository code.
+It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
+reading only repository metadata, the parent-inclusive ruleset inventory and
+branch details. Success prints the barrier id/name and one compact inventory
+line with enforcement, source and bypass visibility. Refusal exits 1 with empty
+stdout and the reader's `::error::` diagnostic; API/response failures name the endpoint.
+Two hidden rulesets need two dispatches: the first refusal names only the
+first hidden ruleset; make its `bypass_actors` visible before dispatching again
+to identify the second.
+The probe changes no release evidence or gate verdicts. A release `dry_run`
+on a merged PR does not exercise the bump-only ruleset reader.
 
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
 `scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
@@ -1672,7 +1828,7 @@ fixed in that constant by a reviewed PR. The release job cannot configure it
 through an environment variable or workflow input. At that sha and every
 descendant, the guard requires a main-proof receipt for the **exact main
 sha** with both full contexts green and does not consult PR heads. Missing,
-unreadable or non-green receipts refuse, with no transitional fallback.
+unreadable or non-green receipts refuse, with no PR or release-bump fallback.
 Commits preceding the cut-over retain phase 1; unknown ancestry refuses.
 The reader seam defines normalized context states, not a receipt storage format.
 
