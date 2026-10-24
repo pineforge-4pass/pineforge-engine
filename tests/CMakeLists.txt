@@ -4666,7 +4666,9 @@ if(PINEFORGE_BUILD_SOURCE_LAYER)
     endif()
 endif()
 
-if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER)
+# H2-3: this MODULE loads into Python, so its row shares the profile fence.
+if(PINEFORGE_BUILD_SOURCE_LAYER AND PINEFORGE_BUILD_LIVE_RUNNER
+   AND NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/same_calc_bracket/generated.cpp")
     add_library(same_calc_bracket_strategy MODULE
         fixtures/same_calc_bracket/generated.cpp
