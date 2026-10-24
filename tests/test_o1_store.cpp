@@ -979,10 +979,19 @@ void check_no_heap_after_open() {
   global_allocation::refusing = true;
   try {
     held = held && store->write(committed, 0, buffer.data(), 32) == 32;
+    std::fprintf(stderr, "no-heap committed: write held=%d\n", held ? 1 : 0);
     held = held && store->resize(committed, 100000);
+    std::fprintf(stderr, "no-heap committed: resize held=%d\n", held ? 1 : 0);
     committed_tx->commit();
     held = held && store->alive(committed);
     held = held && store->stats().bytes_resident == resident_before;
+    std::fprintf(stderr, "no-heap committed: end held=%d resident=%llu before=%llu\n",
+                 held ? 1 : 0,
+                 static_cast<unsigned long long>(store->stats().bytes_resident),
+                 static_cast<unsigned long long>(resident_before));
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "no-heap committed: threw %s\n", error.what());
+    held = false;
   } catch (...) {
     held = false;
   }
