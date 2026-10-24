@@ -114,6 +114,10 @@ void full_with_optional_omitted() {
                 "optional logical counts differ from their witnesses");
         // Names are embedded in trace witness leaves; there is no separate
         // name witness or interned name table in optional SummaryOnly.
+        // CORE-TOP ruling (N4, 12:10): trace_names.logical_count is the number
+        // of names RETAINED (0 when the sequence is not captured), documented
+        // in o1-report-contract.md next to the logical_count definition; a
+        // distinct-name count would need a growing dictionary.
         require_counts(metadata, 12, 0);
         require_no_optional_arrays(report);
         require(host.output_events_len() == 0, "omitted events are resident");

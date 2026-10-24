@@ -144,7 +144,7 @@ Each of `trades`, `equity_curve`, `broker_state_hash`, `trace`, `trace_names`,
 
 | Field | Meaning |
 | --- | --- |
-| `logical_count` (`int64_t`) | Number of final logical records produced by the authoritative pass, independent of capture and resident length. Disabled optional sources produce zero. |
+| `logical_count` (`int64_t`) | Number of final logical records produced by the authoritative pass, independent of capture and resident length. Disabled optional sources produce zero. The one exception is `trace_names`: its `logical_count` is the number of names RETAINED in the name table (a name dictionary would grow with distinct dynamic names, against the bounded-memory rule), so it is 0 when the sequence is not captured (the optional summary control and STREAMED) and N in FULL. |
 | `captured` (`uint32_t`) | Explicit 0/1 flag: the sequence was captured as requested output. A successfully captured empty sequence has 1; a deliberately omitted sequence has 0. |
 | `external` (`uint32_t`) | Explicit 0/1 flag: captured output belongs to the external sink. Implies `captured == 1`. It does not transfer sink ownership to the report. |
 
