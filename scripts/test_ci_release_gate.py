@@ -1603,6 +1603,150 @@ class ReleaseRulesetTests(unittest.TestCase):
                     f"pineforge/parity=success; tree {TREE}"))
 
 
+class RulesetsProbeTests(unittest.TestCase):
+    """Exercise the real CLI and reader; only GitHub transport is fake."""
+
+    def api_for(self, rows=None):
+        api = FakeAPI()
+        api.responses = {REPO_API: json.dumps({"default_branch": "main"})}
+        api.rulesets(release_rulesets() if rows is None else rows)
+        return api
+
+    def run_probe(self, api, *, main=None, repo=REPO):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        forbidden = mock.Mock(side_effect=AssertionError("probe must not run subprocesses"))
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                mock.patch.object(ci_release_gate.subprocess, "run", forbidden):
+            try:
+                code = (ci_release_gate.main if main is None else main)(
+                    ["rulesets-probe", "--repo", repo], api=api, git=forbidden)
+            except SystemExit as exc:
+                # An absent subcommand is an observable CLI refusal, not a
+                # fixture/import failure, when tracing this test on the base.
+                code = exc.code
+        forbidden.assert_not_called()
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_hidden_org_bypass_actors_refuses_with_the_reader_diagnostic(self):
+        rows = release_rulesets()
+        rows[0].update(id=13094758, name="default", source_type="Organization",
+                       source="example")
+        del rows[0]["bypass_actors"]
+        api = self.api_for(rows)
+        self.assertEqual(self.run_probe(api), (
+            1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or invalid "
+            "bypass_actors (App requires administration: read)\n"))
+        self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (f"repos/{REPO}/rulesets/13094758", False, None)])
+
+    def test_visible_barrier_prints_exact_evidence_and_only_reads_rulesets(self):
+        rows = release_rulesets()
+        rows[0].update(source_type="Organization", source="example")
+        rows[1].update(source_type="Repository", source=REPO)
+        api = self.api_for(rows)
+        self.assertEqual(self.run_probe(api), (0, (
+            "release ruleset barrier ok: ruleset 202 'fixture ruleset 202'\n"
+            "branch rulesets: 101 'fixture ruleset 101' active "
+            "source='Organization':'example' bypass_actors=visible; "
+            "202 'fixture ruleset 202' active "
+            f"source='Repository':'{REPO}' bypass_actors=visible\n"), ""))
+        self.assertEqual(api.calls, [
+            (REPO_API, False, None), (RULESETS_API, True, None),
+            (DEFAULT_RULESET_API, False, None), (STRICT_RULESET_API, False, None)])
+
+    def test_barrier_identity_and_inventory_are_not_fixture_constants(self):
+        rows = [ruleset(907, enforcement="evaluate"), ruleset(809)]
+        rows[0].update(name="other\nprotection", source_type="Organization", source="owner")
+        rows[1].update(name="release barrier", source_type="Repository", source="owner/other")
+        api = self.api_for(rows)
+        repo = "owner/other"
+        api.responses = {key.replace(REPO, repo): value for key, value in api.responses.items()}
+        self.assertEqual(self.run_probe(api, repo=repo), (0, (
+            "release ruleset barrier ok: ruleset 809 'release barrier'\n"
+            "branch rulesets: 907 'other\\nprotection' evaluate "
+            "source='Organization':'owner' bypass_actors=visible; "
+            "809 'release barrier' active "
+            "source='Repository':'owner/other' bypass_actors=visible\n"), ""))
+        self.assertEqual(api.calls, [
+            (f"repos/{repo}", False, None),
+            (f"repos/{repo}/rulesets?includes_parents=true&per_page=100", True, None),
+            (f"repos/{repo}/rulesets/907", False, None),
+            (f"repos/{repo}/rulesets/809", False, None)])
+
+    def test_missing_display_metadata_does_not_change_the_gate_verdict(self):
+        rows = [ruleset()]
+        api = self.api_for(rows)
+        summary = ruleset_summaries(rows)
+        del summary[0]["name"]
+        api.responses[RULESETS_API] = http_response(200, json.dumps(summary))
+        detail = {key: value for key, value in rows[0].items() if key != "name"}
+        api.responses[STRICT_RULESET_API] = json.dumps(detail)
+        self.assertEqual(self.run_probe(api), (0, (
+            "release ruleset barrier ok: ruleset 202 '<unknown>'\n"
+            "branch rulesets: 202 '<unknown>' active "
+            "source='<unknown>':'<unknown>' bypass_actors=visible\n"), ""))
+
+    def test_probe_matches_reader_for_every_existing_ruleset_fixture_row(self):
+        # Replay every fixture/subtest from the existing class, including the
+        # original full-source-mutant rows, without rewriting their inputs or
+        # weakening their gate assertions. Each original gate call also runs
+        # an independent real reader and the probe over identical responses.
+        for name in unittest.defaultTestLoader.getTestCaseNames(ReleaseRulesetTests):
+            with self.subTest(fixture_test=name):
+                case = ReleaseRulesetTests(name)
+                original = case.run_gate
+                checked = []
+
+                def compare_then_gate(**kwargs):
+                    direct, probe = FakeAPI(), FakeAPI()
+                    direct.responses = dict(case.api.responses)
+                    probe.responses = dict(case.api.responses)
+                    try:
+                        ci_release_gate._require_release_rulesets(direct, REPO)
+                    except ci_release_gate.ReleaseGateError as exc:
+                        expected = (1, "", f"::error::{exc}\n")
+                    else:
+                        expected = None
+                    result = self.run_probe(probe)
+                    if expected is None:
+                        self.assertEqual(result[0], 0, result)
+                        self.assertEqual(result[2], "")
+                        self.assertEqual(len(result[1].splitlines()), 2, result)
+                    else:
+                        self.assertEqual(result, expected)
+                    self.assertEqual(probe.calls, direct.calls)
+                    checked.append(result[0])
+                    return original(**kwargs)
+
+                case.run_gate = compare_then_gate
+                result = unittest.TestResult()
+                case.run(result)
+                self.assertEqual(result.errors + result.failures, [], name)
+                self.assertTrue(checked, f"{name} exercised no ruleset fixture")
+
+    def test_full_source_mutant_skipping_reader_admits_the_hidden_org_fixture(self):
+        rows = release_rulesets()
+        rows[0].update(id=13094758, name="default", source_type="Organization",
+                       source="example")
+        del rows[0]["bypass_actors"]
+        refusal = (1, "", f"::error::API repos/{REPO}/rulesets/13094758 returned missing or "
+                   "invalid bypass_actors (App requires administration: read)\n")
+        self.assertEqual(self.run_probe(self.api_for(rows)), refusal)
+        source = Path(ci_release_gate.__file__).read_text()
+        before = "    barrier, branches = _require_release_rulesets(api, repo)\n"
+        self.assertEqual(source.count(before), 1, "mutation must have one source target")
+        mutated = source.replace(
+            before, '    barrier, branches = {"id": 0, "name": "unverified"}, []\n', 1)
+        self.assertNotEqual(mutated, source)
+        namespace = {"__name__": "ci_release_rulesets_probe_mutant"}
+        exec(compile(mutated, ci_release_gate.__file__, "exec"), namespace)
+        api = self.api_for(rows)
+        self.assertEqual(self.run_probe(api, main=namespace["main"]), (
+            0, "release ruleset barrier ok: ruleset 0 'unverified'\nbranch rulesets: \n", ""))
+        self.assertEqual(api.calls, [], "the mutant must bypass the real readers")
+
+
 class APICommandTests(unittest.TestCase):
     def test_json_reader_accepts_an_empty_array_with_or_without_pagination(self):
         for paginate in (False, True):
@@ -1648,13 +1792,19 @@ class MainProofSeamTests(unittest.TestCase):
         self.assertEqual(len(writes), 1, "the cut-over must have only its checked-in assignment")
         main = next(node for node in module.body
                     if isinstance(node, ast.FunctionDef) and node.name == "main")
-        flags = [ast.literal_eval(argument)
+        modes = [ast.literal_eval(node.args[0])
                  for node in ast.walk(main)
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                 and node.func.attr == "add_argument"
-                 for argument in node.args]
-        self.assertEqual(flags, ["--repo", "--sha", "--ref"],
-                         "main must offer no cut-over override flag")
+                 and node.func.attr == "add_parser"]
+        self.assertEqual(modes, ["gate", "rulesets-probe"])
+        flags = {}
+        for node in ast.walk(main):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"):
+                flags.setdefault(node.func.value.id, []).extend(
+                    ast.literal_eval(argument) for argument in node.args)
+        self.assertEqual(flags, {"check": ["--repo", "--sha", "--ref"], "probe": ["--repo"]},
+                         "neither subcommand may offer a cut-over override flag")
 
     def test_reader_is_not_live_and_defines_no_storage_format(self):
         with self.assertRaisesRegex(NotImplementedError,

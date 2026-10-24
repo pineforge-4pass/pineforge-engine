@@ -56,12 +56,47 @@ FLEET_JOB_IDS = {
     'docs.yml': ('authz', 'build'),
     'docs-post.yml': ('authz', 'build'),
     'release.yml': ('release', 'prebuilt', 'notify-hub'),
+    'release-ruleset-probe.yml': ('probe',),
     'promote-baseline.yml': ('promote',),
 }
 HEAVY_CI_JOBS = ('preflight-slow', 'sanitizers', 'kernel-only', 'native-live', 'corpus-parity')
 PREFLIGHT_RUN = ('python3 scripts/ci_preflight.py --output-dir build-ci-preflight --tier '
                  + ci_preflight.PREFLIGHT_TIER)
 PROMOTION_AUTHORIZATION_STEP = 'Only our own merged pull requests and dispatches promote the baseline'
+RULESETS_PROBE_FINDING = (
+    'release-ruleset-probe.yml must keep the dispatch-only read-only probe '
+    'with the same release App token')
+RULESETS_PROBE_WORKFLOW = '''name: Release ruleset probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ["self-hosted","pf-gcp-main"]
+    steps:
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Probe release ruleset barrier
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"
+'''
 
 
 def job_script(ci, job, step_name=None):
@@ -1837,6 +1872,8 @@ exit "$lookup_exit"
                 'release': '["self-hosted","pf-gcp-main"]',
                 'prebuilt': '${{ matrix.runner }}',
                 'notify-hub': '["self-hosted","pf-gcp-main"]'},
+            'release-ruleset-probe.yml': {
+                'probe': '["self-hosted","pf-gcp-main"]'},
             'promote-baseline.yml': {
                 'promote': '["self-hosted","pf-gcp-main"]'},
         })
@@ -2092,6 +2129,7 @@ exit "$lookup_exit"
     def test_gcp_sites_require_every_routed_job(self):
         workflows = self.workflow_sources()
         for name, jobs in FLEET_JOB_IDS.items():
+            self.assertIn(name, workflows, f'{name} required fleet workflow is missing')
             for job in jobs:
                 with self.subTest(workflow=name, missing_job=job):
                     before = '  ' + job + ':' + _jobs(workflows[name])[job]
@@ -3434,6 +3472,86 @@ finally:
                               'for the App-only main pull_request barrier',
                               ci_workflow_findings(
                                   *original, others={**others, 'release.yml': changed}))
+
+    def test_release_ruleset_probe_workflow_is_installed_and_pinned(self):
+        path = ROOT / '.github/workflows/release-ruleset-probe.yml'
+        self.assertTrue(path.is_file(), 'the dispatch-only ruleset probe workflow is missing')
+        self.assertEqual(ci_preflight._code(path.read_text()),
+                         ci_preflight._code(RULESETS_PROBE_WORKFLOW))
+        self.assertEqual(ci_preflight.RELEASE_JOB_RUNNERS.get(path.name),
+                         {'probe': RELEASE_RUNNER})
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=self.other_sources()), [])
+
+    def test_release_ruleset_probe_contract_accepts_only_the_requested_workflow(self):
+        others = {**self.other_sources(), 'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}
+        self.assertEqual(ci_workflow_findings(*self.ci_sources(), others=others), [])
+
+    def test_release_ruleset_probe_workflow_mutations_refuse(self):
+        original, others = self.ci_sources(), self.other_sources()
+        # Each row changes an independent invariant of the concrete dispatch
+        # fixture; main has no probe contract and emits none of this finding.
+        for name, before, after in (
+                ('trigger', '  workflow_dispatch:', '  push:'),
+                ('extra trigger', '  workflow_dispatch:', '  workflow_dispatch:\n  pull_request:'),
+                ('inputs', '  workflow_dispatch:', '  workflow_dispatch:\n    inputs:\n      token:\n        type: string'),
+                ('permissions', '  contents: read', '  contents: write'),
+                ('extra scope', '  contents: read', '  contents: read\n  actions: read'),
+                ('job permissions', '    steps:', '    permissions:\n      contents: write\n    steps:'),
+                ('runner', RELEASE_RUNNER, POST_RUNNER),
+                ('app action', 'actions/create-github-app-token@v1',
+                 'actions/create-github-app-token@v2'),
+                ('app output', '        id: app', '        id: other'),
+                ('app id', 'secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
+                ('private key', 'secrets.PINEFORGE_APP_PRIVATE_KEY', 'secrets.OTHER_PRIVATE_KEY'),
+                ('owner', '${{ github.repository_owner }}', 'another-owner'),
+                ('repository', 'repositories: pineforge-engine', 'repositories: other'),
+                ('token permission set', '          repositories: pineforge-engine',
+                 '          repositories: pineforge-engine\n          permission-administration: read'),
+                ('token consumer', 'GH_TOKEN: ${{ steps.app.outputs.token }}',
+                 'GH_TOKEN: ${{ github.token }}'),
+                ('job token', '    steps:',
+                 '    env:\n      GH_TOKEN: ${{ steps.app.outputs.token }}\n    steps:'),
+                ('workflow token', 'jobs:', 'env:\n  GH_TOKEN: ${{ steps.app.outputs.token }}\n\njobs:'),
+                ('checkout persistence', 'persist-credentials: false', 'persist-credentials: true'),
+                ('checkout token', '          persist-credentials: false',
+                 '          persist-credentials: false\n          token: ${{ steps.app.outputs.token }}'),
+                ('another token consumer', '      - name: Checkout',
+                 '      - run: echo "${GH_TOKEN}"\n'
+                 '        env:\n          GH_TOKEN: ${{ steps.app.outputs.token }}\n'
+                 '      - name: Checkout'),
+                ('skip', '      - name: Probe release ruleset barrier',
+                 '      - name: Probe release ruleset barrier\n        if: false'),
+                ('ignore error', '        run: python3',
+                 '        continue-on-error: true\n        run: python3'),
+                ('subcommand', ' rulesets-probe --repo', ' gate --repo'),
+                ('masked exit', '--repo "${GITHUB_REPOSITORY}"',
+                 '--repo "${GITHUB_REPOSITORY}" || true'),
+                ('extra command', '--repo "${GITHUB_REPOSITORY}"',
+                 '--repo "${GITHUB_REPOSITORY}"; gh api repos/example/engine'),
+                ('token logging', '        run: python3', '        run: echo "$GH_TOKEN"; python3')):
+            with self.subTest(invariant=name):
+                self.assertEqual(RULESETS_PROBE_WORKFLOW.count(before), 1, name)
+                changed = RULESETS_PROBE_WORKFLOW.replace(before, after, 1)
+                self.assertNotEqual(changed, RULESETS_PROBE_WORKFLOW)
+                self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(
+                    *original, others={**others, 'release-ruleset-probe.yml': changed}))
+
+    def test_release_ruleset_probe_refuses_missing_workflow_or_different_release_token(self):
+        original, others = self.ci_sources(), self.other_sources()
+        missing = {name: body for name, body in others.items()
+                   if name != 'release-ruleset-probe.yml'}
+        self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(*original, others=missing))
+        for before, after in (
+                ('actions/create-github-app-token@v1', 'actions/create-github-app-token@v2'),
+                ('secrets.PINEFORGE_APP_ID', 'secrets.OTHER_APP_ID'),
+                ('secrets.PINEFORGE_APP_PRIVATE_KEY', 'secrets.OTHER_PRIVATE_KEY'),
+                ('          repositories: pineforge-engine',
+                 '          repositories: pineforge-engine\n          permission-contents: read')):
+            with self.subTest(release_token=after):
+                changed = in_step(others['release.yml'], 'release', 'Mint org App token', before, after)
+                self.assertIn(RULESETS_PROBE_FINDING, ci_workflow_findings(
+                    *original, others={**others, 'release.yml': changed,
+                                      'release-ruleset-probe.yml': RULESETS_PROBE_WORKFLOW}))
 
     def test_no_stage_is_advisory_today(self):
         for entry in check_commands(Path('/src')):

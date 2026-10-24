@@ -2,6 +2,7 @@
 """Refuse a release without full verification and parity evidence.
 
 Usage: ci_release_gate.py gate --repo OWNER/REPO --sha SHA --ref refs/heads/main
+       ci_release_gate.py rulesets-probe --repo OWNER/REPO
 
 Every GitHub API call is a read (GET), using the release job's own GH_TOKEN.
 Each endpoint/page is read at most once; failures refuse without retry or sleep.
@@ -348,7 +349,7 @@ def _ruleset_bypasses(payload: dict, endpoint: str) -> set[tuple[str, int | None
     return bypasses
 
 
-def _require_release_rulesets(api: API, repo: str) -> None:
+def _require_release_rulesets(api: API, repo: str) -> tuple[dict, list[dict]]:
     endpoint = f"repos/{repo}"
     repository = _read_json(api, endpoint)
     if not isinstance(repository, dict) or repository.get("default_branch") != "main":
@@ -370,6 +371,7 @@ def _require_release_rulesets(api: API, repo: str) -> None:
         summaries.append(row)
 
     barrier_found = False
+    barrier, branches = {}, []
     for summary in summaries:
         if summary["target"] != "branch":
             continue
@@ -386,12 +388,17 @@ def _require_release_rulesets(api: API, repo: str) -> None:
                 or any(not isinstance(rule, dict) or not isinstance(rule.get("type"), str)
                        or not rule["type"] for rule in rules)):
             raise ReleaseGateError(f"API {endpoint} returned invalid rules")
+        # Display metadata is evidence, not an additional gate requirement.
+        detail = {**summary, **payload}
+        branches.append(detail)
         blocking = any(rule["type"] == "pull_request" for rule in rules)
         if not applies or not blocking or payload["enforcement"] != "active":
             continue
         # This one PR rule blocks every direct push except its own bypasses.
         # Descriptor intersections cannot account for overlapping role/team members.
         if bypasses == {("Integration", RELEASE_APP_ID, "always")}:
+            if not barrier:
+                barrier = detail
             barrier_found = True
         # Finish reading all branch details so later API/visibility errors refuse.
 
@@ -399,6 +406,19 @@ def _require_release_rulesets(api: API, repo: str) -> None:
         raise ReleaseGateError("main requires an active applicable pull_request ruleset "
                                "with bypass_actors exactly "
                                f"Integration {RELEASE_APP_ID} with bypass_mode always")
+    return barrier, branches
+
+
+def rulesets_probe(repo: str, *, api: API) -> str:
+    """Read exactly the bump's ruleset evidence, with the same refusal policy."""
+    barrier, branches = _require_release_rulesets(api, repo)
+    inventory = "; ".join(
+        f"{row['id']} {row.get('name', '<unknown>')!r} {row['enforcement']} "
+        f"source={row.get('source_type', '<unknown>')!r}:{row.get('source', '<unknown>')!r} "
+        f"bypass_actors={'visible' if isinstance(row.get('bypass_actors'), list) else 'hidden'}"
+        for row in branches)
+    return (f"release ruleset barrier ok: ruleset {barrier['id']} "
+            f"{barrier.get('name', '<unknown>')!r}\nbranch rulesets: {inventory}")
 
 
 def _tree_files(api: API, repo: str, tree: str) -> dict[str, tuple[str, str, str]]:
@@ -610,10 +630,15 @@ def main(argv=None, *, api: API | None = None, git: Git | None = None) -> int:
     check.add_argument("--repo", required=True)
     check.add_argument("--sha", required=True)
     check.add_argument("--ref", required=True)
+    probe = modes.add_parser("rulesets-probe", help="read the release bump's ruleset barrier only")
+    probe.add_argument("--repo", required=True)
     args = parser.parse_args(argv)
     try:
-        green = gate(args.repo, args.sha, args.ref, api=api if api is not None else gh_api,
-                     git=git if git is not None else git_is_ancestor)
+        if args.mode == "rulesets-probe":
+            green = rulesets_probe(args.repo, api=api if api is not None else gh_api)
+        else:
+            green = gate(args.repo, args.sha, args.ref, api=api if api is not None else gh_api,
+                         git=git if git is not None else git_is_ancestor)
     except ReleaseGateError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

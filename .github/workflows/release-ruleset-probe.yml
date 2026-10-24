@@ -1,0 +1,32 @@
+name: Release ruleset probe
+
+# Read the bump's ruleset barrier with the release App installation token.
+# Keep the mint step identical to release.yml, including its permission set.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ["self-hosted","pf-gcp-main"]
+    steps:
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Probe release ruleset barrier
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"

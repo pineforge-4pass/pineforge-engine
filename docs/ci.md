@@ -1369,6 +1369,16 @@ Removing this App permission makes every release-bump exemption refuse.
 Preflight pins the unconditional gate invocation and its App token, and its
 binding release-gate tests pin this permission dependency in code and docs.
 
+Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once to check
+actual ruleset visibility with the same App token mint as `release.yml`.
+It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
+reading only repository metadata, the parent-inclusive ruleset inventory and
+branch details. Success prints the barrier id/name and one compact inventory
+line with enforcement, source and bypass visibility. Refusal exits 1 with empty
+stdout and the reader's `::error::` diagnostic naming the failing endpoint.
+The probe changes no release evidence or gate verdicts. A release `dry_run`
+on a merged PR does not exercise the bump-only ruleset reader.
+
 Phase 2 is **not live yet**: `MAIN_PROOF_WATCHER_FIRST_SHA` in
 `scripts/ci_release_gate.py` is `None`. When C2 main-watch (#176) supplies the
 receipt reader, the cut-over is the watcher's **first recorded main sha**,

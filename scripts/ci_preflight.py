@@ -145,6 +145,7 @@ HOSTED_JOB_RUNNERS = {
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'probe': RELEASE_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -877,8 +878,8 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
     findings = []
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
-        # These existing isolated-release pins are checked by runner_findings;
-        # they are the two exceptions explicitly retained by FLEET-POST=A.
+        # Isolated-release pins are checked by runner_findings; the probe
+        # shares release.yml's App credential and isolated runner.
         if name in RELEASE_JOB_RUNNERS:
             continue
         events = _events(workflow)
@@ -1150,6 +1151,53 @@ RELEASE_GATE_STEP = r'''      - name: Refuse unless pineforge/verify and pinefor
           python3 scripts/ci_release_gate.py gate \
             --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF}"
 '''
+
+# This tiny release-class workflow has no writer or release-gate phases.
+# Pin the complete executable shape so no extra token consumer can be hidden
+# in a workflow/job environment, an additional step or an error override.
+RELEASE_RULESETS_PROBE_WORKFLOW = '''name: Release ruleset probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ["self-hosted","pf-gcp-main"]
+    steps:
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: pineforge-engine
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Probe release ruleset barrier
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/ci_release_gate.py rulesets-probe --repo "${GITHUB_REPOSITORY}"
+'''
+
+
+def release_rulesets_probe_workflow_findings(workflow: str, release: str) -> list[str]:
+    probe_app = _step_named(_steps(_jobs(workflow).get('probe', '')),
+                           '      - name: Mint org App token')
+    release_app = _step_named(_steps(_jobs(release).get('release', '')),
+                             '      - name: Mint org App token')
+    if (_code(workflow) != _code(RELEASE_RULESETS_PROBE_WORKFLOW)
+            or _code(probe_app) != _code(release_app)):
+        return ['release-ruleset-probe.yml must keep the dispatch-only read-only probe '
+                'with the same release App token']
+    return []
 
 
 def release_bump_workflow_findings(workflow: str) -> list[str]:
@@ -1606,6 +1654,8 @@ def ci_workflow_findings(ci: str, native: str, promote: str, cmake: str,
     findings += docs_workflow_findings(docs, docs_post)
     if 'release.yml' in workflows:
         findings += release_bump_workflow_findings(workflows['release.yml'])
+        findings += release_rulesets_probe_workflow_findings(
+            workflows.get('release-ruleset-probe.yml', ''), workflows['release.yml'])
     for name, workflow in workflows.items():
         if name in RELEASE_JOB_RUNNERS:
             continue
