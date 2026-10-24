@@ -12,6 +12,7 @@ import builtins
 import contextlib
 import ctypes
 import errno
+import fcntl
 import hashlib
 import io
 import json
@@ -732,14 +733,46 @@ def snapshot(*directories):
                   for directory in directories for path in directory.rglob("*"))
 
 
+def sealed_arena_fd(size):
+    """A memfd sized to `size` and sealed GROW|SHRINK|SEAL (CR-267: the jailed
+    admission requires a sealed memfd on Linux). The caller owns the fd."""
+    flags = 1 | 2  # MFD_CLOEXEC | MFD_ALLOW_SEALING (linux/memfd.h)
+    if hasattr(os, "memfd_create"):
+        fd = os.memfd_create("pineforge-sink-fd-arena", flags)
+    else:
+        # The lab's relocatable CPython is built without os.memfd_create.
+        libc = ctypes.CDLL(None, use_errno=True)
+        fd = libc.memfd_create(b"pineforge-sink-fd-arena", flags)
+        if fd < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error), "memfd_create")
+    try:
+        os.ftruncate(fd, size)
+        seals = 0x0004 | 0x0002 | 0x0001  # F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL
+        fcntl.fcntl(fd, 1033, seals)  # F_ADD_SEALS
+        assert fcntl.fcntl(fd, 1034) == seals  # F_GET_SEALS
+        # Keep the number above the child's fixed arena slot 5 (seals live on
+        # the inode, so the duplicate carries them).
+        moved = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 16)
+        os.close(fd)
+        return moved
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def child_run(source, extra, *, transport="pipe", stub=True, jail=False,
               work=None, temporary=None, fault=None, break_after=None, pnls=PNLS,
-              without_arena=False, arena_path=None):
+              without_arena=False, arena_path=None, arena_fd=None):
     event_read, event_write = os.pipe()
     with contextlib.ExitStack() as inherited, Stream(transport, break_after=break_after) as stream:
         command = [sys.executable, "-B", str(Path(__file__).resolve()),
                    "--events-fd", str(event_write), "--owned-fd", str(stream.writer)]
         pass_fds = (stream.writer, event_write)
+        if arena_fd is not None:
+            command += ["--arena-fd", str(arena_fd),
+                        "--arena-bytes", str(os.fstat(arena_fd).st_size)]
+            pass_fds += (arena_fd,)
         if arena_path is not None:
             arena = inherited.enter_context(open(arena_path, "r+b", buffering=0))
             command += ["--arena-fd", str(arena.fileno()),
@@ -893,9 +926,9 @@ def test_native_jailed_fd_without_arena_refuses_before_scratch_or_sink(tmp_path)
 
 def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
     source = bars.csv_file(tmp_path, count=17)
-    arena = tmp_path / "inherited-arena"
-    with arena.open("wb") as prepared:
-        prepared.truncate(16 * 1024 * 1024)
+    # The jailed admission requires a sealed memfd arena (CR-267); an ordinary
+    # file is refused with report_sink_failed/arena_backing (the test above).
+    arena = sealed_arena_fd(16 * 1024 * 1024)
     work, temporary = tmp_path / "work", tmp_path / "tmp"
     work.mkdir(mode=0o555)
     temporary.mkdir(mode=0o555)
@@ -904,7 +937,7 @@ def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
         actual = child_run(
             source, ["--so", native_module(False), "--profile", "jailed",
                      "--input-tf", "1", "--script-tf", "1"],
-            stub=False, jail=True, work=work, temporary=temporary, arena_path=arena)
+            stub=False, jail=True, work=work, temporary=temporary, arena_fd=arena)
         assert actual[0] == 0 and actual[2] == "", actual
         document = json.loads(actual[1])
         assert "trades" not in document and "equity_curve" not in document
@@ -915,6 +948,7 @@ def test_native_jailed_fd_with_arena_and_zero_fsize_creates_no_files(tmp_path):
             assert sum(row.tag == "T" for row in records) == document["summary"]["total_trades"]
         assert snapshot(work, temporary) == before
     finally:
+        os.close(arena)
         work.chmod(0o755)
         temporary.chmod(0o755)
 
