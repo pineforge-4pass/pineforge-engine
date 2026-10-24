@@ -19,10 +19,10 @@
 // holding the first held date through the year after the last, whose dates
 // follow the weekday rule: a stream's bars after the held ones.
 //
-// The bounded form. The periods are never stored. A generator walks the
-// feeds once, in time order, and turns the sessions it meets into the periods'
-// opens one at a time: the days of a year are scanned in order, the held
-// sessions are merged from the two feeds as they come, and only the running
+// The bounded form. The periods are never stored. On ordered feeds a
+// generator walks the feeds once, in time order, turning the sessions it
+// meets into period opens one at a time: the days of a year are scanned in
+// order, their held sessions are merged as they come, and only the running
 // count of the year, the position in each feed and the day being scanned are
 // kept. A source answers "which period holds this instant" from the last
 // kMultiDayWindow - 1 opens the generator produced and the one it produced
@@ -31,18 +31,20 @@
 // the answers are the same, and for the questions a run asks -- the current
 // period, the next input bar's, the previous one's -- they come from the
 // buffer. The memory held is the same for a month of days and for forty years
-// of them; planning (make_multi_day_period_source) walks the feeds twice with
-// the same few words of state, where the table it replaces held a node per
-// held session day while it was built.
+// of them; ordered planning (make_multi_day_period_source) walks the feeds
+// twice with the same few words of state, where the table it replaces held
+// a node per held session day while it was built.
 //
-// The domain. The feeds are strictly increasing in time (the host refuses
-// others) and the session days they fall in never go back, which holds for
-// every calendar but a clock change that moves the local date
-// (native_calendar.hpp's note on NativeSessionDay). Such a feed gets no
-// partition, where the table, a map that sorted the days itself, would have
-// been built: the one input the table accepted and this refuses. The source
-// reads the feeds' bars until the run that planned it is over; the aggregator
-// it is installed in is rebuilt at the next run's prepare.
+// The feeds are strictly increasing in time (the host refuses others), but
+// their resolved session dates can go back at a clock change, including
+// through the legacy coverage clock. When the bounded merge detects that,
+// planning instead rescans both feeds for each calendar year's held dates.
+// Only one year's date slots are retained, in kUnorderedRescanDays entries;
+// all resolutions are visited, chart first, keeping each date's first stamp.
+// Even a regression larger than the window is exact: the window limits
+// retained dates, not how far back a rescan looks. The source reads the
+// feeds' bars until the run that planned it is over; the aggregator it is
+// installed in is rebuilt at the next run's prepare.
 //
 // Equivalence. The buffered form answers exactly what the stored table did;
 // tests/test_multi_day_periods_bounded.cpp keeps that table's builder as the
@@ -57,6 +59,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -69,6 +72,13 @@ namespace pineforge::source {
 /// The most period opens a multi-day period source holds at once: the recent
 /// ones it answers short questions from, and the next one ahead.
 inline constexpr std::size_t kMultiDayWindow = 16;
+
+/// Bounds the fallback's retained trading-date slots to one calendar year,
+/// including a leap year; N-day counting restarts each year. Clock changes
+/// (also through the legacy coverage clock) normally regress dates by about
+/// a day. No distance bound is assumed: full-feed rescans remain exact even
+/// beyond this window, replacing the slots rather than accumulating years.
+inline constexpr std::size_t kUnorderedRescanDays = 366;
 
 /// What a run holds of the symbol the N-day request reads.
 struct MultiDayFeeds {
@@ -408,15 +418,304 @@ private:
     bool has_next_ = false;
 };
 
+// Separate fallback classes keep the ordered generator's code, object sizes
+// and allocation path unchanged. A year's slots are the old map restricted
+// to that year, rebuilt from the beginning of both feeds on every reload.
+class RescannedHeldDays {
+public:
+    explicit RescannedHeldDays(const Params& params) : params_(&params) {}
+
+    bool find(std::int64_t ordinal, std::int64_t& value) {
+        if (failed_ || ordinal < params_->first || ordinal > params_->last) return false;
+        if (!loaded_ || ordinal < begin_ || ordinal >= end_) {
+            const std::int64_t year = native_calendar::native_civil_date(ordinal).year;
+            begin_ = native_calendar::native_civil_days(year, 1, 1);
+            end_ = native_calendar::native_civil_days(year + 1, 1, 1);
+            if (end_ <= begin_
+                || end_ - begin_ > static_cast<std::int64_t>(kUnorderedRescanDays)) {
+                failed_ = true;
+                return false;
+            }
+            present_.fill(false);
+            scan(params_->chart, params_->n_chart, params_->daily_chart);
+            if (!failed_) scan(params_->aux, params_->n_aux, false);
+            loaded_ = true;
+        }
+        if (failed_) return false;
+        if (ordinal < begin_ || ordinal >= end_) {
+            failed_ = true;
+            return false;
+        }
+        const std::size_t at = static_cast<std::size_t>(ordinal - begin_);
+        if (at >= values_.size()) {
+            failed_ = true;
+            return false;
+        }
+        if (!present_[at]) return false;
+        value = values_[at];
+        return true;
+    }
+
+    bool failed() const { return failed_; }
+
+private:
+    void scan(const Bar* bars, std::size_t n, bool own_open) {
+        FeedWalk walk(*params_, bars, n, own_open);
+        HeldDay day;
+        while (walk.next(day)) {
+            // Never stop at a high ordinal: a later resolution can return
+            // to this year, even from more than one window away.
+            if (day.ordinal < begin_ || day.ordinal >= end_) continue;
+            const std::size_t at = static_cast<std::size_t>(day.ordinal - begin_);
+            if (at >= values_.size()) {
+                failed_ = true;
+                return;
+            }
+            if (!present_[at]) {
+                present_[at] = true;
+                values_[at] = day.value;
+            }
+        }
+    }
+
+    const Params* params_;
+    std::array<std::int64_t, kUnorderedRescanDays> values_{};
+    std::array<bool, kUnorderedRescanDays> present_{};
+    std::int64_t begin_ = 0;
+    std::int64_t end_ = 0;
+    bool loaded_ = false;
+    bool failed_ = false;
+};
+
+// The same date counting, first-period selection and stamp validation as
+// Stamps, using a rescan lookup instead of the ordered held-date iterator.
+class RescannedStamps {
+public:
+    explicit RescannedStamps(const Params& params)
+        : params_(&params),
+          held_(params),
+          year_(params.first_year),
+          day_(native_calendar::native_civil_days(params.first_year, 1, 1)),
+          year_end_(native_calendar::native_civil_days(params.first_year + 1, 1, 1)) {}
+
+    bool next(std::int64_t& stamp) {
+        if (failed_ || done_) return false;
+        Open open;
+        if (!started_) {
+            started_ = true;
+            bool begun = false;
+            Open begin;
+            while (next_open(open)) {
+                if (open.date > params_->first) {
+                    ahead_ = open;
+                    has_ahead_ = true;
+                    break;
+                }
+                begin = open;
+                begun = true;
+            }
+            if (!begun) {
+                failed_ = true;
+                return false;
+            }
+            open = begin;
+        } else if (has_ahead_) {
+            open = ahead_;
+            has_ahead_ = false;
+        } else if (!next_open(open)) {
+            done_ = true;
+            return false;
+        }
+        std::int64_t at = open.value;
+        if (!open.held) {
+            const native_calendar::NativeCivilDate date = native_calendar::native_civil_date(open.date);
+            const auto noon = native_calendar::resolve_civil(
+                params_->tz.empty() ? "UTC" : params_->tz, static_cast<int>(date.year),
+                date.month, date.day, 12, 0);
+            if (!noon) {
+                failed_ = true;
+                return false;
+            }
+            at = session_period_open_ms(noon->epoch_ms, params_->tz, params_->session,
+                                        CalendarPeriod::DAY);
+        }
+        if (has_previous_ && at <= previous_) {
+            failed_ = true;
+            return false;
+        }
+        has_previous_ = true;
+        previous_ = at;
+        stamp = at;
+        return true;
+    }
+
+    bool failed() const { return failed_; }
+
+private:
+    struct Open {
+        std::int64_t date = 0;
+        bool held = false;
+        std::int64_t value = 0;
+    };
+
+    bool next_open(Open& open) {
+        const Params& p = *params_;
+        for (;;) {
+            if (day_ >= year_end_) {
+                if (year_ >= p.last_year) return false;
+                ++year_;
+                day_ = native_calendar::native_civil_days(year_, 1, 1);
+                year_end_ = native_calendar::native_civil_days(year_ + 1, 1, 1);
+                count_ = 0;
+                continue;
+            }
+            const std::int64_t d = day_++;
+            std::int64_t value = 0;
+            const bool is_held = held_.find(d, value);
+            if (held_.failed()) {
+                failed_ = true;
+                return false;
+            }
+            bool trading = false;
+            if (p.exchange_calendar && d >= p.first && d <= p.last) {
+                trading = is_held;
+            } else {
+                const std::int64_t weekday = ((d % 7) + 7 + 4) % 7;
+                trading = p.every_day || (weekday >= 1 && weekday <= 5);
+            }
+            if (!trading) continue;
+            if (count_++ % p.days == 0) {
+                open.date = d;
+                open.held = is_held;
+                open.value = value;
+                return true;
+            }
+        }
+    }
+
+    const Params* params_;
+    RescannedHeldDays held_;
+    std::int64_t year_;
+    std::int64_t day_;
+    std::int64_t year_end_;
+    std::int64_t count_ = 0;
+    Open ahead_;
+    bool has_ahead_ = false;
+    bool started_ = false;
+    bool done_ = false;
+    bool failed_ = false;
+    bool has_previous_ = false;
+    std::int64_t previous_ = 0;
+};
+
+// The ordered Source's recent-open/restart policy over the fallback
+// generator, without adding a fallback field or dispatch to Source.
+class RescannedSource final : public TimeframeAggregator::PeriodSource {
+public:
+    RescannedSource(std::shared_ptr<const Params> params, std::int64_t first_stamp,
+                    std::int64_t last_stamp)
+        : params_(std::move(params)), first_stamp_(first_stamp), last_stamp_(last_stamp) {
+        recent_.reserve(kBuffered + 1);
+    }
+
+    bool stamp_at(std::int64_t ms, std::int64_t& stamp, bool& last) override {
+        if (ms < first_stamp_) return false;
+        if (recent_.empty() || ms < recent_.front()) restart();
+        if (recent_.empty()) return false;
+        while (has_next_ && next_ <= ms) advance();
+        const auto after = std::upper_bound(recent_.begin(), recent_.end(), ms);
+        if (after == recent_.begin()) return false;
+        stamp = *(after - 1);
+        last = !has_next_ && after == recent_.end();
+        return true;
+    }
+
+    std::int64_t last_stamp() const override { return last_stamp_; }
+
+    std::size_t stamps_held() const override { return recent_.size() + (has_next_ ? 1u : 0u); }
+
+private:
+    static constexpr std::size_t kBuffered = kMultiDayWindow - 1;
+
+    void advance() {
+        NativeDayPartitionScope nominal(nullptr);
+        recent_.push_back(next_);
+        if (recent_.size() > kBuffered) recent_.erase(recent_.begin());
+        has_next_ = stamps_->next(next_);
+    }
+
+    void restart() {
+        NativeDayPartitionScope nominal(nullptr);
+        // Release the previous date window before allocating the next one.
+        stamps_.reset();
+        stamps_ = std::make_unique<RescannedStamps>(*params_);
+        recent_.clear();
+        has_next_ = false;
+        std::int64_t first = 0;
+        if (!stamps_->next(first)) return;
+        recent_.push_back(first);
+        has_next_ = stamps_->next(next_);
+    }
+
+    std::shared_ptr<const Params> params_;
+    std::int64_t first_stamp_;
+    std::int64_t last_stamp_;
+    std::unique_ptr<RescannedStamps> stamps_;
+    std::vector<std::int64_t> recent_;
+    std::int64_t next_ = 0;
+    bool has_next_ = false;
+};
+
+inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_rescanned_source(
+        std::shared_ptr<Params> params) {
+    bool any = false;
+    const auto scan_bounds = [&](const Bar* bars, std::size_t n, bool own_open) {
+        FeedWalk walk(*params, bars, n, own_open);
+        HeldDay day;
+        while (walk.next(day)) {
+            if (!any) {
+                params->first = day.ordinal;
+                params->last = day.ordinal;
+            } else {
+                params->first = std::min(params->first, day.ordinal);
+                params->last = std::max(params->last, day.ordinal);
+            }
+            any = true;
+        }
+    };
+    scan_bounds(params->chart, params->n_chart, params->daily_chart);
+    scan_bounds(params->aux, params->n_aux, false);
+    if (!any) return nullptr;
+    params->first_year = native_calendar::native_civil_date(params->first).year;
+    params->last_year = native_calendar::native_civil_date(params->last).year + 1;
+    std::int64_t first_stamp = 0;
+    std::int64_t last_stamp = 0;
+    {
+        // Allocate the date arrays only after the ordered scan failed;
+        // keep them out of the ordered generator and source objects.
+        auto stamps = std::make_unique<RescannedStamps>(*params);
+        std::int64_t stamp = 0;
+        bool have_stamp = false;
+        while (stamps->next(stamp)) {
+            if (!have_stamp) first_stamp = stamp;
+            last_stamp = stamp;
+            have_stamp = true;
+        }
+        if (!have_stamp || stamps->failed()) return nullptr;
+    }
+    return std::make_shared<RescannedSource>(std::move(params), first_stamp, last_stamp);
+}
+
 }  // namespace multi_day_detail
 
 /// The N-day partition of `feeds`, or null where TradingView's rule yields
 /// none: fewer than two days, a session that does not parse, no held session
 /// day, no period opening at or before the first held day, an open that does
-/// not come after the one before it, a date whose local noon does not exist,
-/// or a feed whose session days go back. Planning walks the feeds twice (the
-/// first and last held day, then every period once to prove the partition
-/// whole) and keeps no table of what it saw.
+/// not come after the one before it, or a date whose local noon does not
+/// exist. Ordered planning walks the feeds twice (the first and last held
+/// day, then every period once to prove the partition whole). An unordered
+/// feed instead uses full-feed rescans with at most kUnorderedRescanDays
+/// retained date slots; neither path keeps a table of all held days.
 inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_multi_day_period_source(
         const MultiDayFeeds& feeds) {
     namespace detail = multi_day_detail;
@@ -445,7 +744,10 @@ inline std::shared_ptr<TimeframeAggregator::PeriodSource> make_multi_day_period_
             params->last = day.ordinal;
             any = true;
         }
-        if (!any || !held.ordered()) return nullptr;
+        if (!any || !held.ordered()) {
+            if (!any) return nullptr;
+            return detail::make_rescanned_source(std::move(params));
+        }
     }
     params->first_year = native_calendar::native_civil_date(params->first).year;
     params->last_year = native_calendar::native_civil_date(params->last).year + 1;
