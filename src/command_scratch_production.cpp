@@ -330,8 +330,8 @@ protected:
         int result;
         do {
 #if defined(__APPLE__)
-            // macOS has no fdatasync: F_FULLFSYNC is the nearest durable flush; fsync if it fails.
-            result = durability == ScratchDurability::data && ::fcntl(fd_, F_FULLFSYNC) != -1
+            // macOS has no fdatasync and its fsync stops short of stable storage: both modes use F_FULLFSYNC, fsync if it fails.
+            result = ::fcntl(fd_, F_FULLFSYNC) != -1
                 ? 0 : ::fsync(fd_);
 #else
             result = durability == ScratchDurability::data ? ::fdatasync(fd_) : ::fsync(fd_);
