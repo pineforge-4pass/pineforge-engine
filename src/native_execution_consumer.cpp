@@ -3166,6 +3166,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         closed_row_prefix_.clear();
     }
     engine.trades_.set_scratch_directory(engine.report_sink_state_.scratch_dir);
+    // The ledger read cache is bounded by the run's memory contract: a sink run
+    // keeps it at a fixed size independent of the trade count (the sink
+    // heap-flatness witness); other runs use the default budget.
+    engine.trades_.set_cache_rows(engine.report_sink_state_.enabled
+        ? TradeLedger::kSinkCacheRows : TradeLedger::kDefaultCacheRows);
     precommit_digest_.reset();
     margin_liquidation_.reset();
     has_margin_path_ = false;

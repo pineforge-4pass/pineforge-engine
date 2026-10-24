@@ -8,6 +8,16 @@ namespace {
 using namespace p2cx_tledger;
 using Size = TradeLedger::size_type;
 
+// A sink run keeps the read cache inside one report_sink::kScratchWindowBytes
+// (64 KiB, src/report_scratch.hpp): the sink heap-flatness witness
+// (test_selected_metrics_l17b) allows 2 windows for ALL working storage, of
+// which the sink's own window takes one. 128 x 312 = 39,936 <= 65,536.
+static_assert(TradeLedger::kSinkCacheRows * TradeLedger::kLedgerEntryBytes <= 64U * 1024U,
+              "sink-run ledger cache exceeds one scratch window");
+static_assert(TradeLedger::kSinkCacheRows >= TradeLedger::kResidentRows
+              && TradeLedger::kSinkCacheRows <= TradeLedger::kDefaultCacheRows,
+              "sink-run ledger cache rows outside the budget range");
+
 void bounded(const TradeLedger& ledger) {
     CHECK(ledger.cache_size() <= ledger.cache_rows());
     CHECK(ledger.cache_resident_bytes()
