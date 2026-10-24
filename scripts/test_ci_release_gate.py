@@ -1685,14 +1685,20 @@ class RulesetsProbeTests(unittest.TestCase):
             'PR jobs use `["self-hosted","pf-gcp-pr"]`, and post-merge push/schedule/manual\n'
             'jobs use `["self-hosted","pf-gcp-post"]`.',
             "The manual `release-ruleset-probe.yml` workflow runs `authz` on\n"
-            '`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-main"]`.',
-            "Release, promotion and the release ruleset probe use the isolated release fleet:\n"
-            "`release`, `notify-hub`, Linux x64 `prebuilt`, baseline `promote` and\n"
-            '`release-ruleset-probe.yml`\'s `probe` job use `["self-hosted","pf-gcp-main"]`.',
+            '`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.',
+            "Release and promotion use the isolated release fleet:\n"
+            "`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use\n"
+            '`["self-hosted","pf-gcp-main"]`.\n'
+            'The release ruleset probe runs `authz` on `["self-hosted","pf-gcp-pr"]` and\n'
+            '`probe` on `["self-hosted","pf-gcp-post"]`.',
             "Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from\n"
             "`main` to check actual ruleset visibility with the same App token mint as\n"
             "`release.yml`. The workflow file must be on the default branch, and the run\n"
-            "must use `main`'s copy.",
+            "must use `main`'s copy.\n"
+            'The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on\n'
+            '`["self-hosted","pf-gcp-pr"]`.',
+            "`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),\n"
+            "so the one-time probe uses `pf-gcp-post`.",
         )
         message = "docs must state the probe's main dispatch and actual fleet routes"
         for required in requirements:

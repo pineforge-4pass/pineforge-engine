@@ -154,7 +154,7 @@ HOSTED_JOB_RUNNERS = {
 RELEASE_JOB_RUNNERS = {
     'release.yml': {'release': RELEASE_RUNNER, 'prebuilt': HOSTED_MATRIX_RUNNER,
                     'notify-hub': RELEASE_RUNNER},
-    'release-ruleset-probe.yml': {'authz': PR_RUNNER, 'probe': RELEASE_RUNNER},
+    'release-ruleset-probe.yml': {'authz': PR_RUNNER, 'probe': POST_RUNNER},
     'promote-baseline.yml': {'promote': RELEASE_RUNNER},
 }
 # Credential-bearing jobs outside the release pins and gated docs build retain
@@ -889,8 +889,8 @@ def workflow_fleet_findings(workflows: dict[str, str]) -> list[str]:
     findings = []
     routes = workflow_event_routes(workflows)
     for name, workflow in workflows.items():
-        # Isolated-release pins are checked by runner_findings; the probe
-        # shares release.yml's App credential and isolated runner.
+        # Per-job release/probe pins are checked by runner_findings; the probe
+        # shares release.yml's App credential and uses the post fleet.
         if name in RELEASE_JOB_RUNNERS:
             continue
         events = _events(workflow)
@@ -1186,7 +1186,7 @@ jobs:
   authz:
     name: authz
     # Preflight pins executable workflow lines after removing comment-only lines.
-    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-main.
+    # authz uses pf-gcp-pr; the App-token probe uses pf-gcp-post.
     runs-on: ["self-hosted", "pf-gcp-pr"]
     permissions: {}
     # No timeout-minutes: the owner's no-time-limits rule (check-no-time-limits refuses new ones).
@@ -1248,7 +1248,7 @@ jobs:
 
   probe:
     needs: [authz]
-    runs-on: ["self-hosted","pf-gcp-main"]
+    runs-on: ["self-hosted","pf-gcp-post"]
     steps:
       - name: Mint org App token
         id: app

@@ -69,7 +69,7 @@ fleet. The checker follows local reusable calls, so a PR caller cannot borrow
 a post workflow even behind a job condition.
 
 The manual `release-ruleset-probe.yml` workflow runs `authz` on
-`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-main"]`.
+`["self-hosted","pf-gcp-pr"]` and `probe` on `["self-hosted","pf-gcp-post"]`.
 
 `docs.yml` retains the PR build name and `.github/**` exclusion.
 `docs-post.yml` builds and deploys on main pushes and manual dispatch.
@@ -1150,9 +1150,11 @@ pins that one job name and image, and the exception never applies to a
 workflow reachable from `pull_request`. The PR build remains
 `build (ubuntu-24.04, Release)` and its aggregate remains `build`.
 
-Release, promotion and the release ruleset probe use the isolated release fleet:
-`release`, `notify-hub`, Linux x64 `prebuilt`, baseline `promote` and
-`release-ruleset-probe.yml`'s `probe` job use `["self-hosted","pf-gcp-main"]`.
+Release and promotion use the isolated release fleet:
+`release`, `notify-hub`, Linux x64 `prebuilt` and baseline `promote` use
+`["self-hosted","pf-gcp-main"]`.
+The release ruleset probe runs `authz` on `["self-hosted","pf-gcp-pr"]` and
+`probe` on `["self-hosted","pf-gcp-post"]`.
 Release's ARM/macOS artifact cells keep their existing hosted pins, and
 promotion runs on a push to `main` plus manual dispatch from `main`.
 
@@ -1379,6 +1381,10 @@ Dispatch **Release ruleset probe** (`release-ruleset-probe.yml`) once from
 `main` to check actual ruleset visibility with the same App token mint as
 `release.yml`. The workflow file must be on the default branch, and the run
 must use `main`'s copy.
+The probe job runs on `["self-hosted","pf-gcp-post"]`, with `authz` on
+`["self-hosted","pf-gcp-pr"]`.
+`pf-gcp-main` admits only allowlisted workflows (an org runner-group restriction),
+so the one-time probe uses `pf-gcp-post`.
 It runs `python3 scripts/ci_release_gate.py rulesets-probe --repo OWNER/REPO`,
 reading only repository metadata, the parent-inclusive ruleset inventory and
 branch details. Success prints the barrier id/name and one compact inventory
