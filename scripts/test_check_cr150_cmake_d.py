@@ -32,8 +32,26 @@ endforeach()
 '''
 
 
+def declared_inputs(paths) -> None:
+    paths = [Path(os.path.abspath(path)) for path in paths]
+    print('CR-150 checker control inputs:\n' + '\n'.join(map(str, paths)), flush=True)
+    protected = tuple(Path.home() / name for name in (
+        '.config/zsh/keys', '.ssh', '.aws', '.codex', '.config/pineforge'))
+
+    def refuse(path):
+        if path.name.endswith('.env') or any(
+                path == prefix or prefix in path.parents for prefix in protected):
+            raise AssertionError(f'refusing protected input: {path}')
+
+    for path in paths:
+        refuse(path)
+        refuse(path.resolve())
+
+
 class CMakeControls(unittest.TestCase):
     def setUp(self) -> None:
+        declared_inputs([CHECKER, ROOT / 'tests' / 'cr150.d' / 'README.md',
+                         *sorted(FIXTURES.glob('*.cmake'))])
         temporary = tempfile.TemporaryDirectory(prefix='cr150-cmake-properties-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -49,6 +67,8 @@ class CMakeControls(unittest.TestCase):
         self.cmake.write_text(INCLUDE_LOOP)
 
     def run_checker(self) -> subprocess.CompletedProcess:
+        declared_inputs([self.checker, self.cmake, self.lane.parent / 'README.md',
+                         *sorted(self.lane.parent.glob('*.cmake'))])
         return subprocess.run([sys.executable, '-B', str(self.checker)],
                               cwd=self.root, capture_output=True, text=True)
 
@@ -91,14 +111,14 @@ class LanePropertyControls(CMakeControls):
                             'FOO')
 
     def test_all_allowed_properties_pass(self) -> None:
-        for keys in (('LABELS', 'SKIP_RETURN_CODE', 'TIMEOUT', 'RUN_SERIAL', 'DEPENDS'),
-                     ('labels', 'skip_return_code', 'timeout', 'run_serial', 'depends')):
+        for keys in (('LABELS', 'SKIP_RETURN_CODE', 'RUN_SERIAL', 'DEPENDS'),
+                     ('labels', 'skip_return_code', 'run_serial', 'depends')):
             with self.subTest(keys=keys):
                 result = self.run_check(
                     'set_tests_properties(test_lane_property PROPERTIES '
                     f'{keys[0]} "ENVIRONMENT WORKING_DIRECTORY; cr150" '
-                    f'{keys[1]} 77 {keys[2]} 30 {keys[3]} TRUE '
-                    f'{keys[4]} [=[setup; teardown]=])')
+                    f'{keys[1]} 77 {keys[2]} TRUE '
+                    f'{keys[3]} [=[setup; teardown]=])')
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
 
@@ -131,7 +151,7 @@ class LanePropertyControls(CMakeControls):
         result = self.run_check('''set_tests_properties(test_lane_property PROPERTIES LABELS [=[
 ENVIRONMENT # literal label text, with a ) and an (
 set_target_properties(literal PROPERTIES FOO bar)
-]=] TIMEOUT 30)''')
+]=] RUN_SERIAL TRUE)''')
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('CR-150 CMake lane directory is valid', result.stdout)
 
@@ -153,7 +173,7 @@ set_target_properties(literal PROPERTIES FOO bar)
         (self.lane.parent / 'other.cmake').write_text(
             'add_test(NAME test_other COMMAND ${Python3_EXECUTABLE} other.py)\n')
         result = self.run_check(
-            'set_tests_properties(test_lane_property PROPERTIES TIMEOUT 30)')
+            'set_tests_properties(test_lane_property PROPERTIES RUN_SERIAL TRUE)')
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         for name in ('test_main', 'test_other'):
             for properties in ('TIMEOUT 30', 'SKIP_RETURN_CODE 1', 'LABELS "slow"'):
@@ -171,6 +191,162 @@ set_target_properties(literal PROPERTIES FOO bar)
                 self.assert_refused(
                     f'set_tests_properties(test_lane_property PROPERTIES SKIP_RETURN_CODE {value})',
                     'SKIP_RETURN_CODE must be 77')
+
+
+class ModuleProfileControls(CMakeControls):
+    """H2-3: a plain interpreter must never load an instrumented MODULE."""
+
+    GUARD = 'NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE'
+    ROW = ('add_test(NAME test_module_python COMMAND ${Python3_EXECUTABLE} '
+           '-B -m pytest fixture.py --module $<TARGET_FILE:fixture_module>)\n')
+    MODULE = 'add_library(fixture_module MODULE fixture.cpp)\n'
+
+    def check_inputs(self, row: str, module: str, extra: str = '') -> subprocess.CompletedProcess:
+        self.lane.write_text(row)
+        self.cmake.write_text(
+            INCLUDE_LOOP
+            + '# --- CR-150 property-control begin ---\n'
+            + module + extra
+            + '# --- CR-150 property-control end ---\n')
+        return self.run_checker()
+
+    def assert_module_refused(self, row: str, module: str, extra: str = '') -> None:
+        positive = self.check_inputs(
+            self.ROW, f'if({self.GUARD})\n{self.MODULE}endif()\n')
+        self.assertEqual(0, positive.returncode, positive.stdout + positive.stderr)
+        result = self.check_inputs(row, module, extra)
+        output = result.stdout + result.stderr
+        self.assertEqual(1, result.returncode, output)
+        self.assertIn('MODULE fixture_module reaches Python row test_module_python', output)
+        self.assertIn('NOT PINEFORGE_ENABLE_SANITIZERS AND NOT PINEFORGE_ENABLE_COVERAGE', output)
+
+    def test_lane_python_module_without_profile_fence_is_refused(self) -> None:
+        self.assert_module_refused(self.ROW, self.MODULE)
+
+    def test_module_or_row_guard_excludes_both_instrumented_profiles(self) -> None:
+        for row, module in (
+                (self.ROW, f'if({self.GUARD})\n{self.MODULE}endif()\n'),
+                (f'if({self.GUARD})\n{self.ROW}endif()\n', self.MODULE),
+                ('if(NOT PINEFORGE_ENABLE_SANITIZERS)\n'
+                 'if(NOT PINEFORGE_ENABLE_COVERAGE)\n'
+                 + self.ROW + 'endif()\nendif()\n', self.MODULE),
+                (self.ROW,
+                 'if(PINEFORGE_ENABLE_SANITIZERS OR PINEFORGE_ENABLE_COVERAGE)\n'
+                 'else()\n' + self.MODULE + 'endif()\n')):
+            with self.subTest(row=row, module=module):
+                result = self.check_inputs(row, module)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_partial_or_disjunctive_profile_guard_is_refused(self) -> None:
+        for guard in ('NOT PINEFORGE_ENABLE_SANITIZERS',
+                      'NOT PINEFORGE_ENABLE_COVERAGE',
+                      'NOT PINEFORGE_ENABLE_SANITIZERS OR NOT PINEFORGE_ENABLE_COVERAGE',
+                      f'({self.GUARD}) OR UNIX'):
+            with self.subTest(guard=guard):
+                self.assert_module_refused(
+                    f'if({guard})\n{self.ROW}endif()\n', self.MODULE)
+
+    def test_else_and_elseif_do_not_inherit_the_previous_guard(self) -> None:
+        for branch in ('else()', 'elseif(UNIX)'):
+            with self.subTest(branch=branch):
+                self.assert_module_refused(
+                    self.ROW,
+                    f'if({self.GUARD})\n{branch}\n{self.MODULE}endif()\n')
+
+    def test_environment_property_also_connects_the_module_to_python(self) -> None:
+        row = ('add_test(NAME test_module_python COMMAND ${Python3_EXECUTABLE} '
+               '-B -m pytest fixture.py)\n')
+        for extra in (
+                'set_property(TEST test_module_python APPEND PROPERTY ENVIRONMENT '
+                '"MODULE=$<TARGET_FILE:fixture_module>")\n',
+                'set_tests_properties(test_module_python PROPERTIES ENVIRONMENT '
+                '"MODULE=$<TARGET_FILE:fixture_module>")\n'):
+            with self.subTest(extra=extra):
+                self.assert_module_refused(row, self.MODULE, extra)
+
+    def test_main_file_module_guard_is_also_seen(self) -> None:
+        self.lane.write_text(self.ROW)
+        for guarded in (True, False):
+            with self.subTest(guarded=guarded):
+                module = (f'if({self.GUARD})\n{self.MODULE}endif()\n'
+                          if guarded else self.MODULE)
+                self.cmake.write_text(module + INCLUDE_LOOP)
+                result = self.run_checker()
+                self.assertEqual(0 if guarded else 1, result.returncode,
+                                 result.stdout + result.stderr)
+                if not guarded:
+                    self.assertIn('MODULE fixture_module reaches Python row', result.stderr)
+
+
+class TimeoutControls(CMakeControls):
+    """H2-8: newly registered rows cannot declare a deadline, even zero."""
+
+    ROW = ('add_test(NAME test_deadline COMMAND ${Python3_EXECUTABLE} '
+           'fixture.py)\n')
+
+    def check_inputs(self, statement: str, location: str) -> subprocess.CompletedProcess:
+        if location == 'lane':
+            self.lane.write_text(self.ROW + statement + '\n')
+            self.cmake.write_text(INCLUDE_LOOP)
+        elif location == 'fence':
+            self.lane.write_text(self.ROW)
+            self.cmake.write_text(
+                INCLUDE_LOOP + '# --- CR-150 property-control begin ---\n'
+                + statement + '\n# --- CR-150 property-control end ---\n')
+        else:
+            self.lane.write_text(REGISTRATION)
+            self.cmake.write_text(self.ROW + statement + '\n' + INCLUDE_LOOP)
+        return self.run_checker()
+
+    def assert_deadline_refused(self, statement: str, location: str) -> None:
+        result = self.check_inputs(
+            'set_tests_properties(test_deadline PROPERTIES LABELS TIMEOUT RUN_SERIAL TRUE)',
+            location)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        result = self.check_inputs(statement, location)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn('TIMEOUT is forbidden (owner #827)', result.stderr)
+
+    def test_lane_timeout_is_refused(self) -> None:
+        for key in ('TIMEOUT', 'timeout', '"TIMEOUT"', '[=[TIMEOUT]=]'):
+            for value in ('0', '30', '"${deadline}"'):
+                with self.subTest(key=key, value=value):
+                    self.assert_deadline_refused(
+                        f'set_tests_properties(test_deadline PROPERTIES {key} {value})',
+                        'lane')
+
+    def test_fenced_timeout_is_refused_through_both_property_apis(self) -> None:
+        for statement in (
+                'set_tests_properties(test_deadline PROPERTIES TIMEOUT 3600)',
+                'set_property(TEST test_deadline PROPERTY TIMEOUT 3600)',
+                'set_property(TEST test_deadline APPEND PROPERTY "timeout" 0)'):
+            with self.subTest(statement=statement):
+                self.assert_deadline_refused(statement, 'fence')
+
+    def test_new_main_file_row_timeout_is_refused(self) -> None:
+        for statement in (
+                'set_tests_properties(test_deadline PROPERTIES TIMEOUT 3600)',
+                'set_property(TEST test_deadline PROPERTY TIMEOUT 1800)',
+                'set_tests_properties(test_deadline PROPERTIES LABELS fast;TIMEOUT;30)'):
+            with self.subTest(statement=statement):
+                self.assert_deadline_refused(statement, 'main')
+
+    def test_inherited_main_ownership_deadline_is_not_extended_to_new_rows(self) -> None:
+        legacy = (
+            'set_tests_properties(test_selected_window_ownership_manifest\n'
+            '    ${_pf_ownership_control_shards} test_selected_window_ownership_d4\n'
+            '    PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 180)\n')
+        self.lane.write_text(REGISTRATION)
+        self.cmake.write_text(legacy + INCLUDE_LOOP)
+        result = self.run_checker()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.cmake.write_text(
+            legacy.replace('test_selected_window_ownership_d4',
+                           'test_selected_window_ownership_d4 test_new_row')
+            + INCLUDE_LOOP)
+        result = self.run_checker()
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn('TIMEOUT is forbidden (owner #827)', result.stderr)
 
 
 class FenceControls(CMakeControls):
@@ -510,7 +686,7 @@ set_target_properties(test_owner own_module PROPERTIES PREFIX "")
 add_dependencies(test_owner own_module own_host)
 add_test(NAME own_script COMMAND ${Python3_EXECUTABLE} own.py)
 set_property(TEST own_script test_owner APPEND PROPERTY ENVIRONMENT "OWN=1")
-set_tests_properties(own_script test_owner PROPERTIES TIMEOUT 30)
+set_tests_properties(own_script test_owner PROPERTIES RUN_SERIAL TRUE)
 if(TARGET test_other)
     target_compile_definitions(test_owner PRIVATE "OTHER=$<TARGET_FILE:test_other>")
     target_compile_definitions(test_owner PRIVATE
