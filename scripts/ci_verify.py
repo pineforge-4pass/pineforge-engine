@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ import sys
 import tempfile
 import time
 from typing import Callable
+import xml.etree.ElementTree as ET
 
 from prepare_settlement_cpp_abi_base import (
     BASE_COMMIT,
@@ -1452,7 +1454,7 @@ def ctest_list_names(output: bytes) -> 'frozenset[str] | None':
 
 @dataclass(frozen=True)
 class CTestRows:
-    """One CTest run's count, non-running rows and named execution evidence."""
+    """One CTest run's closing count and stdout lists of non-running rows."""
     total: int
     # SKIP_RETURN_CODE / SKIP_REGULAR_EXPRESSION rows; inside total, as passed.
     skipped: tuple[str, ...] = ()
@@ -1460,9 +1462,6 @@ class CTestRows:
     not_run: tuple[str, ...] = ()
     # DISABLED rows; CTest leaves them out of total.
     disabled: tuple[str, ...] = ()
-    # Only real Passed/Failed result lines before the closing summary prove
-    # named execution; a summary count or absence from negative lists cannot.
-    executed: tuple[str, ...] = ()
 
     @property
     def ran(self) -> int:
@@ -1485,8 +1484,8 @@ def ctest_rows(output: bytes) -> CTestRows | None:
     when those lists disagree with the output -- a FAILED list whose length is
     not the summary's failed count, or skipped result lines the did-not-run
     list does not match -- so a floor fails closed on output it cannot read.
-    Named execution evidence comes only from Passed/Failed result lines before
-    that summary; the numerical floor continues to use the summary's count.
+    Positive named execution evidence must come from CTest's JUnit report,
+    never result-shaped text a test can echo into this output.
     """
     text = output.decode('utf-8', 'replace')
     summary = ctest_summary(text)
@@ -1508,10 +1507,37 @@ def ctest_rows(output: bytes) -> CTestRows | None:
                          f'names {len(skipped)} skipped rows')
     if len(skipped) + len(not_run) > total:
         raise ValueError(f'{len(skipped) + len(not_run)} rows did not run out of {total}')
-    executed = tuple(match.group('name')
-                     for match in CTEST_NAMED_RESULT.finditer(text[:summary.start()])
-                     if match.group('result') in ('Passed', 'Failed', '***Failed'))
-    return CTestRows(total, skipped, not_run, disabled, executed)
+    return CTestRows(total, skipped, not_run, disabled)
+
+
+def ctest_junit_results(path: Path) -> dict[str, str]:
+    """Read only CTest-owned testcase elements, never their captured output.
+
+    CTest writes this report after running the tests. A run-status testcase
+    with finite nonnegative time and no skipped child proves a verdict;
+    failure children still prove execution. Unknown or ambiguous data fails
+    closed instead of downgrading to stdout evidence.
+    """
+    if path.is_symlink():
+        raise ValueError('JUnit report is a symlink')
+    suite = ET.parse(path).getroot()
+    cases = suite.findall('testcase')
+    if suite.tag != 'testsuite' or not cases:
+        raise ValueError('JUnit report has no CTest testcase list')
+    results: dict[str, str] = {}
+    for case in cases:
+        name, status = case.get('name'), case.get('status')
+        elapsed = float(case.get('time', 'nan'))
+        skipped = case.find('skipped') is not None
+        failed = case.find('failure') is not None
+        if (not name or name in results or status not in ('run', 'notrun', 'disabled')
+                or not math.isfinite(elapsed) or elapsed < 0
+                or (failed and (skipped or status != 'run'))):
+            raise ValueError('JUnit testcase has a missing/duplicate name or invalid status/time')
+        results[name] = ('skipped' if skipped else
+                         'not run' if status != 'run' else
+                         'failed' if failed else 'passed')
+    return results
 
 
 def ctest_supports_junit(runner: Runner) -> bool:
@@ -2010,6 +2036,7 @@ class Driver:
         self.abi_v15_frozen_action = 'not-started'
         self.abi_v16_frozen_action = 'not-started'
         self.abi_v18_frozen_action = 'not-started'
+        self.ctest_junit_requested = False
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -2080,24 +2107,44 @@ class Driver:
         self.write_summary()
         return False
 
-    def scratch_guard_registry(self, test_dir: Path,
-                               registered_names: 'frozenset[str] | None') -> 'frozenset[str] | None':
-        """Runner-only selections prove guard registration at the build root."""
-        if (not self.cfg.profile.source_layer or not sys.platform.startswith('linux')
-                or test_dir == self.cfg.build_dir):
-            return registered_names
-        full_rows = self.invoke(
-            'ctest-list-scratch-guard',
-            ['ctest', '--test-dir', str(self.cfg.build_dir), '-N'],
-            stream_output=False)
-        if full_rows.returncode:
-            return None
+    def scratch_guard_required(self) -> bool:
+        return self.cfg.profile.source_layer and sys.platform.startswith('linux')
+
+    def ctest_discovery(self, result: Completed) -> tuple[int | None, frozenset[str] | None]:
+        """Guard counts and names must describe the same validated listing."""
+        if result.returncode:
+            return None, None
+        output = result.stdout + result.stderr
+        if not self.scratch_guard_required():
+            return ctest_list_count(output), ctest_list_names(output)
         try:
-            # Unlike a name-only listing, this also requires one matching
-            # total and rejects duplicate names/numbers and invalid UTF-8.
-            return frozenset(ctest_registry(full_rows.stdout + full_rows.stderr))
+            names = frozenset(ctest_registry(output))
         except ValueError:
-            return None
+            return None, None
+        return len(names), names
+
+    def scratch_guard_registry(self, test_dir: Path,
+                               registered_rows: Completed) -> 'frozenset[str] | None':
+        """Validate full discovery, including the root of runner-only runs."""
+        full_rows = registered_rows
+        if self.scratch_guard_required() and test_dir != self.cfg.build_dir:
+            full_rows = self.invoke(
+                'ctest-list-scratch-guard',
+                ['ctest', '--test-dir', str(self.cfg.build_dir), '-N'],
+                stream_output=False)
+        return self.ctest_discovery(full_rows)[1]
+
+    def prepare_ctest_junit(self) -> bool:
+        """Never let an earlier run's report satisfy this run's guard gate."""
+        supported = ctest_supports_junit(self.cfg.runner)
+        self.ctest_junit_requested = supported
+        if self.scratch_guard_required():
+            report = self.cfg.build_dir / 'ctest-junit.xml'
+            if report.exists() or report.is_symlink():
+                self.logs.mkdir(parents=True, exist_ok=True)
+                previous = Path(tempfile.mkdtemp(prefix='ctest-junit-previous-', dir=self.logs))
+                report.rename(previous / report.name)
+        return supported
 
     def run_sharded_ctest(self, test_dir: Path, jobs: int, all_rows: Completed,
                           selected_rows: Completed) -> Completed | None:
@@ -2154,7 +2201,7 @@ class Driver:
             self.fail_stage('ctest-shard-discovery', str(error))
             return None
         command = ctest_command(self.cfg, test_dir, jobs=jobs,
-                                junit=ctest_supports_junit(self.cfg.runner))
+                                junit=self.prepare_ctest_junit())
         # 1/1 keeps the unsharded execution command and accounting.
         if shard.count != 1:
             command += ['-R', expression]
@@ -2168,7 +2215,7 @@ class Driver:
         if shard.count == 1:
             self.enforce_test_floor(ran, registered=len(registry), selected=len(selection),
                                     registered_names=self.scratch_guard_registry(
-                                        test_dir, frozenset(registry)),
+                                        test_dir, all_rows),
                                     selected_names=frozenset(selected),
                                     excluded_names=frozenset(excluded))
             if self.cfg.min_tests is None:
@@ -2783,16 +2830,15 @@ class Driver:
         listing = ['ctest', '--test-dir', str(test_dir), '-N']
         all_rows = self.invoke('ctest-list-all', listing,
                                stream_output=False)
-        registered = (ctest_list_count(all_rows.stdout + all_rows.stderr)
-                      if all_rows.returncode == 0 else None)
+        registered, registered_names = self.ctest_discovery(all_rows)
         selected = registered
+        selected_names = registered_names
         selected_rows = all_rows
         if self.cfg.exclude_label:
             selected_rows = self.invoke('ctest-list-selected',
                                         listing + ['-LE', self.cfg.exclude_label],
                                         stream_output=False)
-            selected = (ctest_list_count(selected_rows.stdout + selected_rows.stderr)
-                        if selected_rows.returncode == 0 else None)
+            selected, selected_names = self.ctest_discovery(selected_rows)
         self.summary['ctestRegistered'] = registered
         self.summary['ctestSelected'] = selected
         if registered is None or selected is None:
@@ -2815,13 +2861,9 @@ class Driver:
                     self.fail_stage('ctest-exclusion', str(error))
                     return self.finish('failed', 1)
             ctest = ctest_command(self.cfg, test_dir, jobs=ctest_jobs,
-                                  junit=ctest_supports_junit(self.cfg.runner))
+                                  junit=self.prepare_ctest_junit())
             ran = self.invoke('ctest', ctest, extra_env=self.sanitizer_env())
-            registered_names = (ctest_list_names(all_rows.stdout + all_rows.stderr)
-                                if all_rows.returncode == 0 else None)
-            selected_names = (ctest_list_names(selected_rows.stdout + selected_rows.stderr)
-                              if selected_rows.returncode == 0 else None)
-            registered_names = self.scratch_guard_registry(test_dir, registered_names)
+            registered_names = self.scratch_guard_registry(test_dir, all_rows)
             self.enforce_test_floor(ran, registered=registered, selected=selected,
                                     registered_names=registered_names,
                                     selected_names=selected_names, excluded_names=excluded_names)
@@ -3161,7 +3203,7 @@ class Driver:
                                    registered_names: 'frozenset[str] | None',
                                    selected_names: 'frozenset[str] | None') -> None:
         """Require all Linux/source guard registrations and execution on their shard."""
-        if not self.cfg.profile.source_layer or not sys.platform.startswith('linux'):
+        if not self.scratch_guard_required():
             return
         stage = 'ctest-scratch-guard'
         required = ', '.join(sorted(SCRATCH_GUARD_ROWS))
@@ -3183,15 +3225,31 @@ class Driver:
                             f'cannot check selected guard rows: {required}')
             return
         guards = SCRATCH_GUARD_ROWS & selected_names
+        try:
+            if not self.ctest_junit_requested:
+                raise ValueError('CTest did not request --output-junit for this run')
+            results = ctest_junit_results(self.cfg.build_dir / 'ctest-junit.xml')
+        except (OSError, ValueError, LookupError, ET.ParseError) as error:
+            self.fail_stage(stage, f'{stage}: no machine-readable execution evidence; '
+                            f'cannot check required guard rows: {required} ({error})')
+            return
+        executed = {name for name, result in results.items() if result in ('passed', 'failed')}
         offenders = [
             f'{reason}: {", ".join(sorted(guards & set(names)))}'
             for reason, names in (('skipped', rows.skipped), ('disabled', rows.disabled),
                                   ('not run', rows.not_run))
             if guards & set(names)
         ]
-        unreported = sorted(guards - set(rows.executed))
+        junit_skipped = sorted(guards & (set(results) - executed))
+        if junit_skipped:
+            offenders.append('JUnit skipped/not run: ' + ', '.join(junit_skipped))
+        unreported = sorted(guards - executed)
         if unreported:
-            offenders.append('no Passed/Failed result line: ' + ', '.join(unreported))
+            offenders.append('no non-skipped JUnit testcase: ' + ', '.join(unreported))
+        if len(executed) != rows.ran:
+            offenders.append(f'JUnit has {len(executed)} verdicts but the closing summary '
+                             f'accounts for {rows.ran}; selected guard rows: '
+                             + ', '.join(sorted(guards)))
         if offenders:
             self.fail_stage(stage, f'{stage}: selected guard rows did not run; '
                             + '; '.join(offenders))

@@ -596,13 +596,28 @@ On Linux profiles with the source layer enabled, `ctest-scratch-guard` requires
 `test_scratch_guard_ledger_read`, `test_scratch_guard_reissue`,
 `test_scratch_guard_equal_string`, and `test_scratch_guard_hl2_01` in the full
 CTest registry and refuses selected guard rows that skip, are disabled, or do
-not run; unreadable discovery or result lists fail closed. Every selected guard
-must have its own Passed/Failed result
-line before CTest's closing summary; a passing total alone proves no named
-execution. Runner-only profiles discover the build-root registry on both plain
-and 1/1 runs, requiring exactly one `Total Tests: N` line matching the number
-of listed rows, with no duplicate names or test numbers. Each shard checks
-execution only for its own selected names.
+not run; unreadable discovery or result lists fail closed. Named execution
+evidence comes only from CTest's `--output-junit` report
+(`ctest-junit.xml` in the build directory), on plain, 1/1, and multi-shard runs.
+Every selected guard must have its own testcase with `status="run"`, finite
+nonnegative `time`, and no `<skipped/>` child. A `<failure/>` still proves
+execution; the CTest command's nonzero exit separately fails verification.
+Result-shaped stdout and captured JUnit `system-out` cannot prove execution.
+The number of JUnit testcases with verdicts must equal the closing summary's
+`total - skipped - not_run`; disabled rows are already outside that total.
+Missing, malformed, or unrequested JUnit fails with
+`no machine-readable execution evidence`, including when CTest lacks JUnit
+support; there is no stdout fallback. Before CTest runs, an existing report is
+preserved under `ci-logs/ctest-junit-previous-*/`, so stale output cannot clear
+the gate.
+
+All discovery used by this guard, including ordinary plain runs, requires
+exactly one `Total Tests: N` matching both the number of listed rows and the
+unique names, with no duplicate test numbers. `ctestRegistered` and
+`ctestSelected` come from those validated listings. Runner-only profiles also
+validate the build-root registry on plain and 1/1 runs, while retaining the
+runner selection's counts. Each shard checks execution only for its own
+selected guard names, after requiring all four global registrations.
 These exact row names are the contract the scratch-syscall counter tests must carry;
 kernel-only and non-Linux runs do not run this stage.
 

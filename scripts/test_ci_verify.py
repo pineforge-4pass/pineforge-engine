@@ -22,6 +22,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+import xml.etree.ElementTree as ET
 
 import check_abi_receipt_skips
 import ci_verify
@@ -255,8 +256,8 @@ def named_ctest_output(names, *, skipped=(), not_run=(), disabled=()) -> bytes:
     return (''.join(lines) + text[closing.start():]).encode()
 
 
-def populated_ctest_output(total: int, *, required=(), skipped=(), not_run=(), disabled=()) -> bytes:
-    """Keep the requested count while giving registered witnesses real result lines."""
+def populated_ctest_names(total: int, *, required=(), skipped=(), not_run=(), disabled=()):
+    """One fixture population shared by its console and machine reports."""
     names = list(dict.fromkeys((*required, *skipped, *not_run, *disabled)))
     population = total + len(disabled)
     if len(names) > population:
@@ -267,7 +268,36 @@ def populated_ctest_output(total: int, *, required=(), skipped=(), not_run=(), d
         if name not in names:
             names.append(name)
         index += 1
+    return tuple(names)
+
+
+def populated_ctest_output(total: int, *, required=(), skipped=(), not_run=(), disabled=()) -> bytes:
+    """Keep the requested count while giving registered witnesses real result lines."""
+    names = populated_ctest_names(total, required=required, skipped=skipped,
+                                  not_run=not_run, disabled=disabled)
     return named_ctest_output(names, skipped=skipped, not_run=not_run, disabled=disabled)
+
+
+def ctest_junit_output(names, *, skipped=(), not_run=(), disabled=(), failed=()) -> bytes:
+    """Independent CTest JUnit fixture; system-out is never a testcase registry."""
+    suite = ET.Element('testsuite', name='CTest', tests=str(len(names)))
+    for name in names:
+        case = ET.SubElement(suite, 'testcase', name=name, time='0.01',
+                             status='disabled' if name in disabled else
+                             'notrun' if name in not_run else 'run')
+        if name in (*skipped, *not_run, *disabled):
+            ET.SubElement(case, 'skipped')
+        elif name in failed:
+            ET.SubElement(case, 'failure', message='test failed')
+    return ET.tostring(suite, encoding='utf-8', xml_declaration=True)
+
+
+def write_ctest_junit(driver, names, **categories):
+    """Supply a requested CTest report to standalone enforcement tests."""
+    report = driver.cfg.build_dir / 'ctest-junit.xml'
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_bytes(ctest_junit_output(names, **categories))
+    driver.ctest_junit_requested = True
 
 
 class Scripted:
@@ -305,6 +335,8 @@ class Scripted:
         if argv[0] == 'ctest' and '--help' in argv:
             if self.exits.get('junit_help') == 'absent':
                 return Completed(0, b'CTest help without junit\n', b'')
+            if self.exits.get('junit_help') == 'present':
+                return Completed(0, b'CTest help --output-junit\n', b'')
             return default_runner(argv, extra_env=None,
                                   combine_stderr=True, stream_output=False)
         if argv[0] in {'cmake', 'ctest', 'git'} and '--version' in argv:
@@ -394,6 +426,18 @@ class Scripted:
         if argv[0] == 'cmake' and '--install' in argv:
             return self._install()
         if argv[0] == 'ctest':
+            if '--show-only=json-v1' in argv:
+                names = {'native_live_help', 'test_live_json',
+                         'test_native_live_startup', 'test_native_live_store',
+                         'test_native_live_routing',
+                         'test_native_example_batch', 'test_native_example_selected'}
+                if (self.source / 'runner' / 'transport.cpp').is_file():
+                    names.add('test_native_live_websocket')
+                names.update(ci_verify.runner_e2e_test_names(self.source))
+                names = set(self.exits.get('ctest_shard_inventory', names))
+                names.discard(self.exits.get('live_missing_test'))
+                return Completed(0, json.dumps({'tests': [{'name': name}
+                                  for name in sorted(names)]}).encode(), b'')
             if ('-N' in argv and '--test-dir' in argv
                     and argv[argv.index('--test-dir') + 1] == str(self.build_dir)
                     and 'ctest_root_listing' in self.exits):
@@ -415,19 +459,9 @@ class Scripted:
                     return Completed(0, (listing + f'Total Tests: {len(names)}\n').encode())
                 skipped = tuple(name for name in self.exits.get('ctest_skipped', ())
                                 if name in names)
+                self._junit(argv, names, skipped=skipped)
                 return Completed(int(self.exits.get('ctest', 0)),
                                  named_ctest_output(names, skipped=skipped))
-            if '--show-only=json-v1' in argv:
-                names = {'native_live_help', 'test_live_json',
-                         'test_native_live_startup', 'test_native_live_store',
-                         'test_native_live_routing',
-                         'test_native_example_batch', 'test_native_example_selected'}
-                if (self.source / 'runner' / 'transport.cpp').is_file():
-                    names.add('test_native_live_websocket')
-                names.update(ci_verify.runner_e2e_test_names(self.source))
-                names.discard(self.exits.get('live_missing_test'))
-                return Completed(0, json.dumps({'tests': [{'name': name}
-                                  for name in sorted(names)]}).encode(), b'')
             if self.exits.get('actual_empty_ctest'):
                 return default_runner(argv, extra_env=extra_env,
                                       combine_stderr=combine_stderr, stream_output=False)
@@ -485,6 +519,7 @@ class Scripted:
             # 'ctest_not_run' name rows of that count that did not run;
             # 'ctest_raw' scripts the output verbatim.
             if 'ctest_raw' in self.exits:
+                self._junit(argv, self.exits.get('ctest_junit_names', ()))
                 return Completed(int(self.exits.get('ctest', 0)), self.exits['ctest_raw'], b'')
             default_rows = (registered - labelled if '-LE' in argv else
                             ci_verify.profile_min_tests(
@@ -499,6 +534,13 @@ class Scripted:
                 rows, required=guards, skipped=self.exits.get('ctest_skipped', ()),
                 not_run=self.exits.get('ctest_not_run', ()),
                 disabled=self.exits.get('ctest_disabled', ()))
+            names = populated_ctest_names(
+                rows, required=guards, skipped=self.exits.get('ctest_skipped', ()),
+                not_run=self.exits.get('ctest_not_run', ()),
+                disabled=self.exits.get('ctest_disabled', ()))
+            self._junit(argv, names, skipped=self.exits.get('ctest_skipped', ()),
+                        not_run=self.exits.get('ctest_not_run', ()),
+                        disabled=self.exits.get('ctest_disabled', ()))
             return Completed(int(self.exits.get('ctest', 0)), summary, b'')
         if argv[0].endswith('smoke_version') or Path(argv[0]).name == 'smoke_version':
             stdout = str(self.exits.get('smoke-stdout', expected_version(self.source))).encode() + b'\n'
@@ -511,6 +553,19 @@ class Scripted:
         if '--version' in argv:
             return Completed(0, b'version\n', b'')
         return Completed(1, b'', f'unhandled command: {argv}\n'.encode())
+
+    def _junit(self, argv, names, **categories):
+        if '--output-junit' not in argv:
+            if 'ctest_unrequested_junit' in self.exits:
+                (self.build_dir / 'ctest-junit.xml').write_bytes(
+                    self.exits['ctest_unrequested_junit'])
+            return
+        data = self.exits.get('ctest_junit', _SENTINEL)
+        if data is None:
+            return
+        if data is _SENTINEL:
+            data = ctest_junit_output(names, **categories)
+        Path(argv[argv.index('--output-junit') + 1]).write_bytes(data)
 
     def _cache_values(self) -> dict[str, str]:
         profile = ci_verify.PROFILE[self.profile]
@@ -646,6 +701,9 @@ class Scripted:
         code = int(self.exits.get('build', 0))
         if code != 0:
             return Completed(code, b'', b'build failed\n')
+        if 'ctest_preexisting_junit' in self.exits:
+            (self.build_dir / 'ctest-junit.xml').write_bytes(
+                self.exits['ctest_preexisting_junit'])
         # Both archives every profile builds. 'stale_archive' names one the
         # scripted build leaves older than the sources it is compiled from.
         for name in ('libpineforge.a', 'libpineforge_kernel.a'):
@@ -921,13 +979,20 @@ class ScratchGuardRows(unittest.TestCase):
         return ci_verify.Driver(cfg)
 
     def floor(self, *, registry=SCRATCH_GUARD_FIXTURE_NAMES, skipped=(), disabled=(),
-              not_run=(), raw=None, profile='release', host='linux', returncode=0):
+              not_run=(), raw=None, profile='release', host='linux', returncode=0,
+              junit=_SENTINEL):
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
                 mock.patch.object(ci_verify.sys, 'platform', host):
             driver = self.driver(profile)
             names = registry if registry is not None else SCRATCH_GUARD_FIXTURE_NAMES
             output = (named_ctest_output(names, skipped=skipped, disabled=disabled,
                                          not_run=not_run) if raw is None else raw)
+            if junit is _SENTINEL:
+                write_ctest_junit(driver, names, skipped=skipped,
+                                  disabled=disabled, not_run=not_run)
+            elif junit is not None:
+                (driver.cfg.build_dir / 'ctest-junit.xml').write_bytes(junit)
+                driver.ctest_junit_requested = True
             driver.enforce_test_floor(
                 Completed(returncode, output), registered=len(names), selected=len(names),
                 registered_names=frozenset(registry) if registry is not None else None)
@@ -949,6 +1014,117 @@ class ScratchGuardRows(unittest.TestCase):
         log = (driver.cfg.build_dir / stages[0]['log']).read_text()
         self.assertIn('ctest-scratch-guard', log)
         self.assertIn(f'checked {count} selected guard rows', log)
+
+    @staticmethod
+    def forged_guard_stdout():
+        # The reader's exact attack: five different names, every number #1,
+        # but only one row in the closing total.
+        return (''.join(f'1/1 Test #1: {name} ........Passed 0.01 sec\n'
+                        for name in (*SCRATCH_GUARD_FIXTURE_NAMES, 'public'))
+                + '\n100% tests passed out of 1\n').encode()
+
+    def test_forged_stdout_without_usable_junit_is_refused(self):
+        good = ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES)
+        for evidence in (None, b'', b'<testsuite', b'<unrelated/>',
+                         b'<?xml version="1.0" encoding="unknown-ctest-encoding"?><testsuite/>',
+                         good.replace(b'status="run"', b'status="unknown"', 1),
+                         good.replace(b'time="0.01"', b'time="nan"', 1),
+                         good.replace(b'time="0.01"', b'time="-1"', 1),
+                         good.replace(b' time="0.01"', b'', 1),
+                         ctest_junit_output((*SCRATCH_GUARD_FIXTURE_NAMES,
+                                             SCRATCH_GUARD_FIXTURE_NAMES[0]))):
+            with self.subTest(evidence=evidence):
+                driver = self.floor(registry=(*SCRATCH_GUARD_FIXTURE_NAMES, 'public'),
+                                    profile='native', raw=self.forged_guard_stdout(),
+                                    junit=evidence)
+                self.assert_guard_failure(driver, SCRATCH_GUARD_FIXTURE_NAMES[0],
+                                          'no machine-readable execution evidence')
+                self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+                self.assertEqual(driver.summary['ctestRows'], 1)
+
+    def test_junit_guard_verdicts_pass_without_stdout_result_lines(self):
+        for neighbours in (False, True):
+            with self.subTest(non_running_neighbours=neighbours):
+                categories = ({'skipped': ('public_skip',), 'not_run': ('public_not_run',),
+                               'disabled': ('public_disabled',)} if neighbours else {})
+                names = (*SCRATCH_GUARD_FIXTURE_NAMES,
+                         *(('public_skip', 'public_not_run', 'public_disabled') if neighbours
+                           else ()))
+                # Disabled is outside total; skipped and not-run are inside it.
+                total = 6 if neighbours else 4
+                driver = self.floor(registry=names, raw=ctest_output(total, **categories),
+                                    junit=ctest_junit_output(names, **categories),
+                                    returncode=8 if neighbours else 0)
+                self.assertEqual(driver.failures, [])
+                self.assert_guard_pass(driver, 4)
+                self.assertEqual(driver.summary['ctestRows'], 4)
+
+    def test_junit_failure_is_a_verdict_without_stdout_result_lines(self):
+        failed = SCRATCH_GUARD_FIXTURE_NAMES[0]
+        output = (b'75% tests passed, 1 tests failed out of 4\n'
+                  + f'\nThe following tests FAILED:\n\t1 - {failed} (Failed)\n'.encode())
+        driver = self.floor(raw=output, returncode=8,
+                            junit=ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES,
+                                                     failed=(failed,)))
+        # The guard proves execution. Driver.invoke separately refuses exit 8.
+        self.assertEqual(driver.failures, [])
+        self.assert_guard_pass(driver, 4)
+
+    def test_junit_skipped_guard_cannot_be_cleared_by_stdout_passed(self):
+        names = (*SCRATCH_GUARD_FIXTURE_NAMES, 'public')
+        for row in SCRATCH_GUARD_FIXTURE_NAMES:
+            for category in ('skipped', 'not_run', 'disabled'):
+                with self.subTest(row=row, category=category):
+                    # Both channels account for four verdicts. Only JUnit tells
+                    # the truth about WHICH row skipped; stdout names public.
+                    driver = self.floor(registry=names,
+                                        raw=named_ctest_output(names, skipped=('public',)),
+                                        junit=ctest_junit_output(names, **{category: (row,)}))
+                    self.assert_guard_failure(driver, row, 'JUnit skipped/not run')
+                    self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+                    self.assertEqual(driver.summary['ctestRows'], 4)
+
+    def test_junit_missing_guard_cannot_be_cleared_by_stdout_passed(self):
+        names = (*SCRATCH_GUARD_FIXTURE_NAMES, 'public')
+        for row in SCRATCH_GUARD_FIXTURE_NAMES:
+            for suffix in (False, True):
+                with self.subTest(row=row, suffix_substitution=suffix):
+                    evidence_names = tuple(name + '_extra' if name == row else name
+                                           for name in names if suffix or name != row)
+                    output = named_ctest_output(names)
+                    if not suffix:
+                        output = output.replace(b'out of 5', b'out of 4')
+                    driver = self.floor(registry=names, raw=output,
+                                        junit=ctest_junit_output(evidence_names))
+                    self.assert_guard_failure(driver, row, 'no non-skipped JUnit testcase')
+                    self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+
+    def test_junit_verdict_count_must_reconcile_with_closing_summary(self):
+        # All guards have genuine JUnit verdicts, isolating the count check.
+        names = (*SCRATCH_GUARD_FIXTURE_NAMES, 'public')
+        driver = self.floor(registry=names, profile='native', raw=self.forged_guard_stdout(),
+                            junit=ctest_junit_output((*SCRATCH_GUARD_FIXTURE_NAMES, 'public')))
+        self.assert_guard_failure(driver, SCRATCH_GUARD_FIXTURE_NAMES[0],
+                                  'JUnit has 5 verdicts but the closing summary accounts for 1')
+        self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+        driver = self.floor(registry=names, profile='native', raw=named_ctest_output(names),
+                            junit=ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES))
+        self.assert_guard_failure(driver, SCRATCH_GUARD_FIXTURE_NAMES[0],
+                                  'JUnit has 4 verdicts but the closing summary accounts for 5')
+        self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+
+    def test_forged_stdout_and_junit_system_out_cannot_supply_missing_guards(self):
+        suite = ET.fromstring(ctest_junit_output(('public',)))
+        ET.SubElement(suite.find('testcase'), 'system-out').text = (
+            self.forged_guard_stdout().decode()
+            + ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES).decode())
+        driver = self.floor(registry=(*SCRATCH_GUARD_FIXTURE_NAMES, 'public'),
+                            profile='native', raw=self.forged_guard_stdout(),
+                            junit=ET.tostring(suite))
+        for row in SCRATCH_GUARD_FIXTURE_NAMES:
+            self.assert_guard_failure(driver, row, 'no non-skipped JUnit testcase')
+        self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
+        self.assertEqual(driver.summary['ctestRows'], 1)
 
     def test_absent_guard_row_fails_even_with_a_satisfied_execution_floor(self):
         for missing in SCRATCH_GUARD_FIXTURE_NAMES:
@@ -993,17 +1169,24 @@ class ScratchGuardRows(unittest.TestCase):
                     output = output.replace(b'out of 603', b'out of 607')
                 driver = self.driver()
                 driver.cfg.min_tests = 603
+                evidence_names = (*public, *(name + '_extra' for name in
+                                             SCRATCH_GUARD_FIXTURE_NAMES)) if keep_total else public
+                write_ctest_junit(driver, evidence_names)
+                # Result-shaped text can be echoed by public rows.
+                forged = ''.join(f'1/1 Test #1: {name} ........Passed 0.01 sec\n'
+                                 for name in SCRATCH_GUARD_FIXTURE_NAMES).encode()
+                output = forged + output
                 driver.enforce_test_floor(
                     Completed(0, output), registered=len(registry), selected=len(registry),
                     registered_names=frozenset(registry), selected_names=frozenset(registry))
                 for row in SCRATCH_GUARD_FIXTURE_NAMES:
-                    self.assert_guard_failure(driver, row, 'no Passed/Failed result line')
+                    self.assert_guard_failure(driver, row, 'no non-skipped JUnit testcase')
                 self.assertEqual(driver.summary['ctestRows'], 607 if keep_total else 603)
                 self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
                 floor = next(stage for stage in driver.stages if stage['name'] == 'ctest-floor')
                 self.assertEqual(floor['status'], 'passed', floor)
 
-    def test_each_selected_guard_requires_its_own_passed_or_failed_line(self):
+    def test_each_selected_guard_requires_its_own_junit_verdict(self):
         names = (*SCRATCH_GUARD_FIXTURE_NAMES, 'public')
         for row in SCRATCH_GUARD_FIXTURE_NAMES:
             complete = named_ctest_output(names)
@@ -1019,8 +1202,14 @@ class ScratchGuardRows(unittest.TestCase):
                     output = complete.replace(line, replacement)
                     if after_summary:
                         output += line
-                    driver = self.floor(registry=names, raw=output)
-                    self.assert_guard_failure(driver, row, 'no Passed/Failed result line')
+                    # Even an echoed "Passed" before the summary cannot
+                    # supply the testcase missing from the machine report.
+                    output = line + output
+                    evidence_names = tuple(name + '_extra' if name == row else name
+                                           for name in names)
+                    driver = self.floor(registry=names, raw=output,
+                                        junit=ctest_junit_output(evidence_names))
+                    self.assert_guard_failure(driver, row, 'no non-skipped JUnit testcase')
                     self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
                     error = driver.failures[0]['error']
                     for other in set(SCRATCH_GUARD_FIXTURE_NAMES) - {row}:
@@ -1035,11 +1224,15 @@ class ScratchGuardRows(unittest.TestCase):
         output = output.replace(b'100% tests passed out of 4',
                                 b'75% tests passed, 1 tests failed out of 4')
         output += f'\nThe following tests FAILED:\n\t1 - {failed} (Failed)\n'.encode()
-        self.assertEqual(self.floor(raw=output, returncode=8).failures, [])
+        evidence = ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES, failed=(failed,))
+        self.assertEqual(self.floor(raw=output, returncode=8, junit=evidence).failures, [])
         missing_line = next(line for line in output.splitlines(keepends=True)
                             if f': {missing} '.encode() in line)
-        driver = self.floor(raw=output.replace(missing_line, b''), returncode=8)
-        self.assert_guard_failure(driver, missing, 'no Passed/Failed result line')
+        evidence_names = tuple(name + '_extra' if name == missing else name
+                               for name in SCRATCH_GUARD_FIXTURE_NAMES)
+        driver = self.floor(raw=missing_line + output.replace(missing_line, b''), returncode=8,
+                            junit=ctest_junit_output(evidence_names, failed=(failed,)))
+        self.assert_guard_failure(driver, missing, 'no non-skipped JUnit testcase')
         self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
         self.assertNotIn(failed, driver.failures[0]['error'])
 
@@ -1050,11 +1243,13 @@ class ScratchGuardRows(unittest.TestCase):
             driver.cfg.min_tests = None
             registry = (*SCRATCH_GUARD_FIXTURE_NAMES,
                         *(f'public_floorless_{index}' for index in range(599)))
+            write_ctest_junit(driver,
+                              tuple(f'public_floorless_{index}' for index in range(603)))
             driver.enforce_test_floor(
-                Completed(0, ctest_output(603)), registered=603, selected=603,
+                Completed(0, named_ctest_output(registry)), registered=603, selected=603,
                 registered_names=frozenset(registry))
         for row in SCRATCH_GUARD_FIXTURE_NAMES:
-            self.assert_guard_failure(driver, row, 'no Passed/Failed result line')
+            self.assert_guard_failure(driver, row, 'no non-skipped JUnit testcase')
         self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
 
     def test_unreadable_registry_fails_closed(self):
@@ -1165,11 +1360,14 @@ class ScratchGuardRows(unittest.TestCase):
                     line = next(line for line in output.splitlines(keepends=True)
                                 if f': {missing} '.encode() in line)
                     driver = self.driver(profile)
+                    evidence_names = tuple(name + '_extra' if name == missing else name
+                                           for name in selection)
+                    write_ctest_junit(driver, evidence_names)
                     driver.enforce_test_floor(
-                        Completed(0, output.replace(line, b'')), registered=len(registry),
+                        Completed(0, line + output.replace(line, b'')), registered=len(registry),
                         selected=len(selection), registered_names=registry,
                         selected_names=frozenset(selection), excluded_names=excluded)
-                    self.assert_guard_failure(driver, missing, 'no Passed/Failed result line')
+                    self.assert_guard_failure(driver, missing, 'no non-skipped JUnit testcase')
                     self.assertEqual(failure_stages(driver.summary), ['ctest-scratch-guard'])
                     exclusion = next(stage for stage in driver.stages
                                      if stage['name'] == 'ctest-exclusion')
@@ -1191,9 +1389,12 @@ class ScratchGuardRows(unittest.TestCase):
 
         def runner(argv, **kwargs):
             if '--help' in argv:
-                return Completed(0, b'CTest help\n')
+                return Completed(0, b'CTest help --output-junit\n')
             if '-N' in argv:
                 return discovery(selected)
+            self.assertIn('--output-junit', argv)
+            write_ctest_junit(driver, selected,
+                              skipped=tuple(name for name in skipped if name in selected))
             return Completed(0, named_ctest_output(
                 selected, skipped=tuple(name for name in skipped if name in selected)))
 
@@ -1376,6 +1577,7 @@ class RowFloorConfig(unittest.TestCase):
                 driver.summary['ctestExcludedNames'] = sorted(SHARD_SLOW_FIXTURE_NAMES)
                 selected = ('a', 'b')
                 output = named_ctest_output(selected, **{category: ('b',)})
+                write_ctest_junit(driver, selected, **{category: ('b',)})
                 driver.enforce_sharded_test_floor(Completed(0, output),
                                                   registry, selection, selected)
                 self.assertIn('ctest-floor', failure_stages(driver.summary))
@@ -1384,6 +1586,7 @@ class RowFloorConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             ci_verify.ctest_shard_evidence(b'100% tests passed out of 2\n', ('a', 'b'))
         # Registry size, rather than the local count, clears an explicit floor.
+        write_ctest_junit(driver, ('a',))
         driver.enforce_sharded_test_floor(Completed(0, named_ctest_output(('a',))),
                                           registry, selection, ('a',))
         self.assertEqual(driver.failures, [])
@@ -1418,7 +1621,7 @@ class RowFloorConfig(unittest.TestCase):
 
         def runner(argv, **kwargs):
             if '--help' in argv:
-                return Completed(0, b'CTest help\n')
+                return Completed(0, b'CTest help --output-junit\n')
             names = registry
             if '-L' in argv:
                 names = tuple(name for name in names if name in excluded)
@@ -1427,13 +1630,21 @@ class RowFloorConfig(unittest.TestCase):
             if '-R' in argv:
                 expression = argv[argv.index('-R') + 1]
                 names = tuple(name for name in names if re.search(expression, name))
-            return self.discovery(names) if '-N' in argv else output(names)
+            if '-N' in argv:
+                return self.discovery(names)
+            emitted = tuple(name for name in names if name not in missing)
+            write_ctest_junit(driver, emitted,
+                              skipped=tuple(name for name in skipped if name in emitted))
+            return output(names)
 
         with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES':
                                          '1' if overlay else ''}), \
                 mock.patch.object(ci_verify.sys, 'platform', host_platform):
             driver = self.shard_driver(profile, shard=shard, extra=extra)
             if shard is None:
+                emitted = tuple(name for name in selection if name not in missing)
+                write_ctest_junit(driver, emitted,
+                                  skipped=tuple(name for name in skipped if name in emitted))
                 driver.enforce_test_floor(
                     output(selection), registered=len(registry), selected=len(selection),
                     registered_names=frozenset(registry), excluded_names=frozenset(excluded))
@@ -1595,12 +1806,16 @@ class RowFloorConfig(unittest.TestCase):
                                                  '1' if overlay else ''}):
                     plain = self.shard_driver(profile, shard=None, extra=extra)
                     sharded = self.shard_driver(profile, shard='1/1', extra=extra)
+                    write_ctest_junit(plain, selected_names, skipped=skipped)
                     def runner(argv, **kwargs):
                         if '--help' in argv:
-                            return Completed(0, b'CTest help\n')
+                            return Completed(0, b'CTest help --output-junit\n')
                         if '-L' in argv:
                             return self.discovery(excluded)
-                        return selection if '-N' in argv else Completed(0, output)
+                        if '-N' in argv:
+                            return selection
+                        write_ctest_junit(sharded, selected_names, skipped=skipped)
+                        return Completed(0, output)
                     sharded.cfg.runner = runner
                     with mock.patch.object(plain, 'pinned_private_fixture_rows',
                                            return_value=frozenset({'private'})), \
@@ -1787,7 +2002,7 @@ class RowFloorConfig(unittest.TestCase):
                 code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
                     self, profile, extra=['--ctest-shard', f'{index}/{count}', *extra],
                     ctest_shard_inventory=inventory, ctest_skipped=skipped,
-                    ctest_shard_labelled=labelled, junit_help='absent', **commands)
+                    ctest_shard_labelled=labelled, junit_help='present', **commands)
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertEqual(summary['profile'], profile)
                 self.assertEqual(summary['status'], 'passed')
@@ -1939,7 +2154,7 @@ class RowFloorConfig(unittest.TestCase):
                             self, profile,
                             extra=[] if shard is None else ['--ctest-shard', shard],
                             ctest_shard_inventory=inventory, ctest_shard_labelled=labelled,
-                            junit_help='absent', **commands)
+                            junit_help='present', **commands)
                         self.assertEqual(code, 1)
                         stage = ('ctest-shard-discovery' if shard == '1/4'
                                  else 'ctest-exclusion')
@@ -1962,7 +2177,7 @@ class RowFloorConfig(unittest.TestCase):
                         extra=[] if shard is None else ['--ctest-shard', shard],
                         ctest_shard_inventory=inventory,
                         ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
-                        junit_help='absent', **commands)
+                        junit_help='present', **commands)
                     self.assertEqual(code, 0, summary['failures'])
                     self.assertEqual(summary['status'], 'passed')
 
@@ -1996,7 +2211,7 @@ class RowFloorConfig(unittest.TestCase):
                     self, profile, extra=['--ctest-shard', f'{owner}/4'],
                     ctest_shard_inventory=inventory,
                     ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
-                    ctest_skipped=(*pinned, outsider), junit_help='absent', **commands)
+                    ctest_skipped=(*pinned, outsider), junit_help='present', **commands)
                 self.assertEqual(code, 1)
                 self.assertEqual(failure_stages(bad), ['ctest-floor'])
                 self.assertIn(outsider, bad['failures'][0]['error'])
@@ -2051,7 +2266,7 @@ class RowFloorConfig(unittest.TestCase):
         commands = {name: 0 for name in LAB_SHARD_GUARDS}
         code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
             self, 'native', ctest_shard_inventory=inventory,
-            ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES, junit_help='absent', **commands)
+            ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES, junit_help='present', **commands)
         self.assertEqual(code, 0, summary['failures'])
         self.assertIsNone(summary['excludeLabel'])
         self.assertEqual(summary['ctestRegistered'], len(inventory))
@@ -2072,7 +2287,7 @@ class RowFloorConfig(unittest.TestCase):
         code, summary, _, _ = DriverOrderingAndAggregation.run_profile(
             self, 'release', extra=['--exclude-label', 'custom-label'],
             ctest_shard_inventory=inventory, ctest_shard_labelled=labelled,
-            junit_help='absent', **commands)
+            junit_help='present', **commands)
         self.assertEqual(code, 0, summary['failures'])
         self.assertEqual(summary['excludeLabel'], 'custom-label')
         self.assertEqual(summary['ctestRegistered'], len(inventory))
@@ -2092,7 +2307,7 @@ class RowFloorConfig(unittest.TestCase):
                 code, plain, _, _ = DriverOrderingAndAggregation.run_profile(
                     self, profile, ctest_shard_inventory=tuple(sharded['ctestRegisteredNames']),
                     ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
-                    ctest_skipped=tuple(sharded['ctestSkipped']), junit_help='absent', **commands)
+                    ctest_skipped=tuple(sharded['ctestSkipped']), junit_help='present', **commands)
                 self.assertEqual(code, sharded['exitCode'])
                 self.assertNotIn('ctestShard', plain)
                 self.assertNotIn('ctestRan', plain)
@@ -3502,10 +3717,35 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 self.assertIn('ctest-exclusion', failure_stages(summary))
 
     def test_junit_flag_omitted_when_unsupported(self):
-        code, summary, scripted, build_dir = self.run_profile(junit_help='absent')
-        self.assertEqual(code, 0, summary['failures'])
-        ctest_argv = next(argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
-        self.assertNotIn('--output-junit', ctest_argv)
+        for profile in ('kernel', 'release'):
+            with self.subTest(profile=profile), \
+                    mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+                code, summary, scripted, _ = self.run_profile(profile, junit_help='absent')
+            self.assertEqual(code, 0 if profile == 'kernel' else 1, summary['failures'])
+            ctest_argv = next(argv for argv in scripted.calls
+                              if argv[0] == 'ctest' and '--test-dir' in argv)
+            self.assertNotIn('--output-junit', ctest_argv)
+            self.assertEqual(failure_stages(summary),
+                             [] if profile == 'kernel' else ['ctest-scratch-guard'])
+            if profile == 'release':
+                self.assertIn('no machine-readable execution evidence',
+                              summary['failures'][0]['error'])
+
+    def test_unrequested_junit_cannot_clear_unsupported_ctest(self):
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+            code, summary, scripted, build_dir = self.run_profile(
+                'native', extra=['--min-tests', '1'], ctest_registered=4, ctest_rows=4,
+                junit_help='absent',
+                ctest_unrequested_junit=ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES),
+                **commands)
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+        self.assertIn('no machine-readable execution evidence', summary['failures'][0]['error'])
+        self.assertTrue((build_dir / 'ctest-junit.xml').is_file())
+        command = next(stage['argv'] for stage in summary['stages'] if stage['name'] == 'ctest')
+        self.assertNotIn('--output-junit', command)
 
     def test_ctest_label_exclusion_is_forwarded_to_ctest_execution_run(self):
         code, summary, scripted, _ = self.run_profile(extra=['--exclude-label', 'l4-pending'])
@@ -3779,6 +4019,85 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(summary['ctestSelected'], summary['ctestRegistered'])
         self.assertEqual(summary['ctestSkipped'], [])
 
+    def test_plain_guard_discovery_refuses_zero_total_with_names(self):
+        names = SCRATCH_GUARD_FIXTURE_NAMES
+        root = RowFloorConfig.discovery(names).stdout
+        invalid = root.replace(b'Total Tests: 4\n', b'Total Tests: 0\n')
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+            code, summary, _, _ = self.run_profile(
+                'native', extra=['--min-tests', '1'], ctest_registered=4, ctest_rows=4,
+                ctest_root_listing=invalid, junit_help='present', **commands)
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['ctest-discovery', 'ctest-scratch-guard'])
+        self.assertIsNone(summary['ctestRegistered'])
+        self.assertIsNone(summary['ctestSelected'])
+        guard = next(item for item in summary['failures']
+                     if item['stage'] == 'ctest-scratch-guard')
+        self.assertIn('full CTest registry names were unreadable', guard['error'])
+        # A successful execution floor cannot repair inconsistent discovery.
+        floor = next(item for item in summary['stages'] if item['name'] == 'ctest-floor')
+        self.assertEqual(floor['status'], 'passed', floor)
+
+    def test_guard_junit_is_required_on_plain_one_of_one_and_multi_shard_paths(self):
+        public = tuple(f'public_junit_{index}' for index in range(1020))
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        for profile, shard in (('native', None), ('native', '1/1'), ('debug', '1/2'),
+                               ('live-sanitizers', None), ('live-sanitizers', '1/1'),
+                               ('live-tsan', None), ('live-tsan', '1/1')):
+            labelled = SHARD_SLOW_FIXTURE_NAMES if profile == 'debug' else ()
+            runner_only = profile in ('live-sanitizers', 'live-tsan')
+            registry = (self.scratch_runner_names() if runner_only else
+                        (*SCRATCH_GUARD_FIXTURE_NAMES, *public, *labelled))
+            discovery = ({'ctest_root_listing': RowFloorConfig.discovery(
+                (*registry, *SCRATCH_GUARD_FIXTURE_NAMES)).stdout} if runner_only else {})
+            for evidence in (_SENTINEL, None):
+                with self.subTest(profile=profile, shard=shard, evidence=evidence), \
+                        mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                        mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+                    extra = ['--min-tests', '1']
+                    if shard is not None:
+                        extra += ['--ctest-shard', shard]
+                    code, summary, scripted, build_dir = self.run_profile(
+                        profile, extra=extra, ctest_shard_inventory=registry,
+                        ctest_shard_labelled=labelled, ctest_junit=evidence,
+                        junit_help='present', **discovery, **commands)
+                    self.assertEqual(code, 1 if evidence is None else 0, summary['failures'])
+                    self.assertEqual(failure_stages(summary),
+                                     ['ctest-scratch-guard'] if evidence is None else [])
+                    command = next(stage['argv'] for stage in summary['stages']
+                                   if stage['name'] == 'ctest')
+                    self.assertIn('--output-junit', command)
+                    self.assertEqual(command[command.index('--output-junit') + 1],
+                                     str(build_dir / 'ctest-junit.xml'))
+                    if evidence is None:
+                        self.assertIn('no machine-readable execution evidence',
+                                      summary['failures'][0]['error'])
+                    self.assertNotIn('ctest-shard-accounting', failure_stages(summary))
+                    if runner_only:
+                        inventory = next(stage for stage in summary['stages']
+                                         if stage['name'] == 'live-test-inventory-required')
+                        self.assertEqual(inventory['status'], 'passed', inventory)
+                        self.assertEqual(stage_names(summary).count('ctest-list-scratch-guard'), 1)
+
+    def test_previous_junit_cannot_clear_a_run_that_produces_no_report(self):
+        previous = ctest_junit_output(SCRATCH_GUARD_FIXTURE_NAMES)
+        commands = {name: 0 for name in LAB_SHARD_GUARDS}
+        with mock.patch.dict(os.environ, {'PINEFORGE_PRIVATE_FIXTURES': ''}), \
+                mock.patch.object(ci_verify.sys, 'platform', 'linux'):
+            code, summary, _, build_dir = self.run_profile(
+                'native', extra=['--min-tests', '1'], ctest_registered=4, ctest_rows=4,
+                ctest_preexisting_junit=previous, ctest_junit=None,
+                junit_help='present', **commands)
+        self.assertEqual(code, 1)
+        self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
+        self.assertIn('no machine-readable execution evidence', summary['failures'][0]['error'])
+        self.assertFalse((build_dir / 'ctest-junit.xml').exists())
+        preserved = list((build_dir / 'ci-logs').glob('ctest-junit-previous-*/ctest-junit.xml'))
+        self.assertEqual(len(preserved), 1)
+        self.assertEqual(preserved[0].read_bytes(), previous)
+
     def test_sanitizer_missing_public_flag_fails_before_build(self):
         code, summary, scripted, _ = self.run_profile('sanitizers', sanitizer_flag='absent')
         self.assertEqual(code, 1)
@@ -3803,6 +4122,22 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         if (ROOT / 'runner' / 'transport.cpp').is_file():
             names.add('test_native_live_websocket')
         return tuple(sorted(names))
+
+    def test_scripted_runner_json_inventory_is_distinct_from_root_console_discovery(self):
+        names = self.scratch_runner_names()
+        root = RowFloorConfig.discovery((*names, *SCRATCH_GUARD_FIXTURE_NAMES)).stdout
+        with tempfile.TemporaryDirectory(prefix='ci-runner-inventory-') as temporary:
+            build_dir = Path(temporary) / 'build'
+            runner = Scripted(build_dir, ROOT, 'live-sanitizers',
+                              ctest_shard_inventory=names, ctest_root_listing=root)
+            inventory = runner(['ctest', '--test-dir', str(build_dir / 'runner'),
+                                '--show-only=json-v1'])
+            self.assertEqual(inventory.returncode, 0)
+            self.assertEqual(json.loads(inventory.stdout),
+                             {'tests': [{'name': name} for name in names]})
+            listing = runner(['ctest', '--test-dir', str(build_dir), '-N'])
+            self.assertEqual(listing.returncode, 0)
+            self.assertEqual(listing.stdout, root)
 
     def test_runner_only_guard_registry_rejects_invalid_discovery(self):
         runner_names = self.scratch_runner_names()
@@ -3830,7 +4165,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                         code, summary, _, _ = self.run_profile(
                             profile, extra=[] if shard is None else ['--ctest-shard', shard],
                             ctest_shard_inventory=runner_names, ctest_root_listing=listing,
-                            junit_help='absent', **commands)
+                            junit_help='present', **commands)
                         self.assertEqual(code, 1)
                         self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
                         error = summary['failures'][0]['error']
@@ -3838,6 +4173,9 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                         for row in SCRATCH_GUARD_FIXTURE_NAMES:
                             self.assertIn(row, error)
                         self.assertEqual(stage_names(summary).count('ctest-list-scratch-guard'), 1)
+                        inventory = next(stage for stage in summary['stages']
+                                         if stage['name'] == 'live-test-inventory-required')
+                        self.assertEqual(inventory['status'], 'passed', inventory)
 
     def test_runner_only_one_of_one_checks_root_registry_and_keeps_runner_selection(self):
         runner_names = self.scratch_runner_names()
@@ -3851,9 +4189,12 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                     code, summary, _, build_dir = self.run_profile(
                         profile, extra=[] if shard is None else ['--ctest-shard', shard],
                         ctest_shard_inventory=runner_names, ctest_root_listing=root,
-                        junit_help='absent', **commands)
+                        junit_help='present', **commands)
                     self.assertEqual(code, 0, summary['failures'])
                     self.assertEqual(summary['failures'], [])
+                    inventory = next(stage for stage in summary['stages']
+                                     if stage['name'] == 'live-test-inventory-required')
+                    self.assertEqual(inventory['status'], 'passed', inventory)
                     for key in ('ctestRegistered', 'ctestSelected', 'ctestRows'):
                         self.assertEqual(summary[key], len(runner_names), key)
                     roots = [stage for stage in summary['stages']
@@ -3870,6 +4211,7 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                     ctest = next(stage for stage in summary['stages'] if stage['name'] == 'ctest')
                     self.assertIn(str(build_dir / 'runner'), ctest['argv'])
                     self.assertNotIn('-R', ctest['argv'])
+                    self.assertIn('--output-junit', ctest['argv'])
                     if shard is not None:
                         self.assertEqual(summary['ctestRegisteredNames'], list(runner_names))
                         self.assertEqual(summary['ctestRan'], list(runner_names))
@@ -3888,12 +4230,15 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 code, summary, _, _ = self.run_profile(
                     profile, extra=['--ctest-shard', '1/1'],
                     ctest_shard_inventory=runner_names, ctest_root_listing=root,
-                    junit_help='absent', **commands)
+                    junit_help='present', **commands)
                 self.assertEqual(code, 1)
                 self.assertEqual(failure_stages(summary), ['ctest-scratch-guard'])
                 error = summary['failures'][0]['error']
                 self.assertIn(missing, error)
                 self.assertIn('missing from the full CTest registry', error)
+                inventory = next(stage for stage in summary['stages']
+                                 if stage['name'] == 'live-test-inventory-required')
+                self.assertEqual(inventory['status'], 'passed', inventory)
                 for other in set(SCRATCH_GUARD_FIXTURE_NAMES) - {missing}:
                     self.assertNotIn(other, error)
 
@@ -4109,7 +4454,7 @@ class RowFloorDriver(unittest.TestCase):
                         profile, extra=['--ctest-shard', f'{index}/2'],
                         ctest_shard_inventory=inventory,
                         ctest_shard_labelled=SHARD_SLOW_FIXTURE_NAMES,
-                        junit_help='absent', **guard_exits)
+                        junit_help='present', **guard_exits)
                     self.assertEqual(code, 0, summary['failures'])
                     self.assertEqual(summary['ctestRegistered'], len(inventory))
                     for name in ('configure', 'profile-options', 'build', 'stale-binaries',
@@ -5134,6 +5479,10 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                     output = (populated_ctest_output(
                         total, required=SCRATCH_GUARD_FIXTURE_NAMES, skipped=skipped)
                         if total else ctest_output(0))
+                    if total:
+                        write_ctest_junit(driver, populated_ctest_names(
+                            total, required=SCRATCH_GUARD_FIXTURE_NAMES, skipped=skipped),
+                            skipped=skipped)
                     driver.enforce_test_floor(
                         Completed(0, output),
                         registered=registered, selected=selected,
@@ -5231,10 +5580,14 @@ class PrExclusionWithFixturesAbsent(unittest.TestCase):
                 ['debug', '--exclude-label', 'slow', '--build-dir', str(source / 'build')],
                 source=source, runner=default_runner, stream_output=False)
             driver = ci_verify.Driver(cfg)
+            skipped = tuple(self.pinned_probe(2))
+            write_ctest_junit(driver, populated_ctest_names(
+                877, required=SCRATCH_GUARD_FIXTURE_NAMES, skipped=skipped),
+                skipped=skipped)
             driver.enforce_test_floor(
                 Completed(0, populated_ctest_output(
                     877, required=SCRATCH_GUARD_FIXTURE_NAMES,
-                    skipped=tuple(self.pinned_probe(2))), b''),
+                    skipped=skipped), b''),
                 registered=882, selected=877,
                 registered_names=frozenset(SCRATCH_GUARD_FIXTURE_NAMES),
                 excluded_names=frozenset(SCRIPTED_SLOW_FIXTURE_NAMES))
