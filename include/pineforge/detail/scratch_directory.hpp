@@ -124,7 +124,7 @@ inline std::string resolve_scratch_directory(const std::string& configured,
         refusal += "': ";
         if (query_error != 0) {
             error = query_error;
-            refusal += "statfs failed (errno ";
+            refusal += "directory check failed (errno ";
             refusal += std::to_string(query_error);
             refusal += ": ";
             refusal += std::error_code(query_error, std::generic_category()).message();

@@ -228,8 +228,8 @@ public:
                                                      directory_error, proven_memory);
         if (path.empty())
             throw coded<std::system_error>(RunFailureCode::scratch_io_failed, {},
-                std::system_error(proven_memory ? ENODEV : directory_error,
-                                  std::generic_category(), refusal));
+                std::system_error(directory_error, std::generic_category(),
+                    scratch_with_detail("command scratch create", refusal.c_str(), directory_error)));
         const auto create_message = scratch_create_message("command scratch create", path, refusal);
         if (path.back() != '/') path += '/';
         path += "pineforge-command-XXXXXX";
