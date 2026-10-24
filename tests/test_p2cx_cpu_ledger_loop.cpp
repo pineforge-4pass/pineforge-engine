@@ -520,7 +520,12 @@ constexpr bool kOptimized = false;
 #endif
 constexpr bool kRatioAsserted = kOptimized && !kSanitized;
 
-constexpr double kMaxRatio = 1e9;
+// ROUND 2: r0 = 2.1439 (lab NTU, rj-20261024t221927-daa8c3, unchanged tree:
+// ledger 12.98 ns/step vs vector 6.06 ns/step, 512 passes x 24,238 rows, min of
+// 7 rounds); the same host measured the changed tree at 1.7550 (rj-20261024t221940-
+// 7aeb62: 11.22 vs 6.39 ns/step). Bound = 0.9 * r0 = 1.929, the design target
+// above; the changed tree has about 9% margin under it on that host.
+constexpr double kMaxRatio = 1.929;
 constexpr Size kPopulation = 24238;
 constexpr int kRounds = 7;
 constexpr double kMinLegSeconds = 0.05;
