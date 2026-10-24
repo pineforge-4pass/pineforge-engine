@@ -2004,9 +2004,13 @@ class WorkflowPinTests(unittest.TestCase):
             if value is not None:
                 texts.append(value)
         for text in texts:
-            for view in (text.replace("`", ""),
-                         re.sub(r"""(?:\\\r?\n|#|//|['"`]|\s)+""", " ", text)):
-                view = unicodedata.normalize("NFKC", view).casefold()
+            views = (text.replace("`", ""),
+                     re.sub(r"""(?:\\\r?\n|#|//|['"`]|\s)+""", " ", text))
+            # Compatibility normalization must only add matches to the original views.
+            casefold_views = [view.casefold() for view in views]
+            normalized_views = [unicodedata.normalize("NFKC", view).casefold()
+                                for view in views]
+            for view in casefold_views + normalized_views:
                 self.assertNotRegex(view,
                                     r"\badministration\s*:\s*read\b|\bapp\s+requires\b",
                                     "unverified App permission claim must stay absent")
@@ -2161,6 +2165,56 @@ class WorkflowPinTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                             AssertionError, "unverified App permission claim must stay absent"):
                         self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_compatibility_suffix_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for index, claim in (
+                (0, "\n# Needs administration: read\u2122\n"),
+                (1, "\nNeeds administration: read\u2122\n"),
+                (2, "\n# Needs administration: read\u2122\n"),
+                (0, "\n# Needs administration:\n# read\u2122\n"),
+                (1, "\nNeeds administration:\n# read\u2122\n"),
+                (2, "\n# Needs administration:\n# read\u2122\n")):
+            with self.subTest(place=index, claim=claim):
+                changed = original.copy()
+                changed[index] += claim
+                self.assertNotEqual(changed[index], original[index])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_casefold_scan_removal_breaks_restoration_controls(self):
+        regression = "test_ruleset_visibility_guard_rejects_compatibility_suffix_claims"
+        original_result = unittest.TestResult()
+        WorkflowPinTests(regression).run(original_result)
+        self.assertEqual(original_result.testsRun, 1)
+        self.assertEqual(original_result.errors, [])
+        self.assertEqual(original_result.failures, [],
+                         "restoration controls must pass before mutation")
+
+        source = Path(__file__).read_text()
+        before = "            for view in casefold_views + normalized_views:\n"
+        self.assertEqual(source.count(before), 1, "mutation must have one source target")
+        mutated = source.replace(before, "            for view in normalized_views:\n", 1)
+        self.assertNotEqual(mutated, source)
+        guard = next(node for node in ast.walk(ast.parse(mutated))
+                     if isinstance(node, ast.FunctionDef)
+                     and node.name == "assert_ruleset_visibility_documentation")
+        namespace = {"ast": ast, "re": re, "unicodedata": unicodedata}
+        exec(compile(ast.Module(body=[guard], type_ignores=[]), __file__, "exec"), namespace)
+        case = WorkflowPinTests(regression)
+        case.assert_ruleset_visibility_documentation = namespace[
+            "assert_ruleset_visibility_documentation"].__get__(case)
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 6,
+                         "removing the casefold-only scan must break every restoration row")
+        for _, traceback in result.failures:
+            self.assertIn("AssertionError not raised", traceback)
 
     def test_prebuilt_builds_the_emitted_sha_and_asserts_tag_identity(self):
         jobs = _jobs(self.workflow())
