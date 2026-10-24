@@ -12981,6 +12981,12 @@ void NativeExecutionConsumer::capture_presentation(BacktestEngine& engine) {
             engine.compute_report_sink_trade_metrics(
                 &local, open_storage, open_count);
         }
+        // Omitted rows must never publish empty trade metrics. Judge after
+        // the sink fold, which supplies trade metrics without resident rows.
+        if (engine.report_mode_ != ReportMode::FULL
+            && local.metrics.all.num_trades != local.total_trades)
+            throw coded<std::logic_error>(RunFailureCode::engine_invariant, {},
+                "summary trade metrics differ from the logical trade count");
         if (sink_trades) {
             // The sink view is borrowed for in-place range-end edits only.
             // Its count is bounded by the open lots; no history may be exposed.
@@ -13228,6 +13234,11 @@ int NativeExecutionConsumer::set_execution_observer_v1(
             return -1;
         next = *observer;
         if (next.before_results == nullptr) return -1;
+        // Both the envelope mode and the equity mode adopted at begin must
+        // support capture. Refuse before binding or replacing any observer.
+        if (engine->report_mode_ == ReportMode::SUMMARY_ONLY
+            || engine->pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
+            return -2;
     }
     NativeExecutionConsumer* consumer = nullptr;
     const int refusal = gate_selected_setter(engine, observer != nullptr, &consumer);
