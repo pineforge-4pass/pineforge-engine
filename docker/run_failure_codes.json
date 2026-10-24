@@ -1327,7 +1327,7 @@
   "scratch_io_failed": {
    "args": {},
    "class": "resource",
-   "description": "The engine could not create, resize, read or write the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io.",
+   "description": "The engine could not create, resize, read or write command scratch or the storage of one of its auxiliary tables (the disk id table, the id-pair store or the placement table). Command scratch also raises this code when the default-directory policy fails a directory query or refuses memory-backed default candidates, or when an explicit memory-backed command directory is refused. Native runs create command scratch at begin, so these failures are resource failures before any strategy callback. The run has no successful completion. Report-sink scratch files, the curve writer and the position-tail facade do not raise this code: they raise report_sink_failed with reason scratch_io.",
    "english": [
     "scratch create",
     "scratch read",

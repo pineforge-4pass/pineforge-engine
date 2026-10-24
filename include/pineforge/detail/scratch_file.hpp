@@ -134,22 +134,20 @@ public:
         }
         std::string refusal;
         int directory_error = 0;
-        std::string name = resolve_scratch_directory(directory_, refusal, directory_error);
+        bool proven_memory = false;
+        std::string name = resolve_scratch_directory(directory_, refusal, directory_error,
+                                                     proven_memory);
         if (name.empty()) {
-            if (directory_error != ENODEV || bounded_cache_ || io_raiser_ == IoRaiser::auxiliary)
-                io_error(directory_error, refusal.c_str());
-            // Selection fails before any backing I/O. Carry the same errno,
-            // code and reason directly so the report facade's legacy create
-            // translator cannot erase the candidate/rejection diagnostics.
-            throw coded<std::system_error>(RunFailureCode::report_sink_failed,
-                {{"reason", "scratch_io"}},
-                std::system_error(directory_error, std::generic_category(), refusal));
+            // Keep the established typed raiser for bounded and unbounded
+            // stores alike. A query-returned ENODEV is not a memory verdict.
+            io_error(proven_memory ? ENODEV : directory_error, refusal.c_str());
         }
+        const auto create_message = scratch_create_message("scratch create", name, refusal);
         if (name.back() != '/') name += '/';
         name += prefix;
         name += "-XXXXXX";
         const int opened = ::mkstemp(name.data());
-        if (opened < 0) io_error(errno, "scratch create");
+        if (opened < 0) io_error(errno, create_message.c_str());
         if (::unlink(name.c_str()) != 0) {
             const int error = errno;
             ::close(opened);
@@ -170,7 +168,7 @@ public:
                 io_error(error, "scratch backing");
             }
             // These are memory filesystems, not an external row source.
-            if (backing.f_type == 0x01021994 || backing.f_type == 0x858458f6) {
+            if (scratch_filesystem_is_memory(backing.f_type)) {
                 clear();
                 io_error(ENODEV, "scratch requires disk backing");
             }
