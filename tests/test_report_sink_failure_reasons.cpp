@@ -126,8 +126,9 @@ void writer_origins() {
 #if defined(__linux__)
     const pf_report_sink_v1 full{sizeof full, 1, "/dev/full", "W1", directory.path.c_str()};
     rs::LineWriter device(full);
-    device.write_header({false, false, false, 0, 0});
-    expect_writer_io([&] { (void)device.write_trailer(); }, ENOSPC, "sink_io");
+    // A path sink must be a disk-backed regular file (report_sink_writer.cpp uncached()): a
+    // character device such as /dev/full is refused when the header opens it, with EINVAL.
+    expect_writer_io([&] { device.write_header({false, false, false, 0, 0}); }, EINVAL, "sink_io");
 #endif
     Socket socket;
     const pf_report_sink_fd_v1 fd_sink{sizeof fd_sink, 1, socket.writer.value, "W1"};
