@@ -13392,9 +13392,10 @@ int NativeExecutionConsumer::set_execution_observer_v1(
             return -1;
         next = *observer;
         if (next.before_results == nullptr) return -1;
-        // Refuse envelope SUMMARY_ONLY before binding or replacing an observer.
-        // The legacy equity mode still uses FULL trade capture.
-        if (engine->report_mode_ == ReportMode::SUMMARY_ONLY)
+        // Refuse either SUMMARY_ONLY mode before binding or replacing an observer.
+        // Only the pending legacy mode configures the next run.
+        if (engine->report_mode_ == ReportMode::SUMMARY_ONLY
+            || engine->pending_equity_report_mode_ == ReportMode::SUMMARY_ONLY)
             return -2;
     }
     NativeExecutionConsumer* consumer = nullptr;
