@@ -1,5 +1,6 @@
-// X1(2): SUMMARY_ONLY capture without a sink must fail at begin, before bars.
+// X1(2): v1 SUMMARY_ONLY capture without a sink must fail at begin, before bars.
 // The selected-window setter reaches begin even with the observer setter guard.
+// The legacy equity-only setter preserves FULL trade metrics and pending ratios.
 #include <pineforge/execution_observer.h>
 #include <pineforge/native_host.hpp>
 #include <pineforge/report_mode.h>
@@ -34,6 +35,14 @@ std::uint64_t bits(double value) {
     std::memcpy(&result, &value, sizeof result);
     return result;
 }
+
+struct Report {
+    ReportC value{};
+    Report() = default;
+    ~Report() { BacktestEngine::free_report(&value); }
+    Report(const Report&) = delete;
+    Report& operator=(const Report&) = delete;
+};
 
 struct Envelope {
     ReportEnvelopeV1 value{};
@@ -151,13 +160,17 @@ void attach_observer(Host& host, Observer& observer) {
     require(status == 0, "observer registration status=" + std::to_string(status));
 }
 
-void full_report(Host& host, Envelope& envelope) {
+// A captured FULL run (selected window or observer) is not "complete" in the
+// envelope sense: only the uncaptured oracle run is required to be. The captured
+// controls assert the mode and, in the caller, the oracle's totals.
+void full_report(Host& host, Envelope& envelope, bool require_complete = false) {
     require(host.fill_report_envelope_v1(&envelope.value) == PF_REPORT_MODE_ACCEPTED,
             "FULL envelope refused");
     completed(host);
-    require(envelope.value.metadata.mode == PF_REPORT_MODE_FULL
-                && envelope.value.metadata.complete == 1,
-            "FULL envelope is incomplete or has the wrong mode");
+    require(envelope.value.metadata.mode == PF_REPORT_MODE_FULL,
+            "FULL envelope has the wrong mode");
+    require(!require_complete || envelope.value.metadata.complete == 1,
+            "FULL oracle envelope is incomplete");
 }
 
 void oracle_run(Envelope& oracle) {
@@ -167,7 +180,7 @@ void oracle_run(Envelope& oracle) {
             "oracle FULL setter refused");
     run(host);
     completed(host);
-    full_report(host, oracle);
+    full_report(host, oracle, true);
     const auto& report = oracle.value.report;
     require(report.total_trades == round_trips && report.trades_len == round_trips
                 && report.trades != nullptr && report.metrics.all.num_trades == round_trips
@@ -197,6 +210,17 @@ void compare_totals(const ReportC& actual, const ReportC& oracle) {
                 && bits(actual.metrics.longs.net_profit) == bits(oracle.metrics.longs.net_profit)
                 && bits(actual.metrics.shorts.net_profit) == bits(oracle.metrics.shorts.net_profit),
             "FULL capture P&L differs from the independent FULL oracle");
+}
+
+void legacy_summary_report(Host& host, const ReportC& oracle) {
+    Report report;
+    host.fill_report(&report.value);
+    completed(host);
+    require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
+            "legacy pending equity mode was not adopted");
+    require(!host.equity_summary_ratios_ready(),
+            "legacy SUMMARY_ONLY equity ratios must remain pending");
+    compare_totals(report.value, oracle);
 }
 
 void refused_at_begin(Host& host) {
@@ -295,6 +319,19 @@ int main() {
         run(host);
         completed(host);
     })) return 1;
+    if (!row("legacy SUMMARY_ONLY observer-first control", [&] {
+        Observer observer;
+        Host host;
+        configure(host);
+        // Register while FULL so the observer guard cannot mask the begin check.
+        attach_observer(host, observer);
+        require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
+                "legacy SUMMARY_ONLY setter refused after observer registration");
+        run(host);
+        completed(host);
+        legacy_summary_report(host, oracle.value.report);
+        require(observer.calls == 1, "legacy capture did not dispatch the observer once");
+    })) return 1;
 
     bool good = row("SUMMARY_ONLY selected-window begin refusal", [] {
         Host host;
@@ -305,15 +342,17 @@ int main() {
         select_window(host);
         refused_at_begin(host);
     });
-    if (!row("pending SUMMARY_ONLY selected-window begin refusal", [] {
+    if (!row("legacy SUMMARY_ONLY selected-window control", [&] {
         Host host;
         configure(host);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                 "pending SUMMARY_ONLY setter refused");
         select_window(host);
-        refused_at_begin(host);
-    })) good = false;
-    if (!row("pending SUMMARY_ONLY observer begin refusal", [] {
+        run(host);
+        completed(host);
+        legacy_summary_report(host, oracle.value.report);
+    })) return 1;
+    if (!row("legacy SUMMARY_ONLY observer and selected-window control", [&] {
         Observer observer;
         Host host;
         configure(host);
@@ -322,8 +361,11 @@ int main() {
         attach_observer(host, observer);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == PF_REPORT_MODE_ACCEPTED,
                 "pending SUMMARY_ONLY setter refused after observer registration");
-        refused_at_begin(host);
-        require(observer.calls == 0, "refused begin dispatched the observer");
-    })) good = false;
+        select_window(host);
+        run(host);
+        completed(host);
+        legacy_summary_report(host, oracle.value.report);
+        require(observer.calls == 1, "legacy capture did not dispatch the observer once");
+    })) return 1;
     return good ? 0 : 1;
 }
