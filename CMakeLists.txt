@@ -163,6 +163,7 @@ set(PINEFORGE_KERNEL_SOURCES
     src/selected_window_plan.cpp
     src/metrics_spill_curve.cpp
     src/report_scratch.cpp
+    src/detail/o1_store.cpp
     src/scratch_arena.cpp
 )
 # The kernel-only archive: libpineforge.a's kernel objects and flags, for consumers that never speak Pine.
