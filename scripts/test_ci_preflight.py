@@ -762,6 +762,55 @@ class ActionPins(unittest.TestCase):
         self.assert_yaml_refusals('env: {\n  CHECKOUT: main\n}\n',
                                  [(1, 'flow mappings', 'env: {')])
 
+    def test_reported_flow_continuation_resumes_before_mutable_action(self):
+        path = '.github/workflows/ci.yml'
+        text = ('env: {\n'
+                '  A: b", } # "\n'
+                'steps:\n'
+                '  - uses: actions/checkout@main\n')
+        self.assertEqual(ci_preflight.action_pin_findings({path: text}), [
+            self.unsupported_finding(path, 1, 'env: {'),
+            self.finding(path, 4, 'actions/checkout@main')])
+
+    def test_refused_flow_continuations_count_delimiters_despite_plain_quotes(self):
+        cases = (
+            ('env: {', 'A: b", } # "'),
+            ('env: {', "A: b', } # '"),
+            ('env: {', 'A: [b", linux]} # "'),
+            ('env: {', "A: [b', {B: value}]} # '"),
+            ('options: [{', 'A: b", }] # "'),
+            ('options: [[{', "A: b', }]] # '"),
+        )
+        for opening, continuation in cases:
+            text = ('steps:\n  - ' + opening + '\n'
+                    '      ' + continuation + '\n'
+                    '    uses: actions/checkout@main\n')
+            for path in (self.WORKFLOW, self.ACTION):
+                with self.subTest(opening=opening, continuation=continuation, path=path):
+                    # The uses key is deeper than the opening line: outdent
+                    # recovery alone cannot make this assertion pass.
+                    self.assertEqual(ci_preflight.action_pin_findings({path: text}), [
+                        self.unsupported_finding(path, 2, '- ' + opening),
+                        self.finding(path, 4, 'actions/checkout@main')])
+
+    def test_refused_flow_continuations_end_at_outdent_even_with_unbalanced_depth(self):
+        for prefix, indent in (('', ''), ('options:\n', '  ')):
+            opening = indent + 'env: {'
+            # The quoted { adds depth in the conservative scan; the embedded
+            # quote after b masks the real closer on the old implementation.
+            continuation = indent + '  A: "{", B: b", } # "'
+            for following, uses_line in (
+                    (indent + 'uses: actions/checkout@main\n', 3),
+                    (indent + 'uses: actions/checkout@main # }\n', 3),
+                    ('steps:\n  - uses: actions/checkout@main\n', 4)):
+                text = prefix + opening + '\n' + continuation + '\n' + following
+                offset = 1 if prefix else 0
+                for path in (self.WORKFLOW, self.ACTION):
+                    with self.subTest(prefix=prefix, following=following, path=path):
+                        self.assertEqual(ci_preflight.action_pin_findings({path: text}), [
+                            self.unsupported_finding(path, 1 + offset, opening.strip(' ')),
+                            self.finding(path, uses_line + offset, 'actions/checkout@main')])
+
     def test_empty_sequences_require_a_whole_plain_key_value(self):
         for line in ('- []', 'labels: [[]]', 'labels: [] trailing'):
             with self.subTest(line=line):
@@ -815,21 +864,92 @@ class ActionPins(unittest.TestCase):
                   '\u3000', '\ufeff')
         for space in spaces:
             line = space + '#hidden: {uses: actions/checkout@main}'
+            construct = (f'unsupported line break U+{ord(space):04X}'
+                         if space in '\u0085\u2028\u2029' else 'unsupported whitespace')
             for prefix in ('', 'name: Example\n'):
                 with self.subTest(space=repr(space), prefix=prefix):
                     self.assert_yaml_refusals(
                         prefix + line + '\n',
-                        [(1 if not prefix else 2, 'unsupported whitespace', line)])
+                        [(1 if not prefix else 2, construct, line)])
 
     def test_unicode_whitespace_around_separators_is_refused(self):
         for space in ('\u0085', '\u00a0', '\u2028', '\u2029', '\ufeff'):
+            construct = (f'unsupported line break U+{ord(space):04X}'
+                         if space in '\u0085\u2028\u2029' else 'unsupported whitespace')
             for line in (f'name{space}: Example', f'name:{space}Example',
                          f'name: Example{space}#hidden: {{uses: actions/checkout@main}}',
                          f'name: Example #{space}hidden: {{uses: actions/checkout@main}}',
                          f'name: Example{space}: hidden', f'name: Example:{space}hidden'):
                 with self.subTest(space=repr(space), line=line):
-                    self.assert_yaml_refusals(line + '\n',
-                                             [(1, 'unsupported whitespace', line)])
+                    self.assert_yaml_refusals(line + '\n', [(1, construct, line)])
+
+    def test_unsupported_line_breaks_in_block_scalars_refuse_the_whole_file(self):
+        for separator in ('\r', '\u0085', '\u2028', '\u2029', '\v', '\f'):
+            for prefix, body, following, number in (
+                    ('steps:\n  - run: |\n', '      echo ok',
+                     '  - uses: actions/checkout@main', 3),
+                    ('steps:\n  - run: |\n', '     ',
+                     '  - uses: actions/checkout@main', 3),
+                    ('name: Example\nruns:\n  using: composite\n  steps:\n'
+                     '    - shell: bash\n      run: |\n', '        echo ok',
+                     '    - uses: actions/checkout@main', 7)):
+                line = body + separator + following
+                with self.subTest(separator=repr(separator), prefix=prefix, body=body):
+                    self.assert_yaml_refusals(prefix + line + '\n', [
+                        (number, f'unsupported line break U+{ord(separator):04X}',
+                         line.strip(' \t'))])
+
+    def test_unsupported_line_breaks_in_comments_refuse_the_whole_file(self):
+        for separator in ('\r', '\u0085', '\u2028', '\u2029', '\v', '\f'):
+            line = '  # comment' + separator + '  - uses: actions/checkout@main'
+            with self.subTest(separator=repr(separator)):
+                self.assert_yaml_refusals('steps:\n' + line + '\n', [
+                    (2, f'unsupported line break U+{ord(separator):04X}',
+                     line.strip(' \t'))])
+
+    def test_c0_controls_in_block_scalars_and_comments_refuse_the_whole_file(self):
+        for codepoint in range(0x20):
+            if codepoint in (0x09, 0x0a, 0x0b, 0x0c, 0x0d):
+                continue  # TAB/LF/CRLF controls and the six line breaks have separate rows.
+            control = chr(codepoint)
+            for prefix, line, number in (
+                    ('run: |\n', '  echo ' + control + 'ok', 2),
+                    ('name: Example\n', '# comment ' + control + 'text', 2)):
+                with self.subTest(codepoint=codepoint, prefix=prefix):
+                    self.assert_yaml_refusals(prefix + line + '\n', [
+                        (number, f'unsupported control character U+{codepoint:04X}',
+                         line.strip(' \t'))])
+
+    def test_file_character_refusal_reports_only_the_first_offense_before_scanning(self):
+        first = '  echo \x01ok'
+        text = ('uses: actions/checkout@main\r\n'
+                'run: |\r\n' + first + '\r\n'
+                '# later \u2028\n')
+        for path, other in ((self.WORKFLOW, self.ACTION), (self.ACTION, self.WORKFLOW)):
+            with self.subTest(path=path):
+                self.assertEqual(ci_preflight.action_pin_findings({
+                    path: text, other: 'uses: actions/upload-artifact@main\n'}), [
+                        self.unsupported_finding(
+                            path, 3, first.strip(' '), 'unsupported control character U+0001'),
+                        self.finding(other, 1, 'actions/upload-artifact@main')])
+
+    def test_crlf_block_scalar_resumption_and_non_ascii_text_remain_supported(self):
+        text = ('steps:\n'
+                '  - run: |\n'
+                '      echo café — →\tdata\n'
+                '      uses: actions/checkout@main\n'
+                '  # café — →\n'
+                f'  - uses: actions/upload-artifact@{self.SHA} # v4.4.0\n')
+        for newline in ('\n', '\r\n'):
+            for path in (self.WORKFLOW, self.ACTION):
+                with self.subTest(newline=newline, path=path):
+                    sources = {path: text.replace('\n', newline)}
+                    self.assertEqual(ci_preflight.action_pin_findings(sources), [])
+                    changed = sources[path].replace(
+                        f'actions/upload-artifact@{self.SHA}', 'actions/upload-artifact@main', 1)
+                    self.assertNotEqual(changed, sources[path])
+                    self.assertEqual(ci_preflight.action_pin_findings({path: changed}), [
+                        self.finding(path, 6, 'actions/upload-artifact@main')])
 
     def test_unterminated_expressions_with_many_quotes_are_refused(self):
         # Thread-free, with no timing threshold: the large input cannot finish

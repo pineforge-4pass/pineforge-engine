@@ -751,6 +751,8 @@ _ACTION_YAML_KEY = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*) *:(?: +(.*)|$)')
 _ACTION_YAML_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"' r"|'(?:''|[^'])*'")
 _ACTION_BLOCK_SCALAR = re.compile(r'[|>](?:[+-][1-9]?|[1-9][+-]?)?')
 _ACTION_EMPTY_COLLECTION = re.compile(r'\{[ \t]*\}|\[[ \t]*\]')
+_ACTION_YAML_FORBIDDEN_CHARACTER = re.compile(
+    r'\r(?!\n)|[\x00-\x08\x0b\x0c\x0e-\x1f\x85\u2028\u2029]')
 _ACTION_YAML_PROPERTIES = {'&': 'anchors', '*': 'aliases', '!': 'tags',
                           '?': 'explicit keys', ':': 'explicit keys'}
 
@@ -903,12 +905,25 @@ def action_uses(sources: dict[str, str], *,
                 findings: list[str]) -> Iterator[tuple[str, int, str, str]]:
     """Whitelist workflow YAML, then yield plain block uses scalars for pinning."""
     for name, text in sources.items():
+        # Refuse the raw file before any scalar-body, comment or flow skip.
+        # LF and CRLF are the only supported line endings, including in data.
+        offense = _ACTION_YAML_FORBIDDEN_CHARACTER.search(text)
+        if offense is not None:
+            char = offense.group()
+            number = text.count('\n', 0, offense.start()) + 1
+            source_line = text.replace('\r\n', '\n').split('\n')[number - 1].strip(' \t')
+            construct = ('unsupported line break' if char in '\r\x85\u2028\u2029\v\f'
+                         else 'unsupported control character')
+            findings.append(
+                f'{name}:{number}: unsupported YAML construct in a workflow '
+                f'({construct} U+{ord(char):04X}): '
+                f'rewrite it in plain block style; {source_line!r}')
+            continue
         scalar_depth = None
         sequence = []
         sequence_start = None
         refused_flow_depth = 0
-        # Only LF and CRLF delimit lines; splitlines() would silently consume
-        # Unicode separators before the whitespace refusal can inspect them.
+        refused_flow_indent = 0
         for number, line in enumerate(text.replace('\r\n', '\n').split('\n'), 1):
             if scalar_depth is not None:
                 if not line.strip(' ') or _indent(line) > scalar_depth:
@@ -922,11 +937,23 @@ def action_uses(sources: dict[str, str], *,
                     not line.strip(' ') or line.lstrip(' ').startswith('#')):
                 continue
             if refused_flow_depth:
-                _, visible, _ = _action_yaml_visible(line)
-                refused_flow_depth = max(0, refused_flow_depth
-                                         + sum(1 if char in '{[' else -1
-                                               for char in visible if char in '{}[]'))
-                continue
+                if _indent(line) <= refused_flow_indent:
+                    refused_flow_depth = 0
+                    # An aligned closing tail belongs to the refused flow;
+                    # any other outdent is scanned again as a block line.
+                    if line.lstrip(' ').startswith(('}', ']')):
+                        continue
+                else:
+                    # This collection is already refused. Quotes are plain
+                    # text here: they must never mask a closing delimiter.
+                    for char in line:
+                        if char in '{[':
+                            refused_flow_depth += 1
+                        elif char in '}]':
+                            refused_flow_depth -= 1
+                        if not refused_flow_depth:
+                            break
+                    continue
             stripped = line.strip(' ')
             step = re.match(r'-[ \t]+', stripped)
             key_line = stripped[step.end():] if step and not sequence else stripped
@@ -974,6 +1001,7 @@ def action_uses(sources: dict[str, str], *,
                     refused_flow_depth = max(0, sequence_depth
                                              + sum(1 if char in '{[' else -1
                                                    for char in visible if char in '{}[]'))
+                    refused_flow_indent = _indent(sequence_start[1] if sequence_depth else line)
                 sequence.clear()
                 source_line = line.strip(' \t')
                 findings.append(

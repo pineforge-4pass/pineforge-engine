@@ -117,8 +117,15 @@ elements are refused.
 Keys must be unquoted identifiers (`[A-Za-z_][A-Za-z0-9_-]*`); scalar values
 may be plain or single/double quoted on one line, or use `|` / `>` blocks
 with chomping and indentation indicators. GitHub `${{ ... }}` expressions,
-comments and CRLF line endings are supported. Indented block-scalar bodies
-are excluded, including `run:`, github-script's `with: script:`, and
+comments and LF/CRLF line endings are supported. Before scanning any YAML,
+the lint refuses a whole file containing a bare CR (U+000D), NEL (U+0085),
+LS (U+2028), PS (U+2029), VT (U+000B) or FF (U+000C) as
+`unsupported line break`, naming the first offending line and code point.
+NUL and every other C0 control except TAB, LF and CR within CRLF are likewise
+refused as `unsupported control character`. These file checks include
+comments and block-scalar bodies; ordinary non-ASCII text remains supported.
+Indented block-scalar bodies are otherwise excluded, including `run:`,
+github-script's `with: script:`, and
 multiline action inputs. A sequence item such as `- |`, `- >-` or `- |2+`
 owns its body from the dash column; `- run: |` uses the key's column.
 Whitespace outside block-scalar bodies must be ASCII-only: indentation and
@@ -134,6 +141,16 @@ Empty collections outside the whole plain-key value exception, extra
 inline mapping keys, unrecognised block lines and incomplete quoted/flow
 values are refused too. Each refusal names the file, line, construct and
 source text and asks for a rewrite in plain block style.
+This scanner checks a reviewed YAML subset, not arbitrary YAML syntax.
+After refusing a flow collection, it counts braces and brackets on
+continuation lines with quotes treated as plain text, ending that region
+when depth reaches zero or a nonblank, noncomment line outdents to the
+opening line's indentation or less. An aligned closing tail remains part
+of the original refusal; other outdented lines resume block scanning.
+Delimiter characters inside quoted data or comments in an already-refused
+flow can shorten or extend the region until that outdent. Findings inside
+such regions are not exhaustive; exotic YAML outside the documented subset
+must be rewritten in plain block style.
 To bump an action, resolve the desired upstream version to its full commit
 SHA and update both the SHA and version comment together.
 
