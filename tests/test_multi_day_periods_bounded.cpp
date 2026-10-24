@@ -39,6 +39,12 @@
  * and the aggregator the host installed answers each chart bar with the open
  * the closed form of the rule gives (a day count from the year's first), the
  * reference's, and within the window.
+ *
+ * F16/F17: increasing gap stamps around New York's November 2025 offset
+ * change resolve to decreasing trading dates through session_covered_instant_ms.
+ * The chart and auxiliary witnesses require the same differential even when
+ * planning returns null (the host then keeps nominal aggregation). These are
+ * expected RED on the line; the UTC monotone control must stay GREEN.
  */
 
 #include <pineforge/pineforge.h>
@@ -490,7 +496,7 @@ bool same_bar(const Bar& a, const Bar& b) {
 // feed() over the whole input with the next input bar known; returns the most
 // opens the generated partition held at any bar.
 std::size_t compare_feed(const Scenario& sc, int days, const std::vector<std::int64_t>& stamps,
-                         const Partition& partition, const std::string& ctx) {
+                         const Partition& partition, const std::string& ctx, bool trace = false) {
     const std::vector<Bar>& input = input_of(sc);
     TimeframeAggregator ref = stored_partition(sc, days, stamps);
     TimeframeAggregator made = generated_partition(sc, days, partition);
@@ -499,6 +505,16 @@ std::size_t compare_feed(const Scenario& sc, int days, const std::vector<std::in
         const std::int64_t next_ms = i + 1 < input.size() ? input[i + 1].timestamp : 0;
         const AggregatedBar a = ref.feed(input[i], next_ms, 0);
         const AggregatedBar b = made.feed(input[i], next_ms, 0);
+        if (trace) {
+            std::printf("  %s feed[%zu] at %lld:"
+                        " reference={time=%lld complete=%d subs=%d OHLCV=%.17g/%.17g/%.17g/%.17g/%.17g}"
+                        " line={time=%lld complete=%d subs=%d OHLCV=%.17g/%.17g/%.17g/%.17g/%.17g}\n",
+                        ctx.c_str(), i, static_cast<long long>(input[i].timestamp),
+                        static_cast<long long>(a.bar.timestamp), a.is_complete ? 1 : 0,
+                        a.sub_bar_count, a.bar.open, a.bar.high, a.bar.low, a.bar.close, a.bar.volume,
+                        static_cast<long long>(b.bar.timestamp), b.is_complete ? 1 : 0,
+                        b.sub_bar_count, b.bar.open, b.bar.high, b.bar.low, b.bar.close, b.bar.volume);
+        }
         const bool same = same_bar(a.bar, b.bar) && a.is_complete == b.is_complete
             && a.sub_bar_count == b.sub_bar_count;
         CHECK_CTX(same, ctx + " feed " + std::to_string(i));
@@ -511,7 +527,8 @@ std::size_t compare_feed(const Scenario& sc, int days, const std::vector<std::in
 
 // One feed, one N, one calendar rule: the generated partition against the
 // stored one.
-void run_scenario(const Scenario& sc, int days, bool exchange, bool expect_partition) {
+void run_scenario(const Scenario& sc, int days, bool exchange, bool expect_partition,
+                  bool trace = false) {
     const std::string ctx = sc.name + " " + std::to_string(days) + "D"
         + (exchange ? " exchange" : " weekday");
     const std::vector<std::int64_t> stamps = reference_of(sc, days, exchange);
@@ -520,8 +537,15 @@ void run_scenario(const Scenario& sc, int days, bool exchange, bool expect_parti
     // One partition serves every aggregator below, one after the other: what
     // each question is answered with must not depend on what was asked before.
     const Partition partition = make_partition(sc, days, exchange);
-    CHECK_CTX((partition != nullptr) == !stamps.empty(), ctx + " plans a partition");
-    if (stamps.empty() || !partition) return;
+    const std::string results = " reference={stamps=" + std::to_string(stamps.size())
+        + (stamps.empty() ? "}" : " first=" + std::to_string(stamps.front())
+                                    + " last=" + std::to_string(stamps.back()) + "}")
+        + " line={" + (partition ? "generated partition}" : "nullptr; nominal aggregation}");
+    if (trace) std::printf("  %s%s\n", ctx.c_str(), results.c_str());
+    CHECK_CTX((partition != nullptr) == !stamps.empty(), ctx + " plans a partition;" + results);
+    // A refused source is the host's nominal fallback, which still has to
+    // answer the differential. Returning on null would hide the wrong bars.
+    if (stamps.empty()) return;
     {
         TimeframeAggregator installed = make_aggregator(sc, days);
         CHECK_CTX(installed.set_native_period_source(partition), ctx + " installs");
@@ -531,7 +555,31 @@ void run_scenario(const Scenario& sc, int days, bool exchange, bool expect_parti
     const TimeframeAggregator ref = stored_partition(sc, days, stamps);
     const std::int64_t last_bound = session_period_close_ms(
         stamps.back(), sc.tz, sc.session, CalendarPeriod::DAY);
-    const std::vector<std::int64_t> points = probe_points(sc, stamps, last_bound);
+    std::vector<std::int64_t> points = probe_points(sc, stamps, last_bound);
+    if (trace) {
+        const TimeframeAggregator made = generated_partition(sc, days, partition);
+        const auto show = [&](const std::vector<Bar>& bars, const char* feed) {
+            for (std::size_t i = 0; i < bars.size(); ++i) {
+                const std::int64_t ms = bars[i].timestamp;
+                std::printf("  %s %s[%zu] at %lld:"
+                            " reference={open=%lld label=%lld} line={open=%lld label=%lld}\n",
+                            ctx.c_str(), feed, i, static_cast<long long>(ms),
+                            static_cast<long long>(ref.bucket_open_ms(ms)),
+                            static_cast<long long>(ref.bar_label_ms(ms)),
+                            static_cast<long long>(made.bucket_open_ms(ms)),
+                            static_cast<long long>(made.bar_label_ms(ms)));
+                // The general battery samples intraday/aux bars. These tiny
+                // witnesses ask about every bar and both sides of it.
+                points.push_back(ms - 1);
+                points.push_back(ms);
+                points.push_back(ms + 1);
+            }
+        };
+        show(sc.chart, "chart");
+        show(sc.aux, "aux");
+        std::sort(points.begin(), points.end());
+        points.erase(std::unique(points.begin(), points.end()), points.end());
+    }
     CHECK_CTX(points.size() > 10, ctx + " has probes");
 
     // Forward, as a run asks.
@@ -567,8 +615,118 @@ void run_scenario(const Scenario& sc, int days, bool exchange, bool expect_parti
         compare_in_order(ref, generated_partition(sc, days, partition), shuffled, ctx + " shuffled");
     }
 
-    const std::size_t most = compare_feed(sc, days, stamps, partition, ctx);
+    const std::size_t most = compare_feed(sc, days, stamps, partition, ctx, trace);
     CHECK_CTX(most <= source::kMultiDayWindow, ctx + " holds a bounded window");
+}
+
+// ─── F16/F17: a decreasing resolved date on an increasing feed ────────────────
+
+// The UTC midnight is derived from test_native_calendar.cpp's independent
+// 2025-11-02 00:00 EDT oracle (1762056000000), less its four-hour UTC offset.
+// The raw instants are 2025-11-01 23:59Z and 2025-11-02 00:00Z, one minute
+// apart. In New York both are November 1, 19:59/20:00 EDT, in the gap after
+// 1930-1945. The legacy coverage clock samples the UTC day's noon, retaining
+// its tm_isdst when resolving midnight: its offset changes from +4h to +5h
+// at this UTC midnight, before the actual 06:00Z fall-back.
+//
+// Consequently the first stamp covers November 2's 19:30 EST session open
+// (November 3 00:30Z), but the second covers November 1's 19:30 EDT open
+// (November 1 23:30Z). session_day_at resolves ordinals 20394 then 20393.
+// Both opens are unique civil times; no historical same-isdst fold is used.
+Scenario date_order_fixture(const char* name, bool decreasing, bool auxiliary) {
+    constexpr std::int64_t midnight = 1762056000000LL - 4 * kHour;
+    Scenario sc;
+    sc.name = name;
+    sc.tz = decreasing ? "America/New_York" : "UTC";
+    sc.session = decreasing ? "1930-1945" : "24x7";
+    sc.input_tf = "1";
+    sc.chart.push_back(bar_at(midnight - kMinute, 0));
+    sc.chart.push_back(bar_at(midnight, 1));
+    if (auxiliary) {
+        sc.aux = std::move(sc.chart);
+        sc.chart.clear();
+        sc.input_tf = "5";
+        sc.aux_tf = "1";
+        // One chart bar is sufficient; the decreasing pair is wholly inside
+        // the aux lane, not an artificial chart-to-aux concatenation decrease.
+        sc.chart.push_back(bar_at(midnight - 5 * kMinute, 0));
+    }
+    return sc;
+}
+
+void run_date_order_case(const Scenario& sc, bool decreasing) {
+    constexpr int days = 2;
+    NativeDayPartitionScope nominal(nullptr);
+
+    // Validity witness FIRST: this calls the old map builder, including its
+    // noon-resolution and strictly-increasing-output checks, unchanged.
+    for (const bool exchange : {false, true}) {
+        const std::string ctx = sc.name + (exchange ? " exchange" : " weekday");
+        const std::vector<std::int64_t> stamps = reference_of(sc, days, exchange);
+        CHECK_CTX(!stamps.empty(), ctx + " old reference must have a valid non-empty partition");
+        for (std::size_t i = 1; i < stamps.size(); ++i)
+            CHECK_CTX(stamps[i - 1] < stamps[i], ctx + " reference output is strictly increasing");
+    }
+
+    for (const auto* bars : {&sc.chart, &sc.aux}) {
+        for (std::size_t i = 1; i < bars->size(); ++i)
+            CHECK_CTX((*bars)[i - 1].timestamp < (*bars)[i].timestamp,
+                      sc.name + " each feed is strictly increasing in UTC");
+    }
+    const auto calendar = native_calendar::parse_session(sc.session, sc.tz);
+    CHECK_CTX(calendar.has_value(), sc.name + " calendar is supported");
+    if (!calendar) return;  // A failed prerequisite, never a skipped pass.
+    const std::vector<Bar>& input = input_of(sc);
+    CHECK_CTX(input.size() == 2, sc.name + " smallest decreasing-pair input");
+    if (input.size() != 2) return;
+    const std::int64_t covered_first =
+        session_covered_instant_ms(input[0].timestamp, sc.tz, sc.session);
+    const std::int64_t covered_second =
+        session_covered_instant_ms(input[1].timestamp, sc.tz, sc.session);
+    const auto first = native_calendar::session_day_at(*calendar, covered_first);
+    const auto second = native_calendar::session_day_at(*calendar, covered_second);
+    CHECK_CTX(first.has_value() && second.has_value(), sc.name + " both covered instants resolve");
+    if (first && second) {
+        std::printf("  %s covered=%lld/%lld ordinals=%lld/%lld first-cycle=[%lld,%lld)\n",
+                    sc.name.c_str(), static_cast<long long>(covered_first),
+                    static_cast<long long>(covered_second), static_cast<long long>(first->ordinal),
+                    static_cast<long long>(second->ordinal), static_cast<long long>(first->origin_ms),
+                    static_cast<long long>(first->next_origin_ms));
+        CHECK_CTX(!first->holds(input[1].timestamp),
+                  sc.name + " intraday/aux cycle shortcut must resolve the second bar too");
+        if (decreasing) {
+            CHECK_CTX(covered_first == civil(2025, 11, 3) * kDay + 30 * kMinute,
+                      sc.name + " first covers Nov 2 19:30 EST = Nov 3 00:30Z");
+            CHECK_CTX(covered_second == civil(2025, 11, 1) * kDay + 23 * kHour + 30 * kMinute,
+                      sc.name + " second covers Nov 1 19:30 EDT = Nov 1 23:30Z");
+            CHECK_CTX(first->ordinal == civil(2025, 11, 2), sc.name + " first trading date");
+            CHECK_CTX(second->ordinal == civil(2025, 11, 1), sc.name + " second trading date");
+            CHECK_CTX(second->ordinal < first->ordinal, sc.name + " resolved trading date decreases");
+        } else {
+            CHECK_CTX(covered_first == input[0].timestamp && covered_second == input[1].timestamp,
+                      sc.name + " UTC 24x7 coverage is identity");
+            CHECK_CTX(first->ordinal < second->ordinal, sc.name + " control dates increase");
+        }
+    }
+
+    // Same reference, source factory, installs and comparisons as the general
+    // battery. Null MUST reach the comparisons: it is the host's nominal path.
+    for (const bool exchange : {false, true}) run_scenario(sc, days, exchange, true, true);
+}
+
+void test_f16_f17_chart_decreasing_dates() {
+    std::printf("test_f16_f17_chart_decreasing_dates (expected RED on 14da9f0d82)\n");
+    run_date_order_case(date_order_fixture("f16-f17-chart-decreasing", true, false), true);
+}
+
+void test_f16_f17_aux_decreasing_dates() {
+    std::printf("test_f16_f17_aux_decreasing_dates (expected RED on 14da9f0d82)\n");
+    run_date_order_case(date_order_fixture("f16-f17-aux-decreasing", true, true), true);
+}
+
+void test_f16_f17_monotone_control() {
+    std::printf("test_f16_f17_monotone_control\n");
+    run_date_order_case(date_order_fixture("f16-f17-UTC-monotone-control", false, false), false);
 }
 
 void test_equals_the_stored_table() {
@@ -861,14 +1019,28 @@ void test_host_installs_the_generated_partition() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::printf("[l19k] N-day request.security partition, generated and bounded\n");
-    test_equals_the_stored_table();
-    test_no_partition_where_the_table_was_empty();
-    test_installs_replace_each_other();
-    test_state_does_not_grow_with_days();
-    test_generation_ignores_the_chart_partition();
-    test_host_installs_the_generated_partition();
+    if (argc == 1) {
+        test_equals_the_stored_table();
+        test_no_partition_where_the_table_was_empty();
+        test_installs_replace_each_other();
+        test_state_does_not_grow_with_days();
+        test_generation_ignores_the_chart_partition();
+        test_host_installs_the_generated_partition();
+        test_f16_f17_monotone_control();
+        test_f16_f17_chart_decreasing_dates();
+        test_f16_f17_aux_decreasing_dates();
+    } else if (argc == 2) {
+        // The supervisor can run each witness/control as a separate lab job.
+        const std::string name = argv[1];
+        if (name == "f16_f17_chart_decreasing_dates") test_f16_f17_chart_decreasing_dates();
+        else if (name == "f16_f17_aux_decreasing_dates") test_f16_f17_aux_decreasing_dates();
+        else if (name == "f16_f17_monotone_control") test_f16_f17_monotone_control();
+        else die("unknown case; use f16_f17_{chart_decreasing_dates,aux_decreasing_dates,monotone_control}");
+    } else {
+        die("expected zero arguments or one F16/F17 case name");
+    }
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }
