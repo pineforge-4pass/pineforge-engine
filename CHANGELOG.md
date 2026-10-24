@@ -31,6 +31,70 @@ version number follows semantic versioning over the surfaces the
   build's literal, and a tuple holding both is invalid. No wire or ABI change: the selected-window wire version
   stays 1, the phase version 1 and the fingerprint/schema version 2.
 
+### State hashes
+
+- **Broker-state hash values of Pine source-layer runs on 1.7.0 differ from
+  1.6.3; the domain tags are unchanged.** The tags stay
+  `pineforge-broker-state/v19` and `pineforge-source-adapter/v4`: the recipe
+  gains folded state and changes what some folds contain (the causes are
+  listed below), and the placement retirement rules deliberately change
+  values inside the retirement epoch. A host that stored hashes from 1.6.3 or earlier
+  will see different values on 1.7.0 for every run of a Pine source-layer host
+  (`PineStrategyHost`): `strategy_broker_state_hash`, the per-bar
+  `pf_report_t::broker_state_hash` rows, and `strategy_stream_state_hash`,
+  which folds the broker-state hash. A stored hash will not match a recomputed
+  one; compare these hashes only between runs of one release. A bare native
+  host folds only the constant `source:none` for the source layer, so none of
+  the causes below applies to it. Apart from the last cause, the changes
+  alter hash values only (the re-pin commits report unchanged trades, counts
+  and curves); the last cause, CR-277, also alters trades in one measured
+  configuration. Causes:
+  - the trade command store: the host extension folds a presence flag and, when
+    the store exists, its state digest (order id, next handle, record count and
+    every live row's handle, key and value, independent of backing and cache
+    placement); after a run releases the store the same presence and digest
+    bytes are folded (CR-150);
+  - the exit command store: the adapter folds, right after its domain, a
+    presence flag and, when an exit scratch exists, the run identity, presence
+    flags for its version provider, its lots callback and its working callback,
+    and the exit store's presence flag and state digest (same contents as
+    above) (CR-150); the exit context's temporary scope-allocation counter is
+    not folded (LAB-QUIETFIX), which is not a difference from 1.6.3, which
+    never folded it;
+  - retired limit-only placements (O1W): a terminally filled, non-revivable
+    limit is erased from the hashed placement sequence and survives only in the
+    placement table's high-water, erased-row count and erased-identity digest,
+    and a filled-exit placement folds an extra marker; hash values change
+    wherever such a limit retires;
+  - placement retirement rules (CR-150): entry and order placements retire by
+    their script-bar open time instead of an input-bar index (on a chart that
+    aggregates input bars, 1.6.3 kept every entry row of the run), and for the
+    dormant exit legs of one origin, exit id, family and entry only the oldest
+    is kept as the representative, with superseded dormant legs released; the retired rows leave the hashed
+    placement sequence, so hash values change wherever such a placement
+    retires;
+  - settled bracket families (O1W): wholly settled families are archived out of
+    the working families; when any is archived the adapter folds a versioned
+    part (`pineforge-settled-bracket-families/v1`, the family count and a keyed
+    digest) after the working families, and it is absent when none is
+    archived;
+  - `strategy.close("")` and `strategy.close_all()` keep a pending entry's real
+    id as its replacement key (CR-277; it was an empty string), and the hash
+    folds every pending entry's key, so a hash taken while such an entry is
+    pending differs. A same-id `strategy.entry` re-issued behind such a close
+    now replaces the pending entry instead of opening a second one, as
+    TradingView's order-id rule requires; one measured random reversal
+    configuration (seed 837832, magnifier 1, margin 0, pyramiding 1) therefore
+    closes 89 trades instead of 90 (the lost trade was an exact duplicate
+    short opened beside the first). Reverting only the key capture restores the
+    90. TradingView equality of the exact close-then-reissue sequence is not
+    proven.
+  The cohort table, the consumed partial-exit cycles, the admission-event
+  journal, the exit phases, the source-money fold and the scheduler's consumed
+  digests were rewritten to bound memory; the source comments state that their
+  bytes are unchanged. See the public contract's rule on state-hash recipes
+  ([public contract](docs/pages/public-contract.md)).
+
 ## 1.6.1 — 2026-10-18
 
 **[1.6.1](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v1.6.1)**,
