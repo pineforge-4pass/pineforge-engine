@@ -1,0 +1,19 @@
+//@version=6
+strategy("CR150 K1 dormant reissue measurement", overlay=true, initial_capital=1000000000,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         pyramiding=1, margin_long=100, margin_short=100,
+         commission_type=strategy.commission.percent, commission_value=0, slippage=0,
+         process_orders_on_close=false, calc_on_order_fills=false, close_entries_rule="FIFO")
+// ETH 1m, no inputs. The percent default enables the entry/close pair hold;
+// all actual quantities are explicit. A fixed default does not select it.
+// A huge MARKET reversal cannot supply a permanent decline: the adapter
+// makes an unaffordable-at-signal reversal close-only. Keep a LIMIT reversal
+// pending below ETH instead, so its paired close keeps X dormant.
+// This measures that real pair hold; REPORT-k1g.md explains why the frozen
+// replacement path does not imply one retained dormant row per bar.
+if bar_index == 0
+    strategy.entry("S", strategy.short, qty=1)
+if bar_index >= 1 and strategy.position_size < 0
+    strategy.exit("X", "S", stop=1000000000 + bar_index * 3 * syminfo.mintick, qty=0.5)
+    strategy.entry("L", strategy.long, qty=1000000000, limit=syminfo.mintick)
+    strategy.close("S")
