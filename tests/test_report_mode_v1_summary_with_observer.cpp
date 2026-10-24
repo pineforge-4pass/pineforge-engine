@@ -538,22 +538,24 @@ int main() {
         return parity && full;
     });
 
-    suite.row("B1/replacement", [&] {
+    // Released legacy behaviour (L6 11:18): the LEGACY equity-mode path never
+    // refuses an observer. Replacing an installed observer while the legacy
+    // SUMMARY_ONLY control is pending is accepted, the replacement is the one
+    // delivered, and the result equals the FULL oracle (ratios pending).
+    suite.row("C/legacy-replacement-pinned", [&] {
         Observer installed;
         Observer replacement;
         Host host;
         configure(host);
         attach(host, installed);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
-                "B1/replacement: pending SUMMARY_ONLY setter refused");
-        refuse_observer("B1/replacement", host, replacement);
-        // The pending mode can be restored without clearing/reinstalling the
-        // original observer. Its callback proves the failed replacement atomic.
-        require(host.set_equity_report_mode(ReportMode::FULL) == 0,
-                "B1/replacement: restoring pending FULL refused");
-        run(host, &installed);
-        require(replacement.calls == 0, "B1/replacement: refused descriptor replaced the original");
-        return plain("B1/replacement", host, oracle.value);
+                "C/legacy-replacement-pinned: legacy SUMMARY_ONLY setter refused");
+        attach(host, replacement);
+        run(host, &replacement);
+        require(installed.calls == 0, "C/legacy-replacement-pinned: replaced observer was called");
+        require(replacement.calls == 1,
+                "C/legacy-replacement-pinned: replacement observer was not called once");
+        return plain("C/legacy-replacement-pinned", host, oracle.value);
     });
 
     // The public window setter bypasses observer-registration admission.
@@ -689,18 +691,35 @@ int main() {
         return plain_good && envelope_good;
     })) return 1;
 
-    if (!suite.row("C/observer-last", [&] {
+    if (!suite.row("C/legacy-observer-pinned", [&] {
+        const char* row = "C/legacy-observer-pinned";
         Observer observer;
         Host host;
         configure(host);
         require(host.set_equity_report_mode(ReportMode::SUMMARY_ONLY) == 0,
-                "C/observer-last: legacy SUMMARY_ONLY setter refused");
-        refuse_observer("C/observer-last", host, observer);
-        run(host);
-        require(observer.calls == 0, "C/observer-last: refused descriptor was stored");
-        require(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
-                "C/observer-last: pending equity mode was not adopted");
-        return plain("C/observer-last", host, oracle.value);
+                std::string(row) + ": legacy SUMMARY_ONLY setter refused");
+        const int status = set_observer(host, observer);
+        std::printf("%s: observer registration status=%d expected=0\n", row, status);
+        require(status == 0, std::string(row) + ": legacy observer registration refused");
+        run(host, &observer);
+        Report report;
+        host.fill_report(&report.value);
+        const bool ratios_ready = host.equity_summary_ratios_ready();
+        std::fprintf(stderr,
+            "%s: run_status=%d code=%s args=%s error=%s observer_calls=%d "
+            "equity_mode=%u ratios_ready=%u oracle_total=%d\n",
+            row, host.last_run_status(), run_failure_code_of(host), run_failure_args_of(host),
+            host.last_error().c_str(), observer.calls,
+            static_cast<unsigned>(host.equity_report_mode()), ratios_ready ? 1u : 0u,
+            oracle.value.total_trades);
+        Checks checks{row};
+        checks.check(host.last_run_status() == 0 && host.last_error().empty(),
+                     "legacy plain read did not preserve successful run status");
+        checks.check(host.equity_report_mode() == ReportMode::SUMMARY_ONLY,
+                     "pending legacy equity mode was not adopted");
+        checks.check(!ratios_ready, "legacy summary ratios must remain pending");
+        compare(checks, report.value, oracle.value);
+        return checks.finish(report.value, oracle.value);
     })) return 1;
 
     if (!suite.row("C/clear", [&] {
