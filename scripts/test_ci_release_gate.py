@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -1987,6 +1988,8 @@ class WorkflowPinTests(unittest.TestCase):
         def constant_string(node):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 return node.value
+            if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
+                return node.value.decode("utf-8", errors="replace")
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
                 left = constant_string(node.left)
                 right = constant_string(node.right)
@@ -2001,8 +2004,9 @@ class WorkflowPinTests(unittest.TestCase):
             if value is not None:
                 texts.append(value)
         for text in texts:
-            for view in (text.replace("`", "").casefold(),
-                         re.sub(r"""(?:#|//|['"`]|\s)+""", " ", text).casefold()):
+            for view in (text.replace("`", ""),
+                         re.sub(r"""(?:\\\r?\n|#|//|['"`]|\s)+""", " ", text)):
+                view = unicodedata.normalize("NFKC", view).casefold()
                 self.assertNotRegex(view,
                                     r"\badministration\s*:\s*read\b|\bapp\s+requires\b",
                                     "unverified App permission claim must stay absent")
@@ -2103,6 +2107,53 @@ class WorkflowPinTests(unittest.TestCase):
                     "\n# App\n# requires\n",
                     '\n# Needs "administration":"read".\n',
                     "\n# // 'App'\n# // 'requires'\n"):
+                with self.subTest(place=index, claim=claim):
+                    changed = original.copy()
+                    changed[index] += claim
+                    self.assertNotEqual(changed[index], original[index])
+                    with self.assertRaisesRegex(
+                            AssertionError, "unverified App permission claim must stay absent"):
+                        self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_backslash_wrapped_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for index, claim in (
+                (1, "\nNeeds administration:\\\nread\n"),
+                (2, "\n# Needs administration:\\\n# read\n")):
+            with self.subTest(place=index, claim=claim):
+                changed = original.copy()
+                changed[index] += claim
+                self.assertNotEqual(changed[index], original[index])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_decoded_bytes_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for expression in (
+                'b"administr\\x61tion: re\\x61d"',
+                'b"administr\\x61tion: re\\x61d".decode()',
+                'b"administr\\x61tion:" + b" re\\x61d"',
+                'b"\\xffadministr\\x61tion: re\\x61d".decode("utf-8", errors="replace")'):
+            with self.subTest(expression=expression):
+                changed = original.copy()
+                changed[0] += f"\nPERMISSION_CLAIM = {expression}\n"
+                self.assertNotEqual(changed[0], original[0])
+                ast.parse(changed[0])
+                with self.assertRaisesRegex(
+                        AssertionError, "unverified App permission claim must stay absent"):
+                    self.assert_ruleset_visibility_documentation(*changed)
+
+    def test_ruleset_visibility_guard_rejects_fullwidth_claims(self):
+        original = [Path(ci_release_gate.__file__).read_text(),
+                    (ROOT / "docs/ci.md").read_text(), self.workflow()]
+        self.assert_ruleset_visibility_documentation(*original)
+        for index in range(len(original)):
+            for claim in ("\n# Ａｐｐ requires\n", "\n# Ａｐｐ\n# requires\n"):
                 with self.subTest(place=index, claim=claim):
                     changed = original.copy()
                     changed[index] += claim
