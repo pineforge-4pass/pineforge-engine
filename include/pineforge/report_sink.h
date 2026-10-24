@@ -171,8 +171,8 @@ PF_STATIC_ASSERT(offsetof(pf_report_sink_diagnostics_v1, complete) == 68);
 PF_API uint32_t pf_report_sink_version(void);
 
 /** Install, replace or remove (NULL descriptor) the sink (6:1301, 1307-1309).
- *  Returns 0 accepted; -1 bad struct_size, version, path or handle; -2 a
- *  stream is running or begins; -3 run in progress or removal while an
+ *  Returns 0 accepted; -1 bad struct_size, version, path or handle, or invalid environment arena;
+ *  -2 stream running/beginning; -3 run in progress or removal while an
  *  ordinary run's scratch curve is live. Strings are copied.
  *  A refused removal keeps the sink and its summary report unchanged;
  *  it never restores a full curve array from scratch.
@@ -183,26 +183,26 @@ PF_API uint32_t pf_report_sink_version(void);
  *  independently refuses removal).
  *  Completed fd generations allow NULL through either setter to detach the
  *  next-run sink while preserving their receipt, summary and borrowed fd.
- *  The sink composes with the execution observer and selected window.
- *  Write errors fail the run with the sink I/O code planned for
- *  docker/run_failure_codes.json (DESIGN 3.7:881-888; 6:1330-1332).
- *
- *  With a sink, pf_report_t contains summary scalars, total_trades and
- *  metrics; trades, equity_curve, broker_state_hash and trace are NULL with
- *  length 0. Thus total_trades need not equal trades_len, and the equity
- *  and hash lengths need not equal script_bars_processed (6:1312-1317).
- *  Counts and SHA-256 come from the receipt. Without a sink the existing
- *  entry points and report behavior stay unchanged (6:1352-1354). */
+ *  The sink composes with the execution observer and selected window. Write errors
+ *  fail the run with the sink I/O code planned for docker/run_failure_codes.json
+ *  (DESIGN 3.7:881-888; 6:1330-1332). With a sink, pf_report_t contains summary
+ *  scalars, total_trades and metrics; trades, equity_curve, broker_state_hash and
+ *  trace are NULL with length 0. Thus total_trades need not equal trades_len, and
+ *  equity/hash lengths need not equal script_bars_processed (6:1312-1317). Counts and SHA-256 come from the receipt.
+ *  Without a sink the existing entry points and report behavior stay unchanged (6:1352-1354).
+ *  A non-NULL descriptor attaches the environment arena if configured: PF_SCRATCH_ARENA_FD=5 and positive PF_SCRATCH_ARENA_BYTES, with validation passing.
+ *  The first successful attach sets SIGXFSZ to SIG_IGN process-wide; the prior disposition is not restored. Same fd/size reattaches are no-ops.
+ *  Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching. */
 PF_API int strategy_set_report_sink_v1(pf_strategy_t, const pf_report_sink_v1*);
 
 /** Install, replace or remove (NULL) the single sink using a borrowed fd.
- *  Mutually exclusive with strategy_set_report_sink_v1: either setter
- *  replaces the other kind, and NULL through either setter removes it.
- *  Returns 0 accepted; -1 bad handle, struct_size, version or negative fd;
- *  -2 stream running/beginning; -3 run in progress, as the path setter.
- *  Descriptor I/O/type validation occurs at run begin; a closed fd or a
- *  non-stream descriptor fails the run with report_sink_failed. Summary
- *  reports and strategy_report_sink_receipt_v1 follow the path sink rules. */
+ *  Either setter replaces the other kind; NULL through either setter removes it.
+ *  Returns 0 accepted; -1 bad handle, struct_size, version, negative fd or invalid environment arena;
+ *  -2 stream running/beginning; -3 run in progress, as the path setter. Descriptor I/O/type validation occurs at run begin;
+ *  a closed fd or non-stream descriptor fails the run with report_sink_failed. Summary reports and strategy_report_sink_receipt_v1 follow the path sink rules.
+ *  A non-NULL descriptor attaches the environment arena if configured: PF_SCRATCH_ARENA_FD=5 and positive PF_SCRATCH_ARENA_BYTES, with validation passing.
+ *  The first successful attach sets SIGXFSZ to SIG_IGN process-wide; the prior disposition is not restored. Same fd/size reattaches are no-ops.
+ *  Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching. */
 PF_API int strategy_set_report_sink_fd_v1(pf_strategy_t, const pf_report_sink_fd_v1*);
 
 /** Query the sink receipt (DESIGN 6:1302; RESOLVED S1).

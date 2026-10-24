@@ -712,12 +712,12 @@ PF_API int pf_report_scratch_arena_stats(uint64_t* high_water_bytes,
                                        uint64_t* arena_bytes);
 
 /** Admit a jailed handle only with an attached scratch arena.
- *  Attach the inherited environment arena, if configured (fixed fd 5);
- *  validate its backing and mapping configuration before execution.
- *  Returns 0 accepted; -1 for a NULL handle or an unavailable/invalid arena.
- *  Arena failures set the handle's typed report_sink_failed/arena_backing
- *  failure. Never creates a backing file or falls back to TMPDIR.
- *  Existing unjailed callers do not need to call this opt-in admission. */
+ *  Attach the environment arena if configured: PF_SCRATCH_ARENA_FD=5, positive PF_SCRATCH_ARENA_BYTES; validate backing and mapping before execution.
+ *  Returns 0 accepted; -1 for a NULL handle or an unavailable/invalid arena. Arena failures set the handle's typed report_sink_failed/arena_backing failure.
+ *  Never creates a backing file or falls back to TMPDIR. Existing unjailed callers do not need to call this opt-in admission.
+ *  The first successful attach sets SIGXFSZ to SIG_IGN process-wide; the prior disposition is not restored.
+ *  Same fd/size reattaches are no-ops. Hosts relying on their SIGXFSZ handler
+ *  or default termination must account for this before attaching an arena. */
 PF_API int strategy_require_report_scratch_arena_v1(pf_strategy_t s);
 
 struct pf_report_sink_diagnostics_v1;
@@ -735,8 +735,8 @@ PF_API int strategy_report_sink_diagnostics_v1(
  *  Opt-in, process-wide, for one serialized child invocation. Call on the
  *  invoking thread with SIGTERM blocked, then unblock it; pending SIGTERM is
  *  preserved. Returns 0, or -1 on signal-setup failure. Repeated installation
- *  preserves an already requested stop. No ABI layout or signal disposition
- *  changes occur until this function is called. */
+ *  preserves an already requested stop. This opt-in installs only the abort
+ *  handler for SIGTERM; it does not change any ABI layout. */
 PF_API int pf_run_abort_install_sigterm_v1(void);
 
 /** Read the invocation stop flag: 0 or 1. No allocation or state mutation. */
@@ -932,8 +932,8 @@ typedef struct pf_scratch_tables_v1 {
  *  -2 during a stream, and -3 during a batch run (including begin callbacks).
  *  A refusal preserves the installed configuration and active run ownership.
  *  Finite streams must supply maxima for their complete admitted lifetime.
- *  The embedding host sets RLIMIT_FSIZE and owns disk-scratch SIGXFSZ policy. A successful new inherited-arena attach sets SIGXFSZ to SIG_IGN process-wide;
- *  detach does not restore it. Ignoring SIGXFSZ makes forbidden file growth return EFBIG. Hosts relying on their SIGXFSZ handler or default termination must account for this before attaching an arena. */
+ *  The embedding host sets RLIMIT_FSIZE and owns disk-scratch SIGXFSZ policy.
+ *  This setter does not attach an arena; see #strategy_require_report_scratch_arena_v1 for the SIGXFSZ side effect of arena attachment. */
 PF_API int strategy_set_scratch_tables_v1(pf_strategy_t s,
                                          const pf_scratch_tables_v1* config);
 
